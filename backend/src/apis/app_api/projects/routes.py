@@ -16,7 +16,7 @@ documents. ``DELETE`` on an active project is a 409 naming the first step.
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 
@@ -333,6 +333,36 @@ async def get_settings_version(
         ],
         instructions_diff=version_instructions_diff(detail),
     )
+
+
+# ---- audit -------------------------------------------------------------
+
+# What a project's editors see of its trail: who did what, by email. Admins get
+# the full record (``/admin/projects/{id}/audit``), user ids included.
+_MEMBER_AUDIT_FIELDS = ("auditId", "timestamp", "action", "actorEmail", "changes", "before", "after", "reason")
+
+
+@router.get("/{project_id}/audit")
+def project_audit(
+    project_id: str,
+    limit: int = Query(50, ge=1, le=200),
+    cursor: Optional[str] = Query(None, max_length=128),
+    user: User = Depends(require_projects_user),
+) -> Dict[str, Any]:
+    """The project's audit trail, newest first (editor)."""
+    try:
+        records, next_cursor = _svc().list_audit(project_id, user, limit=limit, after=cursor)
+    except ProjectError as e:
+        raise _translate(e)
+    except Exception:
+        logger.exception("Failed to read the audit trail for project %s", project_id)
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Audit log is unavailable.")
+    return {
+        "records": [
+            {k: v for k, v in r.to_response().items() if k in _MEMBER_AUDIT_FIELDS} for r in records
+        ],
+        "nextCursor": next_cursor,
+    }
 
 
 # ---- tasks -------------------------------------------------------------

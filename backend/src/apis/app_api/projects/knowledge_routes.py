@@ -37,6 +37,7 @@ from apis.app_api.documents.services.storage_service import generate_download_ur
 from apis.app_api.web_sources import routes as crawl_routes
 from apis.app_api.web_sources.models import ActiveCrawlsResponse, CrawlJob, StartCrawlRequest
 from apis.shared.assistants.models import Assistant
+from apis.shared.audit import AuditAction
 from apis.shared.auth.models import User
 from apis.shared.oauth.provider_repository import OAuthProviderRepository, get_provider_repository
 from apis.shared.projects.models import Project, ProjectRole
@@ -116,6 +117,7 @@ async def start_crawl(
 ) -> ProjectStartCrawlResponse:
     project, harness = await _editor(project_id, user)
     result = await crawl_routes.start_crawl(harness.assistant_id, body, user)
+    _svc().record(AuditAction.PROJECT_KNOWLEDGE_ADDED, user, project_id, after={"url": body.url, "source": "web"})
     return ProjectStartCrawlResponse(**result.model_dump(), notice=sharing_notice(project))
 
 
@@ -197,6 +199,10 @@ async def upload_file(
     """Start an upload: a presigned URL, plus the notice that every member can read the file."""
     project, harness = await _editor(project_id, user)
     result = await document_routes.generate_upload_url_endpoint(harness.assistant_id, body, user)
+    _svc().record(
+        AuditAction.PROJECT_KNOWLEDGE_ADDED, user, project_id,
+        after={"documentId": result.document_id, "filename": body.filename, "source": "upload"},
+    )
     return ProjectUploadUrlResponse(**result.model_dump(), notice=sharing_notice(project))
 
 
@@ -216,6 +222,11 @@ async def import_files(
     """Import files from the caller's connected file source (their credentials, the project's files)."""
     project, harness = await _editor(project_id, user)
     result = await document_routes.import_documents(harness.assistant_id, body, user, provider_repo, role_service)
+    for doc in result.documents:
+        _svc().record(
+            AuditAction.PROJECT_KNOWLEDGE_ADDED, user, project_id,
+            after={"documentId": doc.document_id, "filename": doc.filename, "source": "import"},
+        )
     return ProjectImportResponse(**result.model_dump(), notice=sharing_notice(project))
 
 
@@ -242,7 +253,12 @@ async def get_file_chunks(
 @router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_file(project_id: str, document_id: str, user: User = Depends(require_projects_user)) -> None:
     _, harness = await _editor(project_id, user)
+    doc = await get_document(harness.assistant_id, document_id, harness.owner_id)
     await document_routes.delete_document(harness.assistant_id, document_id, user)
+    _svc().record(
+        AuditAction.PROJECT_KNOWLEDGE_REMOVED, user, project_id,
+        before={"documentId": document_id, "filename": doc.filename if doc else None},
+    )
 
 
 __all__: List[str] = ["router", "sharing_notice"]

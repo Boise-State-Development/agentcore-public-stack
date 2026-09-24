@@ -195,3 +195,33 @@ def test_the_agent_routes_refuse_to_edit_a_harness(pid, project, monkeypatch):
         assert response.status_code == 409, (router.prefix, response.text)
         assert "belongs to a project" in response.json()["detail"]
     assert client(OWNER).get(f"/projects/{pid}/instructions").json()["instructions"] != "sneaky"
+
+
+class AuditRecorder:
+    configured = True
+
+    def __init__(self) -> None:
+        self.records: List[dict] = []
+
+    def record(self, **kw):
+        self.records.append(kw)
+
+
+def test_each_settings_save_is_on_the_projects_audit_trail(pid, project, monkeypatch):
+    service, _ = project
+    trail = AuditRecorder()
+    monkeypatch.setattr(service, "audit", trail)
+
+    client(EDITOR).put(f"/projects/{pid}/instructions", json={"instructions": "Be brief."})
+    client(EDITOR).put(f"/projects/{pid}/tools", json={"bindings": [{"ref": "web_search"}]})
+    client(EDITOR).put(f"/projects/{pid}/model", json={"modelConfig": {"modelId": "m-1"}})
+    client(EDITOR).put(f"/projects/{pid}/instructions", json={"instructions": "Be brief."})  # no change
+
+    assert [(r["action"], r["target_type"], r["target_id"], r["actor"].user_id) for r in trail.records] == [
+        ("project.instructions_updated", "project", pid, EDITOR.user_id),
+        ("project.tools_updated", "project", pid, EDITOR.user_id),
+        ("project.model_updated", "project", pid, EDITOR.user_id),
+    ]
+    assert trail.records[1]["before"] == {"refs": []}
+    assert trail.records[1]["after"] == {"version": 3, "refs": ["web_search"]}
+    assert "Be brief." not in str(trail.records[0])  # the text lives in the version history

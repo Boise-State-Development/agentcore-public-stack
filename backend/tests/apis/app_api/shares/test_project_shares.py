@@ -275,3 +275,27 @@ class TestForkKeepsTheProject:
     def test_a_fork_of_a_plain_task_stays_plain(self, shares, project):
         share_id = _share(shares, _session(project_id=None), access="public").share_id
         assert self._fork(shares, share_id, VIEWER).preferences is None
+
+
+
+class TestTheProjectsTrail:
+    def test_sharing_and_unsharing_a_task_is_recorded_on_the_project(self, shares, project):
+        from tests.shared.test_project_settings import AuditRecorder
+
+        trail = AuditRecorder()
+        shares._audit = trail
+        meta = _session(project_id=project.project_id)
+        project_share = _share(shares, meta).share_id
+        public_share = _share(shares, meta, access="public").share_id
+
+        meta_patch, _ = _sources(meta)
+        with meta_patch:
+            asyncio.run(shares.update_share(public_share, AUTHOR, UpdateShareRequest(accessLevel="project")))
+        asyncio.run(shares.revoke_share(project_share, AUTHOR))
+
+        assert [(r["action"], r["target_id"], r["after"]["shareId"]) for r in trail.records] == [
+            ("project.task_shared", project.project_id, project_share),
+            ("project.task_shared", project.project_id, public_share),
+            ("project.task_unshared", project.project_id, project_share),
+        ]
+        assert trail.records[0]["after"]["title"] == "Budget draft"

@@ -17,6 +17,7 @@ import boto3
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 
+from apis.shared.audit import TARGET_PROJECT, AuditAction, AuditService, get_audit_service
 from apis.shared.auth.models import User
 from apis.shared.feature_flags import projects_enabled
 from apis.shared.projects.access import resolve_project_role
@@ -53,10 +54,12 @@ class ShareService:
         self,
         snapshot_store: Optional[ShareSnapshotStore] = None,
         project_repository: Optional[ProjectRepository] = None,
+        audit: Optional[AuditService] = None,
     ) -> None:
         table_name = os.environ.get("SHARED_CONVERSATIONS_TABLE_NAME", "")
         # Built on first use: most shares never touch a project.
         self._project_repository = project_repository
+        self._audit = audit
         self._table_name = table_name
         self._enabled = bool(table_name)
         # S3-backed snapshot body store. Injectable for tests; otherwise the
@@ -186,6 +189,7 @@ class ShareService:
                 self._table.delete_item(Key={"share_id": share_id})
                 self._delete_snapshot_body(item)
                 raise
+            self._record_task_share(AuditAction.PROJECT_TASK_SHARED, user, item)
         logger.info(f"Created share {self._sanitize_id(share_id)} for session {self._sanitize_id(session_id)}")
 
         return self._build_share_response(item)
@@ -276,6 +280,12 @@ class ShareService:
 
         for project_id in {old_project_id, updated.get("project_id")} - {None}:
             self._sync_project_pointer(item["session_id"], project_id)
+        new_project_id = updated.get("project_id")
+        if old_project_id != new_project_id:
+            if old_project_id:
+                self._record_task_share(AuditAction.PROJECT_TASK_UNSHARED, user, {**item, "project_id": old_project_id})
+            if new_project_id:
+                self._record_task_share(AuditAction.PROJECT_TASK_SHARED, user, updated)
 
         return self._build_share_response(updated)
 
@@ -294,6 +304,7 @@ class ShareService:
         self._delete_snapshot_body(item)
         if item.get("project_id"):
             self._sync_project_pointer(item["session_id"], item["project_id"])
+            self._record_task_share(AuditAction.PROJECT_TASK_UNSHARED, user, item)
         logger.info(f"Revoked share {item['share_id']}")
 
     async def delete_shares_for_session(self, session_id: str) -> int:
@@ -597,6 +608,16 @@ class ShareService:
         if project.status != "active":
             raise ProjectShareError(409, "This project is archived. Restore it to share tasks with it.")
         return project_id
+
+    def _record_task_share(self, action: str, user: User, item: dict) -> None:
+        """Audit a task entering or leaving a project, on the project's trail."""
+        (self._audit or get_audit_service()).record(
+            action=action,
+            actor=user,
+            target_type=TARGET_PROJECT,
+            target_id=item["project_id"],
+            after={"shareId": item["share_id"], "title": self._share_title(item)},
+        )
 
     def _put_project_pointer(self, item: dict) -> None:
         self._projects().put_shared_task(

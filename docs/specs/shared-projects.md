@@ -422,6 +422,28 @@ Each PR targets `develop`, lands behind `PROJECTS_ENABLED` (default on, `=false`
       - A member who leaves loses every project share, including ones they opened before. Their own shares stay listed for the remaining members.
       - A fork of a project task lands in the project's Tasks list, not only in the sidebar.
 - **1.7 Notifications + audit:** `NOTIF#` inbox rows + `/notifications`, `project.*` audit actions, `/projects/{id}/audit`, `admin.projects` scope (registry + route-coverage test).
+  **As built:**
+  - **Audit.** `AuditAction` gains the `project.*` actions that something records today: `created, updated, archived, restored, deleted, transferred, member_added, member_role_changed, member_removed, instructions_updated, model_updated, tools_updated, skills_updated, knowledge_added, knowledge_removed, task_shared, task_unshared`. `restored` and `model_updated` are additions to §9.4. Schedule, output and `project_memory.*` actions arrive with the phases that emit them. Records use target `project`, so `AUDIT#project#{id}` is one partition query with the existing `list_for_target`.
+    - The emission points are `ProjectService` (lifecycle and membership), `HarnessSettingsService` (settings; the trail carries the version number, not the instruction text), the knowledge routes, and `ShareService` (project shares). A no-op change records nothing. Leaving is `member_removed` with `reason: "left"`.
+    - Not recorded: the share cascade on session delete, because it has no acting user.
+    - Recording is app-api only (inference-api has no audit grant) and never fails the change it records.
+  - **`GET /projects/{id}/audit`** (editor) returns the trail newest first with `actorEmail` but no user ids. Its cursor is the last sort key, and the partition comes from the path, so a cursor can never page into another project.
+  - **Inbox.** Notifications are stored as `PK=INBOX#{email}`, `SK=NOTIF#{id}` on the projects table, expiring after 90 days via `ttl`.
+    - **Keyed by email, not the spec's `USER#{userId}`:** an invitee who has never signed in has no user id, and they are exactly who an invitation is for.
+    - Kinds: `project_invited`, `project_role_changed`, `project_removed`, `project_ownership_transferred`. The actor is never notified of their own action, and leaving notifies nobody.
+    - Routes: `GET /notifications?limit&cursor&unreadOnly` returns `notifications`, `unreadCount` and `nextCursor`. `POST /notifications/{id}/read` returns 204, is idempotent, and 404s on another person's id. `POST /notifications/read-all` returns `{marked}`.
+    - The inbox is not behind `PROJECTS_ENABLED`. It is generic, and simply empty while projects are off.
+    - Purging a project leaves its notifications to expire.
+  - **`admin.projects`** (delegable, Agent Marketplace group) guards `/admin/projects` (mounted while `PROJECTS_ENABLED`):
+    - `GET` lists every project (a META scan, paginated by project id).
+    - `GET /{id}` returns one project.
+    - `PATCH /{id} {status, reason}` force-archives or restores it, recorded with the admin as actor.
+    - `GET /{id}/audit` returns the full trail, user ids included.
+    - Export and the regulated-data designation wait for Phase 2 and Phase 4. The SPA's `ADMIN_SCOPE_IDS` gains the id; there is no admin page yet.
+  - **UI impact (for the 1.8 mockup re-sync):**
+    - The notification badge reads `unreadCount` from `GET /notifications`. The four kinds each carry `projectId`, `projectName`, `actorEmail` and, for invites and role changes, `payload.role`.
+    - An invitation is waiting at first sign-in, even for someone added before they had an account.
+    - The project's Activity view (editors only) reads `/projects/{id}/audit`. Settings entries point at a version number, whose diff is in History.
 - **1.8 SPA:** projects list/detail shell, Members (people picker + bulk paste + role select), Instructions (+history), Files, Tools & Skills, Tasks (own + shared, share-to-project, fork), notification badge, session-list grouping. Specs for the facade and each page; `ng build` and axe clean.
 - **1.9 Docs:** `docs-site/…/features/projects.md`, `admin/projects.md`, env-var table entries.
 

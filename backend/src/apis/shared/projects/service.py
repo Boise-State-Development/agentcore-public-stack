@@ -28,7 +28,9 @@ import uuid
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
+from apis.shared.audit import TARGET_PROJECT, AuditAction, AuditRecord, AuditService, get_audit_service
 from apis.shared.auth.models import User
+from apis.shared.notifications import NotificationKind, NotificationService
 from apis.shared.timestamps import utc_now_iso
 
 from .access import resolve_project_role
@@ -123,9 +125,50 @@ class ProjectService:
         self,
         repository: Optional[ProjectRepository] = None,
         harness: Optional[HarnessGateway] = None,
+        audit: Optional[AuditService] = None,
+        notifications: Optional[NotificationService] = None,
     ):
         self.repository = repository or ProjectRepository()
         self.harness = harness or AssistantsHarnessGateway()
+        self.audit = audit or get_audit_service()
+        self.notifications = notifications or NotificationService(table_name=self.repository.table_name)
+
+    # ── trail ───────────────────────────────────────────────────────────
+
+    def record(self, action: str, actor: User, project_id: str, **details) -> None:
+        """One ``project.*`` audit record. Never raises (``AuditService.record``)."""
+        self.audit.record(action=action, actor=actor, target_type=TARGET_PROJECT, target_id=project_id, **details)
+
+    def _notify(self, kind: NotificationKind, recipient: str, actor: User, project: Project, **payload) -> None:
+        self.notifications.notify(
+            recipient_email=recipient,
+            kind=kind,
+            actor=actor,
+            project_id=project.project_id,
+            project_name=project.name,
+            payload=payload,
+        )
+
+    def list_audit(
+        self, project_id: str, user: User, *, limit: int, after: Optional[str] = None
+    ) -> Tuple[List[AuditRecord], Optional[str]]:
+        """The project's audit trail, newest first, for its editors.
+
+        ``after`` is the sort key the previous page ended on. The partition is
+        rebuilt from ``project_id``, so a cursor can never page into another target.
+        """
+        self._require(project_id, user, "editor")
+        return self.audit_trail(project_id, limit=limit, after=after)
+
+    def audit_trail(
+        self, project_id: str, *, limit: int, after: Optional[str] = None
+    ) -> Tuple[List[AuditRecord], Optional[str]]:
+        """A project's trail with no permission check: for callers that have made their own."""
+        if not self.audit.configured:
+            return [], None
+        start = {"PK": f"AUDIT#{TARGET_PROJECT}#{project_id}", "SK": after} if after else None
+        records, last = self.audit.repository.list_for_target(TARGET_PROJECT, project_id, limit=limit, cursor=start)
+        return records, (last or {}).get("SK")
 
     # ── permission ──────────────────────────────────────────────────────
 
@@ -155,6 +198,32 @@ class ProjectService:
         if role == "editor" and not project.settings.editors_manage_members:
             raise ProjectPermissionError("Only the project owner can manage members of this project")
         return project, role
+
+    # ── administration (admin.projects) ─────────────────────────────────
+
+    def admin_list_projects(self, *, limit: int, after: Optional[str] = None) -> Tuple[List[Project], Optional[str]]:
+        return self.repository.scan_projects(limit, after)
+
+    def admin_get_project(self, project_id: str) -> Project:
+        project = self.repository.get_project(project_id)
+        if project is None:
+            raise ProjectNotFoundError("Project not found")
+        return project
+
+    def admin_set_status(self, project_id: str, admin: User, status: ProjectStatus, reason: Optional[str] = None) -> Project:
+        """Archive or restore any project, whoever owns it. Recorded with the admin as actor."""
+        project = self.admin_get_project(project_id)
+        if project.status == status:
+            return project
+        try:
+            saved = self.repository.put_project(
+                project.model_copy(update={"status": status, "updated_at": utc_now_iso()}),
+                expected_version=project.version,
+            )
+        except ProjectWriteConflict as e:
+            raise ProjectConflictError("The project changed at the same time. Reload and try again.") from e
+        self._record_update(admin, project, saved, reason=reason or "admin")
+        return saved
 
     # ── projects ────────────────────────────────────────────────────────
 
@@ -219,6 +288,7 @@ class ProjectService:
                 logger.error("Rollback of harness %s failed; it is unreachable (no project)", harness_agent_id, exc_info=True)
             raise
         logger.info("Created project %s with harness %s", project_id, harness_agent_id)
+        self.record(AuditAction.PROJECT_CREATED, user, project_id, after={"name": clean_name})
         return project
 
     def update_project(
@@ -266,7 +336,26 @@ class ProjectService:
             saved = self.repository.put_project(project.model_copy(update=updates), expected_version=project.version)
         except ProjectWriteConflict as e:
             raise ProjectConflictError("The project changed while you were editing it. Reload and try again.") from e
+        self._record_update(user, project, saved)
         return saved, role
+
+    def _record_update(self, actor: User, before: Project, after: Project, reason: Optional[str] = None) -> None:
+        if before.status != after.status:
+            action = AuditAction.PROJECT_ARCHIVED if after.status == "archived" else AuditAction.PROJECT_RESTORED
+            self.record(action, actor, after.project_id, reason=reason)
+        fields = {
+            "name": (before.name, after.name),
+            "description": (before.description, after.description),
+            "editorsManageMembers": (
+                before.settings.editors_manage_members, after.settings.editors_manage_members
+            ),
+        }
+        changed = sorted(k for k, (old, new) in fields.items() if old != new)
+        if changed:
+            self.record(
+                AuditAction.PROJECT_UPDATED, actor, after.project_id, changes=changed,
+                before={k: fields[k][0] for k in changed}, after={k: fields[k][1] for k in changed},
+            )
 
     async def purge_project(self, project_id: str, user: User) -> None:
         """Hard delete. Owner only, archived only.
@@ -281,6 +370,7 @@ class ProjectService:
         await self.harness.delete(project.harness_agent_id)
         deleted = self.repository.delete_project_rows(project_id)
         logger.info("Purged project %s (%d rows, harness %s)", project_id, deleted, project.harness_agent_id)
+        self.record(AuditAction.PROJECT_DELETED, user, project_id, before={"name": project.name})
 
     # ── tasks ───────────────────────────────────────────────────────────
 
@@ -329,6 +419,8 @@ class ProjectService:
             try:
                 self.repository.add_member(member, max_members=cap, now=now)
                 result.added.append(member)
+                self.record(AuditAction.PROJECT_MEMBER_ADDED, user, project_id, after={"email": raw, "role": role})
+                self._notify("project_invited", raw, user, project, role=role)
             except ProjectWriteConflict as e:
                 if 0 in e.failed:
                     result.already_members.append(raw)
@@ -346,9 +438,16 @@ class ProjectService:
         target = normalize_email(email)
         if target == project.owner_email:
             raise ProjectError("The owner's role can't be changed. Transfer ownership instead.")
+        current = self.repository.get_member(project_id, target)
         updated = self.repository.update_member_role(project_id, target, role, utc_now_iso())
         if updated is None:
             raise ProjectNotFoundError("That person is not a member of this project")
+        if current is not None and current.role != role:
+            self.record(
+                AuditAction.PROJECT_MEMBER_ROLE_CHANGED, user, project_id, changes=["role"],
+                before={"email": target, "role": current.role}, after={"email": target, "role": role},
+            )
+            self._notify("project_role_changed", target, user, project, role=role)
         return updated
 
     def remove_member(self, project_id: str, user: User, email: str) -> None:
@@ -359,13 +458,23 @@ class ProjectService:
         project, _ = self._require_member_manager(project_id, user)
         if target == project.owner_email:
             raise ProjectError("The owner can't be removed. Transfer ownership first.")
+        member = self.repository.get_member(project_id, target)
         self._delete_member(project_id, target)
+        self.record(
+            AuditAction.PROJECT_MEMBER_REMOVED, user, project_id,
+            before={"email": target, "role": member.role if member else None},
+        )
+        self._notify("project_removed", target, user, project)
 
     def leave(self, project_id: str, user: User) -> None:
         project, role = self._require(project_id, user, "viewer")
         if role == "owner":
             raise ProjectConflictError("The owner can't leave. Transfer ownership or delete the project.")
-        self._delete_member(project_id, normalize_email(user.email))
+        email = normalize_email(user.email)
+        self._delete_member(project_id, email)
+        self.record(
+            AuditAction.PROJECT_MEMBER_REMOVED, user, project_id, before={"email": email, "role": role}, reason="left"
+        )
 
     def _delete_member(self, project_id: str, email: str) -> None:
         try:
@@ -391,6 +500,11 @@ class ProjectService:
         except ProjectWriteConflict as e:
             raise ProjectConflictError("The project changed during the transfer. Reload and try again.") from e
         logger.info("Project %s ownership transferred to %s", project_id, member.user_id)
+        self.record(
+            AuditAction.PROJECT_TRANSFERRED, user, project_id, changes=["ownerEmail"],
+            before={"ownerEmail": project.owner_email}, after={"ownerEmail": member.email},
+        )
+        self._notify("project_ownership_transferred", member.email, user, project)
         transferred = self.repository.get_project(project_id)
         if transferred is None:
             raise ProjectNotFoundError("Project not found")

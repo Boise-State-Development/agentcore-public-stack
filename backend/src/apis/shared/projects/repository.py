@@ -28,7 +28,7 @@ import logging
 import os
 import re
 from decimal import Decimal
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 try:  # boto3 is absent in some local-dev setups
     import boto3
@@ -218,6 +218,28 @@ class ProjectRepository:
                 raise ProjectWriteConflict([0]) from e
             raise
         return updated
+
+    def scan_projects(self, limit: int, after_project_id: Optional[str] = None) -> Tuple[List[Project], Optional[str]]:
+        """Every project's META, for administration only (a scan; no index lists all projects).
+
+        Returns up to ``limit`` projects and the id to pass back as ``after_project_id``.
+        """
+        from boto3.dynamodb.conditions import Attr
+
+        params: Dict[str, Any] = {"FilterExpression": Attr("SK").eq(META_SK)}
+        if after_project_id:
+            params["ExclusiveStartKey"] = {"PK": project_pk(after_project_id), "SK": META_SK}
+        found: List[Project] = []
+        while True:
+            resp = self._table.scan(**params)
+            found.extend(Project.model_validate(_strip_keys(i)) for i in resp.get("Items", []))
+            last = resp.get("LastEvaluatedKey")
+            if len(found) >= limit or not last:
+                break
+            params["ExclusiveStartKey"] = last
+        page = found[:limit]
+        more = len(found) > limit or bool(last)
+        return page, (page[-1].project_id if more and page else None)
 
     def list_owned(self, owner_id: str) -> List[Project]:
         items = self._query_index(OWNER_INDEX, Key("GSI1PK").eq(f"OWNER#{owner_id}"), "projects a user owns")
