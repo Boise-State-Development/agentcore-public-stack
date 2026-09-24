@@ -228,7 +228,10 @@ def is_project_harness(assistant: Optional[Assistant]) -> bool:
 
 
 def _project_harness_role(assistant: Assistant, user_id: str, user_email: Optional[str]) -> Optional[str]:
-    """The caller's agent permission on a harness: exactly their project role.
+    """The caller's agent permission on a harness: their project role, read-only if archived.
+
+    An archived project is read-only for everyone (shared-projects 1.2), so its harness
+    is too: every member resolves as a viewer, which every agent write route refuses.
 
     Imported lazily: ``apis.shared.projects`` creates harnesses through this module, and
     ``access`` is the one projects module that does not import back.
@@ -237,7 +240,9 @@ def _project_harness_role(assistant: Assistant, user_id: str, user_email: Option
 
     if not assistant.project_id:
         return None
-    _, role = resolve_project_role(assistant.project_id, user_id, user_email)
+    project, role = resolve_project_role(assistant.project_id, user_id, user_email)
+    if role and project is not None and project.status == "archived":
+        return "viewer"
     return role
 
 
@@ -955,6 +960,13 @@ class ProjectHarnessError(AssistantListedError):
 
 PROJECT_HARNESS_DELETE_MESSAGE = (
     "This agent belongs to a project. Delete or archive the project instead."
+)
+
+# The project's settings routes are the harness's only write path, because each save
+# there cuts a version (shared-projects §3.2): an edit through the agent routes would
+# leave a gap in the project's instruction history.
+PROJECT_HARNESS_EDIT_MESSAGE = (
+    "This agent belongs to a project. Edit its instructions, model, tools and skills from the project."
 )
 
 

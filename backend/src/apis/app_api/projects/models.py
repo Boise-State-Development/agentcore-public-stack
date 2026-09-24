@@ -8,10 +8,11 @@ person has signed in (``hasSignedIn``), which is what transfer depends on.
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from apis.shared.assistants.models import AgentModelConfig, VersionFieldChange
 from apis.shared.projects.models import (
     MemberRole,
     Project,
@@ -205,3 +206,79 @@ class DirectoryResponse(BaseModel):
         description="Best match first. A well-formed email nobody has signed in with is returned last, "
         "with hasSignedIn false, so it can always be invited.",
     )
+
+
+# ---- settings (the harness) -------------------------------------------
+
+INSTRUCTIONS_MAX_LENGTH = 100_000
+MAX_BINDINGS_PER_KIND = 100
+
+
+class BindingRef(BaseModel):
+    """One tool or skill the project's agent may use. The kind is the route's."""
+
+    ref: str = Field(..., min_length=1, max_length=512)
+    config: Dict[str, Any] = Field(default_factory=dict)
+
+
+class UpdateInstructionsRequest(BaseModel):
+    instructions: str = Field(..., max_length=INSTRUCTIONS_MAX_LENGTH)
+
+
+class UpdateModelRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    model_settings: AgentModelConfig = Field(..., alias="modelConfig")
+
+
+class UpdateBindingsRequest(BaseModel):
+    """The complete list for the route's kind; bindings of other kinds are kept."""
+
+    bindings: List[BindingRef] = Field(..., max_length=MAX_BINDINGS_PER_KIND)
+
+
+class _SettingsResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    version: Optional[int] = Field(None, description="Current version, or null before the first save")
+    can_edit: bool = Field(..., alias="canEdit")
+
+
+class InstructionsResponse(_SettingsResponse):
+    instructions: str
+
+
+class ModelResponse(_SettingsResponse):
+    model_settings: Optional[AgentModelConfig] = Field(
+        None, alias="modelConfig", description="Null: each member's own default model"
+    )
+
+
+class BindingsResponse(_SettingsResponse):
+    bindings: List[BindingRef]
+
+
+class SettingsVersionSummary(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    version: int
+    created_at: Optional[str] = Field(None, alias="createdAt")
+    created_by_email: Optional[str] = Field(
+        None, alias="createdByEmail", description="Null for the state the project was created with"
+    )
+    changes: List[str] = Field(..., description="Fields changed from the previous version")
+
+
+class SettingsVersionsResponse(BaseModel):
+    versions: List[SettingsVersionSummary] = Field(..., description="Newest first")
+
+
+class SettingsVersionResponse(SettingsVersionSummary):
+    """One version in full, with what changed from the version before it."""
+
+    instructions: str
+    model_settings: Optional[AgentModelConfig] = Field(None, alias="modelConfig")
+    tools: List[BindingRef]
+    skills: List[BindingRef]
+    field_changes: List[VersionFieldChange] = Field(..., alias="fieldChanges")
+    instructions_diff: List[str] = Field(..., alias="instructionsDiff")

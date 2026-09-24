@@ -144,6 +144,12 @@ class ProjectService:
             raise ProjectConflictError("This project is archived. Restore it to make changes.")
         return project, role
 
+    def authorize(
+        self, project_id: str, user: User, min_role: ProjectRole, *, writable: bool = False
+    ) -> Tuple[Project, ProjectRole]:
+        """The role check, for app-api surfaces that act on a part of the project (its harness)."""
+        return self._require(project_id, user, min_role, writable=writable)
+
     def _require_member_manager(self, project_id: str, user: User) -> Tuple[Project, ProjectRole]:
         project, role = self._require(project_id, user, "editor", writable=True)
         if role == "editor" and not project.settings.editors_manage_members:

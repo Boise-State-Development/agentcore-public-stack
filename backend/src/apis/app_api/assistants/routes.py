@@ -36,6 +36,7 @@ from apis.shared.assistants.models import (
     UpdateSharePermissionRequest,
 )
 from apis.shared.assistants.service import (
+    PROJECT_HARNESS_EDIT_MESSAGE,
     assistant_exists,
     create_assistant,
     create_assistant_draft,
@@ -43,6 +44,7 @@ from apis.shared.assistants.service import (
     assert_deletable,
     delete_assistant,
     get_assistant_with_access_check,
+    is_project_harness,
     list_assistant_shares,
     list_shared_with_user,
     list_user_assistants,
@@ -364,15 +366,9 @@ async def update_assistant_endpoint(assistant_id: str, request: UpdateAssistantR
                 status_code=400,
                 detail="Only the owner can change assistant visibility",
             )
-        # A project's harness stays PRIVATE: who can use it is the project's membership.
-        if (
-            getattr(assistant, "kind", None) == "project"
-            and request.visibility is not None
-            and request.visibility != assistant.visibility
-        ):
-            raise HTTPException(
-                status_code=400, detail="A project's agent stays private; manage access from the project's members"
-            )
+        # A project's harness is edited only through the project, which versions every save.
+        if is_project_harness(assistant):
+            raise HTTPException(status_code=409, detail=PROJECT_HARNESS_EDIT_MESSAGE)
 
         # Design-time binding/model validation (D4/D5), after the auth gate above.
         try:
