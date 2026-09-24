@@ -68,7 +68,7 @@ export interface User {
         type="button"
         [cdkMenuTriggerFor]="userMenu"
         [cdkMenuPosition]="menuPositionsComputed()"
-        class="relative flex w-full items-center gap-3 rounded-lg px-2 py-2 hover:bg-gray-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] dark:hover:bg-white/10"
+        class="relative flex w-full items-center gap-3 rounded-md px-2 py-1.5 transition-colors hover:bg-gray-200/60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] dark:hover:bg-white/5"
         aria-label="User menu"
       >
         <span class="sr-only">Open user menu</span>
@@ -77,7 +77,7 @@ export interface User {
              a coloured dot alone is not an accessible signal. -->
         @if (unreadCount() > 0) {
           <span
-            class="absolute left-7 top-1.5 size-2.5 rounded-full bg-primary-600 ring-2 ring-white dark:ring-gray-900"
+            class="absolute left-6 top-1 size-2.5 rounded-full bg-primary-600 ring-2 ring-white dark:ring-gray-900"
             role="status"
             [attr.aria-label]="unreadLabel()"
           ></span>
@@ -87,10 +87,10 @@ export interface User {
           <img
             [src]="user().picture"
             [alt]="user().fullName"
-            class="size-8 shrink-0 rounded-full bg-gray-50 outline -outline-offset-1 outline-black/5 dark:bg-gray-800 dark:outline-white/10"
+            class="size-7 shrink-0 rounded-full bg-gray-50 outline -outline-offset-1 outline-black/5 dark:bg-gray-800 dark:outline-white/10"
           />
         } @else {
-          <div class="size-8 shrink-0 rounded-full bg-gray-200 dark:bg-gray-700 flex items-center justify-center outline -outline-offset-1 outline-black/5 dark:outline-white/10">
+          <div class="size-7 shrink-0 rounded-full bg-gray-200 dark:bg-gray-700 flex items-center justify-center outline -outline-offset-1 outline-black/5 dark:outline-white/10">
             <span class="text-xs font-semibold text-gray-600 dark:text-gray-300">
               {{ getUserInitial() }}
             </span>
@@ -98,12 +98,12 @@ export interface User {
         }
 
         <span class="flex min-w-0 flex-1 items-center justify-between">
-          <span class="truncate text-sm/6 font-semibold text-gray-900 dark:text-white">
+          <span class="truncate text-sm/5 font-semibold text-gray-900 dark:text-white">
             {{ user().fullName }}
           </span>
           <ng-icon
             name="heroChevronUpDown"
-            class="size-5 shrink-0 text-gray-400"
+            class="size-4 shrink-0 text-gray-400"
           />
         </span>
       </button>
