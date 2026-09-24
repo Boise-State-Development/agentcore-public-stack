@@ -218,6 +218,17 @@ export class Topnav {
     }
   }
 
+  /**
+   * The current session's project. A task started in this tab is shown from the
+   * optimistic cache row until its metadata is fetched, so fall back to the list
+   * row, which picks up the backend's preferences on the next list refresh.
+   */
+  private currentProjectId(): string | null {
+    const session = this.currentSession();
+    const listed = this.sessionService.mergedSessionsResource().sessions.find(s => s.sessionId === session.sessionId);
+    return session.preferences?.projectId ?? listed?.preferences?.projectId ?? null;
+  }
+
   /** Opens the share modal for the current session. */
   protected onShareClick(event: Event): void {
     event.preventDefault();
@@ -227,6 +238,7 @@ export class Topnav {
       data: {
         sessionId: this.currentSession().sessionId,
         ownerEmail: this.userService.currentUser()?.email ?? '',
+        projectId: this.currentProjectId(),
       } as ShareModalData,
     });
   }

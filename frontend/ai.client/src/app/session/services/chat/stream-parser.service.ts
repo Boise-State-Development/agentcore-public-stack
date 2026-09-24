@@ -29,6 +29,7 @@ import { isPreviewableFilename } from '../file-preview/file-preview.model';
 import { McpAppStateService } from '../mcp-apps/mcp-app-state.service';
 import { ToolInsightService } from './tool-insight.service';
 import { SessionService } from '../session/session.service';
+import { AgentNoticeService } from '../agent-notice/agent-notice.service';
 import type {
   OAuthRequiredEvent,
   ToolApprovalRequiredEvent,
@@ -40,6 +41,7 @@ import type {
   ToolInputPartialEvent,
   SessionTitleEvent,
   ModelRetryEvent,
+  AgentNoticeEvent,
 } from '../../../shared/utils/stream-parser';
 import {
   processStreamEvent,
@@ -177,6 +179,7 @@ export class StreamParserService {
   private mcpAppState = inject(McpAppStateService);
   private sessionService = inject(SessionService);
   private toolInsight = inject(ToolInsightService);
+  private agentNotice = inject(AgentNoticeService);
 
   // =========================================================================
   // Per-Session State
@@ -578,6 +581,10 @@ export class StreamParserService {
         // conversation instead of leaking into the one on screen.
         state.modelRetry.set(data);
       },
+
+      // Keyed by this stream's session, like model_retry: a background
+      // task's notice stays with that task.
+      onAgentNotice: (data: AgentNoticeEvent) => this.agentNotice.set(state.sessionId, data),
 
       onMetadata: (data) => this.handleMetadata(state, data),
       onReasoning: (data) => this.handleReasoning(state, data),

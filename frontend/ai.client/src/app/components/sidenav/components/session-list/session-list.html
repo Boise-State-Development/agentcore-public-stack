@@ -29,172 +29,36 @@
                  the admin console's arrive identically. Doubles as the
                  skeleton-to-loaded transition when sessions land after boot. -->
             <div class="sidenav-body-enter flex flex-col gap-y-3" style="animation-delay: 60ms">
-                @for (group of groupedSessions(); track group.label) {
+                @for (group of groupedSessions(); track group.label; let gi = $index) {
                     <section>
                         <h3 class="px-2 pb-0.5 text-[11px]/5 font-medium text-gray-400 dark:text-gray-500">{{ group.label }}</h3>
                         <ul role="list" class="flex flex-col gap-y-0.5">
-                            @for (session of group.sessions; track session.sessionId) {
-                                <li class="group relative">
-                                    @if (renamingSessionId() === session.sessionId) {
-                                        <!-- Inline rename input -->
-                                        <div class="flex items-center gap-1 rounded-md px-2 py-1">
-                                            <input
-                                                #renameInput
-                                                type="text"
-                                                [value]="renameValue()"
-                                                (input)="renameValue.set(renameInput.value)"
-                                                (keydown)="onRenameKeydown($event, session)"
-                                                (blur)="onRenameSubmit(session)"
-                                                class="min-w-0 flex-1 rounded-md border border-gray-300 bg-white px-2 py-1 text-sm/5 font-medium text-gray-900 outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:focus:border-primary-400 dark:focus:ring-primary-400"
-                                                aria-label="Rename conversation"
-                                            />
-                                        </div>
-                                    } @else {
+                            @for (entry of group.entries; track entry.kind === 'session' ? entry.session.sessionId : 'project:' + entry.projectId) {
+                                @if (entry.kind === 'session') {
+                                    <ng-container *ngTemplateOutlet="sessionRow; context: { $implicit: entry.session }" />
+                                } @else {
+                                    <!-- A project's tasks in this bucket, under the project's name. -->
+                                    <li>
                                         <a
-                                            [routerLink]="['/s', getSessionId(session.sessionId)]"
-                                            [queryParams]="getSessionQueryParams(session)"
-                                            routerLinkActive="session-row--active bg-gray-200 !font-medium !text-secondary-500 dark:bg-white/5 dark:!text-white"
-                                            (click)="onSessionClick(session)"
-                                            class="flex min-h-8 items-center rounded-md px-2 py-1.5 pr-10 text-sm/5 font-normal text-gray-700 hover:bg-gray-50 hover:text-secondary-500 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-white"
+                                            [routerLink]="['/projects', entry.projectId]"
+                                            [id]="'session-group-' + gi + '-' + entry.projectId"
+                                            (click)="onProjectHeadingClick()"
+                                            class="flex min-h-7 items-center gap-1.5 rounded-md px-2 py-1 text-xs/5 font-medium text-gray-600 hover:bg-gray-50 hover:text-secondary-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-white"
                                         >
-                                            @if (isTitlePending(session)) {
-                                                <!-- Title still generating (new conversation) — shimmer
-                                                     until the session_title event lands or the stream ends.
-                                                     Colour lives in the component stylesheet: on the active
-                                                     row (.session-row--active, whose highlight is bg-gray-200
-                                                     / dark:bg-white/5) the shimmer darkens so it stays
-                                                     visible against it (see .title-skeleton in the CSS).
-                                                     h-4 (1rem) matches the text cap-height; min-h-8 on the
-                                                     row keeps its height identical to a titled row so the
-                                                     skeleton→title swap causes no vertical jank. -->
-                                                <span
-                                                    class="title-skeleton h-4 w-3/5 shrink-0 rounded-md animate-pulse motion-reduce:animate-none"
-                                                    role="status"
-                                                    aria-label="Generating conversation title"
-                                                ></span>
-                                            } @else {
-                                                <!-- Keyed by the title string so the fade replays when the
-                                                     generated title first replaces the skeleton (and on
-                                                     rename), mirroring the top-nav title reveal. -->
-                                                @for (title of [getSessionTitle(session)]; track title) {
-                                                    <span class="session-title-enter min-w-0 truncate">{{ title }}</span>
-                                                }
-                                            }
-                                            @if (isSessionStreaming(session.sessionId)) {
-                                                <span class="sr-only">(response in progress)</span>
-                                            } @else if (shouldShowUnreadDot(session)) {
-                                                <span class="sr-only">(unread)</span>
-                                            }
+                                            <ng-icon name="heroRectangleStack" class="size-3.5 shrink-0" aria-hidden="true" />
+                                            <span class="min-w-0 truncate">{{ entry.name }}</span>
                                         </a>
-                                        @if (isSessionStreaming(session.sessionId)) {
-                                            <!-- Response-in-progress dot. While streaming it owns the
-                                                 pr-10 gutter outright — the ellipsis menu button below is
-                                                 not rendered, both to avoid overlapping the dot on hover
-                                                 (animate-pulse animates opacity, so a group-hover fade
-                                                 can't hide it) and because rename/share/delete shouldn't
-                                                 target a conversation mid-response. -->
-                                            <span
-                                                class="pointer-events-none absolute right-3 top-1/2 size-2 -translate-y-1/2 rounded-full bg-secondary-500 animate-pulse motion-reduce:animate-none"
-                                                aria-hidden="true"
-                                            ></span>
-                                        } @else {
-                                            @if (shouldShowUnreadDot(session)) {
-                                                <!-- Unread dot: an unattended (scheduled) run finished, or a
-                                                     backgrounded response completed while the user was viewing
-                                                     another conversation. Static blue (vs. the pulsing
-                                                     secondary streaming dot) and, unlike the streaming dot, it
-                                                     fades when the ellipsis menu would occupy the same gutter —
-                                                     on hover and when the trigger is keyboard-focused
-                                                     (focus-visible). Crucially NOT on plain focus-within: the
-                                                     CDK menu restores focus to the in-row trigger on close, and
-                                                     hiding the dot for that (mouse-driven) focus is what made a
-                                                     just-marked-unread dot stay invisible until the next
-                                                     interaction. Cleared once the user opens the session. -->
-                                                <span
-                                                    class="pointer-events-none absolute right-3 top-1/2 size-2 -translate-y-1/2 rounded-full bg-primary-500 transition-opacity group-hover:opacity-0 group-has-[button:focus-visible]:opacity-0 dark:bg-primary-400"
-                                                    aria-hidden="true"
-                                                ></span>
+                                        <ul
+                                            role="list"
+                                            class="ml-3.5 flex flex-col gap-y-0.5 border-l border-gray-200 pl-1 dark:border-white/10"
+                                            [attr.aria-labelledby]="'session-group-' + gi + '-' + entry.projectId"
+                                        >
+                                            @for (session of entry.sessions; track session.sessionId) {
+                                                <ng-container *ngTemplateOutlet="sessionRow; context: { $implicit: session }" />
                                             }
-                                            <!-- Ellipsis menu button - visible on hover with fade-in animation -->
-                                            <button
-                                                type="button"
-                                                [cdkMenuTriggerFor]="sessionMenu"
-                                                [cdkMenuPosition]="menuPositions"
-                                                [disabled]="deletingSessionId() === session.sessionId"
-                                                class="session-menu-trigger absolute right-1 top-1/2 -translate-y-1/2 flex size-7 items-center justify-center rounded-md text-gray-500 opacity-0 transition-opacity duration-150 ease-in hover:bg-gray-200 hover:text-gray-700 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 group-hover:opacity-100 dark:text-gray-400 dark:hover:bg-white/10 dark:hover:text-gray-200"
-                                                [attr.aria-label]="'Options for conversation: ' + getSessionTitle(session)"
-                                                aria-haspopup="menu"
-                                            >
-                                                @if (deletingSessionId() === session.sessionId) {
-                                                    <ng-icon name="heroArrowPath" class="size-5 animate-spin" aria-hidden="true" />
-                                                } @else {
-                                                    <ng-icon name="heroEllipsisHorizontalSolid" size="20" aria-hidden="true" />
-                                                }
-                                            </button>
-                                        }
-
-                                        <!-- Session options menu -->
-                                        <ng-template #sessionMenu>
-                                            <div
-                                                cdkMenu
-                                                class="session-options-menu min-w-36 rounded-md bg-white py-1 shadow-lg ring-1 ring-black/5 focus:outline-hidden dark:bg-gray-800 dark:ring-white/10"
-                                                role="menu"
-                                                aria-orientation="vertical"
-                                            >
-                                                <button
-                                                    cdkMenuItem
-                                                    type="button"
-                                                    (click)="onRenameClick($event, session)"
-                                                    class="flex w-full items-center gap-2 px-3 py-2 text-sm/6 text-gray-700 hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
-                                                    role="menuitem"
-                                                >
-                                                    <ng-icon name="heroPencilSquare" class="size-4" aria-hidden="true" />
-                                                    <span>Rename</span>
-                                                </button>
-                                                <button
-                                                    cdkMenuItem
-                                                    type="button"
-                                                    (click)="onShareClick($event, session)"
-                                                    class="flex w-full items-center gap-2 px-3 py-2 text-sm/6 text-gray-700 hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
-                                                    role="menuitem"
-                                                >
-                                                    <ng-icon name="heroArrowUpOnSquare" class="size-4" aria-hidden="true" />
-                                                    <span>Share</span>
-                                                </button>
-                                                <button
-                                                    cdkMenuItem
-                                                    type="button"
-                                                    (click)="onExportClick($event, session)"
-                                                    class="flex w-full items-center gap-2 px-3 py-2 text-sm/6 text-gray-700 hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
-                                                    role="menuitem"
-                                                >
-                                                    <ng-icon name="heroCloudArrowUp" class="size-4" aria-hidden="true" />
-                                                    <span>Save to…</span>
-                                                </button>
-                                                <button
-                                                    cdkMenuItem
-                                                    type="button"
-                                                    (click)="onToggleReadClick($event, session)"
-                                                    class="flex w-full items-center gap-2 px-3 py-2 text-sm/6 text-gray-700 hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
-                                                    role="menuitem"
-                                                >
-                                                    <ng-icon [name]="shouldShowUnreadDot(session) ? 'heroEnvelopeOpen' : 'heroEnvelope'" class="size-4" aria-hidden="true" />
-                                                    <span>{{ shouldShowUnreadDot(session) ? 'Mark as read' : 'Mark as unread' }}</span>
-                                                </button>
-                                                <button
-                                                    cdkMenuItem
-                                                    type="button"
-                                                    (click)="onDeleteClick($event, session)"
-                                                    class="flex w-full items-center gap-2 px-3 py-2 text-sm/6 text-state-danger-600 hover:bg-gray-50 focus:bg-gray-50 dark:text-state-danger-400 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
-                                                    role="menuitem"
-                                                >
-                                                    <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
-                                                    <span>Delete</span>
-                                                </button>
-                                            </div>
-                                        </ng-template>
-                                    }
-                                </li>
+                                        </ul>
+                                    </li>
+                                }
                             }
                         </ul>
                     </section>
@@ -236,4 +100,169 @@
             </div>
         }
     }
+
+    <!-- One conversation row: shared by plain rows and by rows under a project heading. -->
+    <ng-template #sessionRow let-session>
+        <li class="group relative">
+            @if (renamingSessionId() === session.sessionId) {
+                <!-- Inline rename input -->
+                <div class="flex items-center gap-1 rounded-md px-2 py-1">
+                    <input
+                        #renameInput
+                        type="text"
+                        [value]="renameValue()"
+                        (input)="renameValue.set(renameInput.value)"
+                        (keydown)="onRenameKeydown($event, session)"
+                        (blur)="onRenameSubmit(session)"
+                        class="min-w-0 flex-1 rounded-md border border-gray-300 bg-white px-2 py-1 text-sm/5 font-medium text-gray-900 outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:focus:border-primary-400 dark:focus:ring-primary-400"
+                        aria-label="Rename conversation"
+                    />
+                </div>
+            } @else {
+                <a
+                    [routerLink]="['/s', getSessionId(session.sessionId)]"
+                    [queryParams]="getSessionQueryParams(session)"
+                    routerLinkActive="session-row--active bg-gray-200 !font-medium !text-secondary-500 dark:bg-white/5 dark:!text-white"
+                    (click)="onSessionClick(session)"
+                    class="flex min-h-8 items-center rounded-md px-2 py-1.5 pr-10 text-sm/5 font-normal text-gray-700 hover:bg-gray-50 hover:text-secondary-500 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-white"
+                >
+                    @if (isTitlePending(session)) {
+                        <!-- Title still generating (new conversation) — shimmer
+                             until the session_title event lands or the stream ends.
+                             Colour lives in the component stylesheet: on the active
+                             row (.session-row--active, whose highlight is bg-gray-200
+                             / dark:bg-white/5) the shimmer darkens so it stays
+                             visible against it (see .title-skeleton in the CSS).
+                             h-4 (1rem) matches the text cap-height; min-h-8 on the
+                             row keeps its height identical to a titled row so the
+                             skeleton→title swap causes no vertical jank. -->
+                        <span
+                            class="title-skeleton h-4 w-3/5 shrink-0 rounded-md animate-pulse motion-reduce:animate-none"
+                            role="status"
+                            aria-label="Generating conversation title"
+                        ></span>
+                    } @else {
+                        <!-- Keyed by the title string so the fade replays when the
+                             generated title first replaces the skeleton (and on
+                             rename), mirroring the top-nav title reveal. -->
+                        @for (title of [getSessionTitle(session)]; track title) {
+                            <span class="session-title-enter min-w-0 truncate">{{ title }}</span>
+                        }
+                    }
+                    @if (isSessionStreaming(session.sessionId)) {
+                        <span class="sr-only">(response in progress)</span>
+                    } @else if (shouldShowUnreadDot(session)) {
+                        <span class="sr-only">(unread)</span>
+                    }
+                </a>
+                @if (isSessionStreaming(session.sessionId)) {
+                    <!-- Response-in-progress dot. While streaming it owns the
+                         pr-10 gutter outright — the ellipsis menu button below is
+                         not rendered, both to avoid overlapping the dot on hover
+                         (animate-pulse animates opacity, so a group-hover fade
+                         can't hide it) and because rename/share/delete shouldn't
+                         target a conversation mid-response. -->
+                    <span
+                        class="pointer-events-none absolute right-3 top-1/2 size-2 -translate-y-1/2 rounded-full bg-secondary-500 animate-pulse motion-reduce:animate-none"
+                        aria-hidden="true"
+                    ></span>
+                } @else {
+                    @if (shouldShowUnreadDot(session)) {
+                        <!-- Unread dot: an unattended (scheduled) run finished, or a
+                             backgrounded response completed while the user was viewing
+                             another conversation. Static blue (vs. the pulsing
+                             secondary streaming dot) and, unlike the streaming dot, it
+                             fades when the ellipsis menu would occupy the same gutter —
+                             on hover and when the trigger is keyboard-focused
+                             (focus-visible). Crucially NOT on plain focus-within: the
+                             CDK menu restores focus to the in-row trigger on close, and
+                             hiding the dot for that (mouse-driven) focus is what made a
+                             just-marked-unread dot stay invisible until the next
+                             interaction. Cleared once the user opens the session. -->
+                        <span
+                            class="pointer-events-none absolute right-3 top-1/2 size-2 -translate-y-1/2 rounded-full bg-primary-500 transition-opacity group-hover:opacity-0 group-has-[button:focus-visible]:opacity-0 dark:bg-primary-400"
+                            aria-hidden="true"
+                        ></span>
+                    }
+                    <!-- Ellipsis menu button - visible on hover with fade-in animation -->
+                    <button
+                        type="button"
+                        [cdkMenuTriggerFor]="sessionMenu"
+                        [cdkMenuPosition]="menuPositions"
+                        [disabled]="deletingSessionId() === session.sessionId"
+                        class="session-menu-trigger absolute right-1 top-1/2 -translate-y-1/2 flex size-7 items-center justify-center rounded-md text-gray-500 opacity-0 transition-opacity duration-150 ease-in hover:bg-gray-200 hover:text-gray-700 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 group-hover:opacity-100 dark:text-gray-400 dark:hover:bg-white/10 dark:hover:text-gray-200"
+                        [attr.aria-label]="'Options for conversation: ' + getSessionTitle(session)"
+                        aria-haspopup="menu"
+                    >
+                        @if (deletingSessionId() === session.sessionId) {
+                            <ng-icon name="heroArrowPath" class="size-5 animate-spin" aria-hidden="true" />
+                        } @else {
+                            <ng-icon name="heroEllipsisHorizontalSolid" size="20" aria-hidden="true" />
+                        }
+                    </button>
+                }
+
+                <!-- Session options menu -->
+                <ng-template #sessionMenu>
+                    <div
+                        cdkMenu
+                        class="session-options-menu min-w-36 rounded-md bg-white py-1 shadow-lg ring-1 ring-black/5 focus:outline-hidden dark:bg-gray-800 dark:ring-white/10"
+                        role="menu"
+                        aria-orientation="vertical"
+                    >
+                        <button
+                            cdkMenuItem
+                            type="button"
+                            (click)="onRenameClick($event, session)"
+                            class="flex w-full items-center gap-2 px-3 py-2 text-sm/6 text-gray-700 hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
+                            role="menuitem"
+                        >
+                            <ng-icon name="heroPencilSquare" class="size-4" aria-hidden="true" />
+                            <span>Rename</span>
+                        </button>
+                        <button
+                            cdkMenuItem
+                            type="button"
+                            (click)="onShareClick($event, session)"
+                            class="flex w-full items-center gap-2 px-3 py-2 text-sm/6 text-gray-700 hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
+                            role="menuitem"
+                        >
+                            <ng-icon name="heroArrowUpOnSquare" class="size-4" aria-hidden="true" />
+                            <span>Share</span>
+                        </button>
+                        <button
+                            cdkMenuItem
+                            type="button"
+                            (click)="onExportClick($event, session)"
+                            class="flex w-full items-center gap-2 px-3 py-2 text-sm/6 text-gray-700 hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
+                            role="menuitem"
+                        >
+                            <ng-icon name="heroCloudArrowUp" class="size-4" aria-hidden="true" />
+                            <span>Save to…</span>
+                        </button>
+                        <button
+                            cdkMenuItem
+                            type="button"
+                            (click)="onToggleReadClick($event, session)"
+                            class="flex w-full items-center gap-2 px-3 py-2 text-sm/6 text-gray-700 hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
+                            role="menuitem"
+                        >
+                            <ng-icon [name]="shouldShowUnreadDot(session) ? 'heroEnvelopeOpen' : 'heroEnvelope'" class="size-4" aria-hidden="true" />
+                            <span>{{ shouldShowUnreadDot(session) ? 'Mark as read' : 'Mark as unread' }}</span>
+                        </button>
+                        <button
+                            cdkMenuItem
+                            type="button"
+                            (click)="onDeleteClick($event, session)"
+                            class="flex w-full items-center gap-2 px-3 py-2 text-sm/6 text-state-danger-600 hover:bg-gray-50 focus:bg-gray-50 dark:text-state-danger-400 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
+                            role="menuitem"
+                        >
+                            <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
+                            <span>Delete</span>
+                        </button>
+                    </div>
+                </ng-template>
+            }
+        </li>
+    </ng-template>
 </nav>

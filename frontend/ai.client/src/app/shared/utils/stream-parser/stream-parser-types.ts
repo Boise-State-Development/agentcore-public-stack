@@ -377,6 +377,28 @@ export interface ModelRetryEvent {
 }
 
 /**
+ * A project's agent is running this turn without part of its setup, because
+ * the member lacks access to it (shared-projects §9.6, degrade-with-notice).
+ *
+ * Emitted before `message_start`. `message` is the ready-made sentence to
+ * show; the structured fields say what was dropped. Not persisted — it
+ * describes this turn's resolution, so it shows on the live turn only.
+ * `projectId`, `unavailableModelId` and `unavailableMemory` are omitted when
+ * null.
+ */
+export interface AgentNoticeEvent {
+  type: 'agent_notice';
+  sessionId: string;
+  agentId: string;
+  projectId?: string;
+  message: string;
+  unavailableModelId?: string;
+  unavailableTools: string[];
+  unavailableSkills: string[];
+  unavailableMemory?: string;
+}
+
+/**
  * What the agent is doing right now, emitted from the runtime's
  * `AgentStatusHook` at each model-call and tool-call boundary.
  *
@@ -598,6 +620,7 @@ export type StreamEventType =
   | 'session_title'
   | 'steering_applied'
   | 'model_retry'
+  | 'agent_notice'
   | 'agent_status'
   | 'tool_group_summary';
 
@@ -628,6 +651,7 @@ export type StreamEventData =
   | SessionTitleEvent
   | SteeringAppliedEvent
   | ModelRetryEvent
+  | AgentNoticeEvent
   | AgentStatusEvent
   | ToolGroupSummaryEvent
   | null

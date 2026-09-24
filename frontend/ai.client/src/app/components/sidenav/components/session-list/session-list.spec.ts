@@ -7,6 +7,7 @@ import { of } from 'rxjs';
 import { SessionService } from '../../../../session/services/session/session.service';
 import { SidenavService } from '../../../../services/sidenav/sidenav.service';
 import { ToastService } from '../../../../services/toast/toast.service';
+import { ProjectsService } from '../../../../projects/services/projects.service';
 
 describe('SessionList', () => {
   let mockSessionService: any;
@@ -14,6 +15,7 @@ describe('SessionList', () => {
   let mockToastService: any;
   let mockDialog: any;
   let mockRouter: any;
+  let mockProjectsService: any;
 
   const mockSession = {
     sessionId: 'test-session',
@@ -44,6 +46,12 @@ describe('SessionList', () => {
     mockToastService = { success: vi.fn(), error: vi.fn() };
     mockDialog = { open: vi.fn().mockReturnValue({ closed: of(true) }) };
     mockRouter = { navigate: vi.fn() };
+    mockProjectsService = {
+      projects$: signal([{ projectId: 'prj_1', name: 'Enrollment Sync' }]),
+      available$: signal<boolean | null>(null),
+      loading$: signal(false),
+      load: vi.fn().mockResolvedValue(undefined),
+    };
 
     TestBed.configureTestingModule({
       providers: [
@@ -52,6 +60,7 @@ describe('SessionList', () => {
         { provide: ToastService, useValue: mockToastService },
         { provide: Dialog, useValue: mockDialog },
         { provide: Router, useValue: mockRouter },
+        { provide: ProjectsService, useValue: mockProjectsService },
       ],
     });
   });
@@ -304,5 +313,59 @@ describe('SessionList', () => {
     // Stream ends without a title → shimmer clears; row shows the fallback.
     chatState.setChatLoading('test-session', false);
     expect(component['isTitlePending'](untitled)).toBe(false);
+  });
+
+  describe('project grouping', () => {
+    const now = new Date().toISOString();
+    const plain = (id: string) => ({ ...mockSession, sessionId: id, lastMessageAt: now, createdAt: now });
+    const task = (id: string, projectId: string) => ({ ...plain(id), preferences: { assistantId: 'ast', projectId } });
+
+    it('groups project tasks under their project inside the time bucket, in recency order', async () => {
+      mockSessionService.mergedSessionsResource.set({
+        sessions: [plain('a'), task('b', 'prj_1'), plain('c'), task('d', 'prj_1'), task('e', 'prj_gone')],
+        nextToken: null,
+      });
+      const component = await createComponent();
+      const [today] = component.groupedSessions();
+      expect(today.label).toBe('Today');
+      // Buckets keep every session; grouping only reshapes the rows.
+      expect(today.sessions.map((s: any) => s.sessionId)).toEqual(['a', 'b', 'c', 'd', 'e']);
+      expect(today.entries.map((e: any) => (e.kind === 'session' ? e.session.sessionId : `${e.name}:${e.sessions.map((s: any) => s.sessionId).join(',')}`))).toEqual([
+        'a',
+        'Enrollment Sync:b,d',
+        'c',
+        // Not in the caller's project list (left, or not loaded yet): a generic heading.
+        'Project:e',
+      ]);
+    });
+
+    it('loads project names once, and only for someone with a project task', async () => {
+      await createComponent();
+      TestBed.tick();
+      expect(mockProjectsService.load).not.toHaveBeenCalled();
+
+      mockSessionService.mergedSessionsResource.set({ sessions: [task('b', 'prj_1')], nextToken: null });
+      TestBed.tick();
+      mockSessionService.mergedSessionsResource.set({ sessions: [task('b', 'prj_1'), task('x', 'prj_1')], nextToken: null });
+      TestBed.tick();
+      expect(mockProjectsService.load).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not reload a project list that is already loaded', async () => {
+      mockProjectsService.available$.set(true);
+      mockSessionService.mergedSessionsResource.set({ sessions: [task('b', 'prj_1')], nextToken: null });
+      await createComponent();
+      TestBed.tick();
+      expect(mockProjectsService.load).not.toHaveBeenCalled();
+    });
+
+    it('passes the project to the share modal', async () => {
+      const component = await createComponent();
+      const event = { preventDefault: vi.fn(), stopPropagation: vi.fn() } as unknown as Event;
+      (component as any).onShareClick(event, task('b', 'prj_1'));
+      expect(mockDialog.open.mock.calls.at(-1)[1].data.projectId).toBe('prj_1');
+      (component as any).onShareClick(event, plain('a'));
+      expect(mockDialog.open.mock.calls.at(-1)[1].data.projectId).toBeNull();
+    });
   });
 });

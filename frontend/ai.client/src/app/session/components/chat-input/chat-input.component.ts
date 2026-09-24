@@ -28,6 +28,7 @@ import { heroArrowUpSolid, heroStopSolid } from '@ng-icons/heroicons/solid';
 import { ModelDropdownComponent } from '../../../components/model-dropdown/model-dropdown.component';
 import { AnnouncementBannerComponent } from '../../../components/announcement-banner/announcement-banner.component';
 import { QuotaWarningBannerComponent } from '../../../components/quota-warning-banner/quota-warning-banner.component';
+import { AgentNoticeBannerComponent } from '../agent-notice-banner/agent-notice-banner.component';
 import { TooltipDirective } from '../../../components/tooltip';
 import { FileCardComponent } from '../../../components/file-card';
 import { StorageQuotaBannerComponent } from '../../../components/storage-quota-banner';
@@ -233,7 +234,7 @@ function dedupeAttachments(attachments: StoredAttachment[]): StoredAttachment[] 
 
 @Component({
   selector: 'app-chat-input',
-  imports: [AnnouncementBannerComponent, FormsModule, ModelDropdownComponent, NgIcon, QuotaWarningBannerComponent, StorageQuotaBannerComponent, TooltipDirective, FileCardComponent, AgentMentionMenuComponent, SkillCommandMenuComponent, SpinnerComponent],
+  imports: [AgentNoticeBannerComponent, AnnouncementBannerComponent, FormsModule, ModelDropdownComponent, NgIcon, QuotaWarningBannerComponent, StorageQuotaBannerComponent, TooltipDirective, FileCardComponent, AgentMentionMenuComponent, SkillCommandMenuComponent, SpinnerComponent],
   // `relative` is the anchor the announcement banner floats against — it sits
   // `bottom-full` of this host, above the quota tabs and clear of the composer.
   host: { class: 'relative block' },

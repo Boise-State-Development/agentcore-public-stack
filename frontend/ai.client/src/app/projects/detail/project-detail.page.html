@@ -56,6 +56,12 @@
       </nav>
 
       @switch (activeTab()) {
+        @case ('tasks') {
+          <app-project-tasks [project]="p" />
+        }
+        @case ('files') {
+          <app-project-files [project]="p" />
+        }
         @case ('members') {
           <app-project-members [project]="p" (projectChange)="onProjectChange($event)" />
         }

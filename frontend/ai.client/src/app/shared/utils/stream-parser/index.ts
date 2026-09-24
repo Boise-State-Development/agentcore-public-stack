@@ -68,6 +68,7 @@ export {
   validateSessionTitleEvent,
   validateSteeringAppliedEvent,
   validateModelRetryEvent,
+  validateAgentNoticeEvent,
   validateAgentStatusEvent,
   validateToolGroupSummaryEvent,
 } from './stream-parser-core';
@@ -102,6 +103,7 @@ export type {
   SessionTitleEvent,
   SteeringAppliedEvent,
   ModelRetryEvent,
+  AgentNoticeEvent,
   AgentStatusEvent,
   ToolGroupSummaryEvent,
   McpUiCsp,

@@ -7,6 +7,8 @@ import { RouterTestingHarness } from '@angular/router/testing';
 import { of, throwError } from 'rxjs';
 import { ProjectDetailPage } from './project-detail.page';
 import { ProjectOverviewComponent } from './project-overview.component';
+import { ProjectTasksComponent } from './project-tasks.component';
+import { ProjectFilesComponent } from './project-files.component';
 import { ProjectMembersComponent } from './project-members.component';
 import { ProjectSettingsComponent } from './project-settings.component';
 import { ProjectApiService } from '../services/project-api.service';
@@ -19,6 +21,10 @@ import { Project } from '../models/project.model';
  */
 @Component({ selector: 'app-project-overview', template: 'overview-tab' })
 class OverviewStub { readonly project = input<Project>(); }
+@Component({ selector: 'app-project-tasks', template: 'tasks-tab' })
+class TasksStub { readonly project = input<Project>(); }
+@Component({ selector: 'app-project-files', template: 'files-tab' })
+class FilesStub { readonly project = input<Project>(); }
 @Component({ selector: 'app-project-members', template: 'members-tab' })
 class MembersStub { readonly project = input<Project>(); }
 @Component({ selector: 'app-project-settings', template: 'settings-tab' })
@@ -58,8 +64,10 @@ describe('ProjectDetailPage', () => {
       ],
     });
     TestBed.overrideComponent(ProjectDetailPage, {
-      remove: { imports: [ProjectOverviewComponent, ProjectMembersComponent, ProjectSettingsComponent] },
-      add: { imports: [OverviewStub, MembersStub, SettingsStub] },
+      remove: {
+        imports: [ProjectOverviewComponent, ProjectTasksComponent, ProjectFilesComponent, ProjectMembersComponent, ProjectSettingsComponent],
+      },
+      add: { imports: [OverviewStub, TasksStub, FilesStub, MembersStub, SettingsStub] },
     });
   });
 
@@ -78,6 +86,21 @@ describe('ProjectDetailPage', () => {
     expect(el.textContent).toContain('Editor');
     expect(el.textContent).toContain('overview-tab');
     expect(el.querySelector('[aria-current=page]')?.textContent?.trim()).toBe('Overview');
+  });
+
+  it('lists the tabs in order: Overview · Tasks · Files · Members · Settings', async () => {
+    const { el } = await open('/projects/prj_1');
+    const labels = Array.from(el.querySelectorAll('nav[aria-label="Project sections"] a')).map(a => a.textContent?.trim());
+    expect(labels).toEqual(['Overview', 'Tasks', 'Files', 'Members', 'Settings']);
+  });
+
+  it.each([
+    ['tasks', 'tasks-tab', 'Tasks'],
+    ['files', 'files-tab', 'Files'],
+  ])('opens %s from the URL', async (tab, content, label) => {
+    const { el } = await open(`/projects/prj_1/${tab}`);
+    expect(el.textContent).toContain(content);
+    expect(el.querySelector('[aria-current=page]')?.textContent?.trim()).toBe(label);
   });
 
   it('opens the tab named in the URL', async () => {

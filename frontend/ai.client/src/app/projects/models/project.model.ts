@@ -6,6 +6,9 @@
  * signed in yet (ownership transfer needs it).
  */
 
+import type { Document, KbUsage, UploadUrlResponse } from '../../assistants/models/document.model';
+import type { SessionMetadata } from '../../session/services/models/session-metadata.model';
+
 export type ProjectRole = 'owner' | 'editor' | 'viewer';
 export type MemberRole = 'editor' | 'viewer';
 export type ProjectStatus = 'active' | 'archived';
@@ -134,4 +137,51 @@ export interface SettingsVersion extends SettingsVersionSummary {
   skills: BindingRef[];
   fieldChanges: VersionFieldChange[];
   instructionsDiff: string[];
+}
+
+// ---- tasks --------------------------------------------------------------
+
+/** `GET /projects/{id}/tasks`: the caller's own tasks, the `/sessions` list shape. */
+export interface ProjectTasksResponse {
+  /** Newest first. */
+  sessions: SessionMetadata[];
+  /** Value cursor for the next page; null on the last one. */
+  nextToken: string | null;
+}
+
+/** A task a member shared with the project (a `SHARED_TASK#` pointer). */
+export interface SharedTask {
+  shareId: string;
+  title: string;
+  sharedByEmail: string;
+  sharedAt: string;
+  /** The existing `/shared/{shareId}` view. */
+  shareUrl: string;
+  /** The caller shared it, so the caller may revoke it. */
+  isMine: boolean;
+}
+
+export interface SharedTasksResponse {
+  /** Most recently shared first; one entry per task. */
+  tasks: SharedTask[];
+}
+
+// ---- files (the project agent's documents) -----------------------------
+
+export interface ProjectDocument extends Document {
+  /** Null when unknown: added before this was recorded, or by a former member. */
+  addedByEmail: string | null;
+}
+
+export interface ProjectDocumentsResponse {
+  documents: ProjectDocument[];
+  nextToken?: string | null;
+  kbUsage?: KbUsage | null;
+  /** Editor or owner on an active project. */
+  canEdit: boolean;
+}
+
+export interface ProjectUploadUrlResponse extends UploadUrlResponse {
+  /** "Everyone in {project} ({n} people) can open this file…" — shown at upload. */
+  notice: string;
 }

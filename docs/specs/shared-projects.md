@@ -474,6 +474,37 @@ Each PR targets `develop`, lands behind `PROJECTS_ENABLED` (default on, `=false`
     - Owner controls: editors-manage-members, archive or restore, and delete (archived only).
   - The sidenav has a Projects entry after Agents.
   - Axe (WCAG 2 A/AA) found nothing on list, Overview, Members and Settings in both themes, after one fix: the rail links use `dark:text-primary-50` on the gray card.
+
+  **1.8b (as built):**
+  - Tabs are now Overview · Tasks · Files · Members · Settings.
+  - **Tasks** (`project-tasks.component.ts`):
+    - "Your tasks" pages `GET /tasks` (20 per page) with "Show more". Each task opens `/s/{id}?assistantId={harnessAgentId}`.
+    - "Shared with the project" lists `GET /shared-tasks` and opens each entry in `/shared/{shareId}`.
+    - "Continue in my own task" calls `POST /shares/{id}/export`. It opens the fork on the project's agent, unless the project is archived; then the backend returns a plain session.
+    - Revoke (only when `isMine`) confirms, calls `DELETE /shares/{id}`, then re-reads the list, because the pointer can fall back to an older share of the same task.
+  - **Share to project.** `ShareModalData.projectId` comes from `preferences.projectId`, passed by the sidebar and topnav openers.
+    - "Project members" is listed first and pre-selected for a project task, and hidden otherwise.
+    - A 403 or 409 shows the API's `detail` inline. `createShare`, `revokeShare` and `exportSharedConversation` take `suppressErrorToast`, and callers that show errors inline set it.
+    - `ShareAccessLevel` adds `'project'`. Manage-shares labels such a share "Project members".
+    - The read-only share-link field gained `aria-label` (it was an axe failure before this PR).
+  - **Files** is a small project-scoped section (`project-files.component.ts`), not `KnowledgeBaseSectionComponent`. That component is hard-wired to `/assistants/{id}/…`, which refuses viewers.
+    - Only `DocumentService.uploadToS3` is reused. Everything else calls `/projects/{id}/knowledge/**`: list, per-document polling to `complete`/`failed`, download, delete, and `upload-failed` after an S3 error.
+    - The page states before upload that everyone in the project can open these files. The upload response's `notice` then replaces that sentence.
+    - Each file shows "Added by {email}", or "Added by Unknown" when the email is null. Controls follow `canEdit`; viewers get download only, and an archived project says why.
+    - The same 10 MB cap and file-type list as the agent editor.
+    - Not in this PR: connector import and web crawl. Their routes exist, and the Files tab can add them later.
+  - **Sidebar grouping** (`session-list`):
+    - `groupProjectSessions` splits each time bucket into plain rows and one group per project. A group sits where its newest task would, under a heading that links to `/projects/{id}`.
+    - Project names come from `ProjectsService`, loaded once and only when some session has a `projectId`. A project the caller can't see (they left, or it was purged) gets the heading "Project".
+    - `SessionService.mergeSessions` now fills an optimistic cache row's `preferences` from the API row. Without that, a task started in this tab stayed ungrouped (and had no "Project members" share option) until a reload. The topnav falls back to the list row for the same reason.
+  - **`agent_notice`**: event type, validator and `onAgentNotice` in the stream parser.
+    - `AgentNoticeService` keeps one notice per session. A dismissed notice stays dismissed while later turns repeat the same message; a new message shows again.
+    - `app-agent-notice-banner` renders the server's `message` above the composer, for the conversation on screen only.
+  - Verified against dev data (disposable project, since deleted): start a task, share it to the project, see it in Shared tasks, fork it into the project, revoke, sidebar grouping, file list/poll/download/delete and a failed upload.
+    - The browser's S3 PUT is refused by the documents bucket's CORS from any origin but `:4200`, so the upload success path was driven with the presigned URL from curl.
+    - Dev's docling rejects `.txt`, although both upload pickers offer it.
+    - The degrade notice could not be triggered with one user. It was rendered by setting the live service, and the parser path is covered by specs.
+  - Axe (WCAG 2 A/AA) found nothing on Tasks, Files (including the upload panel), the share modal (both states), the notice banner and the grouped sidebar, in both themes.
 - **1.9 Docs:** `docs-site/…/features/projects.md`, `admin/projects.md`, env-var table entries.
 
 ### Phase 2 — project memory

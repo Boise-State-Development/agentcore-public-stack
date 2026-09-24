@@ -59,6 +59,15 @@ describe('ProjectApiService', () => {
     ['saveSkills', 'PUT', `${BASE}/prj_1/skills`, () => service.saveBindings('prj_1', 'skills', [{ ref: 's' }])],
     ['versions', 'GET', `${BASE}/prj_1/instructions/versions?limit=50`, () => service.versions('prj_1')],
     ['version', 'GET', `${BASE}/prj_1/instructions/versions/3`, () => service.version('prj_1', 3)],
+    ['tasks', 'GET', `${BASE}/prj_1/tasks?limit=20`, () => service.tasks('prj_1')],
+    ['tasks (page 2)', 'GET', `${BASE}/prj_1/tasks?limit=20&nextToken=abc`, () => service.tasks('prj_1', 20, 'abc')],
+    ['sharedTasks', 'GET', `${BASE}/prj_1/shared-tasks`, () => service.sharedTasks('prj_1')],
+    ['files', 'GET', `${BASE}/prj_1/knowledge?limit=100`, () => service.files('prj_1')],
+    ['file', 'GET', `${BASE}/prj_1/knowledge/doc_1`, () => service.file('prj_1', 'doc_1')],
+    ['fileDownloadUrl', 'GET', `${BASE}/prj_1/knowledge/doc_1/download`, () => service.fileDownloadUrl('prj_1', 'doc_1')],
+    ['fileUploadUrl', 'POST', `${BASE}/prj_1/knowledge/upload-url`, () => service.fileUploadUrl('prj_1', { filename: 'a.pdf', contentType: 'application/pdf', sizeBytes: 3 })],
+    ['reportFileUploadFailure', 'POST', `${BASE}/prj_1/knowledge/doc_1/upload-failed`, () => service.reportFileUploadFailure('prj_1', 'doc_1', 'nope')],
+    ['deleteFile', 'DELETE', `${BASE}/prj_1/knowledge/doc_1`, () => service.deleteFile('prj_1', 'doc_1')],
   ];
 
   for (const [name, method, url, call] of calls) {
