@@ -171,6 +171,12 @@ export interface FrontendConfig {
   bucketName?: string;
   cloudFrontPriceClass: string;
   additionalCorsOrigins?: string; // Extra CORS origins to append (comma-separated)
+  /**
+   * CloudFront standard access logging for the SPA distribution. Default ON
+   * with a kill switch; `undefined` is treated as on so a hand-built config
+   * cannot silently turn it off by omission.
+   */
+  accessLogsEnabled?: boolean;
 }
 
 export interface AppApiConfig {
@@ -828,6 +834,13 @@ export function loadConfig(scope: cdk.App): AppConfig {
       bucketName: process.env.CDK_FRONTEND_BUCKET_NAME || scope.node.tryGetContext('frontend')?.bucketName,
       cloudFrontPriceClass: process.env.CDK_FRONTEND_CLOUDFRONT_PRICE_CLASS || scope.node.tryGetContext('frontend')?.cloudFrontPriceClass,
       additionalCorsOrigins: process.env.CDK_FRONTEND_CORS_ORIGINS || scope.node.tryGetContext('frontend')?.additionalCorsOrigins,
+      // Default ON with a kill switch, same empty-string-safe ternary as
+      // `projects` below: the workflow forwards an EMPTY STRING when the
+      // variable is unset, so treat empty/unset as the default (on) and only
+      // the literal "false" as the kill switch.
+      accessLogsEnabled: process.env.CDK_FRONTEND_ACCESS_LOGS_ENABLED
+        ? process.env.CDK_FRONTEND_ACCESS_LOGS_ENABLED !== 'false'
+        : scope.node.tryGetContext('frontend')?.accessLogsEnabled ?? true,
     },
     appApi: {
       // Precedence for every sizing knob: env var > FLAT dotted context >
