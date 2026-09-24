@@ -380,6 +380,16 @@ Each PR targets `develop`, lands behind `PROJECTS_ENABLED` (default on, `=false`
     - An archived project's composer gets a conversational error, not a disabled input, unless 1.8 disables it up front.
 
   **1.4b:** personal instructions (`UserSettings.personalInstructions` + precedence sentence). Separate because it changes every user's system prompt, not only project turns.
+  **1.4b (as built):**
+  - **A prerequisite bug fix shipped first (#1272).** The whole `<user_instructions>` block, including the 6,774-character default prompt, was capped at 8 KiB, so every agent's instructions were cut after about 1,400 characters (133 of 232 prod agents). Personal instructions appended after them would have been cut entirely. The fix caps what authors write at 100,000 characters (`MAX_AGENT_INSTRUCTIONS_CHARS`) and bounds the block at that plus 64 KiB of platform headroom.
+  - **Storage:** `UserSettings.personalInstructions`, at most 4,000 characters (`MAX_PERSONAL_INSTRUCTIONS_CHARS`), set through `PUT /users/me/settings`. Values are trimmed, and a blank value clears them.
+  - **Prompt:** the text is appended last in the instructions block as `## Personal Instructions`, after any `## Project Instructions` or `## Assistant-Specific Instructions`. The precedence sentence ("Where they conflict with the {X} above, follow the {X}.") is written only when there are agent or project instructions to rank against. The spec had the sentence once in the platform prompt; that would change every user's cached prefix to say something that matters only to users who have personal instructions.
+    - A user without personal instructions gets a byte-identical prompt, so their cached prefix stays warm.
+    - A user with them moves plain chats from the bare default prompt onto the safety-floor-wrapped prompt, the same shape agent chats already use. That costs one cache write per user when they first save.
+    - Project members share the project part of the prompt byte for byte. Only their own tail differs.
+  - **Where it applies:** every turn except Agent Designer previews, where an author is testing their agent. That covers plain chats, agents, project harnesses and `@`-mentions. Resumed turns reuse the paused snapshot's prompt. The two MCP App dispatch paths add the same text for plain sessions, so they reuse the turn's cached agent; an App's pushed model context lives on that agent's state.
+  - **Cost:** one settings `GetItem` per turn, shared with the default-model lookup, which used to read the same row separately. Voice mode does not read personal instructions yet.
+  - **Not built:** an SPA field. Until the settings page gains one, personal instructions can only be set through the API.
 - **1.5 Knowledge + tools + skills tabs:** proxy routes, `addedBy` on documents, upload-time "shared with all members" notice, instruction versions on save.
   **Split in two.** 1.5a covers settings (instructions, model, tools, skills) and history. 1.5b covers knowledge (the document proxy, `addedBy`, the upload notice). **1.5a (as built):**
   - **The project is the harness's only write path.** `PUT /assistants/{id}` and `PUT /agents/{id}` return 409 on a harness (`PROJECT_HARNESS_EDIT_MESSAGE`), which replaces 1.2's narrower visibility refusal. An edit there would skip the version history.

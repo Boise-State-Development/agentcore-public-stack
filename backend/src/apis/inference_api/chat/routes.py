@@ -71,6 +71,7 @@ from apis.shared.tools.injected import (
     WORKSPACE_TOOL_IDS,
     injected_tools_are_key_described,
 )
+from apis.shared.user_settings.models import MAX_PERSONAL_INSTRUCTIONS_CHARS
 from apis.shared.user_settings.repository import UserSettingsRepository
 
 from .app_context_dispatch import (
@@ -291,8 +292,69 @@ def compose_agent_system_prompt(base_prompt: str, instructions: str, *, project_
     cacheable system block, and two members of one project must render it identically or
     each member pays a cache write for the same project (the prompt-cache contract).
     """
-    heading = "Project Instructions" if project_harness else "Assistant-Specific Instructions"
-    return f"{base_prompt}\n\n## {heading}\n\n{instructions}"
+    return f"{base_prompt}\n\n## {_instructions_heading(project_harness)}\n\n{instructions}"
+
+
+def _instructions_heading(project_harness: bool) -> str:
+    return "Project Instructions" if project_harness else "Assistant-Specific Instructions"
+
+
+def compose_personal_instructions(system_prompt: str, personal: str, *, over: Optional[str]) -> str:
+    """Append the user's personal instructions, last in the instructions block.
+
+    ``over`` names the section above that wins a conflict: the agent's or the project's
+    instructions (shared-projects §4.5). The precedence sentence is written only when
+    there is something to rank, and nothing at all is written for a user with no
+    personal instructions, so their prompt, and its cached prefix, is unchanged.
+    """
+    precedence = f" Where they conflict with the {over} above, follow the {over}." if over else ""
+    return (
+        f"{system_prompt}\n\n## Personal Instructions\n\n"
+        f"The user's standing preferences for how you work with them.{precedence}\n\n{personal}"
+    )
+
+
+def personal_plain_prompt(system_prompt: Optional[str], personal: Optional[str]) -> Optional[str]:
+    """A turn without an agent: the request's (or the default) prompt plus personal instructions."""
+    if not personal:
+        return system_prompt
+    from agents.main_agent.core.system_prompt_builder import SystemPromptBuilder
+
+    base = system_prompt or SystemPromptBuilder().build(include_date=True)
+    return compose_personal_instructions(base, personal, over=None)
+
+
+async def _load_user_settings(user_id: Optional[str]) -> dict:
+    """The user's saved settings, or ``{}``. Best-effort: never blocks a turn."""
+    if not user_id:
+        return {}
+    try:
+        repo = UserSettingsRepository()
+        if not repo.enabled:
+            return {}
+        return await repo.get_settings(user_id)
+    except Exception:
+        logger.warning("Failed to load user settings", exc_info=True)
+        return {}
+
+
+def _personal_instructions(settings: dict) -> Optional[str]:
+    text = (settings.get("personalInstructions") or "").strip()
+    return text[:MAX_PERSONAL_INSTRUCTIONS_CHARS] or None
+
+
+async def _plain_turn_prompt(input_data, user_id: Optional[str]) -> Optional[str]:
+    """The system prompt a no-model App dispatch must pass to reuse the turn's cached agent.
+
+    The agent cache keys on the system prompt, so a dispatch that left out the personal
+    instructions a plain turn adds would build a second agent, and an App's pushed model
+    context (stashed on the agent's state) would never reach the next turn.
+    """
+    if input_data.rag_assistant_id:
+        return input_data.system_prompt
+    return personal_plain_prompt(
+        input_data.system_prompt, _personal_instructions(await _load_user_settings(user_id))
+    )
 
 
 async def _project_turn_refusal(project_id: Optional[str]) -> Optional[str]:
@@ -317,7 +379,9 @@ async def _project_turn_refusal(project_id: Optional[str]) -> Optional[str]:
     return None
 
 
-async def _resolve_user_default_model(user_id: str | None) -> tuple[str | None, str | None]:
+async def _resolve_user_default_model(
+    user_id: str | None, settings: Optional[dict] = None
+) -> tuple[str | None, str | None]:
     """Look up the user's persisted defaultModelId and resolve its provider.
 
     Returns ``(model_id, provider)``. When the request does not specify
@@ -331,15 +395,9 @@ async def _resolve_user_default_model(user_id: str | None) -> tuple[str | None, 
     """
     if not user_id:
         return None, None
-    try:
-        repo = UserSettingsRepository()
-        if not repo.enabled:
-            return None, None
-        settings = await repo.get_settings(user_id)
-        saved_id = settings.get("defaultModelId")
-    except Exception:
-        logger.warning("Failed to load user settings for default model lookup", exc_info=True)
-        return None, None
+    if settings is None:
+        settings = await _load_user_settings(user_id)
+    saved_id = settings.get("defaultModelId")
     if not saved_id:
         return None, None
 
@@ -1913,7 +1971,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                     current_user,
                 ),
                 model_id=input_data.model_id,
-                system_prompt=input_data.system_prompt,
+                system_prompt=await _plain_turn_prompt(input_data, user_id),
                 caching_enabled=caching_enabled,
                 provider=input_data.provider or registry_provider,
                 inference_params=inference_params,
@@ -1980,7 +2038,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                     current_user,
                 ),
                 model_id=input_data.model_id,
-                system_prompt=input_data.system_prompt,
+                system_prompt=await _plain_turn_prompt(input_data, user_id),
                 caching_enabled=caching_enabled,
                 provider=input_data.provider or registry_provider,
                 inference_params=inference_params,
@@ -2403,6 +2461,12 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     context_chunks = None
     augmented_message = input_data.message
     system_prompt = input_data.system_prompt  # Start with provided system prompt
+    # One settings read per turn: the default model and personal instructions both
+    # come from it. A preview is an author testing an agent, so it gets none of theirs.
+    user_settings = await _load_user_settings(user_id)
+    personal_instructions = (
+        None if is_preview_session(input_data.session_id) else _personal_instructions(user_settings)
+    )
     # Agent Designer Phase 3: governed capabilities resolved per invoking user
     # (D5). None ⇒ resolve exactly as today. Set in the assistant block below,
     # consumed at model resolution / prompt assembly; None on resume/continuation.
@@ -2862,6 +2926,14 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 "Assistant has no instructions - using fallback system prompt"
             )
 
+        # 5a. The user's personal instructions, below the agent's, which win a conflict.
+        if personal_instructions:
+            system_prompt = compose_personal_instructions(
+                system_prompt,
+                personal_instructions,
+                over=_instructions_heading(bool(turn_project_id)) if effective_instructions else None,
+            )
+
         # 5b. Agent Designer Phase 3: inject the bound Memory Space content (read-only)
         # after instructions, in either branch. Hydration re-reads via the invoker
         # (MemorySpaceService re-checks viewer+ internally). Empty for a fresh space.
@@ -2989,6 +3061,10 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 system_prompt = SystemPromptBuilder().build(include_date=True)
             system_prompt = append_active_prompt(system_prompt, prompt_name, prompt_text)
             logger.info(f"Appended custom system prompt: {prompt_name!r}")
+
+    # A turn without an agent carries the user's personal instructions too.
+    if not input_data.rag_assistant_id:
+        system_prompt = personal_plain_prompt(system_prompt, personal_instructions)
 
     # Per-session single-flight guard (docs/specs/session-single-flight-guard.md,
     # follow-up to PR #653). A client abort doesn't propagate through the
@@ -3167,7 +3243,9 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 effective_model_id = agent_model_override.model_id
                 effective_provider = agent_model_override.provider or effective_provider
             if not effective_model_id:
-                user_default_id, user_default_provider = await _resolve_user_default_model(user_id)
+                user_default_id, user_default_provider = await _resolve_user_default_model(
+                    user_id, settings=user_settings
+                )
                 if user_default_id:
                     # Re-check model access against the resolved id. The
                     # earlier guard only ran on `input_data.model_id`, so a

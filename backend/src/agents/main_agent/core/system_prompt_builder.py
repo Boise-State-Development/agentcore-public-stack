@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 # against an absurd prompt, not a budget for authors. It has to hold everything composed
 # into that block: the default platform prompt and date, an agent's instructions (capped
 # at save by MAX_AGENT_INSTRUCTIONS_CHARS), a bound memory block (MEMORY_INJECTION_MAX_BYTES,
-# 24 KB by default) and an active prompt template.
+# 24 KB by default), the user's personal instructions and an active prompt template.
 #
 # It used to be 8 KiB, sized for instructions alone, while the default prompt sharing it
 # had grown to ~6.8K characters, so every agent's instructions were silently cut after
