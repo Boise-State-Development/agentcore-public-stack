@@ -4,6 +4,7 @@ import { firstValueFrom } from 'rxjs';
 
 import { ConfigService } from '../../../services/config.service';
 import { AudioRecorderService } from '../voice/audio-recorder.service';
+import { DictationChimeService } from './dictation-chime.service';
 
 export type DictationStatus = 'idle' | 'connecting' | 'listening' | 'finishing';
 
@@ -70,6 +71,7 @@ export class DictationService {
   private readonly http = inject(HttpClient);
   private readonly config = inject(ConfigService);
   private readonly recorder = inject(AudioRecorderService);
+  private readonly chime = inject(DictationChimeService);
 
   private readonly _status = signal<DictationStatus>('idle');
   private readonly _segments = signal<Segment[]>([]);
@@ -105,9 +107,12 @@ export class DictationService {
    */
   async start(handlers: DictationHandlers): Promise<void> {
     if (this._status() !== 'idle') return;
+    // Inside the user's click, before the first await: the start chime plays
+    // once the socket is up, and a context created that late would be muted.
+    this.chime.prime();
     this.reset();
     this.handlers = handlers;
-    this._status.set('connecting');
+    this.setStatus('connecting');
 
     try {
       const ticket = await this.issueTicket();
@@ -132,7 +137,7 @@ export class DictationService {
       this.ready = true;
       for (const chunk of this.pendingChunks) this.ws?.send(chunk);
       this.pendingChunks = [];
-      this._status.set('listening');
+      this.setStatus('listening');
     } catch (err) {
       this.teardown();
       throw err;
@@ -148,7 +153,7 @@ export class DictationService {
       return;
     }
     if (status !== 'listening') return;
-    this._status.set('finishing');
+    this.setStatus('finishing');
     // Stopping the recorder flushes the last partial chunk through onPcmChunk.
     void this.recorder.stop().then(() => this.sendJson({ type: 'stop' }));
     this.finishTimer = setTimeout(() => this.end('stopped'), FINISH_TIMEOUT_MS);
@@ -319,7 +324,25 @@ export class DictationService {
     }
     this.handlers = null;
     this.reset();
-    this._status.set('idle');
+    this.setStatus('idle');
+  }
+
+  /**
+   * Every status change goes through here so the chimes track the mic, not
+   * the buttons: rising on the way into `listening` (the first moment speech
+   * is captured), falling on any way out of it — Done, Cancel, the time
+   * limit, or a dropped socket. An attempt that never reached `listening`
+   * made no start sound, so it makes no stop sound either.
+   */
+  private setStatus(next: DictationStatus): void {
+    const previous = this._status();
+    if (previous === next) return;
+    this._status.set(next);
+    if (next === 'listening') {
+      this.chime.play('start');
+    } else if (previous === 'listening') {
+      this.chime.play('stop');
+    }
   }
 
   private reset(): void {

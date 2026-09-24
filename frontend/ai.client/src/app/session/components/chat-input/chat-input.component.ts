@@ -11,6 +11,7 @@ import {
   afterNextRender,
   DestroyRef,
   ElementRef,
+  Injector,
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { v4 as uuidv4 } from 'uuid';
@@ -59,7 +60,6 @@ import {
   SkillCommand,
   SkillCommandService,
   findSkillCommands,
-  removeSkillCommand,
 } from '../../../services/skill/skill-command.service';
 import { SkillCommandMenuComponent } from './skill-command-menu.component';
 import { SteeringService } from '../../services/chat/steering.service';
@@ -70,11 +70,24 @@ import {
   StoredAttachment,
   StoredComposerDraft,
 } from '../../services/session/composer-draft-storage.service';
+import { ComposerHandoffService } from './composer-handoff.service';
+import { ComposerSegment, findHighlightRanges, toSegments } from './composer-highlights';
 
-// Must stay in sync with the inline min-height/max-height on the textarea in
-// chat-input.component.html.
+// Must stay in sync with the min-height/max-height classes on the textarea in
+// chat-input.component.html (`textareaClass`).
 const MIN_TEXTAREA_HEIGHT_PX = 60;
+const COMPACT_MIN_TEXTAREA_HEIGHT_PX = 40;
 const MAX_TEXTAREA_HEIGHT_PX = 200;
+
+/**
+ * A compact textarea taller than this has wrapped onto a second line: one
+ * 24px line plus 8px padding top and bottom is 40, and the slack absorbs
+ * sub-pixel rounding without admitting a second line.
+ */
+const COMPACT_SINGLE_LINE_MAX_PX = 44;
+
+/** How long the shell takes to change height when the composer folds, unfolds or docks. */
+const SHELL_RESIZE_MS = 200;
 
 /** The composer's resting placeholder, and the string the rotation settles back on. */
 const IDLE_PLACEHOLDER = 'How can I help you today?';
@@ -264,6 +277,9 @@ export class ChatInputComponent {
   private readonly dictation = inject(DictationService);
   protected readonly systemPromptsService = inject(SystemPromptsService);
   private readonly router = inject(Router);
+  private readonly handoff = inject(ComposerHandoffService);
+  private readonly injector = inject(Injector);
+  private readonly destroyRef = inject(DestroyRef);
 
   // Input: session ID for file uploads
   readonly sessionId = input<string | null>(null);
@@ -332,7 +348,17 @@ export class ChatInputComponent {
    */
   readonly draftKey = input<string | null>(null);
 
+  /**
+   * The conversation layout: one row — attach, text, speech controls — with
+   * the model picker and the cost/context line moved beneath the shell. False
+   * (the default) is the roomy empty-state composer, which keeps the picker in
+   * its own bar. The container sets this once the conversation has messages.
+   */
+  readonly compact = input<boolean>(false);
+
   private readonly messageInput = viewChild<ElementRef<HTMLTextAreaElement>>('messageInput');
+  private readonly shell = viewChild<ElementRef<HTMLElement>>('shell');
+  private readonly highlightMirror = viewChild<ElementRef<HTMLElement>>('highlightMirror');
 
   // Use the input directly - parent controls loading state
   protected readonly isLoading = computed(() => this.isChatLoading());
@@ -477,6 +503,104 @@ export class ChatInputComponent {
   );
 
   // =========================================================================
+  // Layout
+  //
+  // There is no send button: Enter sends, and a button nobody clicked was
+  // costing a row of height on every conversation page. What the button also
+  // did has to live somewhere else, and each piece has its own home:
+  //
+  // - **Stop** takes voice mode's slot while a response streams (and Escape
+  //   stops, when no menu or dictation is using the key).
+  // - **Send on touch.** A phone has no Enter a user thinks of as "send", so on
+  //   a coarse pointer return adds a line and a send button appears, in the
+  //   same slot, only once there is something to send.
+  // - **Why Enter did nothing** — an upload still in flight — is said in words
+  //   on the status line under the shell, where the disabled button used to
+  //   say it by being grey.
+  //
+  // Compact is one row while the draft fits on one line. Once it wraps, the
+  // text takes the full width and the buttons drop to a bar beneath it (the
+  // empty state's shape), so a long draft is not framed by two columns of dead
+  // space. It folds back only when the draft is empty again: folding at the
+  // wrap point would flip the layout back and forth on every keystroke that
+  // crossed it.
+  // =========================================================================
+
+  /** A compact draft that wrapped and took the full width. */
+  protected readonly unfolded = signal(false);
+
+  /** Text on top, controls in a bar beneath: the empty state, or a compact draft that wrapped. */
+  protected readonly stacked = computed(() => !this.compact() || this.unfolded());
+
+  /**
+   * Whether the primary pointer is a finger. Read live rather than once: a
+   * tablet that gains a trackpad, or devtools' device toggle, flips it.
+   */
+  protected readonly isCoarsePointer = signal(false);
+
+  /** There is something a send would carry. */
+  private readonly hasDraft = computed(
+    () => this.userInput().trim().length > 0 || this.attachmentIds().length > 0,
+  );
+
+  /** Stop, in voice mode's slot. Voice runs its own stop inside the overlay. */
+  protected readonly showStop = computed(
+    () => this.isLoading() && !this.isVoiceActive() && !this.isDictating(),
+  );
+
+  /**
+   * Send, for touch only. Makes the same decision Enter does (`onSubmit`), so
+   * mid-stream it queues a follow-up exactly as a keyboard user's Enter would.
+   */
+  protected readonly showTouchSend = computed(
+    () => this.isCoarsePointer() && this.hasDraft() && !this.isDictating(),
+  );
+
+  /** Voice mode keeps its slot unless Stop or touch Send needs it — or voice is live, to end it. */
+  protected readonly showVoiceSlot = computed(
+    () =>
+      this.showVoiceControl() &&
+      (this.isVoiceActive() || (!this.showStop() && !this.showTouchSend())),
+  );
+
+  /**
+   * One short line on the status side of the meta line, standing in for cost
+   * and context while it applies. Only for the states where the composer is
+   * doing something the user did not see coming — a queue held behind a prompt
+   * already explains itself in the shelf above the text.
+   */
+  protected readonly statusHint = computed<string | null>(() => {
+    if (this.isDictating()) {
+      return this.dictationStatus() === 'connecting'
+        ? 'Starting dictation…'
+        : 'Enter to insert · Esc to cancel';
+    }
+    if (this.hasActivePendingUploads()) return 'Enter sends once the upload finishes';
+    // Compact only: the empty state's composer streams for a frame or two at
+    // most — until the first send swaps it out — and a line flashing in under
+    // it for that long reads as a glitch, not a hint.
+    if (this.showStop() && this.compact() && !this.isCoarsePointer()) return 'Esc to stop';
+    return null;
+  });
+
+  /**
+   * Whether the line beneath the shell renders. Always in compact — it holds
+   * the model picker — and in the empty state only while there is a status to
+   * say, since the empty state has no cost yet and keeps its picker in the bar.
+   */
+  protected readonly showMetaLine = computed(() => this.compact() || this.statusHint() !== null);
+
+  /**
+   * Padding shared by the textarea, the highlight mirror behind it and the
+   * hint overlay in front of it. The three must wrap identically, or the
+   * highlight drifts off its token and the hint off the placeholder.
+   */
+  protected readonly fieldPadding = computed(() => {
+    if (!this.compact()) return 'px-2 py-4';
+    return this.unfolded() ? 'px-2 pt-2 pb-1' : 'px-2 py-2';
+  });
+
+  // =========================================================================
   // Rotating discovery hints
   //
   // `@` and `/` are the two shortcuts nothing on the page advertises: each one
@@ -566,7 +690,8 @@ export class ChatInputComponent {
     const text = this.isDictating()
       ? 'italic text-gray-600 dark:text-gray-300'
       : 'text-gray-900 dark:text-gray-100';
-    return `${placeholder} ${text}`;
+    const minHeight = this.compact() ? 'min-h-10' : 'min-h-15';
+    return `${placeholder} ${text} ${minHeight} ${this.fieldPadding()}`;
   });
 
   /** Whether the hint is still advancing, as opposed to resting on the idle line. */
@@ -728,8 +853,8 @@ export class ChatInputComponent {
    * **One mention per turn.** D11 hands *the* turn to *an* Agent, so a second mention has
    * nothing to mean. Suppressing the menu while one is pending also stops it re-opening
    * when the caret lands back inside the `@Name` text already committed — names contain
-   * spaces, so that would otherwise happen constantly. The chip's `✕` is how you change
-   * your mind.
+   * spaces, so that would otherwise happen constantly. Deleting the `@Name` is how you
+   * change your mind (`dropStaleMention`).
    */
   readonly isMentionMenuOpen = computed(
     () =>
@@ -802,6 +927,27 @@ export class ChatInputComponent {
   }
 
   /**
+   * The draft split into plain and live runs, for the mirror layer painted
+   * behind the textarea — or null when nothing in it is live, so the mirror is
+   * not rendered at all.
+   *
+   * This is the whole indicator for `@` and `/` now. A chip beside the input
+   * said the same thing as the token already in the text, and cost the compact
+   * row its width; a tint on the token itself says it in place. Off while
+   * dictating, when the textarea shows a preview rather than `userInput`.
+   */
+  protected readonly highlightSegments = computed<ComposerSegment[] | null>(() => {
+    if (this.isDictating()) return null;
+    const text = this.userInput();
+    const ranges = findHighlightRanges(
+      text,
+      this.mentionedAgent()?.name ?? null,
+      this.invokedSkills().map((command) => command.slug),
+    );
+    return toSegments(text, ranges);
+  });
+
+  /**
    * Only one of the two menus is ever open. `@` wins a tie because it is the narrower
    * token (a `@` cannot also be the start of a `/` command), and because both menus
    * claiming the arrow keys would make neither usable.
@@ -836,6 +982,29 @@ export class ChatInputComponent {
     afterNextRender(() => {
       this.focusInput();
       this.sizeTextareaTo(untracked(this.userInput));
+      // A compact composer mounted by the first send: shrink from the empty
+      // state's composer rather than appearing at the final size.
+      if (untracked(this.compact)) {
+        const from = this.handoff.take();
+        const shell = this.shell()?.nativeElement;
+        if (from && shell) this.animateShellFrom(shell, from);
+      }
+    });
+
+    if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
+      const pointer = window.matchMedia('(pointer: coarse)');
+      this.isCoarsePointer.set(pointer.matches);
+      const onPointerChange = (event: MediaQueryListEvent) => this.isCoarsePointer.set(event.matches);
+      pointer.addEventListener?.('change', onPointerChange);
+      this.destroyRef.onDestroy(() => pointer.removeEventListener?.('change', onPointerChange));
+    }
+
+    // Fold a wrapped compact draft back to one row once it is empty — after a
+    // send, a queue, or the user clearing it. Never earlier: see "Layout".
+    effect(() => {
+      if (this.unfolded() && this.userInput().length === 0 && !this.isDictating()) {
+        untracked(() => this.setUnfolded(false));
+      }
     });
     // ...and whenever the session changes (new or existing). When switching
     // between sessions in the messages view the component instance is reused,
@@ -1193,12 +1362,13 @@ export class ChatInputComponent {
   }
 
   /**
-   * Enter (and the send affordance when idle). While a response is streaming
-   * this **queues** rather than stopping: Enter always means "say this".
+   * Enter (and the touch Send button). While a response is streaming this
+   * **queues** rather than stopping: Enter always means "say this".
    *
-   * Stopping stays on the button, deliberately. Making Enter ambiguous — send
-   * when idle, abort when busy — is what let a reflex keystroke kill a run the
-   * user was waiting on, and stopping is the rarer, more destructive of the two.
+   * Stopping has its own controls — the Stop button in voice mode's slot, and
+   * Escape — deliberately. Making Enter ambiguous (send when idle, abort when
+   * busy) is what let a reflex keystroke kill a run the user was waiting on,
+   * and stopping is the rarer, more destructive of the two.
    *
    * `queueHeld()` is the second reason to queue, and it is NOT covered by
    * `isLoading()`: a turn paused for consent or approval has already closed its
@@ -1213,21 +1383,6 @@ export class ChatInputComponent {
       this.queueChatRequest();
     } else {
       this.submitChatRequest();
-    }
-  }
-
-  /**
-   * The round button on the right. Unlike Enter it keeps its old meaning while
-   * streaming — it is the only Stop affordance, and taking that away to make
-   * room for a second Send would leave a user with text typed unable to stop.
-   */
-  onPrimaryButtonClick() {
-    if (this.isLoading()) {
-      this.cancelChatRequest();
-    } else {
-      // Not streaming, so this is Send — but it must make the same decision
-      // Enter does, or the two disagree while a prompt is holding the queue.
-      this.onSubmit();
     }
   }
 
@@ -1336,6 +1491,13 @@ export class ChatInputComponent {
     if (this.hasActivePendingUploads()) {
       this.toastService.warning('Upload in Progress', 'Please wait for file uploads to complete.');
       return;
+    }
+
+    // The empty state's composer is about to be replaced by a compact one (the
+    // first send navigates to the new conversation); leave it our height so the
+    // replacement shrinks from here instead of popping in.
+    if (!this.compact()) {
+      this.handoff.leave(this.shell()?.nativeElement.getBoundingClientRect().height ?? 0);
     }
 
     // Emit the message - parent is responsible for managing loading state
@@ -1515,9 +1677,33 @@ export class ChatInputComponent {
     this.settleHints();
     const textarea = event.target as HTMLTextAreaElement;
     this.userInput.set(textarea.value);
+    this.dropStaleMention(textarea.value);
     this.autoResize(textarea);
     this.syncMentionToken(textarea);
     this.syncSkillToken(textarea);
+  }
+
+  /**
+   * Keep the mention bound to the `@Name` in the text: once the user deletes or
+   * edits the name, the turn goes back to plain chat.
+   *
+   * The binding is still a separate pick (a hand-typed `@Name` binds nothing),
+   * but with no chip beside the input the highlighted name is the only thing
+   * saying the turn is handed off — so removing it has to un-hand it. Otherwise
+   * a user who deleted the name would send to an Agent with nothing on screen
+   * saying so.
+   */
+  private dropStaleMention(text: string): void {
+    const agent = this.mentionedAgent();
+    if (agent && !text.includes(`@${agent.name}`)) {
+      this.mentionedAgent.set(null);
+    }
+  }
+
+  /** The mirror behind the textarea has to scroll with it, or the tint slides off its token. */
+  onTextareaScroll(event: Event): void {
+    const mirror = this.highlightMirror()?.nativeElement;
+    if (mirror) mirror.scrollTop = (event.target as HTMLTextAreaElement).scrollTop;
   }
 
   // ---------------------------------------------------------------- mentions (D11)
@@ -1596,12 +1782,6 @@ export class ChatInputComponent {
     textarea.setSelectionRange(caretAfter, caretAfter);
     textarea.focus();
     this.autoResize(textarea);
-  }
-
-  /** Clear the pending mention; the turn goes back to plain chat. */
-  clearMention(): void {
-    this.mentionedAgent.set(null);
-    this.focusInput();
   }
 
   private closeMentionMenu(): void {
@@ -1697,24 +1877,6 @@ export class ChatInputComponent {
     this.autoResize(textarea);
   }
 
-  /**
-   * Clear one invoked skill.
-   *
-   * The command lives in the text, so un-invoking edits the text — there is no separate
-   * binding to drop. That is the point of deriving the set from the message: the chip and
-   * what gets sent cannot disagree.
-   */
-  clearSkillCommand(command: SkillCommand): void {
-    const textarea = this.messageInput()?.nativeElement;
-    const next = removeSkillCommand(this.userInput(), command.slug);
-    this.userInput.set(next);
-    if (textarea) {
-      textarea.value = next;
-      this.autoResize(textarea);
-    }
-    this.focusInput();
-  }
-
   private closeSkillMenu(): void {
     this.skillToken.set(null);
   }
@@ -1748,8 +1910,67 @@ export class ChatInputComponent {
    */
   private autoResize(textarea: HTMLTextAreaElement): void {
     textarea.style.height = 'auto';
+    if (this.needsUnfold(textarea)) {
+      // Sized again once the wider, stacked layout has rendered.
+      this.setUnfolded(true);
+      return;
+    }
     const height = Math.min(textarea.scrollHeight, MAX_TEXTAREA_HEIGHT_PX);
     textarea.style.height = `${height}px`;
+  }
+
+  /** A compact draft that no longer fits on its one line. */
+  private needsUnfold(textarea: HTMLTextAreaElement): boolean {
+    return (
+      this.compact() &&
+      !this.unfolded() &&
+      textarea.value.length > 0 &&
+      (textarea.value.includes('\n') || textarea.scrollHeight > COMPACT_SINGLE_LINE_MAX_PX)
+    );
+  }
+
+  /**
+   * Switch between the one-row and stacked compact layouts, animating the
+   * shell's height across the change. The textarea is re-sized after the new
+   * layout renders, because its width — and so its wrapping — just changed.
+   */
+  private setUnfolded(next: boolean): void {
+    if (untracked(this.unfolded) === next) return;
+    const shell = this.shell()?.nativeElement;
+    const from = shell?.getBoundingClientRect().height ?? 0;
+    this.unfolded.set(next);
+    afterNextRender(
+      {
+        write: () => {
+          const textarea = this.messageInput()?.nativeElement;
+          if (textarea) this.sizeTextareaTo(textarea.value);
+          if (shell) this.animateShellFrom(shell, from);
+        },
+      },
+      { injector: this.injector },
+    );
+  }
+
+  /**
+   * Ease the shell from `from` to wherever layout has just put it.
+   *
+   * A Web Animation on `height` rather than a CSS transition: the natural
+   * height is `auto`, which does not transition, and the change is a layout
+   * swap rather than a property the stylesheet could interpolate. Overflow is
+   * clipped only for the length of the animation, so the `@` / `/` menus the
+   * shell anchors are never cut off at rest.
+   */
+  private animateShellFrom(shell: HTMLElement, from: number): void {
+    if (this.prefersReducedMotion || typeof shell.animate !== 'function' || from <= 0) return;
+    const to = shell.getBoundingClientRect().height;
+    if (Math.abs(to - from) < 1) return;
+    shell.animate(
+      [
+        { height: `${from}px`, overflow: 'hidden' },
+        { height: `${to}px`, overflow: 'hidden' },
+      ],
+      { duration: SHELL_RESIZE_MS, easing: 'cubic-bezier(0.2, 0, 0, 1)' },
+    );
   }
 
   /** Collapse the textarea back to a single row (after submit or clear). */
@@ -1758,7 +1979,7 @@ export class ChatInputComponent {
     if (!textarea) {
       return;
     }
-    textarea.style.height = `${MIN_TEXTAREA_HEIGHT_PX}px`;
+    textarea.style.height = `${this.compact() ? COMPACT_MIN_TEXTAREA_HEIGHT_PX : MIN_TEXTAREA_HEIGHT_PX}px`;
     textarea.scrollTop = 0;
   }
 
@@ -1835,8 +2056,17 @@ export class ChatInputComponent {
       }
     }
 
-    // Submit on Enter (without Shift)
-    if (event.key === 'Enter' && !event.shiftKey) {
+    // Escape stops a streaming response — only down here, after every menu has
+    // had its chance at the key, so closing a menu never also kills the run.
+    if (event.key === 'Escape' && this.showStop()) {
+      event.preventDefault();
+      this.cancelChatRequest();
+      return;
+    }
+
+    // Submit on Enter (without Shift). On touch, return is the newline key a
+    // phone keyboard offers, and sending is the Send button's job.
+    if (event.key === 'Enter' && !event.shiftKey && !this.isCoarsePointer()) {
       event.preventDefault();
       this.onSubmit();
     }

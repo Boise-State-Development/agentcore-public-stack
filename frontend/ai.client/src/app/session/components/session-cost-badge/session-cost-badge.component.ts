@@ -81,7 +81,7 @@ const COST_COUNT_UP_MS = 650;
           @if (hasQuotaTooltip()) {
             <span
               role="tooltip"
-              class="pointer-events-none absolute bottom-full left-1/2 z-10 mb-2 w-60 -translate-x-1/2 rounded-md border border-gray-200 bg-white p-3 text-left shadow-lg opacity-0 transition-opacity duration-150 group-hover/quota:opacity-100 group-focus-within/quota:opacity-100 dark:border-gray-700 dark:bg-gray-800"
+              class="pointer-events-none absolute bottom-full -left-1 z-10 mb-2 w-60 rounded-md border border-gray-200 bg-white p-3 text-left shadow-lg opacity-0 transition-opacity duration-150 group-hover/quota:opacity-100 group-focus-within/quota:opacity-100 dark:border-gray-700 dark:bg-gray-800"
             >
               <span class="block text-[11px] font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
                 Quota usage
@@ -153,7 +153,7 @@ const COST_COUNT_UP_MS = 650;
             <!-- Hover/focus popover -->
             <span
               role="tooltip"
-              class="pointer-events-none absolute bottom-full left-1/2 z-10 mb-2 w-56 -translate-x-1/2 rounded-md border border-gray-200 bg-white p-3 text-left shadow-lg opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100 dark:border-gray-700 dark:bg-gray-800"
+              class="pointer-events-none absolute bottom-full -left-1 z-10 mb-2 w-56 rounded-md border border-gray-200 bg-white p-3 text-left shadow-lg opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100 dark:border-gray-700 dark:bg-gray-800"
             >
               <span class="block text-[11px] font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
                 Context window

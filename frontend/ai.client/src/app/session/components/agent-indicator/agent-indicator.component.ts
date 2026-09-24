@@ -12,7 +12,6 @@ import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroPencilSquare,
   heroPlusCircle,
-  heroChevronUp,
   heroUserGroup,
   heroLockClosed,
 } from '@ng-icons/heroicons/outline';
@@ -44,14 +43,14 @@ export interface AgentGovernance {
 }
 
 /**
- * The agent bound to the conversation, as a compact chip in the composer's
- * meta row — the left-hand counterpart of the cost + context badge on the
- * right. Sized and coloured to sit at the badge's weight, so the row reads as
- * one line of quiet metadata rather than a control competing with the input.
+ * The agent bound to the conversation, as the first crumb in the top nav:
+ * `Agent / Conversation title`. The conversation lives inside the agent, so
+ * the agent reads before the title, a step quieter than it.
  *
- * Opens an actions menu (New session, and for the owner Edit / Share) upward
- * and anchored to its own left edge, because it lives on the composer's left
- * edge: a centred menu would hang off the side of a narrow composer.
+ * Opens an actions menu (New session, and for the owner Edit / Share) downward
+ * and anchored to its own left edge, which is where it sits in the nav. On a
+ * phone the crumb shrinks to its emoji or avatar; the name stays in the
+ * button's accessible label and at the head of the menu.
  */
 @Component({
   selector: 'app-agent-indicator',
@@ -60,7 +59,6 @@ export interface AgentGovernance {
     provideIcons({
       heroPencilSquare,
       heroPlusCircle,
-      heroChevronUp,
       heroUserGroup,
       heroLockClosed,
     }),
@@ -96,12 +94,6 @@ export interface AgentGovernance {
             [attr.aria-label]="governanceLabel()"
           />
         }
-        <ng-icon
-          name="heroChevronUp"
-          class="pill-chevron"
-          [class.rotated]="menuOpen()"
-          aria-hidden="true"
-        />
       </button>
 
       @if (menuOpen()) {
@@ -187,29 +179,31 @@ export interface AgentGovernance {
       max-width: 100%;
     }
 
-    /* ── Chip ──
-       Same type size and ink as the cost badge it mirrors (text-xs, gray-500),
-       with a hover surface as the only hint that it is a control. */
+    /* ── Crumb ──
+       A step below the title it precedes (text-sm, medium, gray-600 against
+       the title's text-base semibold gray-900), with the same hover surface
+       the title button uses, so the two read as one breadcrumb. No chevron:
+       the title beside it already carries one, and two in a row is noise. */
     .agent-pill {
       display: inline-flex;
       align-items: center;
       gap: 0.375rem;
       min-width: 0;
       max-width: 100%;
-      height: 1.25rem;
+      height: 2rem;
       padding: 0 0.375rem;
       border-radius: 0.375rem;
-      font-size: 0.75rem;
-      line-height: 1;
-      color: var(--color-gray-500);
+      font-size: 0.875rem;
+      line-height: 1.25rem;
+      color: var(--color-gray-600);
       cursor: pointer;
-      animation: pill-enter 0.25s ease-out 0.35s backwards;
+      animation: pill-enter 0.2s ease-out backwards;
       transition: background 0.15s ease, color 0.15s ease;
 
       &:hover,
       &.open {
-        background: var(--color-gray-200);
-        color: var(--color-gray-800);
+        background: var(--color-gray-100);
+        color: var(--color-gray-900);
       }
 
       &:focus-visible {
@@ -219,17 +213,17 @@ export interface AgentGovernance {
     }
 
     :host-context(html.dark) .agent-pill {
-      color: var(--color-gray-400);
+      color: var(--color-gray-300);
 
       &:hover,
       &.open {
         background: rgba(255, 255, 255, 0.1);
-        color: var(--color-gray-100);
+        color: var(--color-white);
       }
     }
 
     .pill-emoji {
-      font-size: 0.8125rem;
+      font-size: 1rem;
       line-height: 1;
       flex-shrink: 0;
     }
@@ -238,10 +232,10 @@ export interface AgentGovernance {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      width: 0.875rem;
-      height: 0.875rem;
-      border-radius: 0.25rem;
-      font-size: 0.5625rem;
+      width: 1.125rem;
+      height: 1.125rem;
+      border-radius: 0.3125rem;
+      font-size: 0.625rem;
       font-weight: 700;
       color: var(--color-white);
       flex-shrink: 0;
@@ -256,31 +250,29 @@ export interface AgentGovernance {
       text-overflow: ellipsis;
     }
 
-    .pill-lock,
-    .pill-chevron {
+    /* Phone width: the nav also holds the sidebar and new-chat buttons, so the
+       crumb gives its width to the title and keeps only its mark. */
+    @media (max-width: 639px) {
+      .pill-name {
+        display: none;
+      }
+    }
+
+    .pill-lock {
       width: 0.75rem;
       height: 0.75rem;
       flex-shrink: 0;
       color: var(--color-gray-400);
     }
 
-    .pill-chevron {
-      transition: transform 0.2s ease;
-    }
-
-    .pill-chevron.rotated {
-      transform: rotate(180deg);
-    }
-
-    :host-context(html.dark) .pill-lock,
-    :host-context(html.dark) .pill-chevron {
+    :host-context(html.dark) .pill-lock {
       color: var(--color-gray-500);
     }
 
     /* ── Menu ── */
     .indicator-menu {
       position: absolute;
-      bottom: calc(100% + 0.375rem);
+      top: calc(100% + 0.375rem);
       left: 0;
       /* Sizes to content so a governance row like "Model  Claude Sonnet 5"
          reads on one line, but never wider than the viewport allows. */
@@ -294,7 +286,7 @@ export interface AgentGovernance {
       box-shadow:
         0 4px 16px rgba(0, 0, 0, 0.1),
         0 1px 4px rgba(0, 0, 0, 0.06);
-      transform-origin: bottom left;
+      transform-origin: top left;
       animation: menu-enter 0.15s cubic-bezier(0.16, 1, 0.3, 1) forwards;
       z-index: 50;
     }
@@ -465,12 +457,10 @@ export interface AgentGovernance {
       color: var(--color-gray-500);
     }
 
-    /* Matches the cost badge's entrance so the two ends of the meta row
-       arrive together. */
     @keyframes pill-enter {
       from {
         opacity: 0;
-        transform: translateY(6px);
+        transform: translateY(-4px);
       }
       to {
         opacity: 1;
@@ -481,7 +471,7 @@ export interface AgentGovernance {
     @keyframes menu-enter {
       0% {
         opacity: 0;
-        transform: translateY(4px) scale(0.96);
+        transform: translateY(-4px) scale(0.96);
       }
       100% {
         opacity: 1;
