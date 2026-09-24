@@ -61,7 +61,11 @@ from apis.shared.sessions.metadata import (
     ensure_session_metadata_exists,
     load_session_meta,
 )
-from apis.shared.tools.always_on import resolve_always_on_tool_ids, union_enabled_tools
+from apis.shared.tools.always_on import (
+    resolve_always_on_tool_ids,
+    resolve_system_tool_ids,
+    union_enabled_tools,
+)
 from apis.shared.tools.injected import (
     ARTIFACT_TOOL_IDS,
     EXCEL_SPREADSHEET_TOOL_IDS,
@@ -1091,11 +1095,21 @@ async def _apply_admin_always_on_tools(
     which applies to the effective list and so does reach Agent-bound turns:
     that one serves the *user's* intent (they attached the file), this one
     serves the *admin's* — and the Agent author is exercising admin intent too.
+
+    **System tools are the exception to the exception.** A ``system`` tool
+    (platform-shipped plumbing such as ``whoami``/``get_my_quota``) is part of
+    the app, not the user's picker and not the admin's per-deployment pin, so it
+    is unioned in on EVERY turn — including Agent-bound ones. An Agent author
+    scopes the *user-facing* toolset; they do not get to remove the platform's
+    own self-service capabilities. See .kiro/specs/platform-self-service/design.md.
     """
+    # Ungated by ADMIN_ALWAYS_ON_TOOLS_ENABLED and unaffected by agent binding:
+    # system capabilities are always available to a granted user.
+    system_ids = await resolve_system_tool_ids(current_user)
     if agent_bound_tools:
-        return enabled_tools
+        return _with_auto_enabled_tools(enabled_tools, system_ids)
     always_on_ids = await resolve_always_on_tool_ids(current_user)
-    return _with_auto_enabled_tools(enabled_tools, always_on_ids)
+    return _with_auto_enabled_tools(enabled_tools, always_on_ids + system_ids)
 
 
 def _estimate_decoded_size(file: "FileContent") -> int:

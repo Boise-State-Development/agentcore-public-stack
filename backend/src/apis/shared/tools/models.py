@@ -764,10 +764,33 @@ class ToolDefinition(BaseModel):
             "unaffected. See docs/specs/admin-always-on-tools.md."
         ),
     )
+    system: bool = Field(
+        default=False,
+        description=(
+            "Provenance flag: a platform-shipped ('system') capability, as "
+            "opposed to an admin-configured tool. A system tool is pinned into "
+            "every turn for users whose roles grant it — like `always_on`, but "
+            "it is part of the app rather than a per-deployment admin knob, so "
+            "it is included regardless of the ADMIN_ALWAYS_ON_TOOLS_ENABLED "
+            "flag. Implies `always_on`. See "
+            ".kiro/specs/platform-self-service/design.md."
+        ),
+    )
+    hidden: bool = Field(
+        default=False,
+        description=(
+            "If true, this tool is excluded from the user-facing Tools panel "
+            "toggle list (GET /tools/), but is still returned in the catalog "
+            "payload flagged `hidden` so the SPA can label a tool-use event in "
+            "the transcript. Used for pure-plumbing system tools (e.g. whoami) "
+            "the user should see the agent using but should not manage. Does "
+            "NOT affect whether the tool is in the model's effective toolset."
+        ),
+    )
 
     @model_validator(mode="after")
     def _normalize_always_on(self) -> "ToolDefinition":
-        """An always-on tool is necessarily on by default.
+        """An always-on (or system) tool is necessarily on by default.
 
         ``enabled_by_default=False`` + ``always_on=True`` is incoherent — the
         tool is pinned on for everyone, so "off until the user turns it on"
@@ -776,11 +799,19 @@ class ToolDefinition(BaseModel):
         (docs/specs/admin-always-on-tools.md §2.2), and this validator is what
         pays for that choice: it makes the invalid pair unrepresentable.
 
+        A ``system`` tool is a platform-shipped pin, so it implies ``always_on``
+        (and therefore ``enabled_by_default``). Normalising here means every
+        downstream reader — the effective-set resolver, the panel builder, the
+        freshness snapshot — can trust ``always_on`` alone without also testing
+        ``system``.
+
         ⚠️ **Load-bearing — do not delete as redundant.** It runs on read as
         well as write (``mode="after"`` fires for ``from_dynamo_item`` too), so
         a hand-written DynamoDB item cannot produce the invalid pair either.
         It retires only when the ``toolEnablement`` enum lands (§10.3).
         """
+        if self.system:
+            self.always_on = True
         if self.always_on and not self.enabled_by_default:
             self.enabled_by_default = True
         return self
@@ -871,6 +902,8 @@ class ToolDefinition(BaseModel):
             "isPublic": self.is_public,
             "enabledByDefault": self.enabled_by_default,
             "alwaysOn": self.always_on,
+            "system": self.system,
+            "hidden": self.hidden,
             "createdAt": to_iso(self.created_at) if self.created_at else None,
             "updatedAt": to_iso(self.updated_at) if self.updated_at else None,
             "createdBy": self.created_by,
@@ -942,6 +975,11 @@ class ToolDefinition(BaseModel):
             # Absent on every row written before always-on shipped, so it reads
             # back False and the tool behaves exactly as it did.
             always_on=item.get("alwaysOn", False),
+            # Absent on every row written before the system tier shipped, so
+            # they read back False and the tool is an ordinary, user-toggleable,
+            # visible tool (backward compatible).
+            system=item.get("system", False),
+            hidden=item.get("hidden", False),
             mcp_config=mcp_config,
             a2a_config=a2a_config,
             mcp_gateway_config=mcp_gateway_config,
@@ -1050,6 +1088,17 @@ class UserToolAccess(BaseModel):
         description="List of sources that grant access (e.g., ['public', 'power_user', 'researcher'])",
     )
     enabled_by_default: bool = Field(..., alias="enabledByDefault")
+    hidden: bool = Field(
+        default=False,
+        alias="hidden",
+        description=(
+            "This tool is a hidden system capability. The SPA MUST exclude it "
+            "from the Tools panel toggle list, but SHOULD keep it in its "
+            "in-memory tool map so a tool-use event in the transcript can be "
+            "labeled with the tool's display name and icon. See "
+            ".kiro/specs/platform-self-service/design.md."
+        ),
+    )
     always_on: bool = Field(
         default=False,
         alias="alwaysOn",

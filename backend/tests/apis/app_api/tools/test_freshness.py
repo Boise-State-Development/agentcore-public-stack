@@ -170,6 +170,78 @@ async def test_repository_error_falls_back_to_last_known_value():
         assert await freshness.get_tool_updated_at("gmail") is None
 
 
+def _sys_tool(tool_id: str, *, is_public: bool = False, system: bool = False):
+    """A catalog-tool stand-in carrying the attrs the snapshot pass reads."""
+    return SimpleNamespace(
+        tool_id=tool_id,
+        is_public=is_public,
+        system=system,
+        always_on=False,
+        mcp_config=None,
+        mcp_gateway_config=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_system_snapshot_contains_only_system_tools():
+    repo = _repo_with_tools(
+        _sys_tool("whoami", system=True),
+        _sys_tool("get_my_quota", system=True),
+        _sys_tool("search_web"),  # ordinary tool
+    )
+    with patch(
+        "apis.shared.tools.repository.get_tool_catalog_repository",
+        return_value=repo,
+    ):
+        system_ids = await freshness.get_system_tool_ids()
+
+    assert system_ids == frozenset({"whoami", "get_my_quota"})
+
+
+@pytest.mark.asyncio
+async def test_system_snapshot_shares_one_read_with_the_other_slots():
+    """All four id snapshots fill from a single list_tools() pass."""
+    repo = _repo_with_tools(
+        _sys_tool("whoami", system=True),
+        _sys_tool("public_tool", is_public=True),
+    )
+    with patch(
+        "apis.shared.tools.repository.get_tool_catalog_repository",
+        return_value=repo,
+    ):
+        await freshness.get_all_tool_ids()
+        await freshness.get_public_tool_ids()
+        await freshness.get_always_on_tool_ids()
+        await freshness.get_system_tool_ids()
+
+    # One read serves all four within the TTL window.
+    assert repo.list_tools.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_invalidate_clears_the_system_snapshot():
+    repo = _repo_with_tools(_sys_tool("whoami", system=True))
+    with patch(
+        "apis.shared.tools.repository.get_tool_catalog_repository",
+        return_value=repo,
+    ):
+        await freshness.get_system_tool_ids()
+        freshness.invalidate()
+        await freshness.get_system_tool_ids()
+
+    assert repo.list_tools.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_system_snapshot_never_raises_on_repo_error():
+    repo = SimpleNamespace(list_tools=AsyncMock(side_effect=RuntimeError("boom")))
+    with patch(
+        "apis.shared.tools.repository.get_tool_catalog_repository",
+        return_value=repo,
+    ):
+        assert await freshness.get_system_tool_ids() == frozenset()
+
+
 @pytest.mark.asyncio
 async def test_public_tool_ids_returns_only_flagged_tools():
     repo = _repo_with_tools(

@@ -120,7 +120,10 @@ async def _always_on_tool_ids_for_voice(
     if not user_info:
         return []
     from apis.shared.auth.models import User
-    from apis.shared.tools.always_on import resolve_always_on_tool_ids
+    from apis.shared.tools.always_on import (
+        resolve_always_on_tool_ids,
+        resolve_system_tool_ids,
+    )
 
     user = User(
         email=user_info.get("email", ""),
@@ -129,7 +132,12 @@ async def _always_on_tool_ids_for_voice(
         roles=user_info.get("roles") or [],
         raw_token=auth_token,
     )
-    return await resolve_always_on_tool_ids(user)
+    always_on = await resolve_always_on_tool_ids(user)
+    system = await resolve_system_tool_ids(user)
+    # Union preserving order; system ids appended after always-on. Dedup keeps
+    # a byte-stable list for the cacheable toolConfig prefix.
+    seen = set(always_on)
+    return always_on + [tid for tid in system if tid not in seen]
 
 
 async def _ensure_session_metadata(session_id: str, user_id: str) -> None:
