@@ -224,6 +224,8 @@ def test_the_kill_switch_shuts_the_harness_for_everyone(project, monkeypatch):
     monkeypatch.setenv("PROJECTS_ENABLED", "false")
     for user in (OWNER, EDITOR, VIEWER):
         assert access(created.harness_agent_id, user) == (None, None)
+        # What the agent document and sync-policy routes ask.
+        assert permission(created.harness_agent_id, user)[1] is None
     assert asyncio.run(is_disabled_project_harness(created.harness_agent_id))
     # An ordinary agent is untouched by the switch.
     assert access(plain.assistant_id, OWNER)[1] == "owner"
