@@ -8,6 +8,10 @@ This module contains all share-related data models including:
 
 from typing import List, Literal, Optional
 
+# "project" shares with every member of the Shared Project the task belongs to
+# (its session's ``preferences.projectId``); the read check is membership.
+ShareAccessLevel = Literal["public", "specific", "project"]
+
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from apis.shared.sessions.models import MessageResponse
@@ -18,7 +22,7 @@ class CreateShareRequest(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    access_level: Literal["public", "specific"] = Field(
+    access_level: ShareAccessLevel = Field(
         ..., alias="accessLevel", description="Access level for the share"
     )
     allowed_emails: Optional[List[str]] = Field(
@@ -43,7 +47,7 @@ class UpdateShareRequest(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    access_level: Optional[Literal["public", "specific"]] = Field(
+    access_level: Optional[ShareAccessLevel] = Field(
         default=None, alias="accessLevel", description="New access level for the share"
     )
     allowed_emails: Optional[List[str]] = Field(
@@ -71,11 +75,14 @@ class ShareResponse(BaseModel):
     share_id: str = Field(..., alias="shareId", description="Unique share identifier")
     session_id: str = Field(..., alias="sessionId", description="Original session identifier")
     owner_id: str = Field(..., alias="ownerId", description="User ID of the share creator")
-    access_level: Literal["public", "specific"] = Field(
+    access_level: ShareAccessLevel = Field(
         ..., alias="accessLevel", description="Access level for the share"
     )
     allowed_emails: Optional[List[str]] = Field(
         default=None, alias="allowedEmails", description="Allowed email addresses"
+    )
+    project_id: Optional[str] = Field(
+        default=None, alias="projectId", description="Project shared with (accessLevel 'project' only)"
     )
     created_at: str = Field(..., alias="createdAt", description="ISO 8601 timestamp of share creation")
     share_url: str = Field(..., alias="shareUrl", description="Shareable URL for the conversation")
@@ -125,7 +132,7 @@ class SharedConversationResponse(BaseModel):
 
     share_id: str = Field(..., alias="shareId", description="Unique share identifier")
     title: str = Field(..., description="Conversation title")
-    access_level: Literal["public", "specific"] = Field(
+    access_level: ShareAccessLevel = Field(
         ..., alias="accessLevel", description="Access level for the share"
     )
     created_at: str = Field(..., alias="createdAt", description="ISO 8601 timestamp of share creation")

@@ -245,12 +245,15 @@ def sessions_metadata_table(aws, monkeypatch):
             {"AttributeName": "GSI3_SK", "AttributeType": "S"},
             {"AttributeName": "GSI4_PK", "AttributeType": "S"},
             {"AttributeName": "GSI4_SK", "AttributeType": "S"},
+            {"AttributeName": "GSI5_PK", "AttributeType": "S"},
+            {"AttributeName": "GSI5_SK", "AttributeType": "S"},
         ],
         gsis=[
             _gsi("UserTimestampIndex", "GSI1PK", "GSI1SK"),
             _gsi("SessionLookupIndex", "GSI_PK", "GSI_SK"),
             _gsi("DueScheduleIndex", "GSI3_PK", "GSI3_SK"),
             _gsi("SessionRecencyIndex", "GSI4_PK", "GSI4_SK"),
+            _gsi("ProjectSessionIndex", "GSI5_PK", "GSI5_SK"),
         ],
     )
 

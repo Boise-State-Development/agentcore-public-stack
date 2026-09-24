@@ -77,3 +77,23 @@ class ProjectMember(BaseModel):
     invited_by: str = Field(..., alias="invitedBy")
     created_at: str = Field(..., alias="createdAt")
     updated_at: str = Field(..., alias="updatedAt")
+
+
+class SharedTask(BaseModel):
+    """A ``PROJECT#{id}`` / ``SHARED_TASK#{sessionId}`` pointer.
+
+    Written when a member shares one of their tasks to the project
+    (``access_level: "project"``). One per task: sharing it again moves the
+    pointer to the newer snapshot. The share row itself, in
+    ``shared-conversations``, is the grant; this row only makes it listable.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    project_id: str = Field(..., alias="projectId")
+    session_id: str = Field(..., alias="sessionId")
+    share_id: str = Field(..., alias="shareId")
+    owner_id: str = Field(..., alias="ownerId")
+    owner_email: str = Field(..., alias="ownerEmail")
+    title: str = ""
+    shared_at: str = Field(..., alias="sharedAt")
