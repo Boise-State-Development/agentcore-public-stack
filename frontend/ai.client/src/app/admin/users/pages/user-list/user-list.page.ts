@@ -13,6 +13,7 @@ import {
   heroChevronRight,
   heroXMark,
   heroArrowLeft,
+  heroExclamationTriangle,
 } from '@ng-icons/heroicons/outline';
 import { UserStateService } from '../../services/user-state.service';
 import { UserListItem, UserStatus } from '../../models';
@@ -24,7 +25,7 @@ import { SpinnerComponent } from '../../../../components/spinner/spinner.compone
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [FormsModule, NgIcon, SpinnerComponent],
   providers: [
-    provideIcons({ heroMagnifyingGlass, heroUser, heroChevronRight, heroXMark, heroArrowLeft }),
+    provideIcons({ heroMagnifyingGlass, heroUser, heroChevronRight, heroXMark, heroArrowLeft, heroExclamationTriangle }),
   ],
   host: {
     class: 'block p-6',
@@ -100,9 +101,24 @@ import { SpinnerComponent } from '../../../../components/spinner/spinner.compone
       </div>
     }
 
+    <!-- Duplicate profiles for one email -->
+    @if (state.emailMatchCount() > 1) {
+      <div
+        role="status"
+        class="mb-4 flex items-start gap-3 rounded-sm border border-state-warning-200 bg-state-warning-50 p-4 dark:border-state-warning-800 dark:bg-state-warning-900/20"
+      >
+        <ng-icon name="heroExclamationTriangle" class="size-5 shrink-0 text-state-warning-700 dark:text-state-warning-400" aria-hidden="true" />
+        <p class="text-sm/6 text-state-warning-800 dark:text-state-warning-200">
+          {{ state.emailMatchCount() }} profiles share this email. The first, with the most
+          recent login, is the account that signs in; the others are leftovers from an earlier
+          login setup. Quota overrides or tiers assigned to them reach nobody.
+        </p>
+      </div>
+    }
+
     <!-- User List -->
     <div class="space-y-2">
-      @for (user of state.users(); track user.userId) {
+      @for (user of state.users(); track user.userId; let first = $first) {
         <div
           (click)="viewUser(user)"
           (keydown.enter)="viewUser(user)"
@@ -121,6 +137,14 @@ import { SpinnerComponent } from '../../../../components/spinner/spinner.compone
           <div class="flex-1 min-w-0">
             <div class="flex items-center gap-2">
               <span class="font-medium truncate">{{ user.email }}</span>
+              @if (state.emailMatchCount() > 1) {
+                <span
+                  class="px-2 py-0.5 text-xs rounded-xs shrink-0"
+                  [class]="first ? 'bg-state-success-100 text-state-success-700 dark:bg-state-success-900/30 dark:text-state-success-400' : 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300'"
+                >
+                  {{ first ? 'Signs in' : 'Duplicate' }}
+                </span>
+              }
               @if (user.status !== 'active') {
                 <span
                   class="px-2 py-0.5 text-xs rounded-xs shrink-0"
@@ -133,6 +157,9 @@ import { SpinnerComponent } from '../../../../components/spinner/spinner.compone
             <div class="text-sm/6 text-gray-500 dark:text-gray-400">
               {{ user.name || 'No name' }} &middot; Last login:
               {{ formatDate(user.lastLoginAt) }}
+              @if (state.emailMatchCount() > 1) {
+                &middot; ID: <span class="font-mono">{{ user.userId }}</span>
+              }
             </div>
           </div>
 
