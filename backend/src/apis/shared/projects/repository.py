@@ -8,6 +8,7 @@ Row shapes:
 
   - ``PK=PROJECT#{id}  SK=META``           + ``GSI1PK=OWNER#{owner_id}  GSI1SK=PROJECT#{id}``
   - ``PK=PROJECT#{id}  SK=MEMBER#{email}`` + ``GSI2PK=MEMBER#{email}    GSI2SK=PROJECT#{id}``
+  - ``PK=PROJECT#{id}  SK=SHARED_TASK#{sessionId}`` — the newest project share of one task
 
 Three invariants the writes enforce, not the callers:
 
@@ -40,13 +41,14 @@ except ImportError:  # pragma: no cover - exercised only without boto3
 
 from apis.shared.dynamo_errors import is_missing_index_error, log_missing_index
 
-from .models import Project, ProjectMember, normalize_email
+from .models import Project, ProjectMember, SharedTask, normalize_email
 
 logger = logging.getLogger(__name__)
 
 META_SK = "META"
 MEMBER_SK_PREFIX = "MEMBER#"
 COST_SK_PREFIX = "COST#"
+SHARED_TASK_SK_PREFIX = "SHARED_TASK#"
 OWNER_INDEX = "OwnerIndex"
 MEMBER_INDEX = "MemberIndex"
 
@@ -404,6 +406,24 @@ class ProjectRepository:
             UpdateExpression=expression + ", userId = :uid",
             ExpressionAttributeValues={**values, ":uid": user_id},
         )
+
+    # ── shared tasks ────────────────────────────────────────────────────
+
+    def put_shared_task(self, pointer: SharedTask) -> None:
+        """Point the project at a task's share, replacing any older one for that task."""
+        item = pointer.model_dump(by_alias=True, exclude_none=True)
+        item.update(PK=project_pk(pointer.project_id), SK=f"{SHARED_TASK_SK_PREFIX}{pointer.session_id}")
+        self._table.put_item(Item=item)
+
+    def delete_shared_task(self, project_id: str, session_id: str) -> None:
+        self._table.delete_item(Key=self._key(project_id, f"{SHARED_TASK_SK_PREFIX}{session_id}"))
+
+    def list_shared_tasks(self, project_id: str) -> List[SharedTask]:
+        items = self._query_all(
+            KeyConditionExpression=Key("PK").eq(project_pk(project_id))
+            & Key("SK").begins_with(SHARED_TASK_SK_PREFIX)
+        )
+        return [SharedTask.model_validate(_strip_keys(i)) for i in items]
 
     # ── whole project ───────────────────────────────────────────────────
 

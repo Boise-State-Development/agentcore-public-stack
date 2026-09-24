@@ -35,6 +35,7 @@ from .models import (
 from .service import (
     AccessDeniedError,
     NotOwnerError,
+    ProjectShareError,
     SessionNotFoundError,
     ShareNotFoundError,
     ShareStorageUnavailableError,
@@ -79,6 +80,8 @@ async def create_share(
         )
     except SessionNotFoundError:
         raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+    except ProjectShareError as e:
+        raise HTTPException(status_code=e.status_code, detail=str(e))
     except NotOwnerError:
         raise HTTPException(status_code=403, detail="You do not have permission to share this session")
     except ShareTableNotFoundError:
@@ -138,6 +141,10 @@ async def update_share(
         )
     except ShareNotFoundError:
         raise HTTPException(status_code=404, detail="Share not found")
+    except SessionNotFoundError:
+        raise HTTPException(status_code=404, detail="The shared conversation no longer exists")
+    except ProjectShareError as e:
+        raise HTTPException(status_code=e.status_code, detail=str(e))
     except NotOwnerError:
         raise HTTPException(status_code=403, detail="You do not have permission to update this share")
     except ShareTableNotFoundError:

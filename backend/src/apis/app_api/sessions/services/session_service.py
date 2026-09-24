@@ -244,22 +244,23 @@ class SessionService:
 
             if old_sk == target_sk:
                 # Already migrated — soft-delete in place: flip status + drop the sparse
-                # recency keys so the row leaves the active listing. No row move.
+                # recency keys (user and project) so the row leaves both active
+                # listings. No row move.
                 self.table.update_item(
                     Key={'PK': pk, 'SK': target_sk},
                     UpdateExpression=(
                         "SET #s = :d, deleted = :true, deletedAt = :da "
-                        "REMOVE GSI4_PK, GSI4_SK"
+                        "REMOVE GSI4_PK, GSI4_SK, GSI5_PK, GSI5_SK"
                     ),
                     ExpressionAttributeNames={'#s': 'status'},
                     ExpressionAttributeValues={':d': 'deleted', ':true': True, ':da': deleted_at},
                 )
             else:
-                # Legacy row — migrate to the static tombstone (status=deleted, no GSI4)
-                # and drop the old row. One-time move; carry existing fields.
+                # Legacy row — migrate to the static tombstone (status=deleted, no
+                # recency keys) and drop the old row. One-time move; carry existing fields.
                 deleted_item = {
                     k: v for k, v in existing.items()
-                    if k not in ('PK', 'SK', 'GSI4_PK', 'GSI4_SK')
+                    if k not in ('PK', 'SK', 'GSI4_PK', 'GSI4_SK', 'GSI5_PK', 'GSI5_SK')
                 }
                 deleted_item.update({
                     'PK': pk,

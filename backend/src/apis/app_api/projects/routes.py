@@ -1,4 +1,5 @@
-"""``/projects`` — Shared Projects CRUD, members, transfer and leave (shared-projects §5, PR-1.2).
+"""``/projects`` — Shared Projects CRUD, members, transfer and leave (shared-projects §5, PR-1.2),
+and the caller's own and shared tasks (PR-1.6).
 
 Every route authenticates by session cookie first and only then applies the
 ``PROJECTS_ENABLED`` kill switch, so an unauthenticated caller always sees 401
@@ -28,6 +29,8 @@ from apis.shared.projects.service import (
     ProjectPermissionError,
     ProjectService,
 )
+from apis.shared.sessions.metadata import list_project_sessions
+from apis.shared.sessions.models import SessionMetadataResponse, SessionsListResponse
 
 from .harness_gateway import AppApiHarnessGateway
 from .models import (
@@ -38,6 +41,8 @@ from .models import (
     MembersResponse,
     ProjectListResponse,
     ProjectResponse,
+    SharedTaskResponse,
+    SharedTasksResponse,
     TransferOwnershipRequest,
     UpdateMemberRequest,
     UpdateProjectRequest,
@@ -146,6 +151,42 @@ def transfer_project(
     except ProjectError as e:
         raise _translate(e)
     return ProjectResponse.from_project(project, "editor")
+
+
+# ---- tasks -------------------------------------------------------------
+
+
+@router.get("/{project_id}/tasks", response_model=SessionsListResponse, response_model_exclude_none=True)
+async def list_tasks(
+    project_id: str,
+    limit: int = Query(50, ge=1, le=200),
+    next_token: Optional[str] = Query(None, alias="nextToken"),
+    user: User = Depends(require_projects_user),
+) -> SessionsListResponse:
+    """The caller's own tasks (sessions) in the project, most recent first.
+
+    Only ever the caller's: other members' tasks reach the project only by being
+    shared to it (``/shared-tasks``).
+    """
+    try:
+        _svc().get_project(project_id, user)
+    except ProjectError as e:
+        raise _translate(e)
+    sessions, token = await list_project_sessions(user.user_id, project_id, limit=limit, next_token=next_token)
+    return SessionsListResponse(
+        sessions=[SessionMetadataResponse.model_validate(s.model_dump(by_alias=True)) for s in sessions],
+        next_token=token,
+    )
+
+
+@router.get("/{project_id}/shared-tasks", response_model=SharedTasksResponse, response_model_by_alias=True)
+def list_shared_tasks(project_id: str, user: User = Depends(require_projects_user)) -> SharedTasksResponse:
+    """Tasks members have shared with the project (``accessLevel: "project"``)."""
+    try:
+        pointers = _svc().list_shared_tasks(project_id, user)
+    except ProjectError as e:
+        raise _translate(e)
+    return SharedTasksResponse(tasks=[SharedTaskResponse.from_pointer(p, user.user_id) for p in pointers])
 
 
 # ---- members -----------------------------------------------------------

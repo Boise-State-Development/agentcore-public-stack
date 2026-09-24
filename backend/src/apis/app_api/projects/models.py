@@ -18,6 +18,7 @@ from apis.shared.projects.models import (
     ProjectMember,
     ProjectRole,
     ProjectStatus,
+    SharedTask,
 )
 from apis.shared.projects.service import (
     DESCRIPTION_MAX_LENGTH,
@@ -153,3 +154,33 @@ class AddMembersResponse(BaseModel):
             over_capacity=result.over_capacity,
         )
 
+
+
+class SharedTaskResponse(BaseModel):
+    """A task a member shared with the project. Opened at ``shareUrl``, forked via ``POST /shares/{shareId}/export``."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    share_id: str = Field(..., alias="shareId")
+    title: str
+    shared_by_email: str = Field(..., alias="sharedByEmail")
+    shared_at: str = Field(..., alias="sharedAt")
+    share_url: str = Field(..., alias="shareUrl")
+    is_mine: bool = Field(..., alias="isMine", description="Whether the caller shared it (and so may revoke it)")
+
+    @classmethod
+    def from_pointer(cls, pointer: SharedTask, caller_id: str) -> "SharedTaskResponse":
+        return cls(
+            share_id=pointer.share_id,
+            title=pointer.title,
+            shared_by_email=pointer.owner_email,
+            shared_at=pointer.shared_at,
+            share_url=f"/shared/{pointer.share_id}",
+            is_mine=pointer.owner_id == caller_id,
+        )
+
+
+class SharedTasksResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    tasks: List[SharedTaskResponse] = Field(..., description="Most recently shared first")

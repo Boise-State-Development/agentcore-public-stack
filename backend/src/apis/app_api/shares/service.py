@@ -18,6 +18,10 @@ from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 
 from apis.shared.auth.models import User
+from apis.shared.feature_flags import projects_enabled
+from apis.shared.projects.access import resolve_project_role
+from apis.shared.projects.models import SharedTask
+from apis.shared.projects.repository import ProjectRepository
 from apis.shared.sessions.messages import get_messages
 from apis.shared.sessions.metadata import get_session_metadata, store_session_metadata
 
@@ -45,8 +49,14 @@ logger = logging.getLogger(__name__)
 class ShareService:
     """Handles share CRUD operations against the shared-conversations DynamoDB table."""
 
-    def __init__(self, snapshot_store: Optional[ShareSnapshotStore] = None) -> None:
+    def __init__(
+        self,
+        snapshot_store: Optional[ShareSnapshotStore] = None,
+        project_repository: Optional[ProjectRepository] = None,
+    ) -> None:
         table_name = os.environ.get("SHARED_CONVERSATIONS_TABLE_NAME", "")
+        # Built on first use: most shares never touch a project.
+        self._project_repository = project_repository
         self._table_name = table_name
         self._enabled = bool(table_name)
         # S3-backed snapshot body store. Injectable for tests; otherwise the
@@ -82,6 +92,10 @@ class ShareService:
         metadata = await get_session_metadata(session_id=session_id, user_id=user.user_id)
         if not metadata:
             raise SessionNotFoundError(session_id)
+
+        project_id = None
+        if request.access_level == "project":
+            project_id = self._require_shareable_project(metadata, user)
 
         # Snapshot messages
         messages_response = await get_messages(session_id=session_id, user_id=user.user_id)
@@ -143,6 +157,9 @@ class ShareService:
             "owner_email": user.email,
             "access_level": request.access_level,
             "created_at": now,
+            # Denormalized from the snapshot so a project pointer can be rebuilt
+            # from the row alone.
+            "title": str(metadata_snapshot.get("title") or ""),
             "body_ref": {
                 "bucket_key": bucket_key,
                 "format": "json",
@@ -152,8 +169,23 @@ class ShareService:
         }
         if allowed_emails is not None:
             item["allowed_emails"] = allowed_emails
+        if project_id:
+            item["project_id"] = project_id
 
         self._table.put_item(Item=item)
+        if project_id:
+            # Without its pointer a project share is unlisted, so the two land
+            # together or not at all.
+            try:
+                self._put_project_pointer(item)
+            except Exception:
+                logger.error(
+                    f"Project pointer write failed for share {self._sanitize_id(share_id)}; rolling back",
+                    exc_info=True,
+                )
+                self._table.delete_item(Key={"share_id": share_id})
+                self._delete_snapshot_body(item)
+                raise
         logger.info(f"Created share {self._sanitize_id(share_id)} for session {self._sanitize_id(session_id)}")
 
         return self._build_share_response(item)
@@ -194,11 +226,22 @@ class ShareService:
         attr_values: dict = {}
         remove_parts: list[str] = []
 
-        new_access = request.access_level or item.get("access_level")
+        old_access = item.get("access_level")
+        old_project_id = item.get("project_id")
+        new_access = request.access_level or old_access
 
         if request.access_level is not None:
             update_expr_parts.append("access_level = :al")
             attr_values[":al"] = request.access_level
+
+        if new_access == "project" and old_access != "project":
+            metadata = await get_session_metadata(session_id=item["session_id"], user_id=user.user_id)
+            if not metadata:
+                raise SessionNotFoundError(item["session_id"])
+            update_expr_parts.append("project_id = :pid")
+            attr_values[":pid"] = self._require_shareable_project(metadata, user)
+        elif new_access != "project" and old_project_id:
+            remove_parts.append("project_id")
 
         # Resolve allowed_emails
         if new_access == "specific":
@@ -231,6 +274,9 @@ class ShareService:
         updated = result.get("Attributes", item)
         logger.info(f"Updated share {item['share_id']}")
 
+        for project_id in {old_project_id, updated.get("project_id")} - {None}:
+            self._sync_project_pointer(item["session_id"], project_id)
+
         return self._build_share_response(updated)
 
     async def revoke_share(self, share_id: str, user: User) -> None:
@@ -246,6 +292,8 @@ class ShareService:
 
         self._table.delete_item(Key={"share_id": item["share_id"]})
         self._delete_snapshot_body(item)
+        if item.get("project_id"):
+            self._sync_project_pointer(item["session_id"], item["project_id"])
         logger.info(f"Revoked share {item['share_id']}")
 
     async def delete_shares_for_session(self, session_id: str) -> int:
@@ -277,6 +325,9 @@ class ShareService:
             # an S3 miss here only leaves an orphan object, never a live share.
             for item in items:
                 self._delete_snapshot_body(item)
+
+            for project_id in {i.get("project_id") for i in items} - {None}:
+                self._sync_project_pointer(session_id, project_id)
 
             logger.info(
                 f"Deleted {len(items)} share(s) for session "
@@ -344,6 +395,7 @@ class ShareService:
             created_at=now,
             last_message_at=now,
             message_count=message_count,
+            preferences=self._forked_project_preferences(metadata, requester),
         )
 
         await store_session_metadata(
@@ -512,6 +564,106 @@ class ShareService:
         sanitized = re.sub(r"[^a-zA-Z0-9\-_]", "", value)
         return sanitized[:max_length]
 
+    # ------------------------------------------------------------------
+    # Project shares
+
+    def _projects(self) -> ProjectRepository:
+        if self._project_repository is None:
+            self._project_repository = ProjectRepository()
+        return self._project_repository
+
+    def _project_role(self, project_id: str, user: User):
+        """``(project, role)`` for ``user``; ``(None, None)`` while Projects is switched off."""
+        if not projects_enabled():
+            return None, None
+        return resolve_project_role(project_id, user.user_id, user.email, repository=self._projects())
+
+    def _require_shareable_project(self, metadata: Any, user: User) -> str:
+        """The project a task may be shared to, or a ``ProjectShareError`` saying why not.
+
+        The task must belong to a project (``preferences.projectId``), and its owner
+        must still be a member of that project, which must be active: sharing adds
+        to the project, and an archived project is read-only.
+        """
+        if not projects_enabled():
+            raise ProjectShareError(400, "Projects are not available")
+        prefs = getattr(metadata, "preferences", None)
+        project_id = getattr(prefs, "project_id", None) if prefs else None
+        if not project_id:
+            raise ProjectShareError(400, "Only a task in a project can be shared with a project")
+        project, role = self._project_role(project_id, user)
+        if project is None or role is None:
+            raise ProjectShareError(403, "You are not a member of this task's project")
+        if project.status != "active":
+            raise ProjectShareError(409, "This project is archived. Restore it to share tasks with it.")
+        return project_id
+
+    def _put_project_pointer(self, item: dict) -> None:
+        self._projects().put_shared_task(
+            SharedTask(
+                project_id=item["project_id"],
+                session_id=item["session_id"],
+                share_id=item["share_id"],
+                owner_id=item["owner_id"],
+                owner_email=item.get("owner_email", ""),
+                title=self._share_title(item),
+                shared_at=item["created_at"],
+            )
+        )
+
+    def _sync_project_pointer(self, session_id: str, project_id: str) -> None:
+        """Point ``SHARED_TASK#{session_id}`` at the task's newest share with the project.
+
+        Rebuilt from the share rows rather than patched, so revoking the newest of
+        several project shares falls back to the next, and revoking the last one
+        removes the pointer. Best-effort: the share row is the grant and has
+        already changed; a stale pointer only lists a share that now 404s.
+        """
+        try:
+            remaining = [
+                i for i in self._find_shares_by_session(session_id)
+                if i.get("access_level") == "project" and i.get("project_id") == project_id
+            ]
+            if remaining:
+                self._put_project_pointer(max(remaining, key=lambda i: i["created_at"]))
+            else:
+                self._projects().delete_shared_task(project_id, session_id)
+        except Exception:
+            logger.warning(
+                f"Could not sync project pointer for session {self._sanitize_id(session_id)} "
+                f"in project {self._sanitize_id(project_id)}",
+                exc_info=True,
+            )
+
+    def _share_title(self, item: dict) -> str:
+        """The row's title; shares created before it was denormalized read the snapshot."""
+        if item.get("title") is not None:
+            return str(item["title"])
+        try:
+            metadata, _ = self._load_snapshot_body(item)
+            return str(metadata.get("title") or "")
+        except Exception:
+            return ""
+
+    def _forked_project_preferences(self, snapshot_metadata: dict, requester: User):
+        """A fork stays in its project when the requester can work in that project.
+
+        The fork is a new task, so it needs what a task started in the project
+        has: ``projectId`` and the project's harness as ``assistantId`` (current,
+        not the snapshot's, which could be stale). A requester who is not a
+        member, or a project that is archived or gone, gets a plain session.
+        """
+        from apis.shared.sessions.models import SessionPreferences
+
+        prefs = snapshot_metadata.get("preferences") or {}
+        project_id = prefs.get("projectId") if isinstance(prefs, dict) else None
+        if not project_id:
+            return None
+        project, role = self._project_role(project_id, requester)
+        if project is None or role is None or project.status != "active":
+            return None
+        return SessionPreferences(project_id=project_id, assistant_id=project.harness_agent_id)
+
     def _ensure_enabled(self) -> None:
         if not self._enabled:
             raise ShareTableNotFoundError()
@@ -568,6 +720,12 @@ class ShareService:
             if requester.email.lower() in allowed:
                 return
 
+        if access_level == "project" and item.get("project_id"):
+            # Any role, on an active or archived project: members may read both.
+            _, role = self._project_role(item["project_id"], requester)
+            if role is not None:
+                return
+
         raise AccessDeniedError()
 
     def _build_share_response(self, item: dict) -> ShareResponse:
@@ -577,6 +735,7 @@ class ShareService:
             owner_id=item["owner_id"],
             access_level=item["access_level"],
             allowed_emails=item.get("allowed_emails"),
+            project_id=item.get("project_id"),
             created_at=item["created_at"],
             share_url=f"/shared/{item['share_id']}",
         )
@@ -812,6 +971,14 @@ class AccessDeniedError(Exception):
 class ShareTableNotFoundError(Exception):
     """Raised when the DynamoDB table does not exist (CDK not deployed)."""
     pass
+
+
+class ProjectShareError(Exception):
+    """A project share the caller may not create; carries the HTTP status to return."""
+
+    def __init__(self, status_code: int, message: str):
+        self.status_code = status_code
+        super().__init__(message)
 
 
 class ShareStorageUnavailableError(Exception):

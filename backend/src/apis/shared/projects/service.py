@@ -41,6 +41,7 @@ from .models import (
     ProjectRole,
     ProjectSettings,
     ProjectStatus,
+    SharedTask,
     normalize_email,
 )
 from .repository import ProjectRepository, ProjectWriteConflict
@@ -269,6 +270,17 @@ class ProjectService:
         await self.harness.delete(project.harness_agent_id)
         deleted = self.repository.delete_project_rows(project_id)
         logger.info("Purged project %s (%d rows, harness %s)", project_id, deleted, project.harness_agent_id)
+
+    # ── tasks ───────────────────────────────────────────────────────────
+
+    def list_shared_tasks(self, project_id: str, user: User) -> List[SharedTask]:
+        """Tasks members have shared to the project, most recently shared first.
+
+        Unpaginated: there is at most one pointer per shared task, so the list is
+        bounded by how much the project has shared, not by its history.
+        """
+        self._require(project_id, user, "viewer")
+        return sorted(self.repository.list_shared_tasks(project_id), key=lambda t: t.shared_at, reverse=True)
 
     # ── members ─────────────────────────────────────────────────────────
 

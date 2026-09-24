@@ -59,7 +59,20 @@ def env(monkeypatch):
 
 
 @pytest.fixture()
-def service(env, monkeypatch) -> ProjectService:
+def task_queries(monkeypatch) -> list:
+    """Stand-in for the sessions-table query behind ``/tasks``; records who asked for what."""
+    calls: list = []
+
+    async def fake_list_project_sessions(user_id, project_id, limit=50, next_token=None):
+        calls.append((user_id, project_id, limit, next_token))
+        return [], None
+
+    monkeypatch.setattr(project_routes, "list_project_sessions", fake_list_project_sessions)
+    return calls
+
+
+@pytest.fixture()
+def service(env, monkeypatch, task_queries) -> ProjectService:
     svc = ProjectService(repository=ProjectRepository(table_name=TABLE), harness=FakeHarness())
     monkeypatch.setattr(project_routes, "_service", svc)
     return svc
@@ -107,6 +120,10 @@ MATRIX = [
      {"owner": 204, "editor": 204, "viewer": 403, "stranger": 404, "other_project_member": 404}),
     ("DELETE", "/members/me", None,
      {"owner": 409, "editor": 204, "viewer": 204, "stranger": 404, "other_project_member": 404}),
+    ("GET", "/tasks", None,
+     {"owner": 200, "editor": 200, "viewer": 200, "stranger": 404, "other_project_member": 404}),
+    ("GET", "/shared-tasks", None,
+     {"owner": 200, "editor": 200, "viewer": 200, "stranger": 404, "other_project_member": 404}),
 ]
 
 
@@ -174,3 +191,31 @@ def test_feature_flag_off_is_a_404_for_a_signed_in_user(project_id, monkeypatch)
     monkeypatch.setenv("PROJECTS_ENABLED", "false")
     assert client_for(OWNER).get("/projects").status_code == 404
     assert client_for(OWNER).get(f"/projects/{project_id}").status_code == 404
+
+
+def test_tasks_lists_only_the_callers_own_sessions_in_the_project(project_id, task_queries):
+    response = client_for(VIEWER).get(f"/projects/{project_id}/tasks?limit=5&nextToken=abc")
+    assert response.status_code == 200
+    assert response.json() == {"sessions": []}
+    assert task_queries == [(VIEWER.user_id, project_id, 5, "abc")]
+
+
+def test_tasks_never_queries_for_a_non_member(project_id, task_queries):
+    assert client_for(STRANGER).get(f"/projects/{project_id}/tasks").status_code == 404
+    assert task_queries == []
+
+
+def test_shared_tasks_hide_user_ids_and_mark_the_callers_own(project_id, service):
+    from apis.shared.projects.models import SharedTask
+
+    for sid, owner, email, at in (("s1", EDITOR, EDITOR.email, "2026-09-01"), ("s2", VIEWER, VIEWER.email, "2026-09-02")):
+        service.repository.put_shared_task(SharedTask(
+            project_id=project_id, session_id=sid, share_id=f"sh-{sid}", owner_id=owner.user_id,
+            owner_email=email, title=f"Task {sid}", shared_at=at,
+        ))
+    tasks = client_for(VIEWER).get(f"/projects/{project_id}/shared-tasks").json()["tasks"]
+    assert [(t["shareId"], t["sharedByEmail"], t["isMine"], t["shareUrl"]) for t in tasks] == [
+        ("sh-s2", VIEWER.email, True, "/shared/sh-s2"),
+        ("sh-s1", EDITOR.email, False, "/shared/sh-s1"),
+    ]
+    assert not any("ownerId" in t or "sessionId" in t for t in tasks)
