@@ -502,17 +502,22 @@ def _references(value: Any, ids: Set[str]) -> Set[str]:
 
 
 def deep_scan(table: Any, ids: Set[str], sleep: float) -> Dict[str, List[str]]:
-    """One Scan of ``table``; for each id, a description of every item naming it."""
+    """One Scan of ``table``; for each id, one description per item naming it."""
     hits: Dict[str, List[str]] = {}
     kwargs: Dict[str, Any] = {}
     while True:
         response = table.scan(**kwargs)
         for item in response.get("Items", []):
+            # One hit per item, naming every attribute that matched: a row
+            # keyed PK=USER#<id> that also carries userId=<id> is one row.
+            attrs_by_id: Dict[str, List[str]] = {}
             for attr, value in item.items():
                 for user_id in _references(value, ids):
-                    hits.setdefault(user_id, []).append(
-                        f"{item.get('PK', item.get('share_id', '?'))} / {item.get('SK', '-')} ({attr})"
-                    )
+                    attrs_by_id.setdefault(user_id, []).append(attr)
+            for user_id, attrs in attrs_by_id.items():
+                hits.setdefault(user_id, []).append(
+                    f"{item.get('PK', item.get('share_id', '?'))} / {item.get('SK', '-')} ({', '.join(sorted(attrs))})"
+                )
         last_key = response.get("LastEvaluatedKey")
         if not last_key:
             return hits

@@ -298,6 +298,8 @@ class TestAudit:
             "PK": "PROJECT#p1", "SK": f"COST#2026-04#USER#{LEGACY}", "cost": "0.100000001",
         })
         stack["tables"]["system-cost-rollup"].put_item(Item={"PK": "ACTIVE#DAILY#2026-04-01", "SK": LEGACY})
+        # One row naming the id twice (PK and userId) is one reference, not two.
+        stack["tables"]["app-roles"].put_item(Item={"PK": f"USER#{LEGACY}", "SK": "TOOL_PREFERENCES", "userId": LEGACY})
 
         audit.run(_args(tmp_path, "--deep"), stack["clients"], "123", now=NOW)
 
@@ -305,6 +307,8 @@ class TestAudit:
         assert stale["verdict"] == "referenced"
         assert stale["references"]["deep:projects"] == 1
         assert stale["references"]["deep:system-cost-rollup"] == 1
+        assert stale["references"]["deep:app-roles"] == 1
+        assert f"USER#{LEGACY} / TOOL_PREFERENCES (PK, userId)" in " ".join(stale["deep_samples"])
         assert any("COST#2026-04#USER#" in s for s in stale["deep_samples"])
 
     def test_a_failed_check_makes_the_row_incomplete_not_unreferenced(self, stack, tmp_path):
