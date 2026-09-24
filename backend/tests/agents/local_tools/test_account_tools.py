@@ -16,12 +16,14 @@ import pytest
 from agents.local_tools.account_tools import (
     make_get_my_quota_tool,
     make_get_my_settings_tool,
+    make_set_default_model_tool,
     make_whoami_tool,
 )
 from apis.shared.auth.models import User
 
 QUOTA_MODULE = "apis.shared.quota"
 SETTINGS_MODULE = "apis.shared.user_settings.repository"
+ACCOUNT_MODULE = "agents.local_tools.account_tools"
 
 
 async def _call(tool, *args, **kwargs):
@@ -232,12 +234,116 @@ class TestGetMySettings:
 
 
 # ---------------------------------------------------------------------------
+# set_default_model (the confirmed WRITE)
+# ---------------------------------------------------------------------------
+
+
+def _model(id="m-uuid-1", model_id="us.anthropic.claude-sonnet", model_name="Claude Sonnet"):
+    return SimpleNamespace(
+        id=id,
+        model_id=model_id,
+        model_name=model_name,
+        enabled=True,
+        available_to_roles=[],
+    )
+
+
+def _patch_accessible(monkeypatch, models):
+    monkeypatch.setattr(
+        f"{ACCOUNT_MODULE}._accessible_models", AsyncMock(return_value=models)
+    )
+
+
+def _patch_settings_repo(monkeypatch, *, current=None):
+    repo = SimpleNamespace(
+        get_settings=AsyncMock(return_value={"defaultModelId": current}),
+        update_settings=AsyncMock(return_value={"defaultModelId": current}),
+    )
+    monkeypatch.setattr(
+        f"{SETTINGS_MODULE}.get_user_settings_repository", lambda: repo
+    )
+    return repo
+
+
+class TestSetDefaultModel:
+    def test_takes_model_and_confirm_not_user_or_id(self):
+        """The write may take a model + a confirm flag, but NEVER a user/id —
+        identity stays closure-bound, so it can only change the caller's own
+        default."""
+        fn = getattr(make_set_default_model_tool(_user()), "__wrapped__")
+        params = list(inspect.signature(fn).parameters)
+        assert params == ["model", "confirm"]
+
+    @pytest.mark.asyncio
+    async def test_preview_without_confirm_does_not_write(self, monkeypatch):
+        _patch_accessible(monkeypatch, [_model()])
+        repo = _patch_settings_repo(monkeypatch, current="old-model")
+        out = await _call(make_set_default_model_tool(_user()), "Claude Sonnet")
+        assert out["status"] == "confirm_required"
+        assert out["new_default_model_id"] == "m-uuid-1"
+        assert out["current_default_model_id"] == "old-model"
+        repo.update_settings.assert_not_awaited()  # preview only
+
+    @pytest.mark.asyncio
+    async def test_confirm_true_writes_the_record_id(self, monkeypatch):
+        _patch_accessible(monkeypatch, [_model()])
+        repo = _patch_settings_repo(monkeypatch, current="old-model")
+        out = await _call(
+            make_set_default_model_tool(_user("u5")), "Claude Sonnet", confirm=True
+        )
+        assert out["status"] == "updated"
+        # Persists the record UUID (what defaultModelId is keyed on), not the name.
+        repo.update_settings.assert_awaited_once_with(
+            "u5", {"defaultModelId": "m-uuid-1"}
+        )
+
+    @pytest.mark.asyncio
+    async def test_model_not_available_is_rejected(self, monkeypatch):
+        _patch_accessible(monkeypatch, [_model(model_name="Claude Sonnet")])
+        repo = _patch_settings_repo(monkeypatch)
+        out = await _call(make_set_default_model_tool(_user()), "gpt-9", confirm=True)
+        assert out["status"] == "not_found"
+        assert "Claude Sonnet" in out["message"]  # lists what IS available
+        repo.update_settings.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_ambiguous_match_asks_to_disambiguate(self, monkeypatch):
+        _patch_accessible(
+            monkeypatch,
+            [
+                _model(id="a", model_name="Claude Sonnet"),
+                _model(id="b", model_name="Claude Haiku"),
+            ],
+        )
+        repo = _patch_settings_repo(monkeypatch)
+        out = await _call(make_set_default_model_tool(_user()), "claude", confirm=True)
+        assert out["status"] == "ambiguous"
+        repo.update_settings.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_no_accessible_models(self, monkeypatch):
+        _patch_accessible(monkeypatch, [])
+        _patch_settings_repo(monkeypatch)
+        out = await _call(make_set_default_model_tool(_user()), "anything", confirm=True)
+        assert out["status"] == "error"
+
+    @pytest.mark.asyncio
+    async def test_backend_failure_returns_status_error_never_raises(self, monkeypatch):
+        monkeypatch.setattr(
+            f"{ACCOUNT_MODULE}._accessible_models",
+            AsyncMock(side_effect=RuntimeError("ddb down")),
+        )
+        out = await _call(make_set_default_model_tool(_user()), "x", confirm=True)
+        assert out["status"] == "error"
+
+
+# ---------------------------------------------------------------------------
 # Feature-flag gate + catalog metadata
 # ---------------------------------------------------------------------------
 
 
 class TestBuilderGate:
-    ALL = ["whoami", "get_my_quota", "get_my_settings"]
+    ALL = ["whoami", "get_my_quota", "get_my_settings", "set_default_model"]
 
     def test_disabled_by_default_even_with_ids(self, monkeypatch):
         monkeypatch.delenv("PLATFORM_SELF_SERVICE_ENABLED", raising=False)
@@ -266,7 +372,7 @@ class TestBuilderGate:
         )
         assert {t.tool_name for t in tools} == {"whoami", "get_my_settings"}
 
-    def test_all_three_when_all_resolved(self, monkeypatch):
+    def test_all_when_all_resolved(self, monkeypatch):
         monkeypatch.setenv("PLATFORM_SELF_SERVICE_ENABLED", "true")
         from apis.inference_api.chat.routes import _build_account_tools
 
@@ -281,7 +387,7 @@ class TestCatalogMetadata:
         whoami = TOOL_CATALOG["whoami"]
         assert whoami.system is True and whoami.hidden is True  # pure plumbing
 
-        for tid in ("get_my_quota", "get_my_settings"):
+        for tid in ("get_my_quota", "get_my_settings", "set_default_model"):
             meta = TOOL_CATALOG[tid]
             assert meta.system is True and meta.hidden is False  # visible-but-locked
             assert meta.to_dict()["system"] is True

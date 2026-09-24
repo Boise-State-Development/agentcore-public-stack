@@ -623,6 +623,7 @@ def _build_account_tools(effective_enabled_tools: list | None, current_user: Use
     from agents.local_tools.account_tools import (
         make_get_my_quota_tool,
         make_get_my_settings_tool,
+        make_set_default_model_tool,
         make_whoami_tool,
     )
 
@@ -632,6 +633,7 @@ def _build_account_tools(effective_enabled_tools: list | None, current_user: Use
         "whoami": make_whoami_tool,
         "get_my_quota": make_get_my_quota_tool,
         "get_my_settings": make_get_my_settings_tool,
+        "set_default_model": make_set_default_model_tool,
     }
     tools = [factory(current_user) for tid, factory in factories.items() if tid in enabled]
     if tools:

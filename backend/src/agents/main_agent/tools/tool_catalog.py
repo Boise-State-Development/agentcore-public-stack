@@ -113,6 +113,17 @@ TOOL_CATALOG: Dict[str, ToolMetadata] = {
         system=True,
         hidden=False,
     ),
+    "set_default_model": ToolMetadata(
+        tool_id="set_default_model",
+        name="Change My Default Model",
+        description="Change the signed-in user's default model, to one they are allowed to use. Confirmation-gated write.",
+        category=ToolCategory.ACCOUNT,
+        icon="adjustments-horizontal",
+        system=True,
+        # User-beneficial write: visible-but-locked so users can see the agent
+        # made the change (and can't turn the capability off themselves).
+        hidden=False,
+    ),
 
     # --- Built-in Tools (Utilities) ---
     "calculator": ToolMetadata(

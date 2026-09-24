@@ -626,6 +626,18 @@ DEFAULT_TOOLS: list[dict[str, Any]] = [
         "system": True,
         "hidden": False,
     },
+    {
+        "toolId": "set_default_model",
+        "displayName": "Change My Default Model",
+        "description": "Change the signed-in user's default model, to one they are allowed to use. Confirmation-gated write.",
+        "category": "account",
+        "protocol": "local",
+        "enabledByDefault": True,
+        "isPublic": True,
+        "forwardAuthToken": False,
+        "system": True,
+        "hidden": False,
+    },
 ]
 
 
