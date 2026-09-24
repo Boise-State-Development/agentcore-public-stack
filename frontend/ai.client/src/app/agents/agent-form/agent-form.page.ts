@@ -66,6 +66,7 @@ import {
 } from '../components/share-agent-dialog.component';
 import { KnowledgeBaseSectionComponent } from '../../knowledge-base/knowledge-base-section.component';
 import { ToolService, retirementDetail } from '../../services/tool/tool.service';
+import { modelRetirementDetail } from '../../shared/utils/retirement';
 import { AGENT_TEMPLATE_DRAFT_KEY, TemplateDraft } from './agent-templates';
 import { reconcileToolRefs } from './tool-ref-reconcile';
 
@@ -657,6 +658,10 @@ export class AgentFormPage implements OnInit, OnDestroy {
 
   // ---- model -----------------------------------------------------------
   selectModel(ref: string): void {
+    // A model being retired can be kept or removed, never newly chosen
+    // (docs/specs/model-retirement.md §7). The card is not rendered in that
+    // state; this is the backstop for any other path in.
+    if (ref !== this.selectedModelId() && this.isModelRetiringByRef(ref)) return;
     const next = this.selectedModelId() === ref ? null : ref;
     // Params are model-specific — a value valid on one model may be unsupported or
     // out-of-bounds on another. Drop them when the model changes so the author re-sets
@@ -665,6 +670,58 @@ export class AgentFormPage implements OnInit, OnDestroy {
     this.selectedModelId.set(next);
     this.bindingsDirty.set(true);
   }
+
+  /** `meta.status` non-active. An older backend omits it, which reads as active. */
+  isModelRetiring(item: BindableItem): boolean {
+    const status = item.meta?.['status'];
+    return typeof status === 'string' && status !== 'active';
+  }
+
+  private isModelRetiringByRef(ref: string): boolean {
+    const item = this.models().find((m) => m.ref === ref);
+    return item ? this.isModelRetiring(item) : false;
+  }
+
+  /**
+   * The model cards to render: every active model, plus the agent's own model
+   * even when it is being retired. Unlike a tool, a retired model stays in the
+   * catalog as a tombstone for good, so rendering them disabled would grow a
+   * permanent graveyard of dead cards — hide them instead.
+   */
+  readonly visibleModels = computed(() =>
+    this.models().filter((m) => !this.isModelRetiring(m) || m.ref === this.selectedModelId()),
+  );
+
+  /**
+   * The notice for an agent whose model is being retired: what happens, and what
+   * the author should do. Null for the overwhelmingly common case.
+   */
+  readonly retiringModelNotice = computed(() => {
+    const model = this.models().find((m) => m.ref === this.selectedModelId());
+    if (!model || !this.isModelRetiring(model)) return null;
+    const meta = model.meta ?? {};
+    const status = meta['status'] as string;
+    const successorName = (meta['replacedByName'] as string | null | undefined) ?? null;
+    const detail = modelRetirementDetail({
+      status,
+      successorName,
+      retirementNote: meta['retirementNote'] as string | null | undefined,
+      retiresOn: meta['retiresOn'] as string | null | undefined,
+    });
+    let action: string;
+    if (status === 'retired' && !successorName) {
+      action = 'This agent can’t run until you choose another model.';
+    } else if (status === 'retired') {
+      action = `Choose ${successorName} or another model so the agent’s settings match what runs.`;
+    } else {
+      action = 'This agent keeps working for now — choose another model when you can.';
+    }
+    return {
+      lead: `${model.label} is ${status === 'retired' ? 'retired' : 'being retired'}.`,
+      detail,
+      action: `${action} If this agent is published, resubmit it so the change reaches the people using it.`,
+    };
+  });
 
   // ---- model params ----------------------------------------------------
   /** Current value for a param, or the spec default (shown as a placeholder). */

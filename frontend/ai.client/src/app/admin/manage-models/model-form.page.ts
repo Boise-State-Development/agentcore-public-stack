@@ -27,8 +27,11 @@ import {
   MANTLE_API_MODE_LABELS,
   ManagedModelFormData,
   MantleApiMode,
+  MODEL_STATUSES,
+  MODEL_STATUS_LABELS,
   ModelParamSpec,
   ModelProvider,
+  ModelStatus,
   SupportedParams,
 } from './models/managed-model.model';
 import {
@@ -244,6 +247,10 @@ interface ModelFormGroup {
   enabled: FormControl<boolean>;
   isDefault: FormControl<boolean>;
   isFeatured: FormControl<boolean>;
+  status: FormControl<ModelStatus>;
+  replacedBy: FormControl<string>;
+  retiresOn: FormControl<string>;
+  retirementNote: FormControl<string>;
   inputPricePerMillionTokens: FormControl<number>;
   outputPricePerMillionTokens: FormControl<number>;
   cacheWritePricePerMillionTokens: FormControl<number | null>;
@@ -374,6 +381,12 @@ export class ModelFormPage implements OnInit {
     enabled: this.fb.control(true, { nonNullable: true }),
     isDefault: this.fb.control(false, { nonNullable: true }),
     isFeatured: this.fb.control(true, { nonNullable: true }),
+    // Lifecycle (docs/specs/model-retirement.md §7). Strings, not null, for the
+    // same reason as shortDescription: '' is how an update clears a field.
+    status: this.fb.control<ModelStatus>('active', { nonNullable: true }),
+    replacedBy: this.fb.control('', { nonNullable: true }),
+    retiresOn: this.fb.control('', { nonNullable: true }),
+    retirementNote: this.fb.control('', { nonNullable: true, validators: [Validators.maxLength(300)] }),
     inputPricePerMillionTokens: this.fb.control(0, { nonNullable: true, validators: [Validators.required, Validators.min(0)] }),
     outputPricePerMillionTokens: this.fb.control(0, { nonNullable: true, validators: [Validators.required, Validators.min(0)] }),
     cacheWritePricePerMillionTokens: this.fb.control<number | null>(null, { validators: [Validators.min(0)] }),
@@ -914,6 +927,10 @@ export class ModelFormPage implements OnInit {
         // Absent on records written before the field existed, and those
         // models are featured today — mirror the backend default.
         isFeatured: model.isFeatured ?? true,
+        status: model.status ?? 'active',
+        replacedBy: model.replacedBy ?? '',
+        retiresOn: model.retiresOn ?? '',
+        retirementNote: model.retirementNote ?? '',
         inputPricePerMillionTokens: model.inputPricePerMillionTokens,
         outputPricePerMillionTokens: model.outputPricePerMillionTokens,
         cacheWritePricePerMillionTokens: model.cacheWritePricePerMillionTokens ?? null,
@@ -1067,6 +1084,27 @@ export class ModelFormPage implements OnInit {
     modelId: this.modelIdValue(),
   }));
 
+  protected readonly modelStatuses = MODEL_STATUSES.map((value) => ({
+    value,
+    label: MODEL_STATUS_LABELS[value],
+  }));
+
+  readonly selectedStatus = toSignal(this.modelForm.controls.status.valueChanges, {
+    initialValue: this.modelForm.controls.status.value,
+  });
+
+  /**
+   * Models this one can be replaced by: every other active, enabled model. The
+   * backend enforces the same rule; offering only valid choices keeps the admin
+   * from finding that out from an error.
+   */
+  readonly successorOptions = computed(() => {
+    const self = this.modelIdValue();
+    return this.managedModelsService
+      .getManagedModels()
+      .filter((m) => (m.status ?? 'active') === 'active' && m.enabled && m.modelId !== self);
+  });
+
   private readonly providerNameValue = toSignal(
     this.modelForm.controls.providerName.valueChanges,
     { initialValue: this.modelForm.controls.providerName.value },
@@ -1192,6 +1230,10 @@ export class ModelFormPage implements OnInit {
         enabled: v.enabled,
         isDefault: v.isDefault,
         isFeatured: v.isFeatured,
+        status: v.status,
+        replacedBy: v.replacedBy,
+        retiresOn: v.retiresOn,
+        retirementNote: v.retirementNote.trim(),
         inputPricePerMillionTokens: v.inputPricePerMillionTokens,
         outputPricePerMillionTokens: v.outputPricePerMillionTokens,
         cacheWritePricePerMillionTokens: v.cacheWritePricePerMillionTokens,

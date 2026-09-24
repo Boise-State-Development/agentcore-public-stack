@@ -65,6 +65,7 @@ function setup(options: {
     selectedEffort,
     setSelectedModel,
     setEffort,
+    modelNameFor: vi.fn(() => null),
   };
 
   const sessionService = {
