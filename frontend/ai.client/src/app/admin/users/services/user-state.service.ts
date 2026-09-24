@@ -26,6 +26,12 @@ export class UserStateService {
   domainFilter = signal<string | null>(null);
   nextCursor = signal<string | null>(null);
   error = signal<string | null>(null);
+  /**
+   * How many profiles the last email search matched. More than one means the
+   * email owns legacy duplicate rows; the backend lists the live one first.
+   * Zero whenever the list is not an email search result.
+   */
+  emailMatchCount = signal(0);
 
   // ========== Computed Signals ==========
 
@@ -43,6 +49,7 @@ export class UserStateService {
     if (reset) {
       this.users.set([]);
       this.nextCursor.set(null);
+      this.emailMatchCount.set(0);
     }
 
     this.loading.set(true);
@@ -87,6 +94,7 @@ export class UserStateService {
       if (response) {
         this.users.set(response.users);
         this.nextCursor.set(null);
+        this.emailMatchCount.set(response.users.length);
       }
     } catch (err: any) {
       this.error.set(err.message || 'Failed to search users');
@@ -172,5 +180,6 @@ export class UserStateService {
     this.domainFilter.set(null);
     this.nextCursor.set(null);
     this.error.set(null);
+    this.emailMatchCount.set(0);
   }
 }

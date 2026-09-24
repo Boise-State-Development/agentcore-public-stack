@@ -63,6 +63,26 @@ describe('UserStateService', () => {
     expect(service.loading()).toBe(false);
   });
 
+  it('records how many profiles an email search matched', async () => {
+    httpService.searchByEmail.mockReturnValue(
+      of({ users: [{ userId: 'uuid-live' }, { userId: '100000001' }] }),
+    );
+
+    await service.searchByEmail('prof@example.com');
+
+    expect(service.emailMatchCount()).toBe(2);
+  });
+
+  it('clears the email match count when the list reloads', async () => {
+    httpService.searchByEmail.mockReturnValue(of({ users: [{ userId: 'a' }, { userId: 'b' }] }));
+    httpService.listUsers.mockReturnValue(of({ users: [{ userId: 'a' }, { userId: 'c' }], nextCursor: null }));
+
+    await service.searchByEmail('prof@example.com');
+    await service.loadUsers(true);
+
+    expect(service.emailMatchCount()).toBe(0);
+  });
+
   it('should load user detail', async () => {
     const mockDetail = { userId: '1', email: 'test@example.com', profile: {} };
     httpService.getUserDetail.mockReturnValue(of(mockDetail));
