@@ -40,19 +40,18 @@ Runtime. Unset or any other value means on.
 While off:
 
 - `/projects/**` returns 404 to signed-in users, and `/admin/projects` is not
-  mounted.
-- The sidebar still shows **Projects**; the page says Projects aren't available
-  in this environment.
+  mounted. The `/projects` page says Projects aren't available in this
+  environment.
+- A project's assistant refuses everyone: its members and its creator. A turn in
+  an existing project task gets a message in the conversation saying Projects
+  are turned off, and the agent routes (documents, sync policies) refuse its
+  assistant too.
 - A conversation can no longer be shared with "Project members". Existing
   project shares open only for the person who shared them.
 - Nothing is deleted. Turning Projects back on restores everything as it was.
 
-:::caution[Not a full stop]
-The switch gates app-api. The inference API does not read it, so a member can
-still run a turn in an **existing** project task on the project's assistant.
-New tasks can't be started from a project page, because that page is gone while
-the switch is off.
-:::
+The sidebar has no Projects entry either way: people reach `/projects` by URL,
+from a project heading in their conversation list, or from a notification.
 
 ## Configuration
 

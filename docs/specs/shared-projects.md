@@ -532,7 +532,13 @@ Each PR targets `develop`, lands behind `PROJECTS_ENABLED` (default on, `=false`
   - `docs-site/…/admin/projects.md` covers the `admin.projects` routes (there is no admin page yet), what the kill switch does, the configuration table and where the data lives.
   - Env-var entries: a Shared Projects section in `backend/src/.env.example` (table, switch, audit table, `PROJECTS_MAX_MEMBERS`, `PROJECTS_EDITORS_MANAGE_MEMBERS_DEFAULT`, `DIRECTORY_PROVIDER`) and a table on the docs-site environment-variables page.
   - §8 values that nothing reads yet are left out of the docs until their phase ships: `PROJECTS_MAX_KNOWLEDGE_ITEMS`, the Graph directory settings, memory lint and budgets, `PROJECTS_DISALLOWED_TOOL_IDS`, email notifications, archive retention.
-  - **Documented gap:** `PROJECTS_ENABLED` gates app-api only. The inference API reads no flag, so while the switch is off a member can still run a turn in an existing project task on the project's harness. The admin page says so.
+  - The kill switch as documented is the one after the fix below: a full stop.
+- **Kill-switch fix (as built, `fix/projects-kill-switch`):**
+  - Before it, `PROJECTS_ENABLED` gated app-api only. The inference API read no flag, so while the switch was off a member could still run a turn in an existing project task on the harness.
+  - Now `_project_harness_role` returns no role while the switch is off, the harness's creator included. That closes every harness path at once: chat turns on inference-api, and the agent document and sync routes on app-api.
+  - The chat route's denied branch asks `is_disabled_project_harness` and streams a conversational "Projects are turned off here" message instead of a bare 403.
+  - The sidenav's Projects entry is removed (Phil, 2026-09-24): a menu item must not wait on a load to know whether the feature is on. `/projects` stays reachable by URL, from the sidebar's project headings and from notifications.
+  - Environments: `CDK_PROJECTS_ENABLED` is `true` in `development` and `false` in `production`, so Projects ship dark in prod while the code default stays on.
 
 ### Phase 2 — project memory
 - **2.1** Memory tools cacheable (`_create_cache_key` gains space ids) — prerequisite, its own PR with `C#`-row proof of cache hits across turns.

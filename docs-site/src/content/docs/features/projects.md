@@ -47,7 +47,9 @@ waiting when they do.
 ## The project page
 
 `/projects` lists your projects: everything you belong to, filtered by All,
-Mine, Shared with me, or Archived. Each project has these tabs:
+Mine, Shared with me, or Archived. There is no menu item for it yet: open
+`/projects` directly, or reach a project from its heading in your conversation
+list or from a notification. Each project has these tabs:
 
 - **Overview**: a composer that starts a task in the project, plus a summary
   of the instructions and the people.
