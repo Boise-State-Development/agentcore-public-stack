@@ -6,3 +6,4 @@ export {
   type DictationHandlers,
   type DictationStatus,
 } from './dictation.service';
+export { DictationChimeService, type DictationChime } from './dictation-chime.service';
