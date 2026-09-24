@@ -15,6 +15,23 @@ DEFAULT_SETTINGS = {
 }
 
 
+_user_settings_repository: Optional["UserSettingsRepository"] = None
+
+
+def get_user_settings_repository() -> "UserSettingsRepository":
+    """Get or create the process-wide UserSettingsRepository singleton.
+
+    Lives in ``apis.shared`` (not ``app_api``) so both app_api routes and the
+    agents layer's account tools can reach one instance without crossing the
+    app_api ↔ agents import boundary. Mirrors the singleton getters in
+    ``apis.shared.quota``.
+    """
+    global _user_settings_repository
+    if _user_settings_repository is None:
+        _user_settings_repository = UserSettingsRepository()
+    return _user_settings_repository
+
+
 class UserSettingsRepository:
     """DynamoDB repository for user settings operations.
 

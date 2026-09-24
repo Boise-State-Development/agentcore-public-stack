@@ -21,20 +21,38 @@ def _resolver(ids):
     return AsyncMock(return_value=list(ids))
 
 
+@pytest.fixture(autouse=True)
+def _no_system_tools_by_default():
+    """`_apply_admin_always_on_tools` now also resolves the platform 'system'
+    tool set. Default it to empty so the existing always-on tests stay
+    hermetic and never reach real AWS; tests that care about system tools
+    re-patch it locally.
+    """
+    with patch.object(routes, "resolve_system_tool_ids", _resolver([])):
+        yield
+
+
 class TestAgentBindingExemption:
     @pytest.mark.asyncio
     async def test_an_agent_that_binds_tools_is_left_alone(self):
-        """The Agent owns its toolset, like modelConfig owns the model."""
+        """The Agent owns its toolset, like modelConfig owns the model.
+
+        Admin-pinned always-on is exempted for a bound Agent; system tools are
+        NOT (see TestSystemTools), but with no system tools configured the
+        result is the untouched bound list.
+        """
         with patch.object(
             routes, "resolve_always_on_tool_ids", _resolver(["pinned"])
-        ) as resolver:
+        ) as resolver, patch.object(
+            routes, "resolve_system_tool_ids", _resolver([])
+        ):
             bound = ["agent_tool_a", "agent_tool_b"]
             result = await routes._apply_admin_always_on_tools(
                 bound, USER, agent_bound_tools=True
             )
         assert result is bound
         # Not merely unchanged — never even resolved. A bound turn should not
-        # pay for a set it cannot use.
+        # pay for the admin-pinned set it cannot use.
         resolver.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -46,7 +64,9 @@ class TestAgentBindingExemption:
         empty `bindings` by design. Exempting them would let anyone shed a
         pinned tool with a trivial unbound Agent.
         """
-        with patch.object(routes, "resolve_always_on_tool_ids", _resolver(["pinned"])):
+        with patch.object(
+            routes, "resolve_always_on_tool_ids", _resolver(["pinned"])
+        ), patch.object(routes, "resolve_system_tool_ids", _resolver([])):
             result = await routes._apply_admin_always_on_tools(
                 ["picker_tool"], USER, agent_bound_tools=False
             )
@@ -54,9 +74,48 @@ class TestAgentBindingExemption:
 
     @pytest.mark.asyncio
     async def test_the_default_chat_turn_gets_the_pinned_set(self):
-        with patch.object(routes, "resolve_always_on_tool_ids", _resolver(["pinned"])):
+        with patch.object(
+            routes, "resolve_always_on_tool_ids", _resolver(["pinned"])
+        ), patch.object(routes, "resolve_system_tool_ids", _resolver([])):
             result = await routes._apply_admin_always_on_tools(["picker_tool"], USER)
         assert result == ["picker_tool", "pinned"]
+
+
+class TestSystemTools:
+    """System (platform-shipped) tools apply on EVERY turn, unlike admin
+    always-on. See docs/specs/platform-self-service/design.md."""
+
+    @pytest.mark.asyncio
+    async def test_system_tools_apply_even_on_a_bound_agent_turn(self):
+        """An Agent author scopes the user-facing toolset; they do not get to
+        remove the platform's own self-service capabilities."""
+        with patch.object(
+            routes, "resolve_always_on_tool_ids", _resolver(["pinned"])
+        ) as always_on, patch.object(
+            routes, "resolve_system_tool_ids", _resolver(["whoami"])
+        ):
+            result = await routes._apply_admin_always_on_tools(
+                ["agent_tool_a"], USER, agent_bound_tools=True
+            )
+        # System tool unioned in; admin always-on still exempted (not awaited).
+        assert result == ["agent_tool_a", "whoami"]
+        always_on.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_system_and_always_on_combine_on_a_normal_turn(self):
+        with patch.object(
+            routes, "resolve_always_on_tool_ids", _resolver(["pinned"])
+        ), patch.object(routes, "resolve_system_tool_ids", _resolver(["whoami"])):
+            result = await routes._apply_admin_always_on_tools(["picker_tool"], USER)
+        assert result == ["picker_tool", "pinned", "whoami"]
+
+    @pytest.mark.asyncio
+    async def test_a_system_tool_the_user_already_has_is_not_duplicated(self):
+        with patch.object(
+            routes, "resolve_always_on_tool_ids", _resolver([])
+        ), patch.object(routes, "resolve_system_tool_ids", _resolver(["whoami"])):
+            result = await routes._apply_admin_always_on_tools(["whoami"], USER)
+        assert result == ["whoami"]
 
 
 class TestUnionSemantics:

@@ -62,7 +62,11 @@ from apis.shared.sessions.metadata import (
     ensure_session_metadata_exists,
     load_session_meta,
 )
-from apis.shared.tools.always_on import resolve_always_on_tool_ids, union_enabled_tools
+from apis.shared.tools.always_on import (
+    resolve_always_on_tool_ids,
+    resolve_system_tool_ids,
+    union_enabled_tools,
+)
 from apis.shared.tools.injected import (
     ARTIFACT_TOOL_IDS,
     EXCEL_SPREADSHEET_TOOL_IDS,
@@ -711,6 +715,66 @@ def _build_spreadsheet_tools(
 
 
 # ============================================================
+# Platform Self-Service Account Tool Injection
+# ============================================================
+
+def _build_account_tools(effective_enabled_tools: list | None, current_user: User) -> list:
+    """Create the platform self-service account tools, admin-governed at runtime.
+
+    These are ``system`` tools — platform plumbing, not a user picker toggle —
+    but they ARE admin-governable without a redeploy. The switch is the tool's
+    catalog row: ``resolve_system_tool_ids`` (called by
+    ``_apply_admin_always_on_tools`` upstream) returns a system tool's id only
+    when its row is ``system`` **and** ``status == active`` **and** the caller's
+    roles grant it. That resolved set is exactly what lands in
+    ``effective_enabled_tools`` here, so:
+
+    - an admin flipping a row to ``disabled`` in the Tools panel drops it from
+      the set on the next turn (≤ the freshness TTL, no deploy);
+    - a role that is not granted the tool never sees it;
+    - and a user cannot turn it on/off in their own picker (it is unioned in
+      regardless of their preferences, like any always-on tool).
+
+    So we inject a closure **only** for an id present in ``effective_enabled_tools``.
+    The closure captures identity (never a model argument); the catalog row is
+    the on/off authority.
+
+    Still gated by ``platform_self_service_enabled()`` (default OFF) as the
+    per-environment master switch — when off, nothing is injected and the
+    agent-cache eligibility is unchanged. See
+    ``.kiro/specs/platform-self-service/``.
+    """
+    from apis.shared.feature_flags import platform_self_service_enabled
+
+    if not platform_self_service_enabled():
+        return []
+
+    enabled = set(effective_enabled_tools or ())
+    if not enabled:
+        return []
+
+    from agents.local_tools.account_tools import (
+        make_get_my_quota_tool,
+        make_get_my_settings_tool,
+        make_set_default_model_tool,
+        make_whoami_tool,
+    )
+
+    # id -> factory. Only ids the catalog resolved into the effective set (row
+    # present, system, active, RBAC-granted) get built.
+    factories = {
+        "whoami": make_whoami_tool,
+        "get_my_quota": make_get_my_quota_tool,
+        "get_my_settings": make_get_my_settings_tool,
+        "set_default_model": make_set_default_model_tool,
+    }
+    tools = [factory(current_user) for tid, factory in factories.items() if tid in enabled]
+    if tools:
+        logger.info("Injected %d platform self-service account tool(s)", len(tools))
+    return tools
+
+
+# ============================================================
 # Artifact Authoring Tool Injection
 # ============================================================
 
@@ -1224,11 +1288,21 @@ async def _apply_admin_always_on_tools(
     which applies to the effective list and so does reach Agent-bound turns:
     that one serves the *user's* intent (they attached the file), this one
     serves the *admin's* — and the Agent author is exercising admin intent too.
+
+    **System tools are the exception to the exception.** A ``system`` tool
+    (platform-shipped plumbing such as ``whoami``/``get_my_quota``) is part of
+    the app, not the user's picker and not the admin's per-deployment pin, so it
+    is unioned in on EVERY turn — including Agent-bound ones. An Agent author
+    scopes the *user-facing* toolset; they do not get to remove the platform's
+    own self-service capabilities. See .kiro/specs/platform-self-service/design.md.
     """
+    # Ungated by ADMIN_ALWAYS_ON_TOOLS_ENABLED and unaffected by agent binding:
+    # system capabilities are always available to a granted user.
+    system_ids = await resolve_system_tool_ids(current_user)
     if agent_bound_tools:
-        return enabled_tools
+        return _with_auto_enabled_tools(enabled_tools, system_ids)
     always_on_ids = await resolve_always_on_tool_ids(current_user)
-    return _with_auto_enabled_tools(enabled_tools, always_on_ids)
+    return _with_auto_enabled_tools(enabled_tools, always_on_ids + system_ids)
 
 
 def _estimate_decoded_size(file: "FileContent") -> int:
@@ -3478,7 +3552,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 enabled_tools=effective_enabled_tools,
                 session_id=input_data.session_id,
                 user_id=user_id,
-            )
+            ) + _build_account_tools(effective_enabled_tools, current_user)
 
             memory_tools = _build_memory_tools(
                 agent_memory=agent_memory,

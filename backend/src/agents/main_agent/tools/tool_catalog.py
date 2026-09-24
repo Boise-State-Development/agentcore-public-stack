@@ -18,6 +18,7 @@ class ToolCategory(str, Enum):
     UTILITIES = "utilities"
     CODE = "code"
     GATEWAY = "gateway"
+    ACCOUNT = "account"
 
 
 @dataclass
@@ -30,6 +31,14 @@ class ToolMetadata:
     is_gateway_tool: bool = False
     requires_oauth_provider: Optional[str] = None  # OAuth provider ID if required
     icon: Optional[str] = None  # Icon name for UI
+    # Platform self-service tier (.kiro/specs/platform-self-service/). ``system``
+    # = shipped with the app, always-on, not a user picker toggle. ``hidden`` =
+    # kept OUT of the settings Tools toggle list but retained (flagged) in the
+    # catalog payload so a tool-use event for it still renders a friendly label
+    # and icon in the transcript. Both default false — every existing entry is
+    # unchanged.
+    system: bool = False
+    hidden: bool = False
 
     def to_dict(self) -> dict:
         """Convert to dictionary for API responses."""
@@ -41,6 +50,8 @@ class ToolMetadata:
             "isGatewayTool": self.is_gateway_tool,
             "requiresOauthProvider": self.requires_oauth_provider,
             "icon": self.icon,
+            "system": self.system,
+            "hidden": self.hidden,
         }
 
 
@@ -64,6 +75,54 @@ TOOL_CATALOG: Dict[str, ToolMetadata] = {
         description="Create interactive bar, line, and pie charts from data.",
         category=ToolCategory.DATA,
         icon="chart-bar",
+    ),
+
+    # --- Platform Self-Service (Account & Usage) ---
+    # system=true → always-on plumbing, injected per request as extra_tools
+    # (see agents/local_tools/account_tools.py). These entries exist for
+    # transcript labeling + the settings-panel hide rule; the runnable tool
+    # objects are the closure-bound ones the inference route injects.
+    "whoami": ToolMetadata(
+        tool_id="whoami",
+        name="Account Lookup",
+        description="Look up who the signed-in user is on this platform (name, roles, plan).",
+        category=ToolCategory.ACCOUNT,
+        icon="identification",
+        system=True,
+        # Pure plumbing: hidden from the settings toggle list, still shown in
+        # the transcript when invoked.
+        hidden=True,
+    ),
+    "get_my_quota": ToolMetadata(
+        tool_id="get_my_quota",
+        name="Usage & Quota",
+        description="Report how much of the signed-in user's usage quota is left.",
+        category=ToolCategory.ACCOUNT,
+        icon="chart-pie",
+        system=True,
+        # User-beneficial capability: visible-but-locked so users discover they
+        # can just ask.
+        hidden=False,
+    ),
+    "get_my_settings": ToolMetadata(
+        tool_id="get_my_settings",
+        name="My Settings",
+        description="Report the signed-in user's account settings, such as their default model.",
+        category=ToolCategory.ACCOUNT,
+        icon="cog-6-tooth",
+        system=True,
+        hidden=False,
+    ),
+    "set_default_model": ToolMetadata(
+        tool_id="set_default_model",
+        name="Change My Default Model",
+        description="Change the signed-in user's default model, to one they are allowed to use. Confirmation-gated write.",
+        category=ToolCategory.ACCOUNT,
+        icon="adjustments-horizontal",
+        system=True,
+        # User-beneficial write: visible-but-locked so users can see the agent
+        # made the change (and can't turn the capability off themselves).
+        hidden=False,
     ),
 
     # --- Built-in Tools (Utilities) ---

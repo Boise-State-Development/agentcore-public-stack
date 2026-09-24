@@ -167,6 +167,7 @@ class ToolCatalogService:
                     requires_oauth_provider=tool.requires_oauth_provider,
                     granted_by=granted_by,
                     enabled_by_default=tool.enabled_by_default,
+                    hidden=tool.hidden,
                     always_on=row_always_on,
                     user_enabled=user_enabled,
                     is_enabled=is_enabled,
