@@ -445,6 +445,25 @@ Each PR targets `develop`, lands behind `PROJECTS_ENABLED` (default on, `=false`
     - An invitation is waiting at first sign-in, even for someone added before they had an account.
     - The project's Activity view (editors only) reads `/projects/{id}/audit`. Settings entries point at a version number, whose diff is in History.
 - **1.8 SPA:** projects list/detail shell, Members (people picker + bulk paste + role select), Instructions (+history), Files, Tools & Skills, Tasks (own + shared, share-to-project, fork), notification badge, session-list grouping. Specs for the facade and each page; `ng build` and axe clean.
+  **Decisions at kickoff (Phil, 2026-09-24):**
+  - Tabs follow the mockup minus Memory: Overview · Tasks · Files · Members · Settings (instructions, model, tools, skills, history), plus Activity for editors. Memory arrives with Phase 2.
+  - Project tasks are grouped under a project heading inside the existing time buckets.
+  - The mockup is not re-synced. The real SPA is built from it and from the UI-impact notes above.
+
+  **Split into 1.8a (shell, Overview, Members, Settings), 1.8b (Tasks, Files, sidebar grouping, the `agent_notice` rendering) and 1.8c (notification bell, Activity, the personal-instructions field).**
+
+  **1.8a (as built):**
+  - `/projects` lists projects with filters All (active), Mine, Shared with me, and Archived. Each card shows the caller's role. A kill-switch 404 renders "not available". Every call opts out of the global error toast.
+  - `/projects/:id/:tab`: `/projects/:id` redirects to `overview`, so a tab click never recreates the page. The page loads on `id` changes through an effect, because the component is reused across projects. Tabs hand back a changed project (`projectChange`), so the header and tabs always agree.
+  - **Overview.** The composer calls `ChatRequestService.submitChatRequest(text, null, undefined, harnessAgentId)`, which starts a session bound to the harness; the backend stamps `projectId` from the first turn. A rail shows the instructions excerpt and the people count. Verified end to end against dev data: the task appeared in `GET /projects/{id}/tasks`.
+  - **Members.**
+    - `app-people-picker` is a `/directory` typeahead that marks existing members "Already a member". A pasted list is staged at once. Enter adds a typed email even if the directory doesn't know it.
+    - Role changes use a select. Remove and Leave go through confirm dialogs. "Make owner" appears only on editors whose `hasSignedIn` is true. `canManage` comes from the server.
+  - **Settings.** Details, instructions (100,000-character counter), model (the bindable palette, with a placeholder when unset), tools and skills. Each saves on its own and cuts a version. A binding someone else added that the caller can't use is listed as kept and can't be toggled.
+    - History (`app-project-history`) loads when opened, and a version expands to its labelled unified diff.
+    - Owner controls: editors-manage-members, archive or restore, and delete (archived only).
+  - The sidenav has a Projects entry after Agents.
+  - Axe (WCAG 2 A/AA) found nothing on list, Overview, Members and Settings in both themes, after one fix: the rail links use `dark:text-primary-50` on the gray card.
 - **1.9 Docs:** `docs-site/…/features/projects.md`, `admin/projects.md`, env-var table entries.
 
 ### Phase 2 — project memory
