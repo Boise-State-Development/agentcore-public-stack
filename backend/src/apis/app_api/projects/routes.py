@@ -1,5 +1,5 @@
 """``/projects`` — Shared Projects CRUD, members, transfer and leave (shared-projects §5, PR-1.2),
-and the caller's own and shared tasks (PR-1.6).
+the people directory for inviting (PR-1.3), and the caller's own and shared tasks (PR-1.6).
 
 Every route authenticates by session cookie first and only then applies the
 ``PROJECTS_ENABLED`` kill switch, so an unauthenticated caller always sees 401
@@ -21,13 +21,16 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.models import User
+from apis.shared.directory import get_directory
 from apis.shared.feature_flags import projects_enabled
+from apis.shared.projects.models import normalize_email
 from apis.shared.projects.service import (
     ProjectConflictError,
     ProjectError,
     ProjectNotFoundError,
     ProjectPermissionError,
     ProjectService,
+    is_valid_email,
 )
 from apis.shared.sessions.metadata import list_project_sessions
 from apis.shared.sessions.models import SessionMetadataResponse, SessionsListResponse
@@ -37,6 +40,8 @@ from .models import (
     AddMembersRequest,
     AddMembersResponse,
     CreateProjectRequest,
+    DirectoryPersonResponse,
+    DirectoryResponse,
     MemberResponse,
     MembersResponse,
     ProjectListResponse,
@@ -211,6 +216,39 @@ def add_members(
     except ProjectError as e:
         raise _translate(e)
     return AddMembersResponse.from_result(result)
+
+
+@router.get("/{project_id}/directory", response_model=DirectoryResponse, response_model_by_alias=True)
+async def search_directory(
+    project_id: str,
+    q: str = Query(..., min_length=1, max_length=254),
+    limit: int = Query(10, ge=1, le=25),
+    user: User = Depends(require_projects_user),
+) -> DirectoryResponse:
+    """People to invite, matched by email prefix or name, each marked with any role they already hold.
+
+    The directory only knows people who have signed in, so a well-formed email it
+    does not know is returned too: an invite is keyed by email and works either way.
+    """
+    try:
+        project, _, members = _svc().list_members(project_id, user)
+    except ProjectError as e:
+        raise _translate(e)
+
+    roles = {m.email: m.role for m in members}
+    roles[project.owner_email] = "owner"
+    people = [
+        DirectoryPersonResponse(email=p.email, name=p.name, has_signed_in=p.known, member_role=roles.get(p.email))
+        for p in await get_directory().search(q, limit)
+    ]
+
+    typed = normalize_email(q)
+    if is_valid_email(typed) and all(p.email != typed for p in people):
+        people = people[: limit - 1]
+        people.append(DirectoryPersonResponse(
+            email=typed, name="", has_signed_in=False, member_role=roles.get(typed),
+        ))
+    return DirectoryResponse(people=people)
 
 
 # Declared before ``/members/{email}`` so "me" is never read as an address.

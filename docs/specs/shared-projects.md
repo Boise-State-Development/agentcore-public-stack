@@ -357,6 +357,16 @@ Each PR targets `develop`, lands behind `PROJECTS_ENABLED` (default on, `=false`
     - The members response carries `canManage`, so the UI never re-derives the editors-manage-members rule.
   - kb-sync's image now copies `apis/shared/projects/` (import closure only; the worker never takes the harness access path).
 - **1.3 Directory:** `apis/shared/directory/` adapter protocol + `UsersTableDirectory` (paginates `StatusLoginIndex` instead of the 100-row cap; adds a lowercase-prefix scan on `EmailIndex`), `/projects/{id}/directory`, `DIRECTORY_PROVIDER` config; email fallback for unknown people.
+  - **1.3 (as built):**
+    - **One pass, not two.** `EmailIndex` has no sort key, so an email-prefix match on it would be a full scan of every user of every status. `UsersTableDirectory` instead pages the active partition of `StatusLoginIndex` once and matches both email and name. Results are ranked exact email, then email prefix, then a name word prefix, then name substring, then email substring. Within a rank, the most recent sign-in wins.
+    - **Snapshot per process.** A typeahead calls the directory on every keystroke, so the `(email, name)` list is held for 60 s and each keystroke filters in memory. It is capped at 20,000 users, and an empty read is never held. A first-time user becomes findable within a minute.
+    - `DIRECTORY_PROVIDER` is read with a default of `users_table`. An unknown value logs a warning and falls back. No CDK change: there is one provider until Graph (4.1).
+    - `GET /projects/{id}/directory?q=&limit=` (viewer, limit 1 to 25, default 10) returns `email, name, hasSignedIn, memberRole`, with no user ids. A well-formed email the directory doesn't know is appended last with `hasSignedIn: false`, so it can always be invited.
+    - `/users/search` is unchanged and keeps its 100-user cap. The agent share dialog still uses it until 1.8 generalizes the picker.
+    - **UI impact (for the 1.8 mockup re-sync):**
+      - The picker can grey out people who are already members, using `memberRole`, rather than failing the invite into `alreadyMembers`.
+      - Typing a full email always offers it, even for someone who has never signed in. The picker still needs the copy "Can't find someone? Enter their email."
+      - Results are ordered by match quality, then by most recent sign-in, not alphabetically.
 - **1.4 Harness wiring:** `preferences.projectId` on session create; `resolve_agent_invocation` for project harness (membership → role, degrade policy §9.6), `projectId` on `C#` rows + `COST#` rollup, `## Project Instructions` heading, `UserSettings.personalInstructions` + injection. Tests: prompt block order golden test, cache-key stability across two members. **Split in two.** **1.4a (as built):**
   - Membership needed no route change: the agent access check already delegates to the project (1.2). The route adds an **archived refusal** (a conversational error naming the project).
   - **Degrade with notice** is `resolve_agent_invocation(..., degrade=True)`, passed only for a harness. It records drops in `plan.unavailable`, which the route streams as a new **`agent_notice`** SSE event before `message_start` (added to CLAUDE.md's event table). Nothing about a drop enters the prompt.

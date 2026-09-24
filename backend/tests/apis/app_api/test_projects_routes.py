@@ -71,8 +71,33 @@ def task_queries(monkeypatch) -> list:
     return calls
 
 
+class FakeDirectory:
+    """Knows the owner, the editor and one person outside the project."""
+
+    def __init__(self) -> None:
+        self.queries: list = []
+
+    async def search(self, query, limit):
+        from apis.shared.directory import DirectoryPerson
+
+        self.queries.append((query, limit))
+        people = [
+            DirectoryPerson(email=OWNER.email, name="O"),
+            DirectoryPerson(email=EDITOR.email, name="E"),
+            DirectoryPerson(email="outsider@example.edu", name="Out Sider"),
+        ]
+        return [p for p in people if query.lower() in p.email or query.lower() in p.name.lower()][:limit]
+
+
 @pytest.fixture()
-def service(env, monkeypatch, task_queries) -> ProjectService:
+def directory(monkeypatch) -> FakeDirectory:
+    fake = FakeDirectory()
+    monkeypatch.setattr(project_routes, "get_directory", lambda: fake)
+    return fake
+
+
+@pytest.fixture()
+def service(env, monkeypatch, task_queries, directory) -> ProjectService:
     svc = ProjectService(repository=ProjectRepository(table_name=TABLE), harness=FakeHarness())
     monkeypatch.setattr(project_routes, "_service", svc)
     return svc
@@ -120,6 +145,8 @@ MATRIX = [
      {"owner": 204, "editor": 204, "viewer": 403, "stranger": 404, "other_project_member": 404}),
     ("DELETE", "/members/me", None,
      {"owner": 409, "editor": 204, "viewer": 204, "stranger": 404, "other_project_member": 404}),
+    ("GET", "/directory?q=out", None,
+     {"owner": 200, "editor": 200, "viewer": 200, "stranger": 404, "other_project_member": 404}),
     ("GET", "/tasks", None,
      {"owner": 200, "editor": 200, "viewer": 200, "stranger": 404, "other_project_member": 404}),
     ("GET", "/shared-tasks", None,
@@ -219,3 +246,35 @@ def test_shared_tasks_hide_user_ids_and_mark_the_callers_own(project_id, service
         ("sh-s1", EDITOR.email, False, "/shared/sh-s1"),
     ]
     assert not any("ownerId" in t or "sessionId" in t for t in tasks)
+
+
+def test_directory_marks_people_already_in_the_project(project_id):
+    people = client_for(EDITOR).get(f"/projects/{project_id}/directory?q=example").json()["people"]
+    assert [(p["email"], p["memberRole"], p["hasSignedIn"]) for p in people] == [
+        (OWNER.email, "owner", True),
+        (EDITOR.email, "editor", True),
+        ("outsider@example.edu", None, True),
+    ]
+    assert not any("userId" in p for p in people)
+
+
+def test_directory_offers_an_unknown_email_so_it_can_be_invited(project_id, directory):
+    people = client_for(OWNER).get(f"/projects/{project_id}/directory?q=New.Person@Example.edu").json()["people"]
+    assert people == [{"email": "new.person@example.edu", "name": "", "hasSignedIn": False, "memberRole": None}]
+
+    # A member who has never signed in is unknown to the directory but still marked.
+    people = client_for(OWNER).get(f"/projects/{project_id}/directory?q={THIRD}").json()["people"]
+    assert [(p["email"], p["memberRole"]) for p in people] == [(THIRD, "viewer")]
+
+
+def test_directory_fallback_respects_the_limit_and_only_takes_real_emails(project_id):
+    people = client_for(OWNER).get(f"/projects/{project_id}/directory?q=not-an-email").json()["people"]
+    assert people == []
+    # "r@example.edu" is a substring of all three known emails and a valid address itself.
+    people = client_for(OWNER).get(f"/projects/{project_id}/directory?q=r@example.edu&limit=2").json()["people"]
+    assert [p["email"] for p in people] == [OWNER.email, "r@example.edu"]
+
+
+def test_directory_never_searches_for_a_non_member(project_id, directory):
+    assert client_for(STRANGER).get(f"/projects/{project_id}/directory?q=a").status_code == 404
+    assert directory.queries == []

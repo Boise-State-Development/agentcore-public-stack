@@ -83,6 +83,11 @@ def editors_manage_members_default() -> bool:
     return os.environ.get("PROJECTS_EDITORS_MANAGE_MEMBERS_DEFAULT", "").strip().lower() != "false"
 
 
+def is_valid_email(email: str) -> bool:
+    """The shape check every invite path applies (not deliverability)."""
+    return bool(_EMAIL_RE.match(email))
+
+
 def _new_project_id() -> str:
     return f"prj_{uuid.uuid4().hex}"
 
@@ -297,7 +302,7 @@ class ProjectService:
         result = AddMembersResult()
         cap = max_members()
         for raw in dict.fromkeys(normalize_email(e) for e in emails if e and e.strip()):
-            if not _EMAIL_RE.match(raw):
+            if not is_valid_email(raw):
                 result.invalid.append(raw)
                 continue
             if raw == project.owner_email:
