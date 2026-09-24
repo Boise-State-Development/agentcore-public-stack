@@ -151,3 +151,23 @@ def test_crawl_routes_are_not_read_as_document_ids(pid, harness_id, monkeypatch)
 def test_a_missing_file_is_404(pid):
     assert client(VIEWER).get(f"/projects/{pid}/knowledge/DOC-nope").status_code == 404
     assert client(VIEWER).get(f"/projects/{pid}/knowledge/DOC-nope/download").status_code == 404
+
+
+def test_adding_and_removing_files_is_on_the_projects_audit_trail(pid, harness_id, project, monkeypatch):
+    from tests.shared.test_project_settings import AuditRecorder
+
+    service, _ = project
+    trail = AuditRecorder()
+    monkeypatch.setattr(service, "audit", trail)
+    monkeypatch.setattr("apis.shared.sync_policies.service.delete_sync_policies_for_source", AsyncMock())
+    monkeypatch.setattr("apis.app_api.documents.services.cleanup_service.cleanup_document_resources", AsyncMock())
+
+    doc_id = _upload(EDITOR, pid, "plan.txt").json()["documentId"]
+    assert client(EDITOR).delete(f"/projects/{pid}/knowledge/{doc_id}").status_code == 204
+
+    assert [(r["action"], r["actor"].user_id) for r in trail.records] == [
+        ("project.knowledge_added", EDITOR.user_id),
+        ("project.knowledge_removed", EDITOR.user_id),
+    ]
+    assert trail.records[0]["after"] == {"documentId": doc_id, "filename": "plan.txt", "source": "upload"}
+    assert trail.records[1]["before"] == {"documentId": doc_id, "filename": "plan.txt"}

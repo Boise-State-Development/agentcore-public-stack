@@ -33,6 +33,7 @@ from apis.shared.assistants.version_repository import (
     list_versions,
 )
 from apis.shared.assistants.versions import snapshot_of
+from apis.shared.audit import AuditAction
 from apis.shared.auth.models import User
 from apis.shared.projects.models import Project, ProjectRole
 from apis.shared.projects.service import ProjectNotFoundError, ProjectService
@@ -160,7 +161,27 @@ class HarnessSettingsService:
         snapshot = AgentVersion(**snapshot.model_dump(by_alias=True), **{CREATED_BY_EMAIL: user.email})
         version = await create_version(updated.assistant_id, snapshot)
         logger.info("Project %s settings saved as version %s", project_id, version.version)
+        self._record(user, project_id, version.version, harness, instructions, model_settings, kind, new_bindings)
         return HarnessView(project, role, updated, version.version)
+
+    def _record(self, user, project_id, version, before, instructions, model_settings, kind, new_bindings) -> None:
+        """Audit what the save changed. Instruction text stays in the version history, not the trail."""
+        at = {"version": version}
+        if instructions is not None:
+            self.projects.record(AuditAction.PROJECT_INSTRUCTIONS_UPDATED, user, project_id, after=at)
+        if model_settings is not None:
+            self.projects.record(
+                AuditAction.PROJECT_MODEL_UPDATED, user, project_id,
+                before={"modelId": before.model_settings.model_id if before.model_settings else None},
+                after={**at, "modelId": model_settings.model_id},
+            )
+        if new_bindings is not None:
+            action = AuditAction.PROJECT_TOOLS_UPDATED if kind == TOOL else AuditAction.PROJECT_SKILLS_UPDATED
+            refs = lambda bindings: sorted(b.ref for b in bindings or [] if b.kind == kind)  # noqa: E731
+            self.projects.record(
+                action, user, project_id,
+                before={"refs": refs(before.bindings)}, after={**at, "refs": refs(new_bindings)},
+            )
 
     async def list_versions(self, project_id: str, user: User, limit: int) -> List[Tuple[AgentVersion, List[str]]]:
         """Newest first, each with the fields it changed from the one before it."""

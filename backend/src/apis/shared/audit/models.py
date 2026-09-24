@@ -62,6 +62,28 @@ class AuditAction:
     # interesting than all of them.
     ROLE_MUTATION_DENIED = "app_role.mutation_denied"
 
+    # Shared Projects (shared-projects §9.4), target ``project``. Only actions
+    # something records are listed; memory, schedule and output actions arrive
+    # with the phases that emit them. ``tools_updated``/``skills_updated`` are a
+    # project's own bindings, not role grants, so the note above does not apply.
+    PROJECT_CREATED = "project.created"
+    PROJECT_UPDATED = "project.updated"
+    PROJECT_ARCHIVED = "project.archived"
+    PROJECT_RESTORED = "project.restored"
+    PROJECT_DELETED = "project.deleted"
+    PROJECT_TRANSFERRED = "project.transferred"
+    PROJECT_MEMBER_ADDED = "project.member_added"
+    PROJECT_MEMBER_ROLE_CHANGED = "project.member_role_changed"
+    PROJECT_MEMBER_REMOVED = "project.member_removed"
+    PROJECT_INSTRUCTIONS_UPDATED = "project.instructions_updated"
+    PROJECT_MODEL_UPDATED = "project.model_updated"
+    PROJECT_TOOLS_UPDATED = "project.tools_updated"
+    PROJECT_SKILLS_UPDATED = "project.skills_updated"
+    PROJECT_KNOWLEDGE_ADDED = "project.knowledge_added"
+    PROJECT_KNOWLEDGE_REMOVED = "project.knowledge_removed"
+    PROJECT_TASK_SHARED = "project.task_shared"
+    PROJECT_TASK_UNSHARED = "project.task_unshared"
+
 
 ALL_ACTIONS: frozenset[str] = frozenset(
     v for k, v in vars(AuditAction).items() if not k.startswith("_") and isinstance(v, str)
@@ -74,6 +96,7 @@ class AuditOutcome:
 
 
 TARGET_APP_ROLE = "app_role"
+TARGET_PROJECT = "project"
 
 
 @dataclass
