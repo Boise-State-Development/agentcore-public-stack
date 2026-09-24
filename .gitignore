@@ -156,4 +156,7 @@ internal-docs/
 *-report-*.pdf
 audit-*.pdf
 audit-*.md
+# backend/scripts/audit_user_duplicates.py reports (contain email addresses)
+user-duplicates-*.json
+user-duplicates-*.md
 review-*.pdf

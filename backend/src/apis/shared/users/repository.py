@@ -41,7 +41,7 @@ def _login_instant(profile: UserProfile) -> datetime:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
-def _live_profile_rank(profile: UserProfile) -> Tuple[datetime, bool, str]:
+def live_profile_rank(profile: UserProfile) -> Tuple[datetime, bool, str]:
     """Sort key (descending) that puts the live profile of an email first.
 
     One email can own several PROFILE rows: the pre-Cognito login keyed users
@@ -49,8 +49,27 @@ def _live_profile_rank(profile: UserProfile) -> Tuple[datetime, bool, str]:
     Cognito ``sub`` uuid, and nothing retired the old rows. Most recent login
     wins; on a tie a non-numeric id beats a legacy numeric one; the id itself
     breaks any remaining tie so the choice never depends on GSI order.
+
+    Public because ``scripts/audit_user_duplicates.py`` must pick the same
+    live row the API does before it retires the others.
     """
     return (_login_instant(profile), not profile.user_id.isdigit(), profile.user_id)
+
+
+def item_to_profile(item: dict) -> UserProfile:
+    """Convert a users-table PROFILE item to a UserProfile."""
+    created_at = _heal_iso(item.get("createdAt", ""))
+    return UserProfile(
+        user_id=item["userId"],
+        email=item["email"],
+        name=item.get("name", ""),
+        roles=item.get("roles", []),
+        picture=item.get("picture"),
+        email_domain=item.get("emailDomain", ""),
+        created_at=created_at,
+        last_login_at=_heal_iso(item.get("lastLoginAt", "")) or created_at,
+        status=item.get("status", "active")
+    )
 
 
 class UserRepository:
@@ -146,7 +165,7 @@ class UserRepository:
         """Every PROFILE row for an email (case-insensitive), live one first.
 
         ``EmailIndex`` has no sort key and email is not unique in this table
-        (see ``_live_profile_rank``), so this reads every page and orders the
+        (see ``live_profile_rank``), so this reads every page and orders the
         rows itself rather than trusting whichever one DynamoDB returns first.
         """
         if not self._enabled:
@@ -171,7 +190,7 @@ class UserRepository:
             return []
 
         profiles = [self._item_to_profile(item) for item in items]
-        return sorted(profiles, key=_live_profile_rank, reverse=True)
+        return sorted(profiles, key=live_profile_rank, reverse=True)
 
     async def get_user_by_email(self, email: str) -> Optional[UserProfile]:
         """The live profile for an email (case-insensitive lookup).
@@ -413,18 +432,7 @@ class UserRepository:
 
     def _item_to_profile(self, item: dict) -> UserProfile:
         """Convert DynamoDB item to UserProfile."""
-        created_at = _heal_iso(item.get("createdAt", ""))
-        return UserProfile(
-            user_id=item["userId"],
-            email=item["email"],
-            name=item.get("name", ""),
-            roles=item.get("roles", []),
-            picture=item.get("picture"),
-            email_domain=item.get("emailDomain", ""),
-            created_at=created_at,
-            last_login_at=_heal_iso(item.get("lastLoginAt", "")) or created_at,
-            status=item.get("status", "active")
-        )
+        return item_to_profile(item)
 
     def _item_to_list_item(self, item: dict) -> UserListItem:
         """Convert DynamoDB item to UserListItem."""
