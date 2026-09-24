@@ -315,6 +315,20 @@ Reuse, not rebuild: `share-agent-dialog` people picker (already the only typeahe
 
 Memory tab: file browser (name, description, size meter, updated, contributors), file view (items with hover provenance, pinned/superseded markers, link chips), block editor (one textarea per item, drag to reorder, link picker dialog, description/aliases form fields, inline validation from the API's per-step errors), history with diff/restore, review queue with side-by-side and per-op approve, archive with restore, "My memory in this project". Viewers get read-only + **Propose**. WCAG 2.1 AA: the block editor and link picker are keyboard-operable (roving tabindex, `aria-live` validation), verified with the existing axe checks.
 
+**Mockup:** https://claude.ai/artifact/2syz1g6zY2ZsCAkgsWVp7F — a clickable prototype with an owner/editor/viewer switcher. Each screen has a "Design notes" drawer that cites sections of this spec. It is updated once, when the SPA PR (1.8) starts, not after every PR.
+
+The mockup departs from the text above in two ways, to be settled at 1.8:
+1. **Six tabs instead of nine.** Instructions, model, and Tools & Skills fold into Settings; Schedules and Outputs stay hidden until Phase 3.
+2. **Memory provenance is shown inline, not on hover,** because touch screens have no hover.
+
+Open questions it raises:
+- whether session-list grouping sits inside the time buckets or gets a pinned Projects section;
+- whether the notification badge ships before 1.7;
+- whether review approves per operation or per proposal;
+- where "Just me" memory lives under Phase 0 decision C.
+
+**When a PR changes a behavior the mockup shows** (the 1.3 picker, the 1.4 degrade notice, 1.6 share semantics, 1.7 notifications), note it in that PR's as-built entry below, so the 1.8 re-sync can find it.
+
 ---
 
 ## 7. Phasing and PR plan
@@ -335,6 +349,12 @@ Each PR targets `develop`, lands behind `PROJECTS_ENABLED` (default on, `=false`
   - **Delete is archive-then-purge as two calls:** `PATCH {"status":"archived"}` (owner), then `DELETE` (owner, archived only; 409 otherwise). An archived project is read-only except for the owner restoring it.
   - **Membership invariants are enforced by the writes:** add/remove is one transaction with the META `memberCount` (capped by `PROJECTS_MAX_MEMBERS`, conditioned on `status=active`); every META write is conditional on `version`. Only a `ConditionalCheckFailed` cancellation is read as a verdict; any other cancellation is re-raised.
   - **Transfer requires the target editor to have signed in** (their `userId` is back-filled on first resolve), because META's owner is keyed by user id.
+  - **UI impact (for the 1.8 mockup re-sync):**
+    - Delete is two steps: an Archive action, then Delete on an archived project.
+    - An archived project is read-only for everyone except the owner restoring it.
+    - Transfer can only target an editor with `hasSignedIn: true`; the member list returns that flag, so the picker can disable the rest.
+    - Bulk invite reports four buckets: `added`, `alreadyMembers`, `invalid`, `overCapacity`.
+    - The members response carries `canManage`, so the UI never re-derives the editors-manage-members rule.
   - kb-sync's image now copies `apis/shared/projects/` (import closure only; the worker never takes the harness access path).
 - **1.3 Directory:** `apis/shared/directory/` adapter protocol + `UsersTableDirectory` (paginates `StatusLoginIndex` instead of the 100-row cap; adds a lowercase-prefix scan on `EmailIndex`), `/projects/{id}/directory`, `DIRECTORY_PROVIDER` config; email fallback for unknown people.
 - **1.4 Harness wiring:** `preferences.projectId` on session create; `resolve_agent_invocation` for project harness (membership → role, degrade policy §9.6), `projectId` on `C#` rows + `COST#` rollup, `## Project Instructions` heading, `UserSettings.personalInstructions` + injection. Tests: prompt block order golden test, cache-key stability across two members. **Split in two.** **1.4a (as built):**
@@ -345,10 +365,14 @@ Each PR targets `develop`, lands behind `PROJECTS_ENABLED` (default on, `=false`
   - `preferences.projectId` is written at session binding.
   - `projectId` rides the `C#` row like `turnAgentId`. **Rollup shape changed:** instead of a `byUser` map on `COST#{YYYY-MM}`, each member gets a `COST#{YYYY-MM}#USER#{userId}` row. Each write is one atomic `ADD`, and member rows are bounded by membership, so there is no top-N trimming. Both are `UpdateItem` (the runtime has no `PutItem`).
   - Gaps inherited from `turnAgentId`: interrupted-turn and resume rows carry no project id.
+  - **UI impact (for the 1.8 mockup re-sync):**
+    - The degrade notice is the `agent_notice` SSE event, arriving before the reply. It carries a ready-made `message` plus structured `unavailableModelId` / `unavailableTools` / `unavailableSkills` / `unavailableMemory`, is not persisted, and so shows on the live turn only.
+    - An archived project's composer gets a conversational error, not a disabled input, unless 1.8 disables it up front.
 
   **1.4b:** personal instructions (`UserSettings.personalInstructions` + precedence sentence). Separate because it changes every user's system prompt, not only project turns.
 - **1.5 Knowledge + tools + skills tabs:** proxy routes, `addedBy` on documents, upload-time "shared with all members" notice, instruction versions on save.
 - **1.6 Tasks:** `ProjectSessionIndex` writes, `/projects/{id}/tasks`, `access_level: "project"` on shares, `SHARED_TASK#` pointer, fork keeps `projectId`.
+  - **1.6-infra (as built):** `ProjectSessionIndex` on sessions-metadata, `GSI5_PK = PROJECT#{projectId}#USER#{userId}`, `GSI5_SK = {lastMessageAt}#{sessionId}`, projection ALL. It is the recency key of `SessionRecencyIndex`/GSI4, and the backend should write and remove it at exactly the points GSI4 is (active only, dropped on soft-delete). Deployed alone: it is this table's one new GSI, and the index is inert until the 1.6 backend writes GSI5 keys. `preferences.projectId` (1.4a) is the source of `projectId`.
 - **1.7 Notifications + audit:** `NOTIF#` inbox rows + `/notifications`, `project.*` audit actions, `/projects/{id}/audit`, `admin.projects` scope (registry + route-coverage test).
 - **1.8 SPA:** projects list/detail shell, Members (people picker + bulk paste + role select), Instructions (+history), Files, Tools & Skills, Tasks (own + shared, share-to-project, fork), notification badge, session-list grouping. Specs for the facade and each page; `ng build` and axe clean.
 - **1.9 Docs:** `docs-site/…/features/projects.md`, `admin/projects.md`, env-var table entries.
