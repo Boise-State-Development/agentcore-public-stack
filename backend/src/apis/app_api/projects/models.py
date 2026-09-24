@@ -12,6 +12,13 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from apis.app_api.documents.models import (
+    DocumentResponse,
+    ImportDocumentsResponse,
+    KbUsage,
+    UploadUrlResponse,
+)
+from apis.app_api.web_sources.models import StartCrawlResponse
 from apis.shared.assistants.models import AgentModelConfig, VersionFieldChange
 from apis.shared.projects.models import (
     MemberRole,
@@ -282,3 +289,43 @@ class SettingsVersionResponse(SettingsVersionSummary):
     skills: List[BindingRef]
     field_changes: List[VersionFieldChange] = Field(..., alias="fieldChanges")
     instructions_diff: List[str] = Field(..., alias="instructionsDiff")
+
+
+# ---- knowledge (the harness's documents) ------------------------------
+
+
+class ProjectDocumentResponse(DocumentResponse):
+    """A document in the project's Files, with who added it."""
+
+    added_by_email: Optional[str] = Field(
+        None, alias="addedByEmail", description="Null if unknown: added before this was recorded, or by a former member"
+    )
+
+
+class ProjectDocumentsResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    documents: List[ProjectDocumentResponse]
+    next_token: Optional[str] = Field(None, alias="nextToken")
+    kb_usage: Optional[KbUsage] = Field(None, alias="kbUsage")
+    can_edit: bool = Field(..., alias="canEdit")
+
+
+class SharingNotice(BaseModel):
+    """What adding a file to a project means, said once, the same way to every client."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    notice: str = Field(..., description="Shown when a member adds files: everyone in the project can read them")
+
+
+class ProjectUploadUrlResponse(UploadUrlResponse, SharingNotice):
+    pass
+
+
+class ProjectImportResponse(ImportDocumentsResponse, SharingNotice):
+    pass
+
+
+class ProjectStartCrawlResponse(StartCrawlResponse, SharingNotice):
+    pass

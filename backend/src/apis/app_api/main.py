@@ -211,6 +211,7 @@ from apis.app_api.chat.proxy_routes import router as bff_chat_proxy_router
 from apis.app_api.mcp_apps.routes import router as mcp_apps_router
 from apis.app_api.memory.routes import router as memory_router
 from apis.app_api.memory_spaces.routes import router as memory_spaces_router
+from apis.app_api.projects.knowledge_routes import router as project_knowledge_router
 from apis.app_api.projects.routes import router as projects_router
 from apis.app_api.tools.routes import router as tools_router
 from apis.app_api.files.routes import router as files_router
@@ -257,6 +258,7 @@ app.include_router(bff_chat_proxy_router)  # Cookie-authenticated SSE proxy (Pha
 app.include_router(mcp_apps_router)  # MCP Apps app-initiated tools/call proxy (PR #5; inert until host flag on)
 app.include_router(memory_spaces_router)  # Memory Spaces user surface (A2); 404s while flag off
 app.include_router(projects_router)  # Shared Projects (PR-1.2); 404s while PROJECTS_ENABLED=false
+app.include_router(project_knowledge_router)  # A project's files (PR-1.5b), over its harness's documents
 app.include_router(memory_router)  # AgentCore Memory access endpoints
 app.include_router(tools_router)  # Tool discovery and permissions
 app.include_router(files_router)  # File upload via pre-signed URLs

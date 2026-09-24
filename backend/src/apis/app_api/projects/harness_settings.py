@@ -74,19 +74,24 @@ def _dumps(bindings: List[AgentBinding]) -> List[dict]:
     return [b.model_dump(by_alias=True) for b in bindings]
 
 
+async def load_harness(project: Project) -> Assistant:
+    """The project's harness record. Call only after authorizing the caller on the project."""
+    table = os.environ.get("DYNAMODB_ASSISTANTS_TABLE_NAME")
+    if not table:
+        raise RuntimeError("DYNAMODB_ASSISTANTS_TABLE_NAME environment variable is required")
+    harness = await _get_assistant_cloud_without_ownership_check(project.harness_agent_id, table)
+    if harness is None:
+        logger.error("Project %s has no harness agent %s", project.project_id, project.harness_agent_id)
+        raise ProjectNotFoundError("This project's settings could not be found")
+    return harness
+
+
 class HarnessSettingsService:
     def __init__(self, projects: ProjectService):
         self.projects = projects
 
     async def _harness(self, project: Project) -> Assistant:
-        table = os.environ.get("DYNAMODB_ASSISTANTS_TABLE_NAME")
-        if not table:
-            raise RuntimeError("DYNAMODB_ASSISTANTS_TABLE_NAME environment variable is required")
-        harness = await _get_assistant_cloud_without_ownership_check(project.harness_agent_id, table)
-        if harness is None:
-            logger.error("Project %s has no harness agent %s", project.project_id, project.harness_agent_id)
-            raise ProjectNotFoundError("This project's settings could not be found")
-        return harness
+        return await load_harness(project)
 
     async def get(self, project_id: str, user: User) -> HarnessView:
         project, role = self.projects.authorize(project_id, user, "viewer")
