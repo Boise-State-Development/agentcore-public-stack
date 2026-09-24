@@ -24,7 +24,15 @@ WHAT IT DOES
    one cheap Query per known key path (see ``QUERY_CHECKS``), an S3 prefix
    probe per user-keyed bucket, AgentCore Memory sessions for the actor, and —
    with ``--deep`` — one Scan per table for un-indexed attributes.
-4. Writes a JSON report (machine-readable) and a Markdown report next to it.
+4. Looks for evidence the old id is *still in use*, because ``lastLoginAt``
+   cannot show it: an API key minted under the old id still authenticates as
+   that id today, and the api-converse path never touches the profile's
+   ``lastLoginAt``. A row is ``in_use`` if it owns an unexpired API key or an
+   active scheduled prompt, or if anything under it (a model call, a message,
+   a key use) is newer than the day its live twin was created — that person's
+   own cutover. The api-converse route also 401s a key whose profile row is
+   missing, so deleting an in-use row would break an integration outright.
+5. Writes a JSON report (machine-readable) and a Markdown report next to it.
 
 SAFETY
 ------
@@ -246,8 +254,11 @@ class ProfileRow:
     references: Dict[str, int] = field(default_factory=dict)
     breakdown: Dict[str, Dict[str, int]] = field(default_factory=dict)
     deep_samples: List[str] = field(default_factory=list)
+    last_activity_at: Optional[str] = None           # newest timestamp found under this id
+    activity: Dict[str, str] = field(default_factory=dict)  # source -> newest timestamp
+    in_use: List[str] = field(default_factory=list)  # why the old id is still live
     errors: List[str] = field(default_factory=list)
-    verdict: str = ""                                # "unreferenced" | "referenced" | "incomplete" | ""
+    verdict: str = ""                                # "in_use" | "referenced" | "unreferenced" | "incomplete" | ""
     action: str = ""
 
 
@@ -539,6 +550,7 @@ def check_references(
     deep_tables: Sequence[str] = (),
     waived: Optional[Set[str]] = None,
     sleep: float = 0.0,
+    now: Optional[datetime] = None,
 ) -> List[CheckStatus]:
     """Fill ``references``/``errors``/``cognito_user`` on every row; return check statuses.
 
@@ -644,15 +656,102 @@ def check_references(
                 row.references[check_id] = len(found)
                 row.deep_samples.extend(f"{logical}: {s}" for s in found[:5])
 
+    for group in groups:
+        live_created = group.rows[0].created_at
+        for row in group.rows[1:]:
+            try:
+                gather_activity(clients, env, row, live_created, now or datetime.now(timezone.utc))
+            except (ClientError, BotoCoreError) as exc:
+                row.errors.append(f"activity: {exc}")
+
     for row in stale:
         if row.errors:
             row.verdict = "incomplete"
+        elif row.in_use:
+            row.verdict = "in_use"
         elif any(row.references.values()):
             row.verdict = "referenced"
         else:
             row.verdict = "unreferenced"
 
     return statuses
+
+
+# --------------------------------------------------------------------------- #
+# Is the old id still in use?                                                 #
+# --------------------------------------------------------------------------- #
+def _instant(value: Any) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("+00:00Z", "Z").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _query_partition(table: Any, pk: str, projection: str, names: Dict[str, str]) -> Iterator[Dict[str, Any]]:
+    kwargs: Dict[str, Any] = {
+        "KeyConditionExpression": Key("PK").eq(pk),
+        "ProjectionExpression": projection,
+        "ExpressionAttributeNames": names,
+    }
+    while True:
+        response = table.query(**kwargs)
+        yield from response.get("Items", [])
+        last_key = response.get("LastEvaluatedKey")
+        if not last_key:
+            return
+        kwargs["ExclusiveStartKey"] = last_key
+
+
+def gather_activity(clients: Clients, env: Environment, row: ProfileRow, cutover: Optional[str], now: datetime) -> None:
+    """Record the newest activity under ``row.user_id`` and every sign it is live.
+
+    Sources: API keys (``lastUsedAt``, and whether any is unexpired), and the
+    sessions-metadata partition — ``C#<ts>#…`` model-call rows (written for
+    api-converse calls too), ``S#`` sessions' ``lastMessageAt``, and
+    ``SCHEDPROMPT#`` rows, which still fire while they carry ``nextRunAt``.
+    """
+    newest: Dict[str, datetime] = {}
+
+    def note(source: str, when: Optional[datetime]) -> None:
+        if when and (source not in newest or when > newest[source]):
+            newest[source] = when
+
+    if "api-keys" in env.tables:
+        table = clients.dynamodb.Table(env.tables["api-keys"])
+        for item in _query_partition(table, f"USER#{row.user_id}", "#n, keyId, lastUsedAt, expiresAt",
+                                     {"#n": "name"}):
+            note("api-key used", _instant(item.get("lastUsedAt")))
+            expires = _instant(item.get("expiresAt"))
+            if expires is None or expires > now:
+                row.in_use.append(
+                    f"unexpired API key {item.get('name') or item.get('keyId')!r} "
+                    f"(last used {item.get('lastUsedAt') or 'never'}, expires {item.get('expiresAt') or 'never'})"
+                )
+
+    if "sessions-metadata" in env.tables:
+        table = clients.dynamodb.Table(env.tables["sessions-metadata"])
+        for item in _query_partition(table, f"USER#{row.user_id}", "SK, lastMessageAt, nextRunAt", {}):
+            sk = str(item.get("SK", ""))
+            if sk.startswith("C#"):
+                note("model call", _instant(sk.split("#")[1] if sk.count("#") >= 2 else None))
+            elif sk.startswith("S#"):
+                note("message", _instant(item.get("lastMessageAt")))
+            elif sk.startswith("SCHEDPROMPT#") and item.get("nextRunAt"):
+                row.in_use.append(f"active scheduled prompt {sk} (next run {item['nextRunAt']})")
+
+    row.activity = {k: v.strftime("%Y-%m-%dT%H:%M:%SZ") for k, v in sorted(newest.items())}
+    if newest:
+        latest_source, latest = max(newest.items(), key=lambda kv: kv[1])
+        row.last_activity_at = latest.strftime("%Y-%m-%dT%H:%M:%SZ")
+        cut = _instant(cutover)
+        if cut and latest > cut:
+            row.in_use.append(
+                f"{latest_source} at {row.last_activity_at}, after this person's live profile "
+                f"was created ({cutover})"
+            )
 
 
 # --------------------------------------------------------------------------- #
@@ -784,6 +883,7 @@ def summarize(
         "needsReview": sum(1 for g in groups if g.kind == "needs_review"),
         "orphanNumericRows": len(orphans),
         "staleRows": len(stale),
+        "inUse": sum(1 for r in stale if r.verdict == "in_use"),
         "unreferenced": sum(1 for r in stale if r.verdict == "unreferenced"),
         "referenced": sum(1 for r in stale if r.verdict == "referenced"),
         "incomplete": sum(1 for r in stale if r.verdict == "incomplete"),
@@ -843,7 +943,8 @@ def render_markdown(report: Dict[str, Any], groups: Sequence[DuplicateGroup], or
         ("unparseableRows", "unparseable rows"), ("duplicateEmails", "emails with >1 row"),
         ("legacyPairs", "legacy pairs (numeric + uuid)"), ("needsReview", "groups needing review"),
         ("orphanNumericRows", "numeric rows with no twin"), ("staleRows", "stale rows checked"),
-        ("unreferenced", "unreferenced"), ("referenced", "still referenced"),
+        ("inUse", "**old id still in use**"), ("referenced", "referenced (history only)"),
+        ("unreferenced", "unreferenced"),
         ("incomplete", "incomplete (a check failed)"), ("eligible", "eligible to retire"),
         ("written", "rows written this run"),
     ]
@@ -853,14 +954,23 @@ def render_markdown(report: Dict[str, Any], groups: Sequence[DuplicateGroup], or
     out += [f"| {c['check_id']} | {c['target']} | {c['status']} | {c['detail'] if c['status'] != 'ok' else ''} |"
             for c in report["checks"]]
 
+    in_use = [(g, r) for g in groups for r in g.rows if r.verdict == "in_use"]
+    out += ["", f"## ⚠️ Old id still in use ({len(in_use)})", "",
+            "Never retired. Each needs a person: move the key or schedule to the live id, or confirm with the user.",
+            ""]
+    for g, r in in_use:
+        out.append(f"- **{g.email}** `{r.user_id}` (live: `{g.live_user_id}`): " + "; ".join(r.in_use))
+
     pairs = [g for g in groups if g.kind == "legacy_pair"]
     out += ["", f"## Legacy pairs ({len(pairs)})", "",
-            "| email | live id · last login | stale id · last login | references on stale id | verdict | action |",
-            "|---|---|---|---|---|---|"]
+            "| email | live id · created · last login | stale id · last login | last activity on stale id "
+            "| references on stale id | verdict | action |",
+            "|---|---|---|---|---|---|---|"]
     for g in pairs:
         live, stale = g.rows
         out.append(
-            f"| {g.email} | `{live.user_id}` · {live.last_login_at} | `{stale.user_id}` · {stale.last_login_at} "
+            f"| {g.email} | `{live.user_id}` · {live.created_at} · {live.last_login_at} "
+            f"| `{stale.user_id}` · {stale.last_login_at} | {stale.last_activity_at or '—'} "
             f"| {_refs_text(stale)} | {stale.verdict} | {stale.action} |"
         )
 
@@ -869,12 +979,13 @@ def render_markdown(report: Dict[str, Any], groups: Sequence[DuplicateGroup], or
             "Never acted on. The top row is what the API resolves the email to today.", ""]
     for g in review:
         out += [f"### {g.email}", "",
-                "| user id | role | last login | created | status | Cognito sub | references | verdict |",
-                "|---|---|---|---|---|---|---|---|"]
+                "| user id | role | last login | created | status | Cognito sub | last activity | references | verdict |",
+                "|---|---|---|---|---|---|---|---|---|"]
         for r in g.rows:
             refs = _refs_text(r) if r.role == "stale" else "(live — not checked)"
             out.append(f"| `{r.user_id}` | {r.role} | {r.last_login_at} | {r.created_at} | {r.status} "
-                       f"| {r.cognito_user} | {refs} | {r.verdict or '—'} |")
+                       f"| {r.cognito_user} | {r.last_activity_at or '—'} | {refs} | {r.verdict or '—'} |")
+        out += [f"- `{r.user_id}` in use: {'; '.join(r.in_use)}" for r in g.rows if r.in_use]
         samples = [s for r in g.rows for s in r.deep_samples]
         if samples:
             out += ["", "Deep-scan hits:", ""] + [f"- `{s}`" for s in samples]
@@ -932,7 +1043,7 @@ def run(args: argparse.Namespace, clients: Clients, account: str, now: Optional[
     else:
         deep = DEEP_SCAN_DEFAULT if args.deep else ()
     statuses = check_references(clients, env, groups, deep_tables=deep,
-                                waived=set(args.waive_check), sleep=args.sleep)
+                                waived=set(args.waive_check), sleep=args.sleep, now=now)
     written = apply_actions(users_table, groups, mode, now=now, min_soak_days=args.min_soak_days)
 
     summary = summarize(groups, orphans, counters, written)

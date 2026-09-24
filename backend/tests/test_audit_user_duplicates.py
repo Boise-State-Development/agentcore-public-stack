@@ -235,7 +235,9 @@ class TestDiscover:
 def _seed_pair(stack, email="prof@x.edu", legacy=LEGACY, live=LIVE):
     users = stack["tables"]["users"]
     users.put_item(Item=_profile_item(legacy, email, "2026-04-15T00:00:00Z"))
-    users.put_item(Item=_profile_item(live, email, "2026-09-20T00:00:00Z"))
+    # The live row is created when the person first signs in through Cognito:
+    # that is their cutover, and anything newer under the old id means it's live.
+    users.put_item(Item=_profile_item(live, email, "2026-09-20T00:00:00Z", createdAt="2026-04-16T09:00:00Z"))
 
 
 class TestAudit:
@@ -256,7 +258,8 @@ class TestAudit:
     def test_references_on_indexed_paths_block_the_row(self, stack, tmp_path):
         _seed_pair(stack)
         t = stack["tables"]
-        t["api-keys"].put_item(Item={"PK": f"USER#{LEGACY}", "SK": "KEY#k1", "userId": LEGACY})
+        t["api-keys"].put_item(Item={"PK": f"USER#{LEGACY}", "SK": "KEY#k1", "userId": LEGACY,
+                                     "expiresAt": "2026-05-01T00:00:00+00:00", "lastUsedAt": "2026-04-10T00:00:00Z"})
         t["sessions-metadata"].put_item(Item={"PK": f"USER#{LEGACY}", "SK": "S#s1"})
         t["sessions-metadata"].put_item(Item={"PK": f"USER#{LEGACY}", "SK": "C#2026-04-01#x"})
         t["sessions-metadata"].put_item(Item={"PK": f"USER#{LEGACY}", "SK": "C#2026-04-02#y"})
@@ -269,6 +272,8 @@ class TestAudit:
         _, stale = _only_group(_report(tmp_path))["rows"]
         assert stale["verdict"] == "referenced"
         assert stale["action"] == "skip: verdict is referenced"
+        assert stale["in_use"] == []
+        assert stale["last_activity_at"] == "2026-04-10T00:00:00Z"
         refs = stale["references"]
         assert refs["api-keys"] == 1
         assert refs["sessions-metadata"] == 3
@@ -353,6 +358,75 @@ class TestAudit:
                         "## Numeric rows with no twin (1)"):
             assert heading in md
         assert f"`{LEGACY}`" in md and "gone@x.edu" in md
+
+
+class TestStillInUse:
+    """lastLoginAt can't show API-key use, so the audit looks for it directly."""
+
+    def _verdict(self, stack, tmp_path, *extra):
+        audit.run(_args(tmp_path, *extra), stack["clients"], "123", now=NOW)
+        return _only_group(_report(tmp_path))["rows"][1]
+
+    def test_an_unexpired_api_key_is_in_use_even_if_unused_lately(self, stack, tmp_path):
+        _seed_pair(stack)
+        stack["tables"]["api-keys"].put_item(Item={
+            "PK": f"USER#{LEGACY}", "SK": "KEY#k1", "keyId": "k1", "name": "canvas sync", "userId": LEGACY,
+            "expiresAt": "2027-03-01T00:00:00+00:00", "lastUsedAt": "2026-04-01T00:00:00Z",
+        })
+
+        stale = self._verdict(stack, tmp_path)
+
+        assert stale["verdict"] == "in_use"
+        assert "unexpired API key 'canvas sync'" in stale["in_use"][0]
+
+    def test_a_key_with_no_expiry_is_in_use(self, stack, tmp_path):
+        _seed_pair(stack)
+        stack["tables"]["api-keys"].put_item(Item={"PK": f"USER#{LEGACY}", "SK": "KEY#k1", "keyId": "k1"})
+
+        assert self._verdict(stack, tmp_path)["verdict"] == "in_use"
+
+    def test_a_model_call_after_the_cutover_is_in_use(self, stack, tmp_path):
+        # An expired key, but the old id made a model call last week.
+        _seed_pair(stack)
+        stack["tables"]["sessions-metadata"].put_item(
+            Item={"PK": f"USER#{LEGACY}", "SK": "C#2026-09-17T14:02:11.482913+00:00#abc"})
+
+        stale = self._verdict(stack, tmp_path)
+
+        assert stale["verdict"] == "in_use"
+        assert stale["last_activity_at"] == "2026-09-17T14:02:11Z"
+        assert "after this person's live profile was created (2026-04-16T09:00:00Z)" in stale["in_use"][0]
+
+    def test_history_before_the_cutover_is_only_referenced(self, stack, tmp_path):
+        _seed_pair(stack)
+        t = stack["tables"]["sessions-metadata"]
+        t.put_item(Item={"PK": f"USER#{LEGACY}", "SK": "C#2026-04-15T10:00:00Z#abc"})
+        t.put_item(Item={"PK": f"USER#{LEGACY}", "SK": "S#s1", "lastMessageAt": "2026-04-15T10:00:05Z"})
+
+        stale = self._verdict(stack, tmp_path)
+
+        assert stale["verdict"] == "referenced"
+        assert stale["activity"] == {"message": "2026-04-15T10:00:05Z", "model call": "2026-04-15T10:00:00Z"}
+
+    def test_an_active_scheduled_prompt_is_in_use(self, stack, tmp_path):
+        _seed_pair(stack)
+        stack["tables"]["sessions-metadata"].put_item(Item={
+            "PK": f"USER#{LEGACY}", "SK": "SCHEDPROMPT#p1", "nextRunAt": "2026-09-25T08:00:00Z"})
+
+        assert self._verdict(stack, tmp_path)["verdict"] == "in_use"
+
+    def test_in_use_rows_are_never_marked_and_are_listed_first(self, stack, tmp_path):
+        _seed_pair(stack)
+        stack["tables"]["api-keys"].put_item(Item={"PK": f"USER#{LEGACY}", "SK": "KEY#k1", "keyId": "k1"})
+
+        stale = self._verdict(stack, tmp_path, "--apply", "mark", "--confirm-prefix", PREFIX)
+
+        assert stale["action"] == "skip: verdict is in_use"
+        item = stack["tables"]["users"].get_item(Key={"PK": f"USER#{LEGACY}", "SK": "PROFILE"})["Item"]
+        assert item["status"] == "active" and "mergedInto" not in item
+        md = next(tmp_path.glob("*.md")).read_text()
+        assert md.index("## ⚠️ Old id still in use (1)") < md.index("## Legacy pairs")
+        assert _report(tmp_path)["summary"]["inUse"] == 1
 
 
 class TestApply:
