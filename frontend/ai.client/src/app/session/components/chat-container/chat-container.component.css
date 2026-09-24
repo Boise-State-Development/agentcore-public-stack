@@ -193,6 +193,14 @@
   background: linear-gradient(to top, var(--color-gray-50), transparent);
 }
 
+/* A compact composer ends in its cost/model meta line, whose 32px row already
+   leaves slack beneath the text; the full 1rem on top of that reads as a gap
+   twice the one between the shell and the line. */
+.chat-input-footer.full-page.compact,
+.chat-input-footer.embedded.compact {
+  padding-bottom: 0.5rem;
+}
+
 /* Keep the composer on the same 720px measure as the messages above it. */
 .chat-input-footer.embedded > * {
   max-width: 720px;
