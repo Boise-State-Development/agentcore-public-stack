@@ -108,6 +108,7 @@ import { ModelOptionComponent } from './components/model-option.component';
                 cdkMenuItem
                 [model]="model"
                 [selected]="isSelected(model)"
+                [successorName]="modelService.modelNameFor(model.replacedBy)"
                 [showNewChatHint]="sessionService.hasCurrentSession()"
                 (cdkMenuItemTriggered)="selectModel(model)"
               />
@@ -206,6 +207,7 @@ import { ModelOptionComponent } from './components/model-option.component';
                       cdkMenuItem
                       [model]="model"
                       [selected]="isSelected(model)"
+                      [successorName]="modelService.modelNameFor(model.replacedBy)"
                       [showNewChatHint]="sessionService.hasCurrentSession()"
                       (cdkMenuItemTriggered)="selectModel(model)"
                     />

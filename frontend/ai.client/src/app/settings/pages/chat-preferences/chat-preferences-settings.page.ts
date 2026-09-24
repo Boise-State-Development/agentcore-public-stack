@@ -12,6 +12,7 @@ import { ModelService } from '../../../session/services/model/model.service';
 import { UserSettingsService } from '../../../services/user-settings.service';
 import { LocalSettingsService } from '../../../services/local-settings.service';
 import { SpinnerComponent } from '../../../components/spinner/spinner.component';
+import { isRetiring } from '../../../shared/utils/retirement';
 
 @Component({
   selector: 'app-chat-preferences-settings',
@@ -65,12 +66,18 @@ import { SpinnerComponent } from '../../../components/spinner/spinner.component'
                 -->
                 <option value="" [selected]="currentDefaultModelId() === ''">No default (use first available)</option>
                 @for (model of modelService.availableModels(); track model.id) {
+                  <!-- A model being retired can stay the default but can't become
+                       it (docs/specs/model-retirement.md §7). -->
                   <option
                     [value]="model.modelId"
                     [selected]="model.modelId === currentDefaultModelId()"
-                  >{{ model.modelName }} ({{ model.providerName }})</option>
+                    [disabled]="isRetiring(model) && model.modelId !== currentDefaultModelId()"
+                  >{{ model.modelName }} ({{ model.providerName }}){{ isRetiring(model) ? ' — being retired' : '' }}</option>
                 }
               </select>
+              @if (retiredDefaultNotice(); as notice) {
+                <p class="mt-2 text-xs/5 text-state-warning-700 dark:text-state-warning-300">{{ notice }}</p>
+              }
             }
             @if (saving()) {
               <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">Saving...</p>
@@ -197,6 +204,20 @@ export class ChatPreferencesSettingsPage {
 
   readonly saving = signal(false);
   readonly saveError = signal<string | null>(null);
+
+  protected readonly isRetiring = isRetiring;
+
+  /**
+   * A saved default on a model that has since been retired no longer matches
+   * any option, so the select reads "No default" — say what actually happens.
+   */
+  readonly retiredDefaultNotice = computed(() => {
+    const id = this.currentDefaultModelId();
+    const successor = this.modelService.successorFor(id);
+    if (!successor) return null;
+    const name = this.modelService.modelNameFor(id) ?? 'Your default model';
+    return `${name} has been retired, so ${successor.modelName} answers in its place. Choose a new default to stop seeing this.`;
+  });
 
   readonly currentDefaultModelId = computed(() => {
     const settings = this.userSettingsService.settingsResource.value();
