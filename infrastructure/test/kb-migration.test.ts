@@ -437,13 +437,15 @@ describe('KbMigrationConstruct — ingestion consumer (task 2.2)', () => {
     });
   });
 
-  it('is triggered by documents-bucket Object Created events under assistants/', () => {
+  it('is triggered by documents-bucket Object Created events under assistants/*/documents/', () => {
+    // Not a bare `assistants/` prefix: that also matches agent icons at
+    // `assistants/{id}/icons/...`, which are not documents.
     t.hasResourceProperties('AWS::Events::Rule', {
       EventPattern: Match.objectLike({
         source: ['aws.s3'],
         'detail-type': ['Object Created'],
         detail: Match.objectLike({
-          object: { key: [{ prefix: 'assistants/' }] },
+          object: { key: [{ wildcard: 'assistants/*/documents/*' }] },
         }),
       }),
       Targets: Match.arrayWith([
