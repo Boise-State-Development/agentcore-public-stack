@@ -606,7 +606,20 @@ Each PR targets `develop`, lands behind `PROJECTS_ENABLED` (opt-in while in deve
   - **Infra:** app-api's `BedrockInvokeModel` statement gains `bedrock:CountTokens` (the Runtime role already had it). There are no new CDK env vars (the Runtime is at 47/50), since every new setting has a code default.
   - **Latency:** nothing runs before the first token. A save adds one CountTokens call (~80 ms), and a canonical save also reads the current version from S3 once. For `memory_write` that lands between tool rounds, not before the first token.
   - UI impact (for the 1.8 mockup re-sync): none. It is API-only; the SPA Memory tab is 2.8.
+  - **Dev-validated 2026-09-25** on `d30ec344` (Platform Stack and Backend Deploy both green), with disposable spaces and agent, all deleted afterwards. Nothing failed.
+    - *Canonical space.* The first save (2 items) returned version 1, 2 minted anchors and 128 tokens with `tokensMethod: count`, which confirms the IAM grant. It took 418 ms round trip from the browser. An edit that kept one anchor, dropped one and added one returned version 2 at 126 tokens (318 ms), with the dropped anchor in `removedAnchors` and `created` unchanged.
+    - *Rejections.* Each of these returned 400: prose, a new `[[dead link]]` (on an existing or a new item), an alias another file already claims (matched case-insensitively), an anchor that does not end its item, `[[nowhere]]` in `MEMORY.md`, and a `PUT …/entries/MEMORY.md` in either format. The 400 body carries the message only; the stable `code` stays server-side for the metric.
+    - *History.* It listed versions [2, 1], and `history/1` returned the v1 text byte for byte.
+    - *Freeform space.* Prose containing `[[nowhere]]` saved with a warning (version 1, 35 tokens counted), was stored as written, and a second save made version 2.
+    - *Agent `memory_write`* (Runtime, Haiku 4.5): the tool took 207 ms and wrote a `FILEVER` row with `reason: save` and `tokensMethod: count`. The ~1.2 s cold counter call measured locally did not show up on either path.
+    - *Purge.* Deleting an entry removed its 3 `FILEVER` rows and 3 version objects, leaving only `MEMORY.md`. Deleting each space left 0 `SPACE#` rows and 0 objects under `spaces/<id>/`.
+    - *Regression.* An existing pre-2.3 space still opens in the SPA and lists its entries.
 - **2.4** Scopes: `scope`/`project_id`/`user_id` on spaces, project-aware `resolve_permission`, personal-in-project auto-create on first task (per the Phase 0 decision), scope-addressed tools, `memory_query`, `memory_save`/`memory_propose`, `STATS#`.
+  - **Carried from 2.3.**
+    - Project spaces are created with `file_format="canonical"`.
+    - *Decide:* strip anchors from the injected `<memory_space>` block (`alwaysLoad`)? They cost ~10 tokens per item on every turn. `memory_read` must keep them so edits stay anchor-stable.
+    - *Watch:* the CountTokens client's first call in a process took ~1.2 s locally (client and TLS setup). It did not show on dev, but if it appears on the first `memory_write` in a Runtime container, warm the client lazily off the request path.
+    - *Deferred elsewhere:* the save audit record (2.4, needs `project_id`), `ARCHIVE#` rows for removed items (2.5), `MEMORY.md` versioning (2.6 snapshots), content lint (2.7), and the §9.7 rejection metrics (keyed on `MemoryValidationError.code`, which is already stable).
 - **2.5** Proposals + review queue, pins, archive + restore, provenance on items (source session/message, proposer, approver).
 - **2.6** Manual maintenance: worker Lambda (lean image, import-boundary guard test like `TestScheduledRunsLeanImageIsImportable`), snapshot, plan (merge/supersede/prune), verifier, proposal for project scope, auto-apply + undo for personal, link maintenance, rollback.
 - **2.7** Content lint (`memoryLintMode`, §9.3) and the export `provenance.json`.
