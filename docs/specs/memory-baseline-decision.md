@@ -1,6 +1,6 @@
 # AgentCore Memory baseline: decision record (Shared Projects Phase 0)
 
-**Status:** **Decided: C (hybrid).** Dev evidence 2026-09-25; the step-5 re-test passed after Phase 0.2 (see "Re-test after Phase 0.2"). Prod read path checked 2026-09-25 (see "Production (read-only)"); the prod record census is pending.
+**Status:** **Decided: C (hybrid).** Dev evidence 2026-09-25; the step-5 re-test passed after Phase 0.2 (see "Re-test after Phase 0.2"). Prod read path and record census checked 2026-09-25 (see "Production (read-only)").
 **Spec:** `shared-projects.md` §1 (procedure §1.2, options §1.3), PR plan §7 Phase 0.
 **Tool:** `scripts/memory-audit/audit.py` (`inventory` and `probe`), plus a manual two-chat test on dev.boisestate.ai.
 **Privacy:** every figure below is an aggregate. Record text, actor ids and account-specific identifiers stay in the auditor's scratch directory.
@@ -135,6 +135,29 @@ Read-only checks against the production account: runtime logs (`FilterLogEvents`
 - **Relevance cut 0.7.** Every one of 2,878 agent builds logged `Retrieval: top_k=10, relevance_score=0.7`.
 - **Bounded retrieval client (#1157)**, live since release 1.23.0 reached prod on 2026-09-20 at about 21:00 UTC. It makes one attempt with a 2 s timeout. Before that, retrieval used the SDK's client and boto's default retries.
 
+### Record census (`audit.py inventory`, 2026-09-25)
+
+| | Prod | Dev (§3 above) |
+|---|---|---|
+| Memory | ACTIVE, 90-day event expiry, same three strategies, all ACTIVE | Same |
+| Namespace templates vs backend queries | Trailing slash only, as in dev (harmless) | Same |
+| Actors | **2,770**; 11,286 sessions with live events | 68; 1,187 sessions |
+| Actor id shape | 2,745 UUIDs (version 7); 25 non-UUID; **0 match the `user_id or session_id` fallback** | 66 UUIDs (version 4, Cognito `sub`); 2 test ids; 0 fallback |
+| Records | **85,382**: 44,627 summaries, 28,377 semantic facts, 12,378 preferences | 2,425: 1,749 / 439 / 237 |
+| Actors with any record | 2,340 (84%); 2,206 with semantic facts, 2,097 with preferences | 60 of 68 (88%) |
+| Records per actor | Most hold 5–24 (58% of actors with records); 175 hold 100+ | Most 5–9; five hold 100+ |
+| Record age | Median 28 days, p90 70, max 93; 10,363 created in the last 7 days | Median 24 days; 256 in 7 days |
+| Record length (median / p90 characters) | Summary 1,409 / 2,867; semantic 253 / 1,644; preference 516 / 2,660 | Summaries 900–1,800 |
+| Failed extraction jobs | **7**, all `LTM_RATE_EXCEEDED` (3 semantic, 2 preference, 2 summary) | 0 |
+
+**Prod writes and extracts like dev, at about 35 times the scale.** Every actor id is a UUID or one of the legacy ids below, and none falls back to a session id. Prod's user ids use a different UUID version than dev's Cognito subs. The retrieval hits in the read-path table show that the records and the retrieval namespace agree on the actor.
+
+**Legacy actors.** The 25 non-UUID actors are 9-character ids in an older user-id format, and none has live sessions. 13 of them still hold 112 records, all created in June 2026. The backend now queries by UUID, so these records are never retrieved. Deleting them is a prod write, so it stays an operator decision; it is not needed for correctness.
+
+**Extraction throttling.** Seven extraction jobs failed with `LTM_RATE_EXCEEDED`. Their events date from 2026-09-18, 09-23 and 09-24, all between 18:00 and 23:00 UTC. That is daytime use, not the load-test nights. Seven failed jobs against about 10,400 records extracted in the same week is negligible; the service lists them as restartable (`StartMemoryExtractionJob`, a write). This is a rate limit inside the extraction pipeline. It is separate from the `RetrieveMemoryRecords` quota, which saw no throttling.
+
+**Census log counts agree** with the analysis below: 81 hit lines (about 40 turns, each logged twice) and 0 throttle lines.
+
 ### Read path (runtime logs, 7 days)
 
 | | Prod | Dev (same check, before 0.2) |
@@ -209,6 +232,6 @@ Other data-plane calls (`CreateEvent`, `ListEvents`) go through the SDK client w
 
 ## Not yet covered
 
-- **Prod record census.** An operator runs `audit.py … inventory` with read-only prod credentials; the read-only guard blocks scripted prod access from the agent, and the workstation's AWS CLI lacks the `bedrock-agentcore` data plane.
 - **Prod after Phase 0.2.** Hit rate and failure rate once a release carries the 0.5 cut, and Fixes 1–2 above, to prod.
+- **Legacy-actor records and failed extraction jobs in prod.** Both need a prod write (delete 112 unreachable records; restart 7 jobs). Neither affects correctness; an operator decides.
 - **Consolidation of directly written records.** Whether the service ever consolidates records written straight into a strategy-less namespace (§1.3 residual) was not probed. It matters only for the Phase 3 derived index.
