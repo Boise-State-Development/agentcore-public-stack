@@ -32,6 +32,8 @@ import copy
 import json
 import logging
 import os
+import threading
+import time
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List, Tuple, TYPE_CHECKING
 
@@ -56,6 +58,13 @@ MEMORY_RETRIEVAL_TIMEOUT_DEFAULT = 2.0
 # Attempts per retrieval, including the first. 1 = never retry a throttle.
 MEMORY_RETRIEVAL_MAX_ATTEMPTS_ENV = "MEMORY_RETRIEVAL_MAX_ATTEMPTS"
 MEMORY_RETRIEVAL_MAX_ATTEMPTS_DEFAULT = 1
+# RetrieveMemoryRecords rejects a searchQuery longer than this
+# (ValidationException), which dropped retrieval for long pasted messages.
+MEMORY_RETRIEVAL_QUERY_MAX_CHARS = 10_000
+_MEMORY_RETRIEVAL_THROTTLE_CODES = ("ThrottlingException", "TooManyRequestsException", "ServiceQuotaExceededException")
+# Serializes replacing the retrieval client: boto3 client creation on the
+# default session is not thread-safe, and the namespaces retrieve in parallel.
+_RETRIEVAL_CLIENT_LOCK = threading.Lock()
 
 
 def memory_retrieval_timeout_seconds() -> float:
@@ -76,6 +85,19 @@ def memory_retrieval_max_attempts() -> int:
     except ValueError:
         value = MEMORY_RETRIEVAL_MAX_ATTEMPTS_DEFAULT
     return value if value >= 1 else MEMORY_RETRIEVAL_MAX_ATTEMPTS_DEFAULT
+
+
+def memory_retrieval_query(text: str) -> str:
+    """The user's text, cut to what ``RetrieveMemoryRecords`` accepts.
+
+    Counts UTF-16 code units, not code points: that is never more than the
+    service's own count, so an emoji-heavy message cannot slip past the cap.
+    """
+    encoded = text.encode("utf-16-le")
+    limit = MEMORY_RETRIEVAL_QUERY_MAX_CHARS * 2
+    if len(encoded) <= limit:
+        return text
+    return encoded[:limit].decode("utf-16-le", errors="ignore")
 
 #: Compaction decisions the per-call ledger will record. Reserved kinds exist
 #: so a scheduling policy can report them without a schema change.
@@ -252,6 +274,12 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
         docs/specs/load-test-assessment-2026-09.md §1 fix 3. One attempt and
         a short timeout: a throttle costs one failed request and the turn
         simply runs without long-term context, which is what a miss means.
+
+        One attempt also means a dead pooled connection is never retried. A
+        cached agent keeps this client between turns, and after ~6 minutes
+        idle its connections are silently dropped on the network path; the
+        next request fails within milliseconds. That is handled separately,
+        by :meth:`_replace_retrieval_client`, not by boto retries.
         """
         if getattr(self, "_retrieval_client", None) is None:
             import boto3
@@ -268,6 +296,20 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
                 ),
             )
         return self._retrieval_client
+
+    def _replace_retrieval_client(self, stale: Any) -> Any:
+        """Swap out a client whose pooled connection went dead, and return a
+        fresh one.
+
+        A new client, not a boto retry on the old one: the old pool can hold
+        further idle connections that are just as dead, and a retry could
+        draw one. Namespaces fail in parallel on the same client, so only
+        the first caller replaces it; the rest get that replacement.
+        """
+        with _RETRIEVAL_CLIENT_LOCK:
+            if getattr(self, "_retrieval_client", None) is stale:
+                self._retrieval_client = None
+            return self._get_retrieval_client()
 
     def retrieve_customer_context(self, event: Any) -> None:
         """Retrieve long-term memory for the last user message and prepend it.
@@ -290,20 +332,33 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
         if not retrieval_config:
             return None
 
-        user_query = messages[-1]["content"][0]["text"]
+        user_query = memory_retrieval_query(messages[-1]["content"][0]["text"])
         client = self._get_retrieval_client()
 
         def retrieve_for_namespace(namespace: str, cfg: Any) -> List[str]:
+            from botocore.exceptions import ConnectionClosedError, SSLError
+
             resolved = namespace.format(
                 actorId=self.config.actor_id,
                 sessionId=self.config.session_id,
                 memoryStrategyId=getattr(cfg, "strategy_id", None) or "",
             )
-            response = client.retrieve_memory_records(
-                memoryId=self.config.memory_id,
-                namespacePath=resolved,
-                searchCriteria={"searchQuery": user_query, "topK": cfg.top_k},
-            )
+            request = {
+                "memoryId": self.config.memory_id,
+                "namespacePath": resolved,
+                "searchCriteria": {"searchQuery": user_query, "topK": cfg.top_k},
+            }
+            try:
+                response = client.retrieve_memory_records(**request)
+            except (ConnectionClosedError, SSLError) as e:
+                # Dead pooled connection: retry once, at once, on a fresh
+                # client. Throttles are ClientErrors and still get no retry.
+                started = time.monotonic()
+                response = self._replace_retrieval_client(client).retrieve_memory_records(**request)
+                logger.info(
+                    "memory retrieval reconnected namespace=%s after %s in %dms",
+                    namespace, type(e).__name__, (time.monotonic() - started) * 1000,
+                )
             records = response.get("memoryRecordSummaries", [])
             if getattr(cfg, "relevance_score", None):
                 records = [r for r in records if r.get("score", 0.0) >= cfg.relevance_score]
@@ -328,14 +383,20 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
                     try:
                         all_context.extend(future.result())
                     except Exception as e:  # noqa: BLE001 - one namespace failing must not sink the rest
-                        code = getattr(e, "response", {}).get("Error", {}).get("Code") if hasattr(e, "response") else None
-                        if code in ("ThrottlingException", "TooManyRequestsException", "ServiceQuotaExceededException"):
+                        # botocore's ConnectionClosedError and ReadTimeoutError
+                        # carry `response = None`, so guard the lookup; raising
+                        # here would discard every namespace's results.
+                        error = getattr(e, "response", None)
+                        code = error.get("Error", {}).get("Code") if isinstance(error, dict) else None
+                        if code in _MEMORY_RETRIEVAL_THROTTLE_CODES:
                             logger.info(
                                 "memory retrieval throttled namespace=%s; turn proceeds without long-term context",
                                 futures[future],
                             )
                         else:
-                            logger.warning("memory retrieval failed namespace=%s: %s", futures[future], e)
+                            logger.warning(
+                                "memory retrieval failed namespace=%s: %s: %s", futures[future], type(e).__name__, e
+                            )
 
             if all_context:
                 tag = getattr(self.config, "context_tag", "user_context")
