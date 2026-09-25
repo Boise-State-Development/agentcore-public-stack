@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { TestBed } from '@angular/core/testing';
+import { provideRouter } from '@angular/router';
 import {
   AgentGovernance,
   AgentIndicatorComponent,
@@ -8,7 +9,7 @@ import {
 describe('AgentIndicatorComponent', () => {
   beforeEach(() => {
     TestBed.resetTestingModule();
-    TestBed.configureTestingModule({});
+    TestBed.configureTestingModule({ providers: [provideRouter([])] });
   });
 
   afterEach(() => TestBed.resetTestingModule());
@@ -121,5 +122,62 @@ describe('AgentIndicatorComponent', () => {
         'This agent fixes 3 tools for this conversation.',
       );
     });
+  });
+
+  describe('project task', () => {
+    // A project task binds the project's harness Agent, and the harness refuses
+    // agent edits and shares (the project is its only write path).
+    function createProject(isOwner = true) {
+      const fixture = TestBed.createComponent(AgentIndicatorComponent);
+      fixture.componentRef.setInput('name', 'Test Project');
+      fixture.componentRef.setInput('ownerName', 'Dana Reyes');
+      fixture.componentRef.setInput('isOwner', isOwner);
+      fixture.componentRef.setInput('projectId', 'prj_1');
+      fixture.componentInstance.menuOpen.set(true);
+      fixture.detectChanges();
+      return fixture;
+    }
+
+    it('offers no Edit agent or Share settings, even to the harness owner', () => {
+      const fixture = createProject(true);
+      expect(text(fixture)).not.toContain('Edit agent');
+      expect(text(fixture)).not.toContain('Share settings');
+    });
+
+    it('links to the project and starts a new task in it', () => {
+      const fixture = createProject();
+      const link = fixture.nativeElement.querySelector('a.menu-item') as HTMLAnchorElement;
+      expect(link.getAttribute('href')).toBe('/projects/prj_1');
+      expect(link.textContent).toContain('Open project');
+      expect(text(fixture)).toContain('New task');
+    });
+
+    it('names no owner: the harness keeps its creator after a transfer', () => {
+      const fixture = createProject();
+      const header = fixture.nativeElement.querySelector('.menu-header') as HTMLElement;
+      expect(header.textContent).toContain('Project');
+      expect(header.textContent).not.toContain('Dana Reyes');
+    });
+
+    it('is labelled as a project', () => {
+      const fixture = createProject();
+      const pill = fixture.nativeElement.querySelector('.agent-pill') as HTMLElement;
+      expect(pill.getAttribute('aria-label')).toBe('Project: Test Project. Click for options.');
+      fixture.componentRef.setInput('governance', { modelName: null, toolCount: 3, skillCount: null });
+      expect(fixture.componentInstance.governanceLabel()).toBe(
+        'This project fixes 3 tools for this conversation.',
+      );
+    });
+  });
+
+  it('keeps Edit and Share for the owner of an ordinary agent', () => {
+    const fixture = TestBed.createComponent(AgentIndicatorComponent);
+    fixture.componentRef.setInput('name', 'Rubric Builder');
+    fixture.componentRef.setInput('isOwner', true);
+    fixture.componentInstance.menuOpen.set(true);
+    fixture.detectChanges();
+    expect(text(fixture)).toContain('Edit agent');
+    expect(text(fixture)).toContain('Share settings');
+    expect(fixture.nativeElement.querySelector('a.menu-item')).toBeNull();
   });
 });

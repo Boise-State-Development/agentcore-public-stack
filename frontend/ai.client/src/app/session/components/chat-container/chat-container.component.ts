@@ -35,6 +35,7 @@ import { SessionCostBadgeComponent } from '../session-cost-badge/session-cost-ba
 import { VoiceOverlayComponent } from '../voice-overlay';
 import { VoiceChatService } from '../../services/voice';
 import { ChatStateService } from '../../services/chat/chat-state.service';
+import { ProjectsService } from '../../../projects/services/projects.service';
 
 /**
  * Configuration options for ChatContainerComponent.
@@ -100,6 +101,7 @@ export class ChatContainerComponent {
 
   private readonly chatState = inject(ChatStateService);
   private readonly modelService = inject(ModelService);
+  private readonly projectsService = inject(ProjectsService);
 
   /**
    * What the bound Agent fixes for this conversation, for the indicator.
@@ -322,6 +324,18 @@ export class ChatContainerComponent {
    *  fixed footer / topnav reserve right-side space so the pane doesn't
    *  cover them. */
   protected readonly artifactPanelOpen = this.dockedPane.isOpen;
+  /**
+   * The crumb's name. A project's harness keeps the name the project was created
+   * with, so a renamed project reads from the project list when the sidebar has
+   * loaded it, and from the harness when it has not.
+   */
+  protected readonly indicatorName = computed(() => {
+    const a = this.assistant();
+    if (!a) return '';
+    if (!a.projectId) return a.name;
+    return this.projectsService.projects$().find(p => p.projectId === a.projectId)?.name ?? a.name;
+  });
+
   protected readonly isAssistantOwner = computed(() => {
     const a = this.assistant();
     if (!a) return false;

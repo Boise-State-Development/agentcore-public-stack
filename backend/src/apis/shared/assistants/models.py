@@ -529,6 +529,15 @@ class AssistantResponse(BaseModel):
         None, alias="userPermission", description="Requesting user's permission level on this assistant"
     )
 
+    # Shared Projects: a project task binds the project's harness, and the chat's crumb
+    # renders it as the project (not an Agent with Edit / Share, which the harness refuses).
+    kind: Optional[Literal["project"]] = Field(
+        None, description="'project' for a Shared Project's hidden harness; absent for every other agent"
+    )
+    project_id: Optional[str] = Field(
+        None, alias="projectId", description="The owning project when kind == 'project'"
+    )
+
 
 class AssistantsListResponse(BaseModel):
     """Response for listing assistants with pagination support"""
