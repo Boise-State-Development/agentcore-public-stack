@@ -24,6 +24,10 @@ os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "testing")
 os.environ.setdefault("AWS_SESSION_TOKEN", "testing")
 os.environ.setdefault("AWS_SECURITY_TOKEN", "testing")
 
+# Memory-file saves count tokens with Bedrock CountTokens by default. An empty
+# model id turns that off (chars/4 estimate), so no test reaches Bedrock.
+os.environ.setdefault("MEMORY_TOKEN_COUNT_MODEL_ID", "")
+
 # Add backend/src to Python path for imports
 # This file is in backend/tests/, so we need to go up one level to backend/
 BACKEND_DIR = Path(__file__).parent.parent

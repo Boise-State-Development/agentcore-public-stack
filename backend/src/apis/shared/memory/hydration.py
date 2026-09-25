@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 from apis.shared.memory.service import MemorySpaceNotFoundError, MemorySpaceService
+from apis.shared.memory.tokens import estimate_tokens
 
 _VALID_ENTRY_TYPES = {"entity", "episodic", "fact"}
 DEFAULT_ALWAYS_LOAD = ["MEMORY.md"]
@@ -48,11 +49,6 @@ class LoadedFragment:
 
     label: str
     text: str
-
-
-def estimate_tokens(text: str) -> int:
-    """Cheap token estimate for budget decisions (ceil of chars / 4)."""
-    return -(-len(text) // _CHARS_PER_TOKEN)
 
 
 def _max_total_tokens() -> int:
