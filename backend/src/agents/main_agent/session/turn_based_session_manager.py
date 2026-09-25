@@ -673,11 +673,14 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
 
         The cost-diagnostics ledger (``record_compaction_event`` /
         ``drain_compaction_events`` + ``ContextLedgerHook``) lands whatever is
-        recorded here on the NEXT model call's ``C#`` cost row as
-        ``compactionEvents``, next to ``windowRemovedMessages`` and the prefix
-        token split — the evidence the summary cap and the scheduling rule are
-        judged on. Resolved by attribute so this is a no-op on a build without
-        the ledger; fields are ints. Never raises.
+        recorded here on a ``C#`` cost row as ``compactionEvents``, next to
+        ``windowRemovedMessages`` and the prefix token split — the evidence the
+        summary cap and the scheduling rule are judged on. Head-of-turn
+        decisions land on the next model call; post-turn ones (from
+        ``update_after_turn``) on the turn's last call, via
+        ``ContextLedgerHook.record_post_turn_events``. Resolved by attribute
+        so this is a no-op on a build without the ledger; fields are ints.
+        Never raises.
         """
         recorder = getattr(self, "record_compaction_event", None)
         if not callable(recorder):
@@ -849,7 +852,11 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
     # ------------------------------------------------------------------
 
     def record_compaction_event(self, kind: str, **fields: Any) -> None:
-        """Queue a compaction decision for the next model call's cost row.
+        """Queue a compaction decision for a model call's cost row.
+
+        Drained onto the next model call by ``ContextLedgerHook``, or — for a
+        decision ``update_after_turn`` takes after the turn's last call — onto
+        that last call by ``ContextLedgerHook.record_post_turn_events``.
 
         ``kind`` is one of the ``COMPACTION_EVENT_KINDS`` — ``applied`` (the
         restore-time slice ran), ``checkpoint`` (a new checkpoint was cut
@@ -1304,8 +1311,10 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
         self._emit_compaction_metrics(state, policy, forced, retained_estimate, bounded, deferred)
         # Routed through the defensive seam rather than calling the recorder
         # directly: same no-op-without-a-ledger contract as every other cut
-        # decision. Queued when the cut is *decided* — when ``deferred`` the
-        # bytes do not move until ``apply_pending_compaction`` runs.
+        # decision. Queued when the cut is *decided* and attached to this
+        # turn's last call (the one whose input triggered it) — when
+        # ``deferred`` the bytes do not move until ``apply_pending_compaction``
+        # runs, which records its own ``applied``.
         self._record_ledger_event(
             "checkpoint",
             checkpoint=new_checkpoint,

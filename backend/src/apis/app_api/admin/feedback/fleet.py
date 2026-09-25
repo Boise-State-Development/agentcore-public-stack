@@ -42,6 +42,14 @@ DEFAULT_MINIMUM_N = 20
 #: rows are per call and a turn may be several of them.
 COMPACTION_BUCKETS: Tuple[str, ...] = ("never", "same call", "1-3 calls", "4+ calls")
 
+#: The ``compactionEvents`` kind that marks a cut reaching the model: the
+#: first call sent on the sliced history (a restore-time slice or a parked
+#: cut promoted at the head of a turn). ``checkpoint`` is only the decision —
+#: it lands on the call whose input triggered it, which the model answered on
+#: the full history — so counting it would put a pre-cut answer in the
+#: "same call" arm.
+COMPACTION_APPLIED_KIND = "applied"
+
 
 def minimum_n() -> int:
     """The coverage floor, env-tunable."""
@@ -93,7 +101,7 @@ class SessionIndex:
     by_message: Dict[int, Dict[str, Any]] = field(default_factory=dict)
     #: messageId -> that row's position in the session's chronological order.
     position: Dict[int, int] = field(default_factory=dict)
-    #: Ordered positions at which a compaction event was recorded.
+    #: Ordered positions of the calls a compaction cut first reached.
     compaction_positions: List[int] = field(default_factory=list)
 
 
@@ -107,7 +115,9 @@ def index_session(records: Sequence[Dict[str, Any]]) -> SessionIndex:
             index.by_message[message_id] = record
             index.position[message_id] = position
         events = record.get("compactionEvents")
-        if isinstance(events, list) and events:
+        if isinstance(events, list) and any(
+            isinstance(e, dict) and e.get("kind") == COMPACTION_APPLIED_KIND for e in events
+        ):
             index.compaction_positions.append(position)
     return index
 
