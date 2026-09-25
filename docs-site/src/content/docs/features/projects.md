@@ -17,7 +17,9 @@ the person who started it until they choose to share it with the project.
 Design and as-built notes live in
 [`docs/specs/shared-projects.md`](https://github.com/Boise-State-Development/agentcore-public-stack/blob/main/docs/specs/shared-projects.md).
 This page describes what ships today (Phase 1). Project memory is Phase 2;
-schedules and outputs are Phase 3.
+schedules and outputs are Phase 3. Projects are still in development, so a
+deployment has to turn them on; see
+[Admin › Projects](/agentcore-public-stack/admin/projects/#turning-projects-on).
 
 ## Roles
 
@@ -47,9 +49,8 @@ waiting when they do.
 ## The project page
 
 `/projects` lists your projects: everything you belong to, filtered by All,
-Mine, Shared with me, or Archived. There is no menu item for it yet: open
-`/projects` directly, or reach a project from its heading in your conversation
-list or from a notification. Each project has these tabs:
+Mine, Shared with me, or Archived. It's in the sidebar menu when your deployment
+has Projects turned on. Each project has these tabs:
 
 - **Overview**: a composer that starts a task in the project, plus a summary
   of the instructions and the people.

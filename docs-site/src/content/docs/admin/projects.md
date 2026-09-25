@@ -30,14 +30,27 @@ Every admin change is recorded on the project's trail with the admin as actor.
 Members with the editor role see the same trail, by email and without user ids,
 on the project's **Activity** tab.
 
-## Turning Projects off
+## Turning Projects on
 
-Projects are **on by default**. To turn them off in one environment, set the
-GitHub environment variable `CDK_PROJECTS_ENABLED` to `false` and redeploy.
-CDK passes it on as `PROJECTS_ENABLED=false` to app-api and to the AgentCore
-Runtime. Unset or any other value means on.
+Projects are still in development, so they are **off unless a deployment turns
+them on**. Two switches, one per side, and they should agree:
 
-While off:
+- **Backend (the real gate):** set the GitHub environment variable
+  `CDK_PROJECTS_ENABLED` to `true` and run the platform deploy. CDK passes
+  `PROJECTS_ENABLED=true` to app-api and the AgentCore Runtime. Unset or any
+  other value means off.
+- **Front end:** `features.projects` in the SPA's environment file for that
+  build: `environment.development.ts` for the deployed dev site,
+  `environment.production.ts` for prod, `environment.ts` for local `ng serve`.
+  It decides whether the UI offers Projects at all (the nav item, the
+  notification bell, the `/projects` routes, project headings in the
+  conversation list, "Project members" sharing). It takes effect on the next
+  frontend deploy.
+
+If the two disagree, the damage is cosmetic: the UI offers Projects and the page
+says they aren't available, or the UI hides Projects that would work.
+
+While the backend switch is off:
 
 - `/projects/**` returns 404 to signed-in users, and `/admin/projects` is not
   mounted. The `/projects` page says Projects aren't available in this
@@ -50,14 +63,11 @@ While off:
   project shares open only for the person who shared them.
 - Nothing is deleted. Turning Projects back on restores everything as it was.
 
-The sidebar has no Projects entry either way: people reach `/projects` by URL,
-from a project heading in their conversation list, or from a notification.
-
 ## Configuration
 
 | Variable | Service | Default | Purpose |
 | --- | --- | --- | --- |
-| `PROJECTS_ENABLED` | app-api, inference-api | on | Kill switch (see above). Set by CDK from `CDK_PROJECTS_ENABLED` |
+| `PROJECTS_ENABLED` | app-api, inference-api | off | Only `true` enables (see above). Set by CDK from `CDK_PROJECTS_ENABLED` |
 | `DYNAMODB_PROJECTS_TABLE_NAME` | app-api, inference-api | — | The `{prefix}-projects` table. Set by CDK |
 | `DYNAMODB_AUDIT_LOG_TABLE_NAME` | app-api | — | Where the Activity trail is written. Without it, nothing is recorded |
 | `PROJECTS_MAX_MEMBERS` | app-api | `200` | Members per project, besides the owner. Invitations past the cap are reported, not added |
