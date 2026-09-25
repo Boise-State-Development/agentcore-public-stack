@@ -14,6 +14,7 @@ import { AppConfig, getResourceName, getTruncatedResourceName, applyStandardTags
 import { AlarmFactory } from '../observability/alarm-factory';
 import { PlatformComputeRefs } from '../platform-compute-refs';
 import {
+  RUNTIME_MEMORY_ACTIONS,
   createRuntimeExecutionRole,
 } from './inference-api-iam-roles';
 
@@ -169,26 +170,13 @@ export class InferenceAgentCoreConstruct extends Construct {
     // AgentCore Runtime
     // ============================================================
 
-    // Grant Runtime permission to access Memory.
-    // Action list mirrors the AgentCore Data Plane API surface — see
-    // https://docs.aws.amazon.com/bedrock-agentcore/latest/APIReference/API_Operations.html
-    // GetMemory and GetMemoryStrategies are control-plane shapes that do
-    // not exist as separate IAM actions; the same data-plane policy
-    // covers them. RetrieveMemory / ListMemorySessions / GetMemorySession
-    // were also speculative and removed.
+    // Grant Runtime permission to access Memory, scoped to this deployment's
+    // memory. Same action list as the role's account-wide statement
+    // (RUNTIME_MEMORY_ACTIONS), so the two cannot disagree.
     runtimeExecutionRole.addToPolicy(new iam.PolicyStatement({
       sid: 'MemoryAccess',
       effect: iam.Effect.ALLOW,
-      actions: [
-        'bedrock-agentcore:CreateEvent',
-        'bedrock-agentcore:GetEvent',
-        'bedrock-agentcore:ListEvents',
-        'bedrock-agentcore:ListActors',
-        'bedrock-agentcore:ListSessions',
-        'bedrock-agentcore:RetrieveMemoryRecords',
-        'bedrock-agentcore:GetMemoryRecord',
-        'bedrock-agentcore:ListMemoryRecords',
-      ],
+      actions: [...RUNTIME_MEMORY_ACTIONS],
       resources: [props.memoryArn],
     }));
 

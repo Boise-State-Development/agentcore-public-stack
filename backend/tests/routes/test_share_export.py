@@ -326,3 +326,86 @@ class TestExportSharedConversation:
 
         assert result["title"] == "My Chat (shared)"
         mock_copy.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Share-fork events skip long-term extraction (Shared Projects Phase 0.2)
+# ---------------------------------------------------------------------------
+
+
+class _RecordingDataPlane:
+    """Stands in for the bedrock-agentcore data-plane client; records create_event kwargs."""
+
+    def __init__(self):
+        self.calls = []
+
+    def create_event(self, **kwargs):
+        self.calls.append(kwargs)
+        return {"event": {"eventId": f"evt-{len(self.calls)}"}}
+
+
+class TestForkSkipsLongTermExtraction:
+    def test_wrapper_sets_skip_and_keeps_an_explicit_mode(self):
+        from types import SimpleNamespace
+
+        from apis.app_api.shares.service import _skip_long_term_extraction
+
+        dp = _RecordingDataPlane()
+        mgr = SimpleNamespace(memory_client=SimpleNamespace(gmdp_client=dp))
+        _skip_long_term_extraction(mgr)
+
+        mgr.memory_client.gmdp_client.create_event(memoryId="mem-1", actorId="user-1")
+        mgr.memory_client.gmdp_client.create_event(memoryId="mem-1", extractionMode="OTHER")
+
+        assert dp.calls[0]["extractionMode"] == "SKIP"
+        assert dp.calls[0]["memoryId"] == "mem-1"
+        assert dp.calls[1]["extractionMode"] == "OTHER"
+
+    def test_sdk_create_event_reaches_the_wrapped_data_plane_call(self):
+        """The wrapper relies on the pinned SDK funnelling MemoryClient.create_event
+        into gmdp_client.create_event. If an SDK upgrade stops doing that, fork
+        messages would silently feed extraction again; this test catches it."""
+        from types import SimpleNamespace
+
+        from bedrock_agentcore.memory.client import MemoryClient
+
+        from apis.app_api.shares.service import _skip_long_term_extraction
+
+        client = MemoryClient(region_name="us-west-2")
+        dp = _RecordingDataPlane()
+        client.gmdp_client = dp
+        _skip_long_term_extraction(SimpleNamespace(memory_client=client))
+
+        client.create_event(
+            memory_id="mem-1",
+            actor_id="user-1",
+            session_id="sess-1",
+            messages=[("Hello", "USER")],
+        )
+
+        assert len(dp.calls) == 1
+        assert dp.calls[0]["extractionMode"] == "SKIP"
+        assert dp.calls[0]["actorId"] == "user-1"
+
+    @pytest.mark.asyncio
+    async def test_copy_messages_wraps_the_managers_client(self):
+        with patch.dict(os.environ, {"SHARED_CONVERSATIONS_TABLE_NAME": ""}):
+            service = ShareService()
+        snapshot = [
+            {"id": "msg-0", "role": "user", "content": [{"type": "text", "text": "Hello"}], "createdAt": "2025-06-01T00:00:00Z"},
+        ]
+        dp = _RecordingDataPlane()
+        mock_mgr = MagicMock()
+        mock_mgr.memory_client.gmdp_client = dp
+        mock_mgr.create_message = MagicMock(
+            side_effect=lambda *a, **k: mock_mgr.memory_client.gmdp_client.create_event(memoryId="mem-123")
+        )
+
+        with patch.dict(os.environ, {"AGENTCORE_MEMORY_ID": "mem-123", "AWS_REGION": "us-east-1"}), \
+             patch("bedrock_agentcore.memory.integrations.strands.session_manager.AgentCoreMemorySessionManager", return_value=mock_mgr), \
+             patch("bedrock_agentcore.memory.integrations.strands.config.AgentCoreMemoryConfig"), \
+             patch("strands.types.session.SessionMessage"):
+            count = await service._copy_messages_to_memory("sess-new", "user-1", snapshot)
+
+        assert count == 1
+        assert dp.calls == [{"memoryId": "mem-123", "extractionMode": "SKIP"}]

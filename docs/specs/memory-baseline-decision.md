@@ -90,21 +90,28 @@ The stored fact was the only hit in each case. The ranking is right; the cut is 
 | B. Unify on files | Step 5 fails **or** records are low quality | Step 5 fails for a configuration reason, not a quality reason. Moving personal global memory would throw away a pipeline that works end to end except for one constant. |
 | **C. Hybrid** | Step 5 passes for global memory | **Recommended.** Keep AgentCore for short-term events and personal *global* extraction (after the 0.2 fix). Use Memory Spaces for project and personal-in-project scopes, which need the browse/edit/delete UI anyway. |
 
-**Condition:** C stands if the step-5 app test passes after Phase 0.2 lowers the relevance cut. If it still fails, fall back to B for personal memory too.
+**Condition:** C stands if the step-5 app test passes after Phase 0.2 lowers the relevance cut (re-run on dev once 0.2 deploys). If it still fails, fall back to B for personal memory too.
 
 **Unchanged by this audit:** AgentCore Memory is not the system of record for project memory (§1.3 "Fixed regardless").
 
-## Phase 0.2 (next PR)
+## Phase 0.2 (as built)
 
-1. **Relevance cut.** Lower the runtime default for `AGENTCORE_MEMORY_RELEVANCE_SCORE` from 0.7 to about 0.5, and set it explicitly in CDK so the value is visible and tunable per environment. Then re-run the app test.
+1. **Relevance cut.** The runtime default for `AGENTCORE_MEMORY_RELEVANCE_SCORE` drops from 0.7 to **0.5** (`agents/main_agent/config/constants.py`).
    - The 0.5 is backed by dev scores: correct records 0.57–0.67, unrelated records ≤ 0.40.
-   - This changes what every user's turns contain, so it deserves its own review, like personal instructions got.
-2. **Session delete purges extracted records.** Summaries sit under a per-session namespace and can be deleted directly. Semantic and preference records sit under the actor namespace, so that PR must first establish whether a record can be traced back to its source session (record metadata) before scoping the purge.
-3. **Share-fork stops feeding extraction.** `CreateEvent` accepts `extractionMode="SKIP"`, which stores the event for history but excludes it from long-term extraction. This is the exact switch §1.3 asked for.
-4. **IAM parity on `GetMemory`** across the two runtime statements.
-5. **Correct the stale "write-only" lines** in `user-markdown-memory.md` and `agentic-platform-primitives.md`, and the dead analysis-doc citation in `app_context_dispatch.py`.
-6. **CDK test** asserting the three strategy names.
-   - Explicit namespace templates are **not** needed: the defaults match what the backend queries once the trailing slash is ignored.
+   - **Deviation:** not set in CDK. The AgentCore Runtime is at 47 of its 50 environment variables, and the existing variable already overrides the default wherever it is set. Adding it to CDK is a one-line follow-up if a per-environment value is ever wanted.
+   - This changes what users' turns contain: turns with a relevant record gain a `<user_context>` block on the user message, after the prompt-cache point. **Re-run the step-5 app test on dev after this deploys**; that result confirms or overturns option C.
+2. **Session delete purges extracted summaries.** `SessionService.delete_agentcore_memory` now also deletes the SUMMARIZATION records under `…/sessions/{sessionId}/` (exact session match; batches of 100). This runs even when the session's events have already expired.
+   - **Semantic facts and preferences are left alone.** Records carry only type and timestamp metadata, no source session, and those strategies consolidate across sessions, so no record is attributable to one session. Removing them stays a user action on the memory dashboard.
+3. **Share-fork stops feeding extraction.** Every event the fork writes under the forking user carries `extractionMode="SKIP"`. The events stay in short-term memory, so the fork's history loads, but they never become the forker's long-term records.
+   - The SDK's `create_message` has no extraction argument, so the fork wraps its own session manager's data-plane `create_event`.
+   - A test runs the pinned SDK's `MemoryClient.create_event` to catch an upgrade that bypasses the wrapper.
+4. **IAM parity.** Both Runtime memory statements (`AgentCoreMemoryAccess`, account-wide, and `MemoryAccess`, scoped to this memory) now use one list, `RUNTIME_MEMORY_ACTIONS`. The scoped statement had lacked `GetMemory` under a comment wrongly saying it was not a real IAM action.
+5. **Stale lines corrected** in `user-markdown-memory.md`, `agentic-platform-primitives.md` and the `app_context_dispatch.py` docstring, which cited a deleted analysis doc.
+6. **CDK test** (`infrastructure/test/agentcore-memory.test.ts`) asserts:
+   - the three strategy names by type;
+   - that no strategy sets `namespaces` (the backend depends on AWS defaults);
+   - the 90-day event expiry;
+   - identical Runtime memory action sets, including `GetMemory`.
 
 ## Not yet covered
 

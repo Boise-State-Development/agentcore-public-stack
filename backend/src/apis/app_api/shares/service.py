@@ -47,6 +47,27 @@ _SNAPSHOT_SCHEMA_VERSION = 1
 logger = logging.getLogger(__name__)
 
 
+
+def _skip_long_term_extraction(mgr: Any) -> None:
+    """Make every event ``mgr`` writes skip long-term memory extraction.
+
+    ``AgentCoreMemorySessionManager.create_message`` has no extraction-mode
+    argument, but all of its writes (conversational events via
+    ``MemoryClient.create_event`` and oversized blob events) end in the data
+    plane client's ``create_event``. Wrapping that one call on this manager's
+    own client sets ``extractionMode="SKIP"`` without copying the SDK's
+    message conversion. The manager is built per fork, so nothing else shares
+    the wrapped client.
+    """
+    gmdp = mgr.memory_client.gmdp_client
+    original = gmdp.create_event
+
+    def create_event(**kwargs: Any) -> Any:
+        kwargs.setdefault("extractionMode", "SKIP")
+        return original(**kwargs)
+
+    gmdp.create_event = create_event
+
 class ShareService:
     """Handles share CRUD operations against the shared-conversations DynamoDB table."""
 
@@ -440,6 +461,12 @@ class ShareService:
         Converts each MessageResponse dict to SessionMessage format and
         persists via create_message to the "default" namespace.
 
+        The messages were written by someone else (the share's owner), but
+        they land under the forking user's actor. Every event is therefore
+        written with ``extractionMode="SKIP"``: it stays in short-term memory,
+        so the fork's history loads, but it never feeds long-term extraction,
+        so another person's content does not become the forker's "memories".
+
         Returns:
             Number of messages successfully written.
         """
@@ -475,6 +502,7 @@ class ShareService:
         mgr = AgentCoreMemorySessionManager(
             agentcore_memory_config=config, region_name=aws_region
         )
+        _skip_long_term_extraction(mgr)
 
         count = 0
         for idx, msg_dict in enumerate(snapshot_messages):

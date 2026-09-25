@@ -147,7 +147,12 @@ class Defaults:
     AWS_REGION = "us-west-2"
 
     # --- Memory Retrieval ---
-    MEMORY_RELEVANCE_SCORE = 0.7
+    # Retrieved long-term memory records scoring below this are dropped. 0.7
+    # dropped everything realistic: in dev, a natural question about a stored
+    # fact scored 0.57-0.67 while unrelated records scored <= 0.40, so no turn
+    # ever received memory context (docs/specs/memory-baseline-decision.md).
+    # Override per environment with AGENTCORE_MEMORY_RELEVANCE_SCORE.
+    MEMORY_RELEVANCE_SCORE = 0.5
     MEMORY_TOP_K = 10
 
     # --- Compaction ---

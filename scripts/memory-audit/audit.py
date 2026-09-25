@@ -27,7 +27,7 @@ Subcommands
     two-message conversation stating a synthetic fact under a synthetic actor,
     waits for extraction, then runs ``RetrieveMemoryRecords`` the same way the
     runtime hook does (``namespacePath`` built from the backend template,
-    ``topK=10``, relevance cut 0.7). Deletes the records and events afterwards
+    ``topK=10`` and its relevance cut). Deletes the records and events afterwards
     unless ``--keep``. The app half (session A states a fact, session B recalls
     it) is a manual chat-UI step; see ``README.md``.
 
@@ -84,7 +84,7 @@ BACKEND_NAMESPACE_TEMPLATES = {
 
 # Retrieval parameters of TurnBasedSessionManager.retrieve_customer_context.
 RETRIEVAL_TOP_K = 10
-RETRIEVAL_RELEVANCE = 0.7
+RETRIEVAL_RELEVANCE = 0.5
 
 UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-([0-9a-f])[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
 PREVIEW_RE = re.compile(r"^preview[-_]", re.I)

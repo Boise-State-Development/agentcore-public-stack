@@ -28,13 +28,14 @@ mid-conversation**, and a Level-1 catalog injected into the system prompt with L
 fetched via a tool. A Memory Space is that mechanism **re-scoped from per-skill to per-space**,
 plus a **write/consolidation** path, a **binding** model, and a **sharing** model.
 
-This is the right design (vs. leaning on AgentCore Memory) because **AgentCore Memory is
-write-only in cloud** — the SDK restore branch never fires, so Memory cannot be the read-time
-source of truth today (see
-[`project_session_restore_writeonly_memory`](../../backend/src/agents/main_agent/session/turn_based_session_manager.py)
-analysis). Managed AgentCore memory (on-by-default on a harness) covers the **opaque
-conversational-continuity** slice; a Memory Space covers the **inspectable, editable,
-entity-linked knowledge** slice. They are complementary, not competitors.
+This is the right design (vs. leaning on AgentCore Memory) because AgentCore Memory's
+long-term records are **opaque**: extracted by the service, not browsable or editable as
+documents. (An earlier version of this spec called AgentCore Memory "write-only in cloud". That
+was wrong: history restores from it on any container, and a per-message retrieval hook reads
+extracted records. See `memory-baseline-decision.md` for the 2026-09 audit.) Managed AgentCore
+memory covers the **opaque conversational-continuity and personal-extraction** slice; a Memory
+Space covers the **inspectable, editable, entity-linked knowledge** slice. They are
+complementary, not competitors.
 
 ---
 
