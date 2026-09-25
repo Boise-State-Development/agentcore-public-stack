@@ -30,7 +30,7 @@ The overview was written without assuming the platform's state. The platform's s
 | Skill version pinning | **Does not exist.** One `SKILL#{id}/METADATA` row; bindings are `{kind:"skill", ref: id}` with no version. | `apis/shared/skills/models.py:110` |
 | Instruction versioning | **Exists for listings.** `AgentVersion` snapshots (`VERSION#{n}`) are cut on marketplace submission, with a review-diff UI. Not cut on ordinary saves. | `apis/shared/assistants/versions.py:115`, `version_repository.py` |
 | Cost attribution | Per-call `C#` rows carry `turnAgentId` as an extra field; no `projectId`, no project rollup. | `apis/shared/sessions/metadata.py:229-330`, `stream_coordinator.py:3418` |
-| Feature flags | House style: default **on** with a `=false` kill switch, router always mounted, 404 dependency while off. CDK ternary in `config.ts` + `platform.yml` forwarding. | `apis/shared/feature_flags.py:42-58`, `infrastructure/lib/config.ts:987` |
+| Feature flags | House style for shipped features: default **on** with a `=false` kill switch, router always mounted, 404 dependency while off. Since 2026-09-24, in-development features (Projects included) are **opt-in** instead (CLAUDE.MD "Feature Flags"). CDK ternary in `config.ts` + `platform.yml` forwarding. | `apis/shared/feature_flags.py:42-58`, `infrastructure/lib/config.ts:987` |
 | AgentCore Memory | **Not write-only.** Three built-in strategies (semantic, summary, user-preference) on one memory per deployment, **no namespace templates set**, 90-day event expiry. A per-message `RetrieveMemoryRecords` read path runs against `/strategies/{id}/actors/{actorId}` for preferences + facts and prepends hits to the user message. Whether it returns anything in a deployed environment is **unverified**. See §1. | `infrastructure/lib/constructs/agentcore/memory-construct.ts:72-98`, `agents/main_agent/session/session_factory.py:77-273`, `turn_based_session_manager.py:263-340` |
 
 **Consequence for the plan (principle 4).** Shared Projects is a *composition* feature. The new entity is the Project and its membership; the harness is an Agent record the Project owns; project memory is a Memory Space the Project owns; tasks are ordinary sessions tagged with a project id; schedules, shares, artifacts and the audit log are extended with a project dimension. Rebuilding any of these would violate the repo's own "compose existing primitives" rule (`agent-designer.md` D4) and, for memory, would fork the system Oliver already runs on.
@@ -333,7 +333,7 @@ Open questions it raises:
 
 ## 7. Phasing and PR plan
 
-Each PR targets `develop`, lands behind `PROJECTS_ENABLED` (default on, `=false` kill switch, `CDK_PROJECTS_ENABLED` forwarded in `platform.yml`), and carries its tests. Infra PRs that add a GSI go first and alone (one GSI per table per deploy).
+Each PR targets `develop`, lands behind `PROJECTS_ENABLED` (opt-in while in development since 2026-09-24: only `true` enables; `CDK_PROJECTS_ENABLED` forwarded in `platform.yml`; the SPA's `features.projects`), and carries its tests. Infra PRs that add a GSI go first and alone (one GSI per table per deploy).
 
 ### Phase 0 — memory baseline (1 PR + a report)
 - **0.1** `scripts/memory-audit/audit.py` (control-plane inventory, record counts, extraction jobs, namespace comparison, behavioral test driver) + the decision record at `docs/specs/memory-baseline-decision.md`.
@@ -527,6 +527,23 @@ Each PR targets `develop`, lands behind `PROJECTS_ENABLED` (default on, `=false`
     - The Version link on the card uses `dark:text-primary-50`.
     - A focused notification's time uses `dark:text-gray-300` (it was 3.96:1 on `gray-700`).
 - **1.9 Docs:** `docs-site/…/features/projects.md`, `admin/projects.md`, env-var table entries.
+  **1.9 (as built):**
+  - `docs-site/…/features/projects.md` is the user guide: roles table, tabs, tasks and sharing, files, settings history and the degrade notice, notifications, personal instructions, archive/delete/transfer.
+  - `docs-site/…/admin/projects.md` covers the `admin.projects` routes (there is no admin page yet), what the kill switch does, the configuration table and where the data lives.
+  - Env-var entries: a Shared Projects section in `backend/src/.env.example` (table, switch, audit table, `PROJECTS_MAX_MEMBERS`, `PROJECTS_EDITORS_MANAGE_MEMBERS_DEFAULT`, `DIRECTORY_PROVIDER`) and a table on the docs-site environment-variables page.
+  - §8 values that nothing reads yet are left out of the docs until their phase ships: `PROJECTS_MAX_KNOWLEDGE_ITEMS`, the Graph directory settings, memory lint and budgets, `PROJECTS_DISALLOWED_TOOL_IDS`, email notifications, archive retention.
+  - The kill switch as documented is the one after the fix below: a full stop.
+- **Kill-switch fix (as built, `fix/projects-kill-switch`):**
+  - Before it, `PROJECTS_ENABLED` gated app-api only. The inference API read no flag, so while the switch was off a member could still run a turn in an existing project task on the harness.
+  - Now `_project_harness_role` returns no role while the switch is off, the harness's creator included. That closes every harness path at once: chat turns on inference-api, and the agent document and sync routes on app-api.
+  - The chat route's denied branch asks `is_disabled_project_harness` and streams a conversational "Projects are turned off here" message instead of a bare 403.
+  - The sidenav's Projects entry is removed (Phil, 2026-09-24): a menu item must not wait on a load to know whether the feature is on. `/projects` stays reachable by URL, from the sidebar's project headings and from notifications.
+  - Environments: `CDK_PROJECTS_ENABLED` is `true` in `development` and `false` in `production`, so Projects ship dark in prod.
+- **Opt-in while in development (as built, `feature/feature-flags-default-off`):**
+  - With collaborators from another org deploying the stack, in-development features now default off (CLAUDE.MD "Feature Flags"; Phil, 2026-09-24).
+  - `PROJECTS_ENABLED` and `CDK_PROJECTS_ENABLED` enable only on `"true"`. The prod variable is now redundant but kept as an explicit record.
+  - The SPA gets compile-time switches: `features` in `src/environments/environment*.ts`, read through the `FEATURES` token. A new `environment.development.ts` and `dev-deploy` configuration exist because dev and prod used to share one bundle. `build.sh` builds `SPA_BUILD_CONFIGURATION`, which each deploy workflow sets.
+  - `features.projects` is `true` in dev and `false` in prod and locally. It brings back the nav item and gates the bell, the `/projects` routes (`canMatch`), sidebar grouping and "Project members" sharing.
 
 ### Phase 2 — project memory
 - **2.1** Memory tools cacheable (`_create_cache_key` gains space ids) — prerequisite, its own PR with `C#`-row proof of cache hits across turns.
@@ -558,7 +575,7 @@ Each PR targets `develop`, lands behind `PROJECTS_ENABLED` (default on, `=false`
 
 | Value | Where it lives | Default |
 |---|---|---|
-| `PROJECTS_ENABLED` / `CDK_PROJECTS_ENABLED` | env via `config.ts` → app-api, inference-api, maintenance worker | on |
+| `PROJECTS_ENABLED` / `CDK_PROJECTS_ENABLED` | env via `config.ts` → app-api, inference-api, maintenance worker; SPA `features.projects` | off (opt-in while in development) |
 | `PROJECTS_EDITORS_MANAGE_MEMBERS_DEFAULT` | env; per-project `settings.editorsManageMembers` overrides | true |
 | `PROJECTS_MAX_MEMBERS` | env | 200 |
 | `PROJECTS_MAX_KNOWLEDGE_ITEMS` | env | 1,000 |
