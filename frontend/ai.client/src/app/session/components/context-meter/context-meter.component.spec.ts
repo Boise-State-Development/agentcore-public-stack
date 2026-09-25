@@ -29,7 +29,7 @@ interface Harness {
   quotaPctClass: () => string;
   triggerAriaLabel: () => string;
   ringEmpty: () => boolean;
-  showPctInline: () => boolean;
+  ringStrokeClass: () => string;
   open: () => boolean;
   toggle: () => void;
   close: () => void;
@@ -163,10 +163,19 @@ describe('ContextMeterComponent', () => {
   });
 
   describe('ring', () => {
-    it('keeps the percentage off the line until the window is filling up', () => {
-      expect(build().c.showPctInline()).toBe(false);
-      contextTokens = 150_000;
-      expect(build().c.showPctInline()).toBe(true);
+    it('signals urgency by colour alone, never a percentage on the line', () => {
+      const calm = build();
+      expect(calm.c.ringStrokeClass()).toContain('success');
+      const calmText = calm.el.querySelector('button')?.textContent?.trim();
+
+      contextTokens = 150_000; // 75%
+      const filling = build();
+      expect(filling.c.ringStrokeClass()).toContain('warning');
+      expect(filling.el.querySelector('button')?.textContent?.trim()).toBe(calmText);
+      expect(filling.el.querySelector('button')?.textContent?.trim()).toBe('');
+
+      contextTokens = 190_000; // 95%
+      expect(build().c.ringStrokeClass()).toContain('danger');
     });
 
     it('summarizes context and cost for assistive tech', () => {

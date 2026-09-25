@@ -23,10 +23,6 @@ const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 const RING_ENTRANCE_DELAY_MS = 350;
 const RING_FILL_DELAY_MS = 600;
 
-/** Below this share of the window the ring speaks for itself; at or above it
- *  the percentage appears beside the ring, because that is when it matters. */
-const SHOW_PCT_AT = 70;
-
 /**
  * Segment colour per partition key. Skills and Memory reuse the section
  * accents the agent form gives those capabilities, so the same thing wears the
@@ -155,9 +151,6 @@ function formatUsd(value: number): string {
             class="motion-safe:transition-[stroke-dashoffset] motion-safe:duration-500 motion-safe:ease-out"
           />
         </svg>
-        @if (showPctInline()) {
-          <span class="tabular-nums" [class]="pctTextClass()" aria-hidden="true">{{ contextLabel() }}</span>
-        }
       </button>
 
       @if (open()) {
@@ -336,7 +329,6 @@ export class ContextMeterComponent {
     return `${Math.round(pct)}%`;
   });
 
-  protected readonly showPctInline = computed(() => this.contextPctValue() >= SHOW_PCT_AT);
 
   protected readonly usedLabel = computed(() => formatTokens(this.contextTokens()));
   protected readonly windowLabel = computed(() => formatTokens(this.contextWindow()));
@@ -426,6 +418,11 @@ export class ContextMeterComponent {
   );
   private firstFillScheduled = false;
 
+  /**
+   * The ring's colour is its only urgency signal — no percentage on the line,
+   * so the trigger keeps one fixed width and never nudges the model picker.
+   * The exact figure is in the panel (and the trigger's aria-label).
+   */
   protected readonly ringStrokeClass = computed(() => {
     const pct = this.contextPctValue();
     if (pct >= 90) return 'stroke-state-danger-500 dark:stroke-state-danger-400';
