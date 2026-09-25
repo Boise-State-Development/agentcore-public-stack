@@ -32,6 +32,7 @@ from fastapi import (
     status,
 )
 
+from apis.app_api.agent_designer.services.agent_deletion import delete_owned_agent
 from apis.app_api.agent_designer.services.bindable_catalog import (
     BINDABLE_KINDS,
     list_bindable,
@@ -71,7 +72,6 @@ from apis.shared.assistants.service import (
     create_assistant,
     create_assistant_draft,
     AssistantListedError,
-    delete_assistant,
     get_assistant_with_access_check,
     is_project_harness,
     list_assistant_shares,
@@ -514,9 +514,11 @@ async def update_agent_endpoint(
 
 @router.delete("/{agent_id}", status_code=204)
 async def delete_agent_endpoint(agent_id: str, current_user: User = Depends(require_agents_enabled)):
-    """Delete an Agent (owner only)."""
+    """Delete an Agent (owner only) and everything it owns: documents, sync policies and its
+    managed knowledge base (``agent_deletion.delete_owned_agent``). This route used to
+    delete only the record, and it is the one the Agents page calls."""
     try:
-        deleted = await delete_assistant(agent_id, current_user.user_id)
+        deleted = await delete_owned_agent(agent_id, current_user.user_id)
         if not deleted:
             raise HTTPException(status_code=404, detail=f"Agent not found: {agent_id}")
     except HTTPException:

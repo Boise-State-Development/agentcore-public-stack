@@ -1148,6 +1148,26 @@ async def rename_project_harness(
     return updated is not None
 
 
+def _delete_share_rows(table, assistant_id: str) -> int:
+    """Delete every ``SHARE#`` row under the Agent, all pages. Returns how many."""
+    from boto3.dynamodb.conditions import Key
+
+    deleted = 0
+    kwargs = {
+        "KeyConditionExpression": Key("PK").eq(f"AST#{assistant_id}") & Key("SK").begins_with("SHARE#"),
+        "ProjectionExpression": "PK, SK",
+    }
+    with table.batch_writer() as batch:
+        while True:
+            response = table.query(**kwargs)
+            for item in response.get("Items", []):
+                batch.delete_item(Key={"PK": item["PK"], "SK": item["SK"]})
+                deleted += 1
+            if "LastEvaluatedKey" not in response:
+                return deleted
+            kwargs["ExclusiveStartKey"] = response["LastEvaluatedKey"]
+
+
 async def _delete_assistant_cloud(assistant_id: str, table_name: str) -> bool:
     """
     Delete assistant from DynamoDB
@@ -1196,6 +1216,19 @@ async def _delete_assistant_cloud(assistant_id: str, table_name: str) -> bool:
             logger.warning(
                 f"Failed to delete versions for assistant {assistant_id}; "
                 "the snapshots will be orphaned in the table",
+                exc_info=True,
+            )
+
+        # Share rows too. Each carries a SharedWithIndex key, so a deleted Agent's shares
+        # stayed in every recipient's "Shared with me" query for good (skipped there only
+        # because the record is gone, at one wasted read each). Found 38 on one deleted
+        # Agent in production.
+        try:
+            _delete_share_rows(table, assistant_id)
+        except Exception:
+            logger.warning(
+                f"Failed to delete shares for assistant {assistant_id}; "
+                "the share rows will be orphaned in the table",
                 exc_info=True,
             )
 

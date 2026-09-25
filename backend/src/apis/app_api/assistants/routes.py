@@ -16,6 +16,7 @@ from apis.app_api.agent_designer.services.binding_validation import (
     BindingValidationError,
     validate_agent_write,
 )
+from apis.app_api.agent_designer.services.agent_deletion import delete_owned_agent
 from apis.app_api.documents.services.document_service import list_assistant_documents
 from apis.inference_api.chat.routes import stream_conversational_message
 from apis.inference_api.chat.service import get_agent
@@ -41,8 +42,6 @@ from apis.shared.assistants.service import (
     create_assistant,
     create_assistant_draft,
     AssistantListedError,
-    assert_deletable,
-    delete_assistant,
     get_assistant_with_access_check,
     is_project_harness,
     list_assistant_shares,
@@ -415,61 +414,12 @@ async def update_assistant_endpoint(assistant_id: str, request: UpdateAssistantR
 
 @router.delete("/{assistant_id}", status_code=204)
 async def delete_assistant_endpoint(assistant_id: str, current_user: User = Depends(get_current_user_from_session)):
-    """Delete an assistant and all associated documents using soft-delete + background cleanup."""
-    user_id = current_user.user_id
+    """Delete an assistant and everything it owns (``agent_deletion.delete_owned_agent``)."""
     logger.info("DELETE /assistants/{assistant_id}")
 
     try:
-        # 0. Refuse a listed Agent BEFORE touching anything (§5.2).
-        #
-        # ⚠️ Order is load-bearing. Steps 2 and 3 below are destructive — documents
-        # soft-deleted, sync policies removed — and they run before the record delete. If
-        # the listing check fired down there instead, a refused delete would leave the Agent
-        # gutted but still in the store: exactly the failure the refusal exists to prevent,
-        # with a live listing pointing at a broken Agent.
-        owned = await assert_deletable(assistant_id, user_id)
-
-        # 0b. Queue the managed knowledge base, if it has one, for teardown. The
-        # migration worker deletes it (app-api holds no bedrock:DeleteKnowledgeBase)
-        # and then removes the KB# record, which nothing else ever would: before
-        # this, a deleted agent's knowledge base stayed ACTIVE and billing. Queued
-        # before anything destructive so a failure here leaves a clean retry, and
-        # only for the caller's own agent.
-        if owned is not None:
-            from apis.app_api.kb_migration.teardown import queue_teardown
-
-            await queue_teardown(assistant_id)
-
-        # 1. List all documents for the assistant
-        docs, _ = await list_assistant_documents(
-            assistant_id=assistant_id,
-            owner_id=user_id,
-            limit=1000,
-        )
-
-        # 2. Batch soft-delete all documents with TTL
-        if docs:
-            from apis.app_api.documents.services.document_service import batch_soft_delete_documents
-            await batch_soft_delete_documents(
-                assistant_id=assistant_id,
-                document_ids=[doc.document_id for doc in docs],
-            )
-
-        # 3. Delete sync policies eagerly so no schedule outlives the assistant
-        #    (the dispatcher's liveness check is the backstop, not the mechanism)
-        from apis.shared.sync_policies.service import delete_sync_policies_for_assistant
-        await delete_sync_policies_for_assistant(assistant_id)
-
-        # 4. Hard-delete assistant record
-        success = await delete_assistant(assistant_id=assistant_id, owner_id=user_id)
-        if not success:
+        if not await delete_owned_agent(assistant_id, current_user.user_id):
             raise HTTPException(status_code=404, detail=f"Assistant not found: {assistant_id}")
-
-        # 5. Fire-and-forget background cleanup for all documents
-        if docs:
-            from apis.app_api.documents.services.cleanup_service import cleanup_assistant_documents
-            asyncio.ensure_future(cleanup_assistant_documents(assistant_id, docs))
-
         return None
 
     except HTTPException:
