@@ -446,6 +446,9 @@ class TestEventParsing:
             "wrong/ast-1/documents/doc-2/f.pdf",
             "assistants/ast-1/wrong/doc-2/f.pdf",
             "assistants/ast-1/documents/doc-2",
+            "assistants//documents/doc-2/f.pdf",
+            "assistants/ast-1/documents//f.pdf",
+            "assistants/ast-1/documents/doc-2/",
             "",
         ],
     )
@@ -454,6 +457,49 @@ class TestEventParsing:
         another's knowledge base."""
         with pytest.raises(ic.IngestionRoutingError):
             ic.parse_object_key(key)
+
+
+class TestNonDocumentKeysAreSkipped:
+    """Agent icons live in the same bucket, at ``assistants/{id}/icons/{digest}.png``.
+
+    The EventBridge rule is scoped to ``assistants/*/documents/*``, but the consumer
+    must not depend on that: a raise here is retried twice and then dead-lettered
+    for an object that was never a document.
+    """
+
+    ICON_KEY = f"assistants/{ASSISTANT_ID}/icons/0123456789abcdef.png"
+
+    @pytest.mark.parametrize(
+        "key",
+        [
+            ICON_KEY,
+            f"assistants/{ASSISTANT_ID}/icons/0123456789abcdef.jpg",
+            f"assistants/{ASSISTANT_ID}/something-else",
+            "models/model-1/icons/0123456789abcdef.png",
+        ],
+    )
+    def test_a_non_document_key_is_not_a_document(self, key):
+        assert ic.is_document_key(key) is False
+
+    def test_a_document_key_is_a_document(self):
+        assert ic.is_document_key(KEY) is True
+
+    def test_an_icon_on_a_managed_kb_is_skipped_without_ingesting_or_writing(self, table):
+        _seed_kb(table, retrievalEngine="managed", awsKbId="kb-1", awsDataSourceId="ds-1")
+        fake = _FakeBackend()
+
+        with patch("apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake):
+            result = ic.handle_object(BUCKET, self.ICON_KEY)
+
+        assert result["routed"] == "skipped"
+        assert result["ingested"] is False
+        assert fake.ingested == []
+        assert "Item" not in table.get_item(Key={"PK": f"AST#{ASSISTANT_ID}", "SK": "DOC#icons"})
+
+    def test_the_handler_returns_success_for_an_icon_event(self, table):
+        response = ic.lambda_handler(_eventbridge_event(self.ICON_KEY), None)
+        assert response["statusCode"] == 200
+        assert response["results"][0]["routed"] == "skipped"
 
 
 # ---------------------------------------------------------------------------

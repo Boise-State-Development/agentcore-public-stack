@@ -627,8 +627,13 @@ export class KbMigrationConstruct extends Construct {
         detailType: ['Object Created'],
         detail: {
           bucket: { name: [documentsBucket.bucketName] },
-          // Same key scope as the legacy notification's prefix filter.
-          object: { key: events.Match.prefix('assistants/') },
+          // Documents only. `assistants/` alone also matches agent icons
+          // (`assistants/{id}/icons/...`), which the consumer would only skip.
+          // The legacy S3 notification can't be narrowed the same way — its
+          // filter is prefix/suffix only and the assistant id comes first —
+          // but an EventBridge wildcard can, and changing a rule's pattern is
+          // an in-place update that leaves the bucket notification untouched.
+          object: { key: events.Match.wildcard('assistants/*/documents/*') },
         },
       },
     });

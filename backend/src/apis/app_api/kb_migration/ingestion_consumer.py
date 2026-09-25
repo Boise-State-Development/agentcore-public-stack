@@ -153,12 +153,35 @@ def parse_object_key(key: str) -> Tuple[str, str, str]:
     delivered the notification.
     """
     parts = unquote_plus(key).split("/")
-    if len(parts) < 5 or parts[0] != "assistants" or parts[2] != "documents":
+    if (
+        len(parts) < 5
+        or parts[0] != "assistants"
+        or parts[2] != "documents"
+        or not parts[1]
+        or not parts[3]
+        or not "/".join(parts[4:])
+    ):
         raise IngestionRoutingError(
             f"object key {key!r} is not an assistant document path; expected "
             f"assistants/{{assistant_id}}/documents/{{document_id}}/{{filename}}"
         )
     return parts[1], parts[3], "/".join(parts[4:])
+
+
+def is_document_key(key: str) -> bool:
+    """Whether ``key`` has the document layout ``parse_object_key`` accepts.
+
+    The documents bucket holds other objects under ``assistants/`` too — agent
+    icons at ``assistants/{assistant_id}/icons/{digest}.{ext}`` — and the S3
+    event reaches this function for them. They are not documents and never will
+    be, so the caller skips them instead of raising: a raise here is retried and
+    then dead-lettered for an object that was never ours.
+    """
+    try:
+        parse_object_key(key)
+    except IngestionRoutingError:
+        return False
+    return True
 
 
 def extract_records(event: Dict[str, Any]) -> List[Dict[str, str]]:
@@ -604,6 +627,10 @@ def _reconcile_bytes_on_complete(
 def handle_object(bucket: str, key: str) -> Dict[str, Any]:
     """Route one uploaded object. Returns a summary for logging and tests."""
     from apis.shared.kb_backend.records import BORN_MANAGED, ENGINE_MANAGED
+
+    if not is_document_key(key):
+        logger.info(f"skipping object {key!r}: not an assistant document key")
+        return {"routed": "skipped", "ingested": False, "key": key}
 
     assistant_id, document_id, filename = parse_object_key(key)
     engine, record = resolve_engine_for(assistant_id)

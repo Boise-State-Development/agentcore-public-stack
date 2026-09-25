@@ -161,6 +161,11 @@ async def async_lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str,
 
         # 1. Parse event and extract metadata
         event_data = _parse_s3_event(event)
+        if event_data is None:
+            # Not a document (an agent icon, say). Success, not failure: raising
+            # or returning an error would record a bogus DOC# row or redeliver
+            # an object that will never be a document.
+            return {"statusCode": 200, "body": json.dumps({"message": "Skipped: not an assistant document key"})}
 
         # 1a. Routing exclusivity (design §537, Requirement 10.5). A promoted
         # knowledge base is served by the managed backend, and the managed
@@ -239,6 +244,8 @@ async def async_lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str,
         try:
             # Re-parse event data safely to ensure we have IDs for status update
             event_data = _parse_s3_event(event)
+            if event_data is None:
+                raise ValueError("not an assistant document key")
             await status_manager.mark_failed(assistant_id=event_data["assistant_id"], document_id=event_data["document_id"], exception=e)
         except Exception as status_error:
             logger.error(f"Failed to update status to 'failed': {status_error}", exc_info=True)
@@ -254,9 +261,12 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     return asyncio.run(async_lambda_handler(event, context))
 
 
-def _parse_s3_event(event: Dict[str, Any]) -> Dict[str, str]:
+def _parse_s3_event(event: Dict[str, Any]) -> Optional[Dict[str, str]]:
     """
-    Parse S3 event to extract metadata
+    Parse S3 event to extract metadata.
+
+    Returns ``None`` for an object that is not an assistant document, which the
+    caller skips without writing any status.
     """
     from urllib.parse import unquote_plus
 
@@ -285,22 +295,27 @@ def _parse_s3_event(event: Dict[str, Any]) -> Dict[str, str]:
     if assistant_id and document_id and filename:
         return {"bucket": bucket, "key": key, "s3_key": key, "assistant_id": assistant_id, "document_id": document_id, "filename": filename}
 
-    # Real S3 event format - parse from key path
+    # Real S3 event format - parse from key path. Only one layout is a document:
+    #
+    #     assistants/{assistant_id}/documents/{document_id}/{filename}
+    #
+    # The bucket also holds other objects under `assistants/` — agent icons at
+    # `assistants/{assistant_id}/icons/{digest}.{ext}` — and the S3 notification
+    # cannot exclude them: its filter is prefix/suffix only, and the variable
+    # assistant id comes before `documents/`. Parsing loosely read an icon as
+    # document_id="icons" and left a failed `DOC#icons` row on the agent, so
+    # anything else is skipped rather than guessed at.
     key_parts = key.split("/")
+    if len(key_parts) < 5 or key_parts[0] != "assistants" or key_parts[2] != "documents":
+        logger.info(f"Skipping S3 object that is not an assistant document: {key}")
+        return None
 
-    if key_parts[0] == "assistants" and len(key_parts) >= 5:
-        assistant_id = key_parts[1]
-        document_id = key_parts[3]
-        filename = "/".join(key_parts[4:])
-    elif len(key_parts) >= 4:
-        assistant_id = key_parts[1] if len(key_parts) >= 2 else None
-        document_id = key_parts[2] if len(key_parts) >= 3 else None
-        filename = "/".join(key_parts[3:]) if len(key_parts) >= 4 else None
-    else:
-        raise ValueError(f"Unable to parse S3 key: {key}")
-
+    assistant_id = key_parts[1]
+    document_id = key_parts[3]
+    filename = "/".join(key_parts[4:])
     if not assistant_id or not document_id or not filename:
-        raise ValueError(f"Missing metadata in S3 key: assistant_id={assistant_id}, document_id={document_id}")
+        logger.info(f"Skipping S3 object with an incomplete document key: {key}")
+        return None
 
     return {"bucket": bucket, "key": key, "s3_key": key, "assistant_id": assistant_id, "document_id": document_id, "filename": filename}
 
