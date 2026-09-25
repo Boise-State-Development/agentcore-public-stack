@@ -123,6 +123,23 @@ ENV AWS_DEFAULT_REGION=${AWS_REGION}
 ENV OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=false
 ENV OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_unredacted_attributes=
 
+# Keep MCP tool arguments and results out of trace spans. ADOT's own MCP
+# instrumentor (entry point `aws_mcp`) writes gen_ai.tool.call.arguments and
+# gen_ai.tool.call.result onto every tools/call span with no capture gate, and
+# those spans go to `aws/spans`, which neither switch above reaches.
+# "disabled" skips all of ADOT's native agentic instrumentors (mcp, crewai,
+# langchain, llama_index, openai_agents); only mcp applies to this app. We
+# lose ADOT's MCP protocol spans (tools/list, tools/call timings); Strands'
+# redacted execute_tool spans remain, and Strands' MCPClient still injects
+# trace context into each request's `_meta` itself.
+#
+# Do not use OTEL_PYTHON_DISABLED_INSTRUMENTATIONS=aws_mcp instead: ADOT fills
+# that variable with its own default list via setdefault, so setting it
+# replaces the list and turns requests, urllib3, sqlalchemy and others back on.
+# ADOT 0.20 renames this variable AWS_GENAI_INSTRUMENTATION and keeps this
+# name as a fallback.
+ENV AWS_AGENTIC_INSTRUMENTATION=disabled
+
 # Expose port 8080 (AgentCore Runtime standard port)
 EXPOSE 8080
 

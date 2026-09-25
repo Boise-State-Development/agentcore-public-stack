@@ -14,9 +14,18 @@ carried every prompt and reply by default:
   sets it to ``true`` whenever ``AGENT_OBSERVABILITY_ENABLED`` is on, with
   ``setdefault``, so the image has to set it first.
 
-``Dockerfile.inference-api`` sets both. These tests read the values from the
-Dockerfile, not from a copy, and run them through the installed Strands,
-ADOT and botocore-instrumentation code. A dependency upgrade that renames a
+A third channel bypasses ``otel-rt-logs`` entirely:
+
+- ``amazon.opentelemetry.distro.instrumentation.mcp``: ADOT's own MCP
+  instrumentor (entry point ``aws_mcp``) sets ``gen_ai.tool.call.arguments``
+  and ``gen_ai.tool.call.result`` on every ``tools/call`` span, with no
+  capture gate, and those spans go to ``aws/spans``. The only 0.19 switch is
+  ``AWS_AGENTIC_INSTRUMENTATION=disabled``, which stops ADOT loading the
+  instrumentor at all.
+
+``Dockerfile.inference-api`` sets all three. These tests read the values from
+the Dockerfile, not from a copy, and run them through the installed Strands,
+ADOT, botocore-instrumentation and MCP code. A dependency upgrade that renames a
 token or changes a default then fails here, instead of quietly putting user
 conversations back into CloudWatch. Each redaction test has a control that
 runs with capture ON and expects the sentinel to appear, so a test that stops
@@ -25,13 +34,19 @@ exercising the content path cannot pass by accident.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
+from importlib.metadata import EntryPoint, entry_points
 from pathlib import Path
 from typing import Any, Iterator
 
 import pytest
+from amazon.opentelemetry.distro.aws_opentelemetry_distro import AwsOpenTelemetryDistro
+from amazon.opentelemetry.distro.instrumentation.mcp import McpInstrumentor
 from amazon.opentelemetry.distro.llo_handler import LLOHandler
+from mcp.server.fastmcp import FastMCP
+from mcp.shared.memory import create_connected_server_and_client_session
 from opentelemetry.instrumentation.botocore.extensions.bedrock_utils import (
     _Choice,
     genai_capture_message_content,
@@ -50,6 +65,9 @@ _DOCKERFILE = Path(__file__).resolve().parents[2] / "Dockerfile.inference-api"
 
 _CAPTURE_VAR = "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"
 _SEMCONV_VAR = "OTEL_SEMCONV_STABILITY_OPT_IN"
+_AGENTIC_VAR = "AWS_AGENTIC_INSTRUMENTATION"
+_CONTENT_SWITCHES = (_CAPTURE_VAR, _SEMCONV_VAR, _AGENTIC_VAR)
+_MCP_SCOPE = "amazon.opentelemetry.distro.instrumentation.mcp"
 
 # Stands in for anything a user typed or a model wrote. Distinct per role so a
 # failure names which part of the conversation leaked.
@@ -75,16 +93,21 @@ def _image_env() -> dict[str, str]:
 def image_env(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
     """Apply the image's content switches, exactly as the container sees them."""
     env = _image_env()
-    for name in (_CAPTURE_VAR, _SEMCONV_VAR):
-        monkeypatch.setenv(name, env[name])
+    for name in _CONTENT_SWITCHES:
+        if name in env:
+            monkeypatch.setenv(name, env[name])
+        else:
+            monkeypatch.delenv(name, raising=False)
     return env
 
 
 @pytest.fixture
 def capture_on(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The pre-fix state: ADOT's capture default, and no Strands redaction token."""
+    """The pre-fix state: ADOT's capture default, no Strands redaction token,
+    and ADOT's native agentic instrumentors on their ``auto`` default."""
     monkeypatch.setenv(_CAPTURE_VAR, "true")
     monkeypatch.delenv(_SEMCONV_VAR, raising=False)
+    monkeypatch.delenv(_AGENTIC_VAR, raising=False)
 
 
 def _strings(value: Any) -> Iterator[str]:
@@ -228,3 +251,92 @@ def test_botocore_converse_events_carry_no_content(image_env: dict[str, str]) ->
 
 def test_botocore_control_leaks_with_capture_on(capture_on: None) -> None:
     assert {_PROMPT, _TOOL_INPUT, _TOOL_RESULT, _REPLY} <= set(_leaked(_botocore_converse_bodies()))
+
+
+@pytest.fixture
+def agentcore_observability(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """AgentCore sets ``AGENT_OBSERVABILITY_ENABLED``; ADOT gates its native
+    instrumentors on it. Undo any instrumentation a test loaded, so the MCP
+    wrappers never leak into the rest of the suite."""
+    monkeypatch.setenv("AGENT_OBSERVABILITY_ENABLED", "true")
+    yield
+    instrumentor = McpInstrumentor()
+    if instrumentor.is_instrumented_by_opentelemetry:
+        instrumentor.uninstrument()
+
+
+def _aws_mcp_entry_point() -> EntryPoint:
+    """The entry point ``opentelemetry-instrument`` hands to the distro at startup."""
+    matches = [ep for ep in entry_points(group="opentelemetry_instrumentor") if ep.name == "aws_mcp"]
+    assert len(matches) == 1, (
+        "ADOT no longer registers exactly one `aws_mcp` instrumentor; re-check which switch "
+        "governs its MCP spans before trusting the tests below"
+    )
+    return matches[0]
+
+
+def _run_mcp_tool_call() -> tuple[str, list[Any]]:
+    """Start the process the way ``opentelemetry-instrument`` does for ADOT's MCP
+    instrumentor (``AwsOpenTelemetryDistro.load_instrumentor``), then make one MCP
+    ``tools/call`` whose argument and result both carry a sentinel. Returns the
+    tool's result text and the exported spans.
+    """
+    span_exporter = InMemorySpanExporter()
+    tracer_provider = TracerProvider()
+    tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+    AwsOpenTelemetryDistro().load_instrumentor(_aws_mcp_entry_point(), tracer_provider=tracer_provider)
+
+    server = FastMCP("otel-content-probe")
+
+    @server.tool()
+    def lookup(query: str) -> str:
+        return f"{_TOOL_RESULT} for {query}"
+
+    async def call() -> str:
+        async with create_connected_server_and_client_session(server) as client:
+            result = await client.call_tool("lookup", {"query": _TOOL_INPUT})
+        return "".join(getattr(block, "text", "") for block in result.content)
+
+    return asyncio.run(call()), list(span_exporter.get_finished_spans())
+
+
+def test_dockerfile_disables_adot_native_agentic_instrumentors() -> None:
+    env = _image_env()
+    assert env.get(_AGENTIC_VAR) == "disabled", (
+        f"Dockerfile.inference-api must set {_AGENTIC_VAR}=disabled. Otherwise ADOT's MCP "
+        f"instrumentor writes every MCP tool argument and result onto spans in aws/spans."
+    )
+    assert "OTEL_PYTHON_DISABLED_INSTRUMENTATIONS" not in env, (
+        "Setting OTEL_PYTHON_DISABLED_INSTRUMENTATIONS replaces the list ADOT fills in with "
+        "setdefault, which re-enables requests, urllib3, sqlalchemy and the rest of it."
+    )
+
+
+def test_mcp_tool_call_leaves_no_content_on_spans(
+    image_env: dict[str, str], agentcore_observability: None
+) -> None:
+    result_text, spans = _run_mcp_tool_call()
+
+    assert _TOOL_RESULT in result_text, "the MCP tool call did not run; the test is not exercising it"
+    span_texts = [text for span in spans for text in _strings(dict(span.attributes or {}))]
+    assert not _leaked(span_texts), f"MCP tool content reached trace spans: {_leaked(span_texts)}"
+    assert not [span for span in spans if span.instrumentation_scope.name == _MCP_SCOPE]
+
+
+def test_mcp_control_leaks_with_only_the_otel_rt_logs_switches(
+    image_env: dict[str, str], agentcore_observability: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other two switches stay on, so this shows it is the agentic switch,
+    not the capture or redaction variable, that keeps MCP content off spans."""
+    monkeypatch.delenv(_AGENTIC_VAR, raising=False)
+    _, spans = _run_mcp_tool_call()
+
+    mcp_spans = [span for span in spans if span.instrumentation_scope.name == _MCP_SCOPE]
+    assert mcp_spans, "ADOT's MCP instrumentor emitted no spans on its default; the switch proves nothing"
+    arguments = [str(span.attributes.get("gen_ai.tool.call.arguments", "")) for span in mcp_spans]
+    results = [str(span.attributes.get("gen_ai.tool.call.result", "")) for span in mcp_spans]
+    assert any(_TOOL_INPUT in text for text in arguments), (
+        f"MCP tool arguments no longer reach spans with {_CAPTURE_VAR}=false. ADOT may have gated "
+        f"them upstream (aws-otel-python-instrumentation#904); re-check before dropping the switch."
+    )
+    assert any(_TOOL_RESULT in text for text in results)
