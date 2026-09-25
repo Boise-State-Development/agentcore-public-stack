@@ -140,6 +140,9 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     projects: {
       enabled: false,
     },
+    platformSelfService: {
+      enabled: false,
+    },
     feedbackEvalSampling: { enabled: false },
     skills: {
       enabled: false,

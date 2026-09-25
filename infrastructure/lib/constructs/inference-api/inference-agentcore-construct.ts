@@ -428,6 +428,14 @@ export class InferenceAgentCoreConstruct extends Construct {
         // bindings entirely (today's behavior).
         AGENTS_API_ENABLED: config.agents.enabled ? 'true' : 'false',
 
+        // Platform self-service (opt-in per env; default off). Read ONLY here on
+        // the invocation path (inference_api/chat/routes.py) — with it off,
+        // _build_account_tools returns [] so no account tool schema or system
+        // text reaches the model. Costs one of the 50 runtime env slots; see the
+        // ceiling warning below. app-api does not read this flag, so it is not
+        // wired there.
+        PLATFORM_SELF_SERVICE_ENABLED: config.platformSelfService.enabled ? 'true' : 'false',
+
         // ENABLE_QUOTA_ENFORCEMENT is deliberately NOT set. `quota.py` reads
         // it with a 'true' default, and this was hardcoded to 'true' — so the
         // entry only ever restated the default while consuming one of the 50
