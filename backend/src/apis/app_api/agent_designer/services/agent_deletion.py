@@ -23,6 +23,9 @@ The order is load-bearing:
    liveness check is the backstop, not the mechanism).
 4. **Delete the record** (with its versions and reports).
 5. **Clean up document vectors and objects in the background.**
+6. **Delete the icon objects** (``assistants/{id}/icons/``), best effort and after the
+   record, so a failure strands an object rather than failing the delete or leaving a
+   live agent without its icon.
 
 A project's harness never comes through here; its project purges it
 (``projects/harness_gateway.py``), which runs the same steps.
@@ -35,6 +38,7 @@ import logging
 from typing import List
 
 from apis.app_api.documents.services.document_service import list_assistant_documents
+from apis.shared.assistants.icons import delete_agent_icons
 from apis.shared.assistants.service import assert_deletable, delete_assistant
 
 logger = logging.getLogger(__name__)
@@ -88,5 +92,9 @@ async def delete_owned_agent(agent_id: str, owner_id: str) -> bool:
         task = asyncio.ensure_future(cleanup_assistant_documents(agent_id, docs))
         _background.add(task)
         task.add_done_callback(_background.discard)
-    logger.info("Deleted agent %s (%d documents queued for cleanup)", agent_id, len(docs))
+    icons = await delete_agent_icons(agent_id)
+    logger.info(
+        "Deleted agent %s (%d documents queued for cleanup, %d icon objects deleted)",
+        agent_id, len(docs), icons,
+    )
     return True

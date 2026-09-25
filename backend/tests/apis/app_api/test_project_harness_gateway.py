@@ -50,16 +50,18 @@ def calls():
             patch(f"{MODULE}.batch_soft_delete_documents", recorder("soft_delete")), \
             patch(f"{MODULE}.delete_sync_policies_for_assistant", recorder("sync_policies")), \
             patch(f"{MODULE}.delete_project_harness", recorder("delete_harness", True)) as delete, \
+            patch(f"{MODULE}.delete_agent_icons", recorder("icons", 1)) as icons, \
             patch(f"{MODULE}.cleanup_assistant_documents", new_callable=AsyncMock), \
             patch(f"{MODULE}.asyncio.ensure_future"):
-        yield SimpleNamespace(order=order, get=get, teardown=teardown, delete=delete)
+        yield SimpleNamespace(order=order, get=get, teardown=teardown, delete=delete, icons=icons)
 
 
 def test_the_knowledge_base_is_queued_before_anything_is_destroyed(calls):
     asyncio.run(AppApiHarnessGateway().delete(HARNESS_ID))
 
     calls.teardown.assert_awaited_once_with(HARNESS_ID)
-    assert calls.order == ["teardown", "list", "soft_delete", "sync_policies", "delete_harness"]
+    assert calls.order == ["teardown", "list", "soft_delete", "sync_policies", "delete_harness", "icons"]
+    calls.icons.assert_awaited_once_with(HARNESS_ID)
 
 
 def test_a_retried_purge_still_queues_the_knowledge_base(calls):
@@ -69,7 +71,8 @@ def test_a_retried_purge_still_queues_the_knowledge_base(calls):
 
     asyncio.run(AppApiHarnessGateway().delete(HARNESS_ID))
 
-    assert calls.order == ["teardown"]
+    # The icons too: the first attempt may have stopped right after the record delete.
+    assert calls.order == ["teardown", "icons"]
 
 
 def test_a_failure_to_queue_leaves_the_project_retryable(calls):
@@ -80,6 +83,7 @@ def test_a_failure_to_queue_leaves_the_project_retryable(calls):
 
     assert calls.order == []
     calls.delete.assert_not_awaited()
+    calls.icons.assert_not_awaited()
 
 
 def test_an_ordinary_agent_is_refused_before_its_knowledge_base_is_touched(calls):
@@ -89,3 +93,4 @@ def test_an_ordinary_agent_is_refused_before_its_knowledge_base_is_touched(calls
         asyncio.run(AppApiHarnessGateway().delete(HARNESS_ID))
 
     calls.teardown.assert_not_awaited()
+    calls.icons.assert_not_awaited()
