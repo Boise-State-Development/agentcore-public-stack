@@ -57,12 +57,25 @@ logger = logging.getLogger(__name__)
 # half the gate leaves that margin twice over.
 PREFILTER_RATIO = 0.5
 
-# Tools whose results are never offloaded. ``document_read`` returns the page
-# slice the model just asked for as a native document block; offloading it
-# to S3 and handing back a text preview would undo the read and cost a second
-# round trip (docs/specs/document-context-offload.md §4B). Its own
-# ``max_pages`` cap is the bound.
-OFFLOAD_EXEMPT_TOOLS = frozenset({"document_read"})
+# Tools whose results are never offloaded. Each one's bound is something other
+# than an external payload, and a preview in place of the result would defeat
+# the call.
+#
+# - ``document_read`` returns the page slice the model just asked for as a
+#   native document block; offloading it to S3 and handing back a text preview
+#   would undo the read and cost a second round trip
+#   (docs/specs/document-context-offload.md §4B). Its own ``max_pages`` cap is
+#   the bound.
+# - ``skills`` is the vended Strands ``AgentSkills`` activation tool: its result
+#   is the skill's SKILL.md body, instructions the model must follow verbatim.
+#   A preview plus a retrieval handle quietly degrades skill-following: nothing
+#   makes the model pull the rest before it acts on the head.
+#   The skill author bounds its size; no external payload does.
+#
+# ``read_skill_file`` is deliberately NOT here: reference files run up to
+# 1 MiB of arbitrary text (schemas, data, inert scripts), which is exactly
+# the payload a preview plus pattern/line-range retrieval exists for.
+OFFLOAD_EXEMPT_TOOLS = frozenset({"document_read", "skills"})
 
 
 def tool_result_offload_enabled() -> bool:
