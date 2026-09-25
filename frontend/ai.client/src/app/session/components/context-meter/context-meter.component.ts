@@ -115,7 +115,9 @@ function formatUsd(value: number): string {
     }
   `,
   template: `
-    @if (visible()) {
+      <!-- Always rendered, empty until the first response is measured: it sits
+           beside the model picker, and appearing mid-conversation would shift
+           the picker sideways. -->
       <button
         type="button"
         class="meter-enter inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 text-xs/5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--color-primary)] dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-gray-300"
@@ -124,41 +126,37 @@ function formatUsd(value: number): string {
         aria-controls="context-meter-panel"
         (click)="toggle()"
       >
-        @if (showContext()) {
-          <svg
-            [attr.width]="ringSize"
-            [attr.height]="ringSize"
-            [attr.viewBox]="ringViewBox"
-            class="-rotate-90"
-            aria-hidden="true"
-          >
-            <circle
-              [attr.cx]="ringCenter"
-              [attr.cy]="ringCenter"
-              [attr.r]="ringRadius"
-              fill="none"
-              stroke-width="2"
-              class="stroke-gray-200 dark:stroke-gray-700"
-            />
-            <circle
-              [attr.cx]="ringCenter"
-              [attr.cy]="ringCenter"
-              [attr.r]="ringRadius"
-              fill="none"
-              stroke-width="2"
-              stroke-linecap="round"
-              [attr.stroke-dasharray]="ringCircumference"
-              [style.stroke-dashoffset.px]="displayedOffset()"
-              [class]="ringStrokeClass()"
-              class="motion-safe:transition-[stroke-dashoffset] motion-safe:duration-500 motion-safe:ease-out"
-            />
-          </svg>
-          @if (showPctInline()) {
-            <span class="tabular-nums" [class]="pctTextClass()" aria-hidden="true">{{ contextLabel() }}</span>
-          }
-        } @else {
-          <!-- No window known yet (e.g. an older conversation) — cost alone. -->
-          <span class="tabular-nums" aria-hidden="true">{{ costLabel() }}</span>
+        <svg
+          [attr.width]="ringSize"
+          [attr.height]="ringSize"
+          [attr.viewBox]="ringViewBox"
+          class="-rotate-90"
+          aria-hidden="true"
+        >
+          <circle
+            [attr.cx]="ringCenter"
+            [attr.cy]="ringCenter"
+            [attr.r]="ringRadius"
+            fill="none"
+            stroke-width="2"
+            class="stroke-gray-200 dark:stroke-gray-700"
+          />
+          <circle
+            [attr.cx]="ringCenter"
+            [attr.cy]="ringCenter"
+            [attr.r]="ringRadius"
+            fill="none"
+            stroke-width="2"
+            stroke-linecap="round"
+            [attr.stroke-dasharray]="ringCircumference"
+            [style.stroke-dashoffset.px]="displayedOffset()"
+            [attr.visibility]="ringEmpty() ? 'hidden' : null"
+            [class]="ringStrokeClass()"
+            class="motion-safe:transition-[stroke-dashoffset] motion-safe:duration-500 motion-safe:ease-out"
+          />
+        </svg>
+        @if (showPctInline()) {
+          <span class="tabular-nums" [class]="pctTextClass()" aria-hidden="true">{{ contextLabel() }}</span>
         }
       </button>
 
@@ -233,12 +231,18 @@ function formatUsd(value: number): string {
               }
               Older messages are summarized as the window fills.
             </p>
+          } @else {
+            <div class="flex items-baseline justify-between gap-3">
+              <span class="font-medium text-gray-900 dark:text-white">Context window</span>
+              <span class="text-gray-500 dark:text-gray-400">Not measured yet</span>
+            </div>
+            <div class="mt-2 h-1.5 w-full rounded-full bg-gray-200 dark:bg-gray-700" aria-hidden="true"></div>
+            <p class="mt-2 text-[11px]/4 text-gray-500 dark:text-gray-400">
+              What fills the window appears here after the next response.
+            </p>
           }
 
-          <div
-            class="flex flex-col gap-1.5"
-            [class]="showContext() ? 'mt-3 border-t border-gray-200 pt-3 dark:border-gray-700' : ''"
-          >
+          <div class="mt-3 flex flex-col gap-1.5 border-t border-gray-200 pt-3 dark:border-gray-700">
             <div class="flex items-baseline justify-between gap-3">
               <span class="font-medium text-gray-900 dark:text-white">This conversation</span>
               <span class="tabular-nums text-gray-700 dark:text-gray-300">{{ costLabel() }}</span>
@@ -266,7 +270,6 @@ function formatUsd(value: number): string {
           </div>
         </div>
       }
-    }
   `,
 })
 export class ContextMeterComponent {
@@ -320,7 +323,6 @@ export class ContextMeterComponent {
       : this.chatStateService.contextBreakdown();
   });
 
-  protected readonly visible = computed(() => this.cost() > 0 || this.contextWindow() > 0);
   protected readonly showContext = computed(() => this.contextWindow() > 0);
 
   protected readonly contextPctClamped = computed(() =>
@@ -418,6 +420,10 @@ export class ContextMeterComponent {
   // transition.
   private readonly displayedOffsetSignal = signal(RING_CIRCUMFERENCE);
   protected readonly displayedOffset = this.displayedOffsetSignal.asReadonly();
+  /** A zero-length arc still paints its round cap as a dot; hide it instead. */
+  protected readonly ringEmpty = computed(
+    () => this.displayedOffset() >= RING_CIRCUMFERENCE - 0.01,
+  );
   private firstFillScheduled = false;
 
   protected readonly ringStrokeClass = computed(() => {
@@ -497,7 +503,7 @@ export class ContextMeterComponent {
 
   protected readonly triggerAriaLabel = computed(() => {
     const cost = `conversation cost ${this.costLabel()}`;
-    if (!this.showContext()) return `Cost details: ${cost}`;
+    if (!this.showContext()) return `Context window not measured yet, ${cost}. Show details`;
     return (
       `Context window ${this.contextLabel()} full ` +
       `(${this.usedLabel()} of ${this.windowLabel()} tokens), ${cost}. Show details`
@@ -510,7 +516,7 @@ export class ContextMeterComponent {
 
   private readonly hovered = signal(false);
   private readonly pinned = signal(false);
-  protected readonly open = computed(() => this.visible() && (this.hovered() || this.pinned()));
+  protected readonly open = computed(() => this.hovered() || this.pinned());
   private hoverTimer: ReturnType<typeof setTimeout> | null = null;
 
   protected onPointerEnter(event: PointerEvent): void {
