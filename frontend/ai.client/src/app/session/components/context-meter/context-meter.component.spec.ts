@@ -28,6 +28,7 @@ interface Harness {
   quotaUnlimited: () => boolean;
   quotaPctClass: () => string;
   triggerAriaLabel: () => string;
+  ringEmpty: () => boolean;
   showPctInline: () => boolean;
   open: () => boolean;
   toggle: () => void;
@@ -172,6 +173,31 @@ describe('ContextMeterComponent', () => {
       expect(build().c.triggerAriaLabel()).toBe(
         'Context window 10% full (20k of 200k tokens), conversation cost $0.4175. Show details',
       );
+    });
+  });
+
+  describe('before anything is measured', () => {
+    beforeEach(() => {
+      contextTokens = 0;
+      contextWindow = 0;
+    });
+
+    it('still renders the trigger, so it never shifts the model picker in later', () => {
+      const { c, el } = build();
+      expect(el.querySelector('button')).not.toBeNull();
+      expect(el.querySelector('svg')).not.toBeNull();
+      // No stray round-cap dot on an empty ring.
+      expect(c.ringEmpty()).toBe(true);
+    });
+
+    it('opens to an empty context section above the cost', () => {
+      const { c, el, detect } = build();
+      c.toggle();
+      detect();
+      const text = el.querySelector('#context-meter-panel')?.textContent ?? '';
+      expect(text).toContain('Not measured yet');
+      expect(text).toContain('This conversation');
+      expect(c.triggerAriaLabel()).toContain('not measured yet');
     });
   });
 
