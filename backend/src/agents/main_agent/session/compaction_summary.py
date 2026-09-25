@@ -90,12 +90,12 @@ Rules:
 
 _EXTRACTION_SYSTEM_PROMPT = """You extract the facts a long conversation between a user and an AI assistant must never lose. You are given the conversation's summary notes, oldest first.
 
-Copy each fact VERBATIM, character for character: names, IDs, codes, amounts, dates, numbers, file names and quoted wording exactly as written. Do not paraphrase a value.
+Copy each fact VERBATIM, character for character: names, IDs, codes, amounts, dates, numbers, file names and quoted wording exactly as written. Do not paraphrase a value, and do not rename what it is: a value the reader cannot tie to its label is lost.
 
 Output exactly these four headings, one bullet per fact:
 STANDING INSTRUCTIONS: every instruction, preference, rule or constraint the user gave (formatting, naming, things to always or never do).
 DECISIONS: every value or choice that was settled, with what it is for.
-IDENTIFIERS: every exact identifier, code, ID, number, amount, date or name that was stated.
+IDENTIFIERS: every exact identifier, code, ID, number, amount, date or name that was stated, each labelled with the conversation's own name for what it identifies.
 CHANGED VALUES: every value that was changed, with ONLY its current value, noting that it replaced an earlier one.
 
 If a later note changes a fact, keep only the latest version. No preamble, no commentary. If a heading has nothing, write "- none"."""
