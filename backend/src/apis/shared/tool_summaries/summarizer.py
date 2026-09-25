@@ -173,10 +173,12 @@ async def summarize_tool_batch(calls: List[Dict[str, Any]]) -> Optional[str]:
             modelId=_MODEL_ID,
             messages=[{"role": "user", "content": [{"text": _build_prompt(calls)}]}],
             system=[{"text": _SUMMARY_SYSTEM_PROMPT}],
+            # Temperature only: Claude 4.5+ rejects `temperature` and `topP`
+            # together, which would silently fail every summary if
+            # `_MODEL_ID` ever moved to one.
             inferenceConfig={
                 "temperature": 0.2,
                 "maxTokens": _MAX_OUTPUT_TOKENS,
-                "topP": 0.9,
             },
         )
         # A generation cut off at the token ceiling is a fragment, not a

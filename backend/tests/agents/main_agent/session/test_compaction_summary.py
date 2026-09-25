@@ -10,6 +10,7 @@ from agents.main_agent.session.compaction_models import CompactionConfig, Compac
 from agents.main_agent.session.compaction_summary import (
     approx_tokens,
     bound_summary,
+    compress_with_model,
     truncate_records_newest_first,
 )
 
@@ -114,6 +115,43 @@ class TestBoundSummary:
         assert cfg.summary_model_id == "us.amazon.nova-lite-v1:0"
         monkeypatch.delenv("AGENTCORE_MEMORY_COMPACTION_SUMMARY_MODEL_ENABLED")
         assert CompactionConfig.from_env().summary_model_enabled is True
+
+
+CLAUDE_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+
+def _reject_temperature_with_top_p(**kwargs):
+    """Bedrock's behavior for Claude 4.5+: both sampling params is a ValidationException."""
+    config = kwargs.get("inferenceConfig", {})
+    if "temperature" in config and "topP" in config:
+        raise RuntimeError(
+            "ValidationException: `temperature` and `top_p` cannot both be specified for this model."
+        )
+    return _model_reply("Standing instructions: cite APA. Open: intro draft.")
+
+
+class TestClaudeSummaryModel:
+    """A Claude ``summary_model_id`` must compress, not silently truncate.
+
+    Sending ``temperature`` with ``topP`` made every compression fail against
+    Claude 4.5+ and fall back to truncation, with nothing but a warning log.
+    """
+
+    @pytest.mark.asyncio
+    async def test_inference_config_never_carries_both_sampling_params(self, bedrock):
+        bedrock.return_value = _model_reply("ok")
+        await bound_summary(["r" * 900], BUDGET, model_enabled=True, model_id=CLAUDE_MODEL_ID)
+        config = bedrock.call_args.kwargs["inferenceConfig"]
+        assert not ("temperature" in config and "topP" in config)
+
+    @pytest.mark.asyncio
+    async def test_claude_model_id_returns_the_model_text(self, bedrock):
+        bedrock.side_effect = _reject_temperature_with_top_p
+        result = await compress_with_model(["r" * 900], BUDGET, model_id=CLAUDE_MODEL_ID)
+        assert result == "Standing instructions: cite APA. Open: intro draft."
+        bounded = await bound_summary(["r" * 900], BUDGET, model_enabled=True, model_id=CLAUDE_MODEL_ID)
+        assert bounded.outcome == "model"
+        assert bedrock.call_args.kwargs["modelId"] == CLAUDE_MODEL_ID
 
 
 class TestThroughUpdateAfterTurn:
