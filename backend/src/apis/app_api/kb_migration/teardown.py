@@ -41,6 +41,20 @@ from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
+#: How long one teardown step waits for AWS to stop listing the knowledge base.
+#:
+#: Longer than the saga's shared default (``KB_DELETE_POLL_TIMEOUT_SECONDS``, 480 s,
+#: sized on a 2-6 minute measurement). Every managed knowledge base torn down on dev
+#: on 2026-09-25 (five of them) was still ``DELETING`` at 480 s and gone by about
+#: 10 minutes, so each teardown took two worker runs and about 30 minutes. 780 s
+#: fits one run inside the worker's 900 s Lambda timeout with 2 minutes to spare
+#: for the lease, the data-source delete and the bookkeeping. It is this step's own
+#: value, not the shared default: the reconciler deletes several orphans in one
+#: 15-minute run and cannot afford 13 minutes each.
+#:
+#: Read at call time (see ``tombstones`` on why a bound default can't be patched).
+POLL_TIMEOUT_SECONDS = 780.0
+
 #: When a teardown that did not finish is handed back. Long enough that a
 #: knowledge base still ``DELETING`` has usually gone by then.
 RETRY_SECONDS = 15 * 60
@@ -132,6 +146,7 @@ def _delete(assistant_id: str, app_kb_id: str, record: Dict[str, Any], client) -
             client=client,
             remove_record=True,
             delete_data_source=True,
+            timeout_seconds=POLL_TIMEOUT_SECONDS,
         )
     else:
         # Nothing in AWS: a legacy record, or a provisioning that never created
@@ -190,6 +205,7 @@ __all__ = [
     "DELETE_UNSUCCESSFUL_RETRY_SECONDS",
     "METRIC_DEFERRED",
     "METRIC_TORN_DOWN",
+    "POLL_TIMEOUT_SECONDS",
     "RETRY_SECONDS",
     "clear_document_tombstones",
     "find_knowledge_base_by_name",

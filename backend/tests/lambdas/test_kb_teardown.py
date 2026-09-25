@@ -37,6 +37,10 @@ from apis.shared.kb_backend import tags as kb_tags
 from apis.shared.kb_backend import tombstones as tb
 from apis.shared.kb_backend.provisioning import _resource_name
 
+# The shipped values, read before the autouse fixture shortens them for speed.
+SHIPPED_TEARDOWN_WINDOW = td.POLL_TIMEOUT_SECONDS
+SHIPPED_SHARED_WINDOW = tb.KB_DELETE_POLL_TIMEOUT_SECONDS
+
 REGION = "us-east-1"
 TABLE = "test-kb-teardown"
 ASSISTANT_ID = "ast-a1b2c3d4-0000-4000-8000-000000000001"
@@ -109,6 +113,7 @@ def quiet(monkeypatch):
     monkeypatch.setattr("apis.shared.kb_backend.metrics.emit_count", lambda *a, **k: None)
     monkeypatch.setattr(tb, "KB_DELETE_POLL_INTERVAL_SECONDS", 0.0)
     monkeypatch.setattr(tb, "KB_DELETE_POLL_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(td, "POLL_TIMEOUT_SECONDS", 0.05)
 
 
 def _error(code: str, operation: str) -> ClientError:
@@ -387,6 +392,28 @@ class TestRunTeardown:
             Key={"PK": r.kb_pk(ASSISTANT_ID), "SK": r.kb_tombstone_sk(ASSISTANT_ID)}
         )["Item"]
         assert tombstone["awsStatus"] == tb.KB_STATUS_DELETE_UNSUCCESSFUL
+
+    def test_the_step_waits_longer_than_the_shared_default_but_fits_the_lambda(self):
+        """Managed knowledge bases outlasted the shared 480 s poll on dev, so every
+        teardown took two runs. The step's own window must still leave the worker's
+        900 s Lambda room for the lease and the bookkeeping."""
+        assert SHIPPED_TEARDOWN_WINDOW > SHIPPED_SHARED_WINDOW
+        assert SHIPPED_TEARDOWN_WINDOW <= 900 - 120
+
+    def test_the_step_passes_its_own_window_to_the_saga(self, table, monkeypatch):
+        _seed(table)
+        asyncio.run(td.queue_teardown(ASSISTANT_ID))
+        seen = {}
+
+        def fake_saga(*args, **kwargs):
+            seen.update(kwargs)
+            tb.remove_kb_record(ASSISTANT_ID, ASSISTANT_ID, True)
+
+        monkeypatch.setattr(tb, "delete_knowledge_base", fake_saga)
+        monkeypatch.setattr(td, "POLL_TIMEOUT_SECONDS", 12.5)
+        _run(FakeBedrockAgent([_summary()]))
+
+        assert seen["timeout_seconds"] == 12.5
 
     def test_the_teardown_state_is_work_eligible_and_never_terminal(self):
         assert r.TEARDOWN in r.WORK_ELIGIBLE_STATES

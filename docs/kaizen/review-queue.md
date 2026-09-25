@@ -5,6 +5,19 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 ## Open
 <!-- Newest at top. -->
 
+### [2026-09-25] Chore: clear the rows deleted agents left in production — after #1293 and #1301 reach `main`
+- **Source**: Phil-initiated, from the Shared Projects dev-validation follow-ups (PRs #1293, #1301). A read-only scan of production on 2026-09-25 found 22 `AST#` partitions with no `METADATA` row (agents deleted through `DELETE /agents/{id}`, which until #1301 deleted only the record): 522 `DOC#` rows (507 `complete`, about 30 MB of source objects still in S3 and still in the legacy vector index), 38 `SHARE#` rows (37 on one agent) and 2 `CRAWL#` rows. No orphaned `KB#` records and no orphaned sync policies, so nothing is billing in Bedrock.
+- **Surface**: ops only — `backend/scripts/cleanup_orphaned_agent_rows.py` (#1301). No code change.
+- **Effort × Impact**: L × L–M
+- **Subtracts**: yes — 522 dead document rows, their S3 objects and vector chunks, and 38 share rows that every affected recipient's "Shared with me" query reads and discards.
+- **Status**: blocked on release. ⛔ **Do not run before #1293 and #1301 are on `main` and deployed to production.** Until then, deleting from the Agents page keeps creating new orphans and would leak a managed KB. Run it from a checkout that includes #1301, because the script imports the fixed vector probe (`GET_VECTORS_MAX_KEYS`). A human runs this; production is read-only from agents.
+  1. Take an on-demand backup of the production `boisestateai-v2-rag-assistants` table. It has PITR, but take the backup anyway.
+  2. Report only: `AWS_PROFILE=<prod profile> backend/.venv/bin/python backend/scripts/cleanup_orphaned_agent_rows.py --project-prefix boisestateai-v2 --region us-west-2 --out orphan-report.json`. Expect about 22 orphans. Compare against the counts above; a large difference means something else changed, so stop and look.
+  3. Apply to one agent: `... --apply --confirm-prefix boisestateai-v2 --agent <an id from the report>`. Check that its partition is empty, nothing is left under `assistants/<id>/` in the documents bucket, and a document's vector key (`<documentId>#0`) no longer resolves.
+  4. Apply to the rest: `... --apply --confirm-prefix boisestateai-v2 --out orphan-apply.json`. Every document should report `deleted`; a `kept` document failed a cleanup phase, and re-running is safe.
+  5. Re-run the report. Expect 0 orphans, apart from any agent deleted in the last 24 hours, which the age guard skips.
+- **Done when**: the report shows 0 orphans. Record the before and after counts here and close the entry.
+
 ### [2026-09-25] A/B the V2 AgentCore Runtime in dev
 - **Source**: research/2026-09-25.md ▸ Top 5 #1 — https://aws.amazon.com/about-aws/whats-new/2026/09/new-agentcore-runtime-generally-available (GA 2026-09-18). Relates to [2026-09-04] W5 part (2).
 - **Surface**: infrastructure — `lib/constructs/inference-api/inference-agentcore-construct.ts:297` (`CfnRuntime`, no `platformVersion` today), `infrastructure/test/`
