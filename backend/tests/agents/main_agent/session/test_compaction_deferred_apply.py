@@ -251,3 +251,55 @@ class TestStateRoundTrip:
         assert CompactionConfig.from_env().deferred_apply_enabled is True
         monkeypatch.setenv("AGENTCORE_MEMORY_COMPACTION_DEFERRED_APPLY_ENABLED", "false")
         assert CompactionConfig.from_env().deferred_apply_enabled is False
+
+
+class TestTurnStartGap:
+    """Every head-of-turn decision reads the gap as it stood when the turn
+    began. ``_save_compaction_state`` stamps ``updated_at``, so a decision that
+    re-reads it after an earlier head-of-turn save sees ~0s and treats a cold
+    cache as warm (2026-09-25 prod readout: parked cuts waited across restores
+    of hours, then applied at the paid hard ceiling).
+    """
+
+    @pytest.mark.asyncio
+    async def test_restore_anchor_advance_does_not_mask_the_gap(self, make_session_manager):
+        store = {}
+        mgr = _manager(make_session_manager, store)
+        stored = make_conversation(5)
+        await mgr.update_after_turn(1200, current_messages=copy.deepcopy(stored))
+        assert store["compaction"]["pendingCheckpoint"] == 4
+        _age(store, 600)
+
+        restored = _manager(make_session_manager, store)
+        agent = _agent(copy.deepcopy(stored))
+        restored._apply_compaction(agent)
+        # The anchor advanced (a save that re-stamped updatedAt)...
+        assert store["compaction"]["truncationAnchor"] == 4
+        # ...and the parked cut still sees the 600s gap and lands for free.
+        assert restored.apply_pending_compaction(agent, prefix_key="m|default") == "cache_expired"
+        assert restored.compaction_state.checkpoint == 4
+        assert restored.compaction_state.policy["cacheGapSeconds"] >= 599
+
+    @pytest.mark.asyncio
+    async def test_document_offload_sees_the_gap_after_a_cut_applies(self, make_session_manager):
+        store = {}
+        mgr = _manager(make_session_manager, store)
+        live = make_conversation(5)
+        await mgr.update_after_turn(1200, current_messages=live)
+        _age(store, 600)
+        assert mgr.apply_pending_compaction(_agent(live), prefix_key="m|default") == "cache_expired"
+        # The apply re-stamped updatedAt; the offload gate still reads the turn's gap.
+        reason, gap = mgr._document_offload_reason()
+        assert reason == "cache_expired"
+        assert gap >= 599
+
+    @pytest.mark.asyncio
+    async def test_a_stale_restore_stamp_does_not_reach_a_later_turn(self, make_session_manager):
+        store = {}
+        mgr, live = await TestHeadOfTurnApply()._parked(make_session_manager, store)
+        # A restore captured an old stamp, but its turn ended without a head-of-turn apply.
+        mgr._restore_turn_stamp = (_now() - timedelta(seconds=600)).isoformat()
+        await mgr.update_after_turn(1300, current_messages=live)
+        # The next turn starts inside the TTL: the cut must keep waiting.
+        assert mgr.apply_pending_compaction(_agent(live), prefix_key="m|default") is None
+        assert mgr.compaction_state.pending_checkpoint == 4
