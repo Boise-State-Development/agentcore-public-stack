@@ -34,6 +34,27 @@ WHAT IT DOES
    * ``KBTOMB#`` is left to the teardown that owns it. Any other row type is reported
      and left alone.
 
+S3 PREFIX MODE (``--s3-prefixes``)
+----------------------------------
+The partition scan above can't see an agent whose partition is already empty. Until
+agent delete learned to delete ``assistants/{agentId}/icons/`` (``delete_agent_icons``),
+every deleted agent with an icon left exactly that: no rows, one or more S3 objects. This
+mode starts from S3 instead:
+
+1. Lists the ``assistants/{agentId}/`` prefixes in the documents bucket.
+2. Drops any whose agent has a ``METADATA`` row (alive) or any other ``AST#`` row (a
+   partition orphan, which the default mode cleans, S3 prefix included).
+3. Skips a prefix whose newest object is younger than ``--min-age-hours``.
+4. Reports the rest: object counts by folder (``icons``, ``documents``, other) and bytes.
+5. With ``--apply``, re-checks that the partition is still empty with a consistent read
+   and deletes the objects. An object whose key a row anywhere in the table still names
+   (``iconKey``/``s3Key``, e.g. a publisher profile or an admin-set ``iconKey`` pointed
+   at another agent's icon) is reported and kept.
+
+The bucket is versioned, so a delete adds a delete marker and the bytes stay as a
+noncurrent version until a lifecycle rule expires them; this matches every other delete
+the app makes in that bucket.
+
 SAFETY
 ------
 * **Read-only by default.** Nothing is written without ``--apply``, and ``--apply``
@@ -48,6 +69,8 @@ Run (a human, not CI; production is read-only from agents)::
         --project-prefix dev-boisestateai-v2 --region us-west-2                  # report only
     ... --apply --confirm-prefix dev-boisestateai-v2 --agent ast-0123456789ab   # one agent
     ... --apply --confirm-prefix dev-boisestateai-v2                              # all orphans
+    ... --s3-prefixes                                                 # S3 prefix mode, report only
+    ... --s3-prefixes --apply --confirm-prefix dev-boisestateai-v2               # S3 prefix mode
 
 Resource names are derived from the prefix and the caller's account, the way CDK names
 them (``{prefix}-rag-assistants``, ``{prefix}-rag-documents-{account}``,
@@ -136,6 +159,84 @@ def find_orphans(
     return ready, young
 
 
+@dataclass
+class OrphanPrefix:
+    """An ``assistants/{agentId}/`` S3 prefix whose agent has no row left at all."""
+
+    agent_id: str
+    objects: List[Dict[str, Any]]
+    referenced: List[str] = field(default_factory=list)
+    result: Dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def newest(self) -> Optional[datetime]:
+        stamps = [o["LastModified"] for o in self.objects if o.get("LastModified")]
+        return max(stamps) if stamps else None
+
+    def deletable(self) -> List[Dict[str, Any]]:
+        keep = set(self.referenced)
+        return [o for o in self.objects if o["Key"] not in keep]
+
+    def summary(self) -> Dict[str, Any]:
+        newest = self.newest
+        return {
+            "agentId": self.agent_id,
+            "newest": newest.isoformat() if newest else "",
+            "objects": dict(sorted(collections.Counter(prefix_folder(o["Key"]) for o in self.objects).items())),
+            "bytes": sum(int(o.get("Size") or 0) for o in self.objects),
+            **({"referencedKept": len(self.referenced)} if self.referenced else {}),
+            **({"result": self.result} if self.result else {}),
+        }
+
+
+def prefix_folder(key: str) -> str:
+    """``icons`` / ``documents`` / ``other`` for a key under ``assistants/{agentId}/``."""
+    parts = key.split("/", 3)
+    folder = parts[2] if len(parts) > 3 else ""
+    return folder if folder in ("icons", "documents") else "other"
+
+
+def table_index(items: Sequence[Dict[str, Any]]) -> tuple[set, set, set]:
+    """(agent ids with a METADATA row, agent ids with any row, every S3 key a row names)."""
+    live, any_rows, referenced = set(), set(), set()
+    for item in items:
+        for attr in ("iconKey", "s3Key"):
+            if isinstance(item.get(attr), str):
+                referenced.add(item[attr])
+        pk = str(item.get("PK", ""))
+        if pk.startswith("AST#"):
+            agent_id = pk.split("#", 1)[1]
+            any_rows.add(agent_id)
+            if item.get("SK") == "METADATA":
+                live.add(agent_id)
+    return live, any_rows, referenced
+
+
+def classify_prefixes(
+    prefix_ids: Sequence[str], items: Sequence[Dict[str, Any]]
+) -> Dict[str, List[str]]:
+    """Sort agent prefixes into ``live``, ``partitionOrphan`` (the default mode's) and ``empty``."""
+    live, any_rows, _ = table_index(items)
+    groups: Dict[str, List[str]] = {"live": [], "partitionOrphan": [], "empty": []}
+    for agent_id in sorted(prefix_ids):
+        key = "live" if agent_id in live else "partitionOrphan" if agent_id in any_rows else "empty"
+        groups[key].append(agent_id)
+    return groups
+
+
+def split_by_age(
+    prefixes: Sequence[OrphanPrefix], now: datetime, min_age_hours: float
+) -> tuple[List[OrphanPrefix], List[OrphanPrefix]]:
+    """(old enough to act on, too young). An object written in the last few minutes may
+    belong to an agent whose create is still in flight."""
+    cutoff = now - timedelta(hours=min_age_hours)
+    ready, young = [], []
+    for prefix in prefixes:
+        newest = prefix.newest
+        (young if newest is not None and newest > cutoff else ready).append(prefix)
+    return ready, young
+
+
 # ── AWS ──────────────────────────────────────────────────────────────────────
 def scan_table(table) -> List[Dict[str, Any]]:
     kwargs: Dict[str, Any] = {}
@@ -153,6 +254,43 @@ def s3_prefix_objects(s3, bucket: str, agent_id: str) -> List[Dict[str, Any]]:
     for page in s3.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=f"assistants/{agent_id}/"):
         objects.extend(page.get("Contents", []))
     return objects
+
+
+def s3_agent_prefixes(s3, bucket: str) -> List[str]:
+    """Every agent id with an ``assistants/{agentId}/`` prefix in the bucket."""
+    ids: List[str] = []
+    for page in s3.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix="assistants/", Delimiter="/"):
+        for common in page.get("CommonPrefixes", []):
+            agent_id = common["Prefix"][len("assistants/"):].rstrip("/")
+            if agent_id:
+                ids.append(agent_id)
+    return ids
+
+
+def partition_empty(table, agent_id: str) -> bool:
+    from boto3.dynamodb.conditions import Key
+
+    response = table.query(
+        KeyConditionExpression=Key("PK").eq(f"AST#{agent_id}"), Limit=1, ConsistentRead=True
+    )
+    return not response.get("Items")
+
+
+def clean_prefix(prefix: OrphanPrefix, table, s3, bucket: str) -> Dict[str, Any]:
+    """Delete one orphan prefix's objects, keeping any a row still names."""
+    if not partition_empty(table, prefix.agent_id):
+        return {"skipped": "the partition has rows now"}
+    objects = prefix.deletable()
+    deleted, errors = 0, []
+    for start in range(0, len(objects), 1000):
+        chunk = objects[start:start + 1000]
+        response = s3.delete_objects(
+            Bucket=bucket, Delete={"Objects": [{"Key": o["Key"]} for o in chunk], "Quiet": True}
+        )
+        failed = response.get("Errors", [])
+        errors.extend(f"{e.get('Key')}: {e.get('Code')}" for e in failed)
+        deleted += len(chunk) - len(failed)
+    return {"s3ObjectsDeleted": deleted, **({"errors": errors} if errors else {})}
 
 
 def metadata_exists(table, agent_id: str) -> bool:
@@ -241,6 +379,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     p.add_argument("--agent", action="append", default=[], help="Only these agent ids (repeatable)")
     p.add_argument("--min-age-hours", type=float, default=24.0,
                    help="Skip orphans whose newest row is younger than this")
+    p.add_argument("--s3-prefixes", action="store_true",
+                   help="Find assistants/{id}/ S3 prefixes with no rows at all (see S3 PREFIX MODE)")
     p.add_argument("--apply", action="store_true", help="Clean up; without it the run only reports")
     p.add_argument("--confirm-prefix", default=None, help="Required with --apply; must equal --project-prefix")
     p.add_argument("--table", default=None, help="Override {prefix}-rag-assistants")
@@ -284,6 +424,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     s3 = boto3.client("s3", region_name=args.region)
     bucket = names["S3_ASSISTANTS_DOCUMENTS_BUCKET_NAME"]
 
+    if args.s3_prefixes:
+        return run_s3_prefixes(args, names, table, s3, bucket)
+
     ready, young = find_orphans(scan_table(table), datetime.now(timezone.utc), args.min_age_hours)
     if args.agent:
         wanted = set(args.agent)
@@ -314,6 +457,53 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "generatedAt": datetime.now(timezone.utc).isoformat(),
             "orphans": [o.summary() for o in ready],
             "tooRecent": [{"agentId": o.agent_id, "newest": o.newest} for o in young],
+        }
+        with open(args.out, "w") as fh:
+            json.dump(report, fh, indent=2, default=str)
+    return 0
+
+
+def run_s3_prefixes(args: argparse.Namespace, names: Dict[str, str], table, s3, bucket: str) -> int:
+    prefix_ids = s3_agent_prefixes(s3, bucket)
+    if args.agent:
+        wanted = set(args.agent)
+        prefix_ids = [i for i in prefix_ids if i in wanted]
+    items = scan_table(table)
+    groups = classify_prefixes(prefix_ids, items)
+    _, _, referenced = table_index(items)
+
+    prefixes = []
+    for agent_id in groups["empty"]:
+        objects = s3_prefix_objects(s3, bucket, agent_id)
+        prefixes.append(OrphanPrefix(agent_id, objects, referenced=sorted(
+            o["Key"] for o in objects if o["Key"] in referenced)))
+    ready, young = split_by_age(prefixes, datetime.now(timezone.utc), args.min_age_hours)
+
+    folders = collections.Counter()
+    for prefix in ready:
+        folders.update(prefix_folder(o["Key"]) for o in prefix.objects)
+    print(f"{'APPLY' if args.apply else 'REPORT ONLY'}: s3://{bucket}/assistants/, "
+          f"{len(prefix_ids)} agent prefixes: {len(groups['live'])} live, "
+          f"{len(groups['partitionOrphan'])} partition orphans (the default mode's), "
+          f"{len(ready)} with no rows to clean ({sum(folders.values())} objects: "
+          f"{dict(sorted(folders.items()))}, {sum(int(o.get('Size') or 0) for p in ready for o in p.objects)} bytes), "
+          f"{len(young)} too recent to touch")
+    for prefix in ready:
+        if args.apply:
+            prefix.result = clean_prefix(prefix, table, s3, bucket)
+        print(json.dumps(prefix.summary(), default=str), flush=True)
+    for prefix in young:
+        print(json.dumps({**prefix.summary(), "skipped": "too recent"}, default=str))
+
+    if args.out:
+        report = {
+            "bucket": bucket,
+            "table": names["DYNAMODB_ASSISTANTS_TABLE_NAME"],
+            "applied": args.apply,
+            "generatedAt": datetime.now(timezone.utc).isoformat(),
+            "prefixes": {k: len(v) for k, v in groups.items()},
+            "orphanPrefixes": [p.summary() for p in ready],
+            "tooRecent": [p.summary() for p in young],
         }
         with open(args.out, "w") as fh:
             json.dump(report, fh, indent=2, default=str)

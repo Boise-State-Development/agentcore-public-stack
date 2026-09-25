@@ -230,6 +230,48 @@ class TestAssistantDeleteEndpoint:
         with patch(f"{TEARDOWN}.queue_teardown", new_callable=AsyncMock, return_value=True) as queue:
             yield queue
 
+    @pytest.fixture(autouse=True)
+    def _icons(self):
+        """Stub deleting the icon objects (S3). What it deletes is covered in
+        ``tests/shared/test_agent_icons.py``; here only whether and when it is called."""
+        with patch(f"{DELETION}.delete_agent_icons", new_callable=AsyncMock, return_value=1) as icons:
+            yield icons
+
+    def test_the_icons_are_deleted_after_the_record(self, app, _icons):
+        """They used to stay in S3 forever, with no row left to find them by."""
+        calls = []
+        _icons.side_effect = lambda *_: calls.append("icons") or 1
+
+        async def _delete(**_):
+            calls.append("record")
+            return True
+
+        with patch(
+            f"{DELETION}.list_assistant_documents", new_callable=AsyncMock, return_value=([], None)
+        ), patch(f"{DELETION}.delete_assistant", side_effect=_delete):
+            resp = TestClient(app).delete(f"/assistants/{ASSISTANT_ID}")
+
+        assert resp.status_code == 204
+        _icons.assert_awaited_once_with(ASSISTANT_ID)
+        assert calls == ["record", "icons"]
+
+    def test_no_icons_are_deleted_on_the_way_to_a_404(self, app, _deletable, _icons):
+        _deletable.return_value = None
+
+        resp = TestClient(app).delete(f"/assistants/{ASSISTANT_ID}")
+
+        assert resp.status_code == 404
+        _icons.assert_not_awaited()
+
+    def test_no_icons_are_deleted_when_the_record_delete_finds_nothing(self, app, _icons):
+        with patch(
+            f"{DELETION}.list_assistant_documents", new_callable=AsyncMock, return_value=([], None)
+        ), patch(f"{DELETION}.delete_assistant", new_callable=AsyncMock, return_value=False):
+            resp = TestClient(app).delete(f"/assistants/{ASSISTANT_ID}")
+
+        assert resp.status_code == 404
+        _icons.assert_not_awaited()
+
     @pytest.fixture
     def app(self):
         _app = FastAPI()

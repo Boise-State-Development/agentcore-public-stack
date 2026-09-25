@@ -149,3 +149,81 @@ class TestCleanOrphan:
 def test_apply_requires_the_prefix_confirmation(capsys):
     assert cleanup.main(["--project-prefix", "dev-x", "--region", REGION, "--apply"]) == 2
     assert cleanup.main(["--project-prefix", "dev-x", "--region", REGION, "--apply", "--confirm-prefix", "prod"]) == 2
+
+
+# ── --s3-prefixes: prefixes whose agent left no row at all ───────────────────────────
+GONE = "ast-0000000000a1"
+
+
+class TestS3PrefixMode:
+    def test_prefixes_are_sorted_by_what_the_table_still_has(self):
+        items = [
+            _row("ast-live00000001", "METADATA"),
+            _row("ast-rows00000001", "SHARE#someone"),
+        ]
+        groups = cleanup.classify_prefixes(["ast-live00000001", "ast-rows00000001", GONE], items)
+        assert groups == {"live": ["ast-live00000001"], "partitionOrphan": ["ast-rows00000001"], "empty": [GONE]}
+
+    def test_a_prefix_with_a_recent_object_is_too_young(self):
+        old = cleanup.OrphanPrefix(GONE, [{"Key": f"assistants/{GONE}/icons/a.png",
+                                           "LastModified": datetime(2026, 9, 1, tzinfo=timezone.utc)}])
+        young = cleanup.OrphanPrefix("ast-0000000000a2", [{"Key": "assistants/ast-0000000000a2/icons/a.png",
+                                                           "LastModified": datetime(2026, 9, 25, 11, tzinfo=timezone.utc)}])
+        ready, too_young = cleanup.split_by_age([old, young], NOW, min_age_hours=24)
+        assert ready == [old] and too_young == [young]
+
+    def test_the_summary_counts_objects_by_folder(self):
+        prefix = cleanup.OrphanPrefix(GONE, [
+            {"Key": f"assistants/{GONE}/icons/a.png", "Size": 3},
+            {"Key": f"assistants/{GONE}/icons/b.jpg", "Size": 4},
+            {"Key": f"assistants/{GONE}/documents/DOC-1/plan.pdf", "Size": 5},
+            {"Key": f"assistants/{GONE}/stray.txt", "Size": 1},
+        ])
+        summary = prefix.summary()
+        assert summary["objects"] == {"documents": 1, "icons": 2, "other": 1}
+        assert summary["bytes"] == 13
+
+    def test_lists_agent_prefixes_and_cleans_one_keeping_referenced_keys(self, aws):
+        table, s3 = aws
+        referenced = f"assistants/{GONE}/icons/shared.png"
+        # A publisher profile hand-pointed at the deleted agent's icon.
+        table.put_item(Item={"PK": "AGENT_PUBLISHERS", "SK": "PUB#dept", "iconKey": referenced})
+        table.put_item(Item=_row("ast-live00000001", "METADATA"))
+        for key in (f"assistants/{GONE}/icons/a.png", f"assistants/{GONE}/icons/b.png", referenced,
+                    "assistants/ast-live00000001/icons/c.png"):
+            s3.put_object(Bucket=BUCKET, Key=key, Body=b"x")
+
+        assert sorted(cleanup.s3_agent_prefixes(s3, BUCKET)) == [GONE, "ast-live00000001"]
+        _, _, names = cleanup.table_index(cleanup.scan_table(table))
+        objects = cleanup.s3_prefix_objects(s3, BUCKET, GONE)
+        prefix = cleanup.OrphanPrefix(GONE, objects, referenced=[o["Key"] for o in objects if o["Key"] in names])
+
+        assert cleanup.clean_prefix(prefix, table, s3, BUCKET) == {"s3ObjectsDeleted": 2}
+        left = {o["Key"] for o in s3.list_objects_v2(Bucket=BUCKET).get("Contents", [])}
+        assert left == {referenced, "assistants/ast-live00000001/icons/c.png"}
+
+    def test_a_prefix_whose_partition_has_rows_again_is_not_touched(self, aws):
+        table, s3 = aws
+        s3.put_object(Bucket=BUCKET, Key=f"assistants/{GONE}/icons/a.png", Body=b"x")
+        objects = cleanup.s3_prefix_objects(s3, BUCKET, GONE)
+        table.put_item(Item=_row(GONE, "METADATA"))
+
+        result = cleanup.clean_prefix(cleanup.OrphanPrefix(GONE, objects), table, s3, BUCKET)
+
+        assert result == {"skipped": "the partition has rows now"}
+        assert s3.list_objects_v2(Bucket=BUCKET, Prefix=f"assistants/{GONE}/")["KeyCount"] == 1
+
+    def test_the_mode_reports_without_deleting_unless_applied(self, aws, capsys, monkeypatch):
+        table, s3 = aws
+        s3.put_object(Bucket=BUCKET, Key=f"assistants/{GONE}/icons/a.png", Body=b"x")
+        monkeypatch.setattr(cleanup, "configure", lambda args, account: {
+            "DYNAMODB_ASSISTANTS_TABLE_NAME": TABLE, "S3_ASSISTANTS_DOCUMENTS_BUCKET_NAME": BUCKET})
+        base = ["--project-prefix", "dev-x", "--region", REGION, "--s3-prefixes", "--min-age-hours", "0"]
+
+        assert cleanup.main(base) == 0
+        assert "REPORT ONLY" in capsys.readouterr().out
+        assert s3.list_objects_v2(Bucket=BUCKET, Prefix=f"assistants/{GONE}/")["KeyCount"] == 1
+
+        assert cleanup.main(base + ["--apply", "--confirm-prefix", "dev-x"]) == 0
+        assert '"s3ObjectsDeleted": 1' in capsys.readouterr().out
+        assert s3.list_objects_v2(Bucket=BUCKET, Prefix=f"assistants/{GONE}/")["KeyCount"] == 0

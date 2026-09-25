@@ -2,9 +2,9 @@
 
 Purging a project must remove its harness the way ``DELETE /assistants`` removes
 an agent — managed knowledge base queued for teardown, documents soft-deleted,
-sync policies removed, vectors and objects cleaned up in the background — or the
-project's knowledge outlives it. That cleanup lives in app-api, which
-``apis.shared.projects`` may not import, so it is injected here.
+sync policies removed, vectors and objects cleaned up in the background, icon
+objects deleted — or the project's knowledge outlives it. That cleanup lives in
+app-api, which ``apis.shared.projects`` may not import, so it is injected here.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ from apis.app_api.documents.services.document_service import (
     list_assistant_documents,
 )
 from apis.app_api.kb_migration.teardown import queue_teardown
+from apis.shared.assistants.icons import delete_agent_icons
 from apis.shared.assistants.service import (
     _get_assistant_cloud_without_ownership_check,
     delete_project_harness,
@@ -48,7 +49,10 @@ class AppApiHarnessGateway(AssistantsHarnessGateway):
         # KB# record still there, and this is the only thing that will ever queue it.
         await queue_teardown(agent_id)
         if harness is None:
-            return  # already gone: a retried purge
+            # Already gone: a retried purge. Icons too, since the first attempt may have
+            # stopped right after the record delete; with no record, nothing shows them.
+            await delete_agent_icons(agent_id)
+            return
 
         # Same order as DELETE /assistants: documents and schedules first, record last.
         docs: List = []
@@ -69,4 +73,8 @@ class AppApiHarnessGateway(AssistantsHarnessGateway):
 
         if docs:
             asyncio.ensure_future(cleanup_assistant_documents(agent_id, docs))
-        logger.info("Deleted project harness %s (%d documents queued for cleanup)", agent_id, len(docs))
+        icons = await delete_agent_icons(agent_id)
+        logger.info(
+            "Deleted project harness %s (%d documents queued for cleanup, %d icon objects deleted)",
+            agent_id, len(docs), icons,
+        )

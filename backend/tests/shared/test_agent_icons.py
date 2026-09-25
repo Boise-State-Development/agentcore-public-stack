@@ -30,6 +30,8 @@ from apis.shared.assistants.icons import (
     IconError,
     build_icon_key,
     content_digest,
+    delete_agent_icons,
+    icon_prefix,
     icon_url,
     icon_version,
     normalize_icon,
@@ -404,3 +406,74 @@ async def test_an_agent_with_no_icon_is_a_404(aws):
         await read_icon("ast-1", AUTHOR)
 
     assert excinfo.value.status_code == 404
+
+
+# ── agent delete: the whole icons/ folder goes ───────────────────────────────────────
+@pytest.mark.asyncio
+async def test_deleting_an_agent_deletes_every_icon_it_stored_and_nothing_else(aws):
+    """Found on dev: a deleted agent's icon stayed in S3 with no row left to find it by.
+    A stray from a failed upload (put, then the record write failed) goes too."""
+    _seed(aws["table"])
+    uploaded = await upload_icon("ast-1", _png(), AUTHOR)
+    s3 = aws["s3"]
+    keep = [
+        "assistants/ast-10/icons/aaaaaaaaaaaaaaaa.png",  # a sibling whose id starts the same
+        "assistants/ast-1/documents/DOC-1/plan.pdf",  # documents have their own cleanup
+    ]
+    for key in [build_icon_key("ast-1", "bbbbbbbbbbbbbbbb", "jpg"), *keep]:
+        s3.put_object(Bucket=BUCKET, Key=key, Body=b"x")
+
+    assert await delete_agent_icons("ast-1") == 2
+
+    left = {o["Key"] for o in s3.list_objects_v2(Bucket=BUCKET).get("Contents", [])}
+    assert left == set(keep)
+    assert uploaded.icon_key not in left
+
+
+@pytest.mark.asyncio
+async def test_an_agent_with_no_icons_deletes_nothing(aws):
+    assert await delete_agent_icons("ast-1") == 0
+
+
+@pytest.mark.asyncio
+async def test_a_failure_to_delete_icons_never_fails_the_agent_delete(aws, monkeypatch):
+    import apis.shared.assistants.icons as icons_module
+
+    def boom(_agent_id):
+        raise RuntimeError("s3 unavailable")
+
+    monkeypatch.setattr(icons_module.get_icon_store(), "delete_all", boom)
+
+    assert await delete_agent_icons("ast-1") == 0
+
+
+def test_a_delete_error_from_s3_is_raised_by_the_store(aws):
+    """``delete_objects`` reports per-key failures in a 200; they must not read as success."""
+    s3 = aws["s3"]
+    s3.put_object(Bucket=BUCKET, Key="assistants/ast-1/icons/x.png", Body=b"x")
+
+    class PartialFailure:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+        def delete_objects(self, **_kwargs):
+            return {"Errors": [{"Key": "assistants/ast-1/icons/x.png", "Code": "AccessDenied"}]}
+
+    store = AgentIconStore(bucket_name=BUCKET, s3_client=PartialFailure(s3))
+    with pytest.raises(Exception, match="AccessDenied"):
+        store.delete_all("ast-1")
+
+
+@pytest.mark.parametrize("agent_id", ["", "ast-1/..", "ast-1/icons"])
+def test_the_icon_prefix_refuses_anything_but_one_agent_id(agent_id):
+    with pytest.raises(ValueError):
+        icon_prefix(agent_id)
+
+
+def test_a_prefix_delete_refuses_an_unterminated_prefix():
+    """``assistants/ast-1`` would also match ``assistants/ast-10``."""
+    with pytest.raises(ValueError):
+        AgentIconStore(bucket_name=BUCKET, s3_client=object()).delete_prefix("assistants/ast-1")
