@@ -28,7 +28,8 @@ interface Harness {
   quotaUnlimited: () => boolean;
   quotaPctClass: () => string;
   triggerAriaLabel: () => string;
-  showPctInline: () => boolean;
+  ringEmpty: () => boolean;
+  ringStrokeClass: () => string;
   open: () => boolean;
   toggle: () => void;
   close: () => void;
@@ -162,16 +163,50 @@ describe('ContextMeterComponent', () => {
   });
 
   describe('ring', () => {
-    it('keeps the percentage off the line until the window is filling up', () => {
-      expect(build().c.showPctInline()).toBe(false);
-      contextTokens = 150_000;
-      expect(build().c.showPctInline()).toBe(true);
+    it('signals urgency by colour alone, never a percentage on the line', () => {
+      const calm = build();
+      expect(calm.c.ringStrokeClass()).toContain('success');
+      const calmText = calm.el.querySelector('button')?.textContent?.trim();
+
+      contextTokens = 150_000; // 75%
+      const filling = build();
+      expect(filling.c.ringStrokeClass()).toContain('warning');
+      expect(filling.el.querySelector('button')?.textContent?.trim()).toBe(calmText);
+      expect(filling.el.querySelector('button')?.textContent?.trim()).toBe('');
+
+      contextTokens = 190_000; // 95%
+      expect(build().c.ringStrokeClass()).toContain('danger');
     });
 
     it('summarizes context and cost for assistive tech', () => {
       expect(build().c.triggerAriaLabel()).toBe(
         'Context window 10% full (20k of 200k tokens), conversation cost $0.4175. Show details',
       );
+    });
+  });
+
+  describe('before anything is measured', () => {
+    beforeEach(() => {
+      contextTokens = 0;
+      contextWindow = 0;
+    });
+
+    it('still renders the trigger, so it never shifts the model picker in later', () => {
+      const { c, el } = build();
+      expect(el.querySelector('button')).not.toBeNull();
+      expect(el.querySelector('svg')).not.toBeNull();
+      // No stray round-cap dot on an empty ring.
+      expect(c.ringEmpty()).toBe(true);
+    });
+
+    it('opens to an empty context section above the cost', () => {
+      const { c, el, detect } = build();
+      c.toggle();
+      detect();
+      const text = el.querySelector('#context-meter-panel')?.textContent ?? '';
+      expect(text).toContain('Not measured yet');
+      expect(text).toContain('This conversation');
+      expect(c.triggerAriaLabel()).toContain('not measured yet');
     });
   });
 
