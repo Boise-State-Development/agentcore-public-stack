@@ -161,11 +161,25 @@ class TestAgentWrites:
             resp = TestClient(app).put("/agents/ast-001", json={"name": "New"})
         assert resp.status_code == 403
 
-    def test_delete_204(self, app, make_user, _flag_on):
+    def test_delete_runs_the_full_agent_deletion(self, app, make_user, _flag_on):
+        """The Agents page deletes through here. It used to delete only the record,
+        leaving documents, sync policies and the managed knowledge base behind."""
         mock_auth_user(app, make_user())
-        with patch(f"{ROUTES_MODULE}.delete_assistant", new_callable=AsyncMock, return_value=True):
+        with patch(f"{ROUTES_MODULE}.delete_owned_agent", new_callable=AsyncMock, return_value=True) as delete:
             resp = TestClient(app).delete("/agents/ast-001")
         assert resp.status_code == 204
+        delete.assert_awaited_once()
+        assert delete.await_args.args[0] == "ast-001"
+
+    def test_delete_404_and_409(self, app, make_user, _flag_on):
+        from apis.shared.assistants.service import AssistantListedError
+
+        mock_auth_user(app, make_user())
+        with patch(f"{ROUTES_MODULE}.delete_owned_agent", new_callable=AsyncMock, return_value=False):
+            assert TestClient(app).delete("/agents/ast-001").status_code == 404
+        with patch(f"{ROUTES_MODULE}.delete_owned_agent", new_callable=AsyncMock,
+                   side_effect=AssistantListedError("listed")):
+            assert TestClient(app).delete("/agents/ast-001").status_code == 409
 
 
 # --------------------------------------------------------------------------- shares

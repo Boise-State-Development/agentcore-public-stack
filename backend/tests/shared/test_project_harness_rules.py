@@ -16,6 +16,7 @@ import asyncio
 
 import boto3
 import pytest
+from boto3.dynamodb.conditions import Key
 
 from apis.shared.assistants.service import (
     ProjectHarnessError,
@@ -186,6 +187,20 @@ def test_harness_rename_refuses_an_ordinary_agent(assistants_table, projects_tab
     with pytest.raises(ValueError, match="not a project harness"):
         asyncio.run(rename_project_harness(plain.assistant_id, name="Hijacked"))
     assert asyncio.run(rename_project_harness("ast-gone", name="Nobody")) is False
+
+
+def test_deleting_an_agent_removes_its_share_rows(assistants_table, projects_table):
+    """Share rows carry the SharedWithIndex key and used to outlive the Agent forever."""
+    import os
+
+    plain = ordinary_agent()
+    assert asyncio.run(share_assistant(plain.assistant_id, OWNER.user_id, [EDITOR.email, VIEWER.email])) is True
+
+    assert asyncio.run(delete_assistant(plain.assistant_id, OWNER.user_id)) is True
+
+    table = boto3.resource("dynamodb").Table(os.environ["DYNAMODB_ASSISTANTS_TABLE_NAME"])
+    left = table.query(KeyConditionExpression=Key("PK").eq(f"AST#{plain.assistant_id}"))["Items"]
+    assert left == []
 
 
 def test_agent_level_sharing_refuses_the_harness(project):
