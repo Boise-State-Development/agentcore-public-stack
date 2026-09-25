@@ -7,6 +7,7 @@ import { StreamParserService } from '../chat/stream-parser.service';
 import { SessionService } from './session.service';
 import { FileUploadService } from '../../../services/file-upload';
 import { OAuthConsentService } from '../../../services/oauth-consent/oauth-consent.service';
+import { ChatStateService } from '../chat/chat-state.service';
 import { signal } from '@angular/core';
 
 describe('MessageMapService', () => {
@@ -82,6 +83,39 @@ describe('MessageMapService', () => {
     expect(message.content).toHaveLength(2);
     expect(message.content[0]).toEqual({ type: 'fileAttachment', fileAttachment: fileAttachments[0] });
     expect(message.content[1]).toEqual({ type: 'text', text: 'Check this file' });
+  });
+
+  describe('context breakdown hydration', () => {
+    const breakdown = {
+      total: 1200,
+      partitions: [
+        { key: 'system', label: 'System instructions', tokens: 400 },
+        { key: 'messages', label: 'Messages', tokens: 800 },
+      ],
+    };
+
+    it('seeds the meter from the last assistant message', async () => {
+      mockSessionService.getMessages.mockResolvedValue({
+        messages: [
+          { id: 'm0', role: 'user', content: [{ type: 'text', text: 'hi' }] },
+          { id: 'm1', role: 'assistant', content: [{ type: 'text', text: 'yo' }], metadata: { contextBreakdown: breakdown } },
+        ],
+      });
+      await service.loadMessagesForSession('cb-1');
+      expect(TestBed.inject(ChatStateService).contextBreakdownFor('cb-1')).toEqual(breakdown);
+    });
+
+    it('ignores an older turn when the last one has no breakdown', async () => {
+      mockSessionService.getMessages.mockResolvedValue({
+        messages: [
+          { id: 'm1', role: 'assistant', content: [], metadata: { contextBreakdown: breakdown } },
+          { id: 'm2', role: 'user', content: [{ type: 'text', text: 'again' }] },
+          { id: 'm3', role: 'assistant', content: [], metadata: {} },
+        ],
+      });
+      await service.loadMessagesForSession('cb-2');
+      expect(TestBed.inject(ChatStateService).contextBreakdownFor('cb-2')).toBeNull();
+    });
   });
 
   it('should load messages for session', async () => {

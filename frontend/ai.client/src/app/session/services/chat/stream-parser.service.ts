@@ -1107,7 +1107,12 @@ export class StreamParserService {
         usage.inputTokens +
         (usage.cacheReadInputTokens ?? 0) +
         (usage.cacheWriteInputTokens ?? 0);
-      this.chatStateService.setContext(state.sessionId, totalContext, data.contextWindow);
+      this.chatStateService.setContext(
+        state.sessionId,
+        totalContext,
+        data.contextWindow,
+        data.contextBreakdown ?? null,
+      );
     }
   }
 
