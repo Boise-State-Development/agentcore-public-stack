@@ -5,6 +5,52 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 ## Open
 <!-- Newest at top. -->
 
+### [2026-09-25] Finish the runtime log retention work: production orphans, the deploy-time race, and the development account's 10-year default
+- **Source**: Phil-initiated, following #1332 (the daily `RuntimeLogRetentionSweepConstruct`), which was merged and dev-validated on 2026-09-25. Content-capture fixes (#1310, #1317) stop new conversation text from reaching the runtime's OTEL logs, but text logged before them is still stored. The audit behind #1332 counted groups and bytes only, never event content:
+  - **Production**: 10 orphaned runtime log groups, about 1.5 GB, all with **no retention**. They last received events between February and June 2026. 2 share the current runtime name; 8 use older names. There are also 4 legacy vended groups (`/aws/vendedlogs/bedrock-agentcore/{identity,runtime}/…`) with no retention.
+  - **Development account**: 272 orphans were at 3653 days. All are now at 30.
+- **Surface**: ops (production one-off), plus infrastructure:
+  - `lib/constructs/inference-api/inference-agentcore-construct.ts` (`RuntimeLogRetention`)
+  - `.kiro/steering/observability.md` §9
+- **Effort × Impact**: L × M. This is a privacy item before it is a cost item: the orphans hold prompt and reply text from before the content-capture fixes.
+- **Subtracts**: yes. About 1.5 GB of never-expiring conversation logs in production, and one false claim in both code and docs.
+- **Dev validation of #1332 (2026-09-25, after the automatic `platform.yml` deploy of the merge commit)**:
+  - Deployed shape: `<prefix>-runtime-log-retention-sweep` (python3.13, arm64, `RETENTION_IN_DAYS=30`) and a `rate(1 day)` rule that is `ENABLED`.
+  - The role's inline policy holds exactly two statements: `logs:DescribeLogGroups` on `log-group:*`, and `logs:PutRetentionPolicy` on `…/runtimes/<runtime-name>-*`. There is no delete action.
+  - One orphan was set back to 3653 days to mimic the landing zone.
+    - The dry-run invoke returned `matched=4 updated=1 failed=0` and changed nothing.
+    - The real invoke returned the same counts, and all 4 groups ended at 30 days. The live group was never touched.
+  - ⚠️ `iam simulate-principal-policy` is **not usable** for these ARNs. It returned `implicitDeny` even for `DescribeLogGroups`, which the real function had just called successfully. The deployed policy text is the evidence for the scope, not the simulator.
+- **Status**: open. Four parts, independent of each other.
+  1. **Production one-off. A human runs it; it does not wait for a release.** The commands are in the #1332 PR body under "Production: commands for an operator to run".
+     - Record the groups with no retention into two files. Expect 10 runtime groups and 4 vended groups.
+     - Set 30 days on them. Every command filters on `retentionInDays==null`, so it cannot reach the live group or any group that already has a policy.
+     - Verify that both null counts are 0.
+     - Deleting the emptied groups is optional and irreversible. It gains nothing for privacy, because the events expire either way.
+     - Record the before and after counts here.
+  2. **After #1332 reaches `main`: verify the sweep in production.** This is read-only for an agent.
+     - Confirm the function `<prefix>-runtime-log-retention-sweep` and its daily rule exist.
+     - After the first tick, its log shows `Retention sweep: matched=3 updated=… failed=0`. After part 1, `updated` should be 0. Before part 1, it should be 2.
+     - `put-retention-policy` is IAM-scoped to `/aws/bedrock-agentcore/runtimes/<runtime-name>-*`. The 8 groups with older names are covered only by part 1.
+  3. **Fix the "PutRetentionPolicy creates the group" claim. It is false.**
+     - Checked in dev on 2026-09-25: calling it on a missing group returns `ResourceNotFoundException` and creates nothing.
+     - The claim appears in the comment above `RuntimeLogRetention` and in `observability.md` §9.
+     - Deploys succeed today only because the Runtime's own role creates the group first. CloudTrail shows about a 25 s lead over the custom resource.
+     - A Runtime whose first container start loses that race would fail the stack update.
+     - Recommendation: add `ignoreErrorCodesMatching: 'ResourceNotFoundException'` to both calls, since the daily sweep catches the group within a day. Correct the comment and the doc. Add a jest assertion on the ignore pattern.
+     - Rejected: adding a `CreateLogGroup` call first. It would race the Runtime's own create the other way round.
+  4. **The development account's 10-year default is a governance question, not a code change.** That account's landing zone sets 3653 days on every `CreateLogGroup` event, about 10 minutes after it happens. That has three consequences:
+     - (a) CDK-managed log groups drift to 3653 there. The memory vended group was confirmed.
+     - (b) `aws/spans` is at 3653. It is account-wide and still carries MCP tool-call arguments and results; see the MCP-span channel, #1326.
+     - (c) 5 groups belonging to other experiments' still-existing runtimes are at 3653.
+     - Ask the cloud team whether 3653 days is policy. If it is, set `CDK_OBSERVABILITY_RUNTIME_LOG_RETENTION_SWEEP_ENABLED=false` in the `development` GitHub environment. If it isn't, ask them to exempt this stack's prefix, and set `aws/spans` retention once by hand.
+     - None of this applies to production, which has no landing zone and where `aws/spans` is at 30 days.
+- **Done when**:
+  - Part 1: the production null counts are 0.
+  - Part 2: a production sweep log line shows `failed=0`.
+  - Part 3: merged.
+  - Part 4: answered, and the development environment's flag is set to match.
+
 ### [2026-09-25] Verify the reconciler teardown guard in production — after #1322 reaches `main`
 - **Source**: Phil-initiated, from the dev validation of #1322. The daily KB reconciler could recreate a `KB#` record that a teardown had just removed (a ghost row holding only `vectorState`/`updatedAt`), and could mark a record in `migrationState=teardown` as `vectorState=missing`. #1322 guards every record-side write on the record existing and skips `teardown` records, listing them under `tearingDown` in the report. Dev-validated 2026-09-25: a synthetic `teardown` row came back in `tearingDown`, was not marked missing, and was left untouched; dev had 7 `KB#` rows and 0 ghosts before and after.
 - **Surface**: ops only — the reconciler Lambda's log group (`/{prefix}/kb-migration/reconciler-function-name` in SSM names the function) and the `boisestateai-v2-rag-assistants` table. No code change.
