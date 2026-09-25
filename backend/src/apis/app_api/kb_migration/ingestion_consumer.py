@@ -232,15 +232,27 @@ def set_document_terminal(
     indexed_at: Optional[str] = None,
     retrievable_at: Optional[str] = None,
     error: Optional[str] = None,
-) -> None:
+) -> bool:
     """Drive the ``DOC#`` record to a terminal state, with bounded retries.
 
     ``indexedAt`` and ``retrievableAt`` are stored separately on purpose: collapsing
     them would erase the only evidence of the INDEXED-to-retrievable gap, which is
     what makes "my upload finished but the assistant cannot see it" diagnosable
     rather than mysterious.
+
+    Returns ``False`` when the row is gone, which is a logged skip and not a
+    failure: no retry, no raise, no DLQ. Guarded on the row existing
+    (:func:`records.update_if_exists`) because the event that drives this can
+    outlive the document. Deleting a document or its whole agent removes the
+    ``DOC#`` row, and a late or redelivered ingestion event would otherwise
+    recreate it as a ghost row carrying only a status and timestamps — the
+    orphaned ``DOC#`` rows ``scripts/cleanup_orphaned_agent_rows.py`` exists to
+    remove. Retrying cannot bring a deleted row back, so a rejected guard is not
+    treated as the transient failure the retries are for.
     """
     from botocore.exceptions import ClientError
+
+    from apis.shared.kb_backend.records import update_if_exists
 
     sets = ["#status = :status", "updatedAt = :now"]
     values: Dict[str, Any] = {":status": status, ":now": _now_iso()}
@@ -260,14 +272,15 @@ def set_document_terminal(
 
     for attempt in range(1, MAX_RECORD_UPDATE_ATTEMPTS + 1):
         try:
-            _table().update_item(
-                Key={"PK": f"AST#{assistant_id}", "SK": f"DOC#{document_id}"},
+            return update_if_exists(
+                {"PK": f"AST#{assistant_id}", "SK": f"DOC#{document_id}"},
+                table=_table(),
+                what=f"DOC# row {assistant_id}/{document_id} (document or agent deleted)",
                 UpdateExpression=expression,
                 # `status` is a DynamoDB reserved keyword.
                 ExpressionAttributeNames={"#status": "status"},
                 ExpressionAttributeValues=values,
             )
-            return
         except ClientError as exc:
             last = exc
             logger.warning(

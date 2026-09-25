@@ -637,7 +637,7 @@ def _plan(
     current_status: str,
     bedrock_status: str,
     armed: bool,
-    perform: Callable[[], None],
+    perform: Callable[[], Optional[bool]],
     metric: str,
     report_only_message: str,
 ) -> None:
@@ -647,6 +647,11 @@ def _plan(
     artifact describes exactly what an armed run would do. When armed, a failure is
     captured on the action rather than raised — one bad document must not end the
     sweep — matching the KB reconciler's per-orphan error handling.
+
+    ``perform`` returning ``False`` means the ``DOC#`` row was deleted between the
+    scan and the write (``set_document_terminal`` will not recreate it). That is
+    neither a correction made nor a failure, so the action is left unperformed
+    with no error and no metric.
     """
     action = PlannedAction(
         assistant_id=assistant_id,
@@ -662,7 +667,9 @@ def _plan(
         return
 
     try:
-        perform()
+        if perform() is False:
+            logger.info(f"{kind} skipped for document {document_id}: its row is gone")
+            return
         action.performed = True
         emit_count(metric)
         logger.info(f"{kind} performed for document {document_id}")

@@ -425,6 +425,22 @@ class TestProvisioningJob:
         assert _doc(table)["status"] == "uploading"
 
     @pytest.mark.asyncio
+    async def test_a_document_deleted_while_provisioning_is_not_recreated(self, table):
+        """The handoff's ``provisioning → uploading`` write is an upsert. A document
+        deleted while its knowledge base was being built must not come back as a
+        ghost ``uploading`` row, and there is nothing left to ingest it for."""
+        _seed_doc(table)
+        waiting = [_doc(table)]
+        table.delete_item(Key={"PK": f"AST#{ASSISTANT_ID}", "SK": f"DOC#{DOCUMENT_ID}"})
+
+        with patch.object(ic, "handle_object") as handled:
+            done = await pv._ingest_waiting(ASSISTANT_ID, waiting)
+
+        assert done == 0
+        handled.assert_not_called()
+        assert _doc(table) is None
+
+    @pytest.mark.asyncio
     async def test_more_documents_than_one_invocation_can_finish_are_requeued(self, table):
         """One document per invocation: the worker's timeout is 15 minutes and one
         document's indexing budget is already 10.5, so a second could not finish and

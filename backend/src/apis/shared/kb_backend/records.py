@@ -322,6 +322,41 @@ def _conditional(operation, **kwargs):
 RECORD_EXISTS = "attribute_exists(PK)"
 
 
+def update_if_exists(key: Mapping[str, str], table=None, what: Optional[str] = None, **kwargs) -> bool:
+    """``update_item`` on any row of this table that cannot bring the row into existence.
+
+    The key-taking form of :func:`update_if_present`, for the rows around a
+    KB_Record that are removed out from under late writers in the same way: a
+    ``KBTOMB#`` tombstone cleared by a concurrent saga, a ``DOC#`` row deleted
+    with its document or its agent. ``UpdateItem`` is an upsert, and even a write
+    that only annotates or stamps a marker would otherwise leave a ghost item
+    holding the key plus that one attribute.
+
+    Returns ``False``, without raising, when the row is gone. ``what`` names the
+    row in that log line. Callers must not pass a ``ConditionExpression``; a
+    writer with a condition of its own ANDs :data:`RECORD_EXISTS` in itself.
+    """
+    from botocore.exceptions import ClientError
+
+    if "ConditionExpression" in kwargs:
+        raise TypeError("update_if_exists owns the ConditionExpression")
+    try:
+        (table if table is not None else _table()).update_item(
+            Key=dict(key),
+            ConditionExpression=RECORD_EXISTS,
+            **kwargs,
+        )
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            logger.info(
+                f"{what or key.get('PK', '') + '/' + key.get('SK', '')} is gone; "
+                f"skipping the write rather than recreating it"
+            )
+            return False
+        raise
+    return True
+
+
 def update_if_present(assistant_id: str, app_kb_id: str, table=None, **kwargs) -> bool:
     """``update_item`` on a KB_Record that cannot bring the record into existence.
 
@@ -339,25 +374,14 @@ def update_if_present(assistant_id: str, app_kb_id: str, table=None, **kwargs) -
     error. ``table`` lets a caller pass its own module's table handle. Callers
     must not pass a ``ConditionExpression``; this function owns it.
     """
-    from botocore.exceptions import ClientError
-
     if "ConditionExpression" in kwargs:
         raise TypeError("update_if_present owns the ConditionExpression")
-    try:
-        (table if table is not None else _table()).update_item(
-            Key={"PK": kb_pk(assistant_id), "SK": kb_sk(app_kb_id)},
-            ConditionExpression=RECORD_EXISTS,
-            **kwargs,
-        )
-    except ClientError as exc:
-        if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
-            logger.info(
-                f"KB_Record {assistant_id}/{app_kb_id} is gone (torn down or never "
-                f"created); skipping the write rather than recreating it"
-            )
-            return False
-        raise
-    return True
+    return update_if_exists(
+        {"PK": kb_pk(assistant_id), "SK": kb_sk(app_kb_id)},
+        table=table,
+        what=f"KB_Record {assistant_id}/{app_kb_id} (torn down or never created)",
+        **kwargs,
+    )
 
 
 def create_provisioning(

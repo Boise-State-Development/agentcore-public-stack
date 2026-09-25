@@ -330,6 +330,28 @@ class TestMarkComplete:
         assert backend.ingested == []
 
 
+    def test_a_row_deleted_mid_pass_is_not_recreated(self, table):
+        """The document is deleted between the scan and the terminal write. The
+        write is skipped rather than recreating a ghost ``complete`` row, and the
+        report does not claim a correction it did not make."""
+        _seed_kb(table, "ast-1")
+        _seed_doc(table, "ast-1", "doc-1", status="uploading", updated_at=OLD)
+
+        class _DeletedDuringProbe(_FakeBackend):
+            async def search(self, kb_ref, query, top_k=5, retrieval_filter=None):
+                table.delete_item(Key={"PK": "AST#ast-1", "SK": "DOC#doc-1"})
+                return await super().search(kb_ref, query, top_k, retrieval_filter)
+
+        backend = _DeletedDuringProbe(statuses={"doc-1": "INDEXED"}, retrievable={"doc-1"})
+
+        report = _run(table, backend, armed=True)
+
+        assert [a.kind for a in report.planned_actions] == [dr.ACTION_MARK_COMPLETE]
+        assert report.actions_performed == 0
+        assert report.planned_actions[0].error is None
+        assert _doc(table, "ast-1", "doc-1") is None
+
+
 # ── Bedrock FAILED → failed ──────────────────────────────────────────────────
 class TestMarkFailed:
     @pytest.mark.parametrize("bedrock_status", ["FAILED", "METADATA_UPDATE_FAILED"])

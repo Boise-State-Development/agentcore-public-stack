@@ -79,6 +79,7 @@ from apis.shared.kb_backend.records import (
     kb_pk,
     kb_sk,
     kb_tombstone_sk,
+    update_if_exists,
 )
 
 logger = logging.getLogger(__name__)
@@ -244,7 +245,8 @@ def _write_tombstone(
     the clock. ``createdAt`` is written through ``if_not_exists`` so it records
     when the delete was *first* attempted — the number an operator triaging a
     stuck tombstone actually wants — while ``attempts`` accumulates with ``ADD``,
-    which is atomic and needs no read.
+    which is atomic and needs no read. For the same reason it is the one tombstone
+    write *not* guarded by :func:`update_if_exists`: creating the row is its job.
 
     No ``ttl`` attribute is written, and none may be added. See the module
     docstring: expiry would silently discard the evidence of an unfinished delete.
@@ -335,6 +337,19 @@ def record_tombstone_error(
     Never raises. The saga has already failed by the time this is reached, and
     losing the annotation is strictly better than replacing a precise failure with
     a DynamoDB error from the bookkeeping.
+
+    Guarded on the tombstone still existing (:func:`records.update_if_exists`).
+    Two sagas can run over the same key — a teardown retry and its predecessor,
+    or the reconciler deleting an orphan whose tag anchors it on the same
+    partition — and the one that confirms absence clears the tombstone while the
+    other is still failing. Unguarded, the loser's annotation would recreate the
+    tombstone as a ghost holding only ``lastError``/``updatedAt``: no intent, no
+    AWS id. Nothing re-drives a delete from a tombstone (teardown only clears
+    per-document ones after a confirmed KB delete), so the ghost would not delete
+    anything; it would sit in :func:`iter_tombstones` forever, with no TTL to
+    expire it, looking exactly like the unfinished delete an operator is paged to
+    chase, in a partition the orphan cleanup script leaves to a teardown that has
+    already finished.
     """
     sets = ["lastError = :err", "updatedAt = :now"]
     values: Dict[str, Any] = {":err": error[:1024], ":now": _now_iso()}
@@ -343,8 +358,10 @@ def record_tombstone_error(
         values[":status"] = aws_status
 
     try:
-        _table().update_item(
-            Key={"PK": kb_pk(assistant_id), "SK": sort_key},
+        update_if_exists(
+            {"PK": kb_pk(assistant_id), "SK": sort_key},
+            table=_table(),
+            what=f"tombstone {assistant_id}/{sort_key} (cleared by a concurrent saga)",
             UpdateExpression=f"SET {', '.join(sets)}",
             ExpressionAttributeValues=values,
         )
