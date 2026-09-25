@@ -23,10 +23,16 @@ _EMF_NAMESPACE = os.environ.get("EMF_NAMESPACE", "AgentCoreStack/PromptCache")
 
 # Dedicated raw-JSON stdout logger. propagate=False keeps the app-level
 # formatter (and its non-JSON prefixes) away from these lines.
+#
+# The leading newline starts every record on a fresh line. stdout is shared
+# with anything in the process that writes to it, and an unterminated write
+# (e.g. print(..., end="")) would otherwise become a prefix of the JSON, which
+# CloudWatch then silently declines to extract. In the normal case this costs
+# one blank line per record.
 _emf_logger = logging.getLogger("apis.shared.observability.emf.raw")
 if not _emf_logger.handlers:
     _handler = logging.StreamHandler(sys.stdout)
-    _handler.setFormatter(logging.Formatter("%(message)s"))
+    _handler.setFormatter(logging.Formatter("\n%(message)s"))
     _emf_logger.addHandler(_handler)
     _emf_logger.setLevel(logging.INFO)
     _emf_logger.propagate = False
