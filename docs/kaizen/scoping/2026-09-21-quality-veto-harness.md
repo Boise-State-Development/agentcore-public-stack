@@ -1,6 +1,6 @@
 # Scoping the quality-veto harness — what it is, what already exists, and the cheapest first slice
 
-**Status:** Slice 1 BUILT 2026-09-25: `backend/scripts/compaction_quality_harness.py` (+ `compaction_quality/`, tests in `backend/tests/test_compaction_quality_harness.py`). The open questions in §6 are answered in §7. The missed-free-apply fix (§7.4) has landed with it, so the first full run can go ahead.
+**Status:** Slice 1 BUILT 2026-09-25: `backend/scripts/compaction_quality_harness.py` (+ `compaction_quality/`, tests in `backend/tests/test_compaction_quality_harness.py`). The open questions in §6 are answered in §7. The missed-free-apply fix (§7.4) has landed. **The first full run is done (§8): the cut passes, and the summary compression fails.**
 **Prompted by:** the two waivers recorded 2026-09-21 (`compaction-model-relative-thresholds.md` §5,
 `document-offload-evaluation.md` §2), both of which name "build the harness" as trigger 1 — the only
 path to an answer that does not wait on user volume.
@@ -260,4 +260,82 @@ reads the turn's gap from a stamp captured before any head-of-turn save, and
   - `prefixTokens` is unusable;
   - `contextBreakdown` is absent in prod;
   - the per-cut EMF carries no session id.
+
+---
+
+## 8. First full run (2026-09-25)
+
+**Question.** Prod's summaries are AgentCore LTM records that `bound_summary`
+compresses with Nova Micro, from a median of ~20k tokens to ~760 (§7.4). Does
+the compacted context still answer what the full history answers?
+
+**Configuration.**
+- `records` mode with one record per turn and `--record-words 600`
+  (`--chunk-turns 1`). That is ~20.7k tokens of records per transcript, and
+  ~10.8k available at the cut.
+- `cut --summary records --summary-model` with arms
+  `full,model_relative,raw_summary`, on the restore pace with a 200k window.
+- `ask --k 3 --workers 4` on `us.anthropic.claude-haiku-4-5-20251001-v1:0`
+  in dev.
+- 12 transcripts × 9 plants, so 108 paired tasks per arm. 972 calls, all
+  `end_turn`.
+
+**Spend.** About $8.80 for `ask`: the cache was written once per history
+and then read, and real tokens came to about 56% of the chars/4 estimate.
+About $7 for two `records` passes; the first, at 8 turns per record, was too
+small to trigger compression. Nova Micro cost is negligible. **About $16 in
+total.**
+
+**Compression reproduced.** `model_relative` compressed ~12.8k–15.9k tokens
+of records to 381–2,629 (median ~730) in every transcript, against prod's
+~20k → ~760. `raw_summary` carried ~14.7k uncompressed.
+
+| family (n) | full | model_relative | raw_summary |
+|---|---|---|---|
+| constraint (36) | 1.00 | **0.72** (10 losses / 0 wins, p=0.002) | 1.00 |
+| decision (24) | 1.00 | 0.79 (5 / 0, p=0.06) | 0.92 (2 / 0, p=0.5) |
+| reference (24) | 0.96 | **0.58** (9 / 0, p=0.004) | 1.00 |
+| superseded (24) | 0.96 | 0.92 (1 / 0, p=1.0) | 0.96 |
+
+- **By retention.** Facts whose stating turn was cut scored 0.52
+  (`model_relative`) against 0.96 (`raw_summary`). Facts whose turn was kept
+  scored 0.96 and 0.98.
+- **Free availability agreed before any model call.** The share of planted
+  values anywhere in the context was constraint 72%, decision 79%, reference
+  58% and superseded 96% under `model_relative`, and 100% across the board
+  under `raw_summary`. For this corpus, the availability table was a near
+  exact predictor of the scored result. Use it to screen changes for free
+  before spending on `ask`.
+- **Failure mode.** Almost every `model_relative` miss was `UNKNOWN`: 76 of
+  81 wrong samples. The model knows it does not know, so the damage appears
+  as "the assistant forgot what I told it", not as confident errors.
+
+**Verdict.**
+- **The model-relative cut is cleared.** The same cut with an uncompressed
+  summary matches the full history.
+- **The summary compression is vetoed** as a lossless step. It drops about
+  28% of standing instructions and about 42% of exact identifiers.
+
+**Levers, not yet chosen.** Rescore each with this harness before shipping.
+1. **Compress less.**
+   - Raise the floor of the compressed output. The prompt allows 4,400 words
+     and Nova Micro returns about 550.
+   - Or compress only above a much larger budget.
+   - Cost check: carrying ~14.7k instead of ~0.7k adds ~14k tokens to the
+     cached prefix. At 0.1× that is about $0.003 per turn on Sonnet 5
+     Global, plus one 1.25× write at the cut. That is small next to a lost
+     instruction, and quality wins per CLAUDE.md.
+2. **A better compressor.** Haiku instead of Nova Micro, with the same
+   budget. The records' own writer kept identifiers verbatim.
+3. **Extract, then compress.** Pull standing instructions, decisions and
+   identifiers verbatim into a pinned block, and let the model compress only
+   the narrative.
+
+**Caveats.**
+- The records are Haiku-written stand-ins, not AgentCore's. Real records may
+  already lose facts, so `raw_summary` is an upper bound.
+- The corpus is synthetic. There is one answering model, and n=24–36 per
+  family.
+- The run covers only the restore pace. Warm sessions hold the full history
+  up to the hard ceiling and are affected later, not less.
 

@@ -358,83 +358,58 @@ replay real trajectories under a policy.
 
 ## 5. Quality gate and tuning
 
-> 🔧 **2026-09-25: the harness exists; the veto has not run yet.** Slice 1 of
-> `docs/kaizen/scoping/2026-09-21-quality-veto-harness.md` is built as
-> `backend/scripts/compaction_quality_harness.py`. It is offline and replays
-> an authored corpus through the production `TurnBasedSessionManager`. The
-> waiver below stands until its first full run. That run then replaces the
-> waiver with a result, per the rule at the end of the waiver.
+> ✅ **VETO RAN 2026-09-25 — the cut passes; the summary compression fails.**
+> This replaces the 2026-09-21 waiver, per its own rule ("deleted rather than
+> amended"). Harness: `backend/scripts/compaction_quality_harness.py`, which is
+> offline and replays an authored corpus through the production
+> `TurnBasedSessionManager`. Method and caveats are in
+> `docs/kaizen/scoping/2026-09-21-quality-veto-harness.md` §8.
 >
-> What the harness has already shown, with no model involved:
-> - **The control is full history, not the kill switch.** With
->   `model_relative_enabled=False` the summary is still bounded, so the
->   switch does not reproduce pre-1.23.0 behaviour. It also keeps fewer turns
->   than the floor-seeking cut (always the last `protected_turns`).
-> - **When the stating turn was kept, the model answered correctly; when it
->   was cut, the fact survived only if the summary carried it.** On the dev
->   smoke run (Haiku 4.5, n = 2 transcripts), every miss was on a cut turn,
->   and the answer was `UNKNOWN`, not a wrong value. What needs measuring is
->   the summary, and prod's summaries are LTM records that Nova Micro
->   compresses from a median of ~20k tokens to **~760** (prod readout,
->   2026-09-25).
-> - **A kept turn can still lose a tool result.** On the restore path, the
->   truncation anchor cuts tool results older than the last
->   `protected_turns` to `max_tool_content_length`.
+> **Setup.** Haiku 4.5, 12 transcripts × 9 planted facts, k=3 (majority vote),
+> restore pace, a 200k window. `records` summaries sized to prod: ~20k tokens
+> per session, and `bound_summary` compressed them at the cut with Nova Micro
+> from ~15k tokens to a median of **~730**. Prod's readout shows ~20k → ~760.
+> There were three arms:
+> - `full`: the whole history (the control);
+> - `model_relative`: prod as shipped;
+> - `raw_summary`: the same cut with the summary budget lifted, so the
+>   summary is uncompressed.
 >
-> **Missed-free-apply fix (2026-09-25).** On a restore, the truncation-anchor
-> save stamped `updatedAt` before `apply_pending_compaction` read the gap, so a
-> parked cut waited for the paid hard ceiling. `apply_document_offload` had the
-> same problem after any apply. Both now read `_turn_start_stamp`, the previous
-> turn's stamp captured before any save at the head of the turn. The first full
-> harness run should be on a build with this fix.
-
-> ⛔ **WAIVED 2026-09-21 — the veto below did not run, and the defaults are
-> in production.** Recording it here because a gate merely unrun reads, to the
-> next person, exactly like a gate that passed.
+> | family (n) | full | model_relative | raw_summary |
+> |---|---|---|---|
+> | constraint (36) | 1.00 | **0.72** (10 losses / 0 wins, p=0.002) | 1.00 |
+> | decision (24) | 1.00 | 0.79 (5 / 0, p=0.06) | 0.92 (2 / 0, p=0.5) |
+> | reference (24) | 0.96 | **0.58** (9 / 0, p=0.004) | 1.00 |
+> | superseded (24) | 0.96 | 0.92 (1 / 0, p=1.0) | 0.96 |
 >
-> **What shipped anyway.** `COMPACTION_CEILING_RATIO = 0.5` / `HARD_CEILING_RATIO
-> = 0.7` and the rest of the model-relative stack (#1125–#1132) reached prod in
-> **1.23.0, 2026-09-20**. The §4.3 long-session eval named below has never
-> existed on disk — `find backend -name "*eval*"` returns only the unrelated
-> `feedback_eval` sampler and vendored site-packages. So the deepest, earliest
-> cut this codebase has ever shipped is defended by **cost alone** ($73.70 vs
-> $102.64 on the 20-session replay), with quality asserted rather than measured.
+> Facts whose stating turn was cut: **0.52** with `model_relative`, 0.96 with
+> `raw_summary`. Facts whose turn was kept: 0.96 and 0.98. Nearly every
+> `model_relative` miss was `UNKNOWN`, not a wrong value.
 >
-> **Why it was waived rather than run.** Two reasons, and only the first was
-> foreseen. (1) No owner: the harness is the one deliverable in this epic that
-> ships no user-visible behaviour, and it lost to every PR that did. (2) The
-> fallback was measured on 2026-09-21 and does not exist either. The cheap
-> substitute — comparing down-thumb rate across arms from the `F#` rows #1142
-> shipped — turns out to have **no substrate**: every `F#` row in prod since
-> 1.23.0 is **13 rows, of which exactly 1 is a thumb**, against
-> `DEFAULT_MINIMUM_N = 20` per arm. At ~0.7 thumbs/day fleet-wide, no arm
-> reaches the floor this quarter. The outcome instrument this spec's §7.2 was
-> counting on is real, correct, and empty.
+> **Reading.**
+> - **The floor-seeking cut, the thresholds and the deferred apply cost no
+>   measurable quality.** `raw_summary` makes the same cut as prod and matches
+>   `full`.
+> - **The loss is entirely in `compress_with_model`.** Nova Micro,
+>   instructed to keep instructions and identifiers verbatim within a
+>   4,400-word budget, returns ~730 tokens and drops about a third of standing
+>   instructions and about 40% of identifiers. `FLOOR_RATIO` is therefore not
+>   the lever this spec's tuning rule assumed.
 >
-> **What this waiver is not.** It is not a finding that the cut is safe. Nobody
-> has looked. The honest statement is that a quality regression from these
-> thresholds would currently be **invisible to us** — there is no harness, and
-> the human signal is three orders of magnitude below its own reporting floor.
->
-> **What reopens it** — any one, and the waiver is deleted rather than amended:
-> 1. The §4.3 harness gets built (the only path that does not wait on users);
-> 2. Any `turnClass` or `callsSinceCompaction` arm in
->    `GET /admin/feedback/fleet` clears `minimumN` — check before assuming, the
->    arm reports `downRate: null` with `belowFloor: true` until it does;
-> 3. A user-reported context-loss incident lands on a compacted session. That
->    is the expensive way to find out, and it is currently the most likely one.
->
-> ⚠️ Do **not** reopen this by lowering `FEEDBACK_ARM_MINIMUM_N`. Manufacturing
-> a rate from n=3 produces the fleet-wide "quality score" that response-feedback
-> spec §9 exists to forbid, and it would close this waiver with a number that
-> means nothing.
+> **Caveats.**
+> - The records are an approximation written by Haiku, not AgentCore's
+>   (they are *better* at keeping identifiers, so `raw_summary` is an upper
+>   bound).
+> - The corpus is synthetic.
+> - There is one model, and n=24–36 per family.
 
 - **Veto before default change in prod:** the spiral spec §4.3 long-session
   eval (constraint retention / revision continuity / reference lookup) runs
   on PR-1 with the fixed-threshold arm as control. A deeper cut is a bigger
   context change than the summary cap, so the veto applies with full force.
 - **Tuning knobs move on evidence, not taste:** raise `FLOOR_RATIO` if the
-  eval shows retention loss; lower `CEILING_CAP_TOKENS` if the Sonnet 5
+  eval shows retention loss *on retained turns* (the 2026-09-25 run did not;
+  its loss was the summary compression, which `FLOOR_RATIO` cannot reach); lower `CEILING_CAP_TOKENS` if the Sonnet 5
   cohort's write:read ratio stays worse than 1:5 after PR-3; never raise the
   cap above 272k while GPT-family rows share the constants (pricing tier).
 - **Summarizer prompt:** preserve standing user instructions and constraints
