@@ -358,6 +358,34 @@ replay real trajectories under a policy.
 
 ## 5. Quality gate and tuning
 
+> 🔧 **2026-09-25: the harness exists; the veto has not run yet.** Slice 1 of
+> `docs/kaizen/scoping/2026-09-21-quality-veto-harness.md` is built as
+> `backend/scripts/compaction_quality_harness.py`. It is offline and replays
+> an authored corpus through the production `TurnBasedSessionManager`. The
+> waiver below stands until its first full run. That run then replaces the
+> waiver with a result, per the rule at the end of the waiver.
+>
+> What the harness has already shown, with no model involved:
+> - **The control is full history, not the kill switch.** With
+>   `model_relative_enabled=False` the summary is still bounded, so the
+>   switch does not reproduce pre-1.23.0 behaviour. It also keeps fewer turns
+>   than the floor-seeking cut (always the last `protected_turns`).
+> - **When the stating turn was kept, the model answered correctly; when it
+>   was cut, the fact survived only if the summary carried it.** On the dev
+>   smoke run (Haiku 4.5, n = 2 transcripts), every miss was on a cut turn,
+>   and the answer was `UNKNOWN`, not a wrong value. What needs measuring is
+>   the summary, and prod's summaries are LTM records that Nova Micro
+>   compresses from a median of ~20k tokens to **~760** (prod readout,
+>   2026-09-25).
+> - **A kept turn can still lose a tool result.** On the restore path, the
+>   truncation anchor cuts tool results older than the last
+>   `protected_turns` to `max_tool_content_length`.
+>
+> The first full run waits for the missed-free-apply fix: on a restore, the
+> truncation-anchor save stamps `updatedAt` before `apply_pending_compaction`
+> reads the gap, so a parked cut waits for the hard ceiling. Scoring before
+> that fix would measure the buggy path.
+
 > ⛔ **WAIVED 2026-09-21 — the veto below did not run, and the defaults are
 > in production.** Recording it here because a gate merely unrun reads, to the
 > next person, exactly like a gate that passed.
