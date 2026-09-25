@@ -272,6 +272,12 @@ def _validate_memory_space(user: User, binding: AgentBinding, mem: MemorySpaceSe
     space, role = mem.resolve_permission(binding.ref, user.user_id, user.email)
     if space is None:
         raise BindingValidationError(f"Memory space '{binding.ref}' not found.", status_code=400)
+    if space.is_project_space:
+        # A project's memory reaches agents only through the project (its harness).
+        raise BindingValidationError(
+            "Project memory can't be connected to an agent; it is used inside its project.",
+            status_code=400,
+        )
 
     required = "editor" if access == "readwrite" else "viewer"
     if role is None or _ROLE_RANK[role] < _ROLE_RANK[required]:

@@ -72,6 +72,29 @@ class TransferOwnershipRequest(BaseModel):
 # ---- responses ---------------------------------------------------------
 
 
+class ProjectMemoryResponse(BaseModel):
+    """A project's memory spaces, as the caller sees them (Phase 2.4).
+
+    Both ids address the ordinary ``/memory/spaces/{id}`` routes, which take a
+    project space's role from the project. ``personalSpaceId`` is null until
+    the caller keeps something of their own here
+    (``POST /projects/{id}/memory/mine``). ``sharedSpaceId`` is null only
+    while Memory Spaces are off, or for an archived project made before 2.4.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    shared_space_id: Optional[str] = Field(None, alias="sharedSpaceId")
+    personal_space_id: Optional[str] = Field(None, alias="personalSpaceId")
+    role: ProjectRole = Field(..., description="The caller's role on this project")
+
+
+class PersonalSpaceResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    space_id: str = Field(..., alias="spaceId")
+
+
 class ProjectResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 

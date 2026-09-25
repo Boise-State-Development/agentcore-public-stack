@@ -226,7 +226,7 @@ class TestModelResolution:
 
 
 class TestMemoryResolution:
-    _SPACE = SimpleNamespace(name="Oliver's Brain", space_id="spc_1")
+    _SPACE = SimpleNamespace(name="Oliver's Brain", space_id="spc_1", is_project_space=False)
 
     @pytest.mark.asyncio
     async def test_no_binding_is_none(self, monkeypatch):
@@ -247,6 +247,19 @@ class TestMemoryResolution:
         with pytest.raises(AgentBindingBlockedError) as ei:
             await resolve_agent_invocation(_assistant(bindings=[_mem_binding()]), _user())
         assert "no longer exists" in ei.value.message
+
+    @pytest.mark.asyncio
+    async def test_a_project_space_never_serves_an_agent_binding(self, monkeypatch):
+        """Defense in depth behind design-time validation: even a member who resolves
+        editor on a project's space gets no memory from an ordinary agent's binding."""
+        project_space = SimpleNamespace(name="Project notes", space_id="spc_p", is_project_space=True)
+        _patch_memory(monkeypatch, space=project_space, role="editor")
+        with pytest.raises(AgentBindingBlockedError):
+            await resolve_agent_invocation(_assistant(bindings=[_mem_binding(access="readwrite")]), _user())
+        plan = await resolve_agent_invocation(
+            _assistant(bindings=[_mem_binding(access="readwrite")]), _user(), degrade=True
+        )
+        assert plan.memory is None and plan.unavailable.memory == "memory"
 
     @pytest.mark.asyncio
     async def test_read_viewer_resolves(self, monkeypatch):

@@ -429,7 +429,9 @@ async def _resolve_memory(
     space, role = await asyncio.to_thread(
         service.resolve_permission, binding.ref, invoker.user_id, invoker.email
     )
-    if space is None:
+    if space is None or space.is_project_space:
+        # A project's space never serves an agent binding (design-time validation
+        # refuses one); it reaches the model only through its project.
         if dropped is not None:
             dropped.memory = "memory"
             return None

@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from apis.shared.memory.models import (
     EntryType,
     FileFormat,
+    MemoryScope,
     FileVersion,
     MemoryEntryRef,
     MemorySpace,
@@ -91,6 +92,8 @@ class SpaceSummaryResponse(BaseModel):
     created_at: str = Field("", alias="createdAt")
     updated_at: str = Field("", alias="updatedAt")
     file_format: FileFormat = Field("freeform", alias="fileFormat")
+    scope: MemoryScope = "personal"
+    project_id: Optional[str] = Field(None, alias="projectId")
 
     @classmethod
     def from_space(cls, space: MemorySpace, role: Role) -> "SpaceSummaryResponse":
@@ -103,6 +106,8 @@ class SpaceSummaryResponse(BaseModel):
             created_at=space.created_at,
             updated_at=space.updated_at,
             file_format=space.file_format,
+            scope=space.scope,
+            project_id=space.project_id,
         )
 
 
@@ -216,6 +221,8 @@ class SpaceDetailResponse(BaseModel):
     created_at: str = Field("", alias="createdAt")
     updated_at: str = Field("", alias="updatedAt")
     file_format: FileFormat = Field("freeform", alias="fileFormat")
+    scope: MemoryScope = "personal"
+    project_id: Optional[str] = Field(None, alias="projectId")
     index: str = Field("", description="The MEMORY.md index text")
     entries: List[EntryRefResponse] = Field(default_factory=list)
 

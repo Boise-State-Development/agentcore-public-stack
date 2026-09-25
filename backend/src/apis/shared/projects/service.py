@@ -35,6 +35,7 @@ from apis.shared.timestamps import utc_now_iso
 
 from .access import resolve_project_role
 from .harness import AssistantsHarnessGateway, HarnessGateway
+from .memory import MemorySpacesGateway, ProjectMemoryGateway
 from .models import (
     ROLE_RANK,
     MemberRole,
@@ -111,6 +112,16 @@ def _clean_description(description: Optional[str]) -> str:
 
 
 @dataclass
+class ProjectMemorySpaces:
+    """The caller's view of a project's memory: the shared space, and theirs if it exists."""
+
+    project: Project
+    role: ProjectRole
+    shared_space_id: Optional[str]
+    personal_space_id: Optional[str]
+
+
+@dataclass
 class AddMembersResult:
     """Outcome of a bulk invite, one bucket per reason, in request order."""
 
@@ -127,9 +138,11 @@ class ProjectService:
         harness: Optional[HarnessGateway] = None,
         audit: Optional[AuditService] = None,
         notifications: Optional[NotificationService] = None,
+        memory: Optional[ProjectMemoryGateway] = None,
     ):
         self.repository = repository or ProjectRepository()
         self.harness = harness or AssistantsHarnessGateway()
+        self.memory = memory or MemorySpacesGateway()
         self.audit = audit or get_audit_service()
         self.notifications = notifications or NotificationService(table_name=self.repository.table_name)
 
@@ -247,12 +260,13 @@ class ProjectService:
         return sorted(listed, key=lambda r: r[0].updated_at, reverse=True)
 
     async def create_project(self, user: User, name: str, description: Optional[str] = None) -> Project:
-        """META + hidden harness Agent, or neither.
+        """META + hidden harness Agent + shared memory space, or none of them.
 
-        The harness is created first so META can point at it. If META then
-        fails, the harness is deleted; a harness whose project never existed
-        resolves no role for anyone, so even a failed rollback leaves nothing
-        reachable.
+        The harness and space are created first so META can point at them. If
+        anything then fails, both are deleted; a harness or space whose project
+        never existed resolves no role for anyone, so even a failed rollback
+        leaves nothing reachable. Without Memory Spaces the project starts with
+        no space, and :meth:`get_memory_spaces` creates it once they exist.
         """
         clean_name = _clean_name(name)
         clean_description = _clean_description(description)
@@ -266,28 +280,40 @@ class ProjectService:
             description=clean_description,
         )
 
-        now = utc_now_iso()
-        project = Project(
-            project_id=project_id,
-            name=clean_name,
-            description=clean_description,
-            owner_id=user.user_id,
-            owner_email=normalize_email(user.email),
-            harness_agent_id=harness_agent_id,
-            settings=ProjectSettings(editors_manage_members=editors_manage_members_default()),
-            created_at=now,
-            updated_at=now,
-        )
+        shared_space_id: Optional[str] = None
         try:
+            if self.memory.enabled:
+                shared_space_id = self.memory.create_space(
+                    project_id=project_id,
+                    scope="shared",
+                    owner_id=user.user_id,
+                    owner_email=normalize_email(user.email),
+                    name=clean_name,
+                )
+            now = utc_now_iso()
+            project = Project(
+                project_id=project_id,
+                name=clean_name,
+                description=clean_description,
+                owner_id=user.user_id,
+                owner_email=normalize_email(user.email),
+                harness_agent_id=harness_agent_id,
+                shared_space_id=shared_space_id,
+                settings=ProjectSettings(editors_manage_members=editors_manage_members_default()),
+                created_at=now,
+                updated_at=now,
+            )
             self.repository.create_project(project)
         except Exception:
-            logger.error("Project %s META write failed; rolling back harness %s", project_id, harness_agent_id)
+            logger.error("Project %s create failed; rolling back harness %s", project_id, harness_agent_id)
             try:
                 await self.harness.delete(harness_agent_id)
             except Exception:
                 logger.error("Rollback of harness %s failed; it is unreachable (no project)", harness_agent_id, exc_info=True)
+            if shared_space_id:
+                self._purge_space_quietly(project_id, shared_space_id)
             raise
-        logger.info("Created project %s with harness %s", project_id, harness_agent_id)
+        logger.info("Created project %s with harness %s, shared space %s", project_id, harness_agent_id, shared_space_id)
         self.record(AuditAction.PROJECT_CREATED, user, project_id, after={"name": clean_name})
         return project
 
@@ -359,6 +385,15 @@ class ProjectService:
                 "Project %s renamed, but its harness %s kept the old name",
                 after.project_id, after.harness_agent_id, exc_info=True,
             )
+        # The shared space's name is what the agent sees on its memory block.
+        if after.shared_space_id and before.name != after.name and self.memory.enabled:
+            try:
+                self.memory.rename_space(after.shared_space_id, after.name)
+            except Exception:
+                logger.error(
+                    "Project %s renamed, but its shared space %s kept the old name",
+                    after.project_id, after.shared_space_id, exc_info=True,
+                )
 
     def _record_update(self, actor: User, before: Project, after: Project, reason: Optional[str] = None) -> None:
         if before.status != after.status:
@@ -389,9 +424,87 @@ class ProjectService:
         if project.status != "archived":
             raise ProjectConflictError("Archive the project before deleting it")
         await self.harness.delete(project.harness_agent_id)
+        # Spaces before rows: the rows are the only record of which spaces the
+        # project owns, so a failure here must leave them for the retry.
+        for space_id in self._owned_space_ids(project):
+            self.memory.purge_space(space_id)
         deleted = self.repository.delete_project_rows(project_id)
         logger.info("Purged project %s (%d rows, harness %s)", project_id, deleted, project.harness_agent_id)
         self.record(AuditAction.PROJECT_DELETED, user, project_id, before={"name": project.name})
+
+    # ── memory (Phase 2.4) ──────────────────────────────────────────────
+
+    def _owned_space_ids(self, project: Project) -> List[str]:
+        ids = self.repository.list_personal_space_ids(project.project_id)
+        return ([project.shared_space_id] if project.shared_space_id else []) + ids
+
+    def _purge_space_quietly(self, project_id: str, space_id: str) -> None:
+        try:
+            self.memory.purge_space(space_id)
+        except Exception:
+            logger.error(
+                "Could not delete space %s of project %s; it is unreachable (no project pointer)",
+                space_id, project_id, exc_info=True,
+            )
+
+    def get_memory_spaces(self, project_id: str, user: User) -> ProjectMemorySpaces:
+        """The project's shared space and the caller's own, for any member.
+
+        Creates the shared space if the project has none yet: projects made
+        before 2.4, or while Memory Spaces were off. Two callers racing here
+        both create one; only the first pointer write wins and the loser
+        deletes its space. The caller's personal space is only looked up,
+        never created (:meth:`get_or_create_personal_space`).
+        """
+        project, role = self._require(project_id, user, "viewer")
+        shared = project.shared_space_id
+        if shared is None and self.memory.enabled and project.status == "active":
+            shared = self._attach_shared_space(project)
+        personal = self.repository.get_personal_space_id(project_id, user.user_id) if user.user_id else None
+        return ProjectMemorySpaces(project=project, role=role, shared_space_id=shared, personal_space_id=personal)
+
+    def _attach_shared_space(self, project: Project) -> Optional[str]:
+        space_id = self.memory.create_space(
+            project_id=project.project_id,
+            scope="shared",
+            owner_id=project.owner_id,
+            owner_email=project.owner_email,
+            name=project.name,
+        )
+        if self.repository.set_shared_space_id(project.project_id, space_id):
+            logger.info("Attached shared space %s to project %s", space_id, project.project_id)
+            return space_id
+        self._purge_space_quietly(project.project_id, space_id)
+        current = self.repository.get_project(project.project_id)
+        return current.shared_space_id if current else None
+
+    def get_or_create_personal_space(self, project_id: str, user: User) -> str:
+        """The caller's ``personal_in_project`` space, created on first use.
+
+        Any member may keep their own memory in a project, viewers included;
+        creating one needs an active project. Racing callers converge on one
+        space through the pointer row's conditional write.
+        """
+        project, _ = self._require(project_id, user, "viewer", writable=True)
+        if not user.user_id:
+            raise ProjectError("Your account has no user id yet; sign in again")
+        existing = self.repository.get_personal_space_id(project_id, user.user_id)
+        if existing:
+            return existing
+        if not self.memory.enabled:
+            raise ProjectError("Memory is not enabled in this environment")
+        space_id = self.memory.create_space(
+            project_id=project_id,
+            scope="personal_in_project",
+            owner_id=user.user_id,
+            owner_email=normalize_email(user.email),
+            name=project.name,
+            user_id=user.user_id,
+        )
+        winner = self.repository.claim_personal_space(project_id, user.user_id, space_id, utc_now_iso())
+        if winner != space_id:
+            self._purge_space_quietly(project_id, space_id)
+        return winner
 
     # ── tasks ───────────────────────────────────────────────────────────
 

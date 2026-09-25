@@ -112,7 +112,7 @@ class TestDegrade:
     async def test_an_unreachable_memory_space_is_skipped(self, monkeypatch):
         from types import SimpleNamespace
 
-        _patch_memory(monkeypatch, space=SimpleNamespace(name="Team notes"), role="viewer")
+        _patch_memory(monkeypatch, space=SimpleNamespace(name="Team notes", is_project_space=False), role="viewer")
         plan = await resolve_agent_invocation(
             _assistant(bindings=[_mem_binding(access="readwrite")]), _user(), degrade=True
         )

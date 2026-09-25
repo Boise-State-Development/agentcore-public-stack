@@ -8,7 +8,7 @@ layer, matching how ``apis/shared`` repositories are structured elsewhere.
 
 Row shapes (see ``models.py``):
 
-  - ``PK=SPACE#{id}  SK=META``            + ``GSI1PK=OWNER#{owner_id}``
+  - ``PK=SPACE#{id}  SK=META``            + ``GSI1PK=OWNER#{owner_id}`` (personal scope only)
   - ``PK=SPACE#{id}  SK=INDEX``
   - ``PK=SPACE#{id}  SK=MEMBER#{email}``  + ``GSI2PK=MEMBER#{email}``
   - ``PK=SPACE#{id}  SK=FILEVER#{slug}#{n:06d}``  (per-file history, no index)
@@ -117,8 +117,6 @@ class MemorySpaceRepository:
         item = {
             "PK": _space_pk(space.space_id),
             "SK": _META_SK,
-            "GSI1PK": f"OWNER#{space.owner_id}",
-            "GSI1SK": _space_pk(space.space_id),
             "spaceId": space.space_id,
             "name": space.name,
             "template": space.template,
@@ -133,6 +131,16 @@ class MemorySpaceRepository:
             item["indexContentHash"] = space.index_content_hash
         if space.file_format != "freeform":
             item["fileFormat"] = space.file_format
+        if space.is_project_space:
+            # Left out of OwnerIndex (a sparse index), so a project's spaces
+            # never appear in anyone's own list of spaces or binding picker.
+            item["scope"] = space.scope
+            item["projectId"] = space.project_id
+            if space.user_id:
+                item["userId"] = space.user_id
+        else:
+            item["GSI1PK"] = f"OWNER#{space.owner_id}"
+            item["GSI1SK"] = _space_pk(space.space_id)
         return item
 
     @staticmethod
@@ -148,6 +156,9 @@ class MemorySpaceRepository:
             index_s3_key=item.get("indexS3Key"),
             index_content_hash=item.get("indexContentHash"),
             file_format=item.get("fileFormat", "freeform"),
+            scope=item.get("scope", "personal"),
+            project_id=item.get("projectId"),
+            user_id=item.get("userId"),
         )
 
     @staticmethod

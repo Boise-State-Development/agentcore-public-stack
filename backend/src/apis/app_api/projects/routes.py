@@ -61,6 +61,8 @@ from .models import (
     MemberResponse,
     MembersResponse,
     ModelResponse,
+    PersonalSpaceResponse,
+    ProjectMemoryResponse,
     ProjectListResponse,
     ProjectResponse,
     SettingsVersionResponse,
@@ -400,6 +402,33 @@ def list_shared_tasks(project_id: str, user: User = Depends(require_projects_use
     except ProjectError as e:
         raise _translate(e)
     return SharedTasksResponse(tasks=[SharedTaskResponse.from_pointer(p, user.user_id) for p in pointers])
+
+
+# ---- memory (Phase 2.4) ------------------------------------------------
+
+
+@router.get("/{project_id}/memory", response_model=ProjectMemoryResponse, response_model_by_alias=True)
+def get_project_memory(project_id: str, user: User = Depends(require_projects_user)) -> ProjectMemoryResponse:
+    """The project's shared space and the caller's own. Creates the shared one if it is missing."""
+    try:
+        spaces = _svc().get_memory_spaces(project_id, user)
+    except ProjectError as e:
+        raise _translate(e)
+    return ProjectMemoryResponse(
+        shared_space_id=spaces.shared_space_id,
+        personal_space_id=spaces.personal_space_id,
+        role=spaces.role,
+    )
+
+
+@router.post("/{project_id}/memory/mine", response_model=PersonalSpaceResponse, response_model_by_alias=True)
+def create_personal_memory(project_id: str, user: User = Depends(require_projects_user)) -> PersonalSpaceResponse:
+    """The caller's own memory in this project, created on first call (idempotent)."""
+    try:
+        space_id = _svc().get_or_create_personal_space(project_id, user)
+    except ProjectError as e:
+        raise _translate(e)
+    return PersonalSpaceResponse(space_id=space_id)
 
 
 # ---- members -----------------------------------------------------------
