@@ -63,9 +63,18 @@ def _create_cache_key(
     skills_hash: str = "",
     document_tools: bool = False,
     assistant_id: Optional[str] = None,
+    memory_binding: str = "",
 ) -> Tuple:
     """
     Create a cache key for agent instances.
+
+    `memory_binding` is ``memory_binding_digest`` of the Agent's resolved
+    Memory-Space binding (space id, name, access), or "" when there is none.
+    The memory tools close over exactly those values (the write tool exists
+    only for ``readwrite``; the name is in the tool descriptions), and read the
+    space live on every call, so they are described once the key carries this.
+    Empty string without a binding, so binding-less turns key exactly as
+    before apart from the constant extra element.
 
     `assistant_id` is the assistant (RAG corpus) the turn ran against. The
     spreadsheet-analysis builders close over it, so without it in the key a
@@ -112,10 +121,27 @@ def _create_cache_key(
         provider or "bedrock",
         freshness_hash,
         agent_type or "chat",
+        memory_binding,  # ahead of the rest so their positions ([-1]..[-3]) stay put
         bool(document_tools),
         assistant_id or "",
-        skills_hash,
+        skills_hash,  # stays the trailing element; tests index it as [-1]
     )
+
+
+def memory_binding_digest(binding: Optional[Dict[str, Any]]) -> str:
+    """Short digest of a resolved Memory-Space binding for the agent cache key.
+
+    ``binding`` is ``{"spaceId", "spaceName", "access"}`` (the shape stamped on
+    the construction snapshot and replayed from ``PausedTurnSnapshot``), or
+    None. Returns "" for None so binding-less keys do not change.
+    """
+    if not binding:
+        return ""
+    payload = json.dumps(
+        [binding.get("spaceId"), binding.get("spaceName"), binding.get("access")],
+        default=str,
+    )
+    return hashlib.md5(payload.encode()).hexdigest()[:8]
 
 
 # LRU cache for agent instances
@@ -262,6 +288,7 @@ async def get_agent(
     has_document_tools: bool = False,
     assistant_id: Optional[str] = None,
     build_stage_recorder: Optional[Callable[[str], None]] = None,
+    memory_binding: Optional[Dict[str, Any]] = None,
 ) -> BaseAgent:
     """
     Get or create agent instance with current configuration for session
@@ -290,6 +317,10 @@ async def get_agent(
             derive it with ``injected_tools_are_key_described``; the default
             (False) keeps the historical bypass, so any caller that has not
             reasoned about its closures gets the safe behavior.
+        memory_binding: The Agent's resolved Memory-Space binding as
+            ``{"spaceId", "spaceName", "access"}``, or None. A key element
+            (see ``_create_cache_key``) and stamped on the construction
+            snapshot so a paused turn resumes into the same slot.
         cache_write: Whether this caller may *populate* the cache. Read stays
             allowed either way. Set False by callers that build a partial
             toolset for a session whose real turns build more — otherwise they
@@ -338,6 +369,7 @@ async def get_agent(
         skills_hash=skills_hash,
         document_tools=has_document_tools,
         assistant_id=assistant_id,
+        memory_binding=memory_binding_digest(memory_binding),
     )
 
     # Whether this turn's injected tools (if any) let it use the cache at all.
@@ -451,6 +483,8 @@ async def get_agent(
         # The assistant is a key element (spreadsheet tools close over it), so
         # resume must replay it verbatim or the paused agent is orphaned.
         agent._construction_snapshot["assistant_id"] = assistant_id
+        # Same for the memory binding (memory tools close over it).
+        agent._construction_snapshot["memory_binding"] = dict(memory_binding) if memory_binding else None
 
     # Don't cache agents whose context-bound extra_tools captured anything the
     # key doesn't describe — a cached agent holds the *old* closures, so reuse
