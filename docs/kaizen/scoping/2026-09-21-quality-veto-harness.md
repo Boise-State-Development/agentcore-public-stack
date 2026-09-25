@@ -1,6 +1,6 @@
 # Scoping the quality-veto harness — what it is, what already exists, and the cheapest first slice
 
-**Status:** Slice 1 BUILT 2026-09-25: `backend/scripts/compaction_quality_harness.py` (+ `compaction_quality/`, tests in `backend/tests/test_compaction_quality_harness.py`). The open questions in §6 are answered in §7. The first full run is pending the missed-free-apply fix (§7.4).
+**Status:** Slice 1 BUILT 2026-09-25: `backend/scripts/compaction_quality_harness.py` (+ `compaction_quality/`, tests in `backend/tests/test_compaction_quality_harness.py`). The open questions in §6 are answered in §7. The missed-free-apply fix (§7.4) has landed with it, so the first full run can go ahead.
 **Prompted by:** the two waivers recorded 2026-09-21 (`compaction-model-relative-thresholds.md` §5,
 `document-offload-evaluation.md` §2), both of which name "build the harness" as trigger 1 — the only
 path to an answer that does not wait on user volume.
@@ -233,9 +233,9 @@ strip-fix win mask an offload regression.
 
 The first clock stub backdated every save by the pace's gap, and that
 **hid a production bug**. A stub for time has to stamp *now* the way
-`_save_compaction_state` does, and apply the gap only between turns. A
-tripwire test (`test_restore_pace_reproduces_the_anchor_save_masking_the_gap`)
-pins the current behaviour until the fix lands.
+`_save_compaction_state` does, and apply the gap only between turns. The fix
+reads the turn's gap from a stamp captured before any head-of-turn save, and
+`test_restore_pace_applies_the_parked_cut_for_free` now holds it in place.
 
 ### 7.4 Prod readout, 2026-09-25 (aggregate, read-only, ~4 days after 1.23.0)
 

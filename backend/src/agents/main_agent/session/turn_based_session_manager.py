@@ -180,6 +180,15 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
         # persisted at turn end so the next head-of-turn can tell whether the
         # cached prefix is already invalid (spec §3.5).
         self._current_prefix_key: Optional[str] = None
+        # When the previous turn ended, as read BEFORE anything at this turn's
+        # head saves compaction state. Every save stamps ``updated_at``, so a
+        # head-of-turn decision that re-reads it after an earlier save (the
+        # restore's truncation-anchor advance, or a parked cut's own apply)
+        # sees a gap of ~0s and waits on a cache that is already cold.
+        # ``_restore_turn_stamp`` is captured by the restore slice;
+        # ``_turn_start_stamp`` is the one every head-of-turn decision reads.
+        self._restore_turn_stamp: Optional[str] = None
+        self._turn_start_stamp: Optional[str] = None
 
         # Session control
         self.cancelled = False
@@ -507,6 +516,9 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
 
         # Load compaction state from DynamoDB
         self.compaction_state = self._load_compaction_state()
+        # The previous turn's stamp, before the anchor advance below re-stamps
+        # it; ``apply_pending_compaction`` reads the gap from this.
+        self._restore_turn_stamp = self.compaction_state.updated_at
 
         # Cache valid cutoff indices (user text messages, not tool results)
         self._valid_cutoff_indices = self._find_valid_cutoff_indices(all_messages)
@@ -1075,6 +1087,9 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
         # cache-gap decision when compaction (whose state stamps updated_at
         # every turn) is off. Stamped before the early return on purpose.
         self._last_turn_completed_at = datetime.now(timezone.utc).isoformat()
+        # The head-of-turn stamps belong to the turn that just ended.
+        self._restore_turn_stamp = None
+        self._turn_start_stamp = None
 
         if not self.compaction_config or not self.compaction_config.enabled:
             return None
@@ -1343,7 +1358,16 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
 
         Otherwise the cut keeps waiting (``compaction_pending_waiting``). Returns
         the reason applied, or ``None``. Never raises.
+
+        The gap is measured from the previous turn's stamp as it stood before
+        this turn's head saved anything (``_turn_start_stamp``), and that
+        stamp is left for ``apply_document_offload``, which runs next.
         """
+        # Consumed every turn, so a stamp from a turn that never reached here
+        # cannot make a later, genuinely warm turn look cold.
+        restore_stamp = getattr(self, "_restore_turn_stamp", None)
+        self._restore_turn_stamp = None
+        self._turn_start_stamp = None
         if not self.compaction_config or not self.compaction_config.enabled:
             return None
         try:
@@ -1352,15 +1376,17 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
             if state is None:
                 return None
 
+            turn_stamp = restore_stamp or state.updated_at
+            self._turn_start_stamp = turn_stamp
             previous_key = state.last_prefix_key
             self._current_prefix_key = prefix_key
             if state.pending_checkpoint is None:
                 return None
 
             config = self.compaction_config
-            gap_seconds = self._seconds_since(state.updated_at)
+            gap_seconds = self._seconds_since(turn_stamp)
             reason: Optional[str] = None
-            if self._cache_window_expired(state.updated_at, config.cache_ttl_seconds):
+            if self._cache_window_expired(turn_stamp, config.cache_ttl_seconds):
                 reason = "cache_expired"
             elif prefix_key and previous_key and prefix_key != previous_key:
                 reason = "prefix_changed"
@@ -1546,7 +1572,14 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
         config = self.compaction_config
         state = self.compaction_state if (config and config.enabled) else None
         ttl = config.cache_ttl_seconds if config else Defaults.COMPACTION_CACHE_TTL_SECONDS
-        last_turn_at = (state.updated_at if state else None) or getattr(self, "_last_turn_completed_at", None)
+        # This turn's start stamp first: ``apply_pending_compaction`` runs
+        # just before this and, when it applies a cut, re-stamps
+        # ``updated_at`` — reading that would call a cold cache warm.
+        last_turn_at = (
+            getattr(self, "_turn_start_stamp", None)
+            or (state.updated_at if state else None)
+            or getattr(self, "_last_turn_completed_at", None)
+        )
         gap = self._seconds_since(last_turn_at)
         if self._cache_window_expired(last_turn_at, ttl):
             return "cache_expired", gap

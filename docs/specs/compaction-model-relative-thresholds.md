@@ -381,10 +381,12 @@ replay real trajectories under a policy.
 >   truncation anchor cuts tool results older than the last
 >   `protected_turns` to `max_tool_content_length`.
 >
-> The first full run waits for the missed-free-apply fix: on a restore, the
-> truncation-anchor save stamps `updatedAt` before `apply_pending_compaction`
-> reads the gap, so a parked cut waits for the hard ceiling. Scoring before
-> that fix would measure the buggy path.
+> **Missed-free-apply fix (2026-09-25).** On a restore, the truncation-anchor
+> save stamped `updatedAt` before `apply_pending_compaction` read the gap, so a
+> parked cut waited for the paid hard ceiling. `apply_document_offload` had the
+> same problem after any apply. Both now read `_turn_start_stamp`, the previous
+> turn's stamp captured before any save at the head of the turn. The first full
+> harness run should be on a build with this fix.
 
 > ⛔ **WAIVED 2026-09-21 — the veto below did not run, and the defaults are
 > in production.** Recording it here because a gate merely unrun reads, to the
