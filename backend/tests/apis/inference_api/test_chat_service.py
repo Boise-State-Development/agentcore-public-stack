@@ -650,6 +650,49 @@ async def test_resume_replays_assistant_id_onto_the_same_slot(
     assert mock_create_agent.call_count == 2
 
 
+class TestProjectMemoryCacheKey:
+    """Shared Projects 2.4b: a project harness's scope-addressed memory tools.
+
+    They close over the project and its two space ids, which reach the key
+    through the same ``memory_binding`` element in a second shape. The 2.1
+    binding digest must not move, or every memory-bound Agent misses once.
+    """
+
+    SCOPES = {"projectId": "prj_1", "sharedSpaceId": "spc_shared", "personalSpaceId": None}
+
+    def test_the_agent_binding_digest_is_unchanged(self):
+        # md5(json.dumps(["spc_1", "Brain", "readwrite"]))[:8], as 2.1 shipped it.
+        assert service.memory_binding_digest(
+            {"spaceId": "spc_1", "spaceName": "Brain", "access": "readwrite"}
+        ) == "2f6a3184"
+
+    def test_the_project_digest_separates_project_and_both_spaces(self):
+        d = service.memory_binding_digest
+        base = d(self.SCOPES)
+        assert base and base == d(dict(self.SCOPES))
+        assert base != d({**self.SCOPES, "projectId": "prj_2"})
+        assert base != d({**self.SCOPES, "sharedSpaceId": None})
+        assert base != d({**self.SCOPES, "personalSpaceId": "spc_mine"})
+
+    def test_the_shapes_cannot_collide(self):
+        d = service.memory_binding_digest
+        as_binding = {"spaceId": "prj_1", "spaceName": "spc_shared", "access": None}
+        assert d(as_binding) != d(self.SCOPES)
+
+    @pytest.mark.asyncio
+    async def test_a_harness_turn_caches_and_a_new_personal_space_misses(
+        self, mock_create_agent, mock_freshness_hash
+    ):
+        common = dict(session_id="s", user_id="u", extra_tools=[object()], extra_tools_key_described=True)
+        first = await service.get_agent(**common, memory_binding=self.SCOPES)
+        assert await service.get_agent(**common, memory_binding=dict(self.SCOPES)) is first
+        after_save = await service.get_agent(
+            **common, memory_binding={**self.SCOPES, "personalSpaceId": "spc_mine"}
+        )
+        assert after_save is not first
+        assert mock_create_agent.call_count == 2
+
+
 class TestMemoryBindingCacheKey:
     """Shared Projects 2.1: agents bound to a Memory Space are cacheable.
 

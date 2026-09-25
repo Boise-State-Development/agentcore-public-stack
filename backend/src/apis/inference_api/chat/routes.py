@@ -11,7 +11,7 @@ import asyncio
 import json
 import logging
 from collections import OrderedDict
-from typing import AsyncGenerator, Optional, Union
+from typing import TYPE_CHECKING, AsyncGenerator, Optional, Tuple, Union
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -30,6 +30,7 @@ from apis.shared.feature_flags import (
     agent_preparing_phase_enabled,
     agents_enabled,
     attachment_turn_guard_enabled,
+    memory_spaces_enabled,
     mid_turn_steering_enabled,
     skills_enabled,
 )
@@ -98,6 +99,10 @@ from .system_prompt_resolver import (
 )
 
 from apis.shared.security.log_sanitize import scrub_log
+
+if TYPE_CHECKING:
+    from apis.inference_api.chat.project_memory import ProjectMemoryTurn
+    from apis.shared.projects.models import Project
 
 logger = logging.getLogger(__name__)
 
@@ -368,26 +373,34 @@ PROJECTS_DISABLED_MESSAGE = (
 )
 
 
-async def _project_turn_refusal(project_id: Optional[str]) -> Optional[str]:
-    """Why a project harness may not start a turn right now, or None if it may.
+async def _project_turn_gate(project_id: Optional[str]) -> Tuple[Optional[str], Optional["Project"]]:
+    """``(refusal, project)`` for a project harness turn; the refusal is None if it may run.
 
     Membership was already checked by the agent access check (it delegates to the
     project). What that check deliberately allows is *reading* an archived project, so a
     new turn is refused here: an archived project is read-only (shared-projects §3.1).
+    The project META read here is the turn's only one; memory takes ``sharedSpaceId``
+    from it (2.4b).
     """
     from apis.shared.projects.repository import ProjectRepository
 
     if not project_id:
-        return "This project agent isn't attached to a project. Ask the project owner for help."
+        return "This project agent isn't attached to a project. Ask the project owner for help.", None
     project = await asyncio.to_thread(ProjectRepository().get_project, project_id)
     if project is None:
-        return "This project no longer exists."
+        return "This project no longer exists.", None
     if project.status != "active":
         return (
             f'The project "{project.name}" is archived, so it can\'t start new conversations. '
             "Ask the project owner to restore it."
-        )
-    return None
+        ), project
+    return None, project
+
+
+async def _project_turn_refusal(project_id: Optional[str]) -> Optional[str]:
+    """Why a project harness may not start a turn right now, or None if it may."""
+    refusal, _ = await _project_turn_gate(project_id)
+    return refusal
 
 
 async def _resolve_user_default_model(
@@ -2688,6 +2701,11 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # dropped (§9.6) and is streamed before ``message_start``; it never reaches the prompt.
     turn_project_id: Optional[str] = None
     agent_notice_event: Optional[AgentNoticeEvent] = None
+    # Shared Projects 2.4b: a harness turn's memory load (started once the project is
+    # known) and its result, which supplies `memory_context`, the scope-addressed
+    # memory tools and their cache-key element.
+    project_memory_task: Optional["asyncio.Task[ProjectMemoryTurn]"] = None
+    project_memory: Optional["ProjectMemoryTurn"] = None
     # Version snapshots (§4): which Agent snapshot this turn resolved to, for the log line
     # below. ``None`` means the live record ran — a plain chat turn with no Agent, an Agent
     # with nothing published, or the owner running their own draft.
@@ -3015,7 +3033,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
 
         runs_project_harness = is_project_harness(assistant)
         if runs_project_harness:
-            refusal = await _project_turn_refusal(assistant.project_id)
+            refusal, turn_project = await _project_turn_gate(assistant.project_id)
             if refusal:
                 refused_event = ConversationalErrorEvent(
                     code=ErrorCode.FORBIDDEN, message=refusal, recoverable=False
@@ -3033,6 +3051,15 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "X-Session-ID": input_data.session_id},
                 )
             turn_project_id = assistant.project_id
+            # Shared Projects 2.4b: the project's memory spaces, read now and awaited at
+            # prompt assembly (5b), so the reads overlap binding resolution and the
+            # knowledge-base search instead of adding to the time to first token.
+            if memory_spaces_enabled():
+                from apis.inference_api.chat.project_memory import load_project_memory
+
+                project_memory_task = asyncio.create_task(
+                    load_project_memory(turn_project_id, turn_project.shared_space_id, user_id)
+                )
 
         # 2b. Agent Designer Phase 3 — resolve the Agent's governed capabilities
         # for the INVOKING user (D5), before the expensive KB search. v1 blocks
@@ -3158,7 +3185,19 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 over=_instructions_heading(bool(turn_project_id)) if effective_instructions else None,
             )
 
-        # 5b. Agent Designer Phase 3: hydrate the bound Memory Space content (read-only),
+        # 5b. A project harness's memory: the `project` and `mine` blocks, read by the
+        # task started at 2a'. It replaces any Agent memory binding (the harness has no
+        # binding surface, and the two tool families share names).
+        if project_memory_task is not None:
+            from apis.inference_api.chat.project_memory import await_project_memory
+
+            project_memory = await await_project_memory(project_memory_task)
+            memory_context = project_memory.memory_context or None
+            if agent_memory is not None:
+                logger.warning("Project harness has a memory binding; project memory replaces it")
+                agent_memory = None
+
+        # 5b'. Agent Designer Phase 3: hydrate the bound Memory Space content (read-only),
         # in either branch. Sent as `memory_context`, not appended to the prompt.
         # Hydration re-reads via the invoker
         # (MemorySpaceService re-checks viewer+ internally). Empty for a fresh space.
@@ -3604,6 +3643,11 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 user_id=user_id,
                 user_email=current_user.email,
             )
+            # A project harness addresses its spaces by scope instead (2.4b).
+            if project_memory is not None:
+                from apis.inference_api.chat.project_memory import build_project_memory_tools
+
+                memory_tools = build_project_memory_tools(project_memory, current_user)
             extra_tools = extra_tools + memory_tools
 
             # document_read for any session that carries a readable attachment
@@ -3630,15 +3674,16 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             # Memory tools close over the resolved binding, so it is a cache-key
             # element (Shared Projects 2.1). Only set when the tools were built,
             # so the key and the toolset cannot disagree.
-            memory_binding_key = (
-                {
+            if project_memory is not None:
+                memory_binding_key = project_memory.binding_key()
+            elif memory_tools:
+                memory_binding_key = {
                     "spaceId": agent_memory.space_id,
                     "spaceName": agent_memory.space_name,
                     "access": agent_memory.access,
                 }
-                if memory_tools
-                else None
-            )
+            else:
+                memory_binding_key = None
 
             # System-prompt assembly, the single-flight lease, skill
             # resolution and every tool builder (documents, attachments,

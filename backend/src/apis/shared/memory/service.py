@@ -142,6 +142,14 @@ class MemorySpaceNotFoundError(MemorySpaceError):
     """The space does not exist (or the caller may not even know it does)."""
 
 
+class MemoryEntryNotFoundError(MemorySpaceNotFoundError):
+    """The space is there and readable, but the entry is not.
+
+    A subclass, so every caller that catches :class:`MemorySpaceNotFoundError`
+    behaves as before; the project harness's tools tell the two apart.
+    """
+
+
 class MemorySpacePermissionError(MemorySpaceError):
     """The caller lacks the required role on the space."""
 
@@ -765,6 +773,30 @@ class MemorySpaceService:
             return ""
         return self.store.get(space.index_s3_key).decode("utf-8")
 
+    def read_project_space_index(
+        self, space_id: str, *, project_id: str, scope: MemoryScope, user_id: str
+    ) -> str:
+        """A project space's ``MEMORY.md`` for a caller whose project role is already settled.
+
+        The project harness's turn path, which has resolved the caller as a
+        member of an active project before it gets here. It skips
+        :meth:`resolve_permission` (a project META and a ``MEMBER#`` read) and
+        checks instead that the space is the one the project points at:
+        ``scope`` and ``project_id`` must match, and a ``personal_in_project``
+        space must belong to ``user_id``. Anything else reads as not found.
+        """
+        space = self.repository.get_space(space_id)
+        if (
+            space is None
+            or space.scope != scope
+            or space.project_id != project_id
+            or (scope == "personal_in_project" and space.user_id != user_id)
+        ):
+            raise MemorySpaceNotFoundError(f"Memory space '{space_id}' not found")
+        if not space.index_s3_key:
+            return ""
+        return self.store.get(space.index_s3_key).decode("utf-8")
+
     def update_index(
         self,
         space_id: str,
@@ -836,7 +868,7 @@ class MemorySpaceService:
         self._require(space_id, user_id, user_email, "viewer")
         ref = self._find_ref(space_id, slug)
         if ref is None:
-            raise MemorySpaceNotFoundError(
+            raise MemoryEntryNotFoundError(
                 f"entry '{slug}' not found in space '{space_id}'"
             )
         return self.store.get(ref.s3_key).decode("utf-8")

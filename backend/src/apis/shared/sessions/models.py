@@ -183,10 +183,12 @@ class PausedTurnSnapshot(BaseModel):
     memory_binding: Optional[Dict[str, Any]] = Field(
         default=None,
         alias="memoryBinding",
-        description="The Agent's resolved Memory-Space binding ({spaceId, spaceName, "
-                    "access}) the paused turn was built with. A cache-key element: "
-                    "resume replays it or the paused agent is orphaned. None when the "
-                    "turn had no binding and on snapshots written before the field existed.",
+        description="What the paused turn's memory tools closed over: an Agent's "
+                    "resolved Memory-Space binding ({spaceId, spaceName, access}) or, for a "
+                    "project harness, its scopes ({projectId, sharedSpaceId, "
+                    "personalSpaceId}; Shared Projects 2.4b). A cache-key element: resume "
+                    "replays it or the paused agent is orphaned. None when the turn had no "
+                    "memory tools and on snapshots written before the field existed.",
     )
     memory_context: Optional[str] = Field(
         default=None,

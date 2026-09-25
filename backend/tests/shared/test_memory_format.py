@@ -30,6 +30,7 @@ from apis.shared.memory.format import (
     render_frontmatter,
     render_items,
     split_frontmatter,
+    strip_anchors,
     validate_slug,
 )
 from apis.shared.memory.validation import (
@@ -419,3 +420,21 @@ class TestTokens:
     def test_suite_never_counts_against_real_bedrock(self):
         # tests/conftest.py turns counting off so no test reaches Bedrock.
         assert memory_tokens.token_count_model_id() == ""
+
+
+# ---- anchors out of injected memory (2.4b) --------------------------------
+
+
+class TestStripAnchors:
+    def test_removes_every_anchor_and_the_blanks_before_it(self):
+        items = (Item(anchor="abcdefgh", text="Batch in groups of 50."), Item(anchor="hjkmnpqr", text="Two\nlines"))
+        text = render_items(items)
+        assert "<!-- e:" in text
+        assert strip_anchors(text) == "- Batch in groups of 50.\n- Two\n  lines\n"
+
+    def test_leaves_other_comments_and_text_alone(self):
+        text = "- Keep <!-- a note --> and e:abcdefgh\n"
+        assert strip_anchors(text) == text
+
+    def test_accepts_either_case_and_loose_spacing(self):
+        assert strip_anchors("- x<!--e:ABCDEFGH-->\n") == "- x\n"
