@@ -94,6 +94,7 @@ LOG_PATTERNS = {
     "retrieval_hits": '"customer context items"',
     "retrieval_failed": '"memory retrieval failed"',
     "retrieval_throttled": '"memory retrieval throttled"',
+    "retrieval_reconnected": '"memory retrieval reconnected"',
     "retrieval_error": '"Failed to retrieve customer context"',
     "ltm_enabled": '"Long-term memory"',
 }
