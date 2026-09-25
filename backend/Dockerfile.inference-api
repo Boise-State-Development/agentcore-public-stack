@@ -100,6 +100,29 @@ ARG AWS_REGION=us-east-1
 ENV AWS_REGION=${AWS_REGION}
 ENV AWS_DEFAULT_REGION=${AWS_REGION}
 
+# Keep conversation content out of OpenTelemetry. Under AgentCore, ADOT
+# records every prompt and reply into the runtime log group's `otel-rt-logs`
+# stream, from two scopes that each have their own switch:
+#
+# - opentelemetry.instrumentation.botocore.bedrock-runtime: ADOT *defaults*
+#   this to "true" when AGENT_OBSERVABILITY_ENABLED is set, but with
+#   os.environ.setdefault, so a value already in the environment wins. With
+#   "false" the gen_ai.* events keep role, finish reason and tool name/id and
+#   lose the text.
+# - strands.telemetry.tracer: an empty `gen_ai_unredacted_attributes=` list
+#   turns on Strands' redaction with nothing exempt, so every message, system
+#   prompt and tool input/result becomes "[REDACTED]". Spans, timings and
+#   token usage are unchanged. The variable is comma-separated; add any other
+#   opt-in token alongside this one, never in place of it.
+#
+# ENV rather than a Runtime variable because the Runtime caps
+# EnvironmentVariables at 50 (runtime-env-var-limit.test.ts). A deployment
+# that wants content back (AgentCore Evaluations needs it) can override
+# either one on the Runtime. tests/security/test_otel_content_capture.py pins
+# both switches to the library code they depend on.
+ENV OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=false
+ENV OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_unredacted_attributes=
+
 # Expose port 8080 (AgentCore Runtime standard port)
 EXPOSE 8080
 

@@ -555,6 +555,15 @@ def feedback_eval_sampling_enabled() -> bool:
     a scope. Flipping this flag is that decision. The read surfaces (the
     queue list, the profile's judged aggregates) are not gated — they show
     numbers only and tolerate the absence of any judged row.
+
+    ⚠️ Turning this on is not enough by itself. The inference-api image
+    redacts Strands' message content in telemetry
+    (``OTEL_SEMCONV_STABILITY_OPT_IN`` in ``Dockerfile.inference-api``), so
+    the judge would read ``[REDACTED]`` in place of every message. An
+    environment that opts in must also override that variable on the
+    AgentCore Runtime, e.g. ``gen_ai_unredacted_attributes=gen_ai.*``. That
+    records every conversation in the runtime log group, not just the
+    sampled ones.
     """
     return os.environ.get("FEEDBACK_EVAL_SAMPLING_ENABLED", "false").strip().lower() == "true"
 
