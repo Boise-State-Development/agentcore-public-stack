@@ -37,6 +37,10 @@ KEY = f"assistants/{ASSISTANT_ID}/documents/{DOCUMENT_ID}/report.pdf"
 #: branch: reserve the real size, then commit it — net-zero on reservedBytes.
 OBJECT_BYTES = 2048
 
+#: What ``document_service.soft_delete_document`` writes, as a literal: the
+#: consumer's own constant must agree with it, not define it.
+DELETING = "deleting"
+
 
 @pytest.fixture()
 def table(monkeypatch):
@@ -1106,7 +1110,8 @@ class TestADeletedDocumentIsNotRecreated:
             ic.set_document_terminal(ASSISTANT_ID, DOCUMENT_ID, ic.STATUS_COMPLETE)
         assert calls["n"] == ic.MAX_RECORD_UPDATE_ATTEMPTS
 
-    def test_a_late_completion_for_a_deleted_document_recreates_nothing(self, table):
+    @pytest.mark.parametrize("bedrock", [["NOT_FOUND", "INDEXED"], ["INDEXED"], ["FAILED"]])
+    def test_a_late_event_for_a_deleted_document_recreates_nothing(self, table, bedrock):
         """Late event after the delete released the reservation and removed the row.
 
         Previously: ``settle_once`` recreated the row and claimed, the reconcile
@@ -1117,7 +1122,7 @@ class TestADeletedDocumentIsNotRecreated:
         self._delete_doc(table)
         with patch(
             "apis.shared.kb_backend.managed_backend.ManagedKbBackend",
-            return_value=_FakeBackend(statuses=["INDEXED"]),
+            return_value=_FakeBackend(statuses=bedrock),
         ):
             result = ic.handle_object(BUCKET, KEY)
 
@@ -1127,14 +1132,122 @@ class TestADeletedDocumentIsNotRecreated:
         assert int(kb.get("storedBytes") or 0) == 0, "bytes were committed for a deleted document"
         assert int(kb.get("totalBytes") or 0) == 0
 
-    def test_a_late_failure_for_a_deleted_document_recreates_nothing(self, table):
+
+# ---------------------------------------------------------------------------
+# A deleted document is not ingested, and a deleting one is not revived
+# ---------------------------------------------------------------------------
+class TestADeletedDocumentIsNotIngested:
+    """The event can outlive the document. Two ways to act on a deleted one:
+
+    * **Ingesting it.** Cleanup removes the managed copy; an ingest that lands
+      after that puts the content back with no row pointing at it — billed per
+      GB-month and taking a ``top_k`` slot before the status filter drops it.
+    * **Reviving it.** A soft-deleted row stays ``deleting`` until cleanup
+      finishes (or for its whole TTL if cleanup fails). The retrieval filter joins
+      on that row, so ``complete`` over it serves a document its owner deleted.
+    """
+
+    def _seed_managed(self, table):
+        _seed_kb(table, retrievalEngine="managed", awsKbId="KB123", awsDataSourceId="DS456")
+
+    def _key(self):
+        return {"PK": f"AST#{ASSISTANT_ID}", "SK": f"DOC#{DOCUMENT_ID}"}
+
+    def _soft_delete(self, table):
+        """What ``document_service.soft_delete_document`` writes."""
+        table.update_item(
+            Key=self._key(),
+            UpdateExpression="SET #s = :d, #ttl = :ttl",
+            ExpressionAttributeNames={"#s": "status", "#ttl": "ttl"},
+            ExpressionAttributeValues={":d": DELETING, ":ttl": 1893456000},
+        )
+
+    def _doc_or_none(self, table):
+        return table.get_item(Key=self._key()).get("Item")
+
+    def _kb(self, table):
+        return table.get_item(
+            Key={"PK": f"AST#{ASSISTANT_ID}", "SK": f"KB#{ASSISTANT_ID}"}
+        ).get("Item") or {}
+
+    def test_an_event_for_a_removed_document_never_reaches_bedrock(self, table):
         self._seed_managed(table)
-        self._delete_doc(table)
-        with patch(
-            "apis.shared.kb_backend.managed_backend.ManagedKbBackend",
-            return_value=_FakeBackend(statuses=["FAILED"]),
-        ):
+        table.delete_item(Key=self._key())
+        fake = _FakeBackend()
+
+        with patch("apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake):
             result = ic.handle_object(BUCKET, KEY)
 
-        assert result["status"] == "FAILED"
+        assert fake.ingested == [], "a deleted document was ingested into the knowledge base"
+        assert fake.status_calls == 0
+        assert result["ingested"] is False
+        assert result["note"] == "document-deleted"
         assert self._doc_or_none(table) is None
+
+    def test_an_event_for_a_deleting_document_never_reaches_bedrock(self, table):
+        self._seed_managed(table)
+        self._soft_delete(table)
+        fake = _FakeBackend()
+
+        with patch("apis.shared.kb_backend.managed_backend.ManagedKbBackend", return_value=fake):
+            result = ic.handle_object(BUCKET, KEY)
+
+        assert fake.ingested == [], "a deleting document was ingested into the knowledge base"
+        assert fake.status_calls == 0
+        assert result["note"] == "document-deleted"
+        doc = self._doc_or_none(table)
+        assert doc["status"] == DELETING
+        assert "byteCapSettled" not in doc
+        kb = self._kb(table)
+        assert int(kb.get("storedBytes") or 0) == 0
+        assert int(kb.get("totalBytes") or 0) == 0
+
+    @pytest.mark.parametrize("status", ["complete", "failed", "uploading"])
+    def test_a_status_write_does_not_revive_a_deleting_row(self, table, monkeypatch, status):
+        """``uploading`` is the provisioner's write; the other two are terminal."""
+        self._soft_delete(table)
+        sleeps = []
+        monkeypatch.setattr(ic.time, "sleep", sleeps.append)
+
+        assert ic.set_document_terminal(ASSISTANT_ID, DOCUMENT_ID, status, error="x") is False
+
+        doc = self._doc_or_none(table)
+        assert doc["status"] == DELETING
+        assert int(doc["ttl"]) == 1893456000
+        assert "ingestionError" not in doc
+        assert sleeps == [], "a rejected guard was retried as if transient"
+
+    def test_a_delete_during_indexing_is_not_overwritten_by_complete(self, table):
+        """The document is soft-deleted while this invocation waits on Bedrock. The
+        start-of-invocation check passed, so the terminal write is the last line."""
+        self._seed_managed(table)
+        soft_delete = self._soft_delete
+
+        class _DeletedWhileIndexing(_FakeBackend):
+            async def ingest(self, kb_ref, source):
+                await super().ingest(kb_ref, source)
+                soft_delete(table)
+
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend",
+            return_value=_DeletedWhileIndexing(),
+        ):
+            ic.handle_object(BUCKET, KEY)
+
+        assert self._doc_or_none(table)["status"] == DELETING
+
+    def test_the_row_is_read_strongly_consistent(self, table, monkeypatch):
+        """A missing row now means "do not ingest". Every producer writes the row
+        before the object, but an eventually consistent read could still miss one
+        written a moment ago and drop a real upload."""
+        reads = []
+
+        class _Spy:
+            def get_item(self, **kwargs):
+                reads.append(kwargs)
+                return table.get_item(**kwargs)
+
+        monkeypatch.setattr(ic, "_table", lambda: _Spy())
+
+        assert ic._get_doc_row(ASSISTANT_ID, DOCUMENT_ID)["status"] == "uploading"
+        assert reads[0].get("ConsistentRead") is True
