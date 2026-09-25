@@ -209,3 +209,27 @@ def test_an_archived_projects_harness_is_read_only_for_every_member(project):
 
     service.update_project(created.project_id, OWNER, status="active")
     assert permission(created.harness_agent_id, EDITOR)[1] == "editor"
+
+
+def test_the_kill_switch_shuts_the_harness_for_everyone(project, monkeypatch):
+    """PROJECTS_ENABLED=false must stop the harness wherever it is reachable, not
+    only the /projects routes: no member (nor its creator) gets a role, so chat
+    turns and the agent document routes refuse alike. Nothing is deleted."""
+    from apis.shared.assistants.service import is_disabled_project_harness
+
+    _, created = project
+    plain = ordinary_agent()
+    assert not asyncio.run(is_disabled_project_harness(created.harness_agent_id))
+
+    monkeypatch.setenv("PROJECTS_ENABLED", "false")
+    for user in (OWNER, EDITOR, VIEWER):
+        assert access(created.harness_agent_id, user) == (None, None)
+        # What the agent document and sync-policy routes ask.
+        assert permission(created.harness_agent_id, user)[1] is None
+    assert asyncio.run(is_disabled_project_harness(created.harness_agent_id))
+    # An ordinary agent is untouched by the switch.
+    assert access(plain.assistant_id, OWNER)[1] == "owner"
+    assert not asyncio.run(is_disabled_project_harness(plain.assistant_id))
+
+    monkeypatch.setenv("PROJECTS_ENABLED", "")
+    assert access(created.harness_agent_id, EDITOR)[1] == "editor"

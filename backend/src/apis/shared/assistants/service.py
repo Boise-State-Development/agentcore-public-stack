@@ -233,12 +233,18 @@ def _project_harness_role(assistant: Assistant, user_id: str, user_email: Option
     An archived project is read-only for everyone (shared-projects 1.2), so its harness
     is too: every member resolves as a viewer, which every agent write route refuses.
 
+    While ``PROJECTS_ENABLED`` is off nobody has a role, the harness's creator included:
+    the kill switch has to stop the harness everywhere it is reachable (chat turns on
+    inference-api, the agent document and sync routes on app-api), not only the
+    ``/projects`` surface.
+
     Imported lazily: ``apis.shared.projects`` creates harnesses through this module, and
     ``access`` is the one projects module that does not import back.
     """
+    from apis.shared.feature_flags import projects_enabled
     from apis.shared.projects.access import resolve_project_role
 
-    if not assistant.project_id:
+    if not assistant.project_id or not projects_enabled():
         return None
     project, role = resolve_project_role(assistant.project_id, user_id, user_email)
     if role and project is not None and project.status == "archived":
@@ -386,6 +392,24 @@ async def bump_last_used_at(assistant_id: str, throttle_hours: int = 24) -> bool
     except Exception as e:
         logger.warning(f"Failed to bump lastUsedAt for {assistant_id}: {e}")
         return False
+
+
+async def is_disabled_project_harness(assistant_id: str) -> bool:
+    """True when ``assistant_id`` is a project harness and Projects are switched off.
+
+    For callers that were just refused access and want to say why: while the kill
+    switch is off, a harness refuses everyone (``_project_harness_role``), which is
+    otherwise indistinguishable from not being a member.
+    """
+    from apis.shared.feature_flags import projects_enabled
+
+    if projects_enabled():
+        return False
+    assistants_table = os.environ.get("DYNAMODB_ASSISTANTS_TABLE_NAME")
+    if not assistants_table:
+        return False
+    assistant = await _get_assistant_cloud_without_ownership_check(assistant_id, assistants_table)
+    return is_project_harness(assistant)
 
 
 async def assistant_exists(assistant_id: str) -> bool:
