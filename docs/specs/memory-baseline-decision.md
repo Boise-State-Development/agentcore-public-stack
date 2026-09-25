@@ -1,6 +1,6 @@
 # AgentCore Memory baseline: decision record (Shared Projects Phase 0)
 
-**Status:** **Decided: C (hybrid).** Dev evidence 2026-09-25; the step-5 re-test passed after Phase 0.2 (see "Re-test after Phase 0.2"). The prod census is pending (see "Not yet covered").
+**Status:** **Decided: C (hybrid).** Dev evidence 2026-09-25; the step-5 re-test passed after Phase 0.2 (see "Re-test after Phase 0.2"). Prod read path checked 2026-09-25 (see "Production (read-only)"); the prod record census is pending.
 **Spec:** `shared-projects.md` §1 (procedure §1.2, options §1.3), PR plan §7 Phase 0.
 **Tool:** `scripts/memory-audit/audit.py` (`inventory` and `probe`), plus a manual two-chat test on dev.boisestate.ai.
 **Privacy:** every figure below is an aggregate. Record text, actor ids and account-specific identifiers stay in the auditor's scratch directory.
@@ -127,9 +127,88 @@ Run against the Runtime version that shipped 0.2, which has no relevance overrid
 
 Chat B was a new session with a newly built agent, so the fact could only have come from long-term memory, not from the in-process agent cache or the conversation history.
 
+## Production (read-only, 2026-09-25)
+
+Read-only checks against the production account: runtime logs (`FilterLogEvents`, 7 days to 2026-09-25 20:00 UTC), CloudWatch metrics and alarm history, and a census run by an operator with `audit.py … inventory`. Aggregates only.
+
+**What prod runs.** Prod has release 1.24.0, not Phase 0.2:
+- **Relevance cut 0.7.** Every one of 2,878 agent builds logged `Retrieval: top_k=10, relevance_score=0.7`.
+- **Bounded retrieval client (#1157)**, live since release 1.23.0 reached prod on 2026-09-20 at about 21:00 UTC. It makes one attempt with a 2 s timeout. Before that, retrieval used the SDK's client and boto's default retries.
+
+### Read path (runtime logs, 7 days)
+
+| | Prod | Dev (same check, before 0.2) |
+|---|---|---|
+| Agent builds with long-term memory | 2,878 (2,143 with 2 namespaces, 735 with 3) | ~150 |
+| Turns | 6,249 (5,531 since the bounded client; 63% served by a cached agent) | — |
+| Turns with injected context (`Retrieved N customer context items`) | **43 (0.7%)**. Items per turn: 1 ×24, 2 ×5, 3 ×9, 4 ×3, 5 ×2 | 0 |
+| Retrieval throttles | **0** | 0 |
+| Retrieval failures | **560 turns (10.1% of turns since the bounded client)**; see below | 0 |
+
+Prod clears the 0.7 cut now and then, where dev never did. The dev probe explains it: only near-verbatim restatements score above 0.7. The 0.5 default should raise the hit rate in prod as it did in dev.
+
+### The ~1,300 failure lines
+
+The earlier count was 1,470 lines. That is **745 events, each logged twice** (plain text and OTEL JSON). **None is a throttle.**
+
+| Kind | Level | Events | Turns | Cause |
+|---|---|---|---|---|
+| `Failed to retrieve customer context: 'NoneType' object has no attribute 'get'` | ERROR | 473 | 473 | Dead pooled connection, masked by a handler bug (below) |
+| `memory retrieval failed … SSL: UNEXPECTED_EOF_WHILE_READING` | WARNING | 104 | 102 | Dead pooled connection |
+| `ValidationException`: `searchCriteria.searchQuery` longer than 10,000 characters | WARNING | 168 | 84 | User message over the API's query limit |
+| `memory retrieval throttled` | INFO | 0 | 0 | — |
+
+Turns with at least one failure (560) is less than the sum of the Turns column because 99 of the SSL turns also carry the masked error from another namespace. Connection failures hit 476 turns in all.
+
+**Per day** (turns with any failure / turns):
+
+| 09-20 (from 21:00) | 09-21 | 09-22 | 09-23 | 09-24 | 09-25 (to 20:00) |
+|---|---|---|---|---|---|
+| 17 / 123 | 106 / 1,331 (8.0%) | 109 / 1,005 (10.8%) | 104 / 921 (11.3%) | 138 / 1,481 (9.3%) | 86 / 670 (12.8%) |
+
+**By hour.** Failures follow the daytime usage curve. 72% fall between 15:00 and 24:00 UTC, and none between 08:00 and 11:00 UTC.
+
+**Not the load tests.** The load-test bursts were on 09-09 to 09-11, outside this window, and their data was cleaned from prod on 09-23. These failures come from real sessions at a steady daily rate, with human-scale pauses between turns.
+
+**Connection failures are a stale-connection problem.** Evidence:
+- **Only cached agents fail.** 475 of the 476 turns with a connection failure were served by a cached agent, which reuses its session manager's retrieval client. None was on a session's first turn.
+- **They fail almost instantly.** In sampled traces the error lands 13–18 ms after the user message is written. The service's own `RetrieveMemoryRecords` latency is p50 211–227 ms and p99 325–660 ms. The request never reached the service, so this is not the 2 s timeout.
+- **The idle time since the session's previous turn decides it.** Rows are cached-agent turns only:
+
+  | Idle before the turn | Turns | Connection failures |
+  |---|---|---|
+  | under 3 min | 1,859 | 1 (0%) |
+  | 3–5 min | 462 | 5 (1%) |
+  | 5–6 min | 136 | 15 (11%) |
+  | 6–15 min | 529 | 431 (81%) |
+  | over 15 min | 26 | 21 (81%) |
+
+  Something on the path drops a connection that has sat idle for about 6 minutes; a 350 s idle timeout (a NAT gateway's) would fit, but this is not confirmed. The next request on that connection then fails.
+- **They started with #1157.** It set `total_max_attempts=1` so a throttle never adds retry backoff to first-token latency. That also turned off boto's retry of connection errors, which used to reconnect silently. In the 48 hours before release 1.23.0, the SDK client logged **0** connection errors (and 69 validation warnings, the same query-length class).
+
+**Handler bug.** `ConnectionClosedError` (and `ReadTimeoutError`) carry `response = None`. The per-namespace handler calls `getattr(e, "response", {}).get(...)`, which raises on `None`, and the exception escapes to the outer handler. So a single dead connection throws away **every** namespace's results for the turn, not just the failed one. The log also loses the real exception class.
+
+**Throttle alarm and service metrics.**
+- `agentcore-memory-throttles` was OK for the whole window. It last fired on 2026-09-11 from 04:04 to 04:23 UTC, a load-test night. `agentcore-memory-system-errors` was also OK.
+- `RetrieveMemoryRecords` published **no** `Throttles` or `SystemErrors` data points in the window. `Errors` equals `UserErrors` at 17–46 a day, which is the validation class.
+- Peak load on the busiest day was 38 calls a minute (0.6/s), about 50 times below the 30/s default quota. **No quota increase is needed** at organic load.
+
+**Impact today.** Small. At the 0.7 cut only 0.7% of turns inject anything, and a failed retrieval adds no latency (it fails in milliseconds). **After 0.2 reaches prod**, the 0.5 cut makes retrieval matter. These failures would then drop memory on about 10% of turns, mostly the first turn after a pause, which is when recall helps most.
+
+### Recommended fix (not implemented)
+
+Land Fixes 1 and 2 before, or together with, the release that carries Phase 0.2 to prod.
+
+1. **Handler.** Use `(getattr(e, "response", None) or {})`, so a connection error stays a per-namespace warning and the other namespaces' results are kept.
+2. **Retry connection errors once, but not throttles.** In `retrieve_for_namespace`, retry once with no backoff on botocore `ConnectionClosedError`, `SSLError` and `EndpointConnectionError`. Leave `total_max_attempts=1`, so a throttle still costs nothing.
+   - **Latency cost:** one new TCP and TLS handshake, only on turns whose pooled connection is dead (about 14% of cached-agent turns today). This is an estimate, not measured; expect tens of milliseconds before the model call on those turns.
+   - **Alternative:** close the client's pool when it has been idle for more than about 5 minutes. That pays the same handshake up front, on the same turns.
+3. **Query length.** Truncate `searchQuery` to the API's 10,000-character limit. Affects 1.5% of turns (long pasted text). The SDK path had the same failure.
+
+Other data-plane calls (`CreateEvent`, `ListEvents`) go through the SDK client with default retries, so any dead connections there are retried and never show up as failures.
+
 ## Not yet covered
 
-- **Prod record census.** It needs the `bedrock-agentcore` data-plane API, which the workstation's AWS CLI lacks, and prod scripting is blocked by the read-only guard.
-  - Either an operator runs `audit.py … inventory` with prod credentials (read-only), or the CLI gets upgraded.
-  - A read-only prod log check (7 days) showed context injected on about 90 turns against roughly 3,000 agent builds, plus about 1,300 retrieval failure or throttle lines not yet analysed.
+- **Prod record census.** An operator runs `audit.py … inventory` with read-only prod credentials; the read-only guard blocks scripted prod access from the agent, and the workstation's AWS CLI lacks the `bedrock-agentcore` data plane.
+- **Prod after Phase 0.2.** Hit rate and failure rate once a release carries the 0.5 cut, and Fixes 1–2 above, to prod.
 - **Consolidation of directly written records.** Whether the service ever consolidates records written straight into a strategy-less namespace (§1.3 residual) was not probed. It matters only for the Phase 3 derived index.
