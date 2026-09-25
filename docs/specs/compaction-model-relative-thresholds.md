@@ -426,6 +426,43 @@ replay real trajectories under a policy.
 >   compress (scoping §9, recommendation 2) remains the structural fix for
 >   the residual ~1%.
 
+> ✅ **FIX CONFIRMED 2026-09-25 — extract-then-compress clears the veto.**
+> `bound_summary(..., extract_enabled=True)` makes one verbatim extraction
+> call: standing instructions, decisions, identifiers, and changed values at
+> their latest value. That builds a pinned block, capped at half the budget.
+> It then compresses the narrative into the rest with the prompt above, sending
+> `temperature` only. The persisted text is `PINNED FACTS (verbatim; …)`
+> followed by `SUMMARY:`, stored verbatim like every summary, so restores
+> prepend identical bytes.
+>
+> **Fallbacks.** Extraction fails → plain compression (today's path).
+> Narrative fails → pinned block plus newest-first truncation
+> (`extract_then_truncate`). Everything fails → truncation. It never raises.
+>
+> **Flag.** `COMPACTION_SUMMARY_EXTRACT_ENABLED`, in development and default
+> off. Set it from `CDK_COMPACTION_SUMMARY_EXTRACT_ENABLED` on the Runtime only.
+>
+> Same harness and setup as above, Nova 2 Lite as the summary model:
+>
+> | family (n) | full | model_relative (Nova Micro) | extract + Nova 2 Lite |
+> |---|---|---|---|
+> | constraint (36) | 1.00 | 0.78 (8 / 0, p=0.008) | **1.00** (0 / 0, p=1.0) |
+> | decision (24) | 1.00 | 0.58 (10 / 0, p=0.002) | **1.00** (0 / 0, p=1.0) |
+> | reference (24) | 0.96 | 0.67 (8 / 1, p=0.039) | **1.00** (0 / 1, p=1.0) |
+> | superseded (24) | 0.96 | 0.96 (0 / 0, p=1.0) | 0.96 (0 / 0, p=1.0) |
+>
+> Facts whose stating turn was cut: **1.00** (n=52), against 0.50 today. The
+> summary grows from a median of ~770 tokens to ~1,700; the cut costs ~$0.02
+> instead of ~$0.001.
+>
+> **Latency.** The summary step on a cut turn goes from 3–7 s (Nova Micro) to
+> **11–23 s** (Nova 2 Lite, two calls). It runs after the final `metadata`
+> event, so time to first token is unchanged, but `done` arrives later on
+> that one turn.
+>
+> **Model choice.** The model matters: on Nova Micro the free screen kept
+> 88%. Details and the concurrency option are in scoping §9.2.
+
 - **Veto before default change in prod:** the spiral spec §4.3 long-session
   eval (constraint retention / revision continuity / reference lookup) runs
   on PR-1 with the fixed-threshold arm as control. A deeper cut is a bigger

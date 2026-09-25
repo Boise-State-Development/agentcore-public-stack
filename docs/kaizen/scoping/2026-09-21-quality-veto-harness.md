@@ -462,3 +462,63 @@ compression is lifted for Nova 2 Lite.
 - Recommendation 3, `topP` for Claude summarizers, which is a separate task.
 - The §8 caveats all still apply: Haiku-written stand-in records, a
   synthetic corpus, one answering model, and only the restore pace.
+
+### 9.2 Paid confirmation: extract-then-compress in production code (2026-09-25)
+
+Recommendation 2 moved into `compaction_summary.py`, behind
+`COMPACTION_SUMMARY_EXTRACT_ENABLED` (in development, default off). The
+harness's `extract_*` arms now set `summary_extract_enabled` on the config
+and run the production `bound_summary`. They no longer swap in the
+prototype copy in `summarizers.py`, which is deleted (`compress_only` stays).
+
+**Configuration.** Same as §8 except the arms:
+- fresh `records` (`--chunk-turns 1 --record-words 600`);
+- `cut --summary records --summary-model` with arms
+  `full,model_relative,extract_nova2lite` on the restore pace at 200k;
+- `ask --k 3 --workers 4` on Haiku 4.5 in dev;
+- 972 calls, all `end_turn`.
+
+**Summaries.** Records came to ~12.2k–16.3k tokens at the cut.
+`model_relative` (Nova Micro, plain) compressed them to 377–1,722 tokens.
+`extract_nova2lite` returned `extract_then_compress` in all 12 sessions, at
+702–3,865 tokens (median ~1,700).
+
+| family (n) | full | model_relative | extract_nova2lite |
+|---|---|---|---|
+| constraint (36) | 1.00 | **0.78** (8 losses / 0 wins, p=0.008) | **1.00** (0 / 0, p=1.0) |
+| decision (24) | 1.00 | **0.58** (10 / 0, p=0.002) | **1.00** (0 / 0, p=1.0) |
+| reference (24) | 0.96 | **0.67** (8 / 1, p=0.039) | **1.00** (0 / 1, p=1.0) |
+| superseded (24) | 0.96 | 0.96 (0 / 0, p=1.0) | 0.96 (0 / 0, p=1.0) |
+
+- **By retention.** Facts whose stating turn was cut scored **1.00** with
+  extract-then-compress (n=52), against 0.50 with today's compression. Facts
+  whose turn was kept scored 0.98 under both (n=56).
+- **Free availability predicted it again.** It was 100% in every family for
+  `extract_nova2lite`, and 77.8 / 58.3 / 70.8 / 100 for `model_relative`.
+- **Misses.** `model_relative` had 82 wrong samples, 77 of them `UNKNOWN`.
+  `extract_nova2lite` had 3.
+
+**Spend.** About $7.20 for `ask` (actual tokens at Regional Haiku 4.5 rates,
+against a $13.42 estimate). About $3.50 for `records`. About $11 in total.
+
+**Latency, measured on these records** (4 cuts each, dev, us-west-2). The
+summary step takes:
+- Nova Micro plain: 3.3–7.3 s;
+- Nova Micro extract: 4.2–10.2 s;
+- Nova 2 Lite plain: 5.7–9.1 s;
+- **Nova 2 Lite extract: 11.4–22.7 s.**
+
+It runs in `update_after_turn`, after the turn's final `metadata` event and
+before `done`, only on the turn that advances the checkpoint. So it adds
+nothing before the first token, but on a cut turn it delays `done`, and with
+it the release of the session's single-flight lease, by that much.
+
+- One option, not built: run the two calls concurrently with the narrative
+  budget fixed at half. The pinned block is already capped at half, so the
+  cut would cost roughly the slower call, not the sum.
+- Another: move the summary off the stream's tail entirely.
+- Either change needs its own harness rescore.
+
+**Verdict.** Extract-then-compress on Nova 2 Lite, in production code, clears
+the veto: no family loses to the full history. It relies on the Nova
+2 Lite default (§9.1); on Nova Micro it screened at 88% (§9).
