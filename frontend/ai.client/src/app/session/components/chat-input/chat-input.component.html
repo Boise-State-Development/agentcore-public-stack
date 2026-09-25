@@ -426,11 +426,10 @@
   </div>
 
 <!--
-  Meta line beneath the shell. The left side reports — cost and context
-  (projected by the container as `composerMeta`), or a short status while one
-  applies — and the right side holds the one control, the model picker. The
-  projected badge is hidden rather than removed while a status shows, so its
-  count-up is not replayed every time the status clears.
+  Meta line beneath the shell. The left side carries a short status while one
+  applies; the right side holds the model picker and, after it, the context
+  meter (projected by the container as `composerMeta`), whose panel also
+  reports what the conversation has cost.
 -->
 @if (showMetaLine()) {
   <div class="flex min-h-8 items-center justify-between gap-3 pt-1 pl-3 text-xs text-gray-500 dark:text-gray-400">
@@ -438,12 +437,12 @@
       @if (statusHint(); as hint) {
         <span class="truncate">{{ hint }}</span>
       }
-      <div class="flex min-w-0 items-center" [hidden]="statusHint() !== null">
-        <ng-content select="[composerMeta]" />
-      </div>
     </div>
     @if (compact()) {
-      <app-model-dropdown size="compact" class="shrink-0" />
+      <div class="flex shrink-0 items-center gap-0.5">
+        <app-model-dropdown size="compact" class="shrink-0" />
+        <ng-content select="[composerMeta]" />
+      </div>
     }
   </div>
 }

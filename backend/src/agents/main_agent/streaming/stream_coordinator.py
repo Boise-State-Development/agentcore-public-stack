@@ -15,7 +15,10 @@ from agents.main_agent.session.hooks.prefix_fingerprint import (
     get_prefix_fingerprint,
     reset_prefix_fingerprints,
 )
-from agents.main_agent.session.hooks.context_attribution import get_prefix_token_split
+from agents.main_agent.session.hooks.context_attribution import (
+    get_context_breakdown,
+    get_prefix_token_split,
+)
 from apis.shared.observability.prefix_tokens import prompt_tokens_from_usage
 from apis.shared.feature_flags import (
     agent_status_live_drain_enabled,
@@ -838,16 +841,17 @@ class StreamCoordinator:
                             except Exception as ctx_err:
                                 logger.debug(f"Skipping contextWindow lookup: {ctx_err}")
 
-                            # Per-turn context attribution (system / tools /
-                            # messages), computed by ContextAttributionHook at
-                            # BeforeModelCallEvent and stashed on the agent.
+                            # Per-turn context attribution, measured by
+                            # ContextAttributionHook at BeforeModelCallEvent and
+                            # itemized here (skills, memory, tools by origin) —
+                            # after the model has answered, memoized per agent.
                             # Partitions sum to `total`; the frontend pairs it
                             # with `contextWindow` above for free-space.
                             try:
                                 from agents.main_agent.session.hooks.context_attribution import (
                                     get_context_breakdown,
                                 )
-                                breakdown = get_context_breakdown(agent)
+                                breakdown = get_context_breakdown(agent, itemized=True)
                                 if breakdown is not None:
                                     final_metadata["contextBreakdown"] = breakdown
                             except Exception as br_err:
@@ -1389,6 +1393,10 @@ class StreamCoordinator:
                                 if idx == len(message_ids_to_store) - 1
                                 else None
                             ),
+                            # The breakdown on the agent describes the turn's
+                            # LAST model call (the hook overwrites it per call),
+                            # so only the last message may carry it.
+                            include_context_breakdown=idx == len(message_ids_to_store) - 1,
                             turn_agent_id=turn_agent_id,  # Which Agent ran this turn (#756)
                             turn_project_id=turn_project_id,
                             tool_calls=(
@@ -1777,6 +1785,7 @@ class StreamCoordinator:
                         stream_end_time=time.time(),
                         first_token_time=first_token_time,
                         agent=main_agent_wrapper,
+                        include_context_breakdown=True,
                     )
                     logger.info(
                         "📊 Persisted interrupted-turn metadata for session %s (message_id=%s)",
@@ -3245,6 +3254,7 @@ class StreamCoordinator:
         tool_calls: Optional[Dict[str, Dict[str, int]]] = None,
         context_ledger: Optional[Dict[str, Any]] = None,
         turn_duration_ms: Optional[int] = None,
+        include_context_breakdown: bool = False,
     ) -> None:
         """
         Store message-level metadata (token usage, latency, model info, citations)
@@ -3509,6 +3519,18 @@ class StreamCoordinator:
                 if turn_duration_ms is not None:
                     metadata_kwargs["turn_duration_ms"] = turn_duration_ms
 
+                # What filled the context window on this call — the same
+                # payload the final `metadata` SSE carried — so the context
+                # meter's breakdown survives a reload. Read off the agent, not
+                # recomputed: this write runs after `done`, and costs nothing
+                # the user waits on. Labels can name skills and MCP servers,
+                # so it stays out of the admin CALL_ROW_PROJECTION (``label``
+                # is a content-bearing path segment).
+                if include_context_breakdown and strands_agent is not None:
+                    breakdown = get_context_breakdown(strands_agent, itemized=True)
+                    if breakdown:
+                        metadata_kwargs["contextBreakdown"] = breakdown
+
                 message_metadata = MessageMetadata(**metadata_kwargs)
 
                 # Store metadata
@@ -3585,9 +3607,12 @@ class StreamCoordinator:
             breakdown = get_context_breakdown(strands_agent) if strands_agent is not None else None
             if not breakdown:
                 return None
+            # Everything but the conversation is the static prefix — system,
+            # tools, and the skills / memory rows itemized out of the system
+            # total.
             total = 0
             for partition in breakdown.get("partitions", []) or []:
-                if isinstance(partition, dict) and partition.get("key") in ("system", "tools"):
+                if isinstance(partition, dict) and partition.get("key") != "messages":
                     total += int(partition.get("tokens") or 0)
             return total or None
         except Exception as e:  # noqa: BLE001

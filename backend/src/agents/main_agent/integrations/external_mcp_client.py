@@ -673,6 +673,12 @@ class ExternalMCPIntegration:
                 )
 
                 if client:
+                    # What the context breakdown calls this server's tools.
+                    # Display-only: never let it cost the server its tools.
+                    try:
+                        client.context_label = getattr(tool, "display_name", None) or tool_id
+                    except Exception:  # noqa: BLE001
+                        pass
                     # Pre-flight the MCP session so a single unreachable
                     # server (e.g. a connector that isn't running locally)
                     # drops out of the registry instead of failing the

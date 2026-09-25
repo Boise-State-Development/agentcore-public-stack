@@ -154,6 +154,24 @@ describe('ChatStateService', () => {
       expect(service.contextPct()).toBeCloseTo(1.5);
     });
 
+    it('keeps the latest turn breakdown per session, and clears it on a turn without one', () => {
+      service.setViewedSession('a');
+      const breakdown = {
+        total: 3000,
+        partitions: [{ key: 'messages', label: 'Messages', tokens: 3000 }],
+      };
+      service.setContext('a', 3000, 200000, breakdown);
+      expect(service.contextBreakdown()).toEqual(breakdown);
+      expect(service.contextBreakdownFor('b')).toBeNull();
+
+      // Re-seeding from session metadata (which has no breakdown) keeps it.
+      service.seedSessionAggregates('a', { totalCost: 1, lastContextTokens: 3000, contextWindow: 200000 });
+      expect(service.contextBreakdown()).toEqual(breakdown);
+
+      service.setContext('a', 4000, 200000);
+      expect(service.contextBreakdown()).toBeNull();
+    });
+
     it('ignores non-finite or non-positive turn costs', () => {
       service.setViewedSession('a');
       service.addTurnCost('a', NaN);

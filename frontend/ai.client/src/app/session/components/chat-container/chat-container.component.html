@@ -291,12 +291,12 @@
           (fileAttached)="onFileAttached($event)"
           [compact]="true"
 >
-          <!-- Cost + context, on the status side of the line beneath the
-               composer. Pinned to this chat's own session: an embedded chat is
-               deliberately NOT the viewed session, so an unpinned badge would
+          <!-- Context meter (cost lives in its panel), beside the model
+               picker. Pinned to this chat's own session: an embedded chat is
+               deliberately NOT the viewed session, so an unpinned meter would
                report whatever conversation the user last opened — a plausible
                number belonging to something else. -->
-          <app-session-cost-badge composerMeta [sessionId]="sessionId()" />
+          <app-context-meter composerMeta [sessionId]="sessionId()" />
         </app-chat-input>
       </div>
     </div>
@@ -342,9 +342,9 @@
           (fileAttached)="onFileAttached($event)"
           [compact]="true"
 >
-          <!-- Cost + context, on the status side of the line beneath the
-               composer; unpinned so it follows the viewed session. -->
-          <app-session-cost-badge composerMeta />
+          <!-- Context meter (cost lives in its panel), beside the model
+               picker; unpinned so it follows the viewed session. -->
+          <app-context-meter composerMeta />
         </app-chat-input>
       </div>
     </div>

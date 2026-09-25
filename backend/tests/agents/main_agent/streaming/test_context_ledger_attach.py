@@ -122,3 +122,48 @@ async def test_kill_switch_drops_the_prefix_split_too(monkeypatch):
 async def test_the_argument_is_optional_for_the_interrupt_path(monkeypatch):
     stored = await _store(monkeypatch, agent=None)
     assert "windowRemovedMessages" not in (stored.model_extra or {})
+
+
+def _wrapper_with_breakdown():
+    from agents.main_agent.session.hooks.context_attribution import _BREAKDOWN_ATTR
+
+    strands_agent = SimpleNamespace()
+    setattr(strands_agent, _BREAKDOWN_ATTR, {
+        "total": 1_000,
+        "partitions": [
+            {"key": "system", "label": "System instructions", "tokens": 300},
+            {"key": "tools", "label": "Tools", "tokens": 600},
+            {"key": "messages", "label": "Messages", "tokens": 100},
+        ],
+    })
+    return _wrapper(strands_agent)
+
+
+@pytest.mark.asyncio
+async def test_context_breakdown_is_persisted_on_the_turns_last_message(monkeypatch):
+    """The context meter's breakdown must survive a reload, so the turn's last
+    message carries the same payload the final `metadata` SSE did."""
+    stored = await _store(monkeypatch, agent=_wrapper_with_breakdown(), include_context_breakdown=True)
+    breakdown = stored.model_extra["contextBreakdown"]
+    assert breakdown["total"] == 1_000
+    assert [p["key"] for p in breakdown["partitions"]] == ["system", "tools", "messages"]
+    assert sum(p["tokens"] for p in breakdown["partitions"]) == 1_000
+    assert stored.model_dump(by_alias=True)["contextBreakdown"]["total"] == 1_000
+
+
+@pytest.mark.asyncio
+async def test_context_breakdown_is_not_persisted_on_earlier_calls(monkeypatch):
+    """The breakdown on the agent describes the turn's LAST call; an earlier
+    call's row must not claim it."""
+    stored = await _store(monkeypatch, agent=_wrapper_with_breakdown())
+    assert "contextBreakdown" not in (stored.model_extra or {})
+
+
+def test_context_breakdown_labels_stay_out_of_admin_projections():
+    """Labels can name skills and MCP servers; `label` is a content-bearing
+    path segment, so no admin projection may request the breakdown."""
+    from apis.shared.observability.content_policy import ALL_PROJECTIONS, is_content_bearing
+
+    assert is_content_bearing("contextBreakdown.partitions.label")
+    for projection in ALL_PROJECTIONS.values():
+        assert "contextBreakdown" not in projection

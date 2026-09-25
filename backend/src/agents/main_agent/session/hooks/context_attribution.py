@@ -74,6 +74,15 @@ usage) and the window all come from provider-reported usage, not from this
 split. Re-enable by deleting the guard once the native count is served here;
 tracked in ``docs/kaizen/review-queue.md``.
 
+**Itemization.** The displayed partitions are finer than the measured split:
+the system total is carved into System instructions / Skills / Memory and the
+tools total into per-origin children, by character share
+(:mod:`.context_itemization`). Every row set sums to the measured total it came
+from, so ``system + skills + memory`` is the split's ``systemTokens`` — which is
+what ``prefixTokens`` persists — and ``messages`` is unchanged. It is computed
+on read (``get_context_breakdown(agent, itemized=True)``), never in the hook,
+so it adds nothing before a model call.
+
 Best-effort: any failure is swallowed so context attribution can never break a
 model call.
 """
@@ -87,6 +96,7 @@ from typing import Any, Dict, Optional, Tuple
 
 from strands.hooks import BeforeModelCallEvent, HookProvider, HookRegistry
 
+from agents.main_agent.session.hooks.context_itemization import itemize_system, itemize_tools
 from apis.shared.observability.prefix_tokens import prefix_split_is_plausible
 
 logger = logging.getLogger(__name__)
@@ -94,6 +104,7 @@ logger = logging.getLogger(__name__)
 # Stashed on the per-session Strands agent instance.
 _SPLIT_ATTR = "_context_attribution_split"          # cached stable {systemTokens, toolTokens}
 _BREAKDOWN_ATTR = "_context_attribution_breakdown"  # latest per-turn breakdown dict
+_ITEMIZED_ATTR = "_context_attribution_itemized"    # (split key, system rows, tools row) memo
 
 # Process-level memo of the stable split, keyed by *session and configuration*
 # rather than by ``Agent`` instance. The instance attribute above is enough
@@ -220,12 +231,51 @@ def _has_inline_attachment(messages: Any) -> bool:
     return False
 
 
-def get_context_breakdown(agent: Any) -> Optional[dict]:
+def get_context_breakdown(agent: Any, itemized: bool = False) -> Optional[dict]:
     """Return the latest context breakdown stashed on ``agent``, or ``None``.
 
-    Used by the stream coordinator to enrich the final ``metadata`` SSE event.
+    By default, the three measured partitions (system / tools / messages) —
+    what the numeric readers (compaction calibration, static-prefix pricing,
+    interrupted-turn usage) need.
+
+    ``itemized=True`` is the display form the final ``metadata`` SSE event and
+    the persisted message row carry: Skills and Memory carved out of the system
+    total, and the tools total broken down by origin (:mod:`.context_itemization`).
+    Itemizing is done here, lazily, rather than in the hook, so none of it runs
+    before a model call; it is memoized per agent on the measured split, so a
+    turn pays for it at most once — after the model has answered.
     """
-    return getattr(agent, _BREAKDOWN_ATTR, None)
+    breakdown = getattr(agent, _BREAKDOWN_ATTR, None)
+    if not itemized or not isinstance(breakdown, dict):
+        return breakdown
+    try:
+        return _itemize_breakdown(agent, breakdown)
+    except Exception as e:  # noqa: BLE001 - itemizing is a display nicety
+        logger.debug("Context itemization skipped: %s", e)
+        return breakdown
+
+
+def _itemize_breakdown(agent: Any, breakdown: dict) -> dict:
+    by_key = {p.get("key"): p for p in breakdown.get("partitions") or [] if isinstance(p, dict)}
+    if "system" not in by_key or "tools" not in by_key:
+        return breakdown
+    system_tokens = int(by_key["system"].get("tokens") or 0)
+    tool_tokens = int(by_key["tools"].get("tokens") or 0)
+
+    memo_key = (system_tokens, tool_tokens)
+    cached = getattr(agent, _ITEMIZED_ATTR, None)
+    if isinstance(cached, tuple) and len(cached) == 3 and cached[0] == memo_key:
+        system_parts, tools_partition = cached[1], cached[2]
+    else:
+        system_parts = _system_partitions(agent, system_tokens)
+        tools_partition = _tools_partition(agent, tool_tokens)
+        setattr(agent, _ITEMIZED_ATTR, (memo_key, system_parts, tools_partition))
+
+    rest = [p for key, p in by_key.items() if key not in ("system", "tools")]
+    return {
+        **breakdown,
+        "partitions": [*(dict(p) for p in system_parts), dict(tools_partition), *rest],
+    }
 
 
 def get_prefix_token_split(
@@ -404,12 +454,39 @@ class ContextAttributionHook(HookProvider):
             return
 
         message_tokens = max(0, full - split["systemTokens"] - split["toolTokens"])
+        # Only the three measured totals here: this runs before every model
+        # call, so itemizing them (see `get_context_breakdown`) waits until
+        # something reads the breakdown after the model has answered.
         breakdown = {
             "total": full,
             "partitions": [
-                {"key": "system", "label": "System prompt", "tokens": split["systemTokens"]},
+                {"key": "system", "label": "System instructions", "tokens": split["systemTokens"]},
                 {"key": "tools", "label": "Tools", "tokens": split["toolTokens"]},
                 {"key": "messages", "label": "Messages", "tokens": message_tokens},
             ],
         }
         setattr(agent, _BREAKDOWN_ATTR, breakdown)
+
+
+def _system_partitions(agent: Any, system_tokens: int) -> list:
+    """The measured system total, itemized (skills, memory, instruction
+    sections) — or as one partition if itemizing fails."""
+    try:
+        return itemize_system(agent, system_tokens)
+    except Exception as e:  # noqa: BLE001 - itemizing is a display nicety
+        logger.debug("System itemization skipped: %s", e)
+        return [{"key": "system", "label": "System instructions", "tokens": system_tokens}]
+
+
+def _tools_partition(agent: Any, tool_tokens: int) -> dict:
+    """The measured tools total, with per-origin children when there is more
+    than one origin."""
+    partition: Dict[str, Any] = {"key": "tools", "label": "Tools", "tokens": tool_tokens}
+    try:
+        children = itemize_tools(agent, tool_tokens)
+    except Exception as e:  # noqa: BLE001 - itemizing is a display nicety
+        logger.debug("Tool itemization skipped: %s", e)
+        children = None
+    if children:
+        partition["children"] = children
+    return partition

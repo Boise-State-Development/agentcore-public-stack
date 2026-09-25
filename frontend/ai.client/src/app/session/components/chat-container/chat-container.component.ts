@@ -31,7 +31,7 @@ import {
   AgentIndicatorComponent,
 } from '../agent-indicator/agent-indicator.component';
 import { ModelService } from '../../services/model/model.service';
-import { SessionCostBadgeComponent } from '../session-cost-badge/session-cost-badge.component';
+import { ContextMeterComponent } from '../context-meter/context-meter.component';
 import { VoiceOverlayComponent } from '../voice-overlay';
 import { VoiceChatService } from '../../services/voice';
 import { ChatStateService } from '../../services/chat/chat-state.service';
@@ -77,7 +77,7 @@ export interface ChatContainerConfig {
     Topnav,
     AgentLaunchCardComponent,
     AgentIndicatorComponent,
-    SessionCostBadgeComponent,
+    ContextMeterComponent,
     VoiceOverlayComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
