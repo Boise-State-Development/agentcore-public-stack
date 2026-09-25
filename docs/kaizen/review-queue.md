@@ -44,7 +44,8 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
      - Confirm the function `<prefix>-runtime-log-retention-sweep` and its daily rule exist.
      - After the first tick, its log shows `Retention sweep: matched=3 updated=… failed=0`. After part 1, `updated` should be 0. Before part 1, it should be 2.
      - `put-retention-policy` is IAM-scoped to `/aws/bedrock-agentcore/runtimes/<runtime-name>-*`. The 8 groups with older names are covered only by part 1.
-  3. **Fix the "PutRetentionPolicy creates the group" claim. It is false.**
+  3. **Fixed in #1345, awaiting merge.** **Fix the "PutRetentionPolicy creates the group" claim. It is false.**
+     - #1345 adds `ignoreErrorCodesMatching: 'ResourceNotFoundException'` to both calls and removes the unused `logs:CreateLogGroup` grant. It also corrects the comment and §9 and adds two jest assertions. The dev probe was re-run for it and returned the same `ResourceNotFoundException`.
      - Checked in dev on 2026-09-25: calling it on a missing group returns `ResourceNotFoundException` and creates nothing.
      - The claim appears in the comment above `RuntimeLogRetention` and in `observability.md` §9.
      - Deploys succeed today only because the Runtime's own role creates the group first. CloudTrail shows about a 25 s lead over the custom resource.
