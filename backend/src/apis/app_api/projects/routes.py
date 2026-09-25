@@ -22,7 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 
 from apis.app_api.agent_designer.services.binding_validation import BindingValidationError
 from apis.shared.assistants.models import AgentBinding, VersionFieldChange
-from apis.shared.assistants.version_diff import changed_fields, wire_field_name, wire_value
+from apis.shared.assistants.version_diff import wire_field_name, wire_value
 from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.models import User
 from apis.shared.directory import get_directory
@@ -46,6 +46,7 @@ from .harness_settings import (
     HarnessSettingsService,
     HarnessView,
     created_by_email,
+    settings_changes,
     version_instructions_diff,
 )
 from .models import (
@@ -145,12 +146,12 @@ def get_project(project_id: str, user: User = Depends(require_projects_user)) ->
 
 
 @router.patch("/{project_id}", response_model=ProjectResponse, response_model_by_alias=True)
-def update_project(
+async def update_project(
     project_id: str, body: UpdateProjectRequest, user: User = Depends(require_projects_user)
 ) -> ProjectResponse:
     """Editors: name, description. Owner: also ``editorsManageMembers`` and ``status``."""
     try:
-        project, role = _svc().update_project(
+        project, role = await _svc().update_project(
             project_id,
             user,
             name=body.name,
@@ -312,7 +313,7 @@ async def get_settings_version(
     except ProjectError as e:
         raise _translate(e)
     v = detail.version
-    changes = changed_fields(detail.previous, v)
+    changes = settings_changes(detail.previous, v)
     return SettingsVersionResponse(
         version=v.version,
         created_at=v.created_at,

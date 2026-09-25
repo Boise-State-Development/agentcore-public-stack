@@ -206,7 +206,7 @@ SK = KB#{app_kb_id}          # app_kb_id == assistant_id in this phase
 | `storedBytes` | N | Committed bytes, from S3 `HEAD` |
 | `reservedBytes` | N | In-flight reservations |
 | `lastRetrievedAt` | S | Throttled write, one winner per 24 h |
-| `migrationState` | S | `shadow` / `verify` / `promote` / `retain` / `failed`, plus `reclaim` reserved but never entered in this phase |
+| `migrationState` | S | `shadow` / `verify` / `promote` / `retain` / `failed`, plus `reclaim` reserved but never entered in this phase. Added later: `born_managed` (see `born-managed-provision-then-ingest.md`) and `teardown` (the agent was deleted; the worker deletes the knowledge base and removes this record, `kb_migration/teardown.py`) |
 | `migrationGeneration` | N | Increments per attempt; guards stale workers |
 | `migrationLeaseUntil` | S | Worker lease expiry |
 | `migrationProgress` | M | `{migrated, total, lastDocumentId}` |

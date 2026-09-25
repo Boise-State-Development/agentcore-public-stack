@@ -572,7 +572,7 @@ class TestDispatcherFlagGating:
         monkeypatch.delenv("MANAGED_KB_MIGRATION_ENABLED", raising=False)
 
         assert d.dispatcher_enabled() is True
-        assert d._enabled_work_states() == [r.BORN_MANAGED]
+        assert d._enabled_work_states() == [r.BORN_MANAGED, r.TEARDOWN]
 
     def test_migration_states_are_not_swept_under_new_default_alone(self, monkeypatch):
         """MUTATION GUARD: gate the states on ``migration_enabled or
@@ -597,7 +597,7 @@ class TestDispatcherFlagGating:
 
         swept = d._enabled_work_states()
         assert r.BORN_MANAGED not in swept
-        assert swept == [r.PROMOTE, r.VERIFY, r.SHADOW]
+        assert swept == [r.TEARDOWN, r.PROMOTE, r.VERIFY, r.SHADOW]
 
     def test_born_managed_is_served_first(self, monkeypatch):
         """Somebody is watching an upload spinner for it; the migration states are

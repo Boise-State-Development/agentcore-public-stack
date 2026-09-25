@@ -124,7 +124,7 @@ def test_upload_carries_the_sharing_notice(pid):
 def test_an_archived_projects_files_are_read_only(pid, harness_id, project):
     service, _ = project
     doc = _doc(harness_id, "kept.txt")
-    service.update_project(pid, OWNER, status="archived")
+    asyncio.run(service.update_project(pid, OWNER, status="archived"))
 
     assert _upload(OWNER, pid).status_code == 409
     assert client(OWNER).delete(f"/projects/{pid}/knowledge/{doc}").status_code == 409

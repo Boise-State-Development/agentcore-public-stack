@@ -909,7 +909,13 @@ async def run_step(
         # the clause would be unreachable, which is how a guard becomes decoration.
         await take_lease(assistant_id, app_kb_id)
 
-        if state == r.BORN_MANAGED:
+        if state == r.TEARDOWN:
+            # The agent was deleted. Not a migration step either, and it never
+            # ends in `failed`: run_teardown re-queues itself on every error.
+            from apis.app_api.kb_migration.teardown import run_teardown
+
+            result = await run_teardown(assistant_id, app_kb_id, record)
+        elif state == r.BORN_MANAGED:
             # Born-managed provisioning (MANAGED_KB_NEW_DEFAULT). Not part of the
             # shadow→verify→promote migration — there is no legacy corpus to carry
             # across — but it runs here to inherit the lease and the work-key

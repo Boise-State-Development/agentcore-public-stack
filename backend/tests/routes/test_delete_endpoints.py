@@ -34,6 +34,7 @@ ASSISTANT_ID = "ast-001"
 USER_ID = "user-001"
 DOC_SERVICE = "apis.app_api.documents.services.document_service"
 CLEANUP_SERVICE = "apis.app_api.documents.services.cleanup_service"
+TEARDOWN = "apis.app_api.kb_migration.teardown"
 ASSISTANT_SERVICE = "apis.shared.assistants.service"
 SYNC_POLICY_SERVICE = "apis.shared.sync_policies.service"
 
@@ -218,6 +219,16 @@ class TestAssistantDeleteEndpoint:
         ) as guard:
             yield guard
 
+    @pytest.fixture(autouse=True)
+    def _teardown(self):
+        """Stub queuing the managed knowledge base for teardown, which writes the KB# record.
+
+        Its own behaviour (what it writes, the worker that acts on it) is covered in
+        ``tests/lambdas/test_kb_teardown.py``; here only whether and when it is called.
+        """
+        with patch(f"{TEARDOWN}.queue_teardown", new_callable=AsyncMock, return_value=True) as queue:
+            yield queue
+
     @pytest.fixture
     def app(self):
         _app = FastAPI()
@@ -225,7 +236,61 @@ class TestAssistantDeleteEndpoint:
         _app.dependency_overrides[get_current_user_from_session] = _make_user
         return _app
 
-    def test_a_listed_agent_is_refused_before_anything_is_cleaned_up(self, app, _deletable):
+    def test_the_managed_knowledge_base_is_queued_before_anything_is_destroyed(self, app, _teardown):
+        """The KB# record and its Bedrock knowledge base used to outlive the agent.
+
+        Queued first so that a failure to queue leaves a delete that can simply be
+        retried, rather than an agent already gone whose knowledge base nothing will
+        ever find again.
+        """
+        calls = []
+        _teardown.side_effect = lambda *_: calls.append("teardown") or True
+
+        async def _docs(**_):
+            calls.append("list")
+            return [], None
+
+        with patch(
+            f"{self.ROUTES_MODULE}.list_assistant_documents", side_effect=_docs
+        ), patch(
+            f"{self.ROUTES_MODULE}.delete_assistant", new_callable=AsyncMock, return_value=True
+        ), patch("asyncio.ensure_future"):
+            resp = TestClient(app).delete(f"/assistants/{ASSISTANT_ID}")
+
+        assert resp.status_code == 204
+        _teardown.assert_awaited_once_with(ASSISTANT_ID)
+        assert calls == ["teardown", "list"]
+
+    def test_a_failure_to_queue_the_teardown_fails_the_delete_before_any_damage(self, app, _teardown):
+        _teardown.side_effect = RuntimeError("dynamodb unavailable")
+
+        with patch(
+            f"{self.ROUTES_MODULE}.list_assistant_documents", new_callable=AsyncMock
+        ) as docs, patch(
+            f"{self.ROUTES_MODULE}.delete_assistant", new_callable=AsyncMock
+        ) as hard_delete:
+            resp = TestClient(app).delete(f"/assistants/{ASSISTANT_ID}")
+
+        assert resp.status_code == 500
+        docs.assert_not_awaited()
+        hard_delete.assert_not_awaited()
+
+    def test_nothing_is_queued_for_an_agent_that_is_not_the_callers(self, app, _deletable, _teardown):
+        """``assert_deletable`` returns None for a missing or someone else's agent; the
+        delete then 404s, and nobody else's knowledge base may be queued on the way."""
+        _deletable.return_value = None
+
+        with patch(
+            f"{self.ROUTES_MODULE}.list_assistant_documents",
+            new_callable=AsyncMock,
+            return_value=([], None),
+        ), patch(f"{self.ROUTES_MODULE}.delete_assistant", new_callable=AsyncMock, return_value=False):
+            resp = TestClient(app).delete(f"/assistants/{ASSISTANT_ID}")
+
+        assert resp.status_code == 404
+        _teardown.assert_not_awaited()
+
+    def test_a_listed_agent_is_refused_before_anything_is_cleaned_up(self, app, _deletable, _teardown):
         """⚠️ Ordering, not just refusal.
 
         Steps 2 and 3 of this handler are destructive. If the guard fired after them, a
@@ -249,6 +314,7 @@ class TestAssistantDeleteEndpoint:
         docs.assert_not_awaited()
         soft_delete.assert_not_awaited()
         hard_delete.assert_not_awaited()
+        _teardown.assert_not_awaited()
 
     def test_delete_soft_deletes_all_docs(self, app):
         """Req 8.1: All documents are batch soft-deleted before assistant is removed."""

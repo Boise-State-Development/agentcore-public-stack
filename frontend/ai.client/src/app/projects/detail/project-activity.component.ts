@@ -3,6 +3,8 @@ import { DatePipe } from '@angular/common';
 import { RouterLink } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 import { UserService } from '../../auth/user.service';
+import { BindableKind } from '../../agents/models/agent.model';
+import { AgentService } from '../../agents/services/agent.service';
 import { parseIso } from '../../utils/date';
 import { Project, ProjectAuditRecord } from '../models/project.model';
 import { ProjectApiService } from '../services/project-api.service';
@@ -17,6 +19,11 @@ export interface ActivityLine {
   text: string;
   version: number | null;
 }
+
+/** A model, tool or skill's display name for its id; the id itself when unknown. */
+export type ActivityLabel = (kind: BindableKind, ref: string) => string;
+
+const idsOnly: ActivityLabel = (_kind, ref) => ref;
 
 function str(value: unknown): string {
   return typeof value === 'string' ? value : '';
@@ -37,9 +44,9 @@ function list(items: string[]): string {
 }
 
 /** "added X and removed Y" for a tools/skills save; the kind word is "tool" or "skill". */
-function bindingChange(before: string[], after: string[], kind: string): string {
-  const added = after.filter(r => !before.includes(r));
-  const removed = before.filter(r => !after.includes(r));
+function bindingChange(before: string[], after: string[], kind: 'tool' | 'skill', label: ActivityLabel): string {
+  const added = after.filter(r => !before.includes(r)).map(r => label(kind, r));
+  const removed = before.filter(r => !after.includes(r)).map(r => label(kind, r));
   const parts: string[] = [];
   if (added.length) parts.push(`added the ${kind}${added.length === 1 ? '' : 's'} ${list(added)}`);
   if (removed.length) parts.push(`removed the ${kind}${removed.length === 1 ? '' : 's'} ${list(removed)}`);
@@ -49,9 +56,10 @@ function bindingChange(before: string[], after: string[], kind: string): string 
 /**
  * One audit record as a sentence (without its actor, which the row shows).
  * The trail keeps no instruction text, only the version a save cut, so settings
- * entries point at the version whose diff is in Settings › History.
+ * entries point at the version whose diff is in Settings › History. The trail
+ * stores model, tool and skill ids; `label` turns them into display names.
  */
-export function describeActivity(record: ProjectAuditRecord): ActivityLine {
+export function describeActivity(record: ProjectAuditRecord, label: ActivityLabel = idsOnly): ActivityLine {
   const before = record.before ?? {};
   const after = record.after ?? {};
   // The audit log stores detail values as strings ("2"), so accept either.
@@ -90,11 +98,11 @@ export function describeActivity(record: ProjectAuditRecord): ActivityLine {
     case 'project.instructions_updated':
       return line('updated the instructions');
     case 'project.model_updated':
-      return line(str(after['modelId']) ? `changed the model to ${str(after['modelId'])}` : 'changed the model');
+      return line(str(after['modelId']) ? `changed the model to ${label('model', str(after['modelId']))}` : 'changed the model');
     case 'project.tools_updated':
-      return line(bindingChange(refs(before['refs']), refs(after['refs']), 'tool'));
+      return line(bindingChange(refs(before['refs']), refs(after['refs']), 'tool', label));
     case 'project.skills_updated':
-      return line(bindingChange(refs(before['refs']), refs(after['refs']), 'skill'));
+      return line(bindingChange(refs(before['refs']), refs(after['refs']), 'skill', label));
     case 'project.knowledge_added':
       return line(
         str(after['source']) === 'web'
@@ -175,6 +183,7 @@ export function describeActivity(record: ProjectAuditRecord): ActivityLine {
 export class ProjectActivityComponent {
   private api = inject(ProjectApiService);
   private user = inject(UserService);
+  private agents = inject(AgentService);
 
   readonly project = input.required<Project>();
 
@@ -184,11 +193,22 @@ export class ProjectActivityComponent {
   protected readonly loaded = signal(false);
   protected readonly error = signal<string | null>(null);
 
+  /**
+   * Display names by `kind:ref`, from the bindable palettes Settings loads (memoised
+   * in `AgentService`, so this usually costs nothing). A ref the viewer's palette
+   * doesn't have (a tool they can't use, one since retired) stays an id.
+   */
+  private readonly labels = signal<ReadonlyMap<string, string>>(new Map());
+  private readonly label = computed<ActivityLabel>(() => {
+    const names = this.labels();
+    return (kind, ref) => names.get(`${kind}:${ref}`) || ref;
+  });
+
   private readonly me = computed(() => (this.user.currentUser()?.email ?? '').toLowerCase());
   protected readonly entries = computed(() =>
     this.records().map(record => ({
       record,
-      line: describeActivity(record),
+      line: describeActivity(record, this.label()),
       actor: record.actorEmail
         ? record.actorEmail.toLowerCase() === this.me() ? 'You' : record.actorEmail
         : 'Someone',
@@ -199,6 +219,7 @@ export class ProjectActivityComponent {
   private readonly projectId = computed(() => this.project().projectId);
 
   constructor() {
+    void this.loadLabels();
     effect(() => {
       const id = this.projectId();
       untracked(() => {
@@ -207,6 +228,14 @@ export class ProjectActivityComponent {
         void this.load(id, null);
       });
     });
+  }
+
+  private async loadLabels(): Promise<void> {
+    const kinds: BindableKind[] = ['model', 'tool', 'skill'];
+    const palettes = await Promise.all(kinds.map(kind => this.agents.loadBindable(kind)));
+    const names = new Map<string, string>();
+    palettes.forEach((items, i) => items.forEach(item => names.set(`${kinds[i]}:${item.ref}`, item.label)));
+    this.labels.set(names);
   }
 
   protected loadMore(): void {

@@ -19,15 +19,18 @@ import pytest
 
 from apis.shared.assistants.service import (
     ProjectHarnessError,
+    assert_deletable,
     create_assistant,
     delete_assistant,
     delete_project_harness,
     get_assistant_with_access_check,
     list_user_assistants,
+    rename_project_harness,
     resolve_assistant_permission,
     share_assistant,
     update_assistant,
 )
+from apis.shared.assistants.version_repository import get_latest_version
 from apis.shared.assistants.version_resolution import runs_own_draft
 from apis.shared.auth.models import User
 from apis.shared.projects.service import ProjectService
@@ -136,6 +139,55 @@ def test_agent_level_delete_refuses_the_harness(project):
     assert access(created.harness_agent_id, OWNER)[0] is not None
 
 
+def test_the_delete_guard_refuses_the_harness_before_the_route_cleans_anything_up(project):
+    """``DELETE /assistants`` soft-deletes documents and queues the knowledge base for
+    teardown after this guard and before ``delete_assistant``'s own refusal, so the
+    guard is what keeps the project's files intact."""
+    _, created = project
+    with pytest.raises(ProjectHarnessError, match="belongs to a project"):
+        asyncio.run(assert_deletable(created.harness_agent_id, OWNER.user_id))
+
+
+def test_the_delete_guard_hands_back_the_callers_own_agent(assistants_table, projects_table):
+    plain = ordinary_agent()
+    assert asyncio.run(assert_deletable(plain.assistant_id, OWNER.user_id)).assistant_id == plain.assistant_id
+    assert asyncio.run(assert_deletable(plain.assistant_id, STRANGER.user_id)) is None
+
+
+def test_renaming_the_project_renames_its_harness(project):
+    """The chat breadcrumb reads the harness's name, which used to keep the name the
+    project was created with."""
+    service, created = project
+    asyncio.run(service.update_project(created.project_id, EDITOR, name="Enrollment Sync FY27",
+                                       description="Canvas enrollment, next year"))
+
+    harness, _ = access(created.harness_agent_id, VIEWER)
+    assert (harness.name, harness.description) == ("Enrollment Sync FY27", "Canvas enrollment, next year")
+    assert (harness.kind, harness.project_id) == ("project", created.project_id)
+
+
+def test_a_rename_cuts_no_version(project):
+    """Versions are the project's settings history: instructions, model, tools, skills."""
+    service, created = project
+    asyncio.run(service.update_project(created.project_id, OWNER, name="Renamed"))
+    assert asyncio.run(get_latest_version(created.harness_agent_id)) is None
+
+
+def test_a_change_that_is_not_a_rename_leaves_the_harness_alone(project):
+    service, created = project
+    before, _ = access(created.harness_agent_id, OWNER)
+    asyncio.run(service.update_project(created.project_id, OWNER, editors_manage_members=False))
+    after, _ = access(created.harness_agent_id, OWNER)
+    assert after.updated_at == before.updated_at
+
+
+def test_harness_rename_refuses_an_ordinary_agent(assistants_table, projects_table):
+    plain = ordinary_agent()
+    with pytest.raises(ValueError, match="not a project harness"):
+        asyncio.run(rename_project_harness(plain.assistant_id, name="Hijacked"))
+    assert asyncio.run(rename_project_harness("ast-gone", name="Nobody")) is False
+
+
 def test_agent_level_sharing_refuses_the_harness(project):
     _, created = project
     assert asyncio.run(share_assistant(created.harness_agent_id, OWNER.user_id, [STRANGER.email])) is False
@@ -202,14 +254,14 @@ def test_the_harness_cannot_be_submitted_to_the_store(project):
 
 def test_an_archived_projects_harness_is_read_only_for_every_member(project):
     service, created = project
-    service.update_project(created.project_id, OWNER, status="archived")
+    asyncio.run(service.update_project(created.project_id, OWNER, status="archived"))
     for user in (OWNER, EDITOR, VIEWER):
         agent, role = access(created.harness_agent_id, user)
         assert (agent is not None, role) == (True, "viewer")
         assert permission(created.harness_agent_id, user)[1] == "viewer"
     assert access(created.harness_agent_id, STRANGER) == (None, None)
 
-    service.update_project(created.project_id, OWNER, status="active")
+    asyncio.run(service.update_project(created.project_id, OWNER, status="active"))
     assert permission(created.harness_agent_id, EDITOR)[1] == "editor"
 
 

@@ -88,6 +88,20 @@ MIGRATION_FAILED = "failed"
 #: different meanings is how the wrong one gets read.
 BORN_MANAGED = "born_managed"
 
+#: The agent that owned this knowledge base was deleted, and the knowledge base
+#: (data source, knowledge base, then this record) is to be torn down.
+#:
+#: Entered from app-api by :func:`request_teardown` when an agent or a project's
+#: harness is deleted. The *deleting* is the migration worker's, because it holds
+#: the provisioning grant (``bedrock:DeleteKnowledgeBase``) that app-api is
+#: deliberately never given. Borrowing the work-key queue again, for the same
+#: reason born-managed does: a delete that polls for minutes has to survive a
+#: crash, and the queue plus the lease is what already does that.
+#:
+#: Not terminal. A teardown ends with the record *removed*, so there is no state
+#: to arrive in, and a failed attempt stays queued: an unfinished delete is a bill.
+TEARDOWN = "teardown"
+
 #: Reserved in the enum so a stored value round-trips, but never entered in this
 #: phase. Reclaiming legacy vectors is explicitly a follow-up spec; a worker that
 #: found itself here would delete data this phase has promised to retain.
@@ -100,7 +114,7 @@ RECLAIM = "reclaim"
 #: work the dispatcher must keep handing back until it reaches a terminal state.
 #: Adding it here is what makes the dispatcher sweep it — ``_work_states`` derives
 #: from this set rather than restating it.
-WORK_ELIGIBLE_STATES = frozenset({BORN_MANAGED, SHADOW, VERIFY, PROMOTE})
+WORK_ELIGIBLE_STATES = frozenset({TEARDOWN, BORN_MANAGED, SHADOW, VERIFY, PROMOTE})
 
 #: States that take a record out of the queue for good. Work keys are removed on
 #: entering one of these. ``RETAIN`` is the terminal state this phase reaches;
@@ -109,7 +123,7 @@ WORK_ELIGIBLE_STATES = frozenset({BORN_MANAGED, SHADOW, VERIFY, PROMOTE})
 TERMINAL_STATES = frozenset({RETAIN, MIGRATION_FAILED})
 
 ALL_MIGRATION_STATES = frozenset(
-    {BORN_MANAGED, SHADOW, VERIFY, PROMOTE, RETAIN, MIGRATION_FAILED, RECLAIM}
+    {TEARDOWN, BORN_MANAGED, SHADOW, VERIFY, PROMOTE, RETAIN, MIGRATION_FAILED, RECLAIM}
 )
 
 
@@ -764,6 +778,106 @@ def retry_from_failed(
             ":wpk": work_pk(SHADOW),
             ":wsk": due_at,
         },
+    )
+
+
+def request_teardown(
+    assistant_id: str,
+    app_kb_id: str,
+    now_iso: str,
+    *,
+    attempts: int = 3,
+) -> Optional[Dict[str, Any]]:
+    """Queue this knowledge base for teardown because its agent is being deleted.
+
+    Returns the record as it stood before the request, or ``None`` when there is
+    no record (a legacy agent, or a retried delete that already finished). A
+    record that is already queued is returned as-is, so a retried delete neither
+    re-writes it nor fences the worker that may be tearing it down right now.
+
+    **Never refuses because a worker is busy.** The generation bump is the fence:
+    every write a born-managed or migration worker makes is guarded on the
+    generation it read, so a worker still running against this record loses its
+    next write (``TransitionLost``) instead of finishing a provisioning or a
+    cutover nobody wants. The worker lease is left alone on purpose. The teardown
+    step takes that same lease, so it cannot start until an in-flight step has
+    let go, and a provisioning that is mid-``CreateKnowledgeBase`` still gets to
+    record ``awsKbId`` (that write is guarded on ``provisioningState``, which this
+    does not touch). That id is what the teardown then deletes.
+
+    Guarded on the generation this call read, so two concurrent deletes and a
+    worker's own transition cannot interleave into a lost update; a lost race
+    re-reads and tries again.
+    """
+    table = _table()
+    key = {"PK": kb_pk(assistant_id), "SK": kb_sk(app_kb_id)}
+    for _ in range(attempts):
+        record = table.get_item(Key=key).get("Item")
+        if not record:
+            return None
+        if record.get("migrationState") == TEARDOWN:
+            return record
+        values: Dict[str, Any] = {
+            ":teardown": TEARDOWN,
+            ":wpk": work_pk(TEARDOWN),
+            ":due": now_iso,
+            ":now": now_iso,
+            ":one": Decimal(1),
+        }
+        if record.get("migrationGeneration") is None:
+            condition = "attribute_exists(PK) AND attribute_not_exists(migrationGeneration)"
+        else:
+            condition = "attribute_exists(PK) AND migrationGeneration = :gen"
+            values[":gen"] = record["migrationGeneration"]
+        try:
+            _conditional(
+                table.update_item,
+                Key=key,
+                UpdateExpression=(
+                    "SET migrationState = :teardown, GSI7_PK = :wpk, GSI7_SK = :due, "
+                    "teardownRequestedAt = if_not_exists(teardownRequestedAt, :now), "
+                    "updatedAt = :now ADD migrationGeneration :one"
+                ),
+                ConditionExpression=condition,
+                ExpressionAttributeValues=values,
+            )
+        except TransitionLost:
+            continue
+        return record
+    raise TransitionLost(
+        f"could not queue kb {app_kb_id} for teardown: it kept changing underneath "
+        f"{attempts} attempts"
+    )
+
+
+def defer_teardown(
+    assistant_id: str,
+    app_kb_id: str,
+    generation: int,
+    due_at: str,
+    error: Optional[str] = None,
+) -> None:
+    """Push a teardown that did not finish back onto the queue, due at ``due_at``.
+
+    Guarded on still being ``teardown`` at this generation, so a straggler cannot
+    re-queue a record that a newer attempt already removed (the update would
+    otherwise create a ghost item holding nothing but work keys).
+    """
+    values: Dict[str, Any] = {
+        ":due": due_at,
+        ":gen": Decimal(generation),
+        ":teardown": TEARDOWN,
+    }
+    expression = "SET GSI7_SK = :due"
+    if error is not None:
+        expression += ", migrationError = :err"
+        values[":err"] = error[:1000]
+    _conditional(
+        _table().update_item,
+        Key={"PK": kb_pk(assistant_id), "SK": kb_sk(app_kb_id)},
+        UpdateExpression=expression,
+        ConditionExpression="migrationGeneration = :gen AND migrationState = :teardown",
+        ExpressionAttributeValues=values,
     )
 
 

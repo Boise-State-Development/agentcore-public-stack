@@ -143,7 +143,7 @@ class TestCreate:
         assert _pointers(projects, project.project_id) == []
 
     def test_an_archived_project_takes_no_new_shares(self, shares, projects, project):
-        projects.update_project(project.project_id, OWNER, status="archived")
+        asyncio.run(projects.update_project(project.project_id, OWNER, status="archived"))
         with pytest.raises(ProjectShareError) as e:
             _share(shares, _session(project_id=project.project_id))
         assert e.value.status_code == 409
@@ -192,7 +192,7 @@ class TestReadAccess:
 
     def test_members_still_read_an_archived_projects_shares(self, shares, projects, project):
         share_id = _share(shares, _session(project_id=project.project_id)).share_id
-        projects.update_project(project.project_id, OWNER, status="archived")
+        asyncio.run(projects.update_project(project.project_id, OWNER, status="archived"))
         assert asyncio.run(shares.get_shared_conversation(share_id, VIEWER)).share_id == share_id
 
 
@@ -269,7 +269,7 @@ class TestForkKeepsTheProject:
 
     def test_a_fork_of_an_archived_projects_task_is_a_plain_session(self, shares, projects, project):
         share_id = _share(shares, _session(project_id=project.project_id)).share_id
-        projects.update_project(project.project_id, OWNER, status="archived")
+        asyncio.run(projects.update_project(project.project_id, OWNER, status="archived"))
         assert self._fork(shares, share_id, VIEWER).preferences is None
 
     def test_a_fork_of_a_plain_task_stays_plain(self, shares, project):

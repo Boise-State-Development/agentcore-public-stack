@@ -6,6 +6,8 @@ routes are its only write path, and every save cuts a version.
 
 from __future__ import annotations
 
+import asyncio
+
 from typing import List
 
 import pytest
@@ -91,7 +93,7 @@ def test_authorization_matrix(pid, principal, method, suffix, body, expected):
 
 def test_an_archived_project_is_read_only(pid, project):
     service, _ = project
-    service.update_project(pid, OWNER, status="archived")
+    asyncio.run(service.update_project(pid, OWNER, status="archived"))
     assert client(OWNER).put(f"/projects/{pid}/instructions", json={"instructions": "x"}).status_code == 409
     body = client(OWNER).get(f"/projects/{pid}/instructions").json()
     assert body["canEdit"] is False
@@ -117,6 +119,29 @@ def test_a_save_that_changes_nothing_cuts_no_version(pid):
     again = editor.put(f"/projects/{pid}/instructions", json={"instructions": "Same."}).json()
     assert again["version"] == 2
     assert len(client(EDITOR).get(f"/projects/{pid}/instructions/versions").json()["versions"]) == 2
+
+
+def test_a_rename_reaches_the_harness_and_stays_out_of_the_settings_history(pid, project):
+    """``PATCH /projects/{id}`` renames the harness too (the chat breadcrumb reads its
+    name), without cutting a version. A version snapshot does carry the name, so the
+    first save after a rename must still report only what that save changed."""
+    from apis.shared.assistants.service import get_assistant_with_access_check
+
+    _, created = project
+    editor = client(EDITOR)
+    editor.put(f"/projects/{pid}/instructions", json={"instructions": "Cite sources."})
+    assert editor.patch(f"/projects/{pid}", json={"name": "Enrollment Sync FY27"}).status_code == 200
+
+    harness, _ = asyncio.run(get_assistant_with_access_check(created.harness_agent_id, VIEWER.user_id, VIEWER.email))
+    assert harness.name == "Enrollment Sync FY27"
+    assert len(editor.get(f"/projects/{pid}/instructions/versions").json()["versions"]) == 2
+
+    editor.put(f"/projects/{pid}/instructions", json={"instructions": "Cite every source."})
+    history = editor.get(f"/projects/{pid}/instructions/versions").json()["versions"]
+    assert history[0]["changes"] == ["instructions"]
+    detail = editor.get(f"/projects/{pid}/instructions/versions/3").json()
+    assert detail["changes"] == ["instructions"]
+    assert [c["field"] for c in detail["fieldChanges"]] == ["instructions"]
 
 
 def test_version_detail_diffs_against_the_one_before(pid):

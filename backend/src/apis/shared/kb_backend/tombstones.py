@@ -692,6 +692,7 @@ def delete_knowledge_base(
     interval_seconds: Optional[float] = None,
     sleep: Callable[[float], None] = time.sleep,
     monotonic: Callable[[], float] = time.monotonic,
+    delete_data_source: bool = False,
 ) -> DeleteOutcome:
     """Delete a knowledge base under a Tombstone.
 
@@ -701,6 +702,12 @@ def delete_knowledge_base(
        leaves a work item rather than a resource nothing knows about.
     2. **Ask AWS.** ``ResourceNotFoundException`` is success, not failure — an
        earlier attempt got there, and the tombstone should still be cleared.
+       With ``delete_data_source``, the data source is deleted first, best
+       effort: a failure there is logged and the knowledge base delete goes
+       ahead, because the knowledge base is what bills. If AWS refuses the
+       knowledge base delete while its data source is still going away, the
+       saga fails like any other refusal and its caller's retry finds the data
+       source gone.
     3. **Confirm by polling.** The accepted call is ignored as evidence.
     4. **Clear the Tombstone**, and only now, optionally, the KB_Record.
 
@@ -727,6 +734,8 @@ def delete_knowledge_base(
     already_absent = False
     try:
         # Step 2.
+        if delete_data_source and aws_data_source_id:
+            _delete_data_source_best_effort(client, aws_kb_id, aws_data_source_id)
         try:
             client.delete_knowledge_base(knowledgeBaseId=aws_kb_id)
         except ClientError as exc:
@@ -769,6 +778,26 @@ def delete_knowledge_base(
         already_absent=already_absent,
         polls=outcome.polls,
     )
+
+
+def _delete_data_source_best_effort(client, aws_kb_id: str, aws_data_source_id: str) -> None:
+    """``DeleteDataSource``, tolerating a data source that is already gone. Never raises."""
+    from botocore.exceptions import ClientError
+
+    try:
+        client.delete_data_source(knowledgeBaseId=aws_kb_id, dataSourceId=aws_data_source_id)
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") == "ResourceNotFoundException":
+            return
+        logger.warning(
+            f"could not delete data source {aws_data_source_id} of knowledge base "
+            f"{aws_kb_id}; deleting the knowledge base anyway: {exc}"
+        )
+    except Exception as exc:  # noqa: BLE001 - best effort; the knowledge base is what bills
+        logger.warning(
+            f"could not delete data source {aws_data_source_id} of knowledge base "
+            f"{aws_kb_id}; deleting the knowledge base anyway: {exc}"
+        )
 
 
 def delete_document(

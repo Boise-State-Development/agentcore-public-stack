@@ -1,10 +1,10 @@
-"""The harness gateway app-api injects: create as the default, delete with cleanup.
+"""The harness gateway app-api injects: create and rename as the default, delete with cleanup.
 
 Purging a project must remove its harness the way ``DELETE /assistants`` removes
-an agent — documents soft-deleted, sync policies removed, vectors and objects
-cleaned up in the background — or the project's knowledge outlives it. That
-cleanup lives in app-api, which ``apis.shared.projects`` may not import, so it
-is injected here.
+an agent — managed knowledge base queued for teardown, documents soft-deleted,
+sync policies removed, vectors and objects cleaned up in the background — or the
+project's knowledge outlives it. That cleanup lives in app-api, which
+``apis.shared.projects`` may not import, so it is injected here.
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ from apis.app_api.documents.services.document_service import (
     batch_soft_delete_documents,
     list_assistant_documents,
 )
+from apis.app_api.kb_migration.teardown import queue_teardown
 from apis.shared.assistants.service import (
     _get_assistant_cloud_without_ownership_check,
     delete_project_harness,
@@ -39,10 +40,15 @@ class AppApiHarnessGateway(AssistantsHarnessGateway):
             raise RuntimeError("DYNAMODB_ASSISTANTS_TABLE_NAME environment variable is required")
 
         harness = await _get_assistant_cloud_without_ownership_check(agent_id, table)
+        if harness is not None and not is_project_harness(harness):
+            raise ValueError(f"Agent {agent_id} is not a project harness")
+
+        # The managed knowledge base first, and even when the harness is already
+        # gone: a purge that failed after deleting the harness is retried with the
+        # KB# record still there, and this is the only thing that will ever queue it.
+        await queue_teardown(agent_id)
         if harness is None:
             return  # already gone: a retried purge
-        if not is_project_harness(harness):
-            raise ValueError(f"Agent {agent_id} is not a project harness")
 
         # Same order as DELETE /assistants: documents and schedules first, record last.
         docs: List = []

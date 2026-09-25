@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, viewChild } from '@angular/core';
 import { Router } from '@angular/router';
 import { CdkMenu, CdkMenuItem, CdkMenuTrigger } from '@angular/cdk/menu';
 import { ConnectedPosition } from '@angular/cdk/overlay';
@@ -94,19 +94,36 @@ export function relativeTime(iso: string, now = Date.now()): string {
         class="notification-panel w-80 max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl bg-white shadow-lg ring-1 ring-black/5 focus:outline-hidden dark:bg-gray-800 dark:ring-white/10"
         aria-label="Notifications"
       >
-        <p class="border-b border-gray-200 px-4 py-2.5 text-sm/6 font-semibold text-gray-900 dark:border-gray-700 dark:text-white">
+        <!-- A plain div, not a <p>: a menu may own only menu items, and the menu's
+             aria-label already names it for assistive technology. -->
+        <div class="border-b border-gray-200 px-4 py-2.5 text-sm/6 font-semibold text-gray-900 dark:border-gray-700 dark:text-white">
           Notifications
-        </p>
+        </div>
 
         <div class="max-h-96 overflow-y-auto py-1">
-          @if (error() && notifications().length === 0) {
-            <p class="px-4 py-6 text-center text-sm/6 text-gray-600 dark:text-gray-400">{{ error() }}</p>
-          } @else if (!ready()) {
-            <div class="px-4 py-3" aria-busy="true">
-              <div class="h-10 animate-pulse rounded-xl bg-gray-100 dark:bg-gray-700"></div>
+          @if (status(); as state) {
+            <!-- Loading, error and empty are a disabled menu item, never bare text: a
+                 menu with no items fails axe (aria-required-children), and most inboxes
+                 are empty. CDK keeps disabled items focusable, as the APG menu pattern
+                 asks, so this is where keyboard focus lands and what a screen reader
+                 reads on open, and it cannot be activated. -->
+            <div
+              cdkMenuItem
+              cdkMenuItemDisabled
+              data-testid="notification-status"
+              class="block cursor-default px-4 text-center text-sm/6 text-gray-600 focus:bg-gray-50 focus:outline-hidden dark:text-gray-400 dark:focus:bg-gray-700 dark:focus:text-gray-300"
+              [class.py-3]="state === 'loading'"
+              [class.py-6]="state !== 'loading'"
+            >
+              @if (state === 'loading') {
+                <span class="block h-10 animate-pulse rounded-xl bg-gray-100 dark:bg-gray-700" aria-hidden="true"></span>
+                <span class="sr-only">Loading notifications…</span>
+              } @else if (state === 'error') {
+                {{ error() }}
+              } @else {
+                You’re all caught up.
+              }
             </div>
-          } @else if (notifications().length === 0) {
-            <p class="px-4 py-6 text-center text-sm/6 text-gray-600 dark:text-gray-400">You’re all caught up.</p>
           } @else {
             @for (n of notifications(); track n.notificationId) {
               <button
@@ -174,6 +191,16 @@ export class NotificationBellComponent {
   protected readonly error = this.service.error;
   protected readonly ready = this.service.ready;
 
+  /** What the panel shows instead of the list, or null when it shows the list. */
+  protected readonly status = computed<'error' | 'loading' | 'empty' | null>(() => {
+    const empty = this.notifications().length === 0;
+    if (this.error() && empty) return 'error';
+    if (!this.ready()) return 'loading';
+    return empty ? 'empty' : null;
+  });
+
+  private readonly menu = viewChild(CdkMenu);
+
   protected readonly badge = computed(() => (this.unreadCount() > 9 ? '9+' : String(this.unreadCount())));
   protected readonly buttonLabel = computed(() => {
     const n = this.unreadCount();
@@ -201,7 +228,19 @@ export class NotificationBellComponent {
   }
 
   protected onOpened(): void {
-    void this.refresh();
+    void this.refresh().then(() => this.keepFocusInMenu());
+  }
+
+  /**
+   * The status item holds focus while the panel is loading or empty. If the
+   * refresh that opening starts brings notifications, it is replaced by the list
+   * and focus falls to the page; put it back on the newest notification.
+   */
+  private keepFocusInMenu(): void {
+    const active = document.activeElement;
+    if (!active || active === document.body) {
+      this.menu()?.focusFirstItem('keyboard');
+    }
   }
 
   protected onVisibilityChange(): void {
