@@ -189,8 +189,12 @@ class Defaults:
     # SUMMARY_OVER_BUDGET diagnosis reads.
     COMPACTION_SUMMARY_TOKEN_BUDGET = 8_000
     COMPACTION_SUMMARY_MODEL_ENABLED = True
-    # Same cheap model as the title and tool-batch side-channels.
-    COMPACTION_SUMMARY_MODEL_ID = "us.amazon.nova-micro-v1:0"
+    # Nova 2 Lite, not the Nova Micro the title and tool-batch side-channels
+    # use: on the quality harness Micro kept ~77% of planted facts (58% of
+    # exact identifiers) and Lite ~99% (100%), for ~$0.01 per cut. `us.*`
+    # because dev's SCP denies `global.*`. Nova accepts `topP`, which
+    # compress_with_model sends; Claude models reject it.
+    COMPACTION_SUMMARY_MODEL_ID = "us.amazon.nova-2-lite-v1:0"
     COMPACTION_DEFERRED_APPLY_ENABLED = True
     # Tool-result offload gate. 4k is well under the 25k compaction floor, so a
     # protected tail of a few big results can no longer hold a session above

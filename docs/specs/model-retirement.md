@@ -474,7 +474,7 @@ The catalog runbook doesn't reach these; each needs a PR:
 | `DEFAULT_MODELS` seed (`seed_bootstrap_data.py:233`) | Haiku 4.5 (`isDefault`), Sonnet 4.6, Nova 2 Sonic | Resurrects a deleted row; seeds a fresh stack with a dead default |
 | Title generation (`inference_api/chat/service.py:588`) | Nova Micro | Fails open → "New Conversation" |
 | Tool summaries (`tool_summaries/summarizer.py:42`) | Nova Micro | Fails open → client-side formatter |
-| Compaction summary (`AGENTCORE_MEMORY_COMPACTION_SUMMARY_MODEL_ID`, `constants.py:182`) | — | Fails open. **Compaction stops**, and the cost goes to prompt size rather than errors |
+| Compaction summary (`AGENTCORE_MEMORY_COMPACTION_SUMMARY_MODEL_ID`, `constants.py:197`) | Nova 2 Lite | Fails open. **Compaction stops**, and the cost goes to prompt size rather than errors |
 | Document digest (`DOCUMENT_DIGEST_MODEL_ID`) | — | Fails open |
 | Voice (`NOVA_SONIC_MODEL_ID`, `constants.py:242`) | Nova 2 Sonic | Voice fails; pricing also depends on the catalog row |
 | Embeddings (`kb_backend/provisioning.py:93`, CDK `managed-kb-role-construct.ts`) | Titan v2 | **Existing vectors are tied to the model.** Changing it means re-embedding every KB. A project in its own right, not a runbook step |

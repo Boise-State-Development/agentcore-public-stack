@@ -384,7 +384,8 @@ about $0.0002 per turn at a Sonnet 5 cache read. Neither cost is a reason
 to keep the lossy compressor.
 
 **Recommendation.**
-1. **Nova 2 Lite as the summary model.** It is a one-line default change
+1. **Nova 2 Lite as the summary model.** ✅ Shipped, and paid-confirmed in
+   §9.1. It is a one-line default change
    (`Defaults.COMPACTION_SUMMARY_MODEL_ID = "us.amazon.nova-2-lite-v1:0"`)
    and runs on production's `bound_summary` unchanged, because Nova accepts
    `topP`. It lifts availability from 76.5% to 98.8%, and exact identifiers
@@ -402,3 +403,62 @@ to keep the lossy compressor.
    Availability is an upper bound, though in §8 it tracked the scored result
    to within a few points per family.
 
+
+### 9.1 Paid confirmation: Nova 2 Lite ships as the default (2026-09-25)
+
+Recommendation 1 is shipped: `Defaults.COMPACTION_SUMMARY_MODEL_ID` is now
+`us.amazon.nova-2-lite-v1:0`. Recommendation 4's paid `ask` ran on it before
+merge.
+
+**Configuration.** As in §8, with a fresh `records` pass (`--chunk-turns 1
+--record-words 600`, 576 Haiku calls). Four arms:
+- `full`: the control;
+- `model_relative`: production defaults, so now Nova 2 Lite;
+- `nova2lite_compress`: the same configuration again, pinned explicitly, as
+  a second sample of a compressor that runs at `temperature` 0.1;
+- `nova_micro_compress`: the old default, pinned, to keep the baseline
+  visible in the same run.
+
+Every compacted arm compressed through the model on all 12 cuts, from
+12.4k–15.5k tokens of records. There was no fallback to truncation. Median
+summary sizes were ~1,810 (`model_relative`), ~1,320 (`nova2lite_compress`)
+and ~890 (`nova_micro_compress`) tokens.
+
+| family (n) | full | model_relative (Nova 2 Lite) | nova2lite_compress | nova_micro_compress |
+|---|---|---|---|---|
+| constraint (36) | 1.00 | 1.00 (0 / 0, p=1.0) | 0.97 (1 / 0, p=1.0) | **0.83** (6 / 0, p=0.031) |
+| decision (24) | 1.00 | 1.00 (0 / 0, p=1.0) | 1.00 (0 / 0, p=1.0) | **0.75** (6 / 0, p=0.031) |
+| reference (24) | 0.96 | 1.00 (0 / 1, p=1.0) | 1.00 (0 / 1, p=1.0) | **0.62** (9 / 1, p=0.021) |
+| superseded (24) | 0.96 | 0.96 (0 / 0, p=1.0) | 0.96 (0 / 0, p=1.0) | 0.88 (2 / 0, p=0.5) |
+
+Cells show accuracy, then losses / wins against `full`, then the exact
+McNemar p.
+
+- **By retention.** Facts whose stating turn was cut scored 1.00 and 0.98
+  on the two Nova 2 Lite arms, against 0.56 on Nova Micro. Facts whose turn
+  was kept scored 0.98 on all three arms.
+- **Free availability again predicted the score.** Nova 2 Lite:
+  100/100/100/100 and 97/100/100/100. Nova Micro: 83/75/62.5/96.
+- **The one Nova 2 Lite constraint loss** is a value its summary dropped.
+  It was absent from context, and the answer was `UNKNOWN`. That is the last
+  ~1% that recommendation 2 (extract, then compress) is for.
+- **Nova Micro reproduced §8's failure mode.** 71 of its 74 wrong samples
+  were `UNKNOWN`.
+
+**Verdict.** On this corpus, Nova 2 Lite compression is indistinguishable
+from the full history in every family, with no significant loss. Nova Micro
+loses significantly in three of four families. The §8 veto on the summary
+compression is lifted for Nova 2 Lite.
+
+**Spend.**
+- `ask`: **$10.23** in real tokens, against the $16.34 chars/4 estimate
+  (63%). The split was $4.58 for `full` and $1.79–$2.02 per compacted arm.
+  1,296 calls, all `end_turn`.
+- `records`: about $3.50.
+- Nova 2 Lite compression: about $0.01 per cut.
+
+**Still open.**
+- Recommendation 2, extract then compress, for the last ~1%.
+- Recommendation 3, `topP` for Claude summarizers, which is a separate task.
+- The §8 caveats all still apply: Haiku-written stand-in records, a
+  synthetic corpus, one answering model, and only the restore pace.

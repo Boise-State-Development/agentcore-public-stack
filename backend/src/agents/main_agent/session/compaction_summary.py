@@ -11,7 +11,7 @@ of the threshold guarantees compaction can never get back under it. This
 module holds the persisted summary at or under a token budget:
 
 1. **Within budget** → unchanged.
-2. **Over budget** → one call to the cheap model (Nova Micro, the same
+2. **Over budget** → one call to the summary model (Nova 2 Lite, the same
    side-channel pattern as titles and tool-batch summaries) that compresses
    the records into a bounded, instruction-preserving summary. It runs once,
    at checkpoint advance — the turn that already pays a prefix re-write.
@@ -41,8 +41,8 @@ logger = logging.getLogger(__name__)
 # fed newest-first up to this many chars, so the side-channel's own spend is
 # flat regardless of how long the session has run.
 MAX_COMPRESSION_INPUT_CHARS = 120_000
-# Nova Micro's output ceiling is 5k tokens; stay under it with margin so the
-# generation is not cut mid-sentence. The budget check after generation is
+# Nova Micro's output ceiling is 5k tokens, the smallest of the models this has
+# run on; stay under it with margin so the generation is not cut mid-sentence. The budget check after generation is
 # what enforces the configured budget.
 _MODEL_MAX_OUTPUT_TOKENS = 4_000
 

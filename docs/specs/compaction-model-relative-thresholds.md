@@ -402,6 +402,29 @@ replay real trajectories under a policy.
 >   bound).
 > - The corpus is synthetic.
 > - There is one model, and n=24–36 per family.
+>
+> ✅ **SUMMARY MODEL FIXED 2026-09-25: Nova 2 Lite replaces Nova Micro.**
+> `Defaults.COMPACTION_SUMMARY_MODEL_ID` is now `us.amazon.nova-2-lite-v1:0`,
+> and `bound_summary` and its prompt are unchanged. It was screened free in
+> scoping §9 and confirmed with a paid run in §9.1: the same setup as above,
+> a fresh records pass, and the old default pinned as its own arm.
+>
+> | family (n) | full | model_relative (Nova 2 Lite) | Nova Micro |
+> |---|---|---|---|
+> | constraint (36) | 1.00 | 1.00 (0 / 0, p=1.0) | **0.83** (6 / 0, p=0.031) |
+> | decision (24) | 1.00 | 1.00 (0 / 0, p=1.0) | **0.75** (6 / 0, p=0.031) |
+> | reference (24) | 0.96 | 1.00 (0 / 1, p=1.0) | **0.62** (9 / 1, p=0.021) |
+> | superseded (24) | 0.96 | 0.96 (0 / 0, p=1.0) | 0.88 (2 / 0, p=0.5) |
+>
+> - **Facts whose stating turn was cut:** 1.00 on Nova 2 Lite, against 0.56
+>   on Nova Micro.
+> - **A second, explicitly pinned Nova 2 Lite arm** lost one constraint, a
+>   value its summary dropped (p=1.0).
+> - **Summaries** are a median of ~1.3k–1.8k tokens, against ~0.9k on Micro.
+> - **Cost:** about $0.01 per cut, and ~1k more cached-prefix tokens per turn.
+> - **The veto on the compression is lifted for Nova 2 Lite.** Extract, then
+>   compress (scoping §9, recommendation 2) remains the structural fix for
+>   the residual ~1%.
 
 - **Veto before default change in prod:** the spiral spec §4.3 long-session
   eval (constraint retention / revision continuity / reference lookup) runs
@@ -449,7 +472,8 @@ constant above ceiling for 10 turns) produces exactly one checkpoint advance.
 As built (`compaction_summary.py`, stacked on PR-1): `bound_summary()` holds
 the persisted summary at `COMPACTION_SUMMARY_TOKEN_BUDGET` (8,000 tokens,
 chars/4 — the same estimate the admin `SUMMARY_OVER_BUDGET` diagnosis uses).
-Within budget → unchanged. Over budget → one Nova Micro `converse` call
+Within budget → unchanged. Over budget → one `converse` call on the summary
+model (Nova Micro as built; Nova 2 Lite since 2026-09-25, see §5)
 (`AGENTCORE_MEMORY_COMPACTION_SUMMARY_MODEL_ID`; kill switch
 `AGENTCORE_MEMORY_COMPACTION_SUMMARY_MODEL_ENABLED=false`) with a prompt that
 keeps standing instructions, decisions, current state of the work, open items
