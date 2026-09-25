@@ -388,3 +388,99 @@ class TestTombstoneKeys:
         doc = r.document_tombstone_sk(APP_KB_ID, "doc-9")
         assert doc.startswith(whole)
         assert doc != whole
+
+
+# ── writes that must not recreate a torn-down record ─────────────────────────
+def _absent(table):
+    return (
+        table.get_item(Key={"PK": r.kb_pk(ASSISTANT_ID), "SK": r.kb_sk(APP_KB_ID)}).get("Item")
+        is None
+    )
+
+
+class TestUpdateIfPresent:
+    """``UpdateItem`` is an upsert. A teardown ends by removing the KB_Record, and
+    any late writer aimed at that key would otherwise recreate it as a ghost item
+    holding only the attributes it happened to set."""
+
+    def test_writes_to_an_existing_record(self, table):
+        _seed(table)
+
+        assert r.update_if_present(
+            ASSISTANT_ID,
+            APP_KB_ID,
+            UpdateExpression="SET storedBytes = :b",
+            ExpressionAttributeValues={":b": 7},
+        )
+        assert int(_raw(table)["storedBytes"]) == 7
+
+    def test_does_not_create_a_removed_record(self, table):
+        assert (
+            r.update_if_present(
+                ASSISTANT_ID,
+                APP_KB_ID,
+                UpdateExpression="SET storedBytes = :b",
+                ExpressionAttributeValues={":b": 7},
+            )
+            is False
+        )
+        assert _absent(table)
+
+    def test_refuses_a_caller_supplied_condition(self, table):
+        """Silently replacing a caller's guard, or dropping ours, is the bug."""
+        with pytest.raises(TypeError):
+            r.update_if_present(
+                ASSISTANT_ID,
+                APP_KB_ID,
+                UpdateExpression="SET storedBytes = :b",
+                ConditionExpression="attribute_exists(SK)",
+                ExpressionAttributeValues={":b": 7},
+            )
+
+
+class TestResourcePolicyStateOnARemovedRecord:
+    def test_recording_a_policy_does_not_recreate_the_record(self, table):
+        r.set_resource_policy_state(ASSISTANT_ID, APP_KB_ID, "KBSYNTH01", "rev-1")
+        assert _absent(table)
+
+    def test_clearing_a_policy_does_not_recreate_the_record(self, table):
+        """A REMOVE-only ``UpdateItem`` still creates a key-only item."""
+        r.set_resource_policy_state(ASSISTANT_ID, APP_KB_ID, None, None)
+        assert _absent(table)
+
+    def test_an_existing_record_still_records_its_policy(self, table):
+        _seed(table)
+        r.set_resource_policy_state(ASSISTANT_ID, APP_KB_ID, "KBSYNTH01", "rev-1")
+        assert _raw(table)["policyAwsKbId"] == "KBSYNTH01"
+
+
+class TestByteCapOnARemovedRecord:
+    """An ingestion that settles after its agent's knowledge base was torn down."""
+
+    def test_commit_does_not_recreate_the_record(self, table):
+        from apis.shared.kb_backend import byte_cap
+
+        byte_cap.commit(ASSISTANT_ID, APP_KB_ID, 100)
+        assert _absent(table)
+
+    def test_release_does_not_recreate_the_record(self, table):
+        from apis.shared.kb_backend import byte_cap
+
+        byte_cap.release(ASSISTANT_ID, APP_KB_ID, 100)
+        assert _absent(table)
+
+    def test_reserve_does_not_recreate_the_record(self, table):
+        from apis.shared.kb_backend import byte_cap
+
+        byte_cap.reserve(ASSISTANT_ID, APP_KB_ID, 100, 1000)
+        assert _absent(table)
+
+    def test_reserve_still_rejects_over_the_cap_on_an_existing_record(self, table):
+        """The existence guard must not turn a cap rejection into a silent no-op."""
+        from apis.shared.kb_backend import byte_cap
+
+        _seed(table)
+        byte_cap.reserve(ASSISTANT_ID, APP_KB_ID, 900, 1000)
+        with pytest.raises(byte_cap.ByteCapExceeded):
+            byte_cap.reserve(ASSISTANT_ID, APP_KB_ID, 200, 1000)
+        assert int(_raw(table)["totalBytes"]) == 900

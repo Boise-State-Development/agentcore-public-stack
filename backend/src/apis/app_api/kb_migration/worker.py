@@ -745,11 +745,16 @@ def _set_retain_until(assistant_id: str, app_kb_id: str, retain_until: str) -> N
     write were also guarded and lost, the record would be promoted with no
     ``retainUntil`` — which reads as "no rollback window" to anything that checks
     it. Writing the later date twice is harmless; writing it never is not.
-    """
-    import boto3
 
-    boto3.resource("dynamodb").Table(os.environ["DYNAMODB_ASSISTANTS_TABLE_NAME"]).update_item(
-        Key={"PK": f"AST#{assistant_id}", "SK": f"KB#{app_kb_id}"},
+    Guarded only on the record existing, so a write that outlives a teardown
+    cannot recreate the record it removed.
+    """
+    from apis.shared.kb_backend.records import update_if_present
+
+    update_if_present(
+        assistant_id,
+        app_kb_id,
+        table=_table(),
         UpdateExpression="SET retainUntil = :until",
         ExpressionAttributeValues={":until": retain_until},
     )
@@ -812,6 +817,8 @@ async def _record_progress(
     """
     from decimal import Decimal
 
+    from apis.shared.kb_backend.records import update_if_present
+
     expression = "SET #progress = :progress"
     names = {"#progress": "migrationProgress"}
     values: Dict[str, Any] = {
@@ -836,8 +843,12 @@ async def _record_progress(
             f"is safe but slow (customDocumentIdentifier makes re-ingest a replace)"
         )
 
-    _table().update_item(
-        Key={"PK": f"AST#{assistant_id}", "SK": f"KB#{app_kb_id}"},
+    # Guarded on the record existing: progress for a knowledge base that was torn
+    # down underneath the step must not recreate its record.
+    update_if_present(
+        assistant_id,
+        app_kb_id,
+        table=_table(),
         UpdateExpression=expression,
         ExpressionAttributeNames=names,
         ExpressionAttributeValues=values,

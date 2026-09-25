@@ -735,6 +735,104 @@ class TestDeleteUnsuccessfulOrphan:
         assert payload["deletionsPerformed"] == 0
 
 
+# ── Teardown: a record being deleted must not be resurrected or mislabelled ──
+class TestTeardownIsLeftAlone:
+    """The migration worker deletes a torn-down agent's knowledge base and then
+    removes its KB_Record, over 15-30+ minutes of dispatcher ticks. The reconciler
+    snapshots every record before walking AWS, so it can hold a record that is
+    being torn down, or one that is already gone."""
+
+    def test_a_record_removed_after_the_snapshot_is_not_recreated(self, table):
+        """TRAP: the teardown finishes between the record scan and the AWS walk.
+
+        The run still holds the record and sees its knowledge base gone. An
+        unconditional ``UpdateItem`` would write a ghost ``KB#`` item holding only
+        ``vectorState``/``updatedAt``: the orphaned row the teardown exists to
+        remove.
+        """
+        _seed_record(table, "ast-race", aws_kb_id="KBGONE")
+
+        def _teardown_finishes():
+            table.delete_item(Key={"PK": "AST#ast-race", "SK": "KB#ast-race"})
+
+        client = FakeBedrockAgent(knowledge_bases=[], tags={}, probe=_teardown_finishes)
+
+        report = _run(client, table, armed=False)
+
+        assert _record(table, "ast-race") is None, "the reconciler recreated a removed record"
+        assert report.records == 1
+        assert report.marked_missing == []
+
+    def test_a_record_removed_before_its_bytes_refresh_is_not_recreated(self, table):
+        """The same race on the matched side: the KB is still listed as DELETING."""
+        _seed_record(table, "ast-race", aws_kb_id="KBDEL", storedBytes=10)
+        client = FakeBedrockAgent(
+            knowledge_bases=[_aws_kb("KBDEL", NOW - timedelta(days=8), status="DELETING")],
+            tags=_ours("KBDEL", "ast-race"),
+        )
+
+        def _resolver(_assistant_id):
+            table.delete_item(Key={"PK": "AST#ast-race", "SK": "KB#ast-race"})
+            return 4096
+
+        report = _run(client, table, armed=False, stored_bytes_resolver=_resolver)
+
+        assert _record(table, "ast-race") is None, "the reconciler recreated a removed record"
+        assert report.matched == 1
+        assert report.refreshed_bytes == []
+
+    def test_a_teardown_record_whose_kb_is_gone_is_not_marked_missing(self, table):
+        """Its vectors are gone because the teardown deleted them, on purpose."""
+        _seed_record(table, "ast-td", aws_kb_id="KBGONE", migrationState="teardown")
+        client = FakeBedrockAgent(knowledge_bases=[], tags={})
+
+        report = _run(client, table, armed=True)
+
+        assert report.marked_missing == []
+        assert report.tearing_down == ["ast-td"]
+        record = _record(table, "ast-td")
+        assert record.get("vectorState") is None
+        assert record.get("vectorStateObservedAt") is None
+
+    def test_a_teardown_record_whose_kb_is_deleting_is_not_refreshed(self, table):
+        """Still listed by AWS, so it joins as matched and is not an orphan, but its
+        bytes are not re-anchored: they are about to be deleted with the record."""
+        _seed_record(
+            table, "ast-td", aws_kb_id="KBDEL", migrationState="teardown", storedBytes=10
+        )
+        client = FakeBedrockAgent(
+            knowledge_bases=[_aws_kb("KBDEL", NOW - timedelta(days=8), status="DELETING")],
+            tags=_ours("KBDEL", "ast-td"),
+        )
+
+        report = _run(client, table, armed=True, stored_bytes_resolver=lambda _a: 4096)
+
+        assert report.matched == 1
+        assert report.orphans == 0
+        assert report.planned_deletions == []
+        assert report.refreshed_bytes == []
+        assert report.tearing_down == ["ast-td"]
+        assert int(_record(table, "ast-td")["storedBytes"]) == 10
+
+    def test_teardown_records_are_counted_in_the_serialized_report(self, table):
+        _seed_record(table, "ast-td", aws_kb_id="KBGONE", migrationState="teardown")
+        _seed_record(table, "ast-stale", aws_kb_id="KBVANISHED")
+        client = FakeBedrockAgent(knowledge_bases=[], tags={})
+
+        payload = _run(client, table, armed=False).to_dict()
+
+        assert payload["records"] == 2
+        assert payload["tearingDown"] == ["ast-td"]
+        # A record in any other state is still marked: the skip is teardown-only.
+        assert payload["markedMissing"] == ["ast-stale"]
+
+    def test_the_record_side_actions_report_a_vanished_record(self, table):
+        """Called directly, both writes say they did nothing and create nothing."""
+        assert rec.mark_vector_state_missing("ast-none", "ast-none") is False
+        assert rec.refresh_stored_bytes("ast-none", "ast-none", 1) is False
+        assert _record(table, "ast-none") is None
+
+
 # ── Mixed and degenerate cases ───────────────────────────────────────────────
 class TestMixedRun:
     def test_all_three_outcomes_in_one_pass(self, table):
@@ -775,6 +873,7 @@ class TestMixedRun:
             "skippedTooYoung": [],
             "markedMissing": [],
             "refreshedBytes": [],
+            "tearingDown": [],
             "limitReached": False,
             # Fleet gauges. Zero here, and asserted as an exact dict on purpose: the
             # report is a stored artifact an operator reads, so a field appearing or

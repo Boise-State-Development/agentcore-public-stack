@@ -16,6 +16,20 @@ Record only    Mark ``vectorState: missing``. **Never delete the record**
 Both           Refresh ``storedBytes`` for quota accounting
 =============  ============================================================
 
+A record in ``migrationState: teardown`` takes none of those actions, on either
+side. Its agent has been deleted and the migration worker is removing the
+knowledge base and then the record, a job that spans 15-30+ minutes of
+dispatcher ticks. Its knowledge base being ``DELETING`` or gone is the teardown
+working, not vectors going missing, and its bytes are about to stop mattering.
+It is counted as ``tearing_down`` so the report still accounts for it.
+
+Every record-side write is also guarded on the record still existing
+(:func:`records.update_if_present`). The pass reads all records first and then
+walks AWS, so a teardown can finish in between: the knowledge base is gone, the
+record is gone, and this run still holds the record in its snapshot. An
+unguarded ``UpdateItem`` would then recreate it as a ghost ``KB#`` item holding
+only the attributes this module sets.
+
 Two of those three rows are counter-intuitive, and each is the way it is because
 the intuitive version destroys something.
 
@@ -72,7 +86,7 @@ from decimal import Decimal
 from typing import Any, Callable, Dict, Iterator, List, Optional
 
 from apis.shared.kb_backend.metrics import emit_count, emit_fleet_gauges
-from apis.shared.kb_backend.records import kb_pk, kb_sk
+from apis.shared.kb_backend.records import TEARDOWN, update_if_present
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -161,6 +175,10 @@ class ReconcileReport:
     skipped_too_young: List[str] = field(default_factory=list)
     marked_missing: List[str] = field(default_factory=list)
     refreshed_bytes: List[str] = field(default_factory=list)
+    #: Records in ``migrationState: teardown``, which this pass neither marks nor
+    #: refreshes. Listed so a record the join skipped is still visible in the
+    #: artifact rather than silently absent from every other bucket.
+    tearing_down: List[str] = field(default_factory=list)
     limit_reached: bool = False
 
     #: Fleet gauges (Requirement 22.1), accumulated over the record side of the
@@ -203,6 +221,7 @@ class ReconcileReport:
             "skippedTooYoung": self.skipped_too_young,
             "markedMissing": self.marked_missing,
             "refreshedBytes": self.refreshed_bytes,
+            "tearingDown": self.tearing_down,
             "limitReached": self.limit_reached,
             "storedBytes": self.stored_bytes,
             "idleBytes": self.idle_bytes,
@@ -384,7 +403,7 @@ def orphan_is_deletable(
 
 
 # ── Record-side actions ──────────────────────────────────────────────────────
-def mark_vector_state_missing(assistant_id: str, app_kb_id: str) -> None:
+def mark_vector_state_missing(assistant_id: str, app_kb_id: str) -> bool:
     """Record that the AWS knowledge base behind this record has gone.
 
     **This never deletes the record**, and there is deliberately no function in
@@ -398,27 +417,39 @@ def mark_vector_state_missing(assistant_id: str, app_kb_id: str) -> None:
     ``awsKbId``/``awsDataSourceId`` are left in place rather than cleared: they
     are the evidence of which AWS resource vanished, and provisioning already
     treats a record it cannot find in AWS as needing a fresh create.
+
+    Returns ``False`` when the record has gone since the pass read it (a teardown
+    finished mid-run). The write is dropped rather than recreating the record.
     """
-    _table().update_item(
-        Key={"PK": kb_pk(assistant_id), "SK": kb_sk(app_kb_id)},
+    written = update_if_present(
+        assistant_id,
+        app_kb_id,
+        table=_table(),
         UpdateExpression=(
             "SET vectorState = :missing, vectorStateObservedAt = :now, updatedAt = :now"
         ),
         ExpressionAttributeValues={":missing": VECTOR_STATE_MISSING, ":now": _now_iso()},
     )
-    emit_count(METRIC_VECTORS_MISSING)
+    if written:
+        emit_count(METRIC_VECTORS_MISSING)
+    return written
 
 
-def refresh_stored_bytes(assistant_id: str, app_kb_id: str, stored_bytes: int) -> None:
+def refresh_stored_bytes(assistant_id: str, app_kb_id: str, stored_bytes: int) -> bool:
     """Re-anchor quota accounting, and clear any stale ``vectorState``.
 
     The ``REMOVE`` matters: a record marked ``missing`` on an earlier run that has
     since been re-provisioned would otherwise stay marked for ever, and the UI
     would keep telling its owner their knowledge base is broken after it was
     fixed.
+
+    Returns ``False`` when the record has gone since the pass read it, without
+    recreating it.
     """
-    _table().update_item(
-        Key={"PK": kb_pk(assistant_id), "SK": kb_sk(app_kb_id)},
+    return update_if_present(
+        assistant_id,
+        app_kb_id,
+        table=_table(),
         UpdateExpression=(
             "SET storedBytes = :bytes, updatedAt = :now "
             "REMOVE vectorState, vectorStateObservedAt"
@@ -511,6 +542,11 @@ def reconcile(
     for item in iter_kb_records():
         report.records += 1
         _accumulate_gauges(item, report, now)
+        if item.get("migrationState") == TEARDOWN:
+            # Being deleted on purpose. Still indexed by awsKbId, so its knowledge
+            # base, while AWS still lists it, joins as matched rather than looking
+            # like an orphan. The skip is in the two record-side actions below.
+            report.tearing_down.append(str(item.get("appKbId") or item.get("SK") or ""))
         aws_kb_id = item.get("awsKbId")
         if aws_kb_id:
             records_by_aws_id[str(aws_kb_id)] = item
@@ -550,6 +586,11 @@ def reconcile(
         for aws_kb_id, record in sorted(records_by_aws_id.items()):
             if aws_kb_id in seen_aws_ids:
                 continue
+            if record.get("migrationState") == TEARDOWN:
+                # Its knowledge base is gone because the teardown deleted it.
+                # Marking it missing would describe a deliberate delete as lost
+                # vectors, and the record is about to be removed anyway.
+                continue
             app_kb_id = str(record.get("appKbId") or "")
             assistant_id = _assistant_id_of(record)
             if not app_kb_id or not assistant_id:
@@ -561,8 +602,8 @@ def reconcile(
                 f"NOT deleted: its documents are still valid and the knowledge base "
                 f"rebuilds from them on the next ingest."
             )
-            mark_vector_state_missing(assistant_id, app_kb_id)
-            report.marked_missing.append(app_kb_id)
+            if mark_vector_state_missing(assistant_id, app_kb_id):
+                report.marked_missing.append(app_kb_id)
 
     # ── AWS only: orphans (Requirements 14.2, 14.3, 14.4) ────────────────────
     report.orphans = len(orphan_facts)
@@ -648,6 +689,7 @@ def reconcile(
         f"planned={len(report.planned_deletions)} "
         f"performed={report.deletions_performed} "
         f"markedMissing={len(report.marked_missing)} "
+        f"tearingDown={len(report.tearing_down)} "
         f"unprovisioned={unprovisioned} "
         f"storedGB={report.stored_bytes / 1_000_000_000:.3f} "
         f"idleGB={report.idle_bytes / 1_000_000_000:.3f} "
@@ -731,7 +773,13 @@ def _reconcile_matched(
     Written only when the number actually changed, or when a stale
     ``vectorState`` needs clearing. A daily no-op write per knowledge base would
     be pure cost and would churn ``updatedAt`` on records nothing happened to.
+
+    A record being torn down is skipped: its bytes are about to be deleted with
+    it, and refreshing them would only give a late write a record to recreate.
     """
+    if record.get("migrationState") == TEARDOWN:
+        return
+
     app_kb_id = str(record.get("appKbId") or "")
     assistant_id = _assistant_id_of(record)
     if not app_kb_id or not assistant_id:
@@ -747,8 +795,8 @@ def _reconcile_matched(
     if actual == current and not stale_state:
         return
 
-    refresh_stored_bytes(assistant_id, app_kb_id, actual)
-    report.refreshed_bytes.append(app_kb_id)
+    if refresh_stored_bytes(assistant_id, app_kb_id, actual):
+        report.refreshed_bytes.append(app_kb_id)
 
 
 def _delete_orphan(facts, client) -> None:

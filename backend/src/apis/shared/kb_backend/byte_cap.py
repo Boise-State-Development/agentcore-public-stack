@@ -177,10 +177,18 @@ def reserve(
 
     ``attribute_not_exists`` covers the first reservation on a record that has
     never held bytes, so a fresh knowledge base does not need initialising.
+
+    The record itself must exist, though. Every caller has just read it and found
+    it managed, so an absent record means a teardown removed it in between, and an
+    unguarded ``ADD`` would recreate it as a ghost ``KB#`` item holding only
+    counters. That case returns without reserving: with no managed knowledge base
+    there is no managed storage to bill, which is the same reason a legacy
+    knowledge base is uncapped (Requirement 12.11). The paired :func:`commit` or
+    :func:`release` is then a no-op too, so the accounting stays consistent.
     """
     from botocore.exceptions import ClientError
 
-    from apis.shared.kb_backend.records import kb_pk, kb_sk
+    from apis.shared.kb_backend.records import RECORD_EXISTS, kb_pk, kb_sk
 
     if n_bytes < 0:
         raise ValueError("n_bytes must not be negative")
@@ -195,7 +203,9 @@ def reserve(
         _table().update_item(
             Key={"PK": kb_pk(assistant_id), "SK": kb_sk(app_kb_id)},
             UpdateExpression="ADD #total :n, #reserved :n",
-            ConditionExpression="attribute_not_exists(#total) OR #total <= :max_before",
+            ConditionExpression=(
+                f"{RECORD_EXISTS} AND (attribute_not_exists(#total) OR #total <= :max_before)"
+            ),
             ExpressionAttributeNames={
                 # `total` is a DynamoDB reserved keyword, so these are aliased.
                 "#total": "totalBytes",
@@ -205,9 +215,18 @@ def reserve(
                 ":n": Decimal(n_bytes),
                 ":max_before": Decimal(cap - n_bytes),
             },
+            # Hands back the record on a rejection, which is what tells "over the
+            # cap" apart from "the record is gone" without a second read.
+            ReturnValuesOnConditionCheckFailure="ALL_OLD",
         )
     except ClientError as exc:
         if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            if not exc.response.get("Item"):
+                logger.info(
+                    f"KB_Record {assistant_id}/{app_kb_id} is gone (torn down); "
+                    f"not reserving {n_bytes} bytes against it"
+                )
+                return
             emit_count(METRIC_BYTE_CAP_REJECTED)
             raise ByteCapExceeded(requested=n_bytes, cap=cap) from exc
         raise
@@ -219,13 +238,19 @@ def commit(assistant_id: str, app_kb_id: str, n_bytes: int) -> None:
     ``totalBytes`` is untouched: the bytes were already counted at reserve time.
     Adding here as well would double-count and shrink the owner's allowance on
     every successful upload.
+
+    Guarded on the record existing (:func:`records.update_if_present`): settling
+    bytes against a knowledge base that was torn down mid-ingestion must not
+    recreate its record.
     """
-    from apis.shared.kb_backend.records import kb_pk, kb_sk
+    from apis.shared.kb_backend.records import update_if_present
 
     if n_bytes == 0:
         return
-    _table().update_item(
-        Key={"PK": kb_pk(assistant_id), "SK": kb_sk(app_kb_id)},
+    update_if_present(
+        assistant_id,
+        app_kb_id,
+        table=_table(),
         UpdateExpression="ADD #reserved :neg, #stored :n",
         ExpressionAttributeNames={"#reserved": "reservedBytes", "#stored": "storedBytes"},
         ExpressionAttributeValues={":neg": Decimal(-n_bytes), ":n": Decimal(n_bytes)},
@@ -239,13 +264,17 @@ def release(assistant_id: str, app_kb_id: str, n_bytes: int) -> None:
     exactly. Not releasing would silently shrink the owner's cap with every failed
     upload until they could not upload at all — a leak that presents as "the
     product stopped working" long after the failures that caused it.
+
+    Guarded on the record existing, as :func:`commit` is.
     """
-    from apis.shared.kb_backend.records import kb_pk, kb_sk
+    from apis.shared.kb_backend.records import update_if_present
 
     if n_bytes == 0:
         return
-    _table().update_item(
-        Key={"PK": kb_pk(assistant_id), "SK": kb_sk(app_kb_id)},
+    update_if_present(
+        assistant_id,
+        app_kb_id,
+        table=_table(),
         UpdateExpression="ADD #reserved :neg, #total :neg",
         ExpressionAttributeNames={"#reserved": "reservedBytes", "#total": "totalBytes"},
         ExpressionAttributeValues={":neg": Decimal(-n_bytes)},

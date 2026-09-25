@@ -317,6 +317,49 @@ def _conditional(operation, **kwargs):
         raise
 
 
+#: The guard :func:`update_if_present` adds. Exported so a writer that already
+#: carries a condition of its own (the byte cap's reservation) can AND it in.
+RECORD_EXISTS = "attribute_exists(PK)"
+
+
+def update_if_present(assistant_id: str, app_kb_id: str, table=None, **kwargs) -> bool:
+    """``update_item`` on a KB_Record that cannot bring the record into existence.
+
+    ``UpdateItem`` is an upsert: aimed at a key that is not there, it creates an
+    item holding the key plus whatever the expression sets. For a KB_Record that is
+    how a teardown gets undone. The migration worker removes the record as the
+    last step of deleting an agent's knowledge base, and any writer still holding
+    a copy it read earlier (the reconciler's snapshot, an ingestion settling its
+    bytes, a policy write finishing late) would otherwise write a ghost ``KB#``
+    item carrying only its own attributes. That orphaned row is exactly what the
+    teardown exists to remove.
+
+    Returns ``False``, without raising, when the record is gone: the write had
+    nothing left to describe, so dropping it is the correct outcome and not an
+    error. ``table`` lets a caller pass its own module's table handle. Callers
+    must not pass a ``ConditionExpression``; this function owns it.
+    """
+    from botocore.exceptions import ClientError
+
+    if "ConditionExpression" in kwargs:
+        raise TypeError("update_if_present owns the ConditionExpression")
+    try:
+        (table if table is not None else _table()).update_item(
+            Key={"PK": kb_pk(assistant_id), "SK": kb_sk(app_kb_id)},
+            ConditionExpression=RECORD_EXISTS,
+            **kwargs,
+        )
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            logger.info(
+                f"KB_Record {assistant_id}/{app_kb_id} is gone (torn down or never "
+                f"created); skipping the write rather than recreating it"
+            )
+            return False
+        raise
+    return True
+
+
 def create_provisioning(
     assistant_id: str,
     record: KbRecord,
@@ -425,19 +468,23 @@ def set_resource_policy_state(
     somebody has to remember to fire into a comparison
     (``resource_policy.policy_is_stale``).
 
-    Unconditional, deliberately. Every other writer here guards on the state it
-    expects, because those transitions must not race. This one records what AWS has
-    just confirmed, and a stale overwrite of the *same* fact is harmless while a
+    Not guarded on state, deliberately. Every other writer here guards on the state
+    it expects, because those transitions must not race. This one records what AWS
+    has just confirmed, and a stale overwrite of the *same* fact is harmless while a
     refused write would leave the record claiming a policy target that is no longer
     true — the failure mode the attribute exists to prevent.
+
+    Guarded only on the record existing (:func:`update_if_present`). A record that
+    has been torn down claims nothing, so there is nothing for a late write to keep
+    true, and an unguarded one would recreate it as a ghost.
 
     Passing ``None`` clears both attributes, for a knowledge base that stopped
     being shared.
     """
-    key = {"PK": kb_pk(assistant_id), "SK": kb_sk(app_kb_id)}
     if aws_kb_id is None:
-        _table().update_item(
-            Key=key,
+        update_if_present(
+            assistant_id,
+            app_kb_id,
             UpdateExpression="REMOVE policyAwsKbId, policyRevisionId",
         )
         return
@@ -450,8 +497,9 @@ def set_resource_policy_state(
     else:
         expression += " REMOVE policyRevisionId"
 
-    _table().update_item(
-        Key=key,
+    update_if_present(
+        assistant_id,
+        app_kb_id,
         UpdateExpression=expression,
         ExpressionAttributeValues=values,
     )
