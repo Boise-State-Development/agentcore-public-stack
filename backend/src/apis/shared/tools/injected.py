@@ -52,9 +52,9 @@ WORKSPACE_TOOL_IDS = frozenset({"workspace_files"})
 DOCUMENT_TOOL_IDS = frozenset({"document_read"})
 
 # Every id owned by a per-request factory. Memory-Space and document tools are
-# deliberately absent: they are gated on an Agent's memory binding / the
-# session's attachments rather than on ``enabled_tools``, so they never reach
-# the filter.
+# deliberately absent: they are gated on an Agent's memory binding (or a
+# project harness) / the session's attachments rather than on
+# ``enabled_tools``, so they never reach the filter.
 INJECTED_TOOL_IDS = frozenset(
     SPREADSHEET_TOOL_IDS
     | ARTIFACT_TOOL_IDS
@@ -108,7 +108,10 @@ INJECTED_TOOL_IDS = frozenset(
 # binding (space id, name, access) plus `(user_id, user_email)`, and
 # `_create_cache_key` carries a digest of the binding (Shared Projects 2.1).
 # The caller must pass that binding to `get_agent` for the key to carry it;
-# the tools themselves read the space live on every call.
+# the tools themselves read the space live on every call. A project harness's
+# scope-addressed family (Shared Projects 2.4b) is described the same way: it
+# closes over the project and its two space ids, which reach the key through
+# the same `memory_binding` element in a different shape.
 KEY_DESCRIBED_INJECTED_TOOL_IDS = frozenset(
     ARTIFACT_TOOL_IDS
     | WORD_DOCUMENT_TOOL_IDS

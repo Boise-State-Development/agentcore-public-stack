@@ -69,13 +69,15 @@ def _create_cache_key(
     """
     Create a cache key for agent instances.
 
-    `memory_binding` is ``memory_binding_digest`` of the Agent's resolved
-    Memory-Space binding (space id, name, access), or "" when there is none.
-    The memory tools close over exactly those values (the write tool exists
-    only for ``readwrite``; the name is in the tool descriptions), and read the
-    space live on every call, so they are described once the key carries this.
-    Empty string without a binding, so binding-less turns key exactly as
-    before apart from the constant extra element.
+    `memory_binding` is ``memory_binding_digest`` of what the turn's memory
+    tools close over, or "" when there are none. For an Agent's binding that is
+    the space id, name and access: the write tool exists only for
+    ``readwrite``, and the name is in the tools' result messages (their specs
+    are constant). For a project harness it is the project and its two space
+    ids (Shared Projects 2.4b). Either way the tools read the spaces live on
+    every call, so they are described once the key carries this. Empty string
+    without memory tools, so those turns key exactly as before apart from the
+    constant extra element.
 
     `memory_context` is the rendered Memory-Space block sent after the system
     prompt (Shared Projects 2.2). It used to be part of `system_prompt`, so it
@@ -138,14 +140,32 @@ def _create_cache_key(
 
 
 def memory_binding_digest(binding: Optional[Dict[str, Any]]) -> str:
-    """Short digest of a resolved Memory-Space binding for the agent cache key.
+    """Short digest of a turn's memory tools' closure for the agent cache key.
 
-    ``binding`` is ``{"spaceId", "spaceName", "access"}`` (the shape stamped on
-    the construction snapshot and replayed from ``PausedTurnSnapshot``), or
-    None. Returns "" for None so binding-less keys do not change.
+    ``binding`` is the shape stamped on the construction snapshot and replayed
+    from ``PausedTurnSnapshot``, or None:
+
+    - an Agent's binding, ``{"spaceId", "spaceName", "access"}``;
+    - a project harness's scopes, ``{"projectId", "sharedSpaceId",
+      "personalSpaceId"}`` (Shared Projects 2.4b). Its payload starts with a
+      ``"project"`` tag, so it can never collide with a binding's.
+
+    Returns "" for None so keys without memory do not change. The binding
+    digest is unchanged from 2.1, so ordinary Agents keep their keys.
     """
     if not binding:
         return ""
+    if "projectId" in binding:
+        payload = json.dumps(
+            [
+                "project",
+                binding.get("projectId"),
+                binding.get("sharedSpaceId"),
+                binding.get("personalSpaceId"),
+            ],
+            default=str,
+        )
+        return hashlib.md5(payload.encode()).hexdigest()[:8]
     payload = json.dumps(
         [binding.get("spaceId"), binding.get("spaceName"), binding.get("access")],
         default=str,
@@ -328,9 +348,11 @@ async def get_agent(
             (False) keeps the historical bypass, so any caller that has not
             reasoned about its closures gets the safe behavior.
         memory_binding: The Agent's resolved Memory-Space binding as
-            ``{"spaceId", "spaceName", "access"}``, or None. A key element
-            (see ``_create_cache_key``) and stamped on the construction
-            snapshot so a paused turn resumes into the same slot.
+            ``{"spaceId", "spaceName", "access"}``, a project harness's
+            scopes as ``{"projectId", "sharedSpaceId", "personalSpaceId"}``,
+            or None. A key element (see ``memory_binding_digest``) and stamped
+            on the construction snapshot so a paused turn resumes into the
+            same slot.
         memory_context: The rendered Memory-Space block, sent after the system
             prompt behind its own cache point. Hashed with the prompt in the
             key and snapshotted by ``BaseAgent`` for resume.

@@ -49,3 +49,21 @@ def test_memory_context_is_passed_on_the_main_turn_and_replayed_on_resume():
     main = [kw for kw in calls if _is_false(kw.get("is_resume")) and "extra_tools_key_described" in kw][0]
     assert ast.unparse(resume["memory_context"]) == "snapshot.memory_context"
     assert ast.unparse(main["memory_context"]) == "memory_context"
+
+
+def test_a_harness_keys_on_the_scopes_its_tools_were_built_from():
+    """Shared Projects 2.4b: the harness's tools and its key element come from one object.
+
+    ``build_project_memory_tools(project_memory, …)`` and
+    ``project_memory.binding_key()`` must both be driven by the same
+    ``project_memory``, or a cached agent could hold tools for other spaces.
+    """
+    source = ROUTES.read_text()
+    tree = ast.parse(source)
+    assigned = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            assigned.setdefault(node.targets[0].id, []).append(ast.unparse(node.value))
+    assert "project_memory.binding_key()" in assigned["memory_binding_key"]
+    assert "build_project_memory_tools(project_memory, current_user)" in assigned["memory_tools"]
+    assert "project_memory.memory_context or None" in assigned["memory_context"]
