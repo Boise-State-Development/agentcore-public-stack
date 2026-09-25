@@ -100,6 +100,19 @@ describe('ALB and ECS service alarms', () => {
       expect(byName('alb-unhealthy-hosts').Properties.TreatMissingData).toBe('breaching');
     });
 
+    // A single target that fails one probe is self-healed by ECS within ~5 min.
+    // Requiring 4 consecutive 5-min periods (20 min) filters those benign blips
+    // while still firing on a stuck target or a total outage. This is a window,
+    // not a raised count threshold — see observability.md §11.
+    it('unhealthy-host alarm requires a sustained 20-minute window', () => {
+      const alarm = byName('alb-unhealthy-hosts');
+      expect(alarm.Properties.EvaluationPeriods).toBe(4);
+      expect(alarm.Properties.DatapointsToAlarm).toBe(4);
+      // Threshold stays 0 (>0 = any unhealthy host), so a single stuck target
+      // still pages — we did not blind the alarm by requiring 2+ hosts down.
+      expect(alarm.Properties.Threshold).toBe(0);
+    });
+
     it('error-count alarms treat missing data as NOT_BREACHING (no traffic is fine)', () => {
       for (const name of ['alb-elb-5xx', 'alb-target-5xx', 'alb-rejected-connections']) {
         expect(byName(name).Properties.TreatMissingData).toBe('notBreaching');
