@@ -20,6 +20,23 @@ module holds the persisted summary at or under a token budget:
    even the newest alone does not fit, keep its tail. Never oldest-first —
    recent context is what the model needs.
 
+**Extract-then-compress** (``extract_enabled``, in development, default off).
+Compression alone drops the facts a conversation cannot lose: on the quality
+harness Nova Micro kept constraints at 0.72 and identifiers at 0.58 of the
+uncompacted control. With the flag on, step 2 becomes two calls:
+
+a. An **extraction** call copies standing instructions, decisions,
+   identifiers and changed values (latest value only) verbatim into a pinned
+   block, capped at half the budget.
+b. The narrative is compressed, with the prompt above, into what is left.
+
+The persisted text is ``PINNED FACTS …`` followed by ``SUMMARY: …``. An
+extraction failure falls back to plain compression (today's path); a failed
+narrative call keeps the pinned block and truncates the records into the rest.
+The model matters: the harness screen kept 100% of planted facts on Nova 2
+Lite and Haiku 4.5, and 88% on Nova Micro (docs/kaizen/scoping/
+2026-09-21-quality-veto-harness.md §9).
+
 Whatever comes out is persisted verbatim in ``CompactionState.summary`` and
 prepended byte-identically at every restore, so the byte-stability contract
 is unchanged: the summary still only mutates at checkpoint advance.
@@ -45,6 +62,10 @@ MAX_COMPRESSION_INPUT_CHARS = 120_000
 # run on; stay under it with margin so the generation is not cut mid-sentence. The budget check after generation is
 # what enforces the configured budget.
 _MODEL_MAX_OUTPUT_TOKENS = 4_000
+# The extraction's own ceiling. At the default 8k budget the pinned block's
+# cap (half the budget) is 4k, so this is what binds; it is the figure the
+# harness screen ran with.
+_EXTRACTION_MAX_OUTPUT_TOKENS = 3_000
 
 _COMPRESSION_SYSTEM_PROMPT = """You maintain the running summary of a long conversation between a user and an AI assistant. You are given the existing summary notes (oldest first). Rewrite them into ONE compact summary the assistant can continue the conversation from.
 
@@ -64,6 +85,22 @@ Rules:
 - Stay under {word_budget} words."""
 
 
+_EXTRACTION_SYSTEM_PROMPT = """You extract the facts a long conversation between a user and an AI assistant must never lose. You are given the conversation's summary notes, oldest first.
+
+Copy each fact VERBATIM, character for character: names, IDs, codes, amounts, dates, numbers, file names and quoted wording exactly as written. Do not paraphrase a value.
+
+Output exactly these four headings, one bullet per fact:
+STANDING INSTRUCTIONS: every instruction, preference, rule or constraint the user gave (formatting, naming, things to always or never do).
+DECISIONS: every value or choice that was settled, with what it is for.
+IDENTIFIERS: every exact identifier, code, ID, number, amount, date or name that was stated.
+CHANGED VALUES: every value that was changed, with ONLY its current value, noting that it replaced an earlier one.
+
+If a later note changes a fact, keep only the latest version. No preamble, no commentary. If a heading has nothing, write "- none"."""
+
+PINNED_HEADER = "PINNED FACTS (verbatim; these override anything below):"
+NARRATIVE_HEADER = "SUMMARY:"
+
+
 def approx_tokens(text: Optional[str]) -> int:
     """chars/4 — the same estimate the admin SUMMARY_OVER_BUDGET diagnosis uses."""
     if not text:
@@ -75,6 +112,7 @@ def approx_tokens(text: Optional[str]) -> int:
 class BoundedSummary:
     text: Optional[str]
     # "within_budget" | "model" | "truncated" | "truncated_after_model" | "empty"
+    # | "extract_then_compress" | "extract_then_truncate"
     outcome: str
     tokens_before: int
     tokens_after: int
@@ -161,6 +199,106 @@ async def compress_with_model(
         return None
 
 
+def _keep_head_lines(text: str, budget_tokens: int) -> Optional[str]:
+    """The leading whole lines of ``text`` that fit ``budget_tokens``.
+
+    The pinned block is ordered by value — standing instructions first — so
+    it is trimmed from the end, and at a line so no fact is cut mid-value.
+    """
+    budget_chars = max(0, int(budget_tokens)) * CHARS_PER_TOKEN
+    if len(text) <= budget_chars:
+        return text
+    head = text[:budget_chars]
+    cut = head.rfind("\n")
+    head = head[:cut] if cut > 0 else ""
+    return head.rstrip() or None
+
+
+async def extract_with_model(
+    records: Sequence[str],
+    max_tokens: int,
+    *,
+    model_id: str,
+    region: Optional[str] = None,
+) -> Optional[str]:
+    """The verbatim extraction call. Returns ``None`` on any failure.
+
+    A generation that hits ``max_tokens`` keeps its complete lines: a pinned
+    block missing its last few facts still beats none.
+    """
+    text = _compression_input(records)
+    if not text.strip():
+        return None
+    try:
+        import boto3
+    except ImportError:  # pragma: no cover - dev without boto3
+        return None
+    try:
+        region = region or os.environ.get("AWS_REGION", "us-west-2")
+        client = boto3.client("bedrock-runtime", region_name=region)
+        response = await asyncio.to_thread(
+            client.converse,
+            modelId=model_id,
+            system=[{"text": _EXTRACTION_SYSTEM_PROMPT}],
+            messages=[{"role": "user", "content": [{"text": "Summary notes, oldest first:\n\n" + text}]}],
+            inferenceConfig={"temperature": 0.0, "maxTokens": max(256, int(max_tokens))},
+        )
+        out = response["output"]["message"]["content"][0]["text"].strip()
+        if response.get("stopReason") == "max_tokens":
+            logger.info("compaction_summary_extract_truncated: keeping the complete lines")
+            cut = out.rfind("\n")
+            out = out[:cut].rstrip() if cut > 0 else ""
+        return out or None
+    except Exception:  # noqa: BLE001 - a summary is never worth an error
+        logger.warning("compaction_summary_extract_failed: falling back to plain compression", exc_info=True)
+        return None
+
+
+async def _extract_then_compress(
+    records: Sequence[str],
+    budget_tokens: int,
+    before: int,
+    *,
+    model_id: str,
+    region: Optional[str],
+) -> Optional[BoundedSummary]:
+    """Pinned facts, then the narrative in the rest. ``None`` = extraction failed."""
+    pinned_cap = budget_tokens // 2
+    pinned = await extract_with_model(
+        records,
+        min(_EXTRACTION_MAX_OUTPUT_TOKENS, pinned_cap),
+        model_id=model_id,
+        region=region,
+    )
+    if pinned:
+        # The pinned block may never crowd out the narrative.
+        pinned = _keep_head_lines(pinned, pinned_cap - approx_tokens(PINNED_HEADER) - 1)
+    if not pinned:
+        return None
+    pinned_block = f"{PINNED_HEADER}\n{pinned}"
+    # What is left once the block, the "\n\n" joiner and the narrative
+    # header are paid for.
+    remaining = budget_tokens - (len(pinned_block) + 2 + len(NARRATIVE_HEADER) + 1 + CHARS_PER_TOKEN - 1) // CHARS_PER_TOKEN
+    narrative = await compress_with_model(records, remaining, model_id=model_id, region=region)
+    outcome = "extract_then_compress"
+    if narrative is None:
+        narrative = truncate_records_newest_first(records, remaining)
+        outcome = "extract_then_truncate"
+    elif approx_tokens(narrative) > remaining:
+        narrative = truncate_records_newest_first([narrative], remaining)
+    text = pinned_block
+    if narrative:
+        text = f"{pinned_block}\n\n{NARRATIVE_HEADER}\n{narrative}"
+    if approx_tokens(text) > budget_tokens:  # pragma: no cover - unreachable by the arithmetic above
+        text = pinned_block
+    after = approx_tokens(text)
+    logger.info(
+        "compaction_summary_bounded: %s %d -> %d tokens (pinned=%d, budget=%d)",
+        outcome, before, after, approx_tokens(pinned_block), budget_tokens,
+    )
+    return BoundedSummary(text, outcome, before, after)
+
+
 async def bound_summary(
     records: Sequence[str],
     budget_tokens: int,
@@ -168,8 +306,13 @@ async def bound_summary(
     model_enabled: bool,
     model_id: str,
     region: Optional[str] = None,
+    extract_enabled: bool = False,
 ) -> BoundedSummary:
-    """Hold the summary built from ``records`` at or under ``budget_tokens``."""
+    """Hold the summary built from ``records`` at or under ``budget_tokens``.
+
+    ``extract_enabled`` pins verbatim facts ahead of the compressed narrative
+    (see the module docstring); it needs ``model_enabled``. Never raises.
+    """
     records = [r for r in records if isinstance(r, str) and r.strip()]
     joined = "\n\n".join(records) if records else None
     before = approx_tokens(joined)
@@ -177,6 +320,11 @@ async def bound_summary(
         return BoundedSummary(None, "empty", 0, 0)
     if before <= budget_tokens:
         return BoundedSummary(joined, "within_budget", before, before)
+
+    if model_enabled and extract_enabled:
+        extracted = await _extract_then_compress(records, budget_tokens, before, model_id=model_id, region=region)
+        if extracted is not None:
+            return extracted
 
     if model_enabled:
         compressed = await compress_with_model(records, budget_tokens, model_id=model_id, region=region)

@@ -1261,6 +1261,7 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
             model_enabled=self.compaction_config.summary_model_enabled,
             model_id=self.compaction_config.summary_model_id,
             region=self.region_name,
+            extract_enabled=self.compaction_config.summary_extract_enabled,
         )
         summary = bounded.text
 

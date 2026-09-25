@@ -8,6 +8,8 @@ import pytest
 
 from agents.main_agent.session.compaction_models import CompactionConfig, CompactionState
 from agents.main_agent.session.compaction_summary import (
+    NARRATIVE_HEADER,
+    PINNED_HEADER,
     approx_tokens,
     bound_summary,
     compress_with_model,
@@ -161,6 +163,157 @@ class TestClaudeSummaryModel:
         assert bedrock.call_args.kwargs["modelId"] == CLAUDE_MODEL_ID
 
 
+PINNED = "STANDING INSTRUCTIONS:\n- Cite APA 7th.\nDECISIONS:\n- none\nIDENTIFIERS:\n- PRJ-4417\nCHANGED VALUES:\n- none"
+EXTRACT_BUDGET = 200  # tokens → 800 chars; the pinned block may take half
+
+
+def _system_text(call):
+    return call.kwargs["system"][0]["text"]
+
+
+def _is_extraction(call):
+    return "VERBATIM" in _system_text(call)
+
+
+class TestExtractThenCompress:
+    """``extract_enabled``: a verbatim pinned block, then the compressed narrative."""
+
+    @pytest.mark.asyncio
+    async def test_pins_facts_then_compresses_the_narrative(self, bedrock):
+        bedrock.side_effect = [_model_reply(PINNED), _model_reply("They drafted the intro; the conclusion is open.")]
+        result = await bound_summary(["r" * 2000], EXTRACT_BUDGET, model_enabled=True, model_id="m", extract_enabled=True)
+
+        assert result.outcome == "extract_then_compress"
+        assert result.text == (
+            f"{PINNED_HEADER}\n{PINNED}\n\n{NARRATIVE_HEADER}\nThey drafted the intro; the conclusion is open."
+        )
+        assert result.tokens_after == approx_tokens(result.text) <= EXTRACT_BUDGET
+        assert bedrock.call_count == 2
+        extraction, narrative = bedrock.call_args_list
+        assert _is_extraction(extraction) and not _is_extraction(narrative)
+        assert all(c.kwargs["modelId"] == "m" for c in bedrock.call_args_list)
+        # Temperature alone on both calls: Claude 4.5+ rejects temperature with topP.
+        assert "topP" not in extraction.kwargs["inferenceConfig"]
+        assert "topP" not in narrative.kwargs["inferenceConfig"]
+        assert extraction.kwargs["inferenceConfig"]["temperature"] == 0.0
+        # The narrative is asked for the budget the pinned block leaves.
+        assert narrative.kwargs["inferenceConfig"]["maxTokens"] == 256
+        words = int(narrative.kwargs["system"][0]["text"].split("Stay under ")[1].split(" words")[0].replace(",", ""))
+        assert words == 150  # the floor: 200 - pinned block leaves < 273 tokens
+
+    @pytest.mark.asyncio
+    async def test_runs_on_a_claude_summary_model(self, bedrock):
+        """Neither call may send the sampling pair Claude 4.5+ rejects."""
+        bedrock.side_effect = _reject_temperature_with_top_p
+        result = await bound_summary(["r" * 2000], EXTRACT_BUDGET, model_enabled=True, model_id=CLAUDE_MODEL_ID, extract_enabled=True)
+        assert result.outcome == "extract_then_compress"
+        assert bedrock.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_is_deterministic_for_the_same_replies(self, bedrock):
+        """The persisted bytes are a function of the model replies alone."""
+        replies = [_model_reply(PINNED), _model_reply("narrative")]
+        bedrock.side_effect = list(replies)
+        first = await bound_summary(["r" * 2000], EXTRACT_BUDGET, model_enabled=True, model_id="m", extract_enabled=True)
+        bedrock.side_effect = list(replies)
+        second = await bound_summary(["r" * 2000], EXTRACT_BUDGET, model_enabled=True, model_id="m", extract_enabled=True)
+        assert first.text == second.text
+
+    @pytest.mark.asyncio
+    async def test_extraction_failure_falls_back_to_plain_compression(self, bedrock):
+        bedrock.side_effect = [RuntimeError("throttled"), _model_reply("plain compressed summary")]
+        result = await bound_summary(["r" * 2000], EXTRACT_BUDGET, model_enabled=True, model_id="m", extract_enabled=True)
+
+        assert result.outcome == "model"
+        assert result.text == "plain compressed summary"
+        assert PINNED_HEADER not in result.text
+        # The fallback is today's call, unchanged.
+        assert not _is_extraction(bedrock.call_args_list[1])
+
+    @pytest.mark.asyncio
+    async def test_empty_extraction_falls_back_to_plain_compression(self, bedrock):
+        bedrock.side_effect = [_model_reply("   "), _model_reply("plain")]
+        result = await bound_summary(["r" * 2000], EXTRACT_BUDGET, model_enabled=True, model_id="m", extract_enabled=True)
+        assert result.outcome == "model" and result.text == "plain"
+
+    @pytest.mark.asyncio
+    async def test_narrative_failure_keeps_the_pinned_block_and_truncates(self, bedrock):
+        bedrock.side_effect = [_model_reply(PINNED), RuntimeError("throttled")]
+        records = ["old " * 300, "newest record"]
+        result = await bound_summary(records, EXTRACT_BUDGET, model_enabled=True, model_id="m", extract_enabled=True)
+
+        assert result.outcome == "extract_then_truncate"
+        assert result.text.startswith(f"{PINNED_HEADER}\n{PINNED}\n\n{NARRATIVE_HEADER}\n")
+        assert result.text.endswith("newest record")
+        assert approx_tokens(result.text) <= EXTRACT_BUDGET
+
+    @pytest.mark.asyncio
+    async def test_everything_failing_truncates_and_never_raises(self, bedrock):
+        bedrock.side_effect = RuntimeError("bedrock down")
+        result = await bound_summary(["old " * 100, "new " * 50], BUDGET, model_enabled=True, model_id="m", extract_enabled=True)
+        assert result.outcome == "truncated_after_model"
+        assert result.text.startswith("new") and approx_tokens(result.text) <= BUDGET
+
+    @pytest.mark.asyncio
+    async def test_oversized_pinned_block_keeps_its_leading_lines(self, bedrock):
+        lines = [f"- fact {i:03d} " + "v" * 40 for i in range(40)]  # ~2k chars, far over half the budget
+        bedrock.side_effect = [_model_reply("STANDING INSTRUCTIONS:\n" + "\n".join(lines)), _model_reply("narrative")]
+        result = await bound_summary(["r" * 4000], EXTRACT_BUDGET, model_enabled=True, model_id="m", extract_enabled=True)
+
+        pinned_block = result.text.split(f"\n\n{NARRATIVE_HEADER}\n")[0]
+        assert approx_tokens(pinned_block) <= EXTRACT_BUDGET // 2
+        # Trimmed from the end, at a line: standing instructions survive, no fact is cut mid-value.
+        assert pinned_block.startswith(f"{PINNED_HEADER}\nSTANDING INSTRUCTIONS:\n- fact 000 ")
+        assert pinned_block.splitlines()[-1] in lines
+        assert approx_tokens(result.text) <= EXTRACT_BUDGET
+
+    @pytest.mark.asyncio
+    async def test_extraction_ceiling_hit_keeps_the_complete_lines(self, bedrock):
+        bedrock.side_effect = [_model_reply("IDENTIFIERS:\n- PRJ-4417\n- PRJ-44", stop="max_tokens"), _model_reply("n")]
+        result = await bound_summary(["r" * 2000], EXTRACT_BUDGET, model_enabled=True, model_id="m", extract_enabled=True)
+        assert result.outcome == "extract_then_compress"
+        assert "- PRJ-4417" in result.text and "- PRJ-44\n" not in result.text
+
+    @pytest.mark.asyncio
+    async def test_overlong_narrative_is_tail_trimmed_inside_the_budget(self, bedrock):
+        bedrock.side_effect = [_model_reply(PINNED), _model_reply("y" * 3000 + "END")]
+        result = await bound_summary(["r" * 4000], EXTRACT_BUDGET, model_enabled=True, model_id="m", extract_enabled=True)
+        assert result.outcome == "extract_then_compress"
+        assert result.text.startswith(PINNED_HEADER) and result.text.endswith("END")
+        assert approx_tokens(result.text) <= EXTRACT_BUDGET
+
+    @pytest.mark.asyncio
+    async def test_within_budget_makes_no_call(self, bedrock):
+        result = await bound_summary(["a"], BUDGET, model_enabled=True, model_id="m", extract_enabled=True)
+        assert result.outcome == "within_budget"
+        bedrock.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_needs_the_model_switch(self, bedrock):
+        result = await bound_summary(["r" * 900], BUDGET, model_enabled=False, model_id="m", extract_enabled=True)
+        assert result.outcome == "truncated"
+        bedrock.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_off_by_default(self, bedrock):
+        bedrock.return_value = _model_reply("compressed")
+        result = await bound_summary(["r" * 900], BUDGET, model_enabled=True, model_id="m")
+        assert result.outcome == "model"
+        assert bedrock.call_count == 1 and not _is_extraction(bedrock.call_args)
+
+    @pytest.mark.parametrize(
+        "value,expected",
+        [(None, False), ("", False), ("false", False), ("yes", False), ("true", True), (" TRUE ", True)],
+    )
+    def test_flag_is_opt_in(self, monkeypatch, value, expected):
+        if value is None:
+            monkeypatch.delenv("COMPACTION_SUMMARY_EXTRACT_ENABLED", raising=False)
+        else:
+            monkeypatch.setenv("COMPACTION_SUMMARY_EXTRACT_ENABLED", value)
+        assert CompactionConfig.from_env().summary_extract_enabled is expected
+        assert CompactionConfig().summary_extract_enabled is False
+
+
 class TestThroughUpdateAfterTurn:
     """Acceptance: oversized LTM records → the persisted summary is ≤ budget and
     the restore prepends the same bounded bytes."""
@@ -195,6 +348,25 @@ class TestThroughUpdateAfterTurn:
         # The restore path prepends exactly the persisted bytes.
         restored = mgr._prepend_summary_to_first_message(make_conversation(2), state.summary)
         assert state.summary in restored[0]["content"][0]["text"]
+
+    @pytest.mark.asyncio
+    async def test_extract_then_compress_is_persisted_verbatim(self, make_session_manager, bedrock):
+        bedrock.side_effect = [_model_reply(PINNED), _model_reply("narrative")]
+        records = [f"record {i} " + "z" * 600 for i in range(10)]
+        mgr = self._manager(make_session_manager, records, summary_extract_enabled=True)
+        mgr.compaction_config.summary_token_budget = EXTRACT_BUDGET
+        await mgr.update_after_turn(2000)
+
+        state = mgr.compaction_state
+        assert state.summary == f"{PINNED_HEADER}\n{PINNED}\n\n{NARRATIVE_HEADER}\nnarrative"
+        assert state.policy["summaryOutcome"] == "extract_then_compress"
+        assert state.policy["summaryTokensAfter"] == approx_tokens(state.summary)
+        # Restores prepend the persisted bytes and call no model.
+        bedrock.reset_mock()
+        first = mgr._prepend_summary_to_first_message(make_conversation(2), state.summary)
+        second = mgr._prepend_summary_to_first_message(make_conversation(2), state.summary)
+        assert first == second and state.summary in first[0]["content"][0]["text"]
+        bedrock.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_small_ltm_join_is_untouched(self, make_session_manager, bedrock):
