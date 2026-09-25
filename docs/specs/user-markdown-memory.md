@@ -582,7 +582,8 @@ calls it.
   merges or evicts entries — that's deferred to the **LLM consolidation pass (Workstream B era)**,
   which extends this exact `consolidate()` seam once agentic writes create real duplication/staleness
   to act on. (Deliberately not auto-run on a schedule/threshold yet — on-demand only; scheduler wiring
-  and SPA surfacing are follow-ups.)
+  and SPA surfacing are follow-ups.) Since Shared Projects 2.3, objects referenced by `FILEVER#` rows
+  (per-file version history) count as referenced too, so consolidation never collects history.
 
 ### Workstream B — Agent / Harness consumption (binds the primitive)
 

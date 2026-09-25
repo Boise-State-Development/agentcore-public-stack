@@ -27,7 +27,9 @@ import logging
 import os
 import re
 from dataclasses import dataclass
-from typing import Any, Literal, Optional
+from typing import Any, Optional
+
+from .models import TokenMethod
 
 logger = logging.getLogger(__name__)
 
@@ -38,8 +40,6 @@ _TIMEOUT_DEFAULT = 2.0
 _CHARS_PER_TOKEN = 4
 _INFERENCE_PROFILE_PREFIX = re.compile(r"^(us|eu|apac|us-gov|global)\.")
 _THROTTLE_CODES = frozenset({"ThrottlingException", "TooManyRequestsException", "ServiceQuotaExceededException"})
-
-TokenMethod = Literal["count", "estimate"]
 
 
 @dataclass(frozen=True)

@@ -657,11 +657,16 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
   // `bedrock:InvokeModel` on the account's DEFAULT PROJECT —
   // `arn:aws:bedrock:<region>:<account>:project/default`, already matched by
   // the `:*` suffix. Do not narrow this to `inference-profile/*`.
+  //
+  // CountTokens sizes a memory file once per save (Shared Projects 2.3,
+  // apis/shared/memory/tokens.py) against the base foundation-model id,
+  // which the foundation-model resource below already covers. Without it
+  // every save falls back to the chars/4 estimate (the save still succeeds).
   taskRole.addToPrincipalPolicy(
     new iam.PolicyStatement({
       sid: 'BedrockInvokeModel',
       effect: iam.Effect.ALLOW,
-      actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
+      actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'bedrock:CountTokens'],
       resources: [
         `arn:aws:bedrock:*::foundation-model/*`,
         `arn:aws:bedrock:${config.awsRegion}:${config.awsAccount}:*`,

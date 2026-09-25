@@ -154,10 +154,13 @@ def make_memory_write_tool(space_id: str, space_name: str, user_id: str, user_em
                     "content": [{"text": f'Updated the MEMORY.md index of "{space_name}".'}],
                     "status": "success",
                 }
+            # A tool write is the "direct save from a task" path (reason
+            # "save"). An empty description means "not given": a canonical
+            # file keeps its own, a freeform entry is cleared as before.
             ref = await asyncio.to_thread(
                 lambda: MemorySpaceService().write_entry(
                     space_id, user_id, user_email, slug, body,
-                    entry_type=entry_type, description=description,
+                    entry_type=entry_type, description=description or None, reason="save",
                 )
             )
         except MemorySpacePermissionError as exc:

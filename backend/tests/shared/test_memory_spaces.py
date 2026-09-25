@@ -10,15 +10,20 @@ import boto3
 import pytest
 from moto import mock_aws
 
-from apis.shared.memory.models import MemoryIndex, MemorySpace, SpaceMember
+from apis.shared.memory import repository as memory_repository
+from apis.shared.memory.format import parse_file
+from apis.shared.memory.models import MemoryEntryRef, MemoryIndex, MemorySpace, SpaceMember
 from apis.shared.memory.repository import MemorySpaceRepository, OptimisticLockError
 from apis.shared.memory.service import (
+    MemorySpaceError,
+    MemoryValidationError,
     MemorySpaceConcurrencyError,
     MemorySpaceNotFoundError,
     MemorySpacePermissionError,
     MemorySpaceService,
 )
-from apis.shared.memory.store import MemorySpaceStore
+from apis.shared.memory.store import MemorySpaceStore, compute_content_hash
+from apis.shared.memory.tokens import TokenCount
 
 AWS_REGION = "us-east-1"
 BUCKET = "test-memory-spaces"
@@ -381,7 +386,7 @@ class TestIndexAndEntries:
         ref = service.write_entry(space.space_id, FRIEND, FRIEND_EMAIL, "note", "hi")
         assert ref.updated_by == FRIEND
 
-    def test_write_replaces_same_slug_and_gcs_old(self, space, service):
+    def test_write_replaces_same_slug_and_keeps_old_as_history(self, space, service):
         service.write_entry(space.space_id, OWNER, OWNER_EMAIL, "n", "v1")
         old_ref = service._find_ref(space.space_id, "n")
         service.write_entry(space.space_id, OWNER, OWNER_EMAIL, "n", "v2")
@@ -389,11 +394,8 @@ class TestIndexAndEntries:
         entries = service.list_entries(space.space_id, OWNER, OWNER_EMAIL)
         assert len(entries) == 1
         assert service.read_entry(space.space_id, OWNER, OWNER_EMAIL, "n") == "v2"
-        # old content-addressed object was garbage collected
-        from apis.shared.memory.store import MemorySpaceStoreError
-
-        with pytest.raises(MemorySpaceStoreError):
-            service.store.get(old_ref.s3_key)
+        # the old object is kept: its FILEVER row still references it
+        assert service.store.get(old_ref.s3_key) == b"v1"
 
     def test_list_entries_filter_by_type_and_where(self, space, service):
         service.write_entry(
@@ -567,3 +569,258 @@ class TestManifestConcurrency:
         service.repository.put_index = always_conflict
         with pytest.raises(MemorySpaceConcurrencyError):
             service.write_entry(space.space_id, OWNER, OWNER_EMAIL, "a", "1")
+
+
+# ============================ file history (Shared Projects 2.3) ============
+
+
+def _versions(service, space_id, slug):
+    return service.list_file_versions(space_id, OWNER, OWNER_EMAIL, slug)
+
+
+class TestFileHistory:
+    def test_every_save_writes_a_version_row(self, space, service):
+        service.write_entry(space.space_id, OWNER, OWNER_EMAIL, "n", "v1")
+        ref = service.write_entry(space.space_id, OWNER, OWNER_EMAIL, "n", "v2", reason="save")
+        assert ref.version == 2
+        assert ref.tokens == 1 and ref.tokens_method == "estimate"
+        versions = _versions(service, space.space_id, "n")
+        assert [(v.version, v.reason) for v in versions] == [(2, "save"), (1, "edit")]
+        assert versions[1].content_hash == compute_content_hash(b"v1")
+        assert versions[0].updated_by == OWNER
+        row, text = service.read_file_version(space.space_id, OWNER, OWNER_EMAIL, "n", 1)
+        assert (row.version, text) == (1, "v1")
+
+    def test_an_entry_from_before_history_gets_a_baseline(self, space, service):
+        key = service.store.put(space_id=space.space_id, content=b"old", content_type="text/markdown")
+        legacy = MemoryEntryRef(
+            slug="n", content_hash=compute_content_hash(b"old"), size=3, s3_key=key,
+            updated="2026-01-01T00:00:00+00:00", updated_by="someone-else",
+        )
+        service.repository.put_index(MemoryIndex(space_id=space.space_id, entries=[legacy], version=1))
+        ref = service.write_entry(space.space_id, OWNER, OWNER_EMAIL, "n", "new")
+        assert ref.version == 2
+        versions = _versions(service, space.space_id, "n")
+        assert [(v.version, v.reason, v.updated_by) for v in versions] == [
+            (2, "edit", OWNER),
+            (1, "baseline", "someone-else"),
+        ]
+        assert service.read_file_version(space.space_id, OWNER, OWNER_EMAIL, "n", 1)[1] == "old"
+
+    def test_history_needs_viewer_and_an_existing_entry(self, space, service):
+        service.write_entry(space.space_id, OWNER, OWNER_EMAIL, "n", "v1")
+        service.share(space.space_id, OWNER, OWNER_EMAIL, FRIEND_EMAIL, "viewer")
+        assert len(service.list_file_versions(space.space_id, FRIEND, FRIEND_EMAIL, "n")) == 1
+        with pytest.raises(MemorySpacePermissionError):
+            service.list_file_versions(space.space_id, STRANGER, STRANGER_EMAIL, "n")
+        with pytest.raises(MemorySpaceNotFoundError):
+            _versions(service, space.space_id, "ghost")
+        with pytest.raises(MemorySpaceNotFoundError):
+            service.read_file_version(space.space_id, OWNER, OWNER_EMAIL, "n", 9)
+
+    def test_a_slug_prefix_does_not_leak_into_another_history(self, space, service):
+        service.write_entry(space.space_id, OWNER, OWNER_EMAIL, "a", "1")
+        service.write_entry(space.space_id, OWNER, OWNER_EMAIL, "a#b", "2")
+        assert [v.slug for v in _versions(service, space.space_id, "a")] == ["a"]
+
+    def test_delete_entry_purges_history_but_not_shared_objects(self, space, service):
+        service.write_entry(space.space_id, OWNER, OWNER_EMAIL, "a", "shared")
+        service.write_entry(space.space_id, OWNER, OWNER_EMAIL, "a", "only-a")
+        service.write_entry(space.space_id, OWNER, OWNER_EMAIL, "b", "shared")
+        service.delete_entry(space.space_id, OWNER, OWNER_EMAIL, "a")
+        assert service.repository.list_file_versions(space.space_id, "a") == []
+        keys = set(service.store.list_keys(space.space_id))
+        assert f"spaces/{space.space_id}/{compute_content_hash(b'shared')}" in keys
+        assert f"spaces/{space.space_id}/{compute_content_hash(b'only-a')}" not in keys
+
+    def test_delete_space_purges_every_object_and_row(self, space, service):
+        service.write_entry(space.space_id, OWNER, OWNER_EMAIL, "a", "1")
+        service.write_entry(space.space_id, OWNER, OWNER_EMAIL, "a", "2")
+        service.store.put(space_id=space.space_id, content=b"orphan", content_type="text/markdown")
+        service.delete_space(space.space_id, OWNER, OWNER_EMAIL)
+        assert service.store.list_keys(space.space_id) == []
+        assert service.repository.list_file_versions(space.space_id) == []
+        assert service.repository.get_space(space.space_id) is None
+
+    def test_consolidate_does_not_collect_history(self, space, service):
+        service.write_entry(space.space_id, OWNER, OWNER_EMAIL, "a", "1")
+        service.write_entry(space.space_id, OWNER, OWNER_EMAIL, "a", "2")
+        report = service.consolidate(space.space_id, OWNER, OWNER_EMAIL)
+        assert report.orphans_deleted == 0
+        assert service.read_file_version(space.space_id, OWNER, OWNER_EMAIL, "a", 1)[1] == "1"
+
+    def test_a_failed_version_row_does_not_fail_the_save(self, space, service, monkeypatch):
+        def boom(*args, **kwargs):
+            raise RuntimeError("dynamodb down")
+
+        monkeypatch.setattr(service.repository, "put_file_version", boom)
+        ref = service.write_entry(space.space_id, OWNER, OWNER_EMAIL, "a", "1")
+        assert service.read_entry(space.space_id, OWNER, OWNER_EMAIL, "a") == "1"
+        assert ref.version == 1
+
+
+class TestFreeformSavePipeline:
+    @pytest.mark.parametrize("slug", ["MEMORY.md", "memory.md"])
+    def test_the_index_slug_is_reserved(self, space, service, slug):
+        with pytest.raises(MemoryValidationError) as e:
+            service.write_entry(space.space_id, OWNER, OWNER_EMAIL, slug, "x")
+        assert e.value.code == "reserved_slug"
+        assert service.repository.get_index(space.space_id).entries == []
+
+    def test_counted_tokens_are_recorded(self, table, store):
+        service = MemorySpaceService(repository=table, store=store, token_counter=lambda t: TokenCount(1234, "count"))
+        space = service.create_space(OWNER, OWNER_EMAIL, "S")
+        ref = service.write_entry(space.space_id, OWNER, OWNER_EMAIL, "a", "text")
+        assert (ref.tokens, ref.tokens_method) == (1234, "count")
+        stored = service._find_ref(space.space_id, "a")
+        assert (stored.tokens, stored.tokens_method, stored.version) == (1234, "count", 1)
+        assert _versions(service, space.space_id, "a")[0].tokens == 1234
+
+    def test_freeform_only_warns(self, space, service, monkeypatch):
+        monkeypatch.setenv("MEMORY_FILE_HARD_CAP_TOKENS", "10")
+        result = service.save_entry(space.space_id, OWNER, OWNER_EMAIL, "a", "x" * 200 + " [[nowhere]]")
+        assert any("nowhere" in w for w in result.warnings)
+        assert any("limit per file is 10" in w for w in result.warnings)
+        assert result.over_soft_threshold is True
+
+    def test_freeform_rejects_aliases(self, space, service):
+        with pytest.raises(MemoryValidationError) as e:
+            service.save_entry(space.space_id, OWNER, OWNER_EMAIL, "a", "x", aliases=["b"])
+        assert e.value.code == "aliases_unsupported"
+
+    def test_manifest_size_guard(self, space, service, monkeypatch):
+        monkeypatch.setattr(memory_repository, "MANIFEST_MAX_BYTES", 200)
+        with pytest.raises(MemoryValidationError) as e:
+            service.write_entry(space.space_id, OWNER, OWNER_EMAIL, "a", "x")
+        assert e.value.code == "manifest_too_large"
+
+
+# ============================ canonical spaces ============================
+
+
+@pytest.fixture()
+def canonical(service):
+    return service.create_space(OWNER, OWNER_EMAIL, "Project memory", file_format="canonical")
+
+
+def _items(service, space_id, slug):
+    return parse_file(service.read_entry(space_id, OWNER, OWNER_EMAIL, slug)).items
+
+
+class TestCanonicalSpaces:
+    def test_file_format_is_stored(self, canonical, service):
+        assert service.get_space(canonical.space_id, OWNER, OWNER_EMAIL).file_format == "canonical"
+        with pytest.raises(MemorySpaceError):
+            service.create_space(OWNER, OWNER_EMAIL, "X", file_format="yaml")
+
+    def test_save_renders_frontmatter_and_mints_anchors(self, canonical, service):
+        result = service.save_entry(
+            canonical.space_id, OWNER, OWNER_EMAIL, "canvas", "- one\n- two, see [[MEMORY.md]]\n",
+            description="Canvas notes", aliases=["LMS"],
+        )
+        parsed = parse_file(service.read_entry(canonical.space_id, OWNER, OWNER_EMAIL, "canvas"))
+        fm = parsed.frontmatter
+        assert (fm["name"], fm["description"], fm["aliases"], fm["version"]) == ("canvas", "Canvas notes", ["LMS"], 1)
+        assert fm["created"] == fm["updated"] == result.ref.updated
+        assert [i.text for i in parsed.items] == ["one", "two, see [[MEMORY.md]]"]
+        assert result.minted_anchors == [i.anchor for i in parsed.items]
+        assert (result.ref.item_count, result.ref.aliases, result.ref.version) == (2, ["LMS"], 1)
+
+    def test_resave_keeps_anchors_created_and_description(self, canonical, service):
+        service.save_entry(canonical.space_id, OWNER, OWNER_EMAIL, "n", "- one\n- two\n", description="d")
+        first = service.read_entry(canonical.space_id, OWNER, OWNER_EMAIL, "n")
+        one, two = parse_file(first).items
+        edited = first.replace("- one", "- one, edited").replace(f"- two <!-- e:{two.anchor} -->\n", "") + "- three\n"
+        result = service.save_entry(canonical.space_id, OWNER, OWNER_EMAIL, "n", edited)
+        items = _items(service, canonical.space_id, "n")
+        assert items[0].anchor == one.anchor and items[0].text == "one, edited"
+        assert result.removed_anchors == [two.anchor]
+        assert len(result.minted_anchors) == 1
+        fm = parse_file(service.read_entry(canonical.space_id, OWNER, OWNER_EMAIL, "n")).frontmatter
+        assert (fm["version"], fm["description"]) == (2, "d")
+        assert fm["created"] == parse_file(first).frontmatter["created"]
+        assert [v.version for v in _versions(service, canonical.space_id, "n")] == [2, 1]
+
+    def test_prose_is_rejected_and_nothing_is_written(self, canonical, service):
+        with pytest.raises(MemoryValidationError) as e:
+            service.save_entry(canonical.space_id, OWNER, OWNER_EMAIL, "n", "Just some prose.")
+        assert e.value.code == "prose_in_body"
+        assert service.repository.get_index(canonical.space_id).entries == []
+        assert service.repository.list_file_versions(canonical.space_id) == []
+        assert service.store.list_keys(canonical.space_id) == [canonical.index_s3_key]
+
+    def test_hard_cap_rejects_and_soft_threshold_warns(self, table, store):
+        size = {"n": 9_000}
+        service = MemorySpaceService(repository=table, store=store, token_counter=lambda t: TokenCount(size["n"], "count"))
+        space = service.create_space(OWNER, OWNER_EMAIL, "S", file_format="canonical")
+        with pytest.raises(MemoryValidationError) as e:
+            service.save_entry(space.space_id, OWNER, OWNER_EMAIL, "n", "- x\n")
+        assert e.value.code == "over_hard_cap"
+        assert service.repository.get_index(space.space_id).entries == []
+        size["n"] = 6_500
+        result = service.save_entry(space.space_id, OWNER, OWNER_EMAIL, "n", "- x\n")
+        assert result.over_soft_threshold and "close to the 8,000-token limit" in result.warnings[0]
+
+    def test_a_stale_echo_is_rejected(self, canonical, service):
+        service.save_entry(canonical.space_id, OWNER, OWNER_EMAIL, "n", "- one\n")
+        stale = service.read_entry(canonical.space_id, OWNER, OWNER_EMAIL, "n")
+        service.save_entry(canonical.space_id, OWNER, OWNER_EMAIL, "n", stale + "- two\n")
+        with pytest.raises(MemoryValidationError) as e:
+            service.save_entry(canonical.space_id, OWNER, OWNER_EMAIL, "n", stale + "- three\n")
+        assert e.value.code == "stale_version"
+
+    def test_a_concurrent_save_of_the_same_file_conflicts(self, canonical, service, monkeypatch):
+        service.save_entry(canonical.space_id, OWNER, OWNER_EMAIL, "n", "- one\n")
+        snapshot = service.repository.get_index(canonical.space_id)
+        service.save_entry(canonical.space_id, OWNER, OWNER_EMAIL, "n", "- one\n- two\n", description="moved")
+        real = service.repository.get_index
+        calls = {"n": 0}
+
+        def stale_first(space_id):
+            calls["n"] += 1
+            return snapshot if calls["n"] == 1 else real(space_id)
+
+        monkeypatch.setattr(service.repository, "get_index", stale_first)
+        with pytest.raises(MemorySpaceConcurrencyError):
+            service.save_entry(canonical.space_id, OWNER, OWNER_EMAIL, "n", "- three\n")
+
+    def test_names_and_aliases_are_unique_across_files(self, canonical, service):
+        service.save_entry(canonical.space_id, OWNER, OWNER_EMAIL, "canvas", "- x\n", aliases=["lms"])
+        with pytest.raises(MemoryValidationError) as e:
+            service.save_entry(canonical.space_id, OWNER, OWNER_EMAIL, "notes", "- y\n", aliases=["LMS"])
+        assert e.value.code == "alias_collision"
+        with pytest.raises(MemoryValidationError) as e:
+            service.save_entry(canonical.space_id, OWNER, OWNER_EMAIL, "lms", "- y\n")
+        assert e.value.code == "name_collision"
+
+    def test_links_new_dead_ones_fail_archived_ones_resolve(self, canonical, service):
+        with pytest.raises(MemoryValidationError) as e:
+            service.save_entry(canonical.space_id, OWNER, OWNER_EMAIL, "n", "- see [[old]]\n")
+        assert e.value.code == "dead_link"
+        service.save_entry(canonical.space_id, OWNER, OWNER_EMAIL, "old", "- x\n")
+        index = service.repository.get_index(canonical.space_id)
+        index.entries[0].archived = True
+        service.repository.put_index(index)
+        result = service.save_entry(canonical.space_id, OWNER, OWNER_EMAIL, "n", "- see [[old]]\n")
+        assert result.archived_links == ["old"]
+
+    def test_deleting_a_link_target_does_not_block_edits(self, canonical, service):
+        service.save_entry(canonical.space_id, OWNER, OWNER_EMAIL, "old", "- x\n")
+        service.save_entry(canonical.space_id, OWNER, OWNER_EMAIL, "n", "- see [[old]]\n")
+        service.delete_entry(canonical.space_id, OWNER, OWNER_EMAIL, "old")
+        text = service.read_entry(canonical.space_id, OWNER, OWNER_EMAIL, "n")
+        result = service.save_entry(canonical.space_id, OWNER, OWNER_EMAIL, "n", text + "- more\n")
+        assert any("old" in w for w in result.warnings)
+
+    def test_canonical_names_are_checked(self, canonical, service):
+        with pytest.raises(MemoryValidationError) as e:
+            service.save_entry(canonical.space_id, OWNER, OWNER_EMAIL, "Bad Name", "- x\n")
+        assert e.value.code == "slug_invalid"
+
+    def test_index_links_are_checked_only_in_canonical_spaces(self, canonical, space, service):
+        with pytest.raises(MemoryValidationError) as e:
+            service.update_index(canonical.space_id, OWNER, OWNER_EMAIL, "# Memory\n[[nowhere]]\n")
+        assert e.value.code == "dead_link"
+        service.update_index(space.space_id, OWNER, OWNER_EMAIL, "# Memory\n[[nowhere]]\n")
+        service.save_entry(canonical.space_id, OWNER, OWNER_EMAIL, "somewhere", "- x\n")
+        service.update_index(canonical.space_id, OWNER, OWNER_EMAIL, "# Memory\n[[Somewhere]]\n")

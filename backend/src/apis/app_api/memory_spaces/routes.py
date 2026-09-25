@@ -51,9 +51,13 @@ from apis.app_api.memory_spaces.models import (
     EntriesListResponse,
     EntryContentResponse,
     EntryRefResponse,
+    FileHistoryResponse,
+    FileVersionContentResponse,
+    FileVersionResponse,
     IndexContentResponse,
     MemberResponse,
     MembersListResponse,
+    SaveEntryResponse,
     ShareRequest,
     SpaceDetailResponse,
     SpaceSummaryResponse,
@@ -200,6 +204,7 @@ def create_space(
             owner_email=user.email,
             name=request.name,
             template=request.template,
+            file_format=request.file_format,
         )
     except MemorySpaceError as e:
         raise _translate(e)
@@ -231,6 +236,7 @@ def get_space(
         owner_id=space.owner_id,
         created_at=space.created_at,
         updated_at=space.updated_at,
+        file_format=space.file_format,
         index=index_text,
         entries=[EntryRefResponse.from_ref(r) for r in entries],
     )
@@ -450,27 +456,35 @@ def read_entry(
     return EntryContentResponse(slug=slug, content=content)
 
 
-@router.put("/{space_id}/entries/{slug:path}", response_model=EntryRefResponse)
+@router.put("/{space_id}/entries/{slug:path}", response_model=SaveEntryResponse)
 def upsert_entry(
     space_id: str,
     slug: str,
     request: UpsertEntryRequest,
     user: User = Depends(require_memory_spaces_user),
-) -> EntryRefResponse:
+) -> SaveEntryResponse:
+    """Save an entry through the validation pipeline (editor+).
+
+    In a canonical space an omitted ``description`` or ``aliases`` keeps the
+    file's current value; a freeform entry clears an omitted description, as
+    it always has. Validation failures are a 400 whose detail says what to fix.
+    """
     try:
-        ref = _svc().write_entry(
+        result = _svc().save_entry(
             space_id,
             user.user_id,
             user.email,
             slug,
             request.body,
             entry_type=request.entry_type,
-            description=request.description,
+            description=request.description if "description" in request.model_fields_set else None,
             indexed=request.indexed,
+            aliases=request.aliases,
+            reason="edit",
         )
     except MemorySpaceError as e:
         raise _translate(e)
-    return EntryRefResponse.from_ref(ref)
+    return SaveEntryResponse.from_result(result)
 
 
 @router.delete("/{space_id}/entries/{slug:path}", status_code=status.HTTP_204_NO_CONTENT)
@@ -481,3 +495,46 @@ def delete_entry(
         _svc().delete_entry(space_id, user.user_id, user.email, slug)
     except MemorySpaceError as e:
         raise _translate(e)
+
+
+# ---- file history (FILEVER) ---------------------------------------------
+#
+# The slug travels as a query parameter: entry slugs may contain "/", so a
+# path segment after ``{slug:path}`` could not be told apart from the slug.
+
+
+@router.get("/{space_id}/history", response_model=FileHistoryResponse)
+def list_file_history(
+    space_id: str,
+    slug: str = Query(..., min_length=1),
+    user: User = Depends(require_memory_spaces_user),
+) -> FileHistoryResponse:
+    """A file's saved versions, newest first (viewer+)."""
+    try:
+        versions = _svc().list_file_versions(space_id, user.user_id, user.email, slug)
+    except MemorySpaceError as e:
+        raise _translate(e)
+    return FileHistoryResponse(slug=slug, versions=[FileVersionResponse.from_version(v) for v in versions])
+
+
+@router.get("/{space_id}/history/{version}", response_model=FileVersionContentResponse)
+def read_file_version(
+    space_id: str,
+    version: int,
+    slug: str = Query(..., min_length=1),
+    user: User = Depends(require_memory_spaces_user),
+) -> FileVersionContentResponse:
+    """One saved version of a file, with its text (viewer+)."""
+    try:
+        row, content = _svc().read_file_version(space_id, user.user_id, user.email, slug, version)
+    except MemorySpaceError as e:
+        raise _translate(e)
+    except MemorySpaceStoreError as e:
+        logger.error("memory-spaces: history read failed for space=%s: %s", scrub_log(space_id), scrub_log(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="failed to read that version",
+        )
+    return FileVersionContentResponse(
+        **FileVersionResponse.from_version(row).model_dump(), slug=slug, content=content
+    )
