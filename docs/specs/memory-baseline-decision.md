@@ -1,6 +1,6 @@
 # AgentCore Memory baseline: decision record (Shared Projects Phase 0)
 
-**Status:** Recommendation from dev evidence (2026-09-25). The prod census is pending (see "Not yet covered").
+**Status:** **Decided: C (hybrid).** Dev evidence 2026-09-25; the step-5 re-test passed after Phase 0.2 (see "Re-test after Phase 0.2"). The prod census is pending (see "Not yet covered").
 **Spec:** `shared-projects.md` §1 (procedure §1.2, options §1.3), PR plan §7 Phase 0.
 **Tool:** `scripts/memory-audit/audit.py` (`inventory` and `probe`), plus a manual two-chat test on dev.boisestate.ai.
 **Privacy:** every figure below is an aggregate. Record text, actor ids and account-specific identifiers stay in the auditor's scratch directory.
@@ -90,7 +90,7 @@ The stored fact was the only hit in each case. The ranking is right; the cut is 
 | B. Unify on files | Step 5 fails **or** records are low quality | Step 5 fails for a configuration reason, not a quality reason. Moving personal global memory would throw away a pipeline that works end to end except for one constant. |
 | **C. Hybrid** | Step 5 passes for global memory | **Recommended.** Keep AgentCore for short-term events and personal *global* extraction (after the 0.2 fix). Use Memory Spaces for project and personal-in-project scopes, which need the browse/edit/delete UI anyway. |
 
-**Condition:** C stands if the step-5 app test passes after Phase 0.2 lowers the relevance cut (re-run on dev once 0.2 deploys). If it still fails, fall back to B for personal memory too.
+**Condition met:** the step-5 app test passed on dev after Phase 0.2 lowered the relevance cut (below). C stands.
 
 **Unchanged by this audit:** AgentCore Memory is not the system of record for project memory (§1.3 "Fixed regardless").
 
@@ -99,7 +99,7 @@ The stored fact was the only hit in each case. The ranking is right; the cut is 
 1. **Relevance cut.** The runtime default for `AGENTCORE_MEMORY_RELEVANCE_SCORE` drops from 0.7 to **0.5** (`agents/main_agent/config/constants.py`).
    - The 0.5 is backed by dev scores: correct records 0.57–0.67, unrelated records ≤ 0.40.
    - **Deviation:** not set in CDK. The AgentCore Runtime is at 47 of its 50 environment variables, and the existing variable already overrides the default wherever it is set. Adding it to CDK is a one-line follow-up if a per-environment value is ever wanted.
-   - This changes what users' turns contain: turns with a relevant record gain a `<user_context>` block on the user message, after the prompt-cache point. **Re-run the step-5 app test on dev after this deploys**; that result confirms or overturns option C.
+   - This changes what users' turns contain: turns with a relevant record gain a `<user_context>` block on the user message, after the prompt-cache point. The step-5 re-test after deploy passed; see "Re-test after Phase 0.2".
 2. **Session delete purges extracted summaries.** `SessionService.delete_agentcore_memory` now also deletes the SUMMARIZATION records under `…/sessions/{sessionId}/` (exact session match; batches of 100). This runs even when the session's events have already expired.
    - **Semantic facts and preferences are left alone.** Records carry only type and timestamp metadata, no source session, and those strategies consolidate across sessions, so no record is attributable to one session. Removing them stays a user action on the memory dashboard.
 3. **Share-fork stops feeding extraction.** Every event the fork writes under the forking user carries `extractionMode="SKIP"`. The events stay in short-term memory, so the fork's history loads, but they never become the forker's long-term records.
@@ -112,6 +112,20 @@ The stored fact was the only hit in each case. The ranking is right; the cut is 
    - that no strategy sets `namespaces` (the backend depends on AWS defaults);
    - the 90-day event expiry;
    - identical Runtime memory action sets, including `GetMemory`.
+
+## Re-test after Phase 0.2 (dev, 2026-09-25)
+
+Run against the Runtime version that shipped 0.2, which has no relevance override, so the new 0.5 default applies.
+
+| Check | Result |
+|---|---|
+| New cut is live | Agent builds log `Retrieval: top_k=10, relevance_score=0.5` |
+| Chat A states a synthetic fact | 1 semantic record + 1 summary extracted within about 100 s |
+| Chat B (a new session) asks for it | **Recalled correctly.** The answer quoted the fact. |
+| Runtime log for chat B's turn | `Retrieved 1 customer context items`: one item, the right one, no unrelated records. No retrieval failures or throttles. |
+| Session delete purges summaries (0.2 fix 2) | Deleting chat A removed its summary record. The semantic fact stayed, as designed, and was then removed by hand. |
+
+Chat B was a new session with a newly built agent, so the fact could only have come from long-term memory, not from the in-process agent cache or the conversation history.
 
 ## Not yet covered
 
