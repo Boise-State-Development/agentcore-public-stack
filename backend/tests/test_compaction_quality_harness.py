@@ -176,3 +176,28 @@ class TestAsk:
         from agents.main_agent.session.compaction_policy import estimate_message_tokens
 
         assert history_tokens(transcript.messages) == sum(estimate_message_tokens(m) for m in transcript.messages)
+
+
+class TestSummarizerSwap:
+    def test_candidate_runs_for_its_arm_and_production_is_restored(self, transcript):
+        from agents.main_agent.session import turn_based_session_manager as tbsm
+        from agents.main_agent.session.compaction_models import CompactionConfig
+        from agents.main_agent.session.compaction_summary import BoundedSummary
+
+        from compaction_quality.arms import Arm
+
+        production = tbsm.bound_summary
+        calls = []
+
+        async def candidate(records, budget_tokens, **kwargs):
+            calls.append(len(records))
+            return BoundedSummary("CANDIDATE SUMMARY", "candidate", 10, 3)
+
+        arm = Arm("candidate", CompactionConfig(summary_model_enabled=False), "test", summarizer=candidate)
+        run = simulate(
+            transcript, arm, pace="cold", overhead_tokens=40_000,
+            summary_mode="records", records_for_turn=lambda turn: ["a record"],
+        )
+        assert calls and run.summary == "CANDIDATE SUMMARY"
+        assert run.policy["lastCut"]["summaryOutcome"] == "candidate"
+        assert tbsm.bound_summary is production

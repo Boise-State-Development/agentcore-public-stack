@@ -128,6 +128,47 @@ def _answer_text(response: Dict[str, Any]) -> str:
     return " ".join(b["text"] for b in content if isinstance(b, dict) and isinstance(b.get("text"), str)).strip()
 
 
+def _ask_one(
+    client: Any,
+    history: Sequence[Dict[str, Any]],
+    job: Job,
+    *,
+    model_id: str,
+    temperature: Optional[float],
+    retries: int,
+) -> Dict[str, Any]:
+    request = build_request(history, job.plant.question, model_id=model_id, temperature=temperature)
+    started = time.monotonic()
+    for attempt in range(retries + 1):
+        try:
+            response = client.converse(**request)
+            break
+        except Exception as exc:  # noqa: BLE001 - throttles are expected at volume
+            if attempt == retries or "Throttl" not in type(exc).__name__ + str(exc):
+                raise
+            time.sleep(2 ** attempt)
+    answer = _answer_text(response)
+    usage = response.get("usage", {}) or {}
+    return {
+        "key": job.key,
+        "variant": job.variant,
+        "arm": job.arm,
+        "plantId": job.plant.plant_id,
+        "family": job.plant.family,
+        "sample": job.sample,
+        "statementRetained": job.statement_retained,
+        "answer": answer,
+        "correct": is_correct(answer, job.plant.expected, job.plant.forbidden),
+        "stopReason": response.get("stopReason"),
+        "inputTokens": usage.get("inputTokens"),
+        "cacheReadInputTokens": usage.get("cacheReadInputTokens"),
+        "cacheWriteInputTokens": usage.get("cacheWriteInputTokens"),
+        "outputTokens": usage.get("outputTokens"),
+        "latencyMs": int((time.monotonic() - started) * 1000),
+        "modelId": model_id,
+    }
+
+
 def run_jobs(
     client: Any,
     groups: Iterable[Tuple[Dict[str, Any], List[Job]]],
@@ -136,49 +177,40 @@ def run_jobs(
     model_id: str,
     temperature: Optional[float],
     done: Optional[Set[str]] = None,
-    retries: int = 4,
+    retries: int = 6,
+    workers: int = 1,
 ) -> int:
-    """Run every job not already in ``done``, appending one JSON line per call."""
+    """Run every job not already in ``done``, appending one JSON line per call.
+
+    Per history, the first call runs alone so it writes the cache; the rest
+    then run ``workers`` at a time and read it.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Lock
+
     done = done or set()
     written = 0
+    lock = Lock()
     with out_path.open("a", encoding="utf-8") as sink:
-        for run, jobs in groups:
-            for job in jobs:
-                if job.key in done:
-                    continue
-                request = build_request(run["history"], job.plant.question, model_id=model_id, temperature=temperature)
-                started = time.monotonic()
-                for attempt in range(retries + 1):
-                    try:
-                        response = client.converse(**request)
-                        break
-                    except Exception as exc:  # noqa: BLE001 - throttles are expected at volume
-                        if attempt == retries or "Throttl" not in type(exc).__name__ + str(exc):
-                            raise
-                        time.sleep(2 ** attempt)
-                answer = _answer_text(response)
-                usage = response.get("usage", {}) or {}
-                row = {
-                    "key": job.key,
-                    "variant": job.variant,
-                    "arm": job.arm,
-                    "plantId": job.plant.plant_id,
-                    "family": job.plant.family,
-                    "sample": job.sample,
-                    "statementRetained": job.statement_retained,
-                    "answer": answer,
-                    "correct": is_correct(answer, job.plant.expected, job.plant.forbidden),
-                    "stopReason": response.get("stopReason"),
-                    "inputTokens": usage.get("inputTokens"),
-                    "cacheReadInputTokens": usage.get("cacheReadInputTokens"),
-                    "cacheWriteInputTokens": usage.get("cacheWriteInputTokens"),
-                    "outputTokens": usage.get("outputTokens"),
-                    "latencyMs": int((time.monotonic() - started) * 1000),
-                    "modelId": model_id,
-                }
+        def record(row: Dict[str, Any]) -> None:
+            nonlocal written
+            with lock:
                 sink.write(json.dumps(row) + "\n")
                 sink.flush()
                 written += 1
+
+        for run, jobs in groups:
+            todo = [j for j in jobs if j.key not in done]
+            if not todo:
+                continue
+            ask = lambda job: _ask_one(  # noqa: E731
+                client, run["history"], job, model_id=model_id, temperature=temperature, retries=retries,
+            )
+            record(ask(todo[0]))
+            if len(todo) > 1:
+                with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+                    for row in pool.map(ask, todo[1:]):
+                        record(row)
     return written
 
 

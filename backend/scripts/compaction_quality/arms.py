@@ -40,12 +40,20 @@ from agents.main_agent.session.compaction_models import CompactionConfig, Compac
 from agents.main_agent.session.compaction_policy import CompactionPolicy, estimate_message_tokens
 from agents.main_agent.session.turn_based_session_manager import TurnBasedSessionManager
 
+from agents.main_agent.session import turn_based_session_manager as _tbsm
+
 from .corpus import Transcript, message_text
+from .summarizers import compress_only, extract_then_compress
 
 PREFIX_KEY = "harness-model|harness-agent"
 PACE_GAP_SECONDS = {"restore": 600, "cold": 600, "warm": 60}
 PACES = tuple(PACE_GAP_SECONDS)
 SUMMARY_MODES = ("fallback", "none", "records")
+
+
+HAIKU_4_5 = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+NOVA_2_LITE = "us.amazon.nova-2-lite-v1:0"
+NOVA_MICRO = "us.amazon.nova-micro-v1:0"
 
 
 @dataclass(frozen=True)
@@ -54,6 +62,9 @@ class Arm:
     # ``None`` = no compaction at all: the full history (the control).
     config: Optional[CompactionConfig]
     description: str
+    # A candidate with ``bound_summary``'s signature (``summarizers.py``),
+    # swapped in for this arm only. ``None`` = production's.
+    summarizer: Optional[Callable[..., Any]] = None
 
 
 def default_arms(*, summary_model_enabled: bool = False) -> Dict[str, Arm]:
@@ -68,6 +79,34 @@ def default_arms(*, summary_model_enabled: bool = False) -> Dict[str, Arm]:
         "legacy": Arm(
             "legacy", CompactionConfig(model_relative_enabled=False, **base),
             "Kill switch: fixed 100k threshold, keep the last protected_turns turns, no hysteresis, immediate checkpoint.",
+        ),
+        "raw_summary": Arm(
+            "raw_summary", CompactionConfig(summary_token_budget=10**9, **base),
+            "Production cut with the summary left uncompressed: isolates what bound_summary's compression costs.",
+        ),
+        "nova2lite_compress": Arm(
+            "nova2lite_compress", CompactionConfig(**{**base, "summary_model_id": NOVA_2_LITE}),
+            "Option 2: production's compression prompt and budget on Nova 2 Lite.",
+        ),
+        "haiku_compress": Arm(
+            "haiku_compress", CompactionConfig(**base),
+            "Option 2: production's compression prompt and budget on Haiku 4.5 (temperature only; see summarizers).",
+            summarizer=compress_only(HAIKU_4_5),
+        ),
+        "extract_nova_micro": Arm(
+            "extract_nova_micro", CompactionConfig(**base),
+            "Option 3: verbatim facts pinned, then the narrative compressed, on Nova Micro.",
+            summarizer=extract_then_compress(NOVA_MICRO),
+        ),
+        "extract_nova2lite": Arm(
+            "extract_nova2lite", CompactionConfig(**base),
+            "Option 3: verbatim facts pinned, then the narrative compressed, on Nova 2 Lite.",
+            summarizer=extract_then_compress(NOVA_2_LITE),
+        ),
+        "extract_haiku": Arm(
+            "extract_haiku", CompactionConfig(**base),
+            "Option 3: verbatim facts pinned, then the narrative compressed, on Haiku 4.5.",
+            summarizer=extract_then_compress(HAIKU_4_5),
         ),
         "floor_50": Arm(
             "floor_50", CompactionConfig(floor_ratio=0.5, **base),
@@ -228,6 +267,11 @@ def simulate(
     session_logger = logging.getLogger("agents.main_agent.session")
     previous_level = session_logger.level
     session_logger.setLevel(logging.WARNING)
+    # ``update_after_turn`` calls the module-level ``bound_summary``; a
+    # candidate replaces it for this arm only.
+    production_summarizer = _tbsm.bound_summary
+    if arm.summarizer is not None:
+        _tbsm.bound_summary = arm.summarizer
     try:
         for t, turn in enumerate(transcript.turns):
             current_turn["t"] = t
@@ -249,6 +293,7 @@ def simulate(
         head_of_turn()
     finally:
         session_logger.setLevel(previous_level)
+        _tbsm.bound_summary = production_summarizer
 
     state = manager.compaction_state
     return ArmRun(
