@@ -8,13 +8,14 @@ it stashes the payload on the conversation agent's Strands `agent.state`,
 keyed by the App's bound resource URI.
 
 Storage (decision #3): `agent.state` is the live Strands `AgentState` of
-the cached conversation agent. Multi-turn continuity in cloud rides the
-in-process LRU agent cache (AgentCore Memory is write-only for continuity —
-see docs/specs/MAX_TOKENS_CONTINUE_SESSION_RESTORE_ANALYSIS.md), so the
-same `agent.state` survives turn boundaries for free; a cold start /
-eviction drops the *entire* conversation anyway, so a dropped pending
-context there is consistent with existing behavior, not a new regression.
-No `TurnBasedSessionManager` / Memory change is needed.
+the cached conversation agent, so the same `agent.state` survives turn
+boundaries while the in-process LRU agent cache holds that agent. A cold
+start or eviction restores the conversation from AgentCore Memory (the
+session manager's restore branch, which also restores agent state that was
+synced after a turn), but this dispatch runs without a model turn, so a
+payload stashed here is only synced by the next turn. Losing it to an
+eviction before then is an accepted loss for a best-effort UI hint; no
+`TurnBasedSessionManager` / Memory change is needed.
 
 `AgentState` in strands 1.40 is a `.get()/.set()/.delete()` store whose
 `.get()` returns a **deep copy** — nested in-place mutation does NOT

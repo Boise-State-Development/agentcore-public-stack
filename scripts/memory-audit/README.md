@@ -50,5 +50,6 @@ The probe tests the service. The spec also wants the app path tested
 2. Wait ~90 s (extraction took ~70 s in dev).
 3. Start chat B and ask for the fact. Pass = it's recalled and the runtime log
    shows `Retrieved N customer context items` for that turn.
-4. Clean up: delete both chats, then delete the extracted records. Deleting a
-   chat does **not** delete them (spec §1.1 gap a).
+4. Clean up: delete both chats, then delete the extracted semantic and
+   preference records. Deleting a chat removes its events and summaries but
+   not facts or preferences, which carry no source session.

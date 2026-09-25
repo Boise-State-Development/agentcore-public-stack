@@ -17,6 +17,42 @@ import { grantManagedKbRetrieval } from '../managed-kb/managed-kb-role-construct
  * Create the AgentCore Runtime execution role with all required
  * policy statements.
  */
+/**
+ * AgentCore Memory actions the Runtime role needs. Both memory statements on
+ * that role (`AgentCoreMemoryAccess` here, account-wide `memory/*`, and
+ * `MemoryAccess` in the Runtime construct, scoped to this deployment's memory)
+ * use this one list, so they cannot drift apart again. They did: the scoped
+ * statement once omitted GetMemory on the belief that it was not a real IAM
+ * action, and retrieval worked only because the wildcard statement carried it.
+ *
+ * Names mirror the AgentCore Data Plane API. GetMemory is required for
+ * long-term memory RETRIEVAL. At session creation the agent calls
+ * _discover_strategy_ids() -> MemoryClient.get_memory_strategies(), which
+ * invokes GetMemory to resolve the SEMANTIC / USER_PREFERENCE / SUMMARIZATION
+ * strategy ids used to build the retrieval namespaces. Without it that call
+ * AccessDenies, the retrieval config is left empty, and the agent silently runs
+ * with "long-term memory retrieval disabled": it keeps writing events
+ * (CreateEvent) but never recalls stored memories. Verified against the AWS
+ * Service Authorization Reference: GetMemory is a Read action on the `memory`
+ * resource type.
+ */
+export const RUNTIME_MEMORY_ACTIONS: readonly string[] = [
+  'bedrock-agentcore:GetMemory',
+  'bedrock-agentcore:CreateEvent',
+  'bedrock-agentcore:GetEvent',
+  'bedrock-agentcore:ListEvents',
+  'bedrock-agentcore:DeleteEvent',
+  'bedrock-agentcore:ListActors',
+  'bedrock-agentcore:ListSessions',
+  'bedrock-agentcore:RetrieveMemoryRecords',
+  'bedrock-agentcore:GetMemoryRecord',
+  'bedrock-agentcore:ListMemoryRecords',
+  'bedrock-agentcore:BatchCreateMemoryRecords',
+  'bedrock-agentcore:BatchUpdateMemoryRecords',
+  'bedrock-agentcore:BatchDeleteMemoryRecords',
+  'bedrock-agentcore:DeleteMemoryRecord',
+];
+
 export function createRuntimeExecutionRole(
   scope: Construct,
   config: AppConfig,
@@ -400,36 +436,9 @@ export function createRuntimeExecutionRole(
   role.addToPolicy(new iam.PolicyStatement({
     sid: 'AgentCoreMemoryAccess',
     effect: iam.Effect.ALLOW,
-    // See app-api-iam-grants.ts for the rationale — these action names
-    // mirror the AgentCore Data Plane API. The previous list used
-    // speculative names (CreateMemoryEvent, ListMemoryEvents,
-    // RetrieveMemory) that don't exist as IAM actions.
-    actions: [
-      // GetMemory is required for long-term memory RETRIEVAL. At session
-      // creation the agent calls _discover_strategy_ids() ->
-      // MemoryClient.get_memory_strategies(), which invokes GetMemory to
-      // resolve the SEMANTIC / USER_PREFERENCE / SUMMARIZATION strategy IDs
-      // used to build the retrieval namespaces. Without it that call
-      // AccessDenies, the retrieval config is left empty, and the agent
-      // silently runs with "long-term memory retrieval disabled" — it keeps
-      // writing events (CreateEvent) but never recalls stored memories.
-      // Verified against the AWS Service Authorization Reference: GetMemory
-      // is a Read action on the `memory` resource type.
-      'bedrock-agentcore:GetMemory',
-      'bedrock-agentcore:CreateEvent',
-      'bedrock-agentcore:GetEvent',
-      'bedrock-agentcore:ListEvents',
-      'bedrock-agentcore:DeleteEvent',
-      'bedrock-agentcore:ListActors',
-      'bedrock-agentcore:ListSessions',
-      'bedrock-agentcore:RetrieveMemoryRecords',
-      'bedrock-agentcore:GetMemoryRecord',
-      'bedrock-agentcore:ListMemoryRecords',
-      'bedrock-agentcore:BatchCreateMemoryRecords',
-      'bedrock-agentcore:BatchUpdateMemoryRecords',
-      'bedrock-agentcore:BatchDeleteMemoryRecords',
-      'bedrock-agentcore:DeleteMemoryRecord',
-    ],
+    // See RUNTIME_MEMORY_ACTIONS. The Runtime construct grants the same list
+    // again, scoped to this deployment's memory (`MemoryAccess`).
+    actions: [...RUNTIME_MEMORY_ACTIONS],
     resources: [`arn:aws:bedrock-agentcore:${config.awsRegion}:${config.awsAccount}:memory/*`],
   }));
 
