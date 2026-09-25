@@ -342,6 +342,13 @@ class AgentFactory:
         # Create agent with session manager, hooks, and system prompt
         # Use SequentialToolExecutor to prevent concurrent browser operations
         # This prevents "Failed to start and initialize Playwright" errors with NovaAct
+        #
+        # callback_handler=None is load-bearing. Left unset, Strands installs
+        # PrintingCallbackHandler, which print()s every streamed text delta to
+        # stdout with end="". The runtime ships stdout to CloudWatch, so that
+        # put user conversation content in the logs and glued unterminated text
+        # onto the front of EMF lines. Nothing here consumes callback events:
+        # the stream processor reads agent.stream_async() directly.
         agent = Agent(
             model=model,
             system_prompt=agent_system_prompt,
@@ -352,6 +359,7 @@ class AgentFactory:
             hooks=hooks if hooks else None,
             plugins=plugins if plugins else None,
             retry_strategy=retry_strategy,
+            callback_handler=None,
         )
 
         return agent
