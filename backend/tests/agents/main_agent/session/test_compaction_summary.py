@@ -115,6 +115,13 @@ class TestBoundSummary:
         monkeypatch.delenv("AGENTCORE_MEMORY_COMPACTION_SUMMARY_MODEL_ENABLED")
         assert CompactionConfig.from_env().summary_model_enabled is True
 
+    def test_default_model_is_nova_2_lite(self, monkeypatch):
+        # Nova Micro dropped ~42% of exact identifiers on the quality harness;
+        # a revert to it should be a deliberate change, not a drive-by.
+        monkeypatch.delenv("AGENTCORE_MEMORY_COMPACTION_SUMMARY_MODEL_ID", raising=False)
+        assert CompactionConfig.from_env().summary_model_id == "us.amazon.nova-2-lite-v1:0"
+        assert CompactionConfig().summary_model_id == "us.amazon.nova-2-lite-v1:0"
+
 
 class TestThroughUpdateAfterTurn:
     """Acceptance: oversized LTM records → the persisted summary is ≤ budget and
