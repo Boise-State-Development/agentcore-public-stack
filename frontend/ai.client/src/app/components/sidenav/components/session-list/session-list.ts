@@ -20,6 +20,7 @@ import { ConfirmationDialogComponent, ConfirmationDialogData } from '../../../co
 import { parseIso } from '../../../../utils/date';
 import { InViewDirective } from './in-view.directive';
 import { ProjectsService } from '../../../../projects/services/projects.service';
+import { FEATURES } from '../../../../services/features';
 
 /**
  * One row of a time bucket: a plain conversation, or the tasks of one project
@@ -72,6 +73,8 @@ export class SessionList {
   private injector = inject(Injector);
   private userService = inject(UserService);
   private projectsService = inject(ProjectsService);
+  /** With Projects off in this build, project tasks list as plain rows (no heading to a dead link). */
+  private readonly projectsOn = inject(FEATURES).projects;
 
   /** Project names for the group headings; a project not in the list reads "Project". */
   private readonly projectNames = computed(
@@ -166,7 +169,12 @@ export class SessionList {
     const names = this.projectNames();
     return groups
       .filter(g => g.sessions.length > 0)
-      .map(g => ({ ...g, entries: groupProjectSessions(g.sessions, names) }));
+      .map(g => ({
+        ...g,
+        entries: this.projectsOn
+          ? groupProjectSessions(g.sessions, names)
+          : g.sessions.map(session => ({ kind: 'session' as const, session })),
+      }));
   });
 
   constructor() {
@@ -174,7 +182,7 @@ export class SessionList {
     // projects page shares this list, so a project created or renamed there is
     // already current here.
     effect(() => {
-      if (this.projectsRequested) return;
+      if (this.projectsRequested || !this.projectsOn) return;
       if (!this.sessions()?.some(s => s.preferences?.projectId)) return;
       this.projectsRequested = true;
       untracked(() => {
@@ -508,7 +516,7 @@ export class SessionList {
       data: {
         sessionId: session.sessionId,
         ownerEmail: this.userService.currentUser()?.email ?? '',
-        projectId: session.preferences?.projectId ?? null,
+        projectId: this.projectsOn ? session.preferences?.projectId ?? null : null,
       } as ShareModalData,
     });
   }

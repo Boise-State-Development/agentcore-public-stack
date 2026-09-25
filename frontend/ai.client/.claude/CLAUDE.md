@@ -34,6 +34,13 @@ You are an expert in TypeScript, Angular, and scalable web application developme
 - Do NOT use `ngStyle`, use `style` bindings instead
 - When using external templates/styles, use paths relative to the component TS file.
 
+## Feature Flags
+
+- UI feature switches live in `features` in `src/environments/environment*.ts` (typed by `src/environments/feature-flags.ts`), one file per build: `environment.ts` (local), `environment.development.ts` (deployed dev, `dev-deploy` configuration), `environment.production.ts` (prod).
+- Read them with `inject(FEATURES)` from `src/app/services/features.ts`. Don't import an environment file into a component. In specs, provide `FEATURES`.
+- Gate UI synchronously on the flag (`@if (features.x)`, route `canMatch`). Never hide a nav item behind a network probe.
+- In-development features are `false` until an environment chooses to turn them on. The backend `*_ENABLED` flag is the real gate; keep both in step (root `CLAUDE.MD`, "Feature Flags").
+
 ## State Management
 
 - Use signals for local component state

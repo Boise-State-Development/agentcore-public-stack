@@ -43,6 +43,8 @@ PROJECTS_TABLE = "test-projects-harness"
 @pytest.fixture()
 def projects_table(aws, monkeypatch):
     monkeypatch.setenv("DYNAMODB_PROJECTS_TABLE_NAME", PROJECTS_TABLE)
+    # Projects are opt-in (CLAUDE.md "Feature flags"); these tests exercise them on.
+    monkeypatch.setenv("PROJECTS_ENABLED", "true")
     # create_assistant has no fallback for this; app-api always sets it (CDK).
     monkeypatch.setenv("S3_ASSISTANTS_VECTOR_STORE_INDEX_NAME", "test-index")
     gsi = lambda name, h, r: {  # noqa: E731
@@ -231,5 +233,9 @@ def test_the_kill_switch_shuts_the_harness_for_everyone(project, monkeypatch):
     assert access(plain.assistant_id, OWNER)[1] == "owner"
     assert not asyncio.run(is_disabled_project_harness(plain.assistant_id))
 
-    monkeypatch.setenv("PROJECTS_ENABLED", "")
+    monkeypatch.setenv("PROJECTS_ENABLED", "true")
     assert access(created.harness_agent_id, EDITOR)[1] == "editor"
+
+    # Opt-in: unset is off, like "false".
+    monkeypatch.delenv("PROJECTS_ENABLED")
+    assert access(created.harness_agent_id, EDITOR) == (None, None)

@@ -626,34 +626,40 @@ describe('RAG Ingestion Configuration', () => {
   });
 
   // ============================================================
-  // Shared Projects feature flag — default ON with a kill switch
-  // (empty GitHub Actions variable must not disable)
+  // Shared Projects feature flag — opt-in while in development
+  // (unset / empty GitHub Actions variable means off)
   // ============================================================
 
   describe('Shared Projects feature flag', () => {
-    test('defaults to enabled when CDK_PROJECTS_ENABLED is unset', () => {
+    test('defaults to disabled when CDK_PROJECTS_ENABLED is unset', () => {
       delete process.env.CDK_PROJECTS_ENABLED;
 
-      expect(loadConfig(app).projects.enabled).toBe(true);
+      expect(loadConfig(app).projects.enabled).toBe(false);
     });
 
-    test('treats empty string (unset GitHub Actions variable) as enabled', () => {
+    test('treats empty string (unset GitHub Actions variable) as disabled', () => {
       process.env.CDK_PROJECTS_ENABLED = '';
 
+      expect(loadConfig(app).projects.enabled).toBe(false);
+    });
+
+    test('CDK_PROJECTS_ENABLED="true" turns it on', () => {
+      process.env.CDK_PROJECTS_ENABLED = 'true';
+
       expect(loadConfig(app).projects.enabled).toBe(true);
     });
 
-    test('CDK_PROJECTS_ENABLED="false" is the kill switch', () => {
-      process.env.CDK_PROJECTS_ENABLED = 'false';
+    test('anything but "true" leaves it off', () => {
+      process.env.CDK_PROJECTS_ENABLED = 'yes';
 
       expect(loadConfig(app).projects.enabled).toBe(false);
     });
 
-    test('cdk.json context projects.enabled=false disables when env is unset', () => {
+    test('cdk.json context projects.enabled=true enables when env is unset', () => {
       delete process.env.CDK_PROJECTS_ENABLED;
-      app.node.setContext('projects', { enabled: false });
+      app.node.setContext('projects', { enabled: true });
 
-      expect(loadConfig(app).projects.enabled).toBe(false);
+      expect(loadConfig(app).projects.enabled).toBe(true);
     });
   });
 

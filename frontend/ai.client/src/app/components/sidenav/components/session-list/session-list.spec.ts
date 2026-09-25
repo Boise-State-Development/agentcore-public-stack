@@ -8,6 +8,7 @@ import { SessionService } from '../../../../session/services/session/session.ser
 import { SidenavService } from '../../../../services/sidenav/sidenav.service';
 import { ToastService } from '../../../../services/toast/toast.service';
 import { ProjectsService } from '../../../../projects/services/projects.service';
+import { FEATURES } from '../../../../services/features';
 
 describe('SessionList', () => {
   let mockSessionService: any;
@@ -61,6 +62,7 @@ describe('SessionList', () => {
         { provide: Dialog, useValue: mockDialog },
         { provide: Router, useValue: mockRouter },
         { provide: ProjectsService, useValue: mockProjectsService },
+        { provide: FEATURES, useValue: { projects: true } },
       ],
     });
   });
@@ -337,6 +339,19 @@ describe('SessionList', () => {
         // Not in the caller's project list (left, or not loaded yet): a generic heading.
         'Project:e',
       ]);
+    });
+
+    it('lists project tasks as plain rows, loads no names, and offers no project share in a build with Projects off', async () => {
+      TestBed.overrideProvider(FEATURES, { useValue: { projects: false } });
+      mockSessionService.mergedSessionsResource.set({ sessions: [plain('a'), task('b', 'prj_1')], nextToken: null });
+      const component = await createComponent();
+      TestBed.tick();
+      const [today] = component.groupedSessions();
+      expect(today.entries.map((e: any) => e.kind)).toEqual(['session', 'session']);
+      expect(mockProjectsService.load).not.toHaveBeenCalled();
+      const event = { preventDefault: vi.fn(), stopPropagation: vi.fn() } as unknown as Event;
+      (component as any).onShareClick(event, task('b', 'prj_1'));
+      expect(mockDialog.open.mock.calls.at(-1)[1].data.projectId).toBeNull();
     });
 
     it('loads project names once, and only for someone with a project task', async () => {

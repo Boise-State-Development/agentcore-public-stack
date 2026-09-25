@@ -10,6 +10,7 @@ import { UserService } from '../../auth/user.service';
 import { SessionService as BffSessionService } from '../../auth/session.service';
 import { UserDropdownComponent } from '../topnav/components/user-dropdown.component';
 import { NotificationBellComponent } from '../notification-bell/notification-bell.component';
+import { FEATURES } from '../../services/features';
 import { SidenavService } from '../../services/sidenav/sidenav.service';
 import { TooltipDirective } from '../tooltip/tooltip.directive';
 import { BrandingService } from '../../../branding/branding.service';
@@ -27,6 +28,8 @@ export class Sidenav {
   protected sidenavService = inject(SidenavService);
   protected userService = inject(UserService);
   protected branding = inject(BrandingService);
+  /** This build's front-end feature switches (compile-time; see environments/feature-flags.ts). */
+  protected readonly features = inject(FEATURES);
 
   /** Whether the branding logo image failed to load (Requirement 2.8). */
   protected logoLoadFailed = signal(false);

@@ -102,10 +102,23 @@
                         <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Agents</span>
                     </a>
 
-                    <!-- Shared Projects has no nav entry for now: a menu item must not wait on
-                         a request to know whether Projects is switched on here. /projects is
-                         still reachable by URL, from a project heading in the conversation list,
-                         and from a notification. -->
+                    <!-- Shared Projects (shared-projects §6). Shown only when this build turns
+                         Projects on (FEATURES / src/environments/feature-flags.ts): a
+                         compile-time value, so the item never waits on a request. -->
+                    @if (features.projects) {
+                        <a
+                            routerLink="/projects"
+                            routerLinkActive="bg-gray-200/80 dark:bg-white/10"
+                            (click)="sidenavService.close()"
+                            class="group flex w-full cursor-pointer items-center gap-3 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-gray-200/60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-secondary-500 dark:hover:bg-white/5">
+                            <div class="flex size-7 shrink-0 items-center justify-center text-gray-500 dark:text-gray-400">
+                                <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12.75V12A2.25 2.25 0 0 1 4.5 9.75h15A2.25 2.25 0 0 1 21.75 12v.75m-8.69-6.44-2.12-2.12a1.5 1.5 0 0 0-1.061-.44H4.5A2.25 2.25 0 0 0 2.25 6v12a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 18V9a2.25 2.25 0 0 0-2.25-2.25h-5.379a1.5 1.5 0 0 1-1.06-.44Z" />
+                                </svg>
+                            </div>
+                            <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Projects</span>
+                        </a>
+                    }
 
                     <!--
                         Artifacts — the library of everything the assistant has made, across
@@ -163,7 +176,10 @@
     @if (userService.currentUser(); as user) {
         <div class="flex shrink-0 items-center gap-1 border-t border-gray-200 px-3 py-2 dark:border-white/10">
             <app-user-dropdown class="min-w-0 flex-1" [user]="user" [isAdmin]="isAdmin()" (logout)="handleLogout()"></app-user-dropdown>
-            <app-notification-bell class="shrink-0" />
+            @if (features.projects) {
+                <!-- Projects are the inbox's only producer so far; show the bell with them. -->
+                <app-notification-bell class="shrink-0" />
+            }
         </div>
     }
 

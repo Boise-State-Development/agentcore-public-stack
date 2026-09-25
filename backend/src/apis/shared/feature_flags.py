@@ -1,10 +1,13 @@
 """Process-level feature flags resolved from environment variables.
 
 These gate optional product surfaces per environment. Each flag documents
-its own default: deferred features default off until explicitly turned on
-(the ``FINE_TUNING_ENABLED`` pattern), while shipping features default on
-with a kill switch (the ``KB_SYNC_ENABLED`` pattern). Each flag is read on
-every call (not cached at import) so that:
+its own default. **New and in-development features default off** until a
+deployment turns them on (only ``"true"`` enables; ``PROJECTS_ENABLED`` is the
+current example). Finished features default on with a kill switch (the
+``KB_SYNC_ENABLED`` pattern), and moving a feature there is a deliberate change.
+The SPA has a matching compile-time switch per feature in
+``frontend/ai.client/src/environments`` (see CLAUDE.MD "Feature Flags").
+Each flag is read on every call (not cached at import) so that:
 
 * import-time callers (conditional router mounting) and per-request callers
   observe the same value, and
@@ -600,14 +603,15 @@ def platform_self_service_enabled() -> bool:
 def projects_enabled() -> bool:
     """Whether Shared Projects exist in this environment.
 
-    Covers app-api's ``/projects`` surface and, from PR-1.4, the project harness
-    on the invocation path (``docs/specs/shared-projects.md``). **Default ON with
-    a kill switch** (house style, mirroring ``SCHEDULED_RUNS_ENABLED``): unset or
-    empty resolves to enabled; only the literal ``"false"`` (case-insensitive)
-    disables. CDK sets it on both app-api and the AgentCore Runtime from
-    ``config.projects.enabled`` with the same empty-string-safe ternary.
+    Covers app-api's ``/projects`` surface and the project harness everywhere it
+    is reachable (``docs/specs/shared-projects.md``). **Opt-in while the feature
+    is in development** (CLAUDE.md "Feature flags"): only ``"true"``
+    (case-insensitive) enables it; unset or anything else is off, so a
+    deployment turns Projects on by choice. CDK sets it on app-api and the
+    AgentCore Runtime from ``config.projects.enabled``. The SPA's matching
+    switch is ``features.projects`` in ``frontend/ai.client/src/environments``.
 
     While off the routes 404 after authentication (the auth sweep requires a
-    401 first), and existing project rows are left untouched.
+    401 first), the harness refuses everyone, and existing rows are left untouched.
     """
-    return os.environ.get("PROJECTS_ENABLED", "").strip().lower() != "false"
+    return os.environ.get("PROJECTS_ENABLED", "").strip().lower() == "true"
