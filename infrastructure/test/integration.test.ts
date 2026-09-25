@@ -91,6 +91,26 @@ describe('Single-stack integration', () => {
       });
     });
 
+    it('grants the App API task role bedrock:CountTokens for memory-file token accounting', () => {
+      // Memory saves count tokens once (apis/shared/memory/tokens.py). The
+      // action rides on the BedrockInvokeModel statement and its
+      // foundation-model resource scope.
+      template.hasResourceProperties('AWS::IAM::Policy', {
+        PolicyDocument: {
+          Statement: Match.arrayWith([
+            Match.objectLike({
+              Sid: 'BedrockInvokeModel',
+              Action: [
+                'bedrock:InvokeModel',
+                'bedrock:InvokeModelWithResponseStream',
+                'bedrock:CountTokens',
+              ],
+            }),
+          ]),
+        },
+      });
+    });
+
     it('grants bedrock-mantle:CallWithBearerToken for Bedrock Mantle (runtime + app-api)', () => {
       // Bedrock Mantle (the OpenAI-compatible Bedrock surface) has its own
       // IAM service namespace — `bedrock-mantle:*`, NOT `bedrock:*`. It

@@ -18,6 +18,7 @@ from agents.builtin_tools.memory_spaces import (
 from apis.shared.memory.service import (
     MemorySpaceNotFoundError,
     MemorySpacePermissionError,
+    MemoryValidationError,
 )
 
 MODULE = "agents.builtin_tools.memory_spaces.tools"
@@ -103,6 +104,28 @@ class TestMemoryWrite:
         kwargs = svc.write_entry.call_args
         assert kwargs.args[0] == "spc_1" and kwargs.args[1] == "u1"
         assert kwargs.kwargs["entry_type"] == "entity"
+        # a tool write is the "direct save from a task" path in file history
+        assert kwargs.kwargs["reason"] == "save"
+        assert kwargs.kwargs["description"] == "person"
+
+    @pytest.mark.asyncio
+    async def test_an_omitted_description_is_not_sent_as_empty(self, monkeypatch):
+        svc = _patch_service(monkeypatch)
+        svc.write_entry.return_value = SimpleNamespace(slug="jane", entry_type="fact")
+        tool = make_memory_write_tool("spc_1", "Brain", "u1", "u1@x.edu")
+        await _call(tool, slug="jane", body="- x")
+        assert svc.write_entry.call_args.kwargs["description"] is None
+
+    @pytest.mark.asyncio
+    async def test_a_validation_failure_reaches_the_model_verbatim(self, monkeypatch):
+        svc = _patch_service(monkeypatch)
+        svc.write_entry.side_effect = MemoryValidationError(
+            "Line 1 is not part of a list item", code="prose_in_body"
+        )
+        tool = make_memory_write_tool("spc_1", "Brain", "u1", "u1@x.edu")
+        result = await _call(tool, slug="jane", body="prose")
+        assert result["status"] == "error"
+        assert "Line 1 is not part of a list item" in result["content"][0]["text"]
 
     @pytest.mark.asyncio
     async def test_write_permission_error_is_error_result(self, monkeypatch):
