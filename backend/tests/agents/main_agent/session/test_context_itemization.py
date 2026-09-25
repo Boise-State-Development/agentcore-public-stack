@@ -171,6 +171,15 @@ class TestItemizeTools:
         assert parts["mcp:Canvas"]["tokens"] > parts["gateway:wikipedia"]["tokens"]
         assert sum(r["tokens"] for r in rows) == 5_000
 
+    def test_a_project_harnesss_memory_tools_are_memory(self):
+        """Shared Projects 2.4b: memory_query and memory_save join the Memory row."""
+        tools = [FakeTool("calculator")] + [
+            FakeTool(name) for name in ("memory_list", "memory_read", "memory_query", "memory_save")
+        ]
+        parts = _by_key(itemize_tools(FakeAgent("p", tools), 1_000))
+        assert set(parts) == {"builtin", "memory"}
+        assert parts["memory"]["label"] == "Memory tools"
+
     def test_one_origin_is_not_itemized(self):
         assert itemize_tools(FakeAgent("p", [FakeTool("a"), FakeTool("b")]), 500) is None
 

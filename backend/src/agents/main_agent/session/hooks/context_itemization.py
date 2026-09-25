@@ -68,7 +68,8 @@ _SKILL_NAME = re.compile(r"<name>(.*?)</name>", re.DOTALL)
 MAX_SKILL_ROWS = 6
 
 _SKILL_TOOL_NAMES = frozenset({"skills", "read_skill_file"})
-_MEMORY_TOOL_NAMES = frozenset({"memory_list", "memory_read", "memory_write"})
+# An Agent's bound-space family, plus a project harness's scope-addressed one (2.4b).
+_MEMORY_TOOL_NAMES = frozenset({"memory_list", "memory_read", "memory_write", "memory_query", "memory_save"})
 
 
 def apportion(total: int, weights: Sequence[Tuple[str, str, int]]) -> List[Dict[str, Any]]:
