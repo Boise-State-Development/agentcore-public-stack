@@ -1,5 +1,7 @@
 import { Component, ChangeDetectionStrategy, inject, signal, computed, OnInit } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
+import { Dialog } from '@angular/cdk/dialog';
+import { firstValueFrom } from 'rxjs';
 import { Router, ActivatedRoute, RouterLink } from '@angular/router';
 import {
   AbstractControl,
@@ -12,7 +14,7 @@ import {
   ReactiveFormsModule,
 } from '@angular/forms';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroArrowLeft, heroChevronDown, heroChevronRight } from '@ng-icons/heroicons/outline';
+import { heroArrowLeft, heroChevronDown, heroChevronRight, heroTrash } from '@ng-icons/heroicons/outline';
 import {
   AVAILABLE_PROVIDERS,
   CACHING_CAPABLE_PROVIDERS,
@@ -45,6 +47,11 @@ import { ManagedModelsService } from './services/managed-models.service';
 import { CuratedModelPrefillService } from './services/curated-model-prefill.service';
 import { AppRolesService } from '../roles/services/app-roles.service';
 import { SpinnerComponent } from '../../components/spinner/spinner.component';
+import {
+  DeleteModelDialogComponent,
+  DeleteModelDialogData,
+  DeleteModelDialogResult,
+} from './components/delete-model-dialog.component';
 
 interface ParamRowGroup {
   /**
@@ -266,7 +273,7 @@ interface ModelFormGroup {
 @Component({
   selector: 'app-model-form-page',
   imports: [ReactiveFormsModule, RouterLink, NgIcon, ModelIconComponent, SpinnerComponent],
-  providers: [provideIcons({ heroArrowLeft, heroChevronDown, heroChevronRight })],
+  providers: [provideIcons({ heroArrowLeft, heroChevronDown, heroChevronRight, heroTrash })],
   templateUrl: './model-form.page.html',
   styleUrl: './model-form.page.css',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -278,6 +285,7 @@ export class ModelFormPage implements OnInit {
   private managedModelsService = inject(ManagedModelsService);
   private prefillService = inject(CuratedModelPrefillService);
   private appRolesService = inject(AppRolesService);
+  private dialog = inject(Dialog);
 
   // Available options for multi-select fields
   readonly availableProviders = AVAILABLE_PROVIDERS;
@@ -348,6 +356,7 @@ export class ModelFormPage implements OnInit {
   readonly isEditMode = signal<boolean>(false);
   readonly modelId = signal<string | null>(null);
   readonly isSubmitting = signal<boolean>(false);
+  readonly isDeleting = signal<boolean>(false);
   readonly isLoading = signal<boolean>(false);
 
   // Inference-param row metadata, parallel to the ``inferenceParams`` FormArray.
@@ -1297,6 +1306,38 @@ export class ModelFormPage implements OnInit {
     return MANTLE_API_MODES.includes(value as MantleApiMode)
       ? (value as MantleApiMode)
       : 'chat';
+  }
+
+  /**
+   * Confirm, delete, and return to the list. On failure the admin stays on the
+   * form with their unsaved edits intact.
+   */
+  async deleteModel(): Promise<void> {
+    const id = this.modelId();
+    if (!id || this.isDeleting()) {
+      return;
+    }
+
+    const { modelId, modelName } = this.modelForm.getRawValue();
+    const dialogRef = this.dialog.open<DeleteModelDialogResult>(
+      DeleteModelDialogComponent,
+      { data: { modelId, modelName } as DeleteModelDialogData },
+    );
+    const confirmed = await firstValueFrom(dialogRef.closed);
+    if (!confirmed) {
+      return;
+    }
+
+    this.isDeleting.set(true);
+    try {
+      await this.managedModelsService.deleteModel(id);
+      this.router.navigate(['/admin/manage-models']);
+    } catch (error) {
+      console.error('Error deleting model:', error);
+      alert('Failed to delete model. Please try again.');
+    } finally {
+      this.isDeleting.set(false);
+    }
   }
 
   /**
