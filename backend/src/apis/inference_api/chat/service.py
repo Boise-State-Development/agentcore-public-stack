@@ -620,10 +620,11 @@ async def generate_conversation_title(
                 }
             ],
             "system": [{"text": TITLE_GENERATION_SYSTEM_PROMPT}],
+            # Temperature only: Claude 4.5+ rejects `temperature` and `topP`
+            # together, so sending both would break titles on a model swap.
             "inferenceConfig": {
                 "temperature": 0.3,  # Low temperature for consistent, focused output
                 "maxTokens": 50,      # Title should be very short
-                "topP": 0.9
             }
         }
 

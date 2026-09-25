@@ -143,10 +143,12 @@ async def compress_with_model(
             modelId=model_id,
             system=[{"text": _COMPRESSION_SYSTEM_PROMPT.replace("{word_budget}", f"{word_budget:,}")}],
             messages=[{"role": "user", "content": [{"text": "Summary notes, oldest first:\n\n" + text}]}],
+            # Temperature only: Claude 4.5+ rejects `temperature` and `topP`
+            # together, and the blanket except below would turn that into a
+            # silent fall back to truncation on every compression.
             inferenceConfig={
                 "temperature": 0.1,
                 "maxTokens": min(_MODEL_MAX_OUTPUT_TOKENS, max(256, int(budget_tokens))),
-                "topP": 0.9,
             },
         )
         if response.get("stopReason") == "max_tokens":

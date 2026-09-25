@@ -6,11 +6,11 @@ the *production* cut with only the summarizer swapped, so a difference in
 the result is the summarizer's alone.
 
 - ``compress_only(model_id)``: option 2. Production's compression prompt,
-  budget and fallback, sending ``temperature`` alone. Production's
-  ``compress_with_model`` also sends ``topP``, which Claude 4.5+ rejects
-  ("`temperature` and `top_p` cannot both be specified"). So pointing
-  ``summary_model_id`` at Haiku silently fails every compression and falls
-  back to truncation.
+  budget and fallback, sending ``temperature`` alone. It was written when
+  production's ``compress_with_model`` also sent ``topP``, which Claude 4.5+
+  rejects ("`temperature` and `top_p` cannot both be specified"), so a Haiku
+  ``summary_model_id`` silently fell back to truncation. Production now sends
+  ``temperature`` alone too, so this arm matches it call for call.
 
 - ``extract_then_compress(model_id)``: option 3. It first extracts standing
   instructions, decisions, identifiers and changed values verbatim into a
