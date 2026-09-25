@@ -540,8 +540,9 @@ class TestHeuristicCountsNeverBecomeASplit:
 
         assert _token_count_is_authoritative(self._converse()) is True
         # What count_tokens records after Bedrock answers "doesn't support
-        # counting tokens" (or AccessDenied) for the id it sent.
-        assert _token_count_is_authoritative(self._converse({"global.anthropic.claude-sonnet-5"})) is False
+        # counting tokens" (or AccessDenied) for the id it sent — the base id,
+        # with the `global.` profile prefix stripped.
+        assert _token_count_is_authoritative(self._converse({"anthropic.claude-sonnet-5"})) is False
 
     def test_native_counting_off_is_not_authoritative(self):
         from agents.main_agent.core.bedrock_count_tokens import CountTokensBedrockModel

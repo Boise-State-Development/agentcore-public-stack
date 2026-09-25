@@ -4,10 +4,10 @@ and keeps a throttled count from ever stalling the reply.
 Two problems, one subclass.
 
 **Model id.** Bedrock's CountTokens API rejects cross-region inference-profile
-model ids (``us.anthropic.…`` / ``eu.…`` / ``apac.…`` / ``us-gov.…``) with a
-misleading ``ValidationException: The provided model doesn't support counting
-tokens.`` — even though on-demand invocation of the newer Claude models
-*requires* the inference-profile id. CountTokens only accepts the base
+model ids (geographic ``us.anthropic.…`` / ``eu.…`` / ``jp.…`` and so on, and
+``global.…``) with a misleading ``ValidationException: The provided model
+doesn't support counting tokens.`` — even though on-demand invocation of the
+newer Claude models *requires* the inference-profile id. CountTokens only accepts the base
 foundation-model id (``anthropic.…``). The inference profile is pure
 cross-region routing, so the base-id count is exact, not an approximation.
 This subclass passes the base id to CountTokens explicitly; invocation
@@ -54,9 +54,13 @@ from strands.types.tools import ToolSpec
 
 logger = logging.getLogger(__name__)
 
-# Cross-region inference-profile geography prefixes. Closed set per AWS — we
-# only strip these exact codes so a real model id is never mangled.
-_INFERENCE_PROFILE_PREFIX = re.compile(r"^(us|eu|apac|us-gov)\.")
+# Cross-region inference-profile prefixes: the geographic profiles (``us``,
+# ``us-gov``, ``eu``, ``apac``, ``au``, ``jp``) plus ``global``. Closed set per
+# the AWS docs (the per-model cards list each profile id) — we only strip these
+# exact codes so a real model id is never mangled. Missing one is silent: the
+# profile id reaches CountTokens, Bedrock rejects it as unsupported, the model
+# lands on the skip list and every count for it is the heuristic.
+_INFERENCE_PROFILE_PREFIX = re.compile(r"^(us|us-gov|eu|apac|au|jp|global)\.")
 
 # Bound on a single CountTokens attempt. Read + connect timeout, seconds. A
 # healthy count answers in well under a second; anything slower is the quota
@@ -74,10 +78,10 @@ _THROTTLE_CODES = frozenset({"ThrottlingException", "TooManyRequestsException", 
 def base_foundation_model_id(model_id: str) -> str:
     """Return the base foundation-model id for ``model_id``.
 
-    Strips a leading cross-region inference-profile prefix (``us.`` / ``eu.`` /
-    ``apac.`` / ``us-gov.``). No-op for ids that are already base ids or that
-    belong to another provider — so it is safe to call unconditionally on the
-    Bedrock path.
+    Strips a leading cross-region inference-profile prefix (``us.`` /
+    ``us-gov.`` / ``eu.`` / ``apac.`` / ``au.`` / ``jp.`` / ``global.``).
+    No-op for ids that are already base ids or that belong to another
+    provider — so it is safe to call unconditionally on the Bedrock path.
     """
     return _INFERENCE_PROFILE_PREFIX.sub("", model_id, count=1)
 

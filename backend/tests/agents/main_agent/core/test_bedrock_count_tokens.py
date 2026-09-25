@@ -34,6 +34,11 @@ class TestBaseFoundationModelId:
             ("eu.anthropic.claude-x", "anthropic.claude-x"),
             ("apac.anthropic.claude-x", "anthropic.claude-x"),
             ("us-gov.anthropic.claude-x", "anthropic.claude-x"),
+            ("au.anthropic.claude-x", "anthropic.claude-x"),
+            ("jp.anthropic.claude-x", "anthropic.claude-x"),
+            # Global CRIS — what prod runs every model on.
+            ("global.anthropic.claude-haiku-4-5-20251001-v1:0", "anthropic.claude-haiku-4-5-20251001-v1:0"),
+            ("global.anthropic.claude-x", "anthropic.claude-x"),
         ],
     )
     def test_strips_known_geography_prefixes(self, profile_id, expected):
@@ -57,6 +62,9 @@ class TestBaseFoundationModelId:
         assert base_foundation_model_id("us.anthropic.claude") == "anthropic.claude"
         # "us" as part of a longer first segment is not a prefix to strip.
         assert base_foundation_model_id("uswest.anthropic.x") == "uswest.anthropic.x"
+        assert base_foundation_model_id("globalx.anthropic.x") == "globalx.anthropic.x"
+        # Undocumented geography codes are left alone rather than guessed at.
+        assert base_foundation_model_id("ca.anthropic.x") == "ca.anthropic.x"
 
 
 @pytest.fixture
