@@ -12,6 +12,8 @@ the SDK default ever comes back, and stream a real turn through it.
 """
 
 import asyncio
+import io
+import json
 from typing import Any, AsyncIterable
 from unittest.mock import patch
 
@@ -79,3 +81,23 @@ def test_streamed_turn_writes_no_model_text_to_stdout_or_stderr(capfd):
     assert _SECRET_TEXT not in out
     assert _SECRET_TEXT not in err
 
+
+def test_emf_record_starts_on_a_fresh_line_after_an_unterminated_write():
+    """Defense in depth: any stray ``print(..., end="")`` on stdout must not
+    swallow the metric line that follows it."""
+    from apis.shared.observability import emf
+
+    stream = io.StringIO()
+    handler = emf._emf_logger.handlers[0]
+    previous = handler.setStream(stream)
+    try:
+        stream.write("some unterminated text")
+        emf.emit_emf_metrics("Test/Namespace", metrics={"Probe": 1})
+    finally:
+        handler.setStream(previous)
+
+    lines = stream.getvalue().splitlines()
+    assert lines[0] == "some unterminated text"
+    record = json.loads(lines[-1])
+    assert record["Probe"] == 1
+    assert record["_aws"]["CloudWatchMetrics"][0]["Namespace"] == "Test/Namespace"
