@@ -41,3 +41,11 @@ def test_the_main_turn_passes_the_binding_it_built_tools_from():
     ]
     assert len(mains) == 1
     assert ast.unparse(mains[0]["memory_binding"]) == "memory_binding_key"
+
+
+def test_memory_context_is_passed_on_the_main_turn_and_replayed_on_resume():
+    calls = list(_get_agent_calls())
+    resume = [kw for kw in calls if _is_true(kw.get("is_resume"))][0]
+    main = [kw for kw in calls if _is_false(kw.get("is_resume")) and "extra_tools_key_described" in kw][0]
+    assert ast.unparse(resume["memory_context"]) == "snapshot.memory_context"
+    assert ast.unparse(main["memory_context"]) == "memory_context"

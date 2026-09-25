@@ -188,6 +188,13 @@ class PausedTurnSnapshot(BaseModel):
                     "resume replays it or the paused agent is orphaned. None when the "
                     "turn had no binding and on snapshots written before the field existed.",
     )
+    memory_context: Optional[str] = Field(
+        default=None,
+        alias="memoryContext",
+        description="The rendered Memory-Space block the paused turn was built with. "
+                    "Hashed with the system prompt in the agent cache key, so resume "
+                    "replays it or the paused agent is orphaned.",
+    )
     captured_at: str = Field(..., alias="capturedAt", description="ISO 8601 timestamp when the turn paused")
     expires_at: str = Field(..., alias="expiresAt", description="ISO 8601 timestamp after which the snapshot is no longer valid for resume")
 

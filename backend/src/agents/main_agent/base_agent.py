@@ -72,9 +72,15 @@ class BaseAgent(ABC):
         mantle_region: Optional[str] = None,
         skip_persistence: bool = False,
         extra_tools: Optional[List[Any]] = None,
+        memory_context: Optional[str] = None,
     ):
         """
         Initialize base agent with shared infrastructure.
+
+        ``memory_context`` is the rendered Memory-Space block (reference data,
+        not instructions). It is kept apart from ``system_prompt`` so it lands
+        OUTSIDE the ``<user_instructions>`` wrapper and behind its own prompt
+        cache point (Shared Projects 2.2).
 
         Args:
             session_id: Session identifier for message persistence
@@ -98,6 +104,7 @@ class BaseAgent(ABC):
         self.auth_token = auth_token
         self.enabled_tools = enabled_tools
         self.extra_tools = extra_tools or []
+        self.memory_context = memory_context or None
         self.agent = None
 
         # Merge legacy temperature/max_tokens into the canonical dict. Explicit
@@ -161,6 +168,9 @@ class BaseAgent(ABC):
         # restored from AgentCore Memory regardless, so the model still sees
         # prior turns; only the system-prompt date line shifts.
         self._construction_snapshot["system_prompt"] = system_prompt
+        # A cache-key component too (hashed with the prompt), so resume must
+        # replay it verbatim.
+        self._construction_snapshot["memory_context"] = self.memory_context
 
         # Sub-stages of `agent_build` (docs/specs/turn-latency-preamble.md).
         # A no-op unless the inference-api turn path installed a recorder.

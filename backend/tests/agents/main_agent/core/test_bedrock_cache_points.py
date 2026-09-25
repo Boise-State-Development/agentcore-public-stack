@@ -419,3 +419,88 @@ class TestStaticPrefixLongTtl:
     def test_caching_disabled_means_no_long_ttl(self, monkeypatch):
         monkeypatch.setenv("AGENTCORE_PROMPT_CACHE_STATIC_PREFIX_TTL", "1h")
         assert ModelConfig(model_id=CLAUDE_MODEL_ID, caching_enabled=False).long_ttl_static_prefix() is False
+
+
+# ---------------------------------------------------------------------------
+# Shared Projects 2.2: a bound Memory-Space block takes the fourth point
+# ---------------------------------------------------------------------------
+MEMORY_BLOCK = '<memory_space scope="agent" name="Notes" note="...">\n\n### MEMORY.md\n- [[a]]\n\n</memory_space>'
+
+
+class TestMemoryBlockCachePoint:
+    """Budget with memory: tools, system, memory, auto message = 4, Bedrock's max.
+
+    The system point stays where it was, so the static prefix survives memory
+    edits; turns without memory are unchanged (3 points, today's bytes).
+    """
+
+    @patch("agents.main_agent.core.agent_factory.Agent")
+    @patch("agents.main_agent.core.agent_factory.CountTokensBedrockModel")
+    def test_factory_puts_memory_after_the_system_point_behind_its_own(self, _m, mock_agent_cls):
+        from agents.main_agent.core.agent_factory import AgentFactory
+
+        AgentFactory.create_agent(
+            model_config=ModelConfig(model_id=CLAUDE_MODEL_ID, caching_enabled=True),
+            system_prompt="You are a helpful assistant.",
+            tools=[], session_manager=MagicMock(), memory_context=MEMORY_BLOCK,
+        )
+        assert mock_agent_cls.call_args.kwargs["system_prompt"] == [
+            {"text": "You are a helpful assistant."},
+            {"cachePoint": {"type": "default"}},
+            {"text": MEMORY_BLOCK},
+            {"cachePoint": {"type": "default"}},
+        ]
+
+    @patch("agents.main_agent.core.agent_factory.Agent")
+    @patch("agents.main_agent.core.agent_factory.CountTokensBedrockModel")
+    def test_without_cache_points_memory_is_appended_as_text(self, _m, mock_agent_cls):
+        from agents.main_agent.core.agent_factory import AgentFactory
+
+        AgentFactory.create_agent(
+            model_config=ModelConfig(model_id=CLAUDE_MODEL_ID, caching_enabled=False),
+            system_prompt="You are a helpful assistant.",
+            tools=[], session_manager=MagicMock(), memory_context=MEMORY_BLOCK,
+        )
+        assert mock_agent_cls.call_args.kwargs["system_prompt"] == (
+            "You are a helpful assistant.\n\n" + MEMORY_BLOCK
+        )
+
+    def _format(self, monkeypatch, ttl_flag=None):
+        monkeypatch.setenv("AWS_REGION", "us-west-2")
+        if ttl_flag is None:
+            monkeypatch.delenv("AGENTCORE_PROMPT_CACHE_STATIC_PREFIX_TTL", raising=False)
+        else:
+            monkeypatch.setenv("AGENTCORE_PROMPT_CACHE_STATIC_PREFIX_TTL", ttl_flag)
+        from agents.main_agent.core.bedrock_count_tokens import CountTokensBedrockModel
+
+        model = CountTokensBedrockModel(
+            **ModelConfig(model_id=CLAUDE_MODEL_ID, caching_enabled=True).to_bedrock_config()
+        )
+        return model.format_request(
+            [{"role": "user", "content": [{"text": "hi"}]}],
+            [{"name": "t", "description": "d", "inputSchema": {"json": {"type": "object", "properties": {}}}}],
+            system_prompt_content=[
+                {"text": "sys"}, {"cachePoint": {"type": "default"}},
+                {"text": MEMORY_BLOCK}, {"cachePoint": {"type": "default"}},
+            ],
+        )
+
+    def test_formatted_request_carries_exactly_four_points_in_order(self, monkeypatch):
+        req = self._format(monkeypatch)
+        assert _count_cache_points(req) == 4, json.dumps(req, default=str, indent=2)
+        assert req["toolConfig"]["tools"][-1] == {"cachePoint": {"type": "default"}}
+        assert req["system"] == [
+            {"text": "sys"}, {"cachePoint": {"type": "default"}},
+            {"text": MEMORY_BLOCK}, {"cachePoint": {"type": "default"}},
+        ]
+        assert req["messages"][-1]["content"][-1] == {"cachePoint": {"type": "default"}}
+
+    def test_long_ttl_flag_gives_both_system_points_1h_keeping_ttl_order_valid(self, monkeypatch):
+        """Bedrock rejects a TTL longer than an earlier point's. With the flag on,
+        upstream fills every TTL-less system point with 1h, so the order is
+        1h (tools), 1h, 1h, 5m (message): non-increasing, valid."""
+        req = self._format(monkeypatch, "1h")
+        system_points = [b["cachePoint"] for b in req["system"] if "cachePoint" in b]
+        assert system_points == [{"type": "default", "ttl": "1h"}, {"type": "default", "ttl": "1h"}]
+        assert req["messages"][-1]["content"][-1] == {"cachePoint": {"type": "default"}}
+        assert _count_cache_points(req) == 4

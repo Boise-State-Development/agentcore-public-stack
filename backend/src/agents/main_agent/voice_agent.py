@@ -151,6 +151,9 @@ class VoiceAgent(BaseAgent):
     def _build_voice_system_prompt(self) -> str:
         """Build system prompt optimized for voice interaction."""
         base = self.system_prompt if isinstance(self.system_prompt, str) else ""
+        memory_context = getattr(self, "memory_context", None)
+        if memory_context:
+            base = f"{base}\n\n{memory_context}" if base else memory_context
         voice_addendum = (
             "\n\n## Voice Interaction Guidelines\n"
             "- Keep responses concise and conversational\n"

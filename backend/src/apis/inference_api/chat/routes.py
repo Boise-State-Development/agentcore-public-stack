@@ -2673,6 +2673,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # consumed at model resolution / prompt assembly; None on resume/continuation.
     agent_model_override = None
     agent_memory = None
+    memory_context = None
     # Agent Designer: an Agent's ``tool`` bindings, resolved per invoker (D5), replace
     # the request's ``enabled_tools`` for the turn (like ``model_override`` replaces the
     # model). None ⇒ the Agent binds no tools ⇒ the request's enabled_tools drive the turn.
@@ -3157,8 +3158,9 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 over=_instructions_heading(bool(turn_project_id)) if effective_instructions else None,
             )
 
-        # 5b. Agent Designer Phase 3: inject the bound Memory Space content (read-only)
-        # after instructions, in either branch. Hydration re-reads via the invoker
+        # 5b. Agent Designer Phase 3: hydrate the bound Memory Space content (read-only),
+        # in either branch. Sent as `memory_context`, not appended to the prompt.
+        # Hydration re-reads via the invoker
         # (MemorySpaceService re-checks viewer+ internally). Empty for a fresh space.
         if agent_memory is not None:
             from apis.shared.memory.hydration import render_memory_block, resolve_always_load
@@ -3175,8 +3177,11 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 )
                 memory_block = render_memory_block(agent_memory.space_name, fragments)
                 if memory_block:
-                    system_prompt = f"{system_prompt}\n\n{memory_block}" if system_prompt else memory_block
-                    logger.info("Injected bound Memory Space content into system prompt")
+                    # Kept apart from system_prompt: it goes after the prompt,
+                    # outside <user_instructions>, behind its own cache point
+                    # (Shared Projects 2.2).
+                    memory_context = memory_block
+                    logger.info("Hydrated bound Memory Space content for the prompt")
             except Exception:
                 # Never fail a turn on a memory-read hiccup — the permission was already
                 # resolved; injection is best-effort context.
@@ -3414,6 +3419,8 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 # The memory binding is a key element too (memory tools close
                 # over it); replay the snapshot's value for the same reason.
                 memory_binding=snapshot.memory_binding,
+                # The memory block is hashed with the system prompt in the key.
+                memory_context=snapshot.memory_context,
                 # Resume never builds injected tools, so an agent built on a
                 # resume *miss* lacks them. Writing it would put a tool-less
                 # agent in the slot the next plain turn hits (same key), and
@@ -3671,6 +3678,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                     assistant_id=input_data.rag_assistant_id,
                     build_stage_recorder=_mark_build_stage,
                     memory_binding=memory_binding_key,
+                    memory_context=memory_context,
                 )
 
             # Defer the build into the stream so it can be narrated.

@@ -186,6 +186,7 @@ class AgentFactory:
         session_manager: Any,
         hooks: Optional[List[Any]] = None,
         plugins: Optional[List[Any]] = None,
+        memory_context: Optional[str] = None,
     ) -> Agent:
         """
         Create a Strands Agent instance with the appropriate model provider
@@ -199,6 +200,9 @@ class AgentFactory:
             plugins: Optional list of Strands plugins (e.g. AgentSkills). A
                 plugin auto-registers its hooks and tools with the agent, so
                 this is how skills disclosure is wired (Skills v2).
+            memory_context: Optional rendered Memory-Space block. Sent after
+                the system prompt, behind a cache point of its own when the
+                model supports cache points (see below).
 
         Returns:
             Agent: Configured Strands Agent instance
@@ -310,12 +314,30 @@ class AgentFactory:
         # Agent.system_prompt remains the plain string (split_system_prompt
         # concatenates the text blocks), so hashing/attribution/voice consumers
         # are unaffected.
+        #
+        # Shared Projects 2.2: a bound Memory-Space block gets the FOURTH and
+        # last cache point (tools, system, memory, auto message = Bedrock's
+        # maximum of 4). The system point stays exactly where it was, so the
+        # static prefix (tools + platform floor + instructions) is still read
+        # from cache when members edit memory; only the memory block and what
+        # follows are rewritten. Turns without memory send today's bytes. With
+        # AGENTCORE_PROMPT_CACHE_STATIC_PREFIX_TTL=1h upstream gives BOTH
+        # TTL-less system points the same 1h, which keeps the non-increasing
+        # TTL order Bedrock requires. Skills XML is appended by the plugin
+        # after the last block, as it always was.
         agent_system_prompt: Any = system_prompt
         if system_prompt and model_config.bedrock_cache_points_supported():
             agent_system_prompt = [
                 {"text": system_prompt},
                 {"cachePoint": {"type": "default"}},
             ]
+            if memory_context:
+                agent_system_prompt += [
+                    {"text": memory_context},
+                    {"cachePoint": {"type": "default"}},
+                ]
+        elif memory_context:
+            agent_system_prompt = f"{system_prompt}\n\n{memory_context}" if system_prompt else memory_context
 
         # Create agent with session manager, hooks, and system prompt
         # Use SequentialToolExecutor to prevent concurrent browser operations
