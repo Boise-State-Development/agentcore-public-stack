@@ -648,3 +648,107 @@ async def test_resume_replays_assistant_id_onto_the_same_slot(
     )
     assert other is not first
     assert mock_create_agent.call_count == 2
+
+
+class TestMemoryBindingCacheKey:
+    """Shared Projects 2.1: agents bound to a Memory Space are cacheable.
+
+    The memory tools close over the resolved binding (space id, name, access),
+    so it is a key element instead of a cache veto. A resume replays it from
+    ``PausedTurnSnapshot`` and never populates the slot.
+    """
+
+    RW = {"spaceId": "space-1", "spaceName": "Team notes", "access": "readwrite"}
+
+    def test_the_digest_separates_space_name_and_access(self):
+        d = service.memory_binding_digest
+        assert d(None) == "" and d({}) == ""
+        assert d(self.RW) == d(dict(self.RW))
+        assert d(self.RW) != d({**self.RW, "spaceId": "space-2"})
+        assert d(self.RW) != d({**self.RW, "access": "read"})
+        assert d(self.RW) != d({**self.RW, "spaceName": "Renamed"})
+
+    def test_the_key_carries_the_binding_without_moving_other_elements(self):
+        base = dict(
+            session_id="s", user_id="u", enabled_tools=None, model_id="m",
+            inference_params={}, system_prompt=None, caching_enabled=False,
+            provider="bedrock", freshness_hash="f", agent_type="chat",
+        )
+        bound = service._create_cache_key(**base, memory_binding="abc123", skills_hash="k")
+        unbound = service._create_cache_key(**base, skills_hash="k")
+        assert bound != unbound
+        assert bound[-4] == "abc123" and unbound[-4] == ""
+        assert bound[-1] == "k"
+        assert bound[:-4] == unbound[:-4] and bound[-3:] == unbound[-3:]
+
+    @pytest.mark.asyncio
+    async def test_a_memory_bound_turn_caches_and_the_next_turn_hits(
+        self, mock_create_agent, mock_freshness_hash
+    ):
+        kwargs = dict(
+            session_id="s", user_id="u", extra_tools=[object()],
+            extra_tools_key_described=True, memory_binding=self.RW,
+        )
+        first = await service.get_agent(**kwargs)
+        second = await service.get_agent(**kwargs)
+        assert second is first
+        assert mock_create_agent.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_a_changed_binding_misses(self, mock_create_agent, mock_freshness_hash):
+        common = dict(session_id="s", user_id="u", extra_tools=[object()], extra_tools_key_described=True)
+        rw = await service.get_agent(**common, memory_binding=self.RW)
+        downgraded = await service.get_agent(**common, memory_binding={**self.RW, "access": "read"})
+        unbound = await service.get_agent(**common, memory_binding=None)
+        assert downgraded is not rw and unbound is not rw and unbound is not downgraded
+        assert mock_create_agent.call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_resume_replays_the_binding_onto_the_paused_agent(
+        self, mock_create_agent, mock_freshness_hash
+    ):
+        first = await service.get_agent(
+            session_id="s1", user_id="u1", extra_tools=[object()],
+            extra_tools_key_described=True, memory_binding=self.RW,
+        )
+        assert first._construction_snapshot["memory_binding"] == self.RW
+        first.agent._interrupt_state.activated = True
+
+        resumed = await service.get_agent(
+            session_id="s1", user_id="u1", is_resume=True, cache_write=False,
+            memory_binding=first._construction_snapshot["memory_binding"],
+        )
+        assert resumed is first
+        assert mock_create_agent.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_a_resume_miss_never_seeds_the_slot_the_next_turn_hits(
+        self, mock_create_agent, mock_freshness_hash
+    ):
+        # The paused agent was evicted; resume rebuilds without injected tools.
+        resumed = await service.get_agent(
+            session_id="s1", user_id="u1", is_resume=True, cache_write=False,
+            memory_binding=self.RW,
+        )
+        # The next plain turn (same key) must build its own, fully-tooled agent.
+        plain = await service.get_agent(
+            session_id="s1", user_id="u1", extra_tools=[object()],
+            extra_tools_key_described=True, memory_binding=self.RW,
+        )
+        assert plain is not resumed
+        assert mock_create_agent.call_count == 2
+
+
+def test_paused_turn_snapshot_round_trips_the_memory_binding():
+    from apis.shared.sessions.models import PausedTurnSnapshot
+
+    binding = {"spaceId": "space-1", "spaceName": "Team notes", "access": "read"}
+    snap = PausedTurnSnapshot(
+        memory_binding=binding, captured_at="2026-01-01T00:00:00+00:00",
+        expires_at="2026-01-01T01:00:00+00:00",
+    )
+    dumped = snap.model_dump(by_alias=True)
+    assert dumped["memoryBinding"] == binding
+    assert PausedTurnSnapshot.model_validate(dumped).memory_binding == binding
+    legacy = {k: v for k, v in dumped.items() if k != "memoryBinding"}
+    assert PausedTurnSnapshot.model_validate(legacy).memory_binding is None

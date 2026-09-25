@@ -103,12 +103,12 @@ INJECTED_TOOL_IDS = frozenset(
 #     is the dominant cohort: the 2026-08-03 prod read put
 #     `analyze_spreadsheet` on ~2,669 of 3,565 sessions.
 #
-# Still excluded:
-#
-#   - Memory-Space tools: capture the resolved binding (space id + access) and
-#     are not gated on `enabled_tools` at all, so they are not in any set here.
-#     `get_agent`'s caller must treat a live memory binding as an independent
-#     veto — see `injected_tools_are_key_described`.
+# Memory-Space tools are not in any set here (they are not gated on
+# `enabled_tools`), but they are described too: they close over the resolved
+# binding (space id, name, access) plus `(user_id, user_email)`, and
+# `_create_cache_key` carries a digest of the binding (Shared Projects 2.1).
+# The caller must pass that binding to `get_agent` for the key to carry it;
+# the tools themselves read the space live on every call.
 KEY_DESCRIBED_INJECTED_TOOL_IDS = frozenset(
     ARTIFACT_TOOL_IDS
     | WORD_DOCUMENT_TOOL_IDS
@@ -121,7 +121,6 @@ KEY_DESCRIBED_INJECTED_TOOL_IDS = frozenset(
 
 def injected_tools_are_key_described(
     enabled_tools: list | frozenset | set | None,
-    has_memory_binding: bool,
 ) -> bool:
     """Whether this turn's injected tools are fully described by the cache key.
 
@@ -133,16 +132,14 @@ def injected_tools_are_key_described(
         enabled_tools: The turn's *effective* enabled tool ids (an Agent's tool
             binding replaces the request's list — pass whatever reaches
             ``get_agent``, or the key and this predicate disagree).
-        has_memory_binding: Whether a resolved Memory-Space binding produced
-            tools this turn. An independent veto: those tools close over the
-            binding, which is not in the key, and they are not gated on
-            ``enabled_tools`` so no id here can represent them.
+
+    Memory-Space tools need no argument here: the binding they close over is a
+    cache-key element (``memory_binding`` on ``get_agent``), not something this
+    predicate has to veto.
 
     Conservative in both directions that matter. A feature-flagged-off family
     whose id is still in ``enabled_tools`` counts as not-described even though
     it built nothing — that costs a cache bypass, never a wrong reuse.
     """
-    if has_memory_binding:
-        return False
     built = INJECTED_TOOL_IDS.intersection(enabled_tools or ())
     return built.issubset(KEY_DESCRIBED_INJECTED_TOOL_IDS)

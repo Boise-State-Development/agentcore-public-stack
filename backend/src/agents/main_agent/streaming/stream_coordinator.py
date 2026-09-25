@@ -1894,6 +1894,7 @@ class StreamCoordinator:
                 mantle_api_mode=snapshot_source.get("mantle_api_mode"),
                 mantle_region=snapshot_source.get("mantle_region"),
                 assistant_id=snapshot_source.get("assistant_id"),
+                memory_binding=snapshot_source.get("memory_binding"),
                 captured_at=now.isoformat(),
                 expires_at=(now + timedelta(hours=1)).isoformat(),
             )

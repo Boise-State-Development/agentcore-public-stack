@@ -2695,7 +2695,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # key is built from construction *values*, and everything a version changes about
     # behavior already reaches it: instructions via ``system_prompt``, tool bindings via
     # ``enabled_tools``, skills via ``skills_hash``/``agent_type``, the model via
-    # ``model_id``, and a memory binding by skipping the cache entirely (extra_tools). So
+    # ``model_id``, and a memory binding via the ``memory_binding`` key element. So
     # promoting a version already misses. Adding the number would buy no discrimination and
     # would cost real safety: the resume path rebuilds its key from ``PausedTurnSnapshot``,
     # so a new key element the snapshot did not carry orphans the paused agent and breaks
@@ -3411,6 +3411,16 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 # field existed carries None, which misses the slot and
                 # rebuilds — the pre-existing eviction path, never a wrong hit.
                 assistant_id=snapshot.assistant_id,
+                # The memory binding is a key element too (memory tools close
+                # over it); replay the snapshot's value for the same reason.
+                memory_binding=snapshot.memory_binding,
+                # Resume never builds injected tools, so an agent built on a
+                # resume *miss* lacks them. Writing it would put a tool-less
+                # agent in the slot the next plain turn hits (same key), and
+                # that turn would silently lose its artifact / document /
+                # spreadsheet / memory tools. Read the paused agent if it is
+                # still cached; never populate.
+                cache_write=False,
                 # Resume must rebuild the SAME cache key the original turn used,
                 # or the paused agent is orphaned. New snapshots carry the
                 # original turn's exact effective set in enabled_skills, so
@@ -3609,7 +3619,18 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             # and the key disagree about which builders ran.
             extra_tools_key_described = injected_tools_are_key_described(
                 enabled_tools=effective_enabled_tools,
-                has_memory_binding=bool(memory_tools),
+            )
+            # Memory tools close over the resolved binding, so it is a cache-key
+            # element (Shared Projects 2.1). Only set when the tools were built,
+            # so the key and the toolset cannot disagree.
+            memory_binding_key = (
+                {
+                    "spaceId": agent_memory.space_id,
+                    "spaceName": agent_memory.space_name,
+                    "access": agent_memory.access,
+                }
+                if memory_tools
+                else None
             )
 
             # System-prompt assembly, the single-flight lease, skill
@@ -3649,6 +3670,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                     has_document_tools=bool(document_tools),
                     assistant_id=input_data.rag_assistant_id,
                     build_stage_recorder=_mark_build_stage,
+                    memory_binding=memory_binding_key,
                 )
 
             # Defer the build into the stream so it can be narrated.

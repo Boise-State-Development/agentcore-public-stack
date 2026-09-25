@@ -180,6 +180,14 @@ class PausedTurnSnapshot(BaseModel):
                     "paused agent's slot. None for assistant-less turns and snapshots "
                     "written before the field existed (those miss and rebuild).",
     )
+    memory_binding: Optional[Dict[str, Any]] = Field(
+        default=None,
+        alias="memoryBinding",
+        description="The Agent's resolved Memory-Space binding ({spaceId, spaceName, "
+                    "access}) the paused turn was built with. A cache-key element: "
+                    "resume replays it or the paused agent is orphaned. None when the "
+                    "turn had no binding and on snapshots written before the field existed.",
+    )
     captured_at: str = Field(..., alias="capturedAt", description="ISO 8601 timestamp when the turn paused")
     expires_at: str = Field(..., alias="expiresAt", description="ISO 8601 timestamp after which the snapshot is no longer valid for resume")
 
