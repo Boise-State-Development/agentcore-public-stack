@@ -261,6 +261,23 @@ reads the turn's gap from a stamp captured before any head-of-turn save, and
   - `contextBreakdown` is absent in prod;
   - the per-cut EMF carries no session id.
 
+  **Root causes (2026-09-25, `fix/compaction-cost-telemetry-gaps`):**
+  - *Ledger.* A cut is decided post-turn and waited in the session
+    manager's in-memory queue for the next call on the *same* instance.
+    Runtime logs for 81 cuts: 49 had a same-instance next turn (recorded);
+    3 had an agent-cache miss and 18 resumed on a new microVM, both with
+    an empty queue; 11 were never resumed. 32 lost is exactly the
+    readout's 74 − 42. The cut now lands on the call that triggered it.
+  - *`prefixTokens`.* Claude Sonnet 5 has no CountTokens, so every count
+    is Strands' heuristic, which counts JSON at chars/2. The attribution
+    hook treated any `BedrockModel` count as native. It now requires a
+    native count, so Sonnet 5 rows read "not tracked".
+  - *`contextBreakdown`.* It is not behind a flag. It was first written to
+    `C#` rows on 2026-09-24, after the 1.24.0 release. Dev rows carry it.
+    After release, only natively counted models will carry it.
+  - *Session id.* Every `AgentCoreStack/Compaction` record from the
+    session manager now carries `sessionId` as a property.
+
 ---
 
 ## 8. First full run (2026-09-25)

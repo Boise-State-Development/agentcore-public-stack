@@ -220,6 +220,45 @@ class TestCountTokensBounded:
         assert isinstance(result, int)
 
 
+class TestCountIsNativeOrSaysSo:
+    """Callers that build arithmetic on counts (the context-attribution hook's
+    tools residual) must be able to tell a native count from the heuristic:
+    Claude Sonnet 5 has no CountTokens at all, and any count can fall back."""
+
+    @pytest.mark.asyncio
+    async def test_a_native_count_is_not_a_fallback(self, _aws_region):
+        model = _model(client=FakeCountClient(result=77))
+        assert await model.count_tokens([]) == 77
+        assert model.heuristic_count_fallbacks == 0
+        assert model.token_count_is_authoritative is True
+
+    @pytest.mark.asyncio
+    async def test_a_throttle_counts_as_a_fallback_but_stays_authoritative(self, _aws_region):
+        model = _model(client=FakeCountClient(raise_with=_client_error("ThrottlingException")))
+        await model.count_tokens([])
+        assert model.heuristic_count_fallbacks == 1
+        # Transient: the next count may well be native.
+        assert model.token_count_is_authoritative is True
+
+    @pytest.mark.asyncio
+    async def test_an_unsupported_model_stops_being_authoritative(self, _aws_region):
+        client = FakeCountClient(
+            raise_with=_client_error("ValidationException", "The provided model doesn't support counting tokens.")
+        )
+        model = _model(client=client)
+        await model.count_tokens([])
+        await model.count_tokens([])
+        assert model.heuristic_count_fallbacks == 2
+        assert model.token_count_is_authoritative is False
+
+    @pytest.mark.asyncio
+    async def test_native_counting_off_is_a_fallback_every_time(self, _aws_region):
+        model = _model(native=False)
+        await model.count_tokens([])
+        assert model.heuristic_count_fallbacks == 1
+        assert model.token_count_is_authoritative is False
+
+
 class TestCountTokensClientConfig:
     """The dedicated client is what bounds the cost of a throttle."""
 

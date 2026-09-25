@@ -76,6 +76,20 @@ def test_distance_from_the_last_compaction_cut_buckets_by_calls():
     assert fleet.calls_since_compaction(index, 99) == "never"
 
 
+def test_only_the_applied_cut_starts_the_distance_not_the_decision():
+    # The cut is decided on call 1 (its `checkpoint` rides the call whose input
+    # triggered it, answered on the full history) and first reaches the model
+    # on call 2 (`applied`). Other ledger kinds never mark a cut.
+    decided = _call(1)
+    decided["compactionEvents"] = [{"kind": "checkpoint"}, {"kind": "forced"}, {"kind": "floor_unreachable"}]
+    other = _call(3)
+    other["compactionEvents"] = [{"kind": "truncation_anchor"}, {"kind": "document_offload"}]
+    index = fleet.index_session([_call(0), decided, _call(2, compaction=True), other])
+    assert fleet.calls_since_compaction(index, 1) == "never"
+    assert fleet.calls_since_compaction(index, 2) == "same call"
+    assert fleet.calls_since_compaction(index, 3) == "1-3 calls"
+
+
 def test_a_turns_tool_round_trips_share_a_message_id_and_the_last_row_wins():
     records = [_call(3, model="haiku"), _call(3, model="sonnet", compaction=True)]
     index = fleet.index_session(records)

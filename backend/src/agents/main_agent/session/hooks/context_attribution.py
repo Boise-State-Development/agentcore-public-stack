@@ -74,6 +74,23 @@ usage) and the window all come from provider-reported usage, not from this
 split. Re-enable by deleting the guard once the native count is served here;
 tracked in ``docs/kaizen/review-queue.md``.
 
+**Why a split is never built from a heuristic count, on any transport.**
+``CountTokensBedrockModel`` is a ``BedrockModel``, but that does not make every
+count it returns native. A model Bedrock refuses to count (Claude Sonnet 5 —
+"doesn't support counting tokens"), a throttle, or any failure all fall back to
+Strands' heuristic, which charges JSON at chars/2, so tool schemas dominate the
+residual. On prod Sonnet 5 the split came out as ``tools = 13,606`` against a
+first call whose whole billed prompt was **12,909** tokens, and the readout of
+2026-09-25 found ``system + tools`` above the call's own prompt on 321 of 352
+first calls in Sonnet 5 sessions. The plausibility guard in
+``apis.shared.observability.prefix_tokens`` only catches the impossible cases;
+on a long conversation the same inflated split passes it. So the hook asks the
+model (``token_count_is_authoritative``, which reads the SDK's skip list) before
+spending any count, and compares the model's ``heuristic_count_fallbacks``
+around every count it relies on — Strands' projection included — so a count
+that silently fell back taints the split instead of becoming it. A tainted
+split is dropped and retried on the next turn, at most once per turn.
+
 **Itemization.** The displayed partitions are finer than the measured split:
 the system total is carved into System instructions / Skills / Memory and the
 tools total into per-origin children, by character share
@@ -94,7 +111,7 @@ import threading
 from collections import OrderedDict
 from typing import Any, Dict, Optional, Tuple
 
-from strands.hooks import BeforeModelCallEvent, HookProvider, HookRegistry
+from strands.hooks import BeforeInvocationEvent, BeforeModelCallEvent, HookProvider, HookRegistry
 
 from agents.main_agent.session.hooks.context_itemization import itemize_system, itemize_tools
 from apis.shared.observability.prefix_tokens import prefix_split_is_plausible
@@ -199,11 +216,27 @@ async def _probe_baseline(model: Any) -> int:
             cached = _probe_baselines.get(key)
         if cached is not None:
             return cached
+    before = _fallback_count(model)
     baseline = int(await model.count_tokens(messages=list(_PROBE_MESSAGES)))
-    if key is not None:
+    # Memoised process-wide, so only a native answer may stick: a heuristic
+    # probe weight would skew every systemTokens figure that follows.
+    if key is not None and _fallback_count(model) == before:
         with _probe_lock:
             _probe_baselines[key] = baseline
     return baseline
+
+
+def _fallback_count(model: Any) -> Optional[int]:
+    """The model's running count of heuristic fallbacks, or ``None`` when it
+    keeps none (a test double, another transport) — which proves nothing."""
+    value = getattr(model, "heuristic_count_fallbacks", None)
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _fell_back_since(model: Any, mark: Optional[int]) -> bool:
+    """Whether any count on ``model`` fell back to the heuristic since ``mark``."""
+    current = _fallback_count(model)
+    return mark is not None and current is not None and current != mark
 
 
 def _has_inline_attachment(messages: Any) -> bool:
@@ -339,6 +372,9 @@ def _token_count_is_authoritative(model: Any) -> bool:
     ``token_count_is_authoritative`` attribute. That is the extension point for
     a future transport that gains a real counter (and what the tests use to
     exercise both branches without pretending to be a ``BedrockModel``).
+    ``CountTokensBedrockModel`` declares it as a property over the SDK's skip
+    list, because being a ``BedrockModel`` is not enough: a Converse model
+    Bedrock will not count (Claude Sonnet 5) only ever returns the heuristic.
 
     Args:
         model: The Strands model backing this agent.
@@ -367,15 +403,30 @@ class ContextAttributionHook(HookProvider):
 
     def __init__(self, session_id: Optional[str] = None) -> None:
         self._session_id = session_id or None
+        # The model's heuristic-fallback count as of the end of the previous
+        # call's attribution (or the turn's start). Strands' projection for
+        # the next call is counted after it, so a change means that
+        # projection was (partly) a heuristic.
+        self._fallback_mark: Optional[int] = None
+        # A split attempt this turn was tainted by a heuristic count. Reset
+        # per turn, so a throttled counter costs at most one attempt a turn.
+        self._split_blocked = False
 
     def register_hooks(self, registry: HookRegistry, **kwargs: Any) -> None:
+        registry.add_callback(BeforeInvocationEvent, self._on_turn_start)
         registry.add_callback(BeforeModelCallEvent, self._on_before_model_call)
+
+    def _on_turn_start(self, event: BeforeInvocationEvent) -> None:
+        self._split_blocked = False
+        self._fallback_mark = _fallback_count(getattr(event.agent, "model", None))
 
     async def _on_before_model_call(self, event: BeforeModelCallEvent) -> None:
         try:
             await self._compute(event)
         except Exception as e:  # noqa: BLE001 - attribution must never break a turn
             logger.debug("Context attribution skipped: %s", e)
+        finally:
+            self._fallback_mark = _fallback_count(getattr(event.agent, "model", None))
 
     async def _compute(self, event: BeforeModelCallEvent) -> None:
         agent = event.agent
@@ -391,6 +442,13 @@ class ContextAttributionHook(HookProvider):
         system_prompt = getattr(agent, "system_prompt", None)
         system_prompt_content = getattr(agent, "_system_prompt_content", None)
         full = event.projected_input_tokens
+        projection_is_heuristic = full is not None and _fell_back_since(model, self._fallback_mark)
+        if projection_is_heuristic:
+            # Strands' projection for this call used the heuristic (a
+            # throttle, or a count that just failed): not a total to split or
+            # to place the messages partition against.
+            logger.debug("Context attribution: projection was a heuristic estimate; ignoring it")
+            full = None
 
         split = getattr(agent, _SPLIT_ATTR, None)
         memo_key = _memo_key(self._session_id, agent) if (split is None and self._session_id) else None
@@ -406,7 +464,13 @@ class ContextAttributionHook(HookProvider):
             # uncomputed and try again on a turn without inline bytes.
             logger.debug("Context attribution deferred: inline attachment in context")
             return
+        if split is None and (self._split_blocked or projection_is_heuristic):
+            # Deferred to the next turn rather than spending a count of our
+            # own on `full` in front of this model call.
+            self._split_blocked = True
+            return
         if split is None:
+            counts_mark = _fallback_count(model)
             # Bedrock CountTokens rejects an empty message list ("A
             # conversation must start with a user message" — verified live
             # against dev 2026-09-18), and Strands swallows that into the
@@ -440,6 +504,13 @@ class ContextAttributionHook(HookProvider):
                     system_prompt=system_prompt,
                     system_prompt_content=system_prompt_content,
                 )
+            if _fell_back_since(model, counts_mark):
+                # One of the counts above was the heuristic — a residual of
+                # it is an estimator disagreement, not tool tokens. Try again
+                # next turn rather than cache it.
+                logger.debug("Context attribution deferred: a count fell back to the heuristic")
+                self._split_blocked = True
+                return
             split = {
                 "systemTokens": system_tokens,
                 "toolTokens": max(0, full - no_tools),

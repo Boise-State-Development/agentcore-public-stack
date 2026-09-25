@@ -907,6 +907,15 @@ class StreamCoordinator:
                                     context_window=turn_context_window,
                                     history_tokens=history_tokens,
                                 )
+                                # The cut (and its forced / floor_unreachable
+                                # flags) belongs on the call that triggered it,
+                                # whose C# row is written after this loop. Left
+                                # queued, it waited on a next call that a new
+                                # microVM, an agent-cache miss or an abandoned
+                                # session never provides.
+                                ledger_hook = getattr(main_agent_wrapper, "context_ledger_hook", None)
+                                if ledger_hook is not None:
+                                    ledger_hook.record_post_turn_events(session_manager)
                                 logger.info(f"   Compaction state updated: {total_input_tokens:,} input tokens")
                                 if compaction_result is not None:
                                     compaction_payload = {
@@ -3470,10 +3479,11 @@ class StreamCoordinator:
                 # Context ledger for this call: the conversation window's
                 # cumulative trim count (a rise between consecutive rows is a
                 # trim, i.e. a prefix re-write) and the compaction decisions
-                # taken since the previous call, each with the summary's
-                # token size. Plus the agent's stable prefix split (system /
-                # tools tokens) so "how big is the static prefix, and how much
-                # of it is tool schemas" is a stored fact. All numbers.
+                # attributed to this call (see ContextLedgerHook), each with
+                # the summary's token size. Plus the agent's stable prefix
+                # split (system / tools tokens) so "how big is the static
+                # prefix, and how much of it is tool schemas" is a stored
+                # fact. All numbers.
                 if context_ledger:
                     removed = context_ledger.get("windowRemovedMessages")
                     if removed is not None:
