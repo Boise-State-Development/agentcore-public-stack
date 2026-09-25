@@ -79,6 +79,7 @@ export interface AppConfig {
   memorySpaces: MemorySpacesConfig;
   projects: ProjectsConfig;
   platformSelfService: PlatformSelfServiceConfig;
+  compactionSummaryExtract: CompactionSummaryExtractConfig;
   feedbackEvalSampling: FeedbackEvalSamplingConfig;
   skills: SkillsConfig;
   agents: AgentsConfig;
@@ -380,6 +381,20 @@ export interface ProjectsConfig {
  * seeded in that environment's DynamoDB before the tools appear.
  */
 export interface PlatformSelfServiceConfig {
+  enabled: boolean;
+}
+
+/**
+ * Compaction extract-then-compress (docs/specs/compaction-model-relative-thresholds.md
+ * §5). **Opt-in while in development**: off unless
+ * CDK_COMPACTION_SUMMARY_EXTRACT_ENABLED=true (or a
+ * `compactionSummaryExtract.enabled: true` cdk.json context). Sets the
+ * COMPACTION_SUMMARY_EXTRACT_ENABLED env var on inference-api ONLY — compaction
+ * runs in the AgentCore Runtime; app-api never reads it. While on, a compaction
+ * cut pins verbatim facts (instructions, decisions, identifiers) ahead of its
+ * compressed summary, at the cost of one extra side-channel model call per cut.
+ */
+export interface CompactionSummaryExtractConfig {
   enabled: boolean;
 }
 
@@ -1076,6 +1091,15 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_PLATFORM_SELF_SERVICE_ENABLED
         ? process.env.CDK_PLATFORM_SELF_SERVICE_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('platformSelfService')?.enabled ?? false,
+    },
+    compactionSummaryExtract: {
+      // Opt-in while in development (CLAUDE.md "Feature flags"): only the literal
+      // "true" turns it on. The workflow forwards an EMPTY STRING when the variable
+      // is unset, which falls through to the context and then to off. Sets
+      // COMPACTION_SUMMARY_EXTRACT_ENABLED on the inference-api runtime only.
+      enabled: process.env.CDK_COMPACTION_SUMMARY_EXTRACT_ENABLED
+        ? process.env.CDK_COMPACTION_SUMMARY_EXTRACT_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('compactionSummaryExtract')?.enabled ?? false,
     },
     skills: {
       // Default ON with a kill switch (house style, mirroring memorySpaces /

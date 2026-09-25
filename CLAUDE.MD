@@ -61,7 +61,7 @@ A feature has up to two switches, one per side, set per environment:
 - **Keep the two in step per environment.** If they drift, the damage is cosmetic: the UI offers a feature whose API 404s, or hides a working one.
 - **Adding a flag:** add a field to `FeatureFlags` and all three environment files (in-development: `false` locally and in prod, `true` in dev only if the dev environment has turned the backend on), plus the backend flag, CDK config and test, and the `platform.yml` variable.
 
-Current in-development flags: **Shared Projects** (`PROJECTS_ENABLED` / `CDK_PROJECTS_ENABLED`, `features.projects`). It's on in the `development` GitHub environment and in `environment.development.ts`, and off in production.
+Current in-development flags: **Shared Projects** (`PROJECTS_ENABLED` / `CDK_PROJECTS_ENABLED`, `features.projects`). It's on in the `development` GitHub environment and in `environment.development.ts`, and off in production. **Compaction extract-then-compress** (`COMPACTION_SUMMARY_EXTRACT_ENABLED` / `CDK_COMPACTION_SUMMARY_EXTRACT_ENABLED`, runtime only, no SPA switch): off everywhere until an environment turns it on.
 
 ## SSE Event Types
 

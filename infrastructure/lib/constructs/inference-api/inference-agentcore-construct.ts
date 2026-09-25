@@ -437,6 +437,15 @@ export class InferenceAgentCoreConstruct extends Construct {
         // wired there.
         PLATFORM_SELF_SERVICE_ENABLED: config.platformSelfService.enabled ? 'true' : 'false',
 
+        // Compaction extract-then-compress (opt-in per env; default off). Read
+        // only by the runtime's compaction (CompactionConfig.from_env); it runs
+        // after the turn's final metadata event, so it adds nothing before the
+        // first token. Costs one of the 50 runtime env slots (49/50 in the
+        // worst case the ceiling test builds). When the feature ships
+        // default-on, flip the backend default and delete this entry rather
+        // than keeping a slot for a kill switch nobody sets.
+        COMPACTION_SUMMARY_EXTRACT_ENABLED: config.compactionSummaryExtract.enabled ? 'true' : 'false',
+
         // ENABLE_QUOTA_ENFORCEMENT is deliberately NOT set. `quota.py` reads
         // it with a 'true' default, and this was hardcoded to 'true' — so the
         // entry only ever restated the default while consuming one of the 50
