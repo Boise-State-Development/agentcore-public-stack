@@ -219,11 +219,20 @@ hardcodes `retention: logs.RetentionDays.*`.
 The AgentCore Runtime's log group is created by the **AgentCore service**, not
 CloudFormation, so a CDK `LogGroup` cannot set its retention — declaring one
 would collide on create or manage a second, empty group. An `AwsCustomResource`
-calls `logs:PutRetentionPolicy` instead. That API is idempotent *and* creates the
-group if absent, which matters on a first deploy when the runtime exists but has
-never been invoked. There is deliberately **no `onDelete`**: removing the
-retention policy on teardown would revert the group to "keep forever", which is
-the cost problem it fixes.
+calls `logs:PutRetentionPolicy` instead. That API is idempotent but does **not**
+create the group: on a missing group it returns `ResourceNotFoundException` and
+creates nothing. The Runtime's own execution role creates the group on its first
+container start, and on every deploy observed so far that has landed well before
+the custom resource runs. If it ever loses that race, a thrown error would fail
+the custom resource and roll back the whole stack update, so both calls set
+`ignoreErrorCodesMatching: 'ResourceNotFoundException'` and the daily sweep
+below sets retention within a day. With the sweep turned off there is no such
+backstop: the group keeps no retention until CloudFormation re-runs the call
+(only when the retention value or the Runtime id changes), so set it by hand.
+Calling `CreateLogGroup` first was rejected: it would race the Runtime's own
+create the other way round. There is deliberately **no `onDelete`**: removing
+the retention policy on teardown would revert the group to "keep forever", which
+is the cost problem it fixes.
 
 **The replacement trap.** That custom resource only ever sees the *current*
 Runtime. Replacing a Runtime gives it a new id and a new group
@@ -239,9 +248,10 @@ contain `-`, so that prefix covers every generation of this deployment's Runtime
 and no other deployment's. It never deletes a group; removing an orphaned group
 is an operator's call. Kill switch:
 `CDK_OBSERVABILITY_RUNTIME_LOG_RETENTION_SWEEP_ENABLED=false`, for an account
-whose governance requires longer retention. Groups from an older naming scheme
-(a different runtime name) are outside the prefix and need a one-off
-`put-retention-policy`.
+whose governance requires longer retention. Turning it off also removes the
+backstop for a live group the deploy-time call found missing. Groups from an
+older naming scheme (a different runtime name) are outside the prefix and need a
+one-off `put-retention-policy`.
 
 ## 10. Subscriptions are not infrastructure-as-code
 

@@ -533,9 +533,22 @@ export class InferenceAgentCoreConstruct extends Construct {
       `/aws/bedrock-agentcore/runtimes/${this.runtime.attrAgentRuntimeId}-DEFAULT`;
     this.runtimeMetricName = `${agentRuntimeName}::DEFAULT`;
 
-    // PutRetentionPolicy is idempotent and creates the group if absent, which
-    // matters before the runtime's first invocation. No onDelete: dropping the
-    // policy on teardown would revert the group to "keep forever".
+    // PutRetentionPolicy is idempotent but does NOT create the group: on a
+    // missing group it returns ResourceNotFoundException and creates nothing
+    // (checked in dev). The Runtime's own execution role creates the group on
+    // its first container start, which in practice lands well before this
+    // call. If that start ever loses the race, a thrown error would fail the
+    // custom resource and roll back the whole stack update, so a missing
+    // group is tolerated instead and the daily RuntimeLogRetentionSweep below
+    // sets retention within a day. An environment that has turned the sweep
+    // off (`runtimeLogRetentionSweepEnabled`) has no such backstop: there the
+    // group keeps no retention until CloudFormation re-runs this call, which
+    // only happens when the retention value or the Runtime id changes, so an
+    // operator must set it by hand.
+    //
+    // Deliberately no CreateLogGroup first: it would race the Runtime's own
+    // create the other way round. No onDelete: dropping the policy on
+    // teardown would revert the group to "keep forever".
     const runtimeLogRetention = new cr.AwsCustomResource(this, 'RuntimeLogRetention', {
       onCreate: {
         service: 'CloudWatchLogs',
@@ -548,6 +561,7 @@ export class InferenceAgentCoreConstruct extends Construct {
         physicalResourceId: cr.PhysicalResourceId.of(
           `${this.runtimeLogGroupName}-retention-${config.observability.logRetentionDays}`,
         ),
+        ignoreErrorCodesMatching: 'ResourceNotFoundException',
       },
       onUpdate: {
         service: 'CloudWatchLogs',
@@ -559,10 +573,11 @@ export class InferenceAgentCoreConstruct extends Construct {
         physicalResourceId: cr.PhysicalResourceId.of(
           `${this.runtimeLogGroupName}-retention-${config.observability.logRetentionDays}`,
         ),
+        ignoreErrorCodesMatching: 'ResourceNotFoundException',
       },
       policy: cr.AwsCustomResourcePolicy.fromStatements([
         new iam.PolicyStatement({
-          actions: ['logs:PutRetentionPolicy', 'logs:CreateLogGroup'],
+          actions: ['logs:PutRetentionPolicy'],
           resources: [
             `arn:aws:logs:${config.awsRegion}:${config.awsAccount}:log-group:${this.runtimeLogGroupName}:*`,
           ],

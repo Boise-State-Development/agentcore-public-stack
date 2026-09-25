@@ -136,6 +136,36 @@ describe('PlatformStack wiring', () => {
     });
   });
 
+  it('tolerates a runtime log group that does not exist yet on create and update', () => {
+    // PutRetentionPolicy does not create the group. If the Runtime's first
+    // start has not created it, the call must not fail the stack update.
+    const template = synthPlatform(true);
+    const retention = Object.values(template.findResources('Custom::AWS')).filter((res: any) =>
+      JSON.stringify(res.Properties.Create ?? '').includes('putRetentionPolicy'));
+    expect(retention).toHaveLength(1);
+
+    const props = (retention[0] as any).Properties;
+    for (const phase of ['Create', 'Update']) {
+      // Serialized as Fn::Join when it embeds tokens such as the runtime id.
+      const serialized = props[phase];
+      const json = typeof serialized === 'string'
+        ? serialized
+        : serialized['Fn::Join'][1].map((part: unknown) =>
+          (typeof part === 'string' ? part : 'TOKEN')).join('');
+      const call = JSON.parse(json);
+      expect(call.action).toBe('putRetentionPolicy');
+      expect(call.ignoreErrorCodesMatching).toBe('ResourceNotFoundException');
+    }
+  });
+
+  it('does not grant the retention custom resource CreateLogGroup', () => {
+    const template = synthPlatform(true);
+    const retentionStatements = statementsWithAction(template, 'logs:PutRetentionPolicy')
+      .filter((s: any) => JSON.stringify(s.Resource).includes('-DEFAULT'));
+    expect(retentionStatements).toHaveLength(1);
+    expect([retentionStatements[0].Action].flat()).not.toContain('logs:CreateLogGroup');
+  });
+
   it('creates neither the function nor the schedule when the kill switch is off', () => {
     const template = synthPlatform(false);
     const sweepFunctions = Object.values(template.findResources('AWS::Lambda::Function'))
