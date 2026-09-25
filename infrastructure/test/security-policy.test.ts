@@ -323,27 +323,33 @@ describe('Security policy hardening', () => {
   describe('AgentCore runtime user-settings grant', () => {
     // Regression guard: inference-agentcore-construct.ts injects
     // DYNAMODB_USER_SETTINGS_TABLE_NAME, which makes UserSettingsRepository
-    // report itself enabled — but the table was absent from the runtime
-    // role's grants. get_settings swallowed the AccessDeniedException into
-    // DEFAULT_SETTINGS, silently ignoring the user's chosen default model.
-    it('runtime role can GetItem on the user-settings table', () => {
-      const matches = statementsWithSid('UserSettingsTableReadAccess');
+    // report itself enabled. The runtime reads this table (get_settings) and,
+    // as of the platform self-service pilot, writes it too: the
+    // confirmation-gated set_default_model tool calls update_settings
+    // (PutItem + a conditional UpdateItem). Without the write grants that
+    // PutItem AccessDenied'd and the tool surfaced only a generic error.
+    // This guard pins the grant to exactly {GetItem, PutItem, UpdateItem} on
+    // the one table ARN — no DeleteItem (the tool never deletes the item) and
+    // no wildcard resource.
+    it('runtime role can read + write the user-settings table (no delete, no wildcard)', () => {
+      const matches = statementsWithSid('UserSettingsTableReadWriteAccess');
 
       if (matches.length === 0) {
         throw new Error(
           "Could not locate the runtime user-settings grant. " +
-            "Looked for Sid 'UserSettingsTableReadAccess'. Without it the user's saved " +
-            "defaultModelId is silently ignored on the inference path. " +
-            "If the Sid was renamed, update this test.",
+            "Looked for Sid 'UserSettingsTableReadWriteAccess'. Without it either " +
+            "get_settings (read) or set_default_model's update_settings (write) fails " +
+            "on the inference path. If the Sid was renamed, update this test.",
         );
       }
 
       for (const s of matches) {
         const actions = asArray(s.Action);
         expect(actions).toContain('dynamodb:GetItem');
-        // The runtime never writes settings — app-api owns that path.
-        expect(actions).not.toContain('dynamodb:PutItem');
-        expect(actions).not.toContain('dynamodb:UpdateItem');
+        expect(actions).toContain('dynamodb:PutItem');
+        expect(actions).toContain('dynamodb:UpdateItem');
+        // Least-privilege: the settings write path never deletes the item,
+        // and the grant must stay scoped to the one table ARN.
         expect(actions).not.toContain('dynamodb:DeleteItem');
         const resources = asArray(s.Resource);
         expect(resources).not.toContain('*');

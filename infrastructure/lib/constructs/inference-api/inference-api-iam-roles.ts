@@ -273,22 +273,26 @@ export function createRuntimeExecutionRole(
     resources: tableResources,
   }));
 
-  // ── User settings table (read-only) ──
+  // ── User settings table (read + write) ──
   // inference_api/chat/routes.py resolves the user's saved defaultModelId via
   // UserSettingsRepository.get_settings — a GetItem on PK=USER#<id>, SK=SETTINGS.
-  // The runtime never writes settings (app-api owns that), and the table has no
-  // GSIs, so this stays a bare-ARN GetItem rather than joining the read/write
-  // bulk grant above.
+  // As of the platform self-service pilot the runtime ALSO writes this table:
+  // the confirmation-gated `set_default_model` account tool calls
+  // UserSettingsRepository.update_settings, which does a PutItem (read-modify-
+  // write of the SETTINGS item) plus an UpdateItem when clearing a field. So
+  // this grant covers GetItem + PutItem + UpdateItem, scoped to the one table
+  // ARN (no GSIs), kept out of the broad DynamoDBTableAccess bulk grant above
+  // so the runtime's settings access stays explicit and least-privilege.
   //
   // inference-agentcore-construct.ts injects DYNAMODB_USER_SETTINGS_TABLE_NAME,
-  // which makes the repository report itself enabled — so without this grant the
-  // GetItem AccessDenied'd and get_settings swallowed it into DEFAULT_SETTINGS.
-  // The user's chosen default model was silently ignored with no user-visible
-  // error; only a stray ERROR line in the runtime log revealed it.
+  // which makes the repository report itself enabled — so without the read grant
+  // the GetItem AccessDenied'd and get_settings swallowed it into
+  // DEFAULT_SETTINGS; without the write grants update_settings' PutItem
+  // AccessDenied'd and set_default_model surfaced only a generic error.
   role.addToPolicy(new iam.PolicyStatement({
-    sid: 'UserSettingsTableReadAccess',
+    sid: 'UserSettingsTableReadWriteAccess',
     effect: iam.Effect.ALLOW,
-    actions: ['dynamodb:GetItem'],
+    actions: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem'],
     resources: [refs.userSettingsTable.tableArn],
   }));
 

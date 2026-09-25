@@ -368,14 +368,34 @@ def make_set_default_model_tool(user: User):
                 "default_model_name": target_name,
                 "message": f"Done — your default model is now '{target_name}'.",
             }
-        except Exception:  # noqa: BLE001 - a self-service write must not break the turn
+        except Exception as exc:  # noqa: BLE001 - a self-service write must not break the turn
             logger.warning("set_default_model failed", exc_info=True)
+            # Surface a specific, non-sensitive reason so an infrastructure gap
+            # (e.g. the runtime IAM role lacking write access to the settings
+            # table) is diagnosable from the tool result itself, instead of a
+            # generic "try again" that hides the real cause. We expose only the
+            # exception/AWS error *type*, never internal values.
+            aws_code = ""
+            resp = getattr(exc, "response", None)
+            if isinstance(resp, dict):
+                aws_code = (resp.get("Error", {}) or {}).get("Code", "") or ""
+            error_type = aws_code or type(exc).__name__
+            if aws_code in ("AccessDeniedException", "AccessDenied"):
+                message = (
+                    "Could not save your default model: the service is not "
+                    "permitted to write your settings (access denied). This is a "
+                    "configuration issue on our side, not something you did — "
+                    "please report it."
+                )
+            else:
+                message = (
+                    f"Could not change your default model right now ({error_type}). "
+                    "Please try again in a moment."
+                )
             return {
                 "status": "error",
-                "message": (
-                    "Could not change your default model right now. "
-                    "Please try again in a moment."
-                ),
+                "error_type": error_type,
+                "message": message,
             }
 
     return set_default_model
