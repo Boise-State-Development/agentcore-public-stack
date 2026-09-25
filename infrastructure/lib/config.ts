@@ -78,6 +78,7 @@ export interface AppConfig {
   platformCosts: PlatformCostsConfig;
   memorySpaces: MemorySpacesConfig;
   projects: ProjectsConfig;
+  platformSelfService: PlatformSelfServiceConfig;
   feedbackEvalSampling: FeedbackEvalSamplingConfig;
   skills: SkillsConfig;
   agents: AgentsConfig;
@@ -363,6 +364,22 @@ export interface MemorySpacesConfig {
  * the invocation path at runtime.
  */
 export interface ProjectsConfig {
+  enabled: boolean;
+}
+
+/**
+ * Platform self-service feature flag (docs/specs/platform-self-service). **Opt-in
+ * while in development**: off unless CDK_PLATFORM_SELF_SERVICE_ENABLED=true (or a
+ * `platformSelfService.enabled: true` cdk.json context), so a deployment turns it
+ * on by choice. See CLAUDE.md "Feature flags". Sets the
+ * PLATFORM_SELF_SERVICE_ENABLED env var on inference-api ONLY — the flag is read
+ * solely by the AgentCore Runtime (inference_api/chat/routes.py); app-api never
+ * reads it, so wiring it there would only burn readability. With the flag off the
+ * runtime builds no account tools and injects nothing, so it is dark per
+ * environment until deliberately enabled. The tool catalog rows must also be
+ * seeded in that environment's DynamoDB before the tools appear.
+ */
+export interface PlatformSelfServiceConfig {
   enabled: boolean;
 }
 
@@ -1043,6 +1060,15 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_PROJECTS_ENABLED
         ? process.env.CDK_PROJECTS_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('projects')?.enabled ?? false,
+    },
+    platformSelfService: {
+      // Opt-in while in development (CLAUDE.md "Feature flags"): only the literal
+      // "true" turns it on. The workflow forwards an EMPTY STRING when the variable
+      // is unset, which falls through to the context and then to off. Sets
+      // PLATFORM_SELF_SERVICE_ENABLED on the inference-api runtime only.
+      enabled: process.env.CDK_PLATFORM_SELF_SERVICE_ENABLED
+        ? process.env.CDK_PLATFORM_SELF_SERVICE_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('platformSelfService')?.enabled ?? false,
     },
     skills: {
       // Default ON with a kill switch (house style, mirroring memorySpaces /
