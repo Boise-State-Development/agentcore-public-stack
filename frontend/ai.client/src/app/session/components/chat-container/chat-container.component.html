@@ -361,10 +361,11 @@
     ></div>
   } @else if (assistant(); as agent) {
     <app-agent-indicator
-      [name]="agent.name"
+      [name]="indicatorName()"
       [emoji]="agent.emoji ?? ''"
       [ownerName]="agent.ownerName"
       [isOwner]="isAssistantOwner()"
+      [projectId]="agent.projectId ?? null"
       [governance]="agentGovernance()"
       (newSessionClicked)="onAssistantNewSession()"
       (editClicked)="onAssistantEdit()"
