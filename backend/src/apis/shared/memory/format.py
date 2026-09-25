@@ -158,6 +158,20 @@ def anchor_comment(anchor: str) -> str:
     return f"<!-- e:{anchor} -->"
 
 
+# Every well-formed anchor comment wherever it sits, with the blanks before it.
+_STRIP_ANCHOR_RE = re.compile(r"[ \t]*<!--[ \t]*e:[0-9A-Za-z]{8}[ \t]*-->")
+
+
+def strip_anchors(text: str) -> str:
+    """``text`` without its ``<!-- e:… -->`` anchor comments.
+
+    For memory injected into a prompt, where each anchor costs ~10 tokens per
+    item on every turn and the model has no use for it. Anything that edits a
+    file reads it with its anchors (``memory_read``), so edits stay anchor-stable.
+    """
+    return _STRIP_ANCHOR_RE.sub("", text)
+
+
 # ---- slugs, descriptions, aliases --------------------------------------
 
 

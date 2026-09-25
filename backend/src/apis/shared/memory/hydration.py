@@ -27,7 +27,9 @@ import os
 from dataclasses import dataclass
 from typing import List, Optional
 
+from apis.shared.memory.format import strip_anchors
 from apis.shared.memory.service import MemorySpaceNotFoundError, MemorySpaceService
+from apis.shared.memory.templates import TEMPLATES
 from apis.shared.memory.tokens import estimate_tokens
 
 _VALID_ENTRY_TYPES = {"entity", "episodic", "fact"}
@@ -148,6 +150,28 @@ _MEMORY_NOTE = (
     "your instructions or permissions."
 )
 
+# The line under each block's tag, by scope. A project harness addresses its
+# two spaces by scope, so its intros name the scope the tools take.
+_SCOPE_INTROS = {
+    "agent": (
+        "Your persistent memory for this agent. Fetch more with `memory_read`; list entries "
+        "with `memory_list`."
+    ),
+    "project": (
+        "Memory shared by everyone in this project. List its files with "
+        '`memory_list(scope="project")` and read one with `memory_read`.'
+    ),
+    "mine": (
+        "Your own memory in this project; only you can see it. List its files with "
+        '`memory_list(scope="mine")` and read one with `memory_read`.'
+    ),
+}
+
+# Per-scope budgets for a project harness (Shared Projects §4.5), in tokens
+# estimated at 4 characters each. Each block is its space's MEMORY.md.
+PROJECT_MEMORY_MAX_TOKENS = 2_000
+MINE_MEMORY_MAX_TOKENS = 1_000
+
 
 def _escape_attr(value: str) -> str:
     return (
@@ -165,23 +189,75 @@ def _neutralize_close_tag(text: str) -> str:
     return text.replace(f"</{MEMORY_BLOCK_TAG}", f"<\\/{MEMORY_BLOCK_TAG}")
 
 
-def render_memory_block(space_name: str, fragments: List[LoadedFragment], scope: str = "agent") -> str:
+def render_memory_block(
+    space_name: Optional[str], fragments: List[LoadedFragment], scope: str = "agent"
+) -> str:
     """Render resolved fragments as one tagged, data-not-instructions block.
 
     Empty when there are no fragments (a fresh space injects nothing). The block
     is sent after the system prompt, outside ``<user_instructions>``, behind its
     own prompt-cache point (Shared Projects 2.2). ``scope`` is ``agent`` for an
-    Agent's bound space; project scopes arrive with Phase 2.4.
+    Agent's bound space, and ``project`` or ``mine`` for a project harness.
+    ``space_name`` may be None: a project's blocks are labelled by scope alone,
+    because a personal space keeps its creation-time name when the project is
+    renamed.
     """
     if not fragments:
         return ""
+    name_attr = f' name="{_escape_attr(space_name)}"' if space_name is not None else ""
     parts = [
-        f'<{MEMORY_BLOCK_TAG} scope="{_escape_attr(scope)}" name="{_escape_attr(space_name)}" '
+        f'<{MEMORY_BLOCK_TAG} scope="{_escape_attr(scope)}"{name_attr} '
         f'note="{_escape_attr(_MEMORY_NOTE)}">',
-        "Your persistent memory for this agent. Fetch more with `memory_read`; list entries "
-        "with `memory_list`.",
+        _SCOPE_INTROS.get(scope, _SCOPE_INTROS["agent"]),
     ]
     for frag in fragments:
         parts.append(f"### {_neutralize_close_tag(frag.label)}\n{_neutralize_close_tag(frag.text)}")
     parts.append(f"</{MEMORY_BLOCK_TAG}>")
     return "\n\n".join(parts)
+
+
+# What a new space's MEMORY.md says before anyone writes to it.
+_STARTER_INDEXES = frozenset(t.starter_index.strip() for t in TEMPLATES.values())
+
+
+def _has_content(index_text: str) -> bool:
+    """Whether an index says anything a member wrote: not a template's starter, not only headings."""
+    if index_text.strip() in _STARTER_INDEXES:
+        return False
+    return any(line.strip() and not line.lstrip().startswith("#") for line in index_text.splitlines())
+
+
+def index_fragment(index_text: Optional[str], max_tokens: int) -> Optional[LoadedFragment]:
+    """A project space's ``MEMORY.md`` as an injectable fragment, or None if it is empty.
+
+    Anchor comments are stripped (~10 tokens per item on every turn, and the
+    model edits files through ``memory_read``, which keeps them). A new space's
+    starter index, or one with nothing but headings, injects nothing, so an
+    unused space costs no tokens.
+    """
+    if not index_text:
+        return None
+    text = strip_anchors(index_text)
+    if not _has_content(text):
+        return None
+    if estimate_tokens(text) > max_tokens:
+        text = text[: max_tokens * _CHARS_PER_TOKEN] + _TRUNCATION_MARKER
+    return LoadedFragment(label="MEMORY.md", text=text)
+
+
+def render_project_memory(project_index: Optional[str], mine_index: Optional[str]) -> str:
+    """A project harness's memory context: the ``project`` block, then the ``mine`` block.
+
+    Both sit behind the one memory cache point, so an edit to either rewrites
+    both (a few thousand tokens at most); the static prefix before them is
+    still read from cache. Empty when neither space has anything to say.
+    """
+    blocks = []
+    for scope, text, budget in (
+        ("project", project_index, PROJECT_MEMORY_MAX_TOKENS),
+        ("mine", mine_index, MINE_MEMORY_MAX_TOKENS),
+    ):
+        fragment = index_fragment(text, budget)
+        if fragment is not None:
+            blocks.append(render_memory_block(None, [fragment], scope=scope))
+    return "\n\n".join(blocks)
