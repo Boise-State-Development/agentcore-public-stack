@@ -125,6 +125,53 @@ async def release_reservation_if_managed(document: Document) -> None:
         )
 
 
+async def settle_bytes_on_delete(document: Document, previous_status: Optional[str]) -> None:
+    """Give a deleted document's bytes back to its managed-KB allowance.
+
+    Which bytes depends on how far the document got, and the ``DOC#`` markers say
+    which, so this never guesses from the status alone:
+
+    * **It committed** (``committedBytes`` is stamped): refund exactly that from
+      ``storedBytes`` and ``totalBytes``, once (``byte_cap.refund_once``). Before
+      this existed a completed document's bytes were never returned — verified in
+      dev, a 98-byte document uploaded, completed and deleted left both counters
+      98 higher for good, so every delete permanently shrank the allowance.
+    * **It never settled** (an upload still in flight): release its request-time
+      reservation through ``settle_once`` (:func:`release_reservation_if_managed`).
+      Nothing else would: the other release paths are ingestion reaching a terminal
+      state, a client-reported upload failure and the stale sweep, and a deleted
+      document reaches none of them.
+
+    The release is skipped for a document deleted from ``failed``. Every managed
+    failure path settles its reservation before it writes ``failed``, so an
+    unsettled ``failed`` row never reserved anything — prod carries such rows from
+    before their knowledge base migrated, with multi-megabyte ``sizeBytes`` — and
+    releasing it would credit the owner allowance they never had. Also skipped for
+    a re-delete (``deleting``): the first delete already made this decision.
+
+    Refund runs first. A row can hold both markers only because a consumer settled
+    it, and then it has nothing left to release.
+    """
+    from apis.shared.kb_backend import byte_cap
+
+    assistant_id = document.assistant_id
+    try:
+        refunded = byte_cap.refund_once(assistant_id, document.document_id)
+        if refunded:
+            byte_cap.refund(assistant_id, assistant_id, refunded)
+            return
+    except Exception as e:  # noqa: BLE001 - a bookkeeping failure must not break the delete
+        logger.error(
+            f"Failed to refund committed bytes for document {document.document_id}: {e}",
+            exc_info=True,
+        )
+        return
+
+    if previous_status in ('failed', 'deleting'):
+        return
+    await release_reservation_if_managed(document)
+
+
 async def create_document(
     assistant_id: str,
     filename: str,
@@ -812,29 +859,23 @@ async def soft_delete_document(
                 ':ttl_value': ttl_value
             },
             ConditionExpression='attribute_exists(PK)',
-            ReturnValues='ALL_NEW'
+            # The row as it was, so the byte settlement below knows the status the
+            # document was deleted FROM; the returned document is patched to match
+            # what was written.
+            ReturnValues='ALL_OLD'
         )
 
         if 'Attributes' in response:
+            previous = response['Attributes']
             try:
-                document = Document.model_validate(response['Attributes'])
+                document = Document.model_validate(
+                    {**previous, 'status': 'deleting', 'updatedAt': now, 'ttl': ttl_value}
+                )
             except Exception as e:
                 logger.warning(f"Failed to parse document from DynamoDB response: {e}")
                 return None
 
-            # Deleting a document that never finished ingesting leaves its
-            # request-time byte reservation stranded. Nothing else settles it: the
-            # release paths are ingestion reaching a terminal state, a
-            # client-reported upload failure, and the stale sweep — and a deleted
-            # document reaches none of them.
-            #
-            # Left unreleased the leak is invisible and cumulative. Every cancelled
-            # upload permanently shaves bytes off that assistant's allowance until
-            # uploads start failing for no reason the owner can see, months after
-            # the deletes that caused it. `settle_once` makes this exactly-once
-            # against the other paths, so releasing here cannot double-credit a
-            # document that some other path also settles.
-            await release_reservation_if_managed(document)
+            await settle_bytes_on_delete(document, previous.get('status'))
 
             return document
 

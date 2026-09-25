@@ -654,6 +654,9 @@ def _reconcile_bytes_on_complete(
     Exactly-once via ``byte_cap.settle_once``: a redelivery that re-examines an
     already-settled document does nothing, which is what stops a second commit
     driving ``reservedBytes`` negative.
+
+    Every commit goes through :func:`_commit_settled`, which stamps the amount on
+    the ``DOC#`` row first so a later delete can refund exactly that.
     """
     from apis.shared.kb_backend import byte_cap
 
@@ -663,12 +666,8 @@ def _reconcile_bytes_on_complete(
 
     real = byte_cap.object_size_bytes(bucket, key)
 
-    if real == declared:
-        byte_cap.commit(assistant_id, assistant_id, real)
-        return
-    if real < declared:
-        byte_cap.commit(assistant_id, assistant_id, real)
-        byte_cap.release(assistant_id, assistant_id, declared - real)
+    if real <= declared:
+        _commit_settled(assistant_id, document_id, real, reserved=declared)
         return
 
     # real > declared: reserve the shortfall the client did not declare.
@@ -683,7 +682,28 @@ def _reconcile_bytes_on_complete(
             byte_cap.release(assistant_id, assistant_id, declared)
         _delete_s3_object(bucket, key)
         raise
+    _commit_settled(assistant_id, document_id, real, reserved=real)
+
+
+def _commit_settled(assistant_id: str, document_id: str, real: int, reserved: int) -> None:
+    """Commit ``real`` bytes out of the ``reserved`` this document holds.
+
+    The amount is stamped on the ``DOC#`` row (``byte_cap.record_commit``) BEFORE
+    the ``KB#`` commit; that stamp is what a delete refunds. If the stamp is
+    refused the document was deleted while it was being ingested, and the delete
+    has already run its refund — finding nothing to refund — so committing now
+    would store bytes nothing ever gives back. The whole reservation is returned
+    instead. Anything reserved beyond ``real`` (the client over-declared) is
+    returned either way.
+    """
+    from apis.shared.kb_backend import byte_cap
+
+    if not byte_cap.record_commit(assistant_id, document_id, real):
+        byte_cap.release(assistant_id, assistant_id, reserved)
+        return
     byte_cap.commit(assistant_id, assistant_id, real)
+    if reserved > real:
+        byte_cap.release(assistant_id, assistant_id, reserved - real)
 
 
 def handle_object(bucket: str, key: str) -> Dict[str, Any]:

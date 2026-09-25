@@ -507,6 +507,75 @@ class TestBothSidesRefreshStoredBytes:
         assert report.refreshed_bytes == ["ast-both"]
         assert int(_record(table, "ast-both")["storedBytes"]) == 4096
 
+    def test_total_bytes_is_re_anchored_with_stored_bytes(self, table):
+        """``totalBytes`` is what the cap guard reads. Re-anchoring ``storedBytes``
+        alone left any drift in the accumulator for good and broke
+        ``totalBytes == storedBytes + reservedBytes``. MUTATION GUARD: drop the
+        ``totalBytes`` term from ``refresh_stored_bytes`` and this ends at 208."""
+        _seed_record(
+            table, "ast-both", aws_kb_id="KBBOTH",
+            storedBytes=108, reservedBytes=100, totalBytes=208,
+        )
+        client = FakeBedrockAgent(
+            knowledge_bases=[_aws_kb("KBBOTH", NOW - timedelta(days=8))],
+            tags=_ours("KBBOTH", "ast-both"),
+        )
+
+        _run(client, table, armed=False, stored_bytes_resolver=lambda _a: 10)
+
+        record = _record(table, "ast-both")
+        assert int(record["storedBytes"]) == 10
+        assert int(record["reservedBytes"]) == 100
+        assert int(record["totalBytes"]) == 110
+
+    def test_a_drifted_total_is_repaired_even_when_stored_bytes_is_right(self, table):
+        """The dev shape: storedBytes matches S3, but totalBytes had drifted from
+        storedBytes + reservedBytes. Skipping the write because storedBytes did not
+        change would leave the cap guard reading the wrong number for ever."""
+        _seed_record(
+            table, "ast-both", aws_kb_id="KBBOTH",
+            storedBytes=4096, reservedBytes=100, totalBytes=3000,
+        )
+        client = FakeBedrockAgent(
+            knowledge_bases=[_aws_kb("KBBOTH", NOW - timedelta(days=8))],
+            tags=_ours("KBBOTH", "ast-both"),
+        )
+
+        report = _run(client, table, armed=False, stored_bytes_resolver=lambda _a: 4096)
+
+        assert report.refreshed_bytes == ["ast-both"]
+        assert int(_record(table, "ast-both")["totalBytes"]) == 4196
+
+    def test_a_record_with_no_reservations_anchors_total_to_stored(self, table):
+        _seed_record(table, "ast-both", aws_kb_id="KBBOTH", storedBytes=5, totalBytes=5)
+        client = FakeBedrockAgent(
+            knowledge_bases=[_aws_kb("KBBOTH", NOW - timedelta(days=8))],
+            tags=_ours("KBBOTH", "ast-both"),
+        )
+
+        _run(client, table, armed=False, stored_bytes_resolver=lambda _a: 4096)
+
+        assert int(_record(table, "ast-both")["totalBytes"]) == 4096
+
+    @pytest.mark.parametrize("state", ["shadow", "verify", "promote", "born_managed"])
+    def test_a_record_the_worker_is_part_way_through_is_left_alone(self, table, state):
+        """During a migration the corpus is held as a snapshot reservation that
+        promotion converts into storedBytes; anchoring storedBytes to S3 under it
+        would count the corpus twice."""
+        _seed_record(
+            table, "ast-both", aws_kb_id="KBBOTH", migrationState=state,
+            storedBytes=0, reservedBytes=600, totalBytes=600,
+        )
+        client = FakeBedrockAgent(
+            knowledge_bases=[_aws_kb("KBBOTH", NOW - timedelta(days=8))],
+            tags=_ours("KBBOTH", "ast-both"),
+        )
+
+        report = _run(client, table, armed=False, stored_bytes_resolver=lambda _a: 600)
+
+        assert report.refreshed_bytes == []
+        assert int(_record(table, "ast-both")["totalBytes"]) == 600
+
     def test_an_unchanged_total_writes_nothing(self, table):
         """A daily no-op write per knowledge base would be pure cost."""
         _seed_record(table, "ast-both", aws_kb_id="KBBOTH", storedBytes=4096)
