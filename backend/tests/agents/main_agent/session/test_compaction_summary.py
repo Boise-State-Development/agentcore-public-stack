@@ -1,6 +1,7 @@
 """Bounded compaction summary — spiral spec PR-2 / thresholds spec §3.6."""
 
 import sys
+import threading
 import types
 from unittest.mock import MagicMock
 
@@ -175,13 +176,37 @@ def _is_extraction(call):
     return "VERBATIM" in _system_text(call)
 
 
+def _route(extract, narrative):
+    """A converse stub that answers by prompt, not call order.
+
+    The two calls run concurrently, so a ``side_effect`` list would pair
+    replies with calls in whatever order the threads reach the mock. Each
+    argument is a reply dict, an exception to raise, or a callable.
+    """
+
+    def converse(**kwargs):
+        is_extraction = "VERBATIM" in kwargs["system"][0]["text"]
+        answer = extract if is_extraction else narrative
+        if isinstance(answer, BaseException):
+            raise answer
+        if callable(answer):
+            return answer(**kwargs)
+        return answer
+
+    return converse
+
+
+async def _extract(records, budget=EXTRACT_BUDGET, model_id="m"):
+    return await bound_summary(records, budget, model_enabled=True, model_id=model_id, extract_enabled=True)
+
+
 class TestExtractThenCompress:
-    """``extract_enabled``: a verbatim pinned block, then the compressed narrative."""
+    """``extract_enabled``: a verbatim pinned block and the compressed narrative, concurrently."""
 
     @pytest.mark.asyncio
-    async def test_pins_facts_then_compresses_the_narrative(self, bedrock):
-        bedrock.side_effect = [_model_reply(PINNED), _model_reply("They drafted the intro; the conclusion is open.")]
-        result = await bound_summary(["r" * 2000], EXTRACT_BUDGET, model_enabled=True, model_id="m", extract_enabled=True)
+    async def test_pins_facts_ahead_of_the_narrative(self, bedrock):
+        bedrock.side_effect = _route(_model_reply(PINNED), _model_reply("They drafted the intro; the conclusion is open."))
+        result = await _extract(["r" * 2000])
 
         assert result.outcome == "extract_then_compress"
         assert result.text == (
@@ -189,58 +214,76 @@ class TestExtractThenCompress:
         )
         assert result.tokens_after == approx_tokens(result.text) <= EXTRACT_BUDGET
         assert bedrock.call_count == 2
-        extraction, narrative = bedrock.call_args_list
-        assert _is_extraction(extraction) and not _is_extraction(narrative)
+        extraction = next(c for c in bedrock.call_args_list if _is_extraction(c))
+        narrative = next(c for c in bedrock.call_args_list if not _is_extraction(c))
         assert all(c.kwargs["modelId"] == "m" for c in bedrock.call_args_list)
         # Temperature alone on both calls: Claude 4.5+ rejects temperature with topP.
         assert "topP" not in extraction.kwargs["inferenceConfig"]
         assert "topP" not in narrative.kwargs["inferenceConfig"]
         assert extraction.kwargs["inferenceConfig"]["temperature"] == 0.0
-        # The narrative is asked for the budget the pinned block leaves.
-        assert narrative.kwargs["inferenceConfig"]["maxTokens"] == 256
-        words = int(narrative.kwargs["system"][0]["text"].split("Stay under ")[1].split(" words")[0].replace(",", ""))
-        assert words == 150  # the floor: 200 - pinned block leaves < 273 tokens
+
+    @pytest.mark.asyncio
+    async def test_the_two_calls_run_concurrently(self, bedrock):
+        """Each call waits for the other to start: sequential calls would time out."""
+        both_in_flight = threading.Barrier(2, timeout=5)
+
+        def meet_then(reply):
+            def answer(**kwargs):
+                both_in_flight.wait()
+                return reply
+            return answer
+
+        bedrock.side_effect = _route(meet_then(_model_reply(PINNED)), meet_then(_model_reply("narrative")))
+        result = await _extract(["r" * 2000])
+        assert result.outcome == "extract_then_compress"
+
+    @pytest.mark.asyncio
+    async def test_the_budget_is_split_up_front(self, bedrock):
+        """The narrative's budget does not depend on the extraction's reply."""
+        bedrock.side_effect = _route(_model_reply(PINNED), _model_reply("n"))
+        await _extract(["r" * 40_000], budget=8_000)
+        narrative = next(c for c in bedrock.call_args_list if not _is_extraction(c))
+        extraction = next(c for c in bedrock.call_args_list if _is_extraction(c))
+        # 8,000 - 4,000 for the pinned half - 3 for the "\n\nSUMMARY:\n" joiner.
+        assert "Stay under 2,198 words" in _system_text(narrative)
+        assert narrative.kwargs["inferenceConfig"]["maxTokens"] == 3_997
+        assert extraction.kwargs["inferenceConfig"]["maxTokens"] == 3_000
 
     @pytest.mark.asyncio
     async def test_runs_on_a_claude_summary_model(self, bedrock):
         """Neither call may send the sampling pair Claude 4.5+ rejects."""
         bedrock.side_effect = _reject_temperature_with_top_p
-        result = await bound_summary(["r" * 2000], EXTRACT_BUDGET, model_enabled=True, model_id=CLAUDE_MODEL_ID, extract_enabled=True)
+        result = await _extract(["r" * 2000], model_id=CLAUDE_MODEL_ID)
         assert result.outcome == "extract_then_compress"
         assert bedrock.call_count == 2
 
     @pytest.mark.asyncio
     async def test_is_deterministic_for_the_same_replies(self, bedrock):
         """The persisted bytes are a function of the model replies alone."""
-        replies = [_model_reply(PINNED), _model_reply("narrative")]
-        bedrock.side_effect = list(replies)
-        first = await bound_summary(["r" * 2000], EXTRACT_BUDGET, model_enabled=True, model_id="m", extract_enabled=True)
-        bedrock.side_effect = list(replies)
-        second = await bound_summary(["r" * 2000], EXTRACT_BUDGET, model_enabled=True, model_id="m", extract_enabled=True)
+        bedrock.side_effect = _route(_model_reply(PINNED), _model_reply("narrative"))
+        first = await _extract(["r" * 2000])
+        second = await _extract(["r" * 2000])
         assert first.text == second.text
 
     @pytest.mark.asyncio
-    async def test_extraction_failure_falls_back_to_plain_compression(self, bedrock):
-        bedrock.side_effect = [RuntimeError("throttled"), _model_reply("plain compressed summary")]
-        result = await bound_summary(["r" * 2000], EXTRACT_BUDGET, model_enabled=True, model_id="m", extract_enabled=True)
+    async def test_extraction_failure_keeps_the_narrative_without_a_third_call(self, bedrock):
+        bedrock.side_effect = _route(RuntimeError("throttled"), _model_reply("plain compressed summary"))
+        result = await _extract(["r" * 2000])
 
         assert result.outcome == "model"
         assert result.text == "plain compressed summary"
-        assert PINNED_HEADER not in result.text
-        # The fallback is today's call, unchanged.
-        assert not _is_extraction(bedrock.call_args_list[1])
+        assert bedrock.call_count == 2
 
     @pytest.mark.asyncio
-    async def test_empty_extraction_falls_back_to_plain_compression(self, bedrock):
-        bedrock.side_effect = [_model_reply("   "), _model_reply("plain")]
-        result = await bound_summary(["r" * 2000], EXTRACT_BUDGET, model_enabled=True, model_id="m", extract_enabled=True)
+    async def test_empty_extraction_keeps_the_narrative(self, bedrock):
+        bedrock.side_effect = _route(_model_reply("   "), _model_reply("plain"))
+        result = await _extract(["r" * 2000])
         assert result.outcome == "model" and result.text == "plain"
 
     @pytest.mark.asyncio
     async def test_narrative_failure_keeps_the_pinned_block_and_truncates(self, bedrock):
-        bedrock.side_effect = [_model_reply(PINNED), RuntimeError("throttled")]
-        records = ["old " * 300, "newest record"]
-        result = await bound_summary(records, EXTRACT_BUDGET, model_enabled=True, model_id="m", extract_enabled=True)
+        bedrock.side_effect = _route(_model_reply(PINNED), RuntimeError("throttled"))
+        result = await _extract(["old " * 300, "newest record"])
 
         assert result.outcome == "extract_then_truncate"
         assert result.text.startswith(f"{PINNED_HEADER}\n{PINNED}\n\n{NARRATIVE_HEADER}\n")
@@ -253,12 +296,13 @@ class TestExtractThenCompress:
         result = await bound_summary(["old " * 100, "new " * 50], BUDGET, model_enabled=True, model_id="m", extract_enabled=True)
         assert result.outcome == "truncated_after_model"
         assert result.text.startswith("new") and approx_tokens(result.text) <= BUDGET
+        assert bedrock.call_count == 2
 
     @pytest.mark.asyncio
     async def test_oversized_pinned_block_keeps_its_leading_lines(self, bedrock):
         lines = [f"- fact {i:03d} " + "v" * 40 for i in range(40)]  # ~2k chars, far over half the budget
-        bedrock.side_effect = [_model_reply("STANDING INSTRUCTIONS:\n" + "\n".join(lines)), _model_reply("narrative")]
-        result = await bound_summary(["r" * 4000], EXTRACT_BUDGET, model_enabled=True, model_id="m", extract_enabled=True)
+        bedrock.side_effect = _route(_model_reply("STANDING INSTRUCTIONS:\n" + "\n".join(lines)), _model_reply("narrative"))
+        result = await _extract(["r" * 4000])
 
         pinned_block = result.text.split(f"\n\n{NARRATIVE_HEADER}\n")[0]
         assert approx_tokens(pinned_block) <= EXTRACT_BUDGET // 2
@@ -269,17 +313,26 @@ class TestExtractThenCompress:
 
     @pytest.mark.asyncio
     async def test_extraction_ceiling_hit_keeps_the_complete_lines(self, bedrock):
-        bedrock.side_effect = [_model_reply("IDENTIFIERS:\n- PRJ-4417\n- PRJ-44", stop="max_tokens"), _model_reply("n")]
-        result = await bound_summary(["r" * 2000], EXTRACT_BUDGET, model_enabled=True, model_id="m", extract_enabled=True)
+        bedrock.side_effect = _route(_model_reply("IDENTIFIERS:\n- PRJ-4417\n- PRJ-44", stop="max_tokens"), _model_reply("n"))
+        result = await _extract(["r" * 2000])
         assert result.outcome == "extract_then_compress"
         assert "- PRJ-4417" in result.text and "- PRJ-44\n" not in result.text
 
     @pytest.mark.asyncio
     async def test_overlong_narrative_is_tail_trimmed_inside_the_budget(self, bedrock):
-        bedrock.side_effect = [_model_reply(PINNED), _model_reply("y" * 3000 + "END")]
-        result = await bound_summary(["r" * 4000], EXTRACT_BUDGET, model_enabled=True, model_id="m", extract_enabled=True)
+        bedrock.side_effect = _route(_model_reply(PINNED), _model_reply("y" * 3000 + "END"))
+        result = await _extract(["r" * 4000])
         assert result.outcome == "extract_then_compress"
         assert result.text.startswith(PINNED_HEADER) and result.text.endswith("END")
+        assert approx_tokens(result.text) <= EXTRACT_BUDGET
+
+    @pytest.mark.parametrize("pinned_chars", [0, 1, 37, 150, 395, 396, 397, 399, 400, 5_000])
+    @pytest.mark.parametrize("narrative_chars", [1, 200, 387, 388, 389, 5_000])
+    @pytest.mark.asyncio
+    async def test_never_exceeds_the_budget(self, bedrock, pinned_chars, narrative_chars):
+        pinned = "\n".join("p" * 9 for _ in range(pinned_chars // 10 + 1))[:pinned_chars]
+        bedrock.side_effect = _route(_model_reply(pinned or " "), _model_reply("n" * narrative_chars))
+        result = await _extract(["r" * 4000])
         assert approx_tokens(result.text) <= EXTRACT_BUDGET
 
     @pytest.mark.asyncio
@@ -351,7 +404,7 @@ class TestThroughUpdateAfterTurn:
 
     @pytest.mark.asyncio
     async def test_extract_then_compress_is_persisted_verbatim(self, make_session_manager, bedrock):
-        bedrock.side_effect = [_model_reply(PINNED), _model_reply("narrative")]
+        bedrock.side_effect = _route(_model_reply(PINNED), _model_reply("narrative"))
         records = [f"record {i} " + "z" * 600 for i in range(10)]
         mgr = self._manager(make_session_manager, records, summary_extract_enabled=True)
         mgr.compaction_config.summary_token_budget = EXTRACT_BUDGET

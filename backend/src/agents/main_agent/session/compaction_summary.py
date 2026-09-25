@@ -28,11 +28,14 @@ uncompacted control. With the flag on, step 2 becomes two calls:
 a. An **extraction** call copies standing instructions, decisions,
    identifiers and changed values (latest value only) verbatim into a pinned
    block, capped at half the budget.
-b. The narrative is compressed, with the prompt above, into what is left.
+b. **Concurrently**, the narrative is compressed, with the prompt above,
+   into the other half.
 
-The persisted text is ``PINNED FACTS …`` followed by ``SUMMARY: …``. An
-extraction failure falls back to plain compression (today's path); a failed
-narrative call keeps the pinned block and truncates the records into the rest.
+The persisted text is ``PINNED FACTS …`` followed by ``SUMMARY: …``. The two
+calls run side by side, so the cut costs the slower one, not the sum. If
+extraction fails the narrative alone is the summary (a plain compression);
+if the narrative fails the pinned block is kept and the records are truncated
+into the rest; if both fail, the records are truncated. Never a third call.
 The model matters: the harness screen kept 100% of planted facts on Nova 2
 Lite and Haiku 4.5, and 88% on Nova Micro (docs/kaizen/scoping/
 2026-09-21-quality-veto-harness.md §9).
@@ -199,6 +202,10 @@ async def compress_with_model(
         return None
 
 
+def _ceil_tokens(chars: int) -> int:
+    return -(-int(chars) // CHARS_PER_TOKEN)
+
+
 def _keep_head_lines(text: str, budget_tokens: int) -> Optional[str]:
     """The leading whole lines of ``text`` that fit ``budget_tokens``.
 
@@ -261,36 +268,54 @@ async def _extract_then_compress(
     *,
     model_id: str,
     region: Optional[str],
-) -> Optional[BoundedSummary]:
-    """Pinned facts, then the narrative in the rest. ``None`` = extraction failed."""
+) -> BoundedSummary:
+    """Pinned facts and the compressed narrative, from two concurrent calls.
+
+    The budget is split up front so neither call waits on the other: the
+    pinned block gets at most half, the narrative the rest after its joiner
+    and header. The cut therefore costs the slower call, not the sum, and
+    never more than two calls whatever fails.
+    """
     pinned_cap = budget_tokens // 2
-    pinned = await extract_with_model(
-        records,
-        min(_EXTRACTION_MAX_OUTPUT_TOKENS, pinned_cap),
-        model_id=model_id,
-        region=region,
+    narrative_budget = budget_tokens - pinned_cap - _ceil_tokens(2 + len(NARRATIVE_HEADER) + 1)
+    pinned, narrative = await asyncio.gather(
+        extract_with_model(
+            records,
+            min(_EXTRACTION_MAX_OUTPUT_TOKENS, pinned_cap),
+            model_id=model_id,
+            region=region,
+        ),
+        compress_with_model(records, narrative_budget, model_id=model_id, region=region),
     )
     if pinned:
-        # The pinned block may never crowd out the narrative.
-        pinned = _keep_head_lines(pinned, pinned_cap - approx_tokens(PINNED_HEADER) - 1)
+        # The pinned block, header included, stays inside its half.
+        pinned = _keep_head_lines(pinned, (pinned_cap * CHARS_PER_TOKEN - len(PINNED_HEADER) - 1) // CHARS_PER_TOKEN)
+
     if not pinned:
-        return None
+        # Extraction failed: the narrative alone is a plain compressed summary.
+        if narrative is not None:
+            text = narrative if approx_tokens(narrative) <= budget_tokens else truncate_records_newest_first([narrative], budget_tokens)
+            outcome = "model"
+        else:
+            text = truncate_records_newest_first(records, budget_tokens)
+            outcome = "truncated_after_model"
+        after = approx_tokens(text)
+        logger.info(
+            "compaction_summary_bounded: extraction failed; %s %d -> %d tokens (budget=%d)",
+            outcome, before, after, budget_tokens,
+        )
+        return BoundedSummary(text, outcome, before, after)
+
     pinned_block = f"{PINNED_HEADER}\n{pinned}"
-    # What is left once the block, the "\n\n" joiner and the narrative
-    # header are paid for.
-    remaining = budget_tokens - (len(pinned_block) + 2 + len(NARRATIVE_HEADER) + 1 + CHARS_PER_TOKEN - 1) // CHARS_PER_TOKEN
-    narrative = await compress_with_model(records, remaining, model_id=model_id, region=region)
     outcome = "extract_then_compress"
     if narrative is None:
-        narrative = truncate_records_newest_first(records, remaining)
+        narrative = truncate_records_newest_first(records, narrative_budget)
         outcome = "extract_then_truncate"
-    elif approx_tokens(narrative) > remaining:
-        narrative = truncate_records_newest_first([narrative], remaining)
+    elif approx_tokens(narrative) > narrative_budget:
+        narrative = truncate_records_newest_first([narrative], narrative_budget)
     text = pinned_block
     if narrative:
         text = f"{pinned_block}\n\n{NARRATIVE_HEADER}\n{narrative}"
-    if approx_tokens(text) > budget_tokens:  # pragma: no cover - unreachable by the arithmetic above
-        text = pinned_block
     after = approx_tokens(text)
     logger.info(
         "compaction_summary_bounded: %s %d -> %d tokens (pinned=%d, budget=%d)",
@@ -322,9 +347,7 @@ async def bound_summary(
         return BoundedSummary(joined, "within_budget", before, before)
 
     if model_enabled and extract_enabled:
-        extracted = await _extract_then_compress(records, budget_tokens, before, model_id=model_id, region=region)
-        if extracted is not None:
-            return extracted
+        return await _extract_then_compress(records, budget_tokens, before, model_id=model_id, region=region)
 
     if model_enabled:
         compressed = await compress_with_model(records, budget_tokens, model_id=model_id, region=region)
