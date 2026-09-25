@@ -130,6 +130,29 @@ class CountTokensBedrockModel(BedrockModel):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._count_client: Any = None
+        #: Counts this instance answered with the chars/4 heuristic rather than
+        #: natively — native counting off, a model on the skip list, a
+        #: throttle, any failure. Monotonic, so a reader that needs to know
+        #: whether *its* counts were real compares two readings.
+        self.heuristic_count_fallbacks = 0
+
+    @property
+    def token_count_is_authoritative(self) -> bool:
+        """Whether ``count_tokens`` can answer natively for this model.
+
+        ``False`` when native counting is off or the base id is on the SDK's
+        skip list — Bedrock refused it as unsupported or AccessDenied, which
+        ``count_tokens`` records on the first failed call. Some Converse
+        models genuinely lack CountTokens: ``anthropic.claude-sonnet-5``
+        answers "doesn't support counting tokens" under the base id and the
+        ``us.`` profile id alike (verified in us-west-2, 2026-09-25), so every
+        count for it is the heuristic. Read by the context-attribution hook,
+        which must not build its tools residual out of heuristic counts.
+        """
+        if self.config.get("use_native_token_count") is not True:
+            return False
+        base_id = base_foundation_model_id(self.config["model_id"])
+        return base_id not in _strands_bedrock._SKIP_COUNT_TOKENS_MODELS
 
     def _get_count_client(self) -> Any:
         """The dedicated CountTokens client, built on first use.
@@ -157,7 +180,8 @@ class CountTokensBedrockModel(BedrockModel):
         system_prompt_content: Optional[list[SystemContentBlock]],
     ) -> int:
         """The SDK's provider-agnostic chars/4 estimate — what ``BedrockModel``
-        itself falls back to."""
+        itself falls back to. Counted in ``heuristic_count_fallbacks``."""
+        self.heuristic_count_fallbacks += 1
         return await Model.count_tokens(self, messages, tool_specs, system_prompt, system_prompt_content)
 
     async def count_tokens(

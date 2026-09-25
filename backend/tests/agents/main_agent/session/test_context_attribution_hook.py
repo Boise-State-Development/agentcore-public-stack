@@ -7,7 +7,7 @@ tool-use scaffolding (full - count(system + messages, no tools)).
 """
 
 import pytest
-from strands.hooks import BeforeModelCallEvent
+from strands.hooks import BeforeInvocationEvent, BeforeModelCallEvent
 
 from agents.main_agent.session.hooks.context_attribution import (
     ContextAttributionHook,
@@ -481,8 +481,11 @@ class TestAuthoritativeCounterGate:
         )
         from apis.shared.models.bedrock_responses import build_bedrock_responses_model
 
+        # Native counting on, as `BedrockModelConfig` always builds it.
         converse = CountTokensBedrockModel(
-            model_id="us.anthropic.claude-haiku-4-5-20251001-v1:0", region_name="us-west-2"
+            model_id="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            region_name="us-west-2",
+            use_native_token_count=True,
         )
         responses = build_bedrock_responses_model("us.moonshotai.kimi-k3", region="us-west-2")
 
@@ -501,3 +504,148 @@ class TestAuthoritativeCounterGate:
 
         responses.token_count_is_authoritative = True
         assert _token_count_is_authoritative(responses) is True
+
+
+class TestHeuristicCountsNeverBecomeASplit:
+    """Being a ``BedrockModel`` does not make a count native. Claude Sonnet 5
+    has no CountTokens at all, and a throttle or failure falls back per call,
+    to a heuristic that charges JSON at chars/2 — prod Sonnet 5 recorded
+    ``tools = 13,606`` against a whole billed prompt of 12,909. The split must
+    come from native counts or not exist."""
+
+    @staticmethod
+    def _converse(skip_list_ids=()):
+        from strands.models import bedrock as strands_bedrock
+
+        from agents.main_agent.core.bedrock_count_tokens import CountTokensBedrockModel
+
+        strands_bedrock._SKIP_COUNT_TOKENS_MODELS.update(skip_list_ids)
+        return CountTokensBedrockModel(
+            model_id="global.anthropic.claude-sonnet-5", region_name="us-west-2", use_native_token_count=True
+        )
+
+    @pytest.fixture(autouse=True)
+    def _clean(self):
+        from strands.models import bedrock as strands_bedrock
+
+        clear_split_memo()
+        clear_probe_baselines()
+        strands_bedrock._SKIP_COUNT_TOKENS_MODELS.clear()
+        yield
+        strands_bedrock._SKIP_COUNT_TOKENS_MODELS.clear()
+        clear_probe_baselines()
+
+    def test_a_model_bedrock_will_not_count_is_not_authoritative(self):
+        from agents.main_agent.session.hooks.context_attribution import _token_count_is_authoritative
+
+        assert _token_count_is_authoritative(self._converse()) is True
+        # What count_tokens records after Bedrock answers "doesn't support
+        # counting tokens" (or AccessDenied) for the id it sent.
+        assert _token_count_is_authoritative(self._converse({"global.anthropic.claude-sonnet-5"})) is False
+
+    def test_native_counting_off_is_not_authoritative(self):
+        from agents.main_agent.core.bedrock_count_tokens import CountTokensBedrockModel
+        from agents.main_agent.session.hooks.context_attribution import _token_count_is_authoritative
+
+        model = CountTokensBedrockModel(model_id="us.anthropic.claude-haiku-4-5-20251001-v1:0", region_name="us-west-2")
+        assert _token_count_is_authoritative(model) is False
+
+    @pytest.mark.asyncio
+    async def test_prod_sonnet_5_shape_records_no_split_and_no_breakdown(self):
+        """The real class, counting against a Bedrock that refuses the model:
+        every count is the heuristic, so nothing is recorded — the cost row
+        reads "not tracked" instead of a tools figure bigger than the prompt."""
+        from agents.main_agent.session.hooks.context_attribution import get_prefix_token_split
+
+        model = self._converse()
+
+        class Refusing:
+            def count_tokens(self, **kwargs):
+                from botocore.exceptions import ClientError
+
+                raise ClientError(
+                    {"Error": {"Code": "ValidationException", "Message": "The provided model doesn't support counting tokens."}},
+                    "CountTokens",
+                )
+
+        model._count_client = Refusing()
+        tool_specs = [{"name": "t", "description": "d" * 4000, "inputSchema": {"json": {"type": "object"}}}]
+        agent = FakeAgent(model, [{"role": "user", "content": [{"text": "hi"}]}], tool_specs=tool_specs)
+        hook = ContextAttributionHook(session_id="s1")
+        hook._on_turn_start(BeforeInvocationEvent(agent=agent))
+        # Strands' projection runs first and is the call that fails.
+        projected = await model.count_tokens(agent.messages, tool_specs=tool_specs, system_prompt="SYSTEM-PROMPT")
+
+        await hook._on_before_model_call(_event(agent, projected))
+
+        assert get_prefix_token_split(agent) is None
+        assert get_context_breakdown(agent) is None
+
+    @pytest.mark.asyncio
+    async def test_a_count_that_falls_back_mid_split_taints_it_once_per_turn(self):
+        model = CountingFake()
+        agent = FakeAgent(model, [{"role": "user", "content": [{"text": "hi"}]}])
+        hook = ContextAttributionHook(session_id="s1")
+        hook._on_turn_start(BeforeInvocationEvent(agent=agent))
+        model.fall_back_on_call = 2  # the system-with-probe count is throttled
+
+        await hook._on_before_model_call(_event(agent, 1000))
+        assert get_context_breakdown(agent) is None
+        calls_after_first = len(model.calls)
+
+        # Same turn, next call: no second attempt against a throttled counter.
+        await hook._on_before_model_call(_event(agent, 1100))
+        assert len(model.calls) == calls_after_first
+        assert get_context_breakdown(agent) is None
+
+        # Next turn: clean counts, so the split is taken.
+        model.fall_back_on_call = None
+        hook._on_turn_start(BeforeInvocationEvent(agent=agent))
+        await hook._on_before_model_call(_event(agent, 1200))
+        assert _parts(get_context_breakdown(agent)) == {"system": 100, "tools": 1200 - 110, "messages": 10}
+
+    @pytest.mark.asyncio
+    async def test_a_heuristic_projection_is_not_split(self):
+        """Strands counts the projection after the previous call's
+        attribution ended; a fallback there means `full` is an estimate."""
+        model = CountingFake()
+        agent = FakeAgent(model, [{"role": "user", "content": [{"text": "hi"}]}])
+        hook = ContextAttributionHook(session_id="s1")
+        hook._on_turn_start(BeforeInvocationEvent(agent=agent))
+        model.heuristic_count_fallbacks += 1  # the projection fell back
+
+        await hook._on_before_model_call(_event(agent, 999_999))
+
+        assert getattr(agent, "_context_attribution_split", None) is None
+        assert get_context_breakdown(agent) is None
+        # Deferred, not re-counted in front of this model call.
+        assert model.calls == []
+
+    @pytest.mark.asyncio
+    async def test_a_heuristic_probe_weight_is_not_memoised(self):
+        from agents.main_agent.session.hooks.context_attribution import _probe_baseline
+
+        model = CountingFake()
+        model.config = {"model_id": "m-1"}
+        model.fall_back_on_call = 1
+        await _probe_baseline(model)
+        model.fall_back_on_call = None
+        await _probe_baseline(model)
+        await _probe_baseline(model)
+        assert len(model.calls) == 2  # the heuristic answer was not kept; the native one was
+
+
+class CountingFake(FakeModel):
+    """A fake that keeps the real model's fallback counter; call N (1-based)
+    can be made to "fall back"."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.heuristic_count_fallbacks = 0
+        self.fall_back_on_call = None
+
+    async def count_tokens(self, messages, tool_specs=None, system_prompt=None, system_prompt_content=None):
+        result = await super().count_tokens(messages, tool_specs, system_prompt, system_prompt_content)
+        if self.fall_back_on_call is not None and len(self.calls) == self.fall_back_on_call:
+            self.heuristic_count_fallbacks += 1
+        return result
