@@ -5,6 +5,18 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 ## Open
 <!-- Newest at top. -->
 
+### [2026-09-25] Verify the reconciler teardown guard in production — after #1322 reaches `main`
+- **Source**: Phil-initiated, from the dev validation of #1322. The daily KB reconciler could recreate a `KB#` record that a teardown had just removed (a ghost row holding only `vectorState`/`updatedAt`), and could mark a record in `migrationState=teardown` as `vectorState=missing`. #1322 guards every record-side write on the record existing and skips `teardown` records, listing them under `tearingDown` in the report. Dev-validated 2026-09-25: a synthetic `teardown` row came back in `tearingDown`, was not marked missing, and was left untouched; dev had 7 `KB#` rows and 0 ghosts before and after.
+- **Surface**: ops only — the reconciler Lambda's log group (`/{prefix}/kb-migration/reconciler-function-name` in SSM names the function) and the `boisestateai-v2-rag-assistants` table. No code change.
+- **Effort × Impact**: L × L
+- **Subtracts**: yes — closes the last open question on the teardown path before the orphan-row cleanup above runs, so that cleanup is not undone behind it.
+- **Status**: blocked on release. Everything here is read-only; do not stage synthetic rows in production.
+  1. Confirm the deployed reconciler image includes #1322: after the first scheduled run (daily, around 18:19 UTC), the `reconcile complete:` log line carries a `tearingDown=` field. Its absence means the old image is still live.
+  2. Scan for ghost rows: `KB#` items with no `appKbId`. Expect 0. Any found are rows the old code recreated; record their keys here before anyone deletes them.
+  3. Check that no `KB#` record in `migrationState=teardown` carries `vectorState=missing`.
+  4. Run the orphan-row cleanup above only after step 1 passes. Ideally wait for the `KBTOMB#` / `DOC#` upsert guard (the follow-up task spun off from #1322) as well, since a late ingestion event can otherwise recreate the `DOC#` rows that cleanup removes.
+- **Done when**: steps 1–3 pass. Record the counts here and close the entry.
+
 ### [2026-09-25] Chore: clear the rows deleted agents left in production — after #1293 and #1301 reach `main`
 - **Source**: Phil-initiated, from the Shared Projects dev-validation follow-ups (PRs #1293, #1301). A read-only scan of production on 2026-09-25 found 22 `AST#` partitions with no `METADATA` row (agents deleted through `DELETE /agents/{id}`, which until #1301 deleted only the record): 522 `DOC#` rows (507 `complete`, about 30 MB of source objects still in S3 and still in the legacy vector index), 38 `SHARE#` rows (37 on one agent) and 2 `CRAWL#` rows. No orphaned `KB#` records and no orphaned sync policies, so nothing is billing in Bedrock.
 - **Surface**: ops only — `backend/scripts/cleanup_orphaned_agent_rows.py` (#1301). No code change.
