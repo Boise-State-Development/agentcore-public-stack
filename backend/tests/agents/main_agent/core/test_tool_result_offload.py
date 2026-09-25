@@ -187,6 +187,34 @@ class TestPrefilterAndOffload:
         assert PREFILTER_RATIO == 0.5
 
 
+class TestSkillsExemption:
+    """A skill's instructions are followed verbatim — never swapped for a preview."""
+
+    def test_exempt_name_matches_the_strands_skills_tool(self):
+        # Pinned to the real plugin so a rename in a Strands upgrade fails here
+        # instead of silently re-enabling offload for skill instructions.
+        from strands import AgentSkills, Skill
+
+        plugin = AgentSkills(skills=[Skill(name="a-skill", description="d", instructions="i")])
+        assert plugin.skills.tool_name in tro.OFFLOAD_EXEMPT_TOOLS
+
+    def test_read_skill_file_is_not_exempt(self):
+        assert "read_skill_file" not in tro.OFFLOAD_EXEMPT_TOOLS
+
+    @pytest.mark.asyncio
+    async def test_oversized_skills_result_is_not_offloaded(self, offloader):
+        plugin, storage = offloader
+        counter = AsyncMock(return_value=5000)
+        instructions = "# Brand deck\n" + ("Always use the approved palette. " * 800)
+        ev = _event(instructions, tool_name="skills", count_tokens=counter)
+        before = ev.result
+        await plugin._handle_tool_result(ev)
+        counter.assert_not_called()
+        assert ev.result is before
+        assert ev.result["content"][0]["text"] == instructions
+        assert storage.objects == {}
+
+
 class TestChatAgentWiring:
     def test_chat_agent_adds_the_offloader_plugin(self, monkeypatch):
         from unittest.mock import MagicMock
