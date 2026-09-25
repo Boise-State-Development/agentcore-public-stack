@@ -1,6 +1,6 @@
 # Scoping the quality-veto harness — what it is, what already exists, and the cheapest first slice
 
-**Status:** Scoping. No code written.
+**Status:** Slice 1 BUILT 2026-09-25: `backend/scripts/compaction_quality_harness.py` (+ `compaction_quality/`, tests in `backend/tests/test_compaction_quality_harness.py`). The open questions in §6 are answered in §7. The first full run is pending the missed-free-apply fix (§7.4).
 **Prompted by:** the two waivers recorded 2026-09-21 (`compaction-model-relative-thresholds.md` §5,
 `document-offload-evaluation.md` §2), both of which name "build the harness" as trigger 1 — the only
 path to an answer that does not wait on user volume.
@@ -183,3 +183,81 @@ strip-fix win mask an offload regression.
 3. **What is the control for compaction?** The spec says "the fixed-threshold arm." Confirm that
    `model_relative_enabled=False` reproduces pre-#1125 behaviour exactly, rather than approximately —
    if it does not, the control is a third policy and the comparison means something narrower.
+
+---
+
+## 7. Slice 1 as built (2026-09-25)
+
+### 7.1 Shape
+
+`cut` (free) → `records` / `ask` (spend, estimate first, `--yes` to run) → `score` (free).
+
+- The corpus is seeded and authored. It is 48-turn grant-proposal editing
+  sessions with 9 facts planted per transcript, across four families:
+  `constraint`, `decision`, `reference` and `superseded`. `superseded` is new,
+  and fails an answer that repeats the old value.
+- The arms are `full` (the control), `model_relative`, `legacy` and `floor_50`.
+  Each is an explicit `CompactionConfig`. Nothing is read from the environment.
+- The paces are `restore` (rebuild every turn with a cold cache), `cold` (a
+  warm agent with every gap past the TTL) and `warm` (every gap inside it).
+- The summary modes are `fallback` (production's first-line summary), `none`,
+  and `records`. `records` stands in for AgentCore's summary records: one
+  model-written record per 8 turns, lagging one turn. It is an approximation,
+  so label any number it produces.
+- **Nothing reimplements the cut.** Each arm drives a bare
+  `TurnBasedSessionManager` through `update_after_turn`,
+  `apply_pending_compaction` and, on the restore pace, `_apply_compaction`.
+  Only the I/O is stubbed: DynamoDB, LTM retrieval, EMF and the clock.
+- `cut` also writes a free **availability** table: whether each planted value
+  is still anywhere in the probe-time context. That is an upper bound on what
+  any model can answer.
+- `ask` puts a cachePoint after the shared history, so repeat questions on a
+  history are cache reads. The dev smoke run wrote 311k tokens and read
+  2.49M.
+
+### 7.2 Answers to §6
+
+1. **Realistic cut?** It is sized so that one 48-turn session crosses the
+   100k ceiling once or twice, and so that the full history still fits a 200k
+   window. Compare it against the prod readout (§7.4): prod cuts retained a
+   median of 37k tokens. The harness lands under 25k because authored turns
+   are uniform. Prod's deeper tail comes from single agentic turns larger
+   than the floor, which this corpus does not model.
+2. **Is `bound_summary` reachable offline?** Yes. It runs inside
+   `update_after_turn` unchanged. The model path (`--summary-model`) needs AWS.
+3. **Control?** Not the kill switch. See spec §5: the summary is still bounded
+   with the switch off, and `legacy` keeps fewer turns than `model_relative`.
+   The control is `full`.
+
+### 7.3 Lesson from building it
+
+The first clock stub backdated every save by the pace's gap, and that
+**hid a production bug**. A stub for time has to stamp *now* the way
+`_save_compaction_state` does, and apply the gap only between turns. A
+tripwire test (`test_restore_pace_reproduces_the_anchor_save_masking_the_gap`)
+pins the current behaviour until the fix lands.
+
+### 7.4 Prod readout, 2026-09-25 (aggregate, read-only, ~4 days after 1.23.0)
+
+- **Scale:** 74 cuts in 44 sessions, about 4% of active sessions.
+- **Guards held:** hysteresis held, no summary exceeded 8k, and no cut applied
+  inside the TTL.
+- **Missed free apply:** on a restore, `_maybe_advance_truncation_anchor`
+  saves (stamping `updatedAt`) before the head-of-turn
+  `apply_pending_compaction` reads the gap. The gap reads about 0 s, and the
+  parked cut waits for the paid hard-ceiling apply. About half of the
+  compacted sessions still held a parked cut.
+- **Retained after a cut:** median 37k, p90 129k. The floor was unreachable on
+  about 64% of cuts.
+- **Forced cuts:** about 22% of cuts. They are mostly single agentic turns
+  that grow past the ceiling; compaction acts only between turns.
+- **Summary source:** `ltm` on every sampled last cut. Model-compressed
+  summaries go from a median of ~20k to ~760 tokens. **That compression is the
+  first thing the full run should score.** Use `records` mode with records
+  large enough to trigger it, plus `--summary-model`.
+- **Measurement gaps:**
+  - the per-call `compactionEvents` ledger records only ~57% of cuts;
+  - `prefixTokens` is unusable;
+  - `contextBreakdown` is absent in prod;
+  - the per-cut EMF carries no session id.
+
