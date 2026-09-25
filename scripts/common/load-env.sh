@@ -332,6 +332,9 @@ build_cdk_context_params() {
     if [ -n "${CDK_OBSERVABILITY_AGENTCORE_APPLICATION_LOGS_ENABLED:-}" ]; then
         context_params="${context_params} --context observability.agentCoreApplicationLogsEnabled=\"${CDK_OBSERVABILITY_AGENTCORE_APPLICATION_LOGS_ENABLED}\""
     fi
+    if [ -n "${CDK_OBSERVABILITY_RUNTIME_LOG_RETENTION_SWEEP_ENABLED:-}" ]; then
+        context_params="${context_params} --context observability.runtimeLogRetentionSweepEnabled=\"${CDK_OBSERVABILITY_RUNTIME_LOG_RETENTION_SWEEP_ENABLED}\""
+    fi
     if [ -n "${CDK_OBSERVABILITY_PROMPT_CACHE_AVOIDABLE_MISS_THRESHOLD:-}" ]; then
         context_params="${context_params} --context observability.promptCacheAvoidableMissThreshold=\"${CDK_OBSERVABILITY_PROMPT_CACHE_AVOIDABLE_MISS_THRESHOLD}\""
     fi
