@@ -192,8 +192,8 @@ class Defaults:
     # Nova 2 Lite, not the Nova Micro the title and tool-batch side-channels
     # use: on the quality harness Micro kept ~77% of planted facts (58% of
     # exact identifiers) and Lite ~99% (100%), for ~$0.01 per cut. `us.*`
-    # because dev's SCP denies `global.*`. Nova accepts `topP`, which
-    # compress_with_model sends; Claude models reject it.
+    # because dev's SCP denies `global.*`. compress_with_model sends
+    # `temperature` only, so a Claude override works too.
     COMPACTION_SUMMARY_MODEL_ID = "us.amazon.nova-2-lite-v1:0"
     COMPACTION_DEFERRED_APPLY_ENABLED = True
     # Tool-result offload gate. 4k is well under the 25k compaction floor, so a
