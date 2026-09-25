@@ -5,6 +5,48 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 ## Open
 <!-- Newest at top. -->
 
+### [2026-09-25] A/B the V2 AgentCore Runtime in dev
+- **Source**: research/2026-09-25.md ▸ Top 5 #1 — https://aws.amazon.com/about-aws/whats-new/2026/09/new-agentcore-runtime-generally-available (GA 2026-09-18). Relates to [2026-09-04] W5 part (2).
+- **Surface**: infrastructure — `lib/constructs/inference-api/inference-agentcore-construct.ts:297` (`CfnRuntime`, no `platformVersion` today), `infrastructure/test/`
+- **Effort × Impact**: L–M × H
+- **Subtracts**: likely — the W5 instance-based-SKU arithmetic changes basis if V2 bills used rather than peak memory; possibly cold-start mitigations.
+- **Unlocks**:
+  - Pay-for-used Runtime memory — the first lever on the 73%-of-AICC line that is neither a token change nor a session-lifetime change.
+  - P75 cold start ~1.9–2.0 s (vs 5.4–30 s on V1) — first-turn TTFT.
+- **Status**: open. ⚠️ `aws-cdk-lib` 2.270.0 has no typed `platformVersion`; needs `addPropertyOverride('PlatformVersion', 'V2')` behind a dev-only config flag. Gate 1: does CFN accept the key today. Gate 2: does V2 change the `/ping`/`/invocations` contract, idle reaper, or 30 s init budget. Measure with the turn-latency EMF (#1184) and Cost Explorer sync (#1235).
+
+### [2026-09-25] Treat any non-`end_turn` stop reason as a failed side-channel call
+- **Source**: research/2026-09-25.md ▸ Top 5 #2 — Claude Code 2.1.282 (refused compaction retries on fallback); verified on disk.
+- **Surface**: backend — `agents/main_agent/session/compaction_summary.py:152`, `apis/shared/tool_summaries/summarizer.py:188` (both test only `stopReason == "max_tokens"`); check the session-title generator too.
+- **Effort × Impact**: L × M
+- **Subtracts**: no — addition, justified: a refusal or guardrail stop is currently accepted as a compaction summary and persists into the cacheable history until the next cut. The fallbacks already exist.
+- **Status**: open. One predicate change per site + a stubbed `guardrail_intervened` test. Does not depend on knowing Bedrock's exact refusal stop reason.
+
+### [2026-09-25] Guard Stop against a turn that already finished
+- **Source**: research/2026-09-25.md ▸ Top 5 #3 — assistant-ui #8282 (merged 2026-09-24); verified on disk.
+- **Surface**: frontend — `session/services/chat/chat-http.service.ts:346` (`cancelChatRequest` — no completion check before `signalInterrupt` / `setLastTurnInterrupted`); loading only clears in `finalizeStream` from `onclose` (`:134`, `:283`); `stream-parser.service.ts:252` `isStreamCompleteFor()` has no external caller.
+- **Effort × Impact**: L × M
+- **Subtracts**: yes — one source of the false-"interrupted" marker (#988 lineage); gives an unused public method its caller (or delete it).
+- **Status**: open — not reproduced live; widest window is a first turn where `session_title` arrives after `done`. Needs a spec for Stop-after-`done`-before-`onclose`.
+
+### [2026-09-25] Strands 1.57 + `bedrock-agentcore` 1.23.1 + boto — one paired bump (supersedes the [2026-09-18] 1.56 entry)
+- **Source**: research/2026-09-25.md ▸ Top 5 #4 — https://github.com/strands-agents/harness-sdk/releases/tag/python%2Fv1.57.0
+- **Surface**: backend — `pyproject.toml` (strands + `[bidi]`, agentcore, boto3 ≥1.43.72), `uv.lock`; read first: `session/turn_based_session_manager.py` (Generic `SessionManager`), any `except EventLoopException` pause detection, `bedrock_responses.py:313`.
+- **Effort × Impact**: M × M
+- **Subtracts**: yes — Chat Completions cache-write gap in `usage_normalization.py:106` (reads no `prompt_tokens_details`) closes upstream via #4361; picks up #4371 (interventions honor interrupts) and #4426 (schema normalization no longer mutates caller specs); retires the [2026-09-18] 1.56 paired-pin entry.
+- **Unlocks**: `handoff_to_user` vended tool (read before building another interrupt tool); Bedrock `requestTimeout`.
+- **Status**: open. ⛔ Keep `strands-agents-tools` at 0.8.8 (0.8.9 needs mcp 2.x); `mcp` stays `<2`, target 1.30.0. ⚠️ A missed pairing presents on Runtime as "initialization time exceeded (30s)" → 502 — dev-validate a real turn. Run `probe_bedrock_cache_point_support.py --offline-only` and diff `strands/_context_manager/` per the standing watch.
+
+### [2026-09-25] Curate Claude Opus 5.5 — and measure GPT-6 Luna as a side-channel candidate
+- **Source**: research/2026-09-25.md ▸ Top 5 #5 — https://aws.amazon.com/blogs/machine-learning/claude-opus-5-5-is-now-available-on-aws/ ; https://aws.amazon.com/about-aws/whats-new/2026/09/openai-gpt-6-sol-luna-on-amazon-bedrock/
+- **Surface**: frontend + backend — `admin/manage-models/models/curated-models.ts`; effort/thinking param handling; (Luna A/B only) `tool_summaries/summarizer.py`.
+- **Effort × Impact**: L × M
+- **Subtracts**: no — addition, justified: warm conversations are mostly cache reads, and Opus 5.5 reads are $0.20/MTok per Anthropic vs Opus 5's $0.50.
+- **Unlocks**:
+  - A cheaper top-tier Claude.
+  - Possibly a Nova Micro successor for titles/summaries (measure, don't swap).
+- **Status**: open. ⚠️ Rates from the AWS **model card** only; `us.*` id in dev (SCP denies `global.*`); thinking cannot be disabled — check against the effort selector (an effort switch already busts the cache); bracket the real cache minimum before any caching A/B.
+
 ### [2026-09-21] Sweep session anatomies at fleet scale — one session already refuted a queued decision, and 1.23.0 may have moved the write:read ratio
 - **Source**: Phil-initiated, from a single prod session anatomy (`7f5f207f`, $21.84 / 48 Opus 5 calls, 2026-09-16→21). One session produced two results that no aggregate on the dashboard surfaces today, which is the argument for doing this at scale rather than one link at a time.
 - **Result 1 — a free A/B across the Release 1.23.0 prod deploy (2026-09-20).** The session spans it, same user, same model, same conversation:
