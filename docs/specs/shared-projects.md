@@ -337,7 +337,8 @@ Each PR targets `develop`, lands behind `PROJECTS_ENABLED` (opt-in while in deve
 
 ### Phase 0 — memory baseline (1 PR + a report)
 - **0.1** `scripts/memory-audit/audit.py` (control-plane inventory, record counts, extraction jobs, namespace comparison, behavioral test driver) + the decision record at `docs/specs/memory-baseline-decision.md`.
-- **0.2** Fixes found in §1.3: session-delete purges records; share-fork stops feeding extraction; IAM parity; stale doc lines; a CDK test asserting strategy names and (once chosen) explicit namespace templates.
+- **0.1 outcome (dev, 2026-09-25):** see `memory-baseline-decision.md`. Memory is written, extracted and correctly namespaced, but the runtime's 0.7 relevance cut discards every realistic hit (questions score 0.57–0.67), so no turn received context. Recommendation **C (hybrid)**, conditional on the step-5 test passing after 0.2 lowers the cut. The prod census is pending.
+- **0.2** Fixes found in §1.3 (plus the relevance cut from 0.1): session-delete purges records; share-fork stops feeding extraction; IAM parity; stale doc lines; a CDK test asserting strategy names and (once chosen) explicit namespace templates.
 
 ### Phase 1 — shared workspace (familiar Projects)
 - **1.1 Infra:** `ProjectsConstruct` (table + OwnerIndex + MemberIndex, refs threaded through `PlatformComputeRefs`, grants to app-api + inference-api, `PROJECTS_ENABLED` env), `ProjectSessionIndex` on sessions-metadata (its own PR), `config.ts` ternary + `platform.yml` var, jest tests, table-count bump. **As built:** both APIs get `DYNAMODB_PROJECTS_TABLE_NAME` + `PROJECTS_ENABLED` like every other table. The AgentCore Runtime had 3 of its 50 env vars free, so the PR retired two it set but never read (`OAUTH_TOKEN_ENCRYPTION_KEY_ARN`, `OAUTH_CLIENT_SECRETS_ARN`, unread since 1.0.0-beta.23), ending one below where it started. The runtime grant is Get/BatchGet/Query/Update only; creates and deletes are app-api's.
