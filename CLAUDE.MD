@@ -45,6 +45,23 @@ npx cdk deploy {prefix}-PlatformStack
 - **All dependencies use exact version pins** — no `^`, `~`, or `>=`
 - **Never install packages without explicit user approval**
 
+## Feature Flags
+
+**New or in-development features default OFF. A deployment turns them on by choice.** Other organizations build on and deploy this stack, so half-finished work must not switch on for them just because it merged. When a feature is finished, flipping it to default-on (with an `=false` kill switch, like most shipped flags) is its own deliberate change.
+
+A feature has up to two switches, one per side, set per environment:
+
+| Side | Where | How it's set |
+|---|---|---|
+| Backend (authoritative) | `backend/src/apis/shared/feature_flags.py` (`<feature>_enabled()` reads `<FEATURE>_ENABLED`) | CDK `infrastructure/lib/config.ts` → env var on app-api / AgentCore Runtime, from the GitHub environment variable `CDK_<FEATURE>_ENABLED` forwarded in `.github/workflows/platform.yml`. In-development: only `"true"` enables. Unset GitHub variables arrive as `""`, so handle that case |
+| Frontend (UI only) | `features` in `frontend/ai.client/src/environments/environment*.ts`, typed by `environments/feature-flags.ts`, read via the `FEATURES` token (`src/app/services/features.ts`) | Compile-time, per build: `environment.ts` = local `ng serve`/tests, `environment.development.ts` = deployed dev (`dev-deploy` configuration), `environment.production.ts` = prod. `scripts/frontend/build.sh` builds `SPA_BUILD_CONFIGURATION`, set by each deploy workflow |
+
+- **The backend is the gate.** The frontend flag only decides what the UI offers (nav items, routes via `canMatch`, buttons), so nothing waits on a request to find out. Never import an environment file from a component; inject `FEATURES`, and provide it in specs.
+- **Keep the two in step per environment.** If they drift, the damage is cosmetic: the UI offers a feature whose API 404s, or hides a working one.
+- **Adding a flag:** add a field to `FeatureFlags` and all three environment files (in-development: `false` locally and in prod, `true` in dev only if the dev environment has turned the backend on), plus the backend flag, CDK config and test, and the `platform.yml` variable.
+
+Current in-development flags: **Shared Projects** (`PROJECTS_ENABLED` / `CDK_PROJECTS_ENABLED`, `features.projects`). It's on in the `development` GitHub environment and in `environment.development.ts`, and off in production.
+
 ## SSE Event Types
 
 | Event | Purpose |

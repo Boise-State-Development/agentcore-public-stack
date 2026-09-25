@@ -354,9 +354,10 @@ export interface MemorySpacesConfig {
 }
 
 /**
- * Shared Projects feature flag (docs/specs/shared-projects.md). Default ON with a
- * kill switch, disabled per environment with CDK_PROJECTS_ENABLED=false (or a
- * `projects.enabled: false` cdk.json context). Sets the PROJECTS_ENABLED env var
+ * Shared Projects feature flag (docs/specs/shared-projects.md). **Opt-in while the
+ * feature is in development**: off unless CDK_PROJECTS_ENABLED=true (or a
+ * `projects.enabled: true` cdk.json context), so a deployment turns it on by choice.
+ * See CLAUDE.md "Feature flags". Sets the PROJECTS_ENABLED env var
  * on app-api and inference-api. The projects table is provisioned
  * unconditionally, so this only gates route mounting and the project harness on
  * the invocation path at runtime.
@@ -1036,13 +1037,12 @@ export function loadConfig(scope: cdk.App): AppConfig {
         : scope.node.tryGetContext('memorySpaces')?.enabled ?? true,
     },
     projects: {
-      // Default ON with a kill switch, same empty-string-safe ternary as
-      // `memorySpaces` above: the workflow forwards an EMPTY STRING when the
-      // variable is unset, so treat empty/unset as the default (on) and only the
-      // literal "false" as the kill switch.
+      // Opt-in while in development (CLAUDE.md "Feature flags"): only the literal
+      // "true" turns it on. The workflow forwards an EMPTY STRING when the variable
+      // is unset, which falls through to the context and then to off.
       enabled: process.env.CDK_PROJECTS_ENABLED
-        ? process.env.CDK_PROJECTS_ENABLED !== 'false'
-        : scope.node.tryGetContext('projects')?.enabled ?? true,
+        ? process.env.CDK_PROJECTS_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('projects')?.enabled ?? false,
     },
     skills: {
       // Default ON with a kill switch (house style, mirroring memorySpaces /

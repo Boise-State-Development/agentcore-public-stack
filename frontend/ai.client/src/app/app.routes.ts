@@ -1,8 +1,13 @@
+import { inject } from '@angular/core';
 import { Routes } from '@angular/router';
 import { authGuard } from './auth/auth.guard';
 import { adminGuard } from './auth/admin.guard';
 import { firstBootGuard } from './auth/first-boot.guard';
 import { legacyMigrationHostGuard } from './shared/utils/legacy-migration-host';
+import { FEATURES } from './services/features';
+
+/** Matches only in a build with Shared Projects on (compile-time; see environments/feature-flags.ts). */
+const projectsEnabled = () => inject(FEATURES).projects;
 
 export const routes: Routes = [
     {
@@ -139,17 +144,23 @@ export const routes: Routes = [
     {
         // Shared Projects (shared-projects §6). The tab is part of the URL so a link can
         // land on Members or Settings; the bare project URL opens its Overview.
+        // `projectsEnabled` keeps every /projects URL unmatched (→ not found) in a build
+        // that has Projects off (src/environments/feature-flags.ts).
         path: 'projects/:id/:tab',
         loadComponent: () => import('./projects/detail/project-detail.page').then(m => m.ProjectDetailPage),
+        canMatch: [projectsEnabled],
         canActivate: [authGuard],
     },
     {
+        // No guard here (Angular runs redirects before guards): the redirect target
+        // is guarded, so with Projects off this still ends at not found.
         path: 'projects/:id',
         redirectTo: 'projects/:id/overview',
     },
     {
         path: 'projects',
         loadComponent: () => import('./projects/projects.page').then(m => m.ProjectsPage),
+        canMatch: [projectsEnabled],
         canActivate: [authGuard],
     },
     {

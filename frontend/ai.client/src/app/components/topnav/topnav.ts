@@ -9,6 +9,7 @@ import { heroChevronDown, heroTrash, heroPencilSquare, heroArrowUpOnSquare, hero
 import { SessionService } from '../../session/services/session/session.service';
 import { ChatStateService } from '../../session/services/chat/chat-state.service';
 import { ShareModalComponent, ShareModalData } from '../../session/components/share-modal';
+import { FEATURES } from '../../services/features';
 import { ExportDialogComponent, ExportDialogData } from '../../session/components/export-dialog';
 import { UserService } from '../../auth/user.service';
 import { SidenavService } from '../../services/sidenav/sidenav.service';
@@ -27,6 +28,8 @@ export class Topnav {
   private router = inject(Router);
   protected sidenavService = inject(SidenavService);
   protected sessionService = inject(SessionService);
+  /** This build's front-end feature switches (compile-time; see environments/feature-flags.ts). */
+  private readonly features = inject(FEATURES);
   private chatStateService = inject(ChatStateService);
   private dialog = inject(Dialog);
   private toastService = inject(ToastService);
@@ -224,6 +227,7 @@ export class Topnav {
    * row, which picks up the backend's preferences on the next list refresh.
    */
   private currentProjectId(): string | null {
+    if (!this.features.projects) return null;
     const session = this.currentSession();
     const listed = this.sessionService.mergedSessionsResource().sessions.find(s => s.sessionId === session.sessionId);
     return session.preferences?.projectId ?? listed?.preferences?.projectId ?? null;

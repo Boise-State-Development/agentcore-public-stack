@@ -426,6 +426,9 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       - name: Build SPA
         run: bash scripts/frontend/build.sh
+        env:
+          # This job deploys to the development environment, whatever the ref.
+          SPA_BUILD_CONFIGURATION: dev-deploy
       - name: Deploy to S3 + invalidate CloudFront
         run: bash scripts/frontend/deploy.sh
 
