@@ -74,11 +74,15 @@ def default_arms(*, summary_model_enabled: bool = False) -> Dict[str, Arm]:
         "full": Arm("full", None, "No compaction: the whole history (control)."),
         "model_relative": Arm(
             "model_relative", CompactionConfig(**base),
-            "Production defaults since 1.23.0: ceiling min(0.5w, 100k), floor 0.25x, hysteresis, deferred apply.",
+            "Production defaults since 1.23.0: ceiling min(0.5w, 100k), floor 0.25x, hysteresis, deferred apply; summary on Nova 2 Lite.",
         ),
         "legacy": Arm(
             "legacy", CompactionConfig(model_relative_enabled=False, **base),
             "Kill switch: fixed 100k threshold, keep the last protected_turns turns, no hysteresis, immediate checkpoint.",
+        ),
+        "nova_micro_compress": Arm(
+            "nova_micro_compress", CompactionConfig(**{**base, "summary_model_id": NOVA_MICRO}),
+            "Baseline: production's compression prompt and budget on Nova Micro, the summary model before Nova 2 Lite.",
         ),
         "raw_summary": Arm(
             "raw_summary", CompactionConfig(summary_token_budget=10**9, **base),

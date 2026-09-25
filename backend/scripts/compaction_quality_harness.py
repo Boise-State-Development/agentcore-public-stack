@@ -281,7 +281,7 @@ def build_parser() -> argparse.ArgumentParser:
     cut.add_argument("--overhead", type=int, default=15_000, help="System prompt + tool tokens counted toward the ceiling.")
     cut.add_argument("--summary", choices=SUMMARY_MODES, default="fallback")
     cut.add_argument("--summary-model", action="store_true",
-                     help="Let bound_summary call Nova Micro when records exceed the budget (spends; needs AWS).")
+                     help="Let bound_summary call its summary model when records exceed the budget (spends; needs AWS).")
     cut.set_defaults(func=cmd_cut)
 
     rec = sub.add_parser("records", help="Generate LTM-shaped summary records (spends).")
