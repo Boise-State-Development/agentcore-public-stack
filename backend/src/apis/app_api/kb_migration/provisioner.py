@@ -300,9 +300,12 @@ async def _ingest_waiting(assistant_id: str, waiting: List[Dict[str, Any]]) -> i
             )
             continue
 
-        await _to_thread(
+        if not await _to_thread(
             ic.set_document_terminal, assistant_id, document_id, "uploading"
-        )
+        ):
+            # Deleted while its knowledge base was being provisioned. The row is
+            # not recreated, and there is nothing left to ingest it for.
+            continue
         try:
             await _to_thread(ic.handle_object, bucket, s3_key)
             done += 1

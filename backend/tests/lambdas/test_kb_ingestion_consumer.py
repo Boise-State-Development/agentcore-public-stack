@@ -1038,3 +1038,103 @@ class TestByteCapReconcileAtIngestion:
         ic.handle_object(BUCKET, KEY)
         kb = self._kb(table)
         assert "reservedBytes" not in kb and "storedBytes" not in kb
+
+
+# ---------------------------------------------------------------------------
+# A deleted document is not recreated by a late event
+# ---------------------------------------------------------------------------
+class TestADeletedDocumentIsNotRecreated:
+    """``UpdateItem`` is an upsert. Deleting a document, or its whole agent, removes
+    the ``DOC#`` row, and a late or redelivered ingestion event would otherwise
+    recreate it as a ghost row holding only a status and timestamps — the
+    orphaned rows ``scripts/cleanup_orphaned_agent_rows.py`` exists to remove."""
+
+    def _seed_managed(self, table):
+        _seed_kb(table, retrievalEngine="managed", awsKbId="KB123", awsDataSourceId="DS456")
+
+    def _delete_doc(self, table):
+        table.delete_item(Key={"PK": f"AST#{ASSISTANT_ID}", "SK": f"DOC#{DOCUMENT_ID}"})
+
+    def _doc_or_none(self, table):
+        return table.get_item(
+            Key={"PK": f"AST#{ASSISTANT_ID}", "SK": f"DOC#{DOCUMENT_ID}"}
+        ).get("Item")
+
+    def _kb(self, table):
+        return table.get_item(
+            Key={"PK": f"AST#{ASSISTANT_ID}", "SK": f"KB#{ASSISTANT_ID}"}
+        ).get("Item") or {}
+
+    def test_a_status_write_to_a_removed_row_is_a_skip_not_a_failure(self, table, monkeypatch):
+        """No retry, no raise, no DLQ: retrying cannot bring a deleted row back."""
+        self._delete_doc(table)
+        sleeps = []
+        monkeypatch.setattr(ic.time, "sleep", sleeps.append)
+
+        assert ic.set_document_terminal(ASSISTANT_ID, DOCUMENT_ID, ic.STATUS_COMPLETE) is False
+
+        assert self._doc_or_none(table) is None
+        assert sleeps == [], "a rejected existence guard was retried as if transient"
+
+    def test_an_existing_row_is_still_driven_terminal(self, table):
+        assert ic.set_document_terminal(
+            ASSISTANT_ID, DOCUMENT_ID, ic.STATUS_COMPLETE,
+            indexed_at="2026-09-01T00:00:00Z", retrievable_at="2026-09-01T00:00:01Z",
+        ) is True
+        doc = _doc(table)
+        assert doc["status"] == "complete"
+        assert doc["indexedAt"] == "2026-09-01T00:00:00Z"
+
+    def test_a_transient_failure_is_still_retried_then_raised(self, table, monkeypatch):
+        """The guard narrows the retry to what it was for; it must not remove it."""
+        from botocore.exceptions import ClientError
+
+        monkeypatch.setattr(ic.time, "sleep", lambda _s: None)
+        calls = {"n": 0}
+
+        class _Throttled:
+            def update_item(self, **kwargs):
+                calls["n"] += 1
+                raise ClientError(
+                    {"Error": {"Code": "ProvisionedThroughputExceededException"}},
+                    "UpdateItem",
+                )
+
+        monkeypatch.setattr(ic, "_table", lambda: _Throttled())
+
+        with pytest.raises(ic.IngestionRoutingError):
+            ic.set_document_terminal(ASSISTANT_ID, DOCUMENT_ID, ic.STATUS_COMPLETE)
+        assert calls["n"] == ic.MAX_RECORD_UPDATE_ATTEMPTS
+
+    def test_a_late_completion_for_a_deleted_document_recreates_nothing(self, table):
+        """Late event after the delete released the reservation and removed the row.
+
+        Previously: ``settle_once`` recreated the row and claimed, the reconcile
+        reserved and committed the real size against the deleted document, and the
+        terminal write stamped the ghost ``complete``.
+        """
+        self._seed_managed(table)
+        self._delete_doc(table)
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend",
+            return_value=_FakeBackend(statuses=["INDEXED"]),
+        ):
+            result = ic.handle_object(BUCKET, KEY)
+
+        assert result["routed"] == "managed"
+        assert self._doc_or_none(table) is None
+        kb = self._kb(table)
+        assert int(kb.get("storedBytes") or 0) == 0, "bytes were committed for a deleted document"
+        assert int(kb.get("totalBytes") or 0) == 0
+
+    def test_a_late_failure_for_a_deleted_document_recreates_nothing(self, table):
+        self._seed_managed(table)
+        self._delete_doc(table)
+        with patch(
+            "apis.shared.kb_backend.managed_backend.ManagedKbBackend",
+            return_value=_FakeBackend(statuses=["FAILED"]),
+        ):
+            result = ic.handle_object(BUCKET, KEY)
+
+        assert result["status"] == "FAILED"
+        assert self._doc_or_none(table) is None

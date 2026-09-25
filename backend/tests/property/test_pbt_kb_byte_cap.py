@@ -176,6 +176,55 @@ def test_commit_does_not_double_count(table, sizes):
     assert reserved == 0
 
 
+DOCUMENT_ID = "doc-cap01"
+DOC_KEY = {"PK": kb_pk(ASSISTANT_ID), "SK": f"DOC#{DOCUMENT_ID}"}
+
+
+@given(callers=st.integers(min_value=1, max_value=8), row_exists=st.booleans())
+@settings(max_examples=40, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
+def test_settle_once_claims_at_most_once_and_never_creates_the_row(table, callers, row_exists):
+    """Exactly one claim per existing ``DOC#`` row, none for a removed one.
+
+    The removed case is the one that broke: ``attribute_not_exists(byteCapSettled)``
+    holds on a missing item, so the claim succeeded, the upsert recreated the row
+    as a ghost holding only the marker, and the caller went on to settle bytes
+    that had already been settled when the document was deleted.
+    """
+    table.delete_item(Key=DOC_KEY)
+    if row_exists:
+        table.put_item(Item={**DOC_KEY, "status": "uploading"})
+
+    claims = [bc.settle_once(ASSISTANT_ID, DOCUMENT_ID) for _ in range(callers)]
+
+    assert claims.count(True) == (1 if row_exists else 0)
+    assert (table.get_item(Key=DOC_KEY).get("Item") is not None) == row_exists
+
+
+def test_a_late_settle_after_document_delete_does_not_settle_twice(table):
+    """The accounting consequence of the ghost row, end to end.
+
+    Deleting a document releases its reservation under ``settle_once`` and then
+    removes the row. An ingestion event arriving after that must find nothing to
+    settle; claiming again would commit bytes that were already returned, driving
+    ``reservedBytes`` negative and charging the owner for a deleted document.
+    """
+    _reset(table)
+    table.put_item(Item={**DOC_KEY, "status": "uploading", "sizeBytes": 100})
+    bc.reserve(ASSISTANT_ID, APP_KB_ID, 100, CAP)
+
+    # Document delete: soft-delete path releases, then the row is hard-deleted.
+    assert bc.settle_once(ASSISTANT_ID, DOCUMENT_ID)
+    bc.release(ASSISTANT_ID, APP_KB_ID, 100)
+    table.delete_item(Key=DOC_KEY)
+
+    # The late ingestion's settle-on-complete.
+    if bc.settle_once(ASSISTANT_ID, DOCUMENT_ID):
+        bc.commit(ASSISTANT_ID, APP_KB_ID, 100)
+
+    assert _counters(table) == (0, 0, 0)
+    assert table.get_item(Key=DOC_KEY).get("Item") is None
+
+
 # ---------------------------------------------------------------------------
 # Boundary and rejection behaviour
 # ---------------------------------------------------------------------------

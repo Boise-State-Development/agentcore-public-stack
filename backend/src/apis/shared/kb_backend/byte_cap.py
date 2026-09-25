@@ -303,19 +303,38 @@ def settle_once(assistant_id: str, document_id: str) -> bool:
 
     Keyed on the ``DOC#`` row rather than a separate ledger so the claim shares the
     document's own lifetime: delete the document and the marker goes with it.
+
+    That lifetime is also why an absent row returns ``False``. Without the
+    ``RECORD_EXISTS`` guard, ``attribute_not_exists(byteCapSettled)`` is trivially
+    true on a missing item and the upsert would recreate the row as a ghost
+    ``DOC#`` holding only the marker, then hand the caller a claim to settle
+    bytes a second time. A row is removed in two ways, and neither leaves
+    anything to settle: deleting one document soft-deletes it and releases its
+    reservation through this same claim *before* the hard delete, and deleting
+    the agent tears its ``KB#`` record down too, so the paired
+    :func:`commit`/:func:`release` would no-op anyway. The rejected item is
+    returned (``ALL_OLD``) only so the log can tell "already settled" from "gone".
     """
     from botocore.exceptions import ClientError
+
+    from apis.shared.kb_backend.records import RECORD_EXISTS
 
     try:
         _table().update_item(
             Key={"PK": f"AST#{assistant_id}", "SK": f"DOC#{document_id}"},
             UpdateExpression="SET byteCapSettled = :true",
-            ConditionExpression="attribute_not_exists(byteCapSettled)",
+            ConditionExpression=f"{RECORD_EXISTS} AND attribute_not_exists(byteCapSettled)",
             ExpressionAttributeValues={":true": True},
+            ReturnValuesOnConditionCheckFailure="ALL_OLD",
         )
         return True
     except ClientError as exc:
         if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            if not exc.response.get("Item"):
+                logger.info(
+                    f"DOC# row {assistant_id}/{document_id} is gone (document or agent "
+                    f"deleted); nothing to settle, and not recreating it"
+                )
             return False
         raise
 
