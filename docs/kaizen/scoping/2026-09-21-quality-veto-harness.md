@@ -339,3 +339,66 @@ of records to 381–2,629 (median ~730) in every transcript, against prod's
 - The run covers only the restore pace. Warm sessions hold the full history
   up to the hard ceiling and are affected later, not less.
 
+---
+
+## 9. Screening the levers (2026-09-25, free check only)
+
+**Method.** Same corpus, the same `records.json` as §8, and the restore pace.
+Each candidate runs the production cut with only the summarizer swapped
+(`compaction_quality/summarizers.py`, `Arm.summarizer`). Three repetitions
+per candidate, because the compressors sample at `temperature` 0.1. Nova
+Micro's own numbers moved between runs. The metric is free availability,
+which is what the §8 paid run tracked family by family. Spend was pennies.
+
+Share of planted values in context, as the mean of 3 runs (min–max), with
+~108 plants per run:
+
+| summarizer | all | constraint | decision | reference | superseded | summary tokens (median) |
+|---|---|---|---|---|---|---|
+| prod: Nova Micro, `bound_summary` | 76.5 (74–79) | 77.8 | 76.4 | **58.3** | 93.1 | ~760 |
+| option 3: extract + Nova Micro | 88.0 (87–89) | 84.3 | 90.3 | 84.7 | 94.4 | ~1,160 |
+| option 2: Haiku 4.5, temperature only | 97.5 (96–99) | 99.1 | 100 | 90.3 | 100 | ~1,350 |
+| option 2: **Nova 2 Lite**, prod `bound_summary` unchanged | 98.8 (98–100) | 100 | 95.8 | 100 | 98.6 | ~1,450 |
+| option 3: extract + Haiku 4.5 | 100 (100–100) | 100 | 100 | 100 | 100 | ~1,870 |
+| option 3: **extract + Nova 2 Lite** | **100 (100–100)** | 100 | 100 | 100 | 100 | ~1,900 |
+| ceiling: uncompressed | 100 | 100 | 100 | 100 | 100 | ~14,850 |
+
+**⚠️ Found along the way: production cannot run Claude as the summarizer.**
+`compress_with_model` sends both `temperature` and `topP`. Haiku 4.5
+rejects that with "`temperature` and `top_p` cannot both be specified", so
+setting `AGENTCORE_MEMORY_COMPACTION_SUMMARY_MODEL_ID` to a Claude model
+fails every compression, silently, into newest-first truncation. The first
+screen measured exactly that: 69/63/58/92. The Haiku rows above use
+`summarizers._compress`, which is the same prompt with `temperature` only.
+
+**Cost per cut.** One cut compresses ~15–20k tokens of records. At
+us-west-2 in-region rates from the Price List API, per MTok:
+- Nova Micro: $0.035 / $0.14, about **$0.001** per cut;
+- Nova 2 Lite: $0.33 / $2.75, about **$0.011** per cut, or ~$0.02 with
+  extraction;
+- Haiku 4.5: $1.10 / $5.50, about **$0.035**, or ~$0.06 with extraction.
+
+At prod's ~18 cuts a day that is cents a day for any of them. The larger
+summary also rides in the cached prefix: ~1.1k more tokens than today is
+about $0.0002 per turn at a Sonnet 5 cache read. Neither cost is a reason
+to keep the lossy compressor.
+
+**Recommendation.**
+1. **Nova 2 Lite as the summary model.** It is a one-line default change
+   (`Defaults.COMPACTION_SUMMARY_MODEL_ID = "us.amazon.nova-2-lite-v1:0"`)
+   and runs on production's `bound_summary` unchanged, because Nova accepts
+   `topP`. It lifts availability from 76.5% to 98.8%, and exact identifiers
+   from 58% to 100%. The `us.*` profile works in dev, whose SCP denies
+   `global.*`. The runtime role already allows every foundation model and
+   profile.
+2. **Then extract-then-compress**, moved from `summarizers.py` into
+   `compaction_summary.py`, for the last ~1% and for robustness. Pinning
+   facts verbatim is the structural fix for what compression drops. On Nova
+   2 Lite it scored 100% in every run.
+3. **Independently: drop `topP` from `compress_with_model`**, or send it
+   only to models that accept it. It is a latent silent-failure trap for
+   anyone who configures a Claude summarizer.
+4. **Before shipping 1 or 2, confirm with a paid `ask`** on the chosen arm.
+   Availability is an upper bound, though in §8 it tracked the scored result
+   to within a few points per family.
+
