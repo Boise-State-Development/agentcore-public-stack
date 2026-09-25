@@ -64,6 +64,7 @@ def _create_cache_key(
     document_tools: bool = False,
     assistant_id: Optional[str] = None,
     memory_binding: str = "",
+    memory_context: Optional[str] = None,
 ) -> Tuple:
     """
     Create a cache key for agent instances.
@@ -75,6 +76,11 @@ def _create_cache_key(
     space live on every call, so they are described once the key carries this.
     Empty string without a binding, so binding-less turns key exactly as
     before apart from the constant extra element.
+
+    `memory_context` is the rendered Memory-Space block sent after the system
+    prompt (Shared Projects 2.2). It used to be part of `system_prompt`, so it
+    is folded into the same prompt hash rather than adding an element; a turn
+    without memory hashes exactly as before.
 
     `assistant_id` is the assistant (RAG corpus) the turn ran against. The
     spreadsheet-analysis builders close over it, so without it in the key a
@@ -107,8 +113,11 @@ def _create_cache_key(
 
     # Hash system prompt if provided (can be very long)
     prompt_hash = None
-    if system_prompt:
-        prompt_hash = hashlib.md5(system_prompt.encode()).hexdigest()[:8]
+    if system_prompt or memory_context:
+        prompt_material = system_prompt or ""
+        if memory_context:
+            prompt_material += "\x00memory\x00" + memory_context
+        prompt_hash = hashlib.md5(prompt_material.encode()).hexdigest()[:8]
 
     return (
         session_id,
@@ -289,6 +298,7 @@ async def get_agent(
     assistant_id: Optional[str] = None,
     build_stage_recorder: Optional[Callable[[str], None]] = None,
     memory_binding: Optional[Dict[str, Any]] = None,
+    memory_context: Optional[str] = None,
 ) -> BaseAgent:
     """
     Get or create agent instance with current configuration for session
@@ -321,6 +331,9 @@ async def get_agent(
             ``{"spaceId", "spaceName", "access"}``, or None. A key element
             (see ``_create_cache_key``) and stamped on the construction
             snapshot so a paused turn resumes into the same slot.
+        memory_context: The rendered Memory-Space block, sent after the system
+            prompt behind its own cache point. Hashed with the prompt in the
+            key and snapshotted by ``BaseAgent`` for resume.
         cache_write: Whether this caller may *populate* the cache. Read stays
             allowed either way. Set False by callers that build a partial
             toolset for a session whose real turns build more — otherwise they
@@ -370,6 +383,7 @@ async def get_agent(
         document_tools=has_document_tools,
         assistant_id=assistant_id,
         memory_binding=memory_binding_digest(memory_binding),
+        memory_context=memory_context,
     )
 
     # Whether this turn's injected tools (if any) let it use the cache at all.
@@ -437,6 +451,8 @@ async def get_agent(
         mantle_api_mode=mantle_api_mode,
         mantle_region=mantle_region,
     )
+    if memory_context:
+        create_kwargs["memory_context"] = memory_context
     # Skills v2: ChatAgent (now the target of both "chat" and "skill" types)
     # accepts accessible_skill_ids and conditionally adds the AgentSkills
     # plugin. Pass it through whenever resolved — VoiceAgent does not take the

@@ -36,12 +36,15 @@ from urllib.parse import urlparse
 
 # Headings `routes.py` composes the user-instructions section under
 # (`compose_agent_system_prompt`, `compose_personal_instructions`,
-# `render_memory_block`, `append_active_prompt`). Matched at a line start.
+# `append_active_prompt`), plus the memory block's opening tag
+# (`render_memory_block`). Since Shared Projects 2.2 the memory block is its own
+# system text block after `</user_instructions>`; Strands joins text blocks with
+# a newline, so the tag still starts a line. Matched at a line start.
 _SECTION_MARKERS: Sequence[Tuple[str, str]] = (
     ("\n## Assistant-Specific Instructions", "agent"),
     ("\n## Project Instructions", "project"),
     ("\n## Personal Instructions", "personal"),
-    ("\n## Bound Memory", "memory"),
+    ("\n<memory_space", "memory"),
     ("\n## Active Mode:", "mode"),
     # The wrapper's close: whatever follows it (tool guidance) is platform text.
     ("\n</user_instructions>", "platform"),

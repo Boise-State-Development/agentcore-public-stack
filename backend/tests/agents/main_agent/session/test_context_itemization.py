@@ -79,9 +79,11 @@ def _prompt(*, agent="", personal="", memory="", skills=False):
         text += "\n\n## Assistant-Specific Instructions\n\n" + agent
     if personal:
         text += "\n\n## Personal Instructions\n\n" + personal
-    if memory:
-        text += '\n\n## Bound Memory — "Notes"\n\n### fact\n' + memory
     text += "\n</user_instructions>"
+    if memory:
+        # Since Shared Projects 2.2 the memory block is its own system text
+        # block after the wrapper; Strands joins text blocks with a newline.
+        text += '\n<memory_space scope="agent" name="Notes" note="...">\n\n### fact\n' + memory + "\n\n</memory_space>"
     if skills:
         text += "\n" + SKILLS_XML
     return text

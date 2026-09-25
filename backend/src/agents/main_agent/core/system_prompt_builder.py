@@ -13,8 +13,10 @@ logger = logging.getLogger(__name__)
 # Hard upper bound on the text wrapped in ``<user_instructions>``: defense in depth
 # against an absurd prompt, not a budget for authors. It has to hold everything composed
 # into that block: the default platform prompt and date, an agent's instructions (capped
-# at save by MAX_AGENT_INSTRUCTIONS_CHARS), a bound memory block (MEMORY_INJECTION_MAX_BYTES,
-# 24 KB by default), the user's personal instructions and an active prompt template.
+# at save by MAX_AGENT_INSTRUCTIONS_CHARS), the user's personal instructions and an active
+# prompt template. A bound Memory-Space block no longer shares it: since Shared Projects 2.2
+# it is sent after the wrapper as its own system block (``memory_context``), so memory can
+# never truncate an agent's instructions.
 #
 # It used to be 8 KiB, sized for instructions alone, while the default prompt sharing it
 # had grown to ~6.8K characters, so every agent's instructions were silently cut after

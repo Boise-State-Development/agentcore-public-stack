@@ -752,3 +752,49 @@ def test_paused_turn_snapshot_round_trips_the_memory_binding():
     assert PausedTurnSnapshot.model_validate(dumped).memory_binding == binding
     legacy = {k: v for k, v in dumped.items() if k != "memoryBinding"}
     assert PausedTurnSnapshot.model_validate(legacy).memory_binding is None
+
+
+class TestMemoryContextCacheKey:
+    """Shared Projects 2.2: the memory block is no longer inside system_prompt,
+    so the key folds it into the prompt hash; resume replays it."""
+
+    BASE = dict(
+        session_id="s", user_id="u", enabled_tools=None, model_id="m",
+        inference_params={}, system_prompt="PROMPT", caching_enabled=False,
+        provider="bedrock", freshness_hash="f", agent_type="chat",
+    )
+
+    def test_no_memory_hashes_exactly_as_before(self):
+        import hashlib
+
+        key = service._create_cache_key(**self.BASE)
+        assert hashlib.md5(b"PROMPT").hexdigest()[:8] in key
+
+    def test_a_memory_edit_changes_the_key(self):
+        a = service._create_cache_key(**self.BASE, memory_context="index v1")
+        b = service._create_cache_key(**self.BASE, memory_context="index v2")
+        none = service._create_cache_key(**self.BASE)
+        assert len({a, b, none}) == 3
+
+    @pytest.mark.asyncio
+    async def test_memory_context_reaches_the_agent_factory(self, mock_create_agent, mock_freshness_hash):
+        await service.get_agent(session_id="s", user_id="u", system_prompt="P", memory_context="MEM")
+        assert mock_create_agent.call_args.kwargs["memory_context"] == "MEM"
+        await service.get_agent(session_id="s2", user_id="u", system_prompt="P")
+        assert "memory_context" not in mock_create_agent.call_args.kwargs
+
+    @pytest.mark.asyncio
+    async def test_resume_with_the_snapshot_memory_hits_the_paused_agent(
+        self, mock_create_agent, mock_freshness_hash
+    ):
+        first = await service.get_agent(session_id="s1", user_id="u1", system_prompt="P", memory_context="MEM")
+        first.agent._interrupt_state.activated = True
+        resumed = await service.get_agent(
+            session_id="s1", user_id="u1", system_prompt="P", memory_context="MEM",
+            is_resume=True, cache_write=False,
+        )
+        assert resumed is first
+        stale = await service.get_agent(
+            session_id="s1", user_id="u1", system_prompt="P", is_resume=True, cache_write=False,
+        )
+        assert stale is not first
