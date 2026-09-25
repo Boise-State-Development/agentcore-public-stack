@@ -101,14 +101,14 @@ def inbox(user: User) -> dict:
 
 
 def test_every_membership_and_lifecycle_change_is_recorded(service, pid):
-    service.update_project(pid, EDITOR, name="Budget FY27")
+    asyncio.run(service.update_project(pid, EDITOR, name="Budget FY27"))
     service.update_member_role(pid, OWNER, VIEWER.email, "editor")
     service.remove_member(pid, OWNER, VIEWER.email)
     service.get_project(pid, EDITOR)  # back-fills the editor's userId, which transfer needs
     service.transfer_ownership(pid, OWNER, EDITOR.email)
     service.leave(pid, OWNER)
-    service.update_project(pid, EDITOR, status="archived")
-    service.update_project(pid, EDITOR, status="active")
+    asyncio.run(service.update_project(pid, EDITOR, status="archived"))
+    asyncio.run(service.update_project(pid, EDITOR, status="active"))
 
     assert actions(service, pid) == [
         "project.created",
@@ -134,12 +134,12 @@ def test_every_membership_and_lifecycle_change_is_recorded(service, pid):
 def test_nothing_is_recorded_for_a_change_that_changes_nothing(service, pid):
     before = actions(service, pid)
     service.update_member_role(pid, OWNER, EDITOR.email, "editor")
-    service.update_project(pid, OWNER, name="Budget")
+    asyncio.run(service.update_project(pid, OWNER, name="Budget"))
     assert actions(service, pid) == before
 
 
 def test_purge_leaves_its_record_behind(service, pid):
-    service.update_project(pid, OWNER, status="archived")
+    asyncio.run(service.update_project(pid, OWNER, status="archived"))
     asyncio.run(service.purge_project(pid, OWNER))
     assert actions(service, pid)[-2:] == ["project.archived", "project.deleted"]
 

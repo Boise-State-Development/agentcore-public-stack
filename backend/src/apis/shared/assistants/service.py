@@ -994,7 +994,7 @@ PROJECT_HARNESS_EDIT_MESSAGE = (
 )
 
 
-async def assert_deletable(assistant_id: str, owner_id: str) -> None:
+async def assert_deletable(assistant_id: str, owner_id: str) -> Optional[Assistant]:
     """Raise ``AssistantListedError`` if this Agent's listing forbids deletion (§5.2).
 
     Exists so a caller that does destructive work *before* the record delete can refuse
@@ -1002,12 +1002,20 @@ async def assert_deletable(assistant_id: str, owner_id: str) -> None:
     so discovering the refusal at the record write would leave the Agent gutted and still
     in the store — worse than either outcome on its own.
 
+    A project's harness is refused here too (``ProjectHarnessError``, a 409), for the same
+    reason: ``delete_assistant`` refuses it, but only after the route has soft-deleted the
+    project's files.
+
     Silent when the Agent is missing or not the caller's: that is the delete path's own 404,
-    and pre-empting it here would turn "not found" into "not deletable".
+    and pre-empting it here would turn "not found" into "not deletable". Returns the
+    caller's Agent when it exists, so the route can act on it without a second read.
     """
     existing = await get_assistant(assistant_id, owner_id)
     if existing:
+        if is_project_harness(existing):
+            raise ProjectHarnessError(PROJECT_HARNESS_DELETE_MESSAGE)
         _assert_listing_allows_delete(existing)
+    return existing
 
 
 def _assert_listing_allows_delete(existing) -> None:
@@ -1107,6 +1115,37 @@ async def delete_project_harness(assistant_id: str) -> bool:
     if not is_project_harness(existing):
         raise ValueError(f"Agent {assistant_id} is not a project harness")
     return await _delete_assistant_cloud(assistant_id, assistants_table)
+
+
+async def rename_project_harness(
+    assistant_id: str, *, name: Optional[str] = None, description: Optional[str] = None
+) -> bool:
+    """Carry a project's new name or description onto its harness. For ``apis.shared.projects`` only.
+
+    The harness is created with the project's name and description, and the chat
+    breadcrumb ("Agent: {name}") reads the harness, so a project rename that stopped
+    at META left every task showing the old name. The agent routes refuse a harness
+    edit (``PROJECT_HARNESS_EDIT_MESSAGE``), so the project is the only writer here,
+    as it is for the harness's settings.
+
+    Cuts no ``AgentVersion``: versions are the project's settings history
+    (instructions, model, tools, skills), and a rename is none of those.
+
+    Returns False if the record is absent; raises ``ValueError`` if it is not a harness.
+    """
+    assistants_table = os.environ.get("DYNAMODB_ASSISTANTS_TABLE_NAME")
+    if not assistants_table:
+        raise RuntimeError("DYNAMODB_ASSISTANTS_TABLE_NAME environment variable is required")
+
+    existing = await _get_assistant_cloud_without_ownership_check(assistant_id, assistants_table)
+    if existing is None:
+        return False
+    if not is_project_harness(existing):
+        raise ValueError(f"Agent {assistant_id} is not a project harness")
+    updated = await update_assistant(
+        assistant_id=assistant_id, owner_id=existing.owner_id, name=name, description=description
+    )
+    return updated is not None
 
 
 async def _delete_assistant_cloud(assistant_id: str, table_name: str) -> bool:

@@ -29,6 +29,10 @@ class HarnessGateway(Protocol):
         """Delete the harness. Must tolerate an id that is already gone."""
         ...
 
+    async def rename(self, agent_id: str, *, name: str, description: str) -> None:
+        """Give the harness the project's current name and description."""
+        ...
+
 
 class AssistantsHarnessGateway:
     """Default gateway over ``apis.shared.assistants.service``.
@@ -57,3 +61,8 @@ class AssistantsHarnessGateway:
         from apis.shared.assistants.service import delete_project_harness
 
         await delete_project_harness(agent_id)
+
+    async def rename(self, agent_id: str, *, name: str, description: str) -> None:
+        from apis.shared.assistants.service import rename_project_harness
+
+        await rename_project_harness(agent_id, name=name, description=description)

@@ -291,7 +291,7 @@ class ProjectService:
         self.record(AuditAction.PROJECT_CREATED, user, project_id, after={"name": clean_name})
         return project
 
-    def update_project(
+    async def update_project(
         self,
         project_id: str,
         user: User,
@@ -304,6 +304,9 @@ class ProjectService:
         """Editors change name and description; settings and status are the owner's.
 
         An archived project accepts exactly one change: the owner restoring it.
+
+        A new name or description is carried onto the harness too, after META is
+        saved (see :meth:`_sync_harness_identity`).
         """
         project, role = self._require(project_id, user, "editor")
 
@@ -337,7 +340,25 @@ class ProjectService:
         except ProjectWriteConflict as e:
             raise ProjectConflictError("The project changed while you were editing it. Reload and try again.") from e
         self._record_update(user, project, saved)
+        await self._sync_harness_identity(project, saved)
         return saved, role
+
+    async def _sync_harness_identity(self, before: Project, after: Project) -> None:
+        """Give the harness the project's new name/description, if either changed.
+
+        After the META write, which is the source of truth and is already saved, so
+        a failure here is logged rather than raised: failing the request would tell
+        the user a rename that happened did not. The next rename repairs it.
+        """
+        if (before.name, before.description) == (after.name, after.description):
+            return
+        try:
+            await self.harness.rename(after.harness_agent_id, name=after.name, description=after.description)
+        except Exception:
+            logger.error(
+                "Project %s renamed, but its harness %s kept the old name",
+                after.project_id, after.harness_agent_id, exc_info=True,
+            )
 
     def _record_update(self, actor: User, before: Project, after: Project, reason: Optional[str] = None) -> None:
         if before.status != after.status:

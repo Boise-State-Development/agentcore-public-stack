@@ -64,6 +64,7 @@ class FakeHarness:
     def __init__(self) -> None:
         self.created: List[Tuple[str, str]] = []
         self.deleted: List[str] = []
+        self.renamed: List[Tuple[str, str, str]] = []
 
     async def create(self, *, project_id, owner_id, owner_name, name, description) -> str:
         agent_id = f"ast-fake{len(self.created)}"
@@ -72,6 +73,9 @@ class FakeHarness:
 
     async def delete(self, agent_id: str) -> None:
         self.deleted.append(agent_id)
+
+    async def rename(self, agent_id: str, *, name: str, description: str) -> None:
+        self.renamed.append((agent_id, name, description))
 
 
 @pytest.fixture()
@@ -198,7 +202,7 @@ def test_list_merges_owned_and_shared_with_the_callers_role(service):
 
 def test_archived_projects_are_listed_only_on_request(service):
     project = create(service)
-    service.update_project(project.project_id, OWNER, status="archived")
+    asyncio.run(service.update_project(project.project_id, OWNER, status="archived"))
 
     assert service.list_projects(OWNER) == []
     assert [p.project_id for p, _ in service.list_projects(OWNER, include_archived=True)] == [project.project_id]
@@ -209,28 +213,55 @@ def test_archived_projects_are_listed_only_on_request(service):
 
 def test_editor_edits_content_but_not_settings_or_status(service):
     project = with_members(service)
-    updated, role = service.update_project(project.project_id, EDITOR, name="Renamed")
+    updated, role = asyncio.run(service.update_project(project.project_id, EDITOR, name="Renamed"))
     assert (updated.name, role) == ("Renamed", "editor")
 
     with pytest.raises(ProjectPermissionError):
-        service.update_project(project.project_id, EDITOR, editors_manage_members=False)
+        asyncio.run(service.update_project(project.project_id, EDITOR, editors_manage_members=False))
     with pytest.raises(ProjectPermissionError):
-        service.update_project(project.project_id, EDITOR, status="archived")
+        asyncio.run(service.update_project(project.project_id, EDITOR, status="archived"))
     with pytest.raises(ProjectPermissionError):
-        service.update_project(project.project_id, VIEWER, name="Nope")
+        asyncio.run(service.update_project(project.project_id, VIEWER, name="Nope"))
+
+
+def test_a_rename_is_carried_onto_the_harness_after_meta(service, harness, repo):
+    project = with_members(service)
+    asyncio.run(service.update_project(project.project_id, EDITOR, name="Renamed"))
+    asyncio.run(service.update_project(project.project_id, EDITOR, description="New scope"))
+    asyncio.run(service.update_project(project.project_id, OWNER, editors_manage_members=False))
+    asyncio.run(service.update_project(project.project_id, EDITOR, name="Renamed"))  # no-op
+
+    assert harness.renamed == [
+        (project.harness_agent_id, "Renamed", "Canvas enrollment work"),
+        (project.harness_agent_id, "Renamed", "New scope"),
+    ]
+
+
+def test_a_failed_harness_rename_does_not_fail_the_saved_project_rename(service, harness, repo):
+    """META is the source of truth and is already saved; telling the user the rename
+    failed would be wrong. The next rename repairs the harness."""
+    project = create(service)
+
+    async def boom(agent_id, *, name, description):
+        raise RuntimeError("assistants table unavailable")
+
+    harness.rename = boom
+    updated, _ = asyncio.run(service.update_project(project.project_id, OWNER, name="Renamed"))
+    assert updated.name == "Renamed"
+    assert repo.get_project(project.project_id).name == "Renamed"
 
 
 def test_archived_project_is_read_only_until_the_owner_restores_it(service):
     project = with_members(service)
-    service.update_project(project.project_id, OWNER, status="archived")
+    asyncio.run(service.update_project(project.project_id, OWNER, status="archived"))
 
     with pytest.raises(ProjectConflictError):
-        service.update_project(project.project_id, EDITOR, name="Blocked")
+        asyncio.run(service.update_project(project.project_id, EDITOR, name="Blocked"))
     with pytest.raises(ProjectConflictError):
         service.add_members(project.project_id, OWNER, ["new@example.edu"], "viewer")
     assert service.get_project(project.project_id, VIEWER)[0].status == "archived"  # still readable
 
-    restored, _ = service.update_project(project.project_id, OWNER, status="active")
+    restored, _ = asyncio.run(service.update_project(project.project_id, OWNER, status="active"))
     assert restored.status == "active"
 
 
@@ -248,7 +279,7 @@ def test_purge_requires_archive_and_deletes_harness_then_rows(service, harness, 
     with pytest.raises(ProjectConflictError):
         asyncio.run(service.purge_project(project.project_id, OWNER))
 
-    service.update_project(project.project_id, OWNER, status="archived")
+    asyncio.run(service.update_project(project.project_id, OWNER, status="archived"))
     with pytest.raises(ProjectPermissionError):
         asyncio.run(service.purge_project(project.project_id, EDITOR))
 
@@ -261,7 +292,7 @@ def test_purge_requires_archive_and_deletes_harness_then_rows(service, harness, 
 
 def test_purge_leaves_the_project_retryable_if_the_harness_delete_fails(service, harness, repo):
     project = create(service)
-    service.update_project(project.project_id, OWNER, status="archived")
+    asyncio.run(service.update_project(project.project_id, OWNER, status="archived"))
 
     async def fail(agent_id):
         raise RuntimeError("assistants table unavailable")
@@ -307,7 +338,7 @@ def test_editors_manage_members_unless_the_owner_turns_it_off(service):
     project = with_members(service)
     service.add_members(project.project_id, EDITOR, ["x@example.edu"], "viewer")
 
-    service.update_project(project.project_id, OWNER, editors_manage_members=False)
+    asyncio.run(service.update_project(project.project_id, OWNER, editors_manage_members=False))
     with pytest.raises(ProjectPermissionError):
         service.add_members(project.project_id, EDITOR, ["y@example.edu"], "viewer")
     with pytest.raises(ProjectPermissionError):

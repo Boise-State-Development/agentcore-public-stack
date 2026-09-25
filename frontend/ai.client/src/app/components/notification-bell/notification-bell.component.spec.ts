@@ -38,9 +38,11 @@ describe('describeNotification', () => {
 describe('NotificationBellComponent', () => {
   const notifications = signal<AppNotification[]>([]);
   const unreadCount = signal(0);
+  const error = signal<string | null>(null);
+  const ready = signal(true);
   const service = {
     notifications, unreadCount,
-    loading: signal(false), error: signal<string | null>(null), ready: signal(true),
+    loading: signal(false), error, ready,
     refresh: vi.fn().mockResolvedValue(undefined),
     markRead: vi.fn().mockResolvedValue(undefined),
     markAllRead: vi.fn().mockResolvedValue(undefined),
@@ -52,6 +54,9 @@ describe('NotificationBellComponent', () => {
     vi.clearAllMocks();
     notifications.set([]);
     unreadCount.set(0);
+    error.set(null);
+    ready.set(true);
+    document.querySelectorAll('.cdk-overlay-container').forEach(el => (el.innerHTML = ''));
     TestBed.configureTestingModule({
       imports: [NotificationBellComponent],
       providers: [
@@ -85,6 +90,70 @@ describe('NotificationBellComponent', () => {
     fixture.detectChanges();
     expect(el.querySelector('button')!.getAttribute('aria-label')).toBe('Notifications');
     expect(el.querySelector('button')!.textContent?.trim()).toBe('');
+  });
+
+  /** Opens the panel and returns its menu element (it renders in the CDK overlay). */
+  async function openPanel() {
+    const rendered = render();
+    (rendered.el.querySelector('button') as HTMLButtonElement).click();
+    rendered.fixture.detectChanges();
+    await rendered.fixture.whenStable();
+    const menu = document.querySelector('[role="menu"]') as HTMLElement;
+    expect(menu).toBeTruthy();
+    return { ...rendered, menu };
+  }
+
+  /**
+   * axe's `aria-required-children`, the rule the empty panel failed: a menu must
+   * own at least one menu item, and nothing else with a role of its own (a `<p>`
+   * is a paragraph). Walks through role-less wrappers the way axe does.
+   */
+  function ownedRoles(menu: HTMLElement): string[] {
+    const roles: string[] = [];
+    const implicit: Record<string, string> = { P: 'paragraph', BUTTON: 'button', UL: 'list', LI: 'listitem' };
+    const walk = (el: Element) => {
+      for (const child of Array.from(el.children)) {
+        const role = child.getAttribute('role') ?? implicit[child.tagName] ?? null;
+        if (role) roles.push(role);
+        else walk(child);
+      }
+    };
+    walk(menu);
+    return roles;
+  }
+
+  it('an empty inbox is a disabled menu item, so the menu is never empty', async () => {
+    const { menu } = await openPanel();
+    const status = menu.querySelector('[data-testid="notification-status"]') as HTMLElement;
+    expect(status.getAttribute('role')).toBe('menuitem');
+    expect(status.getAttribute('aria-disabled')).toBe('true');
+    expect(status.textContent?.trim()).toBe('You’re all caught up.');
+    expect(ownedRoles(menu)).toEqual(['menuitem']);
+  });
+
+  it('loading and a failed load are disabled menu items too', async () => {
+    ready.set(false);
+    const { fixture, menu } = await openPanel();
+    let status = menu.querySelector('[data-testid="notification-status"]') as HTMLElement;
+    expect(status.getAttribute('aria-disabled')).toBe('true');
+    expect(status.textContent?.trim()).toBe('Loading notifications…');
+    expect(menu.querySelector('[aria-busy]')).toBeNull();
+    expect(ownedRoles(menu)).toEqual(['menuitem']);
+
+    error.set('Notifications couldn’t be loaded.');
+    fixture.detectChanges();
+    status = menu.querySelector('[data-testid="notification-status"]') as HTMLElement;
+    expect(status.textContent?.trim()).toBe('Notifications couldn’t be loaded.');
+    expect(ownedRoles(menu)).toEqual(['menuitem']);
+  });
+
+  it('with notifications the menu owns only its items, the header included', async () => {
+    notifications.set([notif(), notif({ notificationId: 'n2', readAt: '2026-09-24T01:00:00Z' })]);
+    unreadCount.set(1);
+    const { menu } = await openPanel();
+    expect(menu.querySelector('[data-testid="notification-status"]')).toBeNull();
+    expect(menu.querySelector('p')).toBeNull();
+    expect(ownedRoles(menu)).toEqual(['menuitem', 'menuitem', 'menuitem']); // two + "Mark all as read"
   });
 
   it('opening a notification marks it read and goes to the project', () => {

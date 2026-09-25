@@ -48,6 +48,16 @@ SKILL = "skill"
 # returns), so history can name an editor who has since left the project.
 CREATED_BY_EMAIL = "createdByEmail"
 
+# What the project's settings history reports as changed. A version snapshot also
+# carries the harness's name and description, which follow the project's own and
+# change without a version (``ProjectService._sync_harness_identity``), so the first
+# save after a rename would otherwise list "name" as something that save changed.
+SETTINGS_FIELDS = ("instructions", "bindings", "model_settings")
+
+
+def settings_changes(before: Optional[AgentVersion], after: AgentVersion) -> List[Tuple[str, object, object]]:
+    return [change for change in changed_fields(before, after) if change[0] in SETTINGS_FIELDS]
+
 
 @dataclass
 class HarnessView:
@@ -188,7 +198,7 @@ class HarnessSettingsService:
         project, _ = self.projects.authorize(project_id, user, "viewer")
         versions = await list_versions(project.harness_agent_id, limit=limit + 1)
         return [
-            (v, [field for field, _, _ in changed_fields(versions[i + 1] if i + 1 < len(versions) else None, v)])
+            (v, [field for field, _, _ in settings_changes(versions[i + 1] if i + 1 < len(versions) else None, v)])
             for i, v in enumerate(versions[:limit])
         ]
 

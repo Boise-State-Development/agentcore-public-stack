@@ -7,6 +7,7 @@ import { of, throwError } from 'rxjs';
 import { ProjectActivityComponent, describeActivity } from './project-activity.component';
 import { ProjectApiService } from '../services/project-api.service';
 import { UserService } from '../../auth/user.service';
+import { AgentService } from '../../agents/services/agent.service';
 import { Project, ProjectAuditRecord } from '../models/project.model';
 
 const PROJECT: Project = {
@@ -48,6 +49,23 @@ describe('describeActivity', () => {
     expect(describeActivity(record).text).toBe(text);
   });
 
+  it('names models, tools and skills when their display names are known', () => {
+    const names: Record<string, string> = {
+      'model:us.anthropic.claude-haiku-4-5-20251001-v1:0': 'Claude Haiku 4.5',
+      'tool:whoami': 'Who am I',
+      'skill:sk-1': 'Brand voice',
+    };
+    const label = (kind: string, ref: string) => names[`${kind}:${ref}`] ?? ref;
+    expect(describeActivity(
+      rec('project.model_updated', { after: { modelId: 'us.anthropic.claude-haiku-4-5-20251001-v1:0' } }), label,
+    ).text).toBe('changed the model to Claude Haiku 4.5');
+    expect(describeActivity(
+      rec('project.tools_updated', { before: { refs: ['retired_tool'] }, after: { refs: ['whoami'] } }), label,
+    ).text).toBe('added the tool Who am I and removed the tool retired_tool');
+    expect(describeActivity(rec('project.skills_updated', { before: { refs: [] }, after: { refs: ['sk-1'] } }), label).text)
+      .toBe('added the skill Brand voice');
+  });
+
   it('points a settings save at the version it cut', () => {
     expect(describeActivity(rec('project.instructions_updated', { after: { version: 3 } }))).toEqual({
       text: 'updated the instructions', version: 3,
@@ -60,6 +78,7 @@ describe('describeActivity', () => {
 
 describe('ProjectActivityComponent', () => {
   const api = { audit: vi.fn() };
+  const agents = { loadBindable: vi.fn() };
 
   beforeEach(() => {
     TestBed.resetTestingModule();
@@ -70,8 +89,10 @@ describe('ProjectActivityComponent', () => {
         provideRouter([]),
         { provide: ProjectApiService, useValue: api },
         { provide: UserService, useValue: { currentUser: signal({ email: 'Me@x.edu' }) } },
+        { provide: AgentService, useValue: agents },
       ],
     });
+    agents.loadBindable.mockResolvedValue([]);
   });
 
   async function render() {
@@ -97,6 +118,21 @@ describe('ProjectActivityComponent', () => {
     expect(rows[0]).toContain('You updated the instructions. Version 2');
     expect(rows[1]).toContain('ann@x.edu added bo@x.edu as an editor.');
     expect(el.querySelector('a')?.getAttribute('href')).toBe('/projects/prj_1/settings');
+  });
+
+  it('shows display names from the bindable palettes Settings loads', async () => {
+    agents.loadBindable.mockImplementation(async (kind: string) =>
+      kind === 'tool' ? [{ kind: 'tool', ref: 'whoami', label: 'Who am I', description: '', meta: {} }] : [],
+    );
+    api.audit.mockReturnValue(of({
+      records: [rec('project.tools_updated', { before: { refs: [] }, after: { version: 3, refs: ['whoami'] } })],
+      nextCursor: null,
+    }));
+    const { fixture, el } = await render();
+    await new Promise(resolve => setTimeout(resolve)); // the palettes resolve after the trail
+    fixture.detectChanges();
+    expect(agents.loadBindable.mock.calls.map(c => c[0])).toEqual(['model', 'tool', 'skill']);
+    expect(el.querySelector('li')?.textContent?.replace(/\s+/g, ' ')).toContain('ann@x.edu added the tool Who am I.');
   });
 
   it('pages older entries with the cursor', async () => {

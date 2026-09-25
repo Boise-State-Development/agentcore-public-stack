@@ -427,7 +427,18 @@ async def delete_assistant_endpoint(assistant_id: str, current_user: User = Depe
         # the listing check fired down there instead, a refused delete would leave the Agent
         # gutted but still in the store: exactly the failure the refusal exists to prevent,
         # with a live listing pointing at a broken Agent.
-        await assert_deletable(assistant_id, user_id)
+        owned = await assert_deletable(assistant_id, user_id)
+
+        # 0b. Queue the managed knowledge base, if it has one, for teardown. The
+        # migration worker deletes it (app-api holds no bedrock:DeleteKnowledgeBase)
+        # and then removes the KB# record, which nothing else ever would: before
+        # this, a deleted agent's knowledge base stayed ACTIVE and billing. Queued
+        # before anything destructive so a failure here leaves a clean retry, and
+        # only for the caller's own agent.
+        if owned is not None:
+            from apis.app_api.kb_migration.teardown import queue_teardown
+
+            await queue_teardown(assistant_id)
 
         # 1. List all documents for the assistant
         docs, _ = await list_assistant_documents(
