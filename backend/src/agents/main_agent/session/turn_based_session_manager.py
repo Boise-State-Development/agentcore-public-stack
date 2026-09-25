@@ -1648,9 +1648,15 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
             last = last.replace(tzinfo=timezone.utc)
         return int((datetime.now(timezone.utc) - last).total_seconds())
 
-    @staticmethod
-    def _emit_emf(metrics: Dict[str, Any], properties: Dict[str, Any], units: Optional[Dict[str, str]] = None) -> None:
+    def _emit_emf(self, metrics: Dict[str, Any], properties: Dict[str, Any], units: Optional[Dict[str, str]] = None) -> None:
         """One content-free EMF record in ``AgentCoreStack/Compaction``. Never raises.
+
+        Every record carries the conversation's ``sessionId`` as a log
+        property, the way the prompt-cache records do — never a dimension,
+        which would mint a metric stream per conversation. Without it, the
+        2026-09-25 prod readout had to join cuts to sessions by matching input
+        tokens within ±30 min. Numbers and identifiers only; no conversation
+        content reaches these records.
 
         ``PROMPT_CACHE_OBSERVABILITY_ENABLED=false`` silences it with the rest
         of the cost observability layer.
@@ -1661,7 +1667,13 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
 
             if not prompt_cache_observability_enabled():
                 return
-            emit_emf_metrics("AgentCoreStack/Compaction", metrics=metrics, properties=properties, units=units or {})
+            session_id = getattr(getattr(self, "config", None), "session_id", None)
+            emit_emf_metrics(
+                "AgentCoreStack/Compaction",
+                metrics=metrics,
+                properties={**properties, "sessionId": session_id},
+                units=units or {},
+            )
         except Exception as e:  # noqa: BLE001
             logger.debug("Compaction EMF skipped: %s", e)
 

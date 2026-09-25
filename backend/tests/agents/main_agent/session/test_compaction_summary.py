@@ -235,6 +235,57 @@ class TestCompactionMetrics:
         assert "tiny" not in str(props)
 
     @pytest.mark.asyncio
+    async def test_cut_record_carries_the_session_id_as_a_property_not_a_dimension(
+        self, make_session_manager, bedrock, monkeypatch
+    ):
+        """The readout had to join cuts to sessions by matching input tokens
+        within ±30 min. The session id now rides the record — as a queryable
+        property, never a dimension (one metric stream per conversation)."""
+        import json
+
+        import apis.shared.observability.emf as emf
+
+        lines = []
+        monkeypatch.setattr(emf._emf_logger, "info", lambda line: lines.append(line))
+        monkeypatch.delenv("PROMPT_CACHE_OBSERVABILITY_ENABLED", raising=False)
+        config = CompactionConfig(enabled=True, deferred_apply_enabled=False, token_threshold=1000, protected_turns=3, summary_token_budget=BUDGET)
+        mgr = make_session_manager(compaction_config=config)
+        mgr.compaction_state = CompactionState()
+        mgr._save_compaction_state = MagicMock()
+        mgr._retrieve_session_summaries = MagicMock(return_value=["a summary that must not leak"])
+        mgr._valid_cutoff_indices = [0, 2, 4, 6, 8]
+        mgr._all_messages_for_summary = make_conversation(5)
+
+        await mgr.update_after_turn(2000)
+
+        records = [json.loads(line) for line in lines]
+        cut = [r for r in records if r.get("CompactionCut") == 1]
+        assert len(cut) == 1
+        record = cut[0]
+        assert record["sessionId"] == mgr.config.session_id
+        directive = record["_aws"]["CloudWatchMetrics"][0]
+        assert directive["Namespace"] == "AgentCoreStack/Compaction"
+        assert directive["Dimensions"] == [[]]
+        assert "sessionId" not in {m["Name"] for m in directive["Metrics"]}
+        # Content-free: neither the summary nor any message text is emitted.
+        raw = "".join(lines)
+        assert "must not leak" not in raw
+        assert "Question" not in raw and "Answer" not in raw
+
+    @pytest.mark.asyncio
+    async def test_every_compaction_record_carries_the_session_id(self, make_session_manager, monkeypatch):
+        import apis.shared.observability.emf as emf
+
+        emitted = []
+        monkeypatch.setattr(emf, "emit_emf_metrics", lambda ns, metrics, properties=None, units=None: emitted.append(properties))
+        monkeypatch.delenv("PROMPT_CACHE_OBSERVABILITY_ENABLED", raising=False)
+        mgr = make_session_manager(compaction_config=CompactionConfig(enabled=True))
+        mgr._emit_emf({"CompactionApplied": 1}, {"applyReason": "cache_expired"})
+        mgr._emit_emf({"TruncationAnchorAdvanced": 1}, {"anchorFrom": 0, "anchorTo": 8})
+        assert [p["sessionId"] for p in emitted] == [mgr.config.session_id] * 2
+        assert emitted[0]["applyReason"] == "cache_expired"
+
+    @pytest.mark.asyncio
     async def test_kill_switch_silences_metrics(self, make_session_manager, bedrock, monkeypatch):
         import apis.shared.observability.emf as emf
         emitted = []
