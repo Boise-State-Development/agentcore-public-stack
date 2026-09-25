@@ -570,7 +570,14 @@ Each PR targets `develop`, lands behind `PROJECTS_ENABLED` (opt-in while in deve
   - **Budget.** Tokens, estimated at 4 chars/token (a CountTokens call per turn costs ~80 ms): `MEMORY_INJECTION_MAX_TOKENS`, default 6,000 (= the old 24 KB), with `MEMORY_INJECTION_MAX_BYTES` still honored. The per-scope budgets (2,000 shared / 1,000 personal-in-project) wait for 2.4, when scopes exist.
   - **`contextBreakdown.memory` already existed** (character-share itemization); its marker moved to the new tag.
   - **Two corrections to the §4.5 sketch.** (1) Skills XML is appended by the Strands plugin *after* the last system block, not before the first cache point, both before and after this PR. (2) A shared index is not "cache reuse across members": each member's cached prefix includes their own personal instructions and the date, so the saving is per member, not shared.
-  - **Measurement, baseline B** (dev, before this PR; disposable agent with a ~960-token index): the turn after an index edit read 10,477 tokens (tools only) and **wrote 3,824** (static system 2,126 + memory + skills + messages). Expected with this PR: the static system prompt is also read, and only memory + skills + messages (~1.4k) are written. The "after" run is recorded below once deployed.
+  - **Measurement, baseline B** (dev, before this PR; disposable agent with a ~960-token index): the turn after an index edit read 10,477 tokens (tools only) and **wrote 3,824** (static system 2,126 + memory + skills + messages). **After (A), measured on dev once deployed** (same agent, same ~1k-token index, same four-turn procedure):
+
+    | Turn after a memory edit | Cache read | Cache write |
+    |---|---|---|
+    | Before (B) | 10,477 | 3,824 |
+    | After (A) | 12,552 | **1,775** |
+
+    The static system prompt (~2,075 tokens) is now read instead of rewritten, which cuts that turn's write by 54% (~40% of its cache cost on Haiku 4.5 Regional). Unchanged turns still hit (30-token writes). The four-cache-point requests were accepted, and `contextBreakdown` still shows the Memory row. The `<memory_space>` wrapper adds ~30 tokens over the old heading. The saving is per member per memory edit. Absolute dollars are small; the point is that memory churn no longer rewrites the static prefix, which matters more as project instructions grow. **This closes the A-vs-B spike: A.**
 - **2.3** Format + validation: `format.py` (frontmatter render/parse, items, anchors, links, aliases), `CountTokens` accounting, save pipeline, `FILEVER` history, reserved-slug enforcement. Tests: property tests over parse/render round-trips, anchor stability, link resolution incl. archived targets.
 - **2.4** Scopes: `scope`/`project_id`/`user_id` on spaces, project-aware `resolve_permission`, personal-in-project auto-create on first task (per the Phase 0 decision), scope-addressed tools, `memory_query`, `memory_save`/`memory_propose`, `STATS#`.
 - **2.5** Proposals + review queue, pins, archive + restore, provenance on items (source session/message, proposer, approver).
