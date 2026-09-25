@@ -17,6 +17,7 @@ import {
   RUNTIME_MEMORY_ACTIONS,
   createRuntimeExecutionRole,
 } from './inference-api-iam-roles';
+import { RuntimeLogRetentionSweepConstruct } from './runtime-log-retention-sweep-construct';
 
 export interface InferenceAgentCoreConstructProps {
   config: AppConfig;
@@ -570,6 +571,16 @@ export class InferenceAgentCoreConstruct extends Construct {
       installLatestAwsSdk: false,
     });
     runtimeLogRetention.node.addDependency(this.runtime);
+
+    // The custom resource above covers the live group once per deploy. The
+    // sweep covers the groups it cannot: those left behind by a replaced
+    // Runtime, and any whose retention something else changed afterwards.
+    if (config.observability.runtimeLogRetentionSweepEnabled) {
+      new RuntimeLogRetentionSweepConstruct(this, 'RuntimeLogRetentionSweep', {
+        config,
+        agentRuntimeName,
+      });
+    }
 
     // NOTE: X-Ray TransactionSearchConfig is an account-level singleton.
     // It cannot be created via CloudFormation if it already exists.

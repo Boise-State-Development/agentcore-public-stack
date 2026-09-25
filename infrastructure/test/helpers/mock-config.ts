@@ -99,6 +99,7 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
       xraySamplingReservoir: OBSERVABILITY_DEFAULT_XRAY_SAMPLING_RESERVOIR,
       xrayInsightsNotifications: false,
       agentCoreApplicationLogsEnabled: false,
+      runtimeLogRetentionSweepEnabled: true,
     },
     ragIngestion: {
       lambdaMemorySize: 3008,

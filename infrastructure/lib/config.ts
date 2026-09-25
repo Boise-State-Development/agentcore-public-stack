@@ -736,6 +736,13 @@ export interface ObservabilityConfig {
   /** AgentCore APPLICATION_LOGS vended delivery. Off by default: the records
    *  carry full prompts and responses, so it is both high-volume and PII. */
   agentCoreApplicationLogsEnabled: boolean;
+  /**
+   * Daily sweep that applies `logRetentionDays` to every generation of this
+   * deployment's AgentCore Runtime log groups, including ones left behind by
+   * a replaced Runtime. On by default; `false` for an account whose
+   * governance requires longer retention.
+   */
+  runtimeLogRetentionSweepEnabled: boolean;
 }
 
 /**
@@ -1345,6 +1352,11 @@ export function loadConfig(scope: cdk.App): AppConfig {
         ?? parseBooleanEnv(scope.node.tryGetContext('observability.agentCoreApplicationLogsEnabled'))
         ?? scope.node.tryGetContext('observability')?.agentCoreApplicationLogsEnabled
         ?? false,
+      runtimeLogRetentionSweepEnabled:
+        parseBooleanEnv(process.env.CDK_OBSERVABILITY_RUNTIME_LOG_RETENTION_SWEEP_ENABLED)
+        ?? parseBooleanEnv(scope.node.tryGetContext('observability.runtimeLogRetentionSweepEnabled'))
+        ?? scope.node.tryGetContext('observability')?.runtimeLogRetentionSweepEnabled
+        ?? true,
     },
     tags: {
       ...(scope.node.tryGetContext('tags') || {}),
@@ -1395,6 +1407,7 @@ export function loadConfig(scope: cdk.App): AppConfig {
     + ` xraySamplingRate=${config.observability.xraySamplingRate}`
     + ` xrayReservoir=${config.observability.xraySamplingReservoir}`
     + ` agentCoreAppLogs=${config.observability.agentCoreApplicationLogsEnabled}`
+    + ` runtimeLogRetentionSweep=${config.observability.runtimeLogRetentionSweepEnabled}`
   );
 
   // Printed because this list is a security control supplied entirely from

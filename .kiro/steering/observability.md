@@ -225,6 +225,24 @@ never been invoked. There is deliberately **no `onDelete`**: removing the
 retention policy on teardown would revert the group to "keep forever", which is
 the cost problem it fixes.
 
+**The replacement trap.** That custom resource only ever sees the *current*
+Runtime. Replacing a Runtime gives it a new id and a new group
+(`<runtime-name>-<new-id>-DEFAULT`); the old group drops out of CDK's view and
+keeps whatever retention it had. Groups orphaned before the custom resource
+existed have none, so they never expire, and they hold conversation text. A
+landing zone that stamps a default retention on every `CreateLogGroup` event
+can also overwrite the deploy-time value a few minutes later, even on the live
+group. `RuntimeLogRetentionSweepConstruct` closes both gaps: a daily Lambda
+lowers every group under `/aws/bedrock-agentcore/runtimes/<runtime-name>-` to
+`logRetentionDays` when its retention is unset or longer. Runtime names cannot
+contain `-`, so that prefix covers every generation of this deployment's Runtime
+and no other deployment's. It never deletes a group; removing an orphaned group
+is an operator's call. Kill switch:
+`CDK_OBSERVABILITY_RUNTIME_LOG_RETENTION_SWEEP_ENABLED=false`, for an account
+whose governance requires longer retention. Groups from an older naming scheme
+(a different runtime name) are outside the prefix and need a one-off
+`put-retention-policy`.
+
 ## 10. Subscriptions are not infrastructure-as-code
 
 The topic is created by CDK; **subscribers are not**. Several teams need to hear

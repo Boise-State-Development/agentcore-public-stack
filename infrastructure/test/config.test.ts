@@ -102,6 +102,7 @@ const OBSERVABILITY_ENV_KEYS = [
   'CDK_OBSERVABILITY_PROMPT_CACHE_SESSION_WASTED_USD_THRESHOLD',
   'CDK_OBSERVABILITY_BEDROCK_TPM_QUOTA_PERCENT',
   'CDK_OBSERVABILITY_BEDROCK_TPM_QUOTAS',
+  'CDK_OBSERVABILITY_RUNTIME_LOG_RETENTION_SWEEP_ENABLED',
 ] as const;
 
 function clearObservabilityEnv(): void {
@@ -1918,6 +1919,18 @@ describe('Observability Configuration', () => {
       expect(loadConfig(app).observability.alarmTopicEnabled).toBe(true);
     });
 
+    // Privacy, not just cost: runtime log groups carry conversation text.
+    test('runtime log retention sweep defaults to ON, even for a forwarded empty var', () => {
+      expect(loadConfig(app).observability.runtimeLogRetentionSweepEnabled).toBe(true);
+      process.env.CDK_OBSERVABILITY_RUNTIME_LOG_RETENTION_SWEEP_ENABLED = '';
+      expect(loadConfig(app).observability.runtimeLogRetentionSweepEnabled).toBe(true);
+    });
+
+    test('runtime log retention sweep turns off on an explicit false', () => {
+      process.env.CDK_OBSERVABILITY_RUNTIME_LOG_RETENTION_SWEEP_ENABLED = 'false';
+      expect(loadConfig(app).observability.runtimeLogRetentionSweepEnabled).toBe(false);
+    });
+
     test('latency floors are streaming-aware, well above a normal agent turn', () => {
       const obs = loadConfig(app).observability;
       expect(obs.agentCoreLatencyMs).toBe(OBSERVABILITY_DEFAULT_P99_LATENCY_MS);
@@ -2086,6 +2099,7 @@ describe('Observability Configuration', () => {
       app.node.setContext('observability.xraySamplingReservoir', '21');
       app.node.setContext('observability.xrayInsightsNotifications', 'true');
       app.node.setContext('observability.agentCoreApplicationLogsEnabled', 'true');
+      app.node.setContext('observability.runtimeLogRetentionSweepEnabled', 'false');
       app.node.setContext('observability.promptCacheAvoidableMissThreshold', '22');
       app.node.setContext('observability.promptCacheWastedUsdThreshold', '2.5');
       app.node.setContext('observability.promptCacheSessionWastedUsdThreshold', '23');
@@ -2107,6 +2121,7 @@ describe('Observability Configuration', () => {
         xraySamplingReservoir: 21,
         xrayInsightsNotifications: true,
         agentCoreApplicationLogsEnabled: true,
+        runtimeLogRetentionSweepEnabled: false,
         promptCacheAvoidableMissThreshold: 22,
         promptCacheWastedUsdThreshold: 2.5,
         promptCacheSessionWastedUsdThreshold: 23,
