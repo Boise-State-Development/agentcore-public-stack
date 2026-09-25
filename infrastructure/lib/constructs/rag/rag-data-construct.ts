@@ -1,6 +1,7 @@
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
+import * as cdk from 'aws-cdk-lib';
 import { CfnResource } from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 
@@ -20,7 +21,8 @@ export interface RagDataConstructProps {
  * RagDataConstruct — RAG documents bucket + vectors bucket + DDB
  * assistants table.
  *
- *   - S3 documents bucket (versioned, BLOCK_ALL public access, CORS
+ *   - S3 documents bucket (versioned with 35-day noncurrent expiry,
+ *     BLOCK_ALL public access, CORS
  *     configurable via `config.ragIngestion.additionalCorsOrigins`)
  *   - S3 Vectors bucket + index — `AWS::S3Vectors::*` (no L2 yet),
  *     dimension and distance metric driven by config; Titan V2
@@ -64,6 +66,30 @@ export class RagDataConstruct extends Construct {
       enforceSSL: true,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       versioned: true,
+      // Every delete the app makes here (document cleanup, icon
+      // replace/remove, agent-delete icon cleanup, the orphaned-row
+      // cleanup script) only writes a delete marker on a versioned
+      // bucket, so without this rule the bytes were kept forever as
+      // noncurrent versions.
+      //
+      // 35 days is the recovery window for an accidental delete, and it
+      // matches the assistants table's point-in-time recovery window
+      // (the DynamoDB default, 35 days): any DOC# row that PITR can
+      // bring back still has its source bytes to re-ingest from. Nothing
+      // reads an object by VersionId — ingestion (legacy and managed KB)
+      // addresses current objects by key — so versioning is only a
+      // recovery net, and a bounded one is enough.
+      lifecycleRules: [
+        {
+          id: 'ExpireNoncurrentVersions',
+          enabled: true,
+          noncurrentVersionExpiration: cdk.Duration.days(35),
+          // Once its last noncurrent version expires, a delete marker is
+          // alone and just clutters listings; S3 removes it.
+          expiredObjectDeleteMarker: true,
+          abortIncompleteMultipartUploadAfter: cdk.Duration.days(7),
+        },
+      ],
       removalPolicy: getRemovalPolicy(config),
       autoDeleteObjects: getAutoDeleteObjects(config),
       cors:
