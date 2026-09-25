@@ -83,15 +83,14 @@ class TestArms:
         assert warm.live_offset <= cold.live_offset
         assert not any(e["kind"] == "truncation_anchor" for e in warm.events)
 
-    def test_restore_pace_reproduces_the_anchor_save_masking_the_gap(self, transcript, arms):
-        # Tripwire for the missed free apply found in the 2026-09-25 prod
-        # readout: on a cold restore, ``_maybe_advance_truncation_anchor``
-        # saves (stamping updated_at) before ``apply_pending_compaction`` reads
-        # the gap, so a parked cut waits for the hard ceiling. When production
-        # measures the gap before that save, this flips — update it then.
+    def test_restore_pace_applies_the_parked_cut_for_free(self, transcript, arms):
+        # Was the tripwire for the missed free apply (2026-09-25 prod readout):
+        # the restore's truncation-anchor save re-stamped updated_at before
+        # ``apply_pending_compaction`` read the gap. Now both see the turn's gap.
         restore = simulate(transcript, arms["model_relative"], pace="restore", overhead_tokens=40_000)
         assert any(e["kind"] == "truncation_anchor" for e in restore.events)
-        assert restore.policy["lastCut"].get("applied") != "cache_expired"
+        assert restore.policy["lastCut"]["applied"] == "cache_expired"
+        assert restore.live_offset > 0
 
     def test_legacy_on_a_warm_agent_never_slices(self, transcript, arms):
         # Faithful to the pre-1.23.0 bug: legacy sets the checkpoint but only a

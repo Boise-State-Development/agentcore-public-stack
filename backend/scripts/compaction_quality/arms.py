@@ -18,10 +18,8 @@ model is holding when the question arrives:
 - ``restore`` — every turn rebuilds the agent from stored history with a cold
   cache (the agent-cache-bypass cohort, and any session resumed after a pause).
   Old tool results below the truncation anchor are cut to
-  ``max_tool_content_length``. A parked cut is meant to apply here too, but the
-  anchor advance saves state (stamping ``updated_at``) before
-  ``apply_pending_compaction`` reads the gap, so it waits for the hard ceiling —
-  the missed free apply the 2026-09-25 prod readout found. The default pace.
+  ``max_tool_content_length``, and a parked cut applies at the next turn. The
+  default pace, and the worst case for retention.
 - ``cold`` — a warm agent (live list kept), but every gap exceeds the cache TTL,
   so a parked cut applies at the next turn. No restore, so no anchor truncation.
 - ``warm`` — a warm agent with every gap inside the TTL: a parked cut waits
