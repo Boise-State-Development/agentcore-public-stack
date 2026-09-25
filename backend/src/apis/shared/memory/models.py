@@ -47,6 +47,14 @@ EntryType = Literal["entity", "episodic", "fact"]
 # on every save (``format.py``, ``validation.py``).
 FileFormat = Literal["freeform", "canonical"]
 
+# Who a space belongs to (Shared Projects §3.3). ``personal`` spaces are owned
+# and shared by one user, as every space before 2.4 is. The two project scopes
+# take their permissions from the project and are never shared directly:
+# ``shared`` is the project's memory, ``personal_in_project`` is one member's
+# memory within one project.
+MemoryScope = Literal["personal", "shared", "personal_in_project"]
+PROJECT_SCOPES = ("shared", "personal_in_project")
+
 # Why a file version was written. ``baseline`` records the content an entry
 # had before history existed, the first time such an entry is replaced.
 FileVersionReason = Literal["edit", "save", "proposal", "maintenance", "restore", "baseline"]
@@ -190,3 +198,12 @@ class MemorySpace(BaseModel):
     index_s3_key: Optional[str] = Field(None, alias="indexS3Key")
     index_content_hash: Optional[str] = Field(None, alias="indexContentHash")
     file_format: FileFormat = Field("freeform", alias="fileFormat")
+    scope: MemoryScope = Field("personal")
+    # Set on the two project scopes; ``user_id`` names the member a
+    # ``personal_in_project`` space belongs to.
+    project_id: Optional[str] = Field(None, alias="projectId")
+    user_id: Optional[str] = Field(None, alias="userId")
+
+    @property
+    def is_project_space(self) -> bool:
+        return self.scope in PROJECT_SCOPES

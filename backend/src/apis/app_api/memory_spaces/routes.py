@@ -237,6 +237,8 @@ def get_space(
         created_at=space.created_at,
         updated_at=space.updated_at,
         file_format=space.file_format,
+        scope=space.scope,
+        project_id=space.project_id,
         index=index_text,
         entries=[EntryRefResponse.from_ref(r) for r in entries],
     )

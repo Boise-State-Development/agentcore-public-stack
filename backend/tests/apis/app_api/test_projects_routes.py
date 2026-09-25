@@ -96,9 +96,28 @@ def directory(monkeypatch) -> FakeDirectory:
     return fake
 
 
+class FakeMemory:
+    """Hands out space ids; the spaces themselves are covered in test_project_memory_spaces."""
+
+    enabled = True
+
+    def __init__(self) -> None:
+        self.created: list = []
+
+    def create_space(self, *, project_id, scope, owner_id, owner_email, name, user_id=None) -> str:
+        self.created.append((scope, project_id, user_id))
+        return f"spc_fake{len(self.created)}"
+
+    def rename_space(self, space_id, name) -> None:
+        pass
+
+    def purge_space(self, space_id) -> None:
+        pass
+
+
 @pytest.fixture()
 def service(env, monkeypatch, task_queries, directory) -> ProjectService:
-    svc = ProjectService(repository=ProjectRepository(table_name=TABLE), harness=FakeHarness())
+    svc = ProjectService(repository=ProjectRepository(table_name=TABLE), harness=FakeHarness(), memory=FakeMemory())
     monkeypatch.setattr(project_routes, "_service", svc)
     return svc
 
@@ -150,6 +169,10 @@ MATRIX = [
     ("GET", "/tasks", None,
      {"owner": 200, "editor": 200, "viewer": 200, "stranger": 404, "other_project_member": 404}),
     ("GET", "/shared-tasks", None,
+     {"owner": 200, "editor": 200, "viewer": 200, "stranger": 404, "other_project_member": 404}),
+    ("GET", "/memory", None,
+     {"owner": 200, "editor": 200, "viewer": 200, "stranger": 404, "other_project_member": 404}),
+    ("POST", "/memory/mine", None,  # a viewer keeps their own memory too
      {"owner": 200, "editor": 200, "viewer": 200, "stranger": 404, "other_project_member": 404}),
 ]
 
@@ -278,3 +301,21 @@ def test_directory_fallback_respects_the_limit_and_only_takes_real_emails(projec
 def test_directory_never_searches_for_a_non_member(project_id, directory):
     assert client_for(STRANGER).get(f"/projects/{project_id}/directory?q=a").status_code == 404
     assert directory.queries == []
+
+
+def test_memory_reports_the_shared_space_and_only_the_callers_own(project_id, service):
+    shared = service.repository.get_project(project_id).shared_space_id
+    assert client_for(VIEWER).get(f"/projects/{project_id}/memory").json() == {
+        "sharedSpaceId": shared, "personalSpaceId": None, "role": "viewer",
+    }
+
+    mine = client_for(VIEWER).post(f"/projects/{project_id}/memory/mine").json()["spaceId"]
+    assert client_for(VIEWER).post(f"/projects/{project_id}/memory/mine").json()["spaceId"] == mine
+    assert client_for(VIEWER).get(f"/projects/{project_id}/memory").json()["personalSpaceId"] == mine
+    assert client_for(EDITOR).get(f"/projects/{project_id}/memory").json()["personalSpaceId"] is None
+
+
+def test_no_personal_memory_in_an_archived_project(project_id):
+    client_for(OWNER).patch(f"/projects/{project_id}", json={"status": "archived"})
+    assert client_for(EDITOR).post(f"/projects/{project_id}/memory/mine").status_code == 409
+    assert client_for(EDITOR).get(f"/projects/{project_id}/memory").status_code == 200

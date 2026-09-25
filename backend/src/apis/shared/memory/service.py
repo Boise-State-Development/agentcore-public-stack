@@ -39,6 +39,7 @@ from .models import (
     FileVersionReason,
     MemoryEntryRef,
     MemoryIndex,
+    MemoryScope,
     MemorySpace,
     Role,
     ShareRole,
@@ -263,10 +264,17 @@ class MemorySpaceService:
         Returns ``(space, role)`` where role is ``owner``/``editor``/``viewer``,
         or ``(space, None)`` if the caller has no grant, or ``(None, None)`` if
         the space does not exist. Mirrors ``resolve_assistant_permission``.
+
+        A project's spaces take their role from the project instead
+        (:meth:`_resolve_project_role`), and resolve as missing for anyone
+        outside it.
         """
         space = self.repository.get_space(space_id)
         if space is None:
             return None, None
+        if space.is_project_space:
+            role = self._resolve_project_role(space, user_id, user_email)
+            return (space, role) if role is not None else (None, None)
         if space.owner_id == user_id:
             return space, "owner"
         if user_email:
@@ -274,6 +282,58 @@ class MemorySpaceService:
             if member is not None:
                 return space, member.permission
         return space, None
+
+    @staticmethod
+    def _resolve_project_role(
+        space: MemorySpace, user_id: str, user_email: Optional[str]
+    ) -> Optional[Role]:
+        """A project space's role, from the project's membership (§3.3).
+
+        No ``MEMBER#`` rows are written for these spaces, so membership has one
+        source of truth. Nobody resolves ``owner``: deleting and sharing belong
+        to the project, not to the space. The shared space gives editors (the
+        project owner included) ``editor`` and viewers ``viewer``; a
+        ``personal_in_project`` space gives its member ``editor`` while they
+        belong to the project, and nobody else anything. An archived project's
+        spaces are read-only, and while Shared Projects is off they resolve
+        for no one.
+        """
+        from apis.shared.feature_flags import projects_enabled
+        from apis.shared.projects.access import resolve_project_role
+
+        if not projects_enabled() or not space.project_id:
+            return None
+        if space.scope == "personal_in_project" and space.user_id != user_id:
+            return None
+        project, project_role = resolve_project_role(space.project_id, user_id, user_email)
+        if project is None or project_role is None:
+            return None
+        if project.status == "archived":
+            return "viewer"
+        if space.scope == "personal_in_project":
+            return "editor"
+        return "viewer" if project_role == "viewer" else "editor"
+
+    def _require_own_space(
+        self,
+        space_id: str,
+        user_id: str,
+        user_email: Optional[str],
+        min_role: Role,
+    ) -> Tuple[MemorySpace, Role]:
+        """:meth:`_require` for actions a project space never allows directly.
+
+        Sharing, leaving and deleting a project's space go through the project
+        (its members and its purge), so a member who can see the space is told
+        where to go instead of getting a bare 403.
+        """
+        space, _ = self.resolve_permission(space_id, user_id, user_email)
+        if space is not None and space.is_project_space:
+            raise MemorySpaceError(
+                "This memory belongs to a project. Its access follows the project's "
+                "members, and it is deleted with the project."
+            )
+        return self._require(space_id, user_id, user_email, min_role)
 
     def _require(
         self,
@@ -314,7 +374,56 @@ class MemorySpaceService:
             raise MemorySpaceError(f"unknown template '{template}'")
         if file_format not in _FILE_FORMATS:
             raise MemorySpaceError(f"unknown file format '{file_format}'")
+        return self._create(owner_id, owner_email, name, template, file_format)
 
+    def create_project_space(
+        self,
+        *,
+        project_id: str,
+        scope: MemoryScope,
+        owner_id: str,
+        owner_email: str,
+        name: str,
+        user_id: Optional[str] = None,
+    ) -> MemorySpace:
+        """Create one of a project's spaces. No permission check: the project decides.
+
+        Called by ``apis.shared.projects`` only, never from a user-facing route.
+        Project spaces are always ``canonical`` (Shared Projects §4.2). The
+        owner fields record who created the space; nothing reads them for
+        access. ``user_id`` is required for ``personal_in_project``.
+        """
+        if scope not in ("shared", "personal_in_project"):
+            raise MemorySpaceError(f"'{scope}' is not a project scope")
+        if not project_id:
+            raise MemorySpaceError("project_id is required for a project space")
+        if scope == "personal_in_project" and not user_id:
+            raise MemorySpaceError("user_id is required for a personal project space")
+        if not name or not name.strip():
+            raise MemorySpaceError("a memory space name is required")
+        return self._create(
+            owner_id,
+            owner_email,
+            name,
+            DEFAULT_TEMPLATE_ID,
+            "canonical",
+            scope=scope,
+            project_id=project_id,
+            user_id=user_id if scope == "personal_in_project" else None,
+        )
+
+    def _create(
+        self,
+        owner_id: str,
+        owner_email: str,
+        name: str,
+        template: str,
+        file_format: FileFormat,
+        *,
+        scope: MemoryScope = "personal",
+        project_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> MemorySpace:
         tmpl = get_template(template)
         space_id = _new_space_id()
         now = _now_iso()
@@ -336,14 +445,19 @@ class MemorySpaceService:
             index_s3_key=index_key,
             index_content_hash=compute_content_hash(index_bytes),
             file_format=file_format,
+            scope=scope,
+            project_id=project_id,
+            user_id=user_id,
         )
         self.repository.put_space(space)
         self.repository.put_index(MemoryIndex(space_id=space_id, entries=[], version=0))
         logger.info(
-            "memory-spaces: created space=%s owner=%s template=%s",
+            "memory-spaces: created space=%s owner=%s template=%s scope=%s project=%s",
             space_id,
             owner_id,
             template,
+            scope,
+            project_id,
         )
         return space
 
@@ -418,7 +532,36 @@ class MemorySpaceService:
         listing of the space's prefix, so neither old versions nor orphans
         from interrupted writes survive the space.
         """
-        space, _ = self._require(space_id, user_id, user_email, "owner")
+        self._require_own_space(space_id, user_id, user_email, "owner")
+        self._purge(space_id)
+        logger.info("memory-spaces: deleted space=%s by user=%s", space_id, user_id)
+
+    def purge_project_space(self, space_id: str) -> None:
+        """Delete a project's space with no permission check (the project's purge).
+
+        Tolerates a space that is already gone, so a retried project purge
+        passes through. Refuses a personal space: only a project space may be
+        deleted on the project's say-so.
+        """
+        space = self.repository.get_space(space_id)
+        if space is None:
+            return
+        if not space.is_project_space:
+            raise MemorySpaceError(f"memory space '{space_id}' does not belong to a project")
+        self._purge(space_id)
+        logger.info("memory-spaces: purged project space=%s project=%s", space_id, space.project_id)
+
+    def rename_project_space(self, space_id: str, name: str) -> None:
+        """Give a project's shared space the project's new name (no permission check)."""
+        space = self.repository.get_space(space_id)
+        if space is None or not space.is_project_space or not name.strip():
+            return
+        if space.name != name.strip():
+            space.name = name.strip()
+            space.updated_at = _now_iso()
+            self.repository.put_space(space)
+
+    def _purge(self, space_id: str) -> None:
         keys = self._referenced_keys(space_id)
         try:
             keys.update(self.store.list_keys(space_id))
@@ -427,7 +570,6 @@ class MemorySpaceService:
         for key in keys:
             self.store.delete(key)
         self.repository.delete_space(space_id)
-        logger.info("memory-spaces: deleted space=%s by user=%s", space_id, user_id)
 
     def leave_space(
         self, space_id: str, user_id: str, user_email: Optional[str] = None
@@ -441,6 +583,8 @@ class MemorySpaceService:
         space, role = self.resolve_permission(space_id, user_id, user_email)
         if space is None:
             raise MemorySpaceNotFoundError(f"Memory space '{space_id}' not found")
+        if space.is_project_space:
+            self._require_own_space(space_id, user_id, user_email, "viewer")
         if role == "owner":
             raise MemorySpaceError(
                 "the owner cannot leave a space; delete it instead"
@@ -550,7 +694,7 @@ class MemorySpaceService:
         permission: ShareRole = "viewer",
     ) -> SpaceMember:
         """Grant ``grantee_email`` a role on the space (owner only)."""
-        self._require(space_id, actor_id, actor_email, "owner")
+        self._require_own_space(space_id, actor_id, actor_email, "owner")
         if permission not in ("viewer", "editor"):
             raise MemorySpaceError(f"invalid share permission '{permission}'")
         member = SpaceMember(
@@ -575,7 +719,7 @@ class MemorySpaceService:
         Distinct from :meth:`share` (upsert-create) so a PATCH gets proper
         not-found semantics and keeps the original ``created_at``.
         """
-        self._require(space_id, actor_id, actor_email, "owner")
+        self._require_own_space(space_id, actor_id, actor_email, "owner")
         if permission not in ("viewer", "editor"):
             raise MemorySpaceError(f"invalid share permission '{permission}'")
         existing = self.repository.get_member(space_id, grantee_email)
@@ -600,7 +744,7 @@ class MemorySpaceService:
         grantee_email: str,
     ) -> None:
         """Remove a grant (owner only)."""
-        self._require(space_id, actor_id, actor_email, "owner")
+        self._require_own_space(space_id, actor_id, actor_email, "owner")
         self.repository.delete_member(space_id, grantee_email)
         self._touch(space_id)
 

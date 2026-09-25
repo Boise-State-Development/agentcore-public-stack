@@ -9,6 +9,7 @@ Row shapes:
   - ``PK=PROJECT#{id}  SK=META``           + ``GSI1PK=OWNER#{owner_id}  GSI1SK=PROJECT#{id}``
   - ``PK=PROJECT#{id}  SK=MEMBER#{email}`` + ``GSI2PK=MEMBER#{email}    GSI2SK=PROJECT#{id}``
   - ``PK=PROJECT#{id}  SK=SHARED_TASK#{sessionId}`` — the newest project share of one task
+  - ``PK=PROJECT#{id}  SK=PERSONAL_SPACE#{userId}`` — a member's memory in this project
 
 Three invariants the writes enforce, not the callers:
 
@@ -49,6 +50,7 @@ META_SK = "META"
 MEMBER_SK_PREFIX = "MEMBER#"
 COST_SK_PREFIX = "COST#"
 SHARED_TASK_SK_PREFIX = "SHARED_TASK#"
+PERSONAL_SPACE_SK_PREFIX = "PERSONAL_SPACE#"
 OWNER_INDEX = "OwnerIndex"
 MEMBER_INDEX = "MemberIndex"
 
@@ -336,6 +338,60 @@ class ProjectRepository:
         except ClientError as e:
             if e.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
                 raise
+
+    # ── memory spaces (Phase 2.4) ───────────────────────────────────────
+
+    def set_shared_space_id(self, project_id: str, space_id: str) -> bool:
+        """Point META at the project's shared space, once. ``False`` if one is already set.
+
+        Bumps ``version`` like every META mutation, so a full META write that
+        read the project before this one fails instead of dropping the pointer.
+        """
+        try:
+            self._table.update_item(
+                Key={"PK": project_pk(project_id), "SK": META_SK},
+                UpdateExpression="SET sharedSpaceId = :sid, version = version + :one",
+                ConditionExpression="attribute_exists(PK) AND attribute_not_exists(sharedSpaceId)",
+                ExpressionAttributeValues={":sid": space_id, ":one": 1},
+            )
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+                return False
+            raise
+        return True
+
+    def get_personal_space_id(self, project_id: str, user_id: str) -> Optional[str]:
+        resp = self._table.get_item(
+            Key={"PK": project_pk(project_id), "SK": f"{PERSONAL_SPACE_SK_PREFIX}{user_id}"}
+        )
+        return (resp.get("Item") or {}).get("spaceId")
+
+    def claim_personal_space(self, project_id: str, user_id: str, space_id: str, now: str) -> str:
+        """Record ``space_id`` as the member's space unless one exists; return the winner.
+
+        An ``UpdateItem`` upsert rather than a ``PutItem``, so the Runtime (which
+        may update but not put on this table) can create the pointer too.
+        """
+        key = {"PK": project_pk(project_id), "SK": f"{PERSONAL_SPACE_SK_PREFIX}{user_id}"}
+        try:
+            self._table.update_item(
+                Key=key,
+                UpdateExpression="SET spaceId = :sid, userId = :uid, createdAt = :now",
+                ConditionExpression="attribute_not_exists(PK)",
+                ExpressionAttributeValues={":sid": space_id, ":uid": user_id, ":now": now},
+            )
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+                raise
+            return self._table.get_item(Key=key, ConsistentRead=True)["Item"]["spaceId"]
+        return space_id
+
+    def list_personal_space_ids(self, project_id: str) -> List[str]:
+        items = self._query_all(
+            KeyConditionExpression=Key("PK").eq(project_pk(project_id))
+            & Key("SK").begins_with(PERSONAL_SPACE_SK_PREFIX),
+        )
+        return [item["spaceId"] for item in items if item.get("spaceId")]
 
     def transfer_ownership(self, project: Project, new_owner: ProjectMember, now: str) -> None:
         """Swap owner and editor in one transaction.
