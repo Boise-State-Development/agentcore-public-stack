@@ -68,6 +68,13 @@ logger.setLevel(logging.INFO)
 STATUS_COMPLETE = "complete"
 STATUS_FAILED = "failed"
 
+#: A soft-deleted document (``document_service.soft_delete_document``): its row
+#: stays, with a TTL, until cleanup has removed the vectors, the managed copy and
+#: the S3 source, and only then is hard-deleted. Nothing here may move a row out
+#: of this status or ingest a document in it — the retrieval filter joins on the
+#: row, so reviving it to ``complete`` would serve a document its owner deleted.
+STATUS_DELETING = "deleting"
+
 #: The leading status of a born-managed first upload (``MANAGED_KB_NEW_DEFAULT``):
 #: the document is uploaded and its knowledge base is still being created, so the
 #: managed lifecycle is ``provisioning → uploading → complete``.
@@ -240,22 +247,33 @@ def set_document_terminal(
     what makes "my upload finished but the assistant cannot see it" diagnosable
     rather than mysterious.
 
-    Returns ``False`` when the row is gone, which is a logged skip and not a
-    failure: no retry, no raise, no DLQ. Guarded on the row existing
-    (:func:`records.update_if_exists`) because the event that drives this can
-    outlive the document. Deleting a document or its whole agent removes the
-    ``DOC#`` row, and a late or redelivered ingestion event would otherwise
-    recreate it as a ghost row carrying only a status and timestamps — the
-    orphaned ``DOC#`` rows ``scripts/cleanup_orphaned_agent_rows.py`` exists to
-    remove. Retrying cannot bring a deleted row back, so a rejected guard is not
-    treated as the transient failure the retries are for.
+    Returns ``False`` when the document has been deleted, which is a logged skip
+    and not a failure: no retry, no raise, no DLQ. The event that drives this can
+    outlive the document, so the write is guarded twice:
+
+    * **The row must exist.** ``UpdateItem`` is an upsert. Deleting a document or
+      its whole agent removes the ``DOC#`` row, and a late or redelivered event
+      would otherwise recreate it as a ghost row carrying only a status and
+      timestamps — the orphaned ``DOC#`` rows
+      ``scripts/cleanup_orphaned_agent_rows.py`` exists to remove.
+    * **The row must not be ``deleting``.** A soft-deleted row lives on until its
+      cleanup finishes, or for its whole TTL if cleanup fails. Writing
+      ``complete`` over it would make the document the owner just deleted
+      retrievable again, because the retrieval filter joins on this row.
+
+    Retrying cannot undo a delete, so a rejected guard is not treated as the
+    transient failure the retries are for.
     """
     from botocore.exceptions import ClientError
 
-    from apis.shared.kb_backend.records import update_if_exists
+    from apis.shared.kb_backend.records import RECORD_EXISTS
 
     sets = ["#status = :status", "updatedAt = :now"]
-    values: Dict[str, Any] = {":status": status, ":now": _now_iso()}
+    values: Dict[str, Any] = {
+        ":status": status,
+        ":now": _now_iso(),
+        ":deleting": STATUS_DELETING,
+    }
 
     if indexed_at:
         sets.append("indexedAt = :indexed")
@@ -272,16 +290,28 @@ def set_document_terminal(
 
     for attempt in range(1, MAX_RECORD_UPDATE_ATTEMPTS + 1):
         try:
-            return update_if_exists(
-                {"PK": f"AST#{assistant_id}", "SK": f"DOC#{document_id}"},
-                table=_table(),
-                what=f"DOC# row {assistant_id}/{document_id} (document or agent deleted)",
+            _table().update_item(
+                Key={"PK": f"AST#{assistant_id}", "SK": f"DOC#{document_id}"},
                 UpdateExpression=expression,
+                ConditionExpression=f"{RECORD_EXISTS} AND #status <> :deleting",
                 # `status` is a DynamoDB reserved keyword.
                 ExpressionAttributeNames={"#status": "status"},
                 ExpressionAttributeValues=values,
+                # Tells "row gone" from "row being deleted" without a second read.
+                ReturnValuesOnConditionCheckFailure="ALL_OLD",
             )
+            return True
         except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+                why = (
+                    "is being deleted" if exc.response.get("Item")
+                    else "is gone (document or agent deleted)"
+                )
+                logger.info(
+                    f"DOC# row {assistant_id}/{document_id} {why}; not marking it "
+                    f"{status}"
+                )
+                return False
             last = exc
             logger.warning(
                 f"attempt {attempt}/{MAX_RECORD_UPDATE_ATTEMPTS} to mark "
@@ -524,11 +554,30 @@ def _get_doc_row(assistant_id: str, document_id: str) -> Optional[Dict[str, Any]
 
     Carries the declared ``sizeBytes`` reconciled against the true S3 size, and the
     ``byteCapSettled`` marker that makes settlement idempotent across redeliveries.
+
+    Strongly consistent because ``None`` now means "do not ingest": every producer
+    writes this row before the S3 object exists, and an eventually consistent read
+    that missed a just-written row would drop a real upload.
     """
     response = _table().get_item(
-        Key={"PK": f"AST#{assistant_id}", "SK": f"DOC#{document_id}"}
+        Key={"PK": f"AST#{assistant_id}", "SK": f"DOC#{document_id}"},
+        ConsistentRead=True,
     )
     return response.get("Item")
+
+
+def _deleted_reason(doc_row: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Why a document must not be ingested because it was deleted, or ``None``.
+
+    Every producer — a presigned upload, a file-source import, a crawl, a sync —
+    writes the ``DOC#`` row before the S3 object exists, so a missing row means
+    the document was deleted, never that it has not been recorded yet.
+    """
+    if doc_row is None:
+        return "is gone (document or agent deleted)"
+    if doc_row.get("status") == STATUS_DELETING:
+        return "is being deleted"
+    return None
 
 
 def _declared_bytes(doc_row: Optional[Dict[str, Any]]) -> int:
@@ -725,6 +774,24 @@ def handle_object(bucket: str, key: str) -> Dict[str, Any]:
             "document_id": document_id,
             "status": doc_row.get("status"),
             "note": "already-settled",
+        }
+    deleted = _deleted_reason(doc_row)
+    if deleted:
+        # The owner deleted this document (or its agent) before its event got
+        # here. Ingesting anyway would put content back into the knowledge base
+        # after cleanup has removed it — an orphan that no row points at, billed
+        # per GB-month and taking a slot in every top_k before the status filter
+        # drops it. Its reservation is the delete's to return
+        # (`release_reservation_if_managed`), not this path's.
+        logger.info(
+            f"document {document_id} {deleted} before its ingestion event arrived; "
+            f"not ingesting it"
+        )
+        return {
+            "routed": "managed",
+            "ingested": False,
+            "document_id": document_id,
+            "note": "document-deleted",
         }
     declared = _declared_bytes(doc_row)
     # The backend takes the App_KB_Id and resolves the AWS identifiers itself on

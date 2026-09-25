@@ -648,10 +648,11 @@ def _plan(
     captured on the action rather than raised — one bad document must not end the
     sweep — matching the KB reconciler's per-orphan error handling.
 
-    ``perform`` returning ``False`` means the ``DOC#`` row was deleted between the
-    scan and the write (``set_document_terminal`` will not recreate it). That is
-    neither a correction made nor a failure, so the action is left unperformed
-    with no error and no metric.
+    ``perform`` returning ``False`` means the document was deleted between the scan
+    and the action — its ``DOC#`` row is gone or ``deleting``, and neither
+    ``set_document_terminal`` nor ``_reingest`` will act on it. That is neither a
+    correction made nor a failure, so the action is left unperformed with no error
+    and no metric.
     """
     action = PlannedAction(
         assistant_id=assistant_id,
@@ -668,7 +669,7 @@ def _plan(
 
     try:
         if perform() is False:
-            logger.info(f"{kind} skipped for document {document_id}: its row is gone")
+            logger.info(f"{kind} skipped for document {document_id}: it was deleted")
             return
         action.performed = True
         emit_count(metric)
@@ -678,10 +679,22 @@ def _plan(
         logger.error(f"{kind} failed for document {document_id}: {exc}", exc_info=True)
 
 
-def _reingest(backend: Any, assistant_id: str, source: Any) -> None:
+def _reingest(backend: Any, assistant_id: str, source: Any) -> bool:
+    """Re-submit the bytes, unless the document was deleted since the scan.
+
+    The scan skips ``deleting`` rows, but a document deleted between the scan and
+    here would otherwise be pushed back into the knowledge base after its cleanup
+    removed it. Re-read (strongly consistent) right before ingesting; ``False`` is
+    ``_plan``'s logged skip.
+    """
     import asyncio
 
+    deleted = ic._deleted_reason(ic._get_doc_row(assistant_id, source.document_id))
+    if deleted:
+        logger.info(f"document {source.document_id} {deleted}; not re-ingesting it")
+        return False
     asyncio.run(backend.ingest(assistant_id, source))
+    return True
 
 
 def _document_source(document: Dict[str, Any], document_id: str) -> Optional[Any]:
