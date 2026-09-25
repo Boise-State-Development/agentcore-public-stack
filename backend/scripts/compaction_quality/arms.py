@@ -69,6 +69,10 @@ def default_arms(*, summary_model_enabled: bool = False) -> Dict[str, Arm]:
             "legacy", CompactionConfig(model_relative_enabled=False, **base),
             "Kill switch: fixed 100k threshold, keep the last protected_turns turns, no hysteresis, immediate checkpoint.",
         ),
+        "raw_summary": Arm(
+            "raw_summary", CompactionConfig(summary_token_budget=10**9, **base),
+            "Production cut with the summary left uncompressed: isolates what bound_summary's compression costs.",
+        ),
         "floor_50": Arm(
             "floor_50", CompactionConfig(floor_ratio=0.5, **base),
             "Tuning arm: production policy with a shallower cut (floor = half the ceiling).",

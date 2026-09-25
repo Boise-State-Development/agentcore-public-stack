@@ -206,7 +206,7 @@ def cmd_ask(args: argparse.Namespace) -> int:
     done = load_done(results_path)
     written = run_jobs(
         client, plan_jobs(runs, plants, availability, args.k), results_path,
-        model_id=args.model_id, temperature=args.temperature, done=done,
+        model_id=args.model_id, temperature=args.temperature, done=done, workers=args.workers,
     )
     print(f"wrote {written} rows to {results_path} ({len(done)} already present)")
     return 0
@@ -226,7 +226,16 @@ def cmd_records(args: argparse.Namespace) -> int:
     import boto3
 
     client = boto3.client("bedrock-runtime", region_name=args.region)
-    data = {str(t.variant): build_records(client, t, model_id=args.model_id, chunk_turns=args.chunk_turns) for t in corpus}
+    from concurrent.futures import ThreadPoolExecutor
+
+    def one(transcript: Any) -> List[Dict[str, Any]]:
+        return build_records(
+            client, transcript, model_id=args.model_id,
+            chunk_turns=args.chunk_turns, max_words=args.record_words,
+        )
+
+    with ThreadPoolExecutor(max_workers=max(1, args.workers)) as pool:
+        data = {str(t.variant): rows for t, rows in zip(corpus, pool.map(one, corpus))}
     (out / "records.json").write_text(json.dumps(data, indent=2), encoding="utf-8")
     print(f"wrote {out}/records.json")
     return 0
@@ -279,6 +288,9 @@ def build_parser() -> argparse.ArgumentParser:
     corpus_args(rec)
     rec.add_argument("--model-id", default="us.anthropic.claude-haiku-4-5-20251001-v1:0")
     rec.add_argument("--chunk-turns", type=int, default=8)
+    rec.add_argument("--record-words", type=int, default=250,
+                     help="Word cap per record. 600 with --chunk-turns 2 reaches prod's ~20k-token records.")
+    rec.add_argument("--workers", type=int, default=1, help="Transcripts summarized in parallel.")
     rec.add_argument("--region", default="us-west-2")
     rec.add_argument("--yes", action="store_true")
     rec.set_defaults(func=cmd_records)
@@ -290,6 +302,8 @@ def build_parser() -> argparse.ArgumentParser:
     ask.add_argument("--temperature", type=float, default=None, help="Omit for the model default (production).")
     ask.add_argument("--arms", default=None, help="Subset of the arms `cut` produced.")
     ask.add_argument("--limit-variants", type=int, default=None, help="Smoke test on the first N variants.")
+    ask.add_argument("--workers", type=int, default=1,
+                     help="Parallel calls per history, after its first call has written the cache.")
     ask.add_argument("--region", default="us-west-2")
     ask.add_argument("--yes", action="store_true")
     ask.set_defaults(func=cmd_ask)

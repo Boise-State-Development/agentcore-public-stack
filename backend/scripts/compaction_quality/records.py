@@ -25,7 +25,7 @@ from .corpus import Transcript, message_text
 RECORD_PROMPT = (
     "Summarize this portion of a conversation between a user and an AI assistant working on a grant proposal. "
     "Keep standing instructions, decisions, exact identifiers, numbers, dates and names verbatim. "
-    "Note anything that changed and what it changed to. Plain bullets, under 250 words."
+    "Note anything that changed and what it changed to. Plain bullets, under {max_words} words."
 )
 
 
@@ -35,7 +35,12 @@ def build_records(
     *,
     model_id: str,
     chunk_turns: int = 8,
+    max_words: int = 250,
 ) -> List[Dict[str, Any]]:
+    """One record per ``chunk_turns`` turns. Prod's records total a median of
+    ~20k tokens at cut time (2026-09-25 readout), which is what makes
+    ``bound_summary`` compress; ``chunk_turns=2, max_words=600`` reproduces
+    that on the default corpus, while the defaults stay under the budget."""
     records = []
     for start in range(0, len(transcript.turns), chunk_turns):
         end = min(start + chunk_turns, len(transcript.turns)) - 1
@@ -46,9 +51,9 @@ def build_records(
         )
         response = client.converse(
             modelId=model_id,
-            system=[{"text": RECORD_PROMPT}],
+            system=[{"text": RECORD_PROMPT.replace("{max_words}", str(max_words))}],
             messages=[{"role": "user", "content": [{"text": text}]}],
-            inferenceConfig={"maxTokens": 600, "temperature": 0.1},
+            inferenceConfig={"maxTokens": max(600, int(max_words * 2)), "temperature": 0.1},
         )
         content = response["output"]["message"]["content"]
         summary = " ".join(b.get("text", "") for b in content if isinstance(b, dict)).strip()
