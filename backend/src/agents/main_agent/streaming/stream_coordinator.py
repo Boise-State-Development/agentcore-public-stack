@@ -842,8 +842,9 @@ class StreamCoordinator:
                                 logger.debug(f"Skipping contextWindow lookup: {ctx_err}")
 
                             # Per-turn context attribution, measured by
-                            # ContextAttributionHook at BeforeModelCallEvent and
-                            # itemized here (skills, memory, tools by origin) —
+                            # ContextAttributionHook off the critical path (the
+                            # split in the background, the total from the last
+                            # call's billed prompt) and itemized here (skills, memory, tools by origin) —
                             # after the model has answered, memoized per agent.
                             # Partitions sum to `total`; the frontend pairs it
                             # with `contextWindow` above for free-space.
@@ -1820,25 +1821,19 @@ class StreamCoordinator:
         A cut generation frequently never delivers Bedrock's terminal usage
         event, so ``accumulated_metadata['usage']`` is empty and the turn
         would persist with no token/cost/context data. The context-attribution
-        hook computed the turn's projected input at ``BeforeModelCallEvent``
-        (before the model call that got interrupted), so use its total as the
-        input-side occupancy. Output is unknown — the turn never finished — so
-        it's reported as zero (input-side cost only). Returns ``None`` if no
-        projection is available, leaving the caller to persist whatever it has.
+        hook keeps the best input size it has for the call in flight — a
+        native count of the exact request when it measured one, else Strands'
+        usage-anchored projection (see ``get_projected_input_tokens``). Output
+        is unknown — the turn never finished — so it's reported as zero
+        (input-side cost only). Returns ``None`` if no projection is
+        available, leaving the caller to persist whatever it has.
         """
         try:
             from agents.main_agent.session.hooks.context_attribution import (
-                get_context_breakdown,
+                get_projected_input_tokens,
             )
 
-            breakdown = get_context_breakdown(agent)
-            if not breakdown:
-                return None
-            total = (
-                breakdown.get("total")
-                if isinstance(breakdown, dict)
-                else getattr(breakdown, "total", None)
-            )
+            total = get_projected_input_tokens(agent)
             if not total or total <= 0:
                 return None
             return {"inputTokens": int(total), "outputTokens": 0, "totalTokens": int(total)}

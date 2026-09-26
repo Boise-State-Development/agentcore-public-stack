@@ -6,7 +6,7 @@ total it came from, because ``prefixTokens`` and compaction read those totals.
 """
 
 import pytest
-from strands.hooks import BeforeModelCallEvent
+from strands.hooks import AfterModelCallEvent, BeforeModelCallEvent
 
 from agents.main_agent.session.hooks.context_attribution import (
     ContextAttributionHook,
@@ -199,7 +199,9 @@ class TestItemizedOnRead:
             token_count_is_authoritative = True
 
             async def count_tokens(self, messages, tool_specs=None, system_prompt=None, system_prompt_content=None):
-                return (1_000 if system_prompt else 0) + len(messages) * 10
+                return (1_000 if (system_prompt or system_prompt_content) else 0) + len(messages) * 10 + (
+                    1_990 if tool_specs else 0
+                )
 
         agent = FakeAgent(
             _prompt(agent="Be a tutor. " * 40, skills=True),
@@ -209,17 +211,26 @@ class TestItemizedOnRead:
         agent.messages = [{"role": "user", "content": [{"text": "hi"}]}]
         agent._system_prompt_content = None
 
-        await ContextAttributionHook()._on_before_model_call(
-            BeforeModelCallEvent(agent=agent, projected_input_tokens=3_000)
+        hook = ContextAttributionHook()
+        hook._on_before_model_call(BeforeModelCallEvent(agent=agent, projected_input_tokens=None))
+        await hook._split_task
+        hook._on_after_model_call(
+            AfterModelCallEvent(
+                agent=agent,
+                stop_response=AfterModelCallEvent.ModelStopResponse(
+                    message={"role": "assistant", "content": [], "metadata": {"usage": {"inputTokens": 3_000}}},
+                    stop_reason="end_turn",
+                ),
+            )
         )
-        # The hook itself stores only the three measured totals — nothing
-        # extra runs before the model call.
+        # The hook itself stores only the three measured totals — itemizing
+        # waits for a reader.
         assert [p["key"] for p in get_context_breakdown(agent)["partitions"]] == ["system", "tools", "messages"]
 
         bd = get_context_breakdown(agent, itemized=True)
         parts = _by_key(bd["partitions"])
         assert sum(p["tokens"] for p in bd["partitions"]) == bd["total"] == 3_000
-        # system + skills is the measured system total (1,000); tools = 3,000 - 1,010.
+        # system + skills is the measured system total (1,000); tools = full - no-tools.
         assert parts["system"]["tokens"] + parts["skills"]["tokens"] == 1_000
         assert parts["tools"]["tokens"] == 1_990
         assert sum(c["tokens"] for c in parts["tools"]["children"]) == 1_990

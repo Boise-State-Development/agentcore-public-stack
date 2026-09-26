@@ -1,54 +1,59 @@
-"""Hook that computes a per-turn context-token attribution breakdown.
+"""Hook that computes a per-call context-token attribution breakdown.
 
-Splits the authoritative projected input-token count (Bedrock-native via
-``CountTokensBedrockModel``) into ``system`` / ``tools`` / ``messages``
-partitions and stashes the result on the agent. The stream coordinator reads
-it via :func:`get_context_breakdown` and attaches it to the turn's final
-``metadata`` SSE event as ``contextBreakdown`` — answering "what is filling the
-context window?" without an aggregate-only guess.
+Splits the prompt each model call was billed for into ``system`` / ``tools`` /
+``messages`` partitions and stashes the result on the agent. The stream
+coordinator reads it via :func:`get_context_breakdown` and attaches it to the
+turn's final ``metadata`` SSE event as ``contextBreakdown`` — answering "what
+is filling the context window?" without an aggregate-only guess.
 
-Decomposition (convention validated live against Bedrock CountTokens):
+Decomposition (convention validated live against Bedrock CountTokens), from
+four native counts of one snapshot of the conversation:
 
-- ``systemTokens`` = ``count(system only)``
-- ``toolTokens``   = ``full - count(system + messages, no tools)`` — the tool
-  schemas **plus** the tool-use scaffolding Bedrock injects only when tools and
-  a conversation coexist (~400 tokens). Folded into Tools by design: it is the
-  true marginal cost of having tools enabled. An empty-messages baseline would
-  miss the scaffolding and mis-attribute it to messages.
-- ``messageTokens`` = ``full - systemTokens - toolTokens`` (residual; grows with
-  the conversation, scaffolding-free). Partitions sum to ``full`` by
+- ``systemTokens`` = ``count(probe + system) - count(probe)``. Bedrock refuses
+  an empty message list, so the system prompt is counted against a fixed
+  probe message whose own weight is subtracted (see ``_probe_baseline``).
+- ``toolTokens``   = ``count(full) - count(system + messages, no tools)`` — the
+  tool schemas **plus** the tool-use scaffolding Bedrock injects only when
+  tools and a conversation coexist (~400 tokens). Folded into Tools by design:
+  it is the true marginal cost of having tools enabled.
+- ``messageTokens`` = ``billed prompt - systemTokens - toolTokens`` (residual;
+  grows with the conversation). Partitions sum to the billed total by
   construction.
 
-``systemTokens`` / ``toolTokens`` are stable across a session (the tool
-overhead is constant as the conversation grows — verified), so they are
-computed once per agent at cold start (two extra CountTokens calls, plus a
-once-per-model probe baseline — see ``_probe_baseline``) and cached; every
-turn afterward is pure arithmetic against the free, authoritative
-``projected_input_tokens``. ``count(system only)`` is really
-``count(probe + system) - count(probe)``: Bedrock refuses an empty message
-list, so a bare system count silently degraded to the chars/4 heuristic.
+**Nothing here sits in front of a model call.** Usage reports only a total,
+so the split needs CountTokens — but a CountTokens round trip is ~70 ms at
+minimum and ~150 ms for a 30k-token prompt, and awaiting it before a model
+call adds that to time to first token one-for-one (measured, see #1343). So
+``BeforeModelCallEvent`` only records Strands' projection and, while an agent
+has no split yet, starts one background task over a snapshot of the
+conversation; its counts run in worker threads, concurrently with the model
+call. ``AfterModelCallEvent`` reads the call's billed prompt (input + cache
+read + cache write) off the assistant message and rebuilds the breakdown —
+pure arithmetic, after the model has answered. The split is stable across a
+session (the tool overhead is constant as the conversation grows — verified),
+so it is measured once per agent and memoised per session + configuration.
+Strands' own projection no longer calls CountTokens at all
+(``CountTokensBedrockModel(native_projection=False)``): nothing in this stack
+reads it except the interrupted-turn fallback (:func:`get_projected_input_tokens`).
 
 **Why the split is not computed while an attachment is in context.**
-``toolTokens`` is a *residual* between two independently sourced numbers —
-``full`` (Strands' projection for the upcoming request) and ``no_tools`` (our own
-CountTokens call) — so any disagreement between them about how a content block
-is counted lands wholly in it. Bedrock understands a PDF page as an image *and*
-a text layer; when the two sources do not agree on that, the document's entire
-weight is attributed to tools. Measured on dev 2026-09-16 (session
-``61de2256``): a call reported ``toolTokens`` of **106,756** where the session's
-real tools prefix was **12,516** — a difference of 94,240 against a document
-measured at ~94,485, i.e. the whole document. The split is therefore skipped on
-any turn whose context carries inline document or image bytes, and taken on a
-later clean turn instead. An absent ``prefixTokens`` reads "not tracked" (the
+``toolTokens`` is a residual, so any disagreement between its two sides about
+how a content block is counted lands wholly in it. When one side was Strands'
+projection and the other our own CountTokens call, a PDF's entire weight was
+attributed to tools. Measured on dev 2026-09-16 (session ``61de2256``): a call
+reported ``toolTokens`` of **106,756** where the session's real tools prefix
+was **12,516** — a difference of 94,240 against a document measured at
+~94,485, i.e. the whole document. Both sides are now native counts of the
+same snapshot, which should remove that failure, but the guard stays until a
+document turn has been measured to prove it: the split is skipped on any call
+whose context carries inline document or image bytes, and taken on a later
+clean call instead. An absent ``prefixTokens`` reads "not tracked" (the
 ledger's convention); a wrong one silently corrupts every share computed from
 it.
 
 **Why the split is not computed at all on OpenAI-surface providers.**
-The same residual argument has a second, larger failure mode that is a property
-of the *transport* rather than of any one turn. ``toolTokens`` subtracts our
-``count_tokens`` call from Strands' ``projected_input_tokens``, and those are
-only the same estimator on Bedrock Converse, where ``BedrockModel`` implements
-a native CountTokens. On ``bedrock-responses`` and ``mantle`` the model is an
+There is no native counter to take it from. Only Bedrock Converse serves
+CountTokens (``BedrockModel``). On ``bedrock-responses`` and ``mantle`` the model is an
 ``OpenAIResponsesModel``, whose ``count_tokens`` consults the native endpoint
 only when ``use_native_token_count`` is set — and that endpoint is **not
 served** on bedrock-runtime's OpenAI surface: enabling it makes ``count_tokens``
@@ -56,9 +61,9 @@ return ``None`` (measured against ``us.moonshotai.kimi-k3``, us-west-2,
 2026-09-21; Strands returns None rather than raising, so it would poison the
 arithmetic silently). Left unset, it degrades to the chars/4 heuristic.
 
-Subtracting a heuristic from a usage-anchored projection does not yield tool
-tokens; it yields tools *plus* the estimator disagreement, which moves with the
-conversation. Measured live on one Kimi K3 session: the same byte-identical
+When the split subtracted a heuristic count from a usage-anchored projection,
+it did not yield tool tokens; it yielded tools *plus* the estimator
+disagreement, which moves with the conversation. Measured live on one Kimi K3 session: the same byte-identical
 tool set (``toolConfigHash`` 8f6647f7f7 on both calls) reported **13,967** then
 **7,145** — a 2x swing on the number whose entire job is saying what fills the
 window. Forcing both sides through ``count_tokens`` makes the residual exactly
@@ -86,10 +91,12 @@ first calls in Sonnet 5 sessions. The plausibility guard in
 ``apis.shared.observability.prefix_tokens`` only catches the impossible cases;
 on a long conversation the same inflated split passes it. So the hook asks the
 model (``token_count_is_authoritative``, which reads the SDK's skip list) before
-spending any count, and compares the model's ``heuristic_count_fallbacks``
-around every count it relies on — Strands' projection included — so a count
-that silently fell back taints the split instead of becoming it. A tainted
-split is dropped and retried on the next turn, at most once per turn.
+spending any count, and counts through
+``CountTokensBedrockModel.native_count_tokens``, which answers ``None`` rather
+than a heuristic. A split with any ``None`` among its counts is dropped and
+retried on the next turn, at most once per turn. (A model without that method
+that still declares an authoritative ``count_tokens`` is read through it, with
+``heuristic_count_fallbacks`` compared around each call to the same effect.)
 
 **Itemization.** The displayed partitions are finer than the measured split:
 the system total is carved into System instructions / Skills / Memory and the
@@ -104,14 +111,21 @@ Best-effort: any failure is swallowed so context attribution can never break a
 model call.
 """
 
+import asyncio
 import hashlib
 import json
 import logging
 import threading
 from collections import OrderedDict
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
-from strands.hooks import BeforeInvocationEvent, BeforeModelCallEvent, HookProvider, HookRegistry
+from strands.hooks import (
+    AfterModelCallEvent,
+    BeforeInvocationEvent,
+    BeforeModelCallEvent,
+    HookProvider,
+    HookRegistry,
+)
 
 from agents.main_agent.session.hooks.context_itemization import itemize_system, itemize_tools
 from apis.shared.observability.prefix_tokens import prefix_split_is_plausible
@@ -122,6 +136,9 @@ logger = logging.getLogger(__name__)
 _SPLIT_ATTR = "_context_attribution_split"          # cached stable {systemTokens, toolTokens}
 _BREAKDOWN_ATTR = "_context_attribution_breakdown"  # latest per-turn breakdown dict
 _ITEMIZED_ATTR = "_context_attribution_itemized"    # (split key, system rows, tools row) memo
+_LAST_PROMPT_ATTR = "_context_attribution_last_prompt"  # billed prompt tokens of the last completed call
+_PROJECTED_ATTR = "_context_attribution_projected"      # Strands' pre-call projection, as handed to the hook
+_SNAPSHOT_FULL_ATTR = "_context_attribution_snapshot_full"  # native count of the request the split measured
 
 # Process-level memo of the stable split, keyed by *session and configuration*
 # rather than by ``Agent`` instance. The instance attribute above is enough
@@ -153,14 +170,9 @@ def _digest(payload: Any) -> str:
     return hashlib.md5(raw.encode("utf-8")).hexdigest()[:16]
 
 
-def _memo_key(session_id: str, agent: Any) -> Optional[Tuple[str, str, str]]:
-    """``(session, prompt digest, tool-spec digest)`` or None if any part is
-    unavailable — in which case the memo is simply not consulted."""
-    try:
-        prompt_payload = getattr(agent, "_system_prompt_content", None) or getattr(agent, "system_prompt", None)
-        specs = agent.tool_registry.get_all_tool_specs()
-    except Exception:  # noqa: BLE001 - never let key construction break a turn
-        return None
+def _memo_key(session_id: str, prompt_payload: Any, specs: Any) -> Tuple[str, str, str]:
+    """``(session, prompt digest, tool-spec digest)``. The digests serialize
+    the whole prompt and every tool schema, so this runs in a worker thread."""
     return (session_id, _digest(prompt_payload), _digest(specs))
 
 
@@ -208,22 +220,57 @@ def _probe_model_key(model: Any) -> Optional[str]:
     return None
 
 
-async def _probe_baseline(model: Any) -> int:
-    """Token weight of ``_PROBE_MESSAGES`` alone on ``model``, memoised per model id."""
+NativeCounter = Callable[..., Awaitable[Optional[int]]]
+
+
+async def _probe_baseline(model: Any, counter: NativeCounter) -> Optional[int]:
+    """Token weight of ``_PROBE_MESSAGES`` alone on ``model``, memoised per
+    model id. ``None`` when the count can't be had natively."""
     key = _probe_model_key(model)
     if key is not None:
         with _probe_lock:
             cached = _probe_baselines.get(key)
         if cached is not None:
             return cached
-    before = _fallback_count(model)
-    baseline = int(await model.count_tokens(messages=list(_PROBE_MESSAGES)))
+    baseline = await counter(list(_PROBE_MESSAGES))
     # Memoised process-wide, so only a native answer may stick: a heuristic
     # probe weight would skew every systemTokens figure that follows.
-    if key is not None and _fallback_count(model) == before:
+    if key is not None and baseline is not None:
         with _probe_lock:
             _probe_baselines[key] = baseline
     return baseline
+
+
+def _native_counter(model: Any) -> Optional[NativeCounter]:
+    """An async counter that answers natively or ``None`` — never a heuristic.
+
+    ``CountTokensBedrockModel.native_count_tokens`` is blocking, so it runs in
+    a worker thread. A model without it that still declares an authoritative
+    ``count_tokens`` (a future transport, the tests' doubles) is used through
+    ``count_tokens``, with ``heuristic_count_fallbacks`` read around each call
+    to turn a silent fallback into ``None``."""
+    if not _token_count_is_authoritative(model):
+        return None
+    native = getattr(model, "native_count_tokens", None)
+    if callable(native):
+
+        async def count(messages: Any, tool_specs: Any = None, system_prompt_content: Any = None) -> Optional[int]:
+            return await asyncio.to_thread(native, messages, tool_specs, system_prompt_content)
+
+        return count
+
+    async def count_via_model(
+        messages: Any, tool_specs: Any = None, system_prompt_content: Any = None
+    ) -> Optional[int]:
+        before = _fallback_count(model)
+        value = await model.count_tokens(
+            messages=messages, tool_specs=tool_specs, system_prompt_content=system_prompt_content
+        )
+        if _fell_back_since(model, before):
+            return None
+        return int(value)
+
+    return count_via_model
 
 
 def _fallback_count(model: Any) -> Optional[int]:
@@ -392,151 +439,198 @@ def _token_count_is_authoritative(model: Any) -> bool:
     return isinstance(model, BedrockModel)
 
 
-class ContextAttributionHook(HookProvider):
-    """Compute the system / tools / messages token breakdown each turn.
+def _prompt_tokens(usage: Any) -> Optional[int]:
+    """The whole prompt a call was billed for — input plus cache read and
+    write. The same total Strands' own projection baselines on."""
+    if not isinstance(usage, dict):
+        return None
+    try:
+        total = (
+            int(usage.get("inputTokens") or 0)
+            + int(usage.get("cacheReadInputTokens") or 0)
+            + int(usage.get("cacheWriteInputTokens") or 0)
+        )
+    except (TypeError, ValueError):
+        return None
+    return total or None
 
-    ``session_id`` enables the process-level split memo (see the module
-    comment): a rebuilt Agent for the same session and configuration adopts
-    the split its predecessor measured instead of re-counting. Without it the
-    split lives on the Agent instance only.
+
+def _has_usage_baseline(messages: Any) -> bool:
+    """Whether any assistant message carries provider usage — i.e. whether
+    Strands' projection was anchored on a real count rather than built
+    wholly from the heuristic."""
+    if not isinstance(messages, list):
+        return False
+    for message in reversed(messages):
+        if isinstance(message, dict) and message.get("role") == "assistant":
+            if (message.get("metadata") or {}).get("usage"):
+                return True
+    return False
+
+
+def get_projected_input_tokens(agent: Any) -> Optional[int]:
+    """Best available input size for the call now in flight, or ``None``.
+
+    For an interrupted turn, whose call never reported usage. Prefers a native
+    count of the exact request (taken by the split measurement on an agent's
+    first call); otherwise Strands' projection, but only when it was anchored
+    on a real usage baseline — a cold projection is the heuristic end to end
+    (JSON at chars/2), and an absent figure is better than that one.
     """
+    snapshot = getattr(agent, _SNAPSHOT_FULL_ATTR, None)
+    projected = getattr(agent, _PROJECTED_ATTR, None)
+    messages = getattr(agent, "messages", None)
+    if isinstance(snapshot, tuple) and len(snapshot) == 2 and isinstance(messages, list):
+        length, full = snapshot
+        if length == len(messages):
+            return full
+    if isinstance(projected, int) and projected > 0 and _has_usage_baseline(messages):
+        return projected
+    return None
 
-    def __init__(self, session_id: Optional[str] = None) -> None:
-        self._session_id = session_id or None
-        # The model's heuristic-fallback count as of the end of the previous
-        # call's attribution (or the turn's start). Strands' projection for
-        # the next call is counted after it, so a change means that
-        # projection was (partly) a heuristic.
-        self._fallback_mark: Optional[int] = None
-        # A split attempt this turn was tainted by a heuristic count. Reset
-        # per turn, so a throttled counter costs at most one attempt a turn.
-        self._split_blocked = False
 
-    def register_hooks(self, registry: HookRegistry, **kwargs: Any) -> None:
-        registry.add_callback(BeforeInvocationEvent, self._on_turn_start)
-        registry.add_callback(BeforeModelCallEvent, self._on_before_model_call)
-
-    def _on_turn_start(self, event: BeforeInvocationEvent) -> None:
-        self._split_blocked = False
-        self._fallback_mark = _fallback_count(getattr(event.agent, "model", None))
-
-    async def _on_before_model_call(self, event: BeforeModelCallEvent) -> None:
-        try:
-            await self._compute(event)
-        except Exception as e:  # noqa: BLE001 - attribution must never break a turn
-            logger.debug("Context attribution skipped: %s", e)
-        finally:
-            self._fallback_mark = _fallback_count(getattr(event.agent, "model", None))
-
-    async def _compute(self, event: BeforeModelCallEvent) -> None:
-        agent = event.agent
-        model = agent.model
-        if not _token_count_is_authoritative(model):
-            # No trustworthy counter on this transport — emit nothing rather
-            # than a residual that is really an estimator disagreement.
-            logger.debug(
-                "Context attribution skipped: %s has no authoritative count_tokens",
-                type(model).__name__,
-            )
-            return
-        system_prompt = getattr(agent, "system_prompt", None)
-        system_prompt_content = getattr(agent, "_system_prompt_content", None)
-        full = event.projected_input_tokens
-        projection_is_heuristic = full is not None and _fell_back_since(model, self._fallback_mark)
-        if projection_is_heuristic:
-            # Strands' projection for this call used the heuristic (a
-            # throttle, or a count that just failed): not a total to split or
-            # to place the messages partition against.
-            logger.debug("Context attribution: projection was a heuristic estimate; ignoring it")
-            full = None
-
-        split = getattr(agent, _SPLIT_ATTR, None)
-        memo_key = _memo_key(self._session_id, agent) if (split is None and self._session_id) else None
-        if split is None and memo_key is not None:
-            split = _memo_get(memo_key)
-            if split is not None:
-                # A predecessor Agent for this session + configuration already
-                # measured it; adopt without spending two CountTokens calls.
-                setattr(agent, _SPLIT_ATTR, split)
-                logger.debug("Context attribution split adopted from session memo")
-        if split is None and _has_inline_attachment(agent.messages):
-            # Untrustworthy residual (see module docstring) — leave the split
-            # uncomputed and try again on a turn without inline bytes.
-            logger.debug("Context attribution deferred: inline attachment in context")
-            return
-        if split is None and (self._split_blocked or projection_is_heuristic):
-            # Deferred to the next turn rather than spending a count of our
-            # own on `full` in front of this model call.
-            self._split_blocked = True
-            return
-        if split is None:
-            counts_mark = _fallback_count(model)
-            # Bedrock CountTokens rejects an empty message list ("A
-            # conversation must start with a user message" — verified live
-            # against dev 2026-09-18), and Strands swallows that into the
-            # chars/4 heuristic, so `count(messages=[])` was never the
-            # authoritative system count it looked like. Count the system
-            # prompt against a fixed probe user message and subtract the
-            # probe's own weight, which is a per-model constant measured once
-            # per process.
-            probe_only = await _probe_baseline(model)
-            system_with_probe = await model.count_tokens(
-                messages=list(_PROBE_MESSAGES),
-                system_prompt=system_prompt,
-                system_prompt_content=system_prompt_content,
-            )
-            system_tokens = max(0, system_with_probe - probe_only)
-            # system + the current conversation, WITHOUT tools — so the
-            # difference from `full` captures tool schemas + the tool-use
-            # scaffolding (present only when tools and messages coexist).
-            no_tools = await model.count_tokens(
-                messages=agent.messages,
-                system_prompt=system_prompt,
-                system_prompt_content=system_prompt_content,
-            )
-            if full is None:
-                # projected estimate unavailable — count the full request once
-                # so cold start can still establish the split.
-                tool_specs = agent.tool_registry.get_all_tool_specs()
-                full = await model.count_tokens(
-                    messages=agent.messages,
-                    tool_specs=tool_specs,
-                    system_prompt=system_prompt,
-                    system_prompt_content=system_prompt_content,
-                )
-            if _fell_back_since(model, counts_mark):
-                # One of the counts above was the heuristic — a residual of
-                # it is an estimator disagreement, not tool tokens. Try again
-                # next turn rather than cache it.
-                logger.debug("Context attribution deferred: a count fell back to the heuristic")
-                self._split_blocked = True
-                return
-            split = {
-                "systemTokens": system_tokens,
-                "toolTokens": max(0, full - no_tools),
-            }
-            setattr(agent, _SPLIT_ATTR, split)
-            if memo_key is not None:
-                _memo_put(memo_key, split)
-
-        if full is None:
-            # No authoritative total this turn — can't place the messages
-            # partition. Leave the previous breakdown (if any) untouched.
-            return
-
-        message_tokens = max(0, full - split["systemTokens"] - split["toolTokens"])
-        # Only the three measured totals here: this runs before every model
-        # call, so itemizing them (see `get_context_breakdown`) waits until
-        # something reads the breakdown after the model has answered.
-        breakdown = {
-            "total": full,
+def _refresh_breakdown(agent: Any) -> None:
+    """Rebuild the three measured partitions from the split and the last
+    call's billed prompt. Pure arithmetic; runs after a model call answers."""
+    split = getattr(agent, _SPLIT_ATTR, None)
+    total = getattr(agent, _LAST_PROMPT_ATTR, None)
+    if not isinstance(split, dict) or not isinstance(total, int):
+        return
+    message_tokens = max(0, total - split["systemTokens"] - split["toolTokens"])
+    setattr(
+        agent,
+        _BREAKDOWN_ATTR,
+        {
+            "total": total,
             "partitions": [
                 {"key": "system", "label": "System instructions", "tokens": split["systemTokens"]},
                 {"key": "tools", "label": "Tools", "tokens": split["toolTokens"]},
                 {"key": "messages", "label": "Messages", "tokens": message_tokens},
             ],
+        },
+    )
+
+
+class ContextAttributionHook(HookProvider):
+    """Measure the system / tools split off the critical path, and place each
+    call's messages partition against the prompt the provider billed.
+
+    Nothing here waits in front of a model call. ``BeforeModelCallEvent``
+    records Strands' projection and, while an agent has no split yet, starts
+    one background measurement over a snapshot of the conversation — its
+    native counts run concurrently with the model call. ``AfterModelCallEvent``
+    reads the call's billed prompt off the assistant message and rebuilds the
+    breakdown. ``session_id`` enables the process-level split memo (see the
+    module comment).
+    """
+
+    def __init__(self, session_id: Optional[str] = None) -> None:
+        self._session_id = session_id or None
+        # A split attempt this turn found no native count. Reset per turn, so
+        # a throttled counter costs at most one attempt a turn.
+        self._split_blocked = False
+        self._split_task: Optional["asyncio.Task[None]"] = None
+
+    def register_hooks(self, registry: HookRegistry, **kwargs: Any) -> None:
+        registry.add_callback(BeforeInvocationEvent, self._on_turn_start)
+        registry.add_callback(BeforeModelCallEvent, self._on_before_model_call)
+        registry.add_callback(AfterModelCallEvent, self._on_after_model_call)
+
+    def _on_turn_start(self, event: BeforeInvocationEvent) -> None:
+        self._split_blocked = False
+
+    def _on_before_model_call(self, event: BeforeModelCallEvent) -> None:
+        """On the TTFT path: record, maybe schedule, return. No I/O, no
+        digests, no formatting — those all run in the background task."""
+        try:
+            agent = event.agent
+            setattr(agent, _PROJECTED_ATTR, event.projected_input_tokens)
+            if getattr(agent, _SPLIT_ATTR, None) is not None or self._split_blocked:
+                return
+            if self._split_task is not None and not self._split_task.done():
+                return
+            counter = _native_counter(agent.model)
+            if counter is None:
+                return
+            messages = list(agent.messages)
+            self._split_task = asyncio.get_running_loop().create_task(
+                self._measure_split(agent, counter, messages)
+            )
+        except Exception as e:  # noqa: BLE001 - attribution must never break a turn
+            logger.debug("Context attribution skipped: %s", e)
+
+    def _on_after_model_call(self, event: AfterModelCallEvent) -> None:
+        try:
+            response = event.stop_response
+            if response is None:
+                return
+            usage = ((response.message or {}).get("metadata") or {}).get("usage")
+            total = _prompt_tokens(usage)
+            if total is None:
+                return
+            setattr(event.agent, _LAST_PROMPT_ATTR, total)
+            _refresh_breakdown(event.agent)
+        except Exception as e:  # noqa: BLE001 - attribution must never break a turn
+            logger.debug("Context attribution skipped: %s", e)
+
+    async def _measure_split(self, agent: Any, counter: NativeCounter, messages: List[Any]) -> None:
+        try:
+            await self._measure_split_inner(agent, counter, messages)
+        except Exception as e:  # noqa: BLE001 - a background measurement never surfaces
+            logger.debug("Context attribution split failed: %s", e)
+
+    async def _measure_split_inner(self, agent: Any, counter: NativeCounter, messages: List[Any]) -> None:
+        system_prompt = getattr(agent, "system_prompt", None)
+        system_prompt_content = getattr(agent, "_system_prompt_content", None)
+        if system_prompt_content is None and system_prompt:
+            system_prompt_content = [{"text": system_prompt}]
+
+        # Read on the event loop (the registry is not ours to touch from a
+        # worker thread); only the serialization below leaves it.
+        tool_specs = agent.tool_registry.get_all_tool_specs()
+        memo_key: Optional[Tuple[str, str, str]] = None
+        if self._session_id:
+            memo_key = await asyncio.to_thread(
+                _memo_key, self._session_id, system_prompt_content or system_prompt, tool_specs
+            )
+            split = _memo_get(memo_key)
+            if split is not None:
+                # A predecessor Agent for this session + configuration already
+                # measured it; adopt without spending any counts.
+                setattr(agent, _SPLIT_ATTR, split)
+                _refresh_breakdown(agent)
+                logger.debug("Context attribution split adopted from session memo")
+                return
+
+        if _has_inline_attachment(messages):
+            # Untrustworthy residual (see module docstring) — try again on a
+            # later call without inline bytes.
+            logger.debug("Context attribution deferred: inline attachment in context")
+            return
+
+        # Bedrock refuses an empty message list, so the system prompt is
+        # counted against a fixed probe message whose own weight is
+        # subtracted. `no_tools` and `full` count the same snapshot, so the
+        # tools residual is between two native counts of one conversation.
+        probe_only, system_with_probe, no_tools, full = await asyncio.gather(
+            _probe_baseline(agent.model, counter),
+            counter(list(_PROBE_MESSAGES), None, system_prompt_content),
+            counter(messages, None, system_prompt_content),
+            counter(messages, tool_specs, system_prompt_content),
+        )
+        if None in (probe_only, system_with_probe, no_tools, full):
+            logger.debug("Context attribution deferred: a count had no native answer")
+            self._split_blocked = True
+            return
+        split = {
+            "systemTokens": max(0, system_with_probe - probe_only),
+            "toolTokens": max(0, full - no_tools),
         }
-        setattr(agent, _BREAKDOWN_ATTR, breakdown)
+        setattr(agent, _SPLIT_ATTR, split)
+        setattr(agent, _SNAPSHOT_FULL_ATTR, (len(messages), full))
+        if memo_key is not None:
+            _memo_put(memo_key, split)
+        _refresh_breakdown(agent)
 
 
 def _system_partitions(agent: Any, system_tokens: int) -> list:

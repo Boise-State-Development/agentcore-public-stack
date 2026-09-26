@@ -311,3 +311,85 @@ class TestCountTokensClientConfig:
         assert boto_client.call_args.args == ("bedrock-runtime",)
         assert kwargs["region_name"] == "us-east-1"
         assert kwargs["config"].retries["total_max_attempts"] == 1
+
+
+class TestNativeCountTokens:
+    """The counter the context-attribution hook calls from its background
+    task: a native answer or ``None`` — never a heuristic — with the same
+    skip-list bookkeeping as ``count_tokens``."""
+
+    def test_counts_against_the_base_id(self, _aws_region):
+        client = FakeCountClient(result=777)
+        model = _model(model_id="global.anthropic.claude-haiku-4-5-20251001-v1:0", client=client)
+
+        assert model.native_count_tokens([{"role": "user", "content": [{"text": "hi"}]}]) == 777
+        assert client.calls[0]["modelId"] == BASE_ID
+
+    def test_native_counting_off_answers_none_without_a_request(self, _aws_region):
+        client = FakeCountClient()
+        model = _model(native=False, client=client)
+
+        assert model.native_count_tokens([{"role": "user", "content": [{"text": "hi"}]}]) is None
+        assert client.calls == []
+
+    def test_a_skip_listed_model_answers_none_without_a_request(self, _aws_region):
+        client = FakeCountClient()
+        model = _model(client=client)
+        _SKIP_COUNT_TOKENS_MODELS.add(BASE_ID)
+
+        assert model.native_count_tokens([{"role": "user", "content": [{"text": "hi"}]}]) is None
+        assert client.calls == []
+
+    def test_unsupported_answers_none_and_skip_lists_the_base_id(self, _aws_region):
+        client = FakeCountClient(
+            raise_with=_client_error("ValidationException", "The provided model doesn't support counting tokens.")
+        )
+        model = _model(client=client)
+
+        assert model.native_count_tokens([{"role": "user", "content": [{"text": "hi"}]}]) is None
+        assert BASE_ID in _SKIP_COUNT_TOKENS_MODELS
+        assert model.token_count_is_authoritative is False
+
+    def test_a_throttle_answers_none_and_does_not_skip_list(self, _aws_region):
+        client = FakeCountClient(raise_with=_client_error("ThrottlingException"))
+        model = _model(client=client)
+
+        assert model.native_count_tokens([{"role": "user", "content": [{"text": "hi"}]}]) is None
+        assert BASE_ID not in _SKIP_COUNT_TOKENS_MODELS
+        assert model.heuristic_count_fallbacks == 0, "no heuristic was answered"
+
+
+class TestNativeProjectionOff:
+    """``native_projection=False`` — how the factory builds every Converse
+    model — keeps the count Strands awaits before each model call local."""
+
+    @pytest.mark.asyncio
+    async def test_count_tokens_never_reaches_the_network(self, _aws_region):
+        client = FakeCountClient()
+        model = CountTokensBedrockModel(model_id=PROFILE_ID, use_native_token_count=True, native_projection=False)
+        model._count_client = client
+
+        with patch.object(Model, "count_tokens", return_value=42) as heuristic:
+            result = await model.count_tokens([{"role": "user", "content": [{"text": "hi"}]}], system_prompt="s")
+
+        assert result == 42
+        heuristic.assert_called_once()
+        assert client.calls == []
+
+    def test_native_counts_stay_available_to_the_hook(self, _aws_region):
+        client = FakeCountClient(result=99)
+        model = CountTokensBedrockModel(model_id=PROFILE_ID, use_native_token_count=True, native_projection=False)
+        model._count_client = client
+
+        assert model.token_count_is_authoritative is True
+        assert model.native_count_tokens([{"role": "user", "content": [{"text": "hi"}]}]) == 99
+
+    def test_the_factory_builds_models_with_the_projection_local(self, _aws_region):
+        from agents.main_agent.core.agent_factory import AgentFactory
+        from agents.main_agent.core.model_config import ModelConfig
+
+        model = AgentFactory._create_bedrock_model(ModelConfig(model_id=PROFILE_ID))
+
+        assert isinstance(model, CountTokensBedrockModel)
+        assert model._native_projection is False
+        assert model.config["use_native_token_count"] is True
