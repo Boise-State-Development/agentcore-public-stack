@@ -5,6 +5,29 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 ## Open
 <!-- Newest at top. -->
 
+### [2026-09-25] Track harness-sdk#4618 — upstream will make Bedrock `inputTokens` inclusive of cache tokens, the opposite of what our cost math assumes
+- **Source**: Phil-initiated. Tracks https://github.com/strands-agents/harness-sdk/issues/4618 (opened 2026-09-25 by a maintainer, labels `area-model` / `area-otel`). It is the declared successor to [#3546](https://github.com/strands-agents/harness-sdk/issues/3546), which will close when [#4617](https://github.com/strands-agents/harness-sdk/pull/4617) (TS only) merges.
+- **What #4618 proposes**: one canonical `Usage` convention, semconv **subset**. `inputTokens` includes cache reads and writes, the cache fields become breakdowns of it, and `totalTokens == inputTokens + outputTokens`. It is enforced **in each provider adapter**, so Bedrock and Anthropic would fold cache tokens into `inputTokens`. The read-time guess (`_total_prompt_tokens`) is deleted, and a reasoning-token field is added as a subset of `outputTokens`. It covers both `strands-py` and `strands-ts`.
+- **Why it matters here**: this stack uses the **disjoint** Converse convention everywhere:
+  - `apis/shared/costs/calculator.py` (`calculate_message_cost` prices each bucket separately)
+  - the context-size sum in `agents/main_agent/streaming/stream_coordinator.py`
+  - `apis/shared/observability/prompt_cache.py` and `prefix_tokens.py`
+  - the `C#` rows in `apis/shared/sessions/metadata.py`
+
+  `usage_normalization.py` exists to force OpenAI-family usage *into* that shape, and it deliberately leaves Bedrock untouched. If #4618 ships and we bump, every cached Bedrock token is priced twice: once at the input rate, then again at the cache-read rate (or the 1.25× write rate). On our Haiku 4.5 default, with 30k–150k-token cached prefixes, that inflates cost and **quota** by several times on most turns. Nothing errors. Direct boto3 Converse callers (`app_api/chat/converse_routes.py`) would keep the disjoint shape, so our code would hold both conventions at once.
+- **Surface**: backend. `apis/shared/models/usage_normalization.py` (Bedrock would need the same subtraction OpenAI gets; the "leaves Bedrock untouched" contract inverts), plus the consumers listed above, plus the `strands-agents` pin (`==1.55.0` in `backend/pyproject.toml`).
+- **Effort × Impact**: L to watch. M × H when it lands, because a silent cost and quota inflation on the dominant path is the worst failure class this repo guards against.
+- **Subtracts**: partly. The subset convention is the one semconv and OpenAI already use, so once *every* adapter emits it we could normalize **one** way for all providers (subset → disjoint in a single place) instead of branching by provider. The reasoning-token field could also feed per-call cost attribution for reasoning models. The price is a coordinated change at the pin bump.
+- **Status**: open, **watch only**. As filed, the issue asks for a design doc first and has no PR. Two related items moved the same day: our [#4193](https://github.com/strands-agents/harness-sdk/pull/4193) (`cache_write_tokens` mapping) **merged 2026-09-25 at 21:25 UTC, after `python/v1.57.1` was cut**, so it ships in the next Python release. #3546 is closing via #4617.
+- **Gate (added to `kaizen-research/SKILL.md` §2a)**: any Strands bump PR must check whether the Bedrock adapter folds cache tokens into `inputTokens`. The tell is `_total_prompt_tokens` disappearing. If it does, the bump **must** carry the matching `normalize_usage` change and a live before/after check that one cached Bedrock call prices identically. Our comment was posted 2026-09-25 (https://github.com/strands-agents/harness-sdk/issues/4618#issuecomment-5841509350). It asks for four things:
+  1. a breaking-change callout for Bedrock and Anthropic in the release notes
+  2. a guaranteed identity for every provider: `input - cacheRead - cacheWrite` equals the uncached input and is never negative
+  3. how `BedrockModel` handles the model-family split (GPT over Converse already reports subset; Claude reports disjoint)
+  4. confirmation that reasoning tokens are a subset of `outputTokens`
+
+  Each run, check the thread for replies to these.
+- **Done when**: #4618 either closes without changing Bedrock semantics, or its change is adopted here behind a verified pricing check and `usage_normalization.py` has been reduced to one convention.
+
 ### [2026-09-25] Confirm the RAG documents bucket's lifecycle rule drains dev and lands in production (after #1336 reaches `main`)
 - **Source**: Phil-initiated, from the dev validation of #1336. The documents bucket is versioned and had no lifecycle rules, so every delete the app makes in it (document cleanup, icon replace/remove, agent-delete icon cleanup, `cleanup_orphaned_agent_rows.py`) only wrote a delete marker. The deleted bytes stayed forever as noncurrent versions. #1336 adds one rule: noncurrent versions expire after 35 days (the assistants table's PITR window), orphaned delete markers are removed, and incomplete multipart uploads abort after 7 days. It was dev-validated on 2026-09-25: the deployed rule matches the template exactly, versioning is still enabled, and the current object count was unchanged.
 - **Surface**: ops only, read-only. `get-bucket-lifecycle-configuration` and `list-object-versions` on the `rag-documents` bucket in each account. No code change.
@@ -420,8 +443,8 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Subtracts**: yes, by construction. This entry only ever proposes removals; if a run finds nothing upstream, it stays open and costs one scan.
 - **Status**: open — the convergence is real and already partly upstream, so this is a waiting game with a known finish line, not speculation.
   - ✅ **Already on upstream main:** `strands/models/_openai_cache.py::apply_cache_config` maps `CacheConfig.cache_key` → `prompt_cache_key` for OpenAI models. That is our `build_prompt_cache_key()`, upstream. **Not in our pinned 1.51.0** — adopt on the next bump.
-  - ⏳ `cache_write_tokens` mapping — [harness-sdk#4193](https://github.com/strands-agents/harness-sdk/pull/4193) is **ours**, open. Merging + a release deletes half of `usage_normalization.py`.
-  - ⏳ Disjoint-`Usage` contract — [harness-sdk#3546](https://github.com/strands-agents/harness-sdk/issues/3546) open; the broad fix (#3561, 84 files) was **closed unmerged**, maintainers want small PRs. Landing it deletes the other half.
+  - ⏳ `cache_write_tokens` mapping — [harness-sdk#4193](https://github.com/strands-agents/harness-sdk/pull/4193) is **ours**, **merged 2026-09-25** (after `python/v1.57.1`). The first release that contains it, plus a bump, deletes half of `usage_normalization.py`.
+  - ⚠️ Disjoint-`Usage` contract — **will not come from upstream.** [#3546](https://github.com/strands-agents/harness-sdk/issues/3546) is closing via #4617, and its successor [#4618](https://github.com/strands-agents/harness-sdk/issues/4618) standardizes on the *inclusive* (subset) convention for every provider, Bedrock included. The OpenAI half of the shim does not retire. Instead, Bedrock would gain the same subtraction. See the [2026-09-25] #4618 entry.
   - ❌ No upstream equivalent for explicit breakpoints — `apply_cache_config` emits no `prompt_cache_breakpoint`. Ours is OFF by default and stays off.
   - ⚠️ `apply_cache_config` maps ttl → `prompt_cache_retention` (`in_memory`/`24h`), **not** GPT-5.6's `prompt_cache_options.ttl: "30m"`. Not yet the same concept as our `cache_ttl_seconds_for()`; don't conflate them.
 - **Scope is all cacheable families, not just GPT.** Anthropic, OpenAI, and any newly cacheable Bedrock model. For each new one, confirm *which API surface* serves caching before assuming it works — GPT-5.6 caches **only** over the Responses API and not at all over Converse, and that distinction was worth an entire transport.
