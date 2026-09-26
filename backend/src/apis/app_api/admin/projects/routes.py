@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from apis.shared.auth import User, require_admin_scope
 from apis.shared.projects.models import Project, ProjectStatus
 from apis.shared.projects.service import ProjectConflictError, ProjectNotFoundError, ProjectService
+from apis.shared.security.log_sanitize import scrub_log
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +119,6 @@ def project_audit(
     try:
         records, next_cursor = _svc().audit_trail(project_id, limit=limit, after=cursor)
     except Exception:
-        logger.exception("Failed to read the audit trail for project %s", project_id)
+        logger.exception("Failed to read the audit trail for project %s", scrub_log(project_id))
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Audit log is unavailable.")
     return {"records": [r.to_response() for r in records], "nextCursor": next_cursor}

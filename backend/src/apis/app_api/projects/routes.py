@@ -36,6 +36,7 @@ from apis.shared.projects.service import (
     ProjectService,
     is_valid_email,
 )
+from apis.shared.security.log_sanitize import scrub_log
 from apis.shared.sessions.metadata import list_project_sessions
 from apis.shared.sessions.models import SessionMetadataResponse, SessionsListResponse
 
@@ -358,7 +359,7 @@ def project_audit(
     except ProjectError as e:
         raise _translate(e)
     except Exception:
-        logger.exception("Failed to read the audit trail for project %s", project_id)
+        logger.exception("Failed to read the audit trail for project %s", scrub_log(project_id))
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Audit log is unavailable.")
     return {
         "records": [
