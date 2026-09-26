@@ -19,7 +19,13 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Effort × Impact**: L to watch. M × H when it lands, because a silent cost and quota inflation on the dominant path is the worst failure class this repo guards against.
 - **Subtracts**: partly. The subset convention is the one semconv and OpenAI already use, so once *every* adapter emits it we could normalize **one** way for all providers (subset → disjoint in a single place) instead of branching by provider. The reasoning-token field could also feed per-call cost attribution for reasoning models. The price is a coordinated change at the pin bump.
 - **Status**: open, **watch only**. As filed, the issue asks for a design doc first and has no PR. Two related items moved the same day: our [#4193](https://github.com/strands-agents/harness-sdk/pull/4193) (`cache_write_tokens` mapping) **merged 2026-09-25 at 21:25 UTC, after `python/v1.57.1` was cut**, so it ships in the next Python release. #3546 is closing via #4617.
-- **Gate (added to `kaizen-research/SKILL.md` §2a)**: any Strands bump PR must check whether the Bedrock adapter folds cache tokens into `inputTokens`. The tell is `_total_prompt_tokens` disappearing. If it does, the bump **must** carry the matching `normalize_usage` change and a live before/after check that one cached Bedrock call prices identically. Consider commenting on #4618 during the design-doc phase: we are a downstream consumer whose cost ledger depends on the Bedrock shape, and a per-release changelog callout (or a transition flag) would make this safe to adopt.
+- **Gate (added to `kaizen-research/SKILL.md` §2a)**: any Strands bump PR must check whether the Bedrock adapter folds cache tokens into `inputTokens`. The tell is `_total_prompt_tokens` disappearing. If it does, the bump **must** carry the matching `normalize_usage` change and a live before/after check that one cached Bedrock call prices identically. Our comment was posted 2026-09-25 (https://github.com/strands-agents/harness-sdk/issues/4618#issuecomment-5841509350). It asks for four things:
+  1. a breaking-change callout for Bedrock and Anthropic in the release notes
+  2. a guaranteed identity for every provider: `input - cacheRead - cacheWrite` equals the uncached input and is never negative
+  3. how `BedrockModel` handles the model-family split (GPT over Converse already reports subset; Claude reports disjoint)
+  4. confirmation that reasoning tokens are a subset of `outputTokens`
+
+  Each run, check the thread for replies to these.
 - **Done when**: #4618 either closes without changing Bedrock semantics, or its change is adopted here behind a verified pricing check and `usage_normalization.py` has been reduced to one convention.
 
 ### [2026-09-25] Confirm the RAG documents bucket's lifecycle rule drains dev and lands in production (after #1336 reaches `main`)
