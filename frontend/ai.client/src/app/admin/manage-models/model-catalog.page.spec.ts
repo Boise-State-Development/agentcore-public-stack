@@ -255,12 +255,27 @@ describe('ModelCatalogPage', () => {
     });
 
     it('derives cache rates from base input at Bedrock\'s published multipliers', () => {
+      // Published exceptions to the 1.25x write / 0.1x read default, each from
+      // a source outside this file. Anything else that drifts is a typo.
+      //  - Claude Opus 5.5 reads at 0.05x: Price List API, $0.22 against $4.40
+      //    Regional ($0.20 against $4.00 Global), 2026-09-25.
+      //  - GPT-5.5 has no write bucket: its card's cache-write cell is an em
+      //    dash, and a live probe reported `cache_write_tokens: 0` on every turn
+      //    while reading the prefix back from cache.
+      const WRITE_MULTIPLIER: Record<string, number> = { 'gpt-5-5': 0 };
+      const READ_MULTIPLIER: Record<string, number> = { 'claude-opus-5-5': 0.05 };
       for (const model of tieredModels) {
         const t = model.template;
         if (!t.supportsCaching) continue;
         const input = t.inputPricePerMillionTokens;
-        expect(t.cacheWritePricePerMillionTokens).toBeCloseTo(input * 1.25, 6);
-        expect(t.cacheReadPricePerMillionTokens).toBeCloseTo(input * 0.1, 6);
+        expect(t.cacheWritePricePerMillionTokens, model.key).toBeCloseTo(
+          input * (WRITE_MULTIPLIER[model.key] ?? 1.25),
+          6,
+        );
+        expect(t.cacheReadPricePerMillionTokens, model.key).toBeCloseTo(
+          input * (READ_MULTIPLIER[model.key] ?? 0.1),
+          6,
+        );
       }
     });
   });
@@ -484,7 +499,15 @@ describe('ModelCatalogPage', () => {
     // provider an install may not use at all. Demoting it left Mantle with no
     // featured model but a specialist coding one, which the family check below
     // now catches. A template default cannot assume what else gets added.
-    const DEMOTED = ['claude-sonnet-4-6', 'qwen3-coder-30b', 'gpt-5-6-luna'];
+    const DEMOTED = [
+      'claude-opus-4-7',
+      'claude-sonnet-4-6',
+      'qwen3-coder-30b',
+      'gpt-5-5',
+      'gpt-5-6-sol',
+      'gpt-5-6-terra',
+      'gpt-5-6-luna',
+    ];
 
     it('demotes exactly the superseded and specialist models', () => {
       const demoted = ALL.filter(m => m.template.isFeatured === false)
