@@ -191,7 +191,7 @@ class TestRetrievalThresholdEnvVars:
     def test_uses_default_thresholds(
         self, mock_tbsm, mock_retrieval, mock_mem_config, mock_discover, monkeypatch
     ):
-        """Default relevance_score=0.5 and top_k=10 when env vars not set."""
+        """Default relevance_score=0.4 and top_k=10 when env vars not set."""
         from agents.main_agent.session.session_factory import SessionFactory
 
         monkeypatch.delenv("AGENTCORE_MEMORY_RELEVANCE_SCORE", raising=False)
@@ -208,7 +208,7 @@ class TestRetrievalThresholdEnvVars:
         # retrieved per message unless explicitly re-enabled.
         assert mock_retrieval.call_count == 2
         for c in mock_retrieval.call_args_list:
-            assert c == call(top_k=10, relevance_score=0.5)
+            assert c == call(top_k=10, relevance_score=0.4)
 
     @patch("agents.main_agent.session.session_factory.AGENTCORE_MEMORY_AVAILABLE", True)
     @patch("agents.main_agent.session.session_factory._discover_strategy_ids")
