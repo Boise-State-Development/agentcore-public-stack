@@ -84,7 +84,7 @@ class TestBoundSummary:
         assert approx_tokens(result.text) <= BUDGET
 
     @pytest.mark.asyncio
-    async def test_model_ceiling_hit_is_a_failure(self, bedrock):
+    async def test_model_ceiling_hit_with_no_complete_line_falls_back(self, bedrock):
         bedrock.return_value = _model_reply("frag", stop="max_tokens")
         result = await bound_summary(["r" * 900], BUDGET, model_enabled=True, model_id="m")
         assert result.outcome == "truncated_after_model"
@@ -125,6 +125,78 @@ class TestBoundSummary:
         monkeypatch.delenv("AGENTCORE_MEMORY_COMPACTION_SUMMARY_MODEL_ID", raising=False)
         assert CompactionConfig.from_env().summary_model_id == "us.amazon.nova-2-lite-v1:0"
         assert CompactionConfig().summary_model_id == "us.amazon.nova-2-lite-v1:0"
+
+
+class TestCeilingSalvage:
+    """A generation cut off by ``maxTokens`` keeps its complete lines.
+
+    Nova 2 Lite's narrative length varies several times over on the same
+    records, so hitting the ceiling is routine. Discarding the generation
+    fell back to newest-first truncation of the raw records, which drops the
+    oldest standing instructions first.
+    """
+
+    CUT_OFF = "Standing instructions: cite APA.\nDecisions: title is Tides.\nOpen: the conclu"
+
+    @pytest.mark.asyncio
+    async def test_keeps_complete_lines_and_drops_the_partial_one(self, bedrock):
+        bedrock.return_value = _model_reply(self.CUT_OFF, stop="max_tokens")
+        result = await bound_summary(["r" * 900], BUDGET, model_enabled=True, model_id="m")
+        assert result.outcome == "model_salvaged"
+        assert result.text == "Standing instructions: cite APA.\nDecisions: title is Tides."
+        assert result.tokens_after == approx_tokens(result.text)
+
+    @pytest.mark.asyncio
+    async def test_over_budget_salvage_keeps_the_head_not_the_tail(self, bedrock):
+        # 10 lines of 60 chars against a 400-char budget: the standing
+        # instructions at the head survive, the cut-off end does not.
+        lines = ["INSTRUCTIONS: never contact the vendor directly".ljust(60)]
+        lines += [f"detail {i}".ljust(60) for i in range(9)]
+        bedrock.return_value = _model_reply("\n".join(lines) + "\npartial", stop="max_tokens")
+        result = await bound_summary(["r" * 900], BUDGET, model_enabled=True, model_id="m")
+        assert result.outcome == "model_salvaged"
+        assert result.text.startswith("INSTRUCTIONS: never contact the vendor directly")
+        assert "partial" not in result.text
+        assert approx_tokens(result.text) <= BUDGET
+        # Whole lines only: the text ends where one of the model's lines ends.
+        assert result.text.split("\n")[-1] == lines[len(result.text.split("\n")) - 1].rstrip()
+
+    @pytest.mark.asyncio
+    async def test_compress_with_model_returns_the_salvage(self, bedrock):
+        # The public helper other cut paths call gets the same salvage.
+        bedrock.return_value = _model_reply(self.CUT_OFF, stop="max_tokens")
+        out = await compress_with_model(["r" * 900], BUDGET, model_id="m")
+        assert out == "Standing instructions: cite APA.\nDecisions: title is Tides."
+
+    @pytest.mark.asyncio
+    async def test_complete_generation_is_still_plain_model(self, bedrock):
+        bedrock.return_value = _model_reply(self.CUT_OFF)
+        result = await bound_summary(["r" * 900], BUDGET, model_enabled=True, model_id="m")
+        assert result.outcome == "model" and result.text == self.CUT_OFF
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "model_id, expected",
+        [
+            # Nova 2 Lite's card: 64K max output, so the budget binds.
+            ("us.amazon.nova-2-lite-v1:0", 8_000),
+            ("global.amazon.nova-2-lite-v1:0", 8_000),
+            ("amazon.nova-2-lite-v1:0", 8_000),
+            # Anything unlisted stays under Nova Micro's 5K ceiling.
+            ("us.amazon.nova-micro-v1:0", 4_000),
+            ("us.anthropic.claude-haiku-4-5-20251001-v1:0", 4_000),
+        ],
+    )
+    async def test_max_tokens_follows_the_models_ceiling(self, bedrock, model_id, expected):
+        bedrock.return_value = _model_reply("ok")
+        await bound_summary(["r" * 40_000], 8_000, model_enabled=True, model_id=model_id)
+        assert bedrock.call_args.kwargs["inferenceConfig"]["maxTokens"] == expected
+
+    @pytest.mark.asyncio
+    async def test_budget_below_the_ceiling_still_binds(self, bedrock):
+        bedrock.return_value = _model_reply("ok")
+        await bound_summary(["r" * 40_000], 3_000, model_enabled=True, model_id="us.amazon.nova-2-lite-v1:0")
+        assert bedrock.call_args.kwargs["inferenceConfig"]["maxTokens"] == 3_000
 
 
 CLAUDE_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
@@ -319,6 +391,18 @@ class TestExtractThenCompress:
         assert "- PRJ-4417" in result.text and "- PRJ-44\n" not in result.text
 
     @pytest.mark.asyncio
+    async def test_narrative_ceiling_hit_keeps_its_complete_lines(self, bedrock):
+        """A cut-off narrative is salvaged, not swapped for raw records (extract_then_truncate)."""
+        bedrock.side_effect = _route(
+            _model_reply(PINNED),
+            _model_reply("Drafted the intro.\nOpen: the conclu", stop="max_tokens"),
+        )
+        result = await _extract(["raw record " * 200])
+        assert result.outcome == "extract_then_compress"
+        assert result.text == f"{PINNED_HEADER}\n{PINNED}\n\n{NARRATIVE_HEADER}\nDrafted the intro."
+        assert "raw record" not in result.text
+
+    @pytest.mark.asyncio
     async def test_overlong_narrative_is_tail_trimmed_inside_the_budget(self, bedrock):
         bedrock.side_effect = _route(_model_reply(PINNED), _model_reply("y" * 3000 + "END"))
         result = await _extract(["r" * 4000])
@@ -428,6 +512,17 @@ class TestThroughUpdateAfterTurn:
         assert mgr.compaction_state.summary == "LTM summary 1\n\nLTM summary 2"
         assert mgr.compaction_state.policy["summaryOutcome"] == "within_budget"
         bedrock.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_salvaged_summary_is_persisted_and_labelled(self, make_session_manager, bedrock):
+        bedrock.return_value = _model_reply("Instructions: cite APA.\nOpen: the conclu", stop="max_tokens")
+        records = [f"record {i} " + "z" * 600 for i in range(10)]
+        mgr = self._manager(make_session_manager, records)
+        await mgr.update_after_turn(2000)
+        state = mgr.compaction_state
+        assert state.summary == "Instructions: cite APA."
+        assert state.policy["summaryOutcome"] == "model_salvaged"
+        assert bedrock.call_count == 1
 
     @pytest.mark.asyncio
     async def test_fallback_summary_is_labelled(self, make_session_manager, bedrock):
