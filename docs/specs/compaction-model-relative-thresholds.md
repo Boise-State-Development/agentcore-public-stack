@@ -443,8 +443,9 @@ replay real trajectories under a policy.
 >   (`extract_then_truncate`).
 > - Both fail → truncation.
 >
-> **Flag.** `COMPACTION_SUMMARY_EXTRACT_ENABLED`, in development and default
-> off. Set it from `CDK_COMPACTION_SUMMARY_EXTRACT_ENABLED` on the Runtime only.
+> **Flag.** `COMPACTION_SUMMARY_EXTRACT_ENABLED`, **default on** since the
+> 2026-09-26 dev validation (scoping §9.4), with `=false` as the kill switch.
+> There is no CDK entry; a deployed opt-out is an out-of-band Runtime update.
 >
 > Same harness and setup as above, Nova 2 Lite as the summary model. This is
 > the first, sequential version, run before the Nova 2 Lite default, so

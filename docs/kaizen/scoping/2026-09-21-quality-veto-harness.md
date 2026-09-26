@@ -613,3 +613,41 @@ is:
 - facts pinned verbatim regardless of how the narrative is sampled
   (free availability 100% every rep against 96–100%);
 - a pinned block that survives a failed narrative call.
+
+### 9.4 Dev validation, and default on (2026-09-26)
+
+**Forced cut on dev.** The deploy of the concurrent version had
+`COMPACTION_SUMMARY_EXTRACT_ENABLED=true` on the Runtime. The session was a
+throwaway on Haiku 4.5 (200k window, so a 100k ceiling):
+- Its summary namespace was seeded with 30 harness records (≈12.2k tokens,
+  five planted facts).
+- Filler turns pushed it to 104,911 input tokens.
+
+- **The cut.**
+  - Outcome `extract_then_compress`, 12,181 → 3,394 tokens, parked as
+    pending.
+  - All five planted facts were in the pinned block, verbatim and labelled.
+- **Calls.** Bedrock showed exactly two Nova 2 Lite invocations that minute,
+  the extraction and the narrative in parallel. They took 19,566 input and
+  2,832 output tokens, about $0.014. The slower call ran 14.3 s, so that
+  turn took 18 s against 2.6 s for the model's answer.
+- **Apply.** After a 339 s gap the cut applied on a cache-expired turn
+  (`miss_ttl_expired`, so the re-write was free). Haiku answered all five
+  facts from the summary alone.
+- **Byte stability.** The next turn read the new prefix from cache (`hit`),
+  so the pinned summary restores byte for byte.
+- **Noise.** The extractor listed 30 bare "Section identifier: N" lines, a
+  few hundred tokens that carry nothing a user would ask about. Tightening
+  `IDENTIFIERS` needs its own paid rescore, because the label defect in §9.3
+  was only visible to `ask`.
+
+**Default on.** `COMPACTION_SUMMARY_EXTRACT_ENABLED` now defaults on, with
+`=false` as the kill switch.
+- The CDK entry and the `platform.yml` variable are gone. A default-on flag
+  needs no AgentCore Runtime env var slot, which takes the Runtime back to
+  48 of 50.
+- Setting the kill switch in a deployed environment is now an out-of-band
+  Runtime update.
+- In the harness, `model_relative` follows the production default and
+  extracts. `nova2lite_compress` and `nova_micro_compress` pin
+  `summary_extract_enabled=False` as the plain-compression baselines.

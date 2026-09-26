@@ -665,48 +665,6 @@ describe('RAG Ingestion Configuration', () => {
   });
 
   // ============================================================
-  // Compaction extract-then-compress — opt-in while in development
-  // (unset / empty GitHub Actions variable means off)
-  // ============================================================
-
-  describe('Compaction summary extract flag', () => {
-    afterEach(() => {
-      delete process.env.CDK_COMPACTION_SUMMARY_EXTRACT_ENABLED;
-    });
-
-    test('defaults to disabled when CDK_COMPACTION_SUMMARY_EXTRACT_ENABLED is unset', () => {
-      delete process.env.CDK_COMPACTION_SUMMARY_EXTRACT_ENABLED;
-
-      expect(loadConfig(app).compactionSummaryExtract.enabled).toBe(false);
-    });
-
-    test('treats empty string (unset GitHub Actions variable) as disabled', () => {
-      process.env.CDK_COMPACTION_SUMMARY_EXTRACT_ENABLED = '';
-
-      expect(loadConfig(app).compactionSummaryExtract.enabled).toBe(false);
-    });
-
-    test('CDK_COMPACTION_SUMMARY_EXTRACT_ENABLED="true" turns it on', () => {
-      process.env.CDK_COMPACTION_SUMMARY_EXTRACT_ENABLED = 'true';
-
-      expect(loadConfig(app).compactionSummaryExtract.enabled).toBe(true);
-    });
-
-    test('anything but "true" leaves it off', () => {
-      process.env.CDK_COMPACTION_SUMMARY_EXTRACT_ENABLED = 'yes';
-
-      expect(loadConfig(app).compactionSummaryExtract.enabled).toBe(false);
-    });
-
-    test('cdk.json context compactionSummaryExtract.enabled=true enables when env is unset', () => {
-      delete process.env.CDK_COMPACTION_SUMMARY_EXTRACT_ENABLED;
-      app.node.setContext('compactionSummaryExtract', { enabled: true });
-
-      expect(loadConfig(app).compactionSummaryExtract.enabled).toBe(true);
-    });
-  });
-
-  // ============================================================
   // SPA CloudFront access logs — default ON with a kill switch
   // (empty GitHub Actions variable must not disable)
   // ============================================================

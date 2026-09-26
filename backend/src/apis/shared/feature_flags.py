@@ -632,18 +632,24 @@ def compaction_summary_extract_enabled() -> bool:
     Extract-then-compress (``agents/main_agent/session/compaction_summary.py``):
     one extraction call copies standing instructions, decisions, identifiers
     and changed values verbatim into a pinned block, then the narrative is
-    compressed into the rest of the budget. **Opt-in while in development**
-    (CLAUDE.md "Feature flags"): only ``"true"`` (case-insensitive) enables it.
-    CDK sets it on the AgentCore Runtime only, from
-    ``config.compactionSummaryExtract.enabled``; there is no SPA switch.
+    compressed into the rest of the budget; the two calls run concurrently.
+    **Default ON with a kill switch** (house style, mirroring
+    ``TOOL_SUMMARIES_ENABLED``): unset or empty resolves to enabled; only the
+    literal ``"false"`` (case-insensitive) disables. Flipped from opt-in once
+    the quality harness showed no loss against the full history and a forced
+    cut on dev pinned and answered every planted fact (scoping doc
+    ``2026-09-21-quality-veto-harness.md`` §9.2–9.3). There is no CDK entry
+    and no SPA switch: a default-on flag needs no AgentCore Runtime env var
+    slot, so setting ``=false`` in a deployed environment is an out-of-band
+    Runtime update.
 
     Read once per session manager, through ``CompactionConfig.from_env``. It
     runs only when a cut advances the checkpoint, after the turn's final
     ``metadata`` event, so it adds nothing before the first token; the cut
     turn pays one extra side-channel call. The result is persisted verbatim,
-    so the restore bytes stay stable. While off, the cut compresses exactly
-    as before. Needs ``AGENTCORE_MEMORY_COMPACTION_SUMMARY_MODEL_ENABLED`` on,
+    so the restore bytes stay stable. While off, the cut makes the single
+    plain compression call. Needs ``AGENTCORE_MEMORY_COMPACTION_SUMMARY_MODEL_ENABLED`` on,
     and a summary model that can extract: Nova 2 Lite and Haiku 4.5 held
     every planted fact on the quality harness, Nova Micro 88%.
     """
-    return os.environ.get("COMPACTION_SUMMARY_EXTRACT_ENABLED", "").strip().lower() == "true"
+    return os.environ.get("COMPACTION_SUMMARY_EXTRACT_ENABLED", "").strip().lower() != "false"

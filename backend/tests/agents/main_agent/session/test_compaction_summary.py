@@ -440,15 +440,15 @@ class TestExtractThenCompress:
 
     @pytest.mark.parametrize(
         "value,expected",
-        [(None, False), ("", False), ("false", False), ("yes", False), ("true", True), (" TRUE ", True)],
+        [(None, True), ("", True), ("true", True), ("yes", True), ("false", False), (" FALSE ", False)],
     )
-    def test_flag_is_opt_in(self, monkeypatch, value, expected):
+    def test_flag_is_on_by_default_with_a_kill_switch(self, monkeypatch, value, expected):
         if value is None:
             monkeypatch.delenv("COMPACTION_SUMMARY_EXTRACT_ENABLED", raising=False)
         else:
             monkeypatch.setenv("COMPACTION_SUMMARY_EXTRACT_ENABLED", value)
         assert CompactionConfig.from_env().summary_extract_enabled is expected
-        assert CompactionConfig().summary_extract_enabled is False
+        assert CompactionConfig().summary_extract_enabled is True
 
 
 class TestThroughUpdateAfterTurn:
@@ -517,7 +517,8 @@ class TestThroughUpdateAfterTurn:
     async def test_salvaged_summary_is_persisted_and_labelled(self, make_session_manager, bedrock):
         bedrock.return_value = _model_reply("Instructions: cite APA.\nOpen: the conclu", stop="max_tokens")
         records = [f"record {i} " + "z" * 600 for i in range(10)]
-        mgr = self._manager(make_session_manager, records)
+        # The plain single-call path; extraction is on by default.
+        mgr = self._manager(make_session_manager, records, summary_extract_enabled=False)
         await mgr.update_after_turn(2000)
         state = mgr.compaction_state
         assert state.summary == "Instructions: cite APA."
