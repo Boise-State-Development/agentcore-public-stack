@@ -1036,8 +1036,9 @@ export class ChatInputComponent {
     //
     // Every path that empties the composer — send, queue-as-follow-up, the
     // user deleting it — flows through `userInput` and so forgets the draft
-    // without naming it, which is why none of those call sites mention
-    // persistence at all.
+    // without naming it. The one exception is send: it also writes at once
+    // (`persistDraftNow`), because the first send can destroy this instance
+    // before the effect runs again.
     effect(() => {
       const key = this.draftKey();
       const draft = this.composerDraftSnapshot();
@@ -1271,6 +1272,21 @@ export class ChatInputComponent {
     // from the empty-state page before this composer rendered would otherwise
     // never be filed against the conversation at all.
     if (key !== null) this.draftStorage.write(key, this.composerDraftSnapshot());
+  }
+
+  /**
+   * Write the composer's state under its conversation now, instead of on the
+   * draft effect's next run.
+   *
+   * The first send from the empty state swaps this composer for the compact
+   * one, and the swap destroys this instance before its effect runs again. The
+   * mirrored draft would then still hold the message just sent, and every later
+   * New Session would open with it in the composer.
+   */
+  private persistDraftNow(): void {
+    if (this.mirroredDraftKey) {
+      this.draftStorage.write(this.mirroredDraftKey, this.composerDraftSnapshot());
+    }
   }
 
   /**
@@ -1519,6 +1535,7 @@ export class ChatInputComponent {
     this.closeSkillMenu();
     this.resetTextareaHeight();
     this.clearAttachments();
+    this.persistDraftNow();
   }
 
   cancelChatRequest() {
