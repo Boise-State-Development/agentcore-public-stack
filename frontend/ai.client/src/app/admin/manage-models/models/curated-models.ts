@@ -51,7 +51,7 @@ import { ManagedModelFormData, ModelProvider, SupportedParams } from './managed-
  * written for one silently returns nothing for the other. Match both.
  *
  * The one real gap: the **hosted OpenAI family** (`openai.gpt-5.4`,
- * `us.openai.gpt-5.6-*`, `us.openai.gpt-6-astra`) is absent from BOTH offer
+ * `us.openai.gpt-5.[56]*`, `us.openai.gpt-6-*`) is absent from BOTH offer
  * files, so its cards remain the only source. Reading that absence as
  * "unpublished" once put three rows into the dev catalog at GovCloud prices,
  * over-charging by 20%. Note the old explanation for it — "those models bill
@@ -168,8 +168,47 @@ const ratesWithDerivedCache = (
 
 export const CURATED_BEDROCK_MODELS: CuratedModel[] = [
   {
+    key: 'claude-opus-5-5',
+    tagline: 'Anthropic\'s most capable model — coding, knowledge work and long-running tasks.',
+    capabilities: ['Adaptive thinking', 'Effort control', 'Vision', 'Long context', 'Prompt caching'],
+    pricingTier: 'regional',
+    template: {
+      ...claude4xDefaults(),
+      // `us.` because dev's SCP denies every `global.*` profile (verified for
+      // this id 2026-09-25). Prod has no SCP: `global.anthropic.claude-opus-5-5`
+      // at $4.00 / $20.00 is the cheaper id there.
+      modelId: 'us.anthropic.claude-opus-5-5',
+      // Card: 1M context, 128K output, June 2026 cutoff.
+      maxInputTokens: 1_000_000,
+      modelName: 'Claude Opus 5.5',
+      shortDescription: 'For your toughest challenges',
+      maxOutputTokens: 128_000,
+      // Regional (CRIS): $4.40 / $22.00, cache write $5.50 (1.25x) — Price List
+      // API, `AmazonBedrockFoundationModels`, 2026-09-25 (the card defers to the
+      // pricing page). Cache READ is $0.22, **0.05x** input, not the 0.1x
+      // default; the Global rows ($4.00 / $0.20) show the same ratio.
+      ...ratesWithDerivedCache(4.4, 22.0, 0.05),
+      knowledgeCutoffDate: '2026-06-01',
+      // Measured against `us.anthropic.claude-opus-5-5` 2026-09-25: temperature
+      // and top_p both 400 ("deprecated for this model"), and
+      // `thinking.type.disabled` 400s — adaptive thinking is always on, so no
+      // `thinking` param is declared. The effort enum is the endpoint's own
+      // 400 on a bogus level; `medium` is the card's published default.
+      supportedParams: {
+        params: {
+          max_tokens: { supported: true, min: 1, max: 128_000, default: 32_000 },
+          effort: {
+            supported: true,
+            allowed: ['low', 'medium', 'high', 'xhigh', 'max'],
+            default: 'medium',
+          },
+        },
+      },
+    },
+  },
+  {
     key: 'claude-opus-4-7',
-    tagline: 'Anthropic\'s most capable model — for the hardest reasoning.',
+    tagline: 'Previous-generation Opus — for the hardest reasoning.',
     capabilities: ['Adaptive thinking', 'Effort control', 'Vision', 'Prompt caching'],
     pricingTier: 'regional',
     template: {
@@ -181,7 +220,9 @@ export const CURATED_BEDROCK_MODELS: CuratedModel[] = [
       // needs, paying a prefix re-write and a summarizer call each time.
       maxInputTokens: 1_000_000,
       modelName: 'Claude Opus 4.7',
-      shortDescription: 'For your toughest challenges',
+      shortDescription: 'Previous-generation Opus',
+      // Superseded by Claude Opus 5.5, which is also cheaper.
+      isFeatured: false,
       maxOutputTokens: 64_000,
       // Regional (CRIS): $5.50 / $27.50. Global is $5.00 / $25.00.
       ...ratesWithDerivedCache(5.5, 27.5),
@@ -474,7 +515,8 @@ const bedrockResponsesDefaults = (): Pick<
  * MEASURED — the bar this comment has always set. AWS still publishes no
  * parameter table for these models (`model-parameters-openai.html` documents
  * only the open-weight gpt-oss family), so the evidence is the endpoint's own
- * responses, probed against all four ids in us-west-2:
+ * responses, probed against all four ids in us-west-2 (and re-probed, with
+ * identical results, against GPT-6 Sol, GPT-6 Luna and GPT-5.5 on 2026-09-25):
  *
  *   - `reasoning.effort` — sending a deliberately invalid value returns a 400
  *     that ENUMERATES the enum: "Supported values are: 'none', 'low',
@@ -671,8 +713,77 @@ export const CURATED_BEDROCK_RESPONSES_MODELS: CuratedModel[] = [
     },
   },
   {
+    key: 'gpt-6-sol',
+    tagline: 'Built for demanding development work — features, debugging, refactors and review.',
+    capabilities: ['Reasoning', 'Vision', 'Long context', 'Prompt caching'],
+    pricingTier: 'regional',
+    template: {
+      ...bedrockResponsesDefaults(),
+      modelId: 'us.openai.gpt-6-sol',
+      modelName: 'GPT-6 Sol',
+      shortDescription: 'Strong coding and agentic work',
+      // Card, US Geo CRIS Short Context: $2.20 / $11.00, cache write $2.75,
+      // cache read $0.22. Global CRIS is $2.00 / $10.00. Cheaper than the
+      // GPT-5.6 Sol and Terra rows it supersedes.
+      ...ratesWithDerivedCache(2.2, 11.0),
+      knowledgeCutoffDate: null,
+      supportedParams: openaiResponsesParams(),
+    },
+  },
+  {
+    key: 'gpt-6-luna',
+    tagline: 'Fast and affordable — summaries, extraction and focused questions at scale.',
+    capabilities: ['Reasoning', 'Vision', 'Long context', 'Prompt caching'],
+    pricingTier: 'regional',
+    template: {
+      ...bedrockResponsesDefaults(),
+      modelId: 'us.openai.gpt-6-luna',
+      modelName: 'GPT-6 Luna',
+      shortDescription: 'Fast and affordable, for focused tasks',
+      // Card, US Geo CRIS Short Context: $0.11 / $0.55, cache write $0.1375,
+      // cache read $0.011. Global CRIS is $0.10 / $0.50.
+      ...ratesWithDerivedCache(0.11, 0.55),
+      knowledgeCutoffDate: null,
+      supportedParams: openaiResponsesParams(),
+    },
+  },
+  {
+    key: 'gpt-5-5',
+    tagline: 'OpenAI GPT-5.5 — coding, research and long-running agentic work.',
+    capabilities: ['Reasoning', 'Vision', 'Long context', 'Prompt caching'],
+    pricingTier: 'regional',
+    template: {
+      ...bedrockResponsesDefaults(),
+      // The card lists `bedrock-mantle` only, In-Region in us-east-1/2. That is
+      // stale: `us.openai.gpt-5.5` is an ACTIVE profile in us-west-2 and
+      // answered over bedrock-runtime Responses on 2026-09-25, while Mantle
+      // us-west-2 404s the model. So it rides this transport like its siblings.
+      modelId: 'us.openai.gpt-5.5',
+      modelName: 'GPT-5.5',
+      shortDescription: 'Previous-generation GPT',
+      // A June 2026 model, older than the GPT-6 family and 2.5x GPT-6 Sol's
+      // price — available, but not a picker default.
+      isFeatured: false,
+      // ⚠️ SINGLE SOURCE. The card publishes only In-Region: $5.50 / $33.00,
+      // cache read $0.55, and an em dash for cache write. No US Geo CRIS row is
+      // published, and the hosted OpenAI family is in neither Price List offer
+      // file. Every sibling card prices US Geo CRIS identically to Mantle
+      // In-Region (both carry the same 10% premium), so these are that row.
+      // The write rate is a literal 0, as on GPT-5.4: measured 2026-09-25, a
+      // 5.9k-token prefix read back 5,470 cached tokens on turns 2 and 3 and
+      // reported `cache_write_tokens: 0` on every turn — there is no write
+      // bucket to bill. Audit against Cost Explorer on a single-model day.
+      inputPricePerMillionTokens: 5.5,
+      outputPricePerMillionTokens: 33.0,
+      cacheReadPricePerMillionTokens: 0.55,
+      cacheWritePricePerMillionTokens: 0,
+      knowledgeCutoffDate: null,
+      supportedParams: openaiResponsesParams(),
+    },
+  },
+  {
     key: 'gpt-5-6-sol',
-    tagline: 'OpenAI\'s most capable model — frontier reasoning and agentic work.',
+    tagline: 'Previous-generation Sol — frontier reasoning and agentic work.',
     capabilities: ['Reasoning', 'Vision', 'Long context', 'Prompt caching'],
     pricingTier: 'regional',
     template: {
@@ -680,6 +791,8 @@ export const CURATED_BEDROCK_RESPONSES_MODELS: CuratedModel[] = [
       modelId: 'us.openai.gpt-5.6-sol',
       modelName: 'GPT-5.6 Sol',
       shortDescription: 'Strong reasoning and agentic work',
+      // Superseded by GPT-6 Sol, which is half the price.
+      isFeatured: false,
       // Geo CRIS: $4.40 / $22.00. Global CRIS is $4.00 / $20.00.
       ...ratesWithDerivedCache(4.4, 22.0),
       knowledgeCutoffDate: null,
@@ -696,6 +809,9 @@ export const CURATED_BEDROCK_RESPONSES_MODELS: CuratedModel[] = [
       modelId: 'us.openai.gpt-5.6-terra',
       modelName: 'GPT-5.6 Terra',
       shortDescription: 'Balanced performance per dollar',
+      // GPT-6 Sol undercuts it ($2.20 / $11.00 against $2.20 / $13.20), so
+      // there is no price tier left for Terra to hold at the top level.
+      isFeatured: false,
       // Geo CRIS: $2.20 / $13.20. Global CRIS is $2.00 / $12.00.
       ...ratesWithDerivedCache(2.2, 13.2),
       knowledgeCutoffDate: null,
