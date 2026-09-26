@@ -139,14 +139,16 @@ def _ask_one(
 ) -> Dict[str, Any]:
     request = build_request(history, job.plant.question, model_id=model_id, temperature=temperature)
     started = time.monotonic()
-    for attempt in range(retries + 1):
+    attempt = 0
+    while True:
         try:
             response = client.converse(**request)
             break
         except Exception as exc:  # noqa: BLE001 - throttles are expected at volume
-            if attempt == retries or "Throttl" not in type(exc).__name__ + str(exc):
+            if attempt >= retries or "Throttl" not in type(exc).__name__ + str(exc):
                 raise
             time.sleep(2 ** attempt)
+            attempt += 1
     answer = _answer_text(response)
     usage = response.get("usage", {}) or {}
     return {

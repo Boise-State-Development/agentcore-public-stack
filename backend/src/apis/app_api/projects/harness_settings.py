@@ -37,6 +37,7 @@ from apis.shared.audit import AuditAction
 from apis.shared.auth.models import User
 from apis.shared.projects.models import Project, ProjectRole
 from apis.shared.projects.service import ProjectNotFoundError, ProjectService
+from apis.shared.security.log_sanitize import scrub_log
 from apis.shared.timestamps import utc_now_iso
 
 logger = logging.getLogger(__name__)
@@ -170,7 +171,7 @@ class HarnessSettingsService:
         snapshot = snapshot_of(updated, created_at=utc_now_iso(), created_by=user.user_id)
         snapshot = AgentVersion(**snapshot.model_dump(by_alias=True), **{CREATED_BY_EMAIL: user.email})
         version = await create_version(updated.assistant_id, snapshot)
-        logger.info("Project %s settings saved as version %s", project_id, version.version)
+        logger.info("Project %s settings saved as version %s", scrub_log(project_id), version.version)
         self._record(user, project_id, version.version, harness, instructions, model_settings, kind, new_bindings)
         return HarnessView(project, role, updated, version.version)
 
