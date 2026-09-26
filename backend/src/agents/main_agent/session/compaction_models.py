@@ -179,8 +179,8 @@ class CompactionConfig:
     summary_model_enabled: bool = Defaults.COMPACTION_SUMMARY_MODEL_ENABLED
     summary_model_id: str = Defaults.COMPACTION_SUMMARY_MODEL_ID
     # Extract-then-compress: pin verbatim facts ahead of the compressed
-    # narrative. In development, default off (feature_flags).
-    summary_extract_enabled: bool = False
+    # narrative. Default on, with a kill switch (feature_flags).
+    summary_extract_enabled: bool = True
     # Paid-when-free scheduling (spec §3.5). Only meaningful with the
     # model-relative policy on; legacy mode always applies immediately.
     deferred_apply_enabled: bool = Defaults.COMPACTION_DEFERRED_APPLY_ENABLED

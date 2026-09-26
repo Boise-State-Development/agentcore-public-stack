@@ -440,15 +440,15 @@ class TestExtractThenCompress:
 
     @pytest.mark.parametrize(
         "value,expected",
-        [(None, False), ("", False), ("false", False), ("yes", False), ("true", True), (" TRUE ", True)],
+        [(None, True), ("", True), ("true", True), ("yes", True), ("false", False), (" FALSE ", False)],
     )
-    def test_flag_is_opt_in(self, monkeypatch, value, expected):
+    def test_flag_is_on_by_default_with_a_kill_switch(self, monkeypatch, value, expected):
         if value is None:
             monkeypatch.delenv("COMPACTION_SUMMARY_EXTRACT_ENABLED", raising=False)
         else:
             monkeypatch.setenv("COMPACTION_SUMMARY_EXTRACT_ENABLED", value)
         assert CompactionConfig.from_env().summary_extract_enabled is expected
-        assert CompactionConfig().summary_extract_enabled is False
+        assert CompactionConfig().summary_extract_enabled is True
 
 
 class TestThroughUpdateAfterTurn:

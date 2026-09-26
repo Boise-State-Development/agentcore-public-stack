@@ -210,4 +210,7 @@ class TestSummarizerSwap:
             assert arm.config.summary_extract_enabled is True
             assert arm.config.summary_model_enabled is True
         assert arms["extract_nova2lite"].config.summary_model_id == "us.amazon.nova-2-lite-v1:0"
-        assert arms["model_relative"].config.summary_extract_enabled is False
+        # Production defaults extract; the plain-compression baselines pin it off.
+        assert arms["model_relative"].config.summary_extract_enabled is True
+        assert arms["nova2lite_compress"].config.summary_extract_enabled is False
+        assert arms["nova_micro_compress"].config.summary_extract_enabled is False
