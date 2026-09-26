@@ -20,6 +20,13 @@ module holds the persisted summary at or under a token budget:
    even the newest alone does not fit, keep its tail. Never oldest-first —
    recent context is what the model needs.
 
+A generation that hits its output ceiling is **salvaged**, not discarded:
+its complete lines are kept, trimmed from the end to the budget. The prompt
+orders the summary by value (standing instructions first), so a head cut
+short still beats newest-first truncation of the raw records, which drops
+the oldest instructions first. Nova 2 Lite's narrative length varies several
+times over on the same records, so the ceiling is hit in normal use.
+
 Whatever comes out is persisted verbatim in ``CompactionState.summary`` and
 prepended byte-identically at every restore, so the byte-stability contract
 is unchanged: the summary still only mutates at checkpoint advance.
@@ -31,7 +38,7 @@ import asyncio
 import logging
 import os
 from dataclasses import dataclass
-from typing import List, Optional, Sequence
+from typing import List, Optional, Sequence, Tuple
 
 from .compaction_policy import CHARS_PER_TOKEN
 
@@ -41,10 +48,18 @@ logger = logging.getLogger(__name__)
 # fed newest-first up to this many chars, so the side-channel's own spend is
 # flat regardless of how long the session has run.
 MAX_COMPRESSION_INPUT_CHARS = 120_000
-# Nova Micro's output ceiling is 5k tokens, the smallest of the models this has
-# run on; stay under it with margin so the generation is not cut mid-sentence. The budget check after generation is
-# what enforces the configured budget.
+# ``maxTokens`` for the compression call is min(the model's ceiling, the
+# budget); the budget check after generation is what enforces the budget.
+# Unlisted models get 4k, under Nova Micro's 5k output ceiling (the smallest of
+# the models this has run on), so a ``summary_model_id`` override is never
+# rejected for asking too much. Listed models are matched by substring, so the
+# ``us.`` / ``global.`` profiles and bare ids all resolve.
 _MODEL_MAX_OUTPUT_TOKENS = 4_000
+_MAX_OUTPUT_TOKENS_BY_MODEL: Tuple[Tuple[str, int], ...] = (
+    # Model card: 64K max output tokens. At the default 8k budget this lets
+    # maxTokens match the budget the prompt's word limit is sized to.
+    ("amazon.nova-2-lite", 64_000),
+)
 
 _COMPRESSION_SYSTEM_PROMPT = """You maintain the running summary of a long conversation between a user and an AI assistant. You are given the existing summary notes (oldest first). Rewrite them into ONE compact summary the assistant can continue the conversation from.
 
@@ -74,7 +89,8 @@ def approx_tokens(text: Optional[str]) -> int:
 @dataclass(frozen=True)
 class BoundedSummary:
     text: Optional[str]
-    # "within_budget" | "model" | "truncated" | "truncated_after_model" | "empty"
+    # "within_budget" | "model" | "model_salvaged" | "truncated"
+    # | "truncated_after_model" | "empty"
     outcome: str
     tokens_before: int
     tokens_after: int
@@ -114,24 +130,51 @@ def _compression_input(records: Sequence[str]) -> str:
     return joined[-MAX_COMPRESSION_INPUT_CHARS:]
 
 
-async def compress_with_model(
+def _max_output_tokens(model_id: str) -> int:
+    for fragment, ceiling in _MAX_OUTPUT_TOKENS_BY_MODEL:
+        if fragment in model_id:
+            return ceiling
+    return _MODEL_MAX_OUTPUT_TOKENS
+
+
+def _keep_head_lines(text: str, budget_tokens: int) -> Optional[str]:
+    """The leading whole lines of ``text`` that fit ``budget_tokens``."""
+    budget_chars = max(0, int(budget_tokens)) * CHARS_PER_TOKEN
+    if len(text) <= budget_chars:
+        return text
+    head = text[:budget_chars]
+    cut = head.rfind("\n")
+    head = head[:cut] if cut > 0 else ""
+    return head.rstrip() or None
+
+
+def _salvage(text: str, budget_tokens: int) -> Optional[str]:
+    """The complete lines of a generation cut off by ``maxTokens``, within budget.
+
+    Its last line is dropped as possibly partial. Anything still over budget
+    is trimmed from the end, never the head: the head holds the standing
+    instructions, and the end is already missing.
+    """
+    cut = text.rfind("\n")
+    head = text[:cut].rstrip() if cut > 0 else ""
+    return _keep_head_lines(head, budget_tokens) if head else None
+
+
+async def _compress(
     records: Sequence[str],
     budget_tokens: int,
     *,
     model_id: str,
-    region: Optional[str] = None,
-) -> Optional[str]:
-    """One bounded Bedrock ``converse`` call. Returns ``None`` on any failure.
-
-    Side-channel by construction: its own messages, never ``agent.messages``.
-    """
+    region: Optional[str],
+) -> Tuple[Optional[str], bool]:
+    """``compress_with_model``, plus whether its text was salvaged from a cut-off generation."""
     text = _compression_input(records)
     if not text.strip():
-        return None
+        return None, False
     try:
         import boto3
     except ImportError:  # pragma: no cover - dev without boto3
-        return None
+        return None, False
     try:
         region = region or os.environ.get("AWS_REGION", "us-west-2")
         client = boto3.client("bedrock-runtime", region_name=region)
@@ -148,17 +191,39 @@ async def compress_with_model(
             # silent fall back to truncation on every compression.
             inferenceConfig={
                 "temperature": 0.1,
-                "maxTokens": min(_MODEL_MAX_OUTPUT_TOKENS, max(256, int(budget_tokens))),
+                "maxTokens": min(_max_output_tokens(model_id), max(256, int(budget_tokens))),
             },
         )
-        if response.get("stopReason") == "max_tokens":
-            logger.info("compaction_summary_model_truncated: generation hit the token ceiling; discarding")
-            return None
         out = response["output"]["message"]["content"][0]["text"].strip()
-        return out or None
+        if response.get("stopReason") == "max_tokens":
+            salvaged = _salvage(out, budget_tokens)
+            logger.info(
+                "compaction_summary_model_truncated: generation hit the token ceiling; kept %d of %d chars",
+                len(salvaged or ""), len(out),
+            )
+            return salvaged, salvaged is not None
+        return out or None, False
     except Exception:  # noqa: BLE001 - a summary is never worth an error
         logger.warning("compaction_summary_model_failed: falling back to truncation", exc_info=True)
-        return None
+        return None, False
+
+
+async def compress_with_model(
+    records: Sequence[str],
+    budget_tokens: int,
+    *,
+    model_id: str,
+    region: Optional[str] = None,
+) -> Optional[str]:
+    """One bounded Bedrock ``converse`` call. Returns ``None`` on any failure.
+
+    A generation cut off by ``maxTokens`` returns its complete lines, held to
+    ``budget_tokens`` (``None`` if none survive).
+
+    Side-channel by construction: its own messages, never ``agent.messages``.
+    """
+    compressed, _ = await _compress(records, budget_tokens, model_id=model_id, region=region)
+    return compressed
 
 
 async def bound_summary(
@@ -179,15 +244,16 @@ async def bound_summary(
         return BoundedSummary(joined, "within_budget", before, before)
 
     if model_enabled:
-        compressed = await compress_with_model(records, budget_tokens, model_id=model_id, region=region)
+        compressed, salvaged = await _compress(records, budget_tokens, model_id=model_id, region=region)
         if compressed is not None:
             after = approx_tokens(compressed)
             if after <= budget_tokens:
+                outcome = "model_salvaged" if salvaged else "model"
                 logger.info(
-                    "compaction_summary_bounded: model %d -> %d tokens (budget=%d)",
-                    before, after, budget_tokens,
+                    "compaction_summary_bounded: %s %d -> %d tokens (budget=%d)",
+                    outcome, before, after, budget_tokens,
                 )
-                return BoundedSummary(compressed, "model", before, after)
+                return BoundedSummary(compressed, outcome, before, after)
             # The model overshot: truncate ITS output newest-first (its tail
             # holds the open items), rather than the raw records.
             trimmed = truncate_records_newest_first([compressed], budget_tokens)
