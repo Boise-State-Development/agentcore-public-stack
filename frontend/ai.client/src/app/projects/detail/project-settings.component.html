@@ -1,0 +1,266 @@
+<div class="max-w-3xl space-y-8">
+  @if (error()) {
+    <p role="alert" class="rounded-2xl border border-state-danger-200 bg-state-danger-50 px-4 py-3 text-sm/6 text-state-danger-600 dark:border-state-danger-800 dark:bg-state-danger-900/20 dark:text-state-danger-400">
+      {{ error() }}
+    </p>
+  }
+  @if (!canEdit()) {
+    <p class="text-sm/6 text-gray-600 dark:text-gray-400">
+      @if (archived()) { This project is archived, so its settings are read-only. } @else { Only editors can change these settings. }
+    </p>
+  }
+
+  <!-- Details -->
+  <section class="space-y-4" aria-labelledby="details-heading">
+    <h2 id="details-heading" class="text-base/7 font-semibold text-gray-900 dark:text-white">Details</h2>
+    <div>
+      <label for="settings-name" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Name</label>
+      <input
+        id="settings-name"
+        type="text"
+        [formControl]="name"
+        maxlength="200"
+        class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:bg-gray-50 disabled:text-gray-600 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:disabled:bg-gray-900 dark:disabled:text-gray-400"
+      />
+    </div>
+    <div>
+      <label for="settings-description" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Description</label>
+      <textarea
+        id="settings-description"
+        rows="2"
+        [formControl]="description"
+        maxlength="2000"
+        class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:bg-gray-50 disabled:text-gray-600 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:disabled:bg-gray-900 dark:disabled:text-gray-400"
+      ></textarea>
+    </div>
+    @if (canEdit()) {
+      <button
+        type="button"
+        (click)="saveDetails()"
+        [disabled]="!detailsDirty() || name.invalid || saving() === 'details'"
+        class="rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-semibold text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {{ saving() === 'details' ? 'Saving…' : 'Save details' }}
+      </button>
+    }
+  </section>
+
+  <!-- Instructions -->
+  <section class="space-y-4 border-t border-gray-200 pt-8 dark:border-gray-700" aria-labelledby="instructions-heading">
+    <div class="flex flex-wrap items-baseline justify-between gap-3">
+      <h2 id="instructions-heading" class="text-base/7 font-semibold text-gray-900 dark:text-white">Instructions</h2>
+      @if (version()) {
+        <span class="text-xs/5 text-gray-600 dark:text-gray-400">Version {{ version() }}</span>
+      }
+    </div>
+    <p class="text-sm/6 text-gray-600 dark:text-gray-400">
+      What the assistant is told in every task in this project. Where they conflict with a member’s personal instructions, these win.
+    </p>
+    @if (!loaded()) {
+      <div class="h-40 animate-pulse rounded-2xl bg-gray-100 dark:bg-gray-800" aria-busy="true"></div>
+    } @else {
+      <label for="settings-instructions" class="sr-only">Instructions</label>
+      <textarea
+        id="settings-instructions"
+        rows="10"
+        [formControl]="instructions"
+        [attr.maxlength]="instructionsMax"
+        placeholder="e.g. You support the integrations team. Be terse, and name the file you relied on."
+        aria-describedby="instructions-count"
+        class="block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 font-mono text-sm/6 text-gray-900 placeholder:font-sans placeholder:text-gray-500 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:bg-gray-50 disabled:text-gray-700 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-400 dark:disabled:bg-gray-900 dark:disabled:text-gray-300"
+      ></textarea>
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <span id="instructions-count" class="text-xs/5 text-gray-600 dark:text-gray-400">
+          {{ instructionsValue().length.toLocaleString() }} / {{ instructionsMax.toLocaleString() }} characters
+        </span>
+        @if (canEdit()) {
+          <button
+            type="button"
+            (click)="saveInstructions()"
+            [disabled]="!instructionsDirty() || instructions.invalid || saving() === 'instructions'"
+            class="rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-semibold text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {{ saving() === 'instructions' ? 'Saving…' : 'Save instructions' }}
+          </button>
+        }
+      </div>
+    }
+  </section>
+
+  <!-- Model -->
+  <section class="space-y-3 border-t border-gray-200 pt-8 dark:border-gray-700" aria-labelledby="model-heading">
+    <h2 id="model-heading" class="text-base/7 font-semibold text-gray-900 dark:text-white">Model</h2>
+    <p class="text-sm/6 text-gray-600 dark:text-gray-400">
+      Members who can’t use this model get their own default instead.
+    </p>
+    @if (loaded()) {
+      <div class="relative inline-flex max-w-full">
+        <label for="settings-model" class="sr-only">Model</label>
+        <select
+          id="settings-model"
+          [disabled]="!canEdit() || saving() === 'model'"
+          (change)="saveModel($any($event.target).value)"
+          class="max-w-full appearance-none rounded-2xl border border-gray-300 bg-white py-2 pr-9 pl-3 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:bg-gray-50 disabled:text-gray-700 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:disabled:bg-gray-900 dark:disabled:text-gray-300"
+        >
+          @if (!modelId()) {
+            <option value="" disabled selected>Each member’s default model</option>
+          }
+          @for (m of models(); track m.ref) {
+            <option [value]="m.ref" [selected]="m.ref === modelId()">{{ m.label }}</option>
+          }
+          @if (modelId() && !modelKnown()) {
+            <option [value]="modelId()" selected>{{ modelId() }}</option>
+          }
+        </select>
+        <ng-icon name="heroChevronDown" class="pointer-events-none absolute top-1/2 right-3 size-4 -translate-y-1/2 text-gray-500 dark:text-gray-400" aria-hidden="true" />
+      </div>
+    }
+  </section>
+
+  <!-- Tools and skills -->
+  @for (kind of ['tools', 'skills']; track kind) {
+    <section class="space-y-3 border-t border-gray-200 pt-8 dark:border-gray-700" [attr.aria-labelledby]="kind + '-heading'">
+      <h2 [id]="kind + '-heading'" class="text-base/7 font-semibold text-gray-900 dark:text-white">
+        {{ kind === 'tools' ? 'Tools' : 'Skills' }}
+      </h2>
+      <p class="text-sm/6 text-gray-600 dark:text-gray-400">
+        @if (kind === 'tools') {
+          What the assistant can use. Members without access to a tool get the assistant without it.
+        } @else {
+          Playbooks the assistant can follow. Skills run their latest version.
+        }
+      </p>
+      @if (loaded()) {
+        @let choices = kind === 'tools' ? tools() : skills();
+        @let selected = kind === 'tools' ? selectedTools() : selectedSkills();
+        @if (choices.length === 0) {
+          <p class="text-sm/6 text-gray-600 dark:text-gray-400">None are available to you.</p>
+        } @else {
+          <ul class="divide-y divide-gray-200 overflow-hidden rounded-2xl border border-gray-200 bg-white dark:divide-gray-700 dark:border-gray-700 dark:bg-gray-800">
+            @for (c of choices; track c.ref) {
+              <li>
+                <label class="flex cursor-pointer items-start gap-3 px-4 py-3 has-disabled:cursor-default">
+                  <input
+                    type="checkbox"
+                    [checked]="selected.has(c.ref)"
+                    [disabled]="!canEdit() || c.foreign"
+                    (change)="toggle($any(kind), c.ref)"
+                    class="mt-1 size-4 rounded border-gray-300 text-primary-accessible focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700"
+                  />
+                  <span class="min-w-0">
+                    <span class="block text-sm/6 font-medium text-gray-900 dark:text-white">{{ c.label }}</span>
+                    @if (c.foreign) {
+                      <span class="block text-xs/5 text-gray-600 dark:text-gray-400">Added by someone else. You don’t have access to it, but it stays.</span>
+                    } @else if (c.description) {
+                      <span class="block text-xs/5 text-gray-600 dark:text-gray-400">{{ c.description }}</span>
+                    }
+                  </span>
+                </label>
+              </li>
+            }
+          </ul>
+          @if (canEdit()) {
+            @let dirty = kind === 'tools' ? toolsDirty() : skillsDirty();
+            <div class="flex gap-3">
+              <button
+                type="button"
+                (click)="saveBindings($any(kind))"
+                [disabled]="!dirty || saving() === kind"
+                class="rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-semibold text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {{ saving() === kind ? 'Saving…' : 'Save ' + kind }}
+              </button>
+              @if (dirty) {
+                <button
+                  type="button"
+                  (click)="resetBindings($any(kind))"
+                  class="rounded-2xl px-4 py-2 text-sm/6 font-medium text-gray-600 hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-500 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white"
+                >
+                  Discard changes
+                </button>
+              }
+            </div>
+          }
+        }
+      }
+    </section>
+  }
+
+  <!-- History -->
+  <section class="space-y-3 border-t border-gray-200 pt-8 dark:border-gray-700" aria-labelledby="history-heading">
+    <div class="flex items-center justify-between gap-3">
+      <h2 id="history-heading" class="text-base/7 font-semibold text-gray-900 dark:text-white">History</h2>
+      <button
+        type="button"
+        (click)="toggleHistory()"
+        [attr.aria-expanded]="historyOpen()"
+        aria-controls="settings-history"
+        class="rounded-2xl border border-gray-300 bg-white px-3 py-1 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+      >
+        {{ historyOpen() ? 'Hide' : 'Show' }}
+      </button>
+    </div>
+    <p class="text-sm/6 text-gray-600 dark:text-gray-400">Every saved change to the instructions, model, tools and skills, and who made it.</p>
+    <div id="settings-history">
+      @if (historyOpen()) {
+        <app-project-history [projectId]="project().projectId" />
+      }
+    </div>
+  </section>
+
+  <!-- Owner -->
+  @if (isOwner()) {
+    <section class="space-y-4 border-t border-gray-200 pt-8 dark:border-gray-700" aria-labelledby="owner-heading">
+      <h2 id="owner-heading" class="text-base/7 font-semibold text-gray-900 dark:text-white">Owner controls</h2>
+
+      <label class="flex items-start gap-3">
+        <input
+          type="checkbox"
+          [checked]="project().editorsManageMembers"
+          [disabled]="archived() || saving() === 'access'"
+          (change)="setEditorsManageMembers($any($event.target).checked)"
+          class="mt-1 size-4 rounded border-gray-300 text-primary-accessible focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700"
+        />
+        <span>
+          <span class="block text-sm/6 font-medium text-gray-900 dark:text-white">Editors can manage members</span>
+          <span class="block text-xs/5 text-gray-600 dark:text-gray-400">Otherwise only you can add, change or remove people.</span>
+        </span>
+      </label>
+
+      <div class="flex flex-wrap gap-3">
+        @if (archived()) {
+          <button
+            type="button"
+            (click)="setArchived(false)"
+            [disabled]="saving() === 'status'"
+            class="rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-semibold text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:opacity-50"
+          >
+            Restore project
+          </button>
+          <button
+            type="button"
+            (click)="deleteProject()"
+            [disabled]="saving() === 'delete'"
+            class="rounded-2xl border border-state-danger-300 bg-white px-4 py-2 text-sm/6 font-medium text-state-danger-600 hover:bg-state-danger-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-600 disabled:opacity-50 dark:border-state-danger-800 dark:bg-gray-800 dark:text-state-danger-400 dark:hover:bg-state-danger-900/20"
+          >
+            Delete project
+          </button>
+        } @else {
+          <button
+            type="button"
+            (click)="setArchived(true)"
+            [disabled]="saving() === 'status'"
+            class="rounded-2xl border border-gray-300 bg-white px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+          >
+            Archive project
+          </button>
+        }
+      </div>
+      @if (!archived()) {
+        <p class="text-xs/5 text-gray-600 dark:text-gray-400">
+          To delete a project, archive it first. Transfer ownership from the Members tab.
+        </p>
+      }
+    </section>
+  }
+</div>

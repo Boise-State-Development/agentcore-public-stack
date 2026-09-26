@@ -23,6 +23,7 @@ export const ADMIN_SCOPE_IDS = [
   'admin.file_sources',
   'admin.export_targets',
   'admin.marketplace',
+  'admin.projects',
   'admin.users',
   'admin.system_prompts',
   'admin.agent_templates',

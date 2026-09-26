@@ -9,8 +9,14 @@ Same closure-identity + ``asyncio.to_thread`` pattern as the artifact/spreadshee
 (the codebase has no tool-execution contextvar; ``MemorySpaceService`` is sync boto3).
 
 These are injected via the invocation path's ``extra_tools`` seam only when an Agent has a
-resolved ``memory_space`` binding — agents with ``extra_tools`` are never cached, so a tool
-closed over user A's identity can never be served to user B.
+resolved ``memory_space`` binding. Since Shared Projects 2.1 such an agent may be cached:
+the cache key carries the invoking user's id and a digest of the binding (space id, name,
+access), which is everything these closures hold, so a tool closed over user A's identity
+can never be served to user B.
+
+A project's harness never gets these; it gets the scope-addressed family in
+:mod:`.project_tools` (2.4b). Their specs stay byte-identical, because they are part of
+every memory-bound Agent's prompt-cached ``toolConfig``.
 """
 
 from __future__ import annotations
@@ -154,10 +160,13 @@ def make_memory_write_tool(space_id: str, space_name: str, user_id: str, user_em
                     "content": [{"text": f'Updated the MEMORY.md index of "{space_name}".'}],
                     "status": "success",
                 }
+            # A tool write is the "direct save from a task" path (reason
+            # "save"). An empty description means "not given": a canonical
+            # file keeps its own, a freeform entry is cleared as before.
             ref = await asyncio.to_thread(
                 lambda: MemorySpaceService().write_entry(
                     space_id, user_id, user_email, slug, body,
-                    entry_type=entry_type, description=description,
+                    entry_type=entry_type, description=description or None, reason="save",
                 )
             )
         except MemorySpacePermissionError as exc:

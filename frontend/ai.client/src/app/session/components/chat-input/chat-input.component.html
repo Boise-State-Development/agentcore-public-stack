@@ -6,44 +6,22 @@
   <app-announcement-banner [placement]="announcementPlacement()" />
 }
 
-<!--
-  Composer meta row: one line above the composer carrying the quota tab(s) in
-  the centre and the projected cost + context badge on the right.
+<!-- What a project's agent is running this turn without (agent_notice). Above
+     the quota tab, which has to stay welded to the composer's top edge. -->
+<app-agent-notice-banner />
 
-  Grid, not flex, because the tab has to stay centred on the *composer* rather
-  than on whatever is left over: in a flex row the badge's own width pulls the
-  centred item off-centre by half of it (~50px), and it would move again every
-  time the cost label grew a digit. `1fr auto 1fr` pins the middle column to
-  the composer's centre line whatever the two edges hold, and the leading
-  column is the slot a future left-aligned control drops into.
-
-  Stacking is a container query rather than flex wrapping: `1fr` columns cannot
-  wrap, so below the width where the tab and the badge stop fitting side by
-  side the row becomes single-column. `order` puts the badge on the upper line
-  there, because stacking the other way would break the tab's weld to the
-  composer's top edge.
--->
-<div class="@container/meta">
-  <div
-    class="grid grid-cols-[1fr_auto_1fr] items-end gap-x-3 gap-y-1 @max-[512px]/meta:grid-cols-1"
-  >
-    <!-- Reserved for a future left-aligned control; it is also the left half of
-         the centring, so it stays in the DOM while it is empty. -->
-    <div class="min-w-0 @max-[512px]/meta:hidden"></div>
-    <!-- Cost quota warning indicator -->
-    <app-quota-warning-banner class="min-w-0 justify-self-center @max-[512px]/meta:order-2" />
-    <!-- The right inset lives on the cell, not the row: row padding would shift
-         the middle column off the composer's centre line. -->
-    <div class="justify-self-end pr-[10px] @max-[512px]/meta:order-1">
-      <ng-content select="[composerMeta]" />
-    </div>
-  </div>
+<!-- Cost quota warning: a tab welded to the composer's top edge. It stays up
+     here rather than joining the meta line beneath, because it is a warning
+     and the line beneath is quiet metadata. -->
+<div class="flex justify-center">
+  <app-quota-warning-banner class="min-w-0" />
 </div>
 
 <!-- Storage quota warning indicator (only shows when files are attached) -->
 <app-storage-quota-banner [showWhenFilesAttached]="showFileAttachments()" />
 
 <div
+    #shell
     class="relative rounded-2xl shadow-xl outline -outline-offset-1 transition-all duration-200"
     [class]="isDraggingOver()
       ? 'bg-primary-50 dark:bg-primary-900/20 outline-2 outline-dashed outline-primary-500 dark:outline-primary-400 ring-2 ring-primary-500/30 dark:ring-primary-400/30'
@@ -184,206 +162,287 @@
       />
     }
 
-    <!-- Main Input Area -->
-    <div class="relative">
-      <label for="user-message" class="sr-only">How can I help you today?</label>
-      <textarea
-        #messageInput
-        id="user-message"
-        name="user-message"
-        rows="1"
-        [value]="userInput()"
-        (input)="onTextareaInput($event)"
-        (keydown)="onKeyDown($event)"
-        (keyup)="onTextareaCaretMove($event)"
-        (click)="onTextareaCaretMove($event)"
-        (focus)="onFocus()"
-        (blur)="onBlur()"
-        [attr.placeholder]="placeholder()"
-        role="combobox"
-        aria-autocomplete="list"
-        [attr.aria-expanded]="isMentionMenuOpen() || isSkillMenuVisible()"
-        [attr.aria-controls]="
-          isMentionMenuOpen()
-            ? 'agent-mention-listbox'
-            : isSkillMenuVisible()
-              ? 'skill-command-listbox'
-              : null
-        "
-        [attr.aria-activedescendant]="
-          isMentionMenuOpen()
-            ? 'agent-mention-option-' + mentionActiveIndex()
-            : isSkillMenuVisible()
-              ? 'skill-command-option-' + skillActiveIndex()
-              : null
-        "
-        class="block w-full resize-none bg-transparent px-6 py-4 text-base text-gray-900 dark:text-gray-100 focus:outline-hidden overflow-y-auto"
-        [class]="
-          showHintOverlay()
-            ? 'placeholder:text-transparent'
-            : 'placeholder:text-gray-500 dark:placeholder:text-gray-400'
-        "
-        style="min-height: 60px; max-height: 200px;"
-      ></textarea>
+    <!--
+      Main input. One grid in two shapes (see "Layout" in the component):
+      compact keeps attach, text and the speech controls on one row; stacked —
+      the empty state, or a compact draft that wrapped — puts the text across
+      the top and the controls in a bar beneath it. Grid areas rather than two
+      templates, so the textarea is never re-created and keeps focus, caret and
+      undo history when the layout changes under it.
+    -->
+    <div
+      class="composer-row"
+      [class.composer-row--stacked]="stacked()"
+      [class.composer-row--full]="!compact()"
+    >
+      <div class="composer-field relative min-w-0">
+        <label for="user-message" class="sr-only">How can I help you today?</label>
 
-      <!--
-        Rotating discovery hints (see `composerHints` in the component).
+        <!--
+          Highlight mirror: the draft again, in transparent ink, with the live
+          `@mention` and `/skill` tokens tinted. It sits behind the textarea
+          (whose background is transparent) so the tint shows through under
+          the real text. Must wrap exactly as the textarea does — same padding
+          (`fieldPadding`), type scale and wrapping rules — and is kept on one
+          line of template so no whitespace leaks into its pre-wrap text.
+        -->
+        @if (highlightSegments(); as segments) {
+          <div #highlightMirror aria-hidden="true" class="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words text-base text-transparent" [class]="fieldPadding()">@for (segment of segments; track $index) {@if (segment.mark) {<mark class="composer-token">{{ segment.text }}</mark>} @else {<span>{{ segment.text }}</span>}}</div>
+        }
 
-        Decoration, deliberately: `aria-hidden`, painted over a placeholder that
-        stays present and unchanging underneath — only its colour goes
-        transparent — so assistive tech reads one stable string while the pixels
-        cycle. `pointer-events-none` keeps a click on the hint landing in the
-        textarea. Padding and type scale must stay in step with the textarea's
-        or the line will not sit where the placeholder did.
-      -->
-      @for (hint of visibleHint(); track hint) {
-        <div
-          aria-hidden="true"
-          animate.enter="composer-hint-enter"
-          animate.leave="composer-hint-leave"
-          class="composer-hint pointer-events-none absolute inset-x-0 top-0 truncate px-6 py-4 text-base text-gray-500 dark:text-gray-400"
-        >
-          {{ hint }}
-        </div>
-      }
-
-      <!-- Bottom Controls Bar -->
-      <div class="flex items-center justify-between px-4 pb-3">
-        <!-- Left Controls -->
-        <div class="flex items-center gap-2" role="group" aria-label="Message options">
-          @if (showFileControls()) {
-            <!-- Add Attachment Button -->
-            <div
-              class="flex size-10 items-center justify-center rounded-lg text-gray-500 dark:text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-white/5 dark:hover:text-gray-300 focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-[var(--color-primary)]"
-              appTooltip="Attach file"
-              appTooltipPosition="top"
-            >
-              <input
-                type="file"
-                class="sr-only"
-                (change)="onFileSelect($event)"
-                id="chat-input-file-upload"
-                [accept]="acceptedFileTypes"
-                multiple
-                aria-label="Attach a file"
-              />
-              <label for="chat-input-file-upload" class="flex size-full cursor-pointer items-center justify-center">
-                <ng-icon name="heroPlus" class="size-5" aria-hidden="true" />
-              </label>
-            </div>
+        <!-- Screen readers get in words what the tint shows. -->
+        <span class="sr-only" role="status">
+          @if (mentionedAgent(); as agent) {
+            This message goes to {{ agent.name }}.
           }
+          @for (command of invokedSkills(); track command.skillId) {
+            This message runs the {{ command.name }} skill.
+          }
+        </span>
 
-          @if (showVoiceControl()) {
-          <!-- Voice Toggle Button -->
-          <button
-            type="button"
-            (click)="toggleVoice()"
-            [class]="voiceButtonClass()"
-            [attr.aria-label]="voiceAriaLabel()"
-            [appTooltip]="voiceTooltip()"
+        <textarea
+          #messageInput
+          id="user-message"
+          name="user-message"
+          rows="1"
+          [value]="composerText()"
+          [readOnly]="isDictating()"
+          (input)="onTextareaInput($event)"
+          (keydown)="onKeyDown($event)"
+          (keyup)="onTextareaCaretMove($event)"
+          (click)="onTextareaCaretMove($event)"
+          (scroll)="onTextareaScroll($event)"
+          (focus)="onFocus()"
+          (blur)="onBlur()"
+          [attr.placeholder]="placeholder()"
+          role="combobox"
+          aria-autocomplete="list"
+          [attr.aria-expanded]="isMentionMenuOpen() || isSkillMenuVisible()"
+          [attr.aria-controls]="
+            isMentionMenuOpen()
+              ? 'agent-mention-listbox'
+              : isSkillMenuVisible()
+                ? 'skill-command-listbox'
+                : null
+          "
+          [attr.aria-activedescendant]="
+            isMentionMenuOpen()
+              ? 'agent-mention-option-' + mentionActiveIndex()
+              : isSkillMenuVisible()
+                ? 'skill-command-option-' + skillActiveIndex()
+                : null
+          "
+          class="relative block w-full resize-none bg-transparent text-base focus:outline-hidden overflow-y-auto"
+          [class]="textareaClass()"
+          style="max-height: 200px;"
+        ></textarea>
+
+        <!--
+          Rotating discovery hints (see `composerHints` in the component).
+
+          Decoration, deliberately: `aria-hidden`, painted over a placeholder that
+          stays present and unchanging underneath — only its colour goes
+          transparent — so assistive tech reads one stable string while the pixels
+          cycle. `pointer-events-none` keeps a click on the hint landing in the
+          textarea. Padding and type scale come from the same `fieldPadding` as
+          the textarea's, or the line will not sit where the placeholder did.
+        -->
+        @for (hint of visibleHint(); track hint) {
+          <div
+            aria-hidden="true"
+            animate.enter="composer-hint-enter"
+            animate.leave="composer-hint-leave"
+            class="composer-hint pointer-events-none absolute inset-x-0 top-0 truncate text-base text-gray-500 dark:text-gray-400"
+            [class]="fieldPadding()"
+          >
+            {{ hint }}
+          </div>
+        }
+      </div>
+
+      <!-- Leading control: attach -->
+      <div class="composer-lead flex items-center" role="group" aria-label="Message options">
+        @if (showFileControls()) {
+          <div
+            class="flex size-10 items-center justify-center rounded-lg text-gray-500 dark:text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-white/5 dark:hover:text-gray-300 focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-[var(--color-primary)]"
+            appTooltip="Attach file"
             appTooltipPosition="top"
           >
-            @if (voiceStatus() === 'listening') {
-              <!-- Pulsing dot indicator for listening -->
-              <span class="relative flex size-3">
-                <span class="absolute inline-flex size-full animate-ping rounded-full bg-state-danger-400 opacity-75"></span>
-                <span class="relative inline-flex size-3 rounded-full bg-state-danger-500"></span>
-              </span>
-            } @else if (voiceStatus() === 'speaking') {
-              <!-- Wave bars for speaking -->
-              <span class="flex items-center gap-0.5" aria-hidden="true">
-                <span class="h-3 w-0.5 animate-bounce rounded-full bg-state-success-500" style="animation-delay: 0ms;"></span>
-                <span class="h-4 w-0.5 animate-bounce rounded-full bg-state-success-500" style="animation-delay: 150ms;"></span>
-                <span class="h-3 w-0.5 animate-bounce rounded-full bg-state-success-500" style="animation-delay: 300ms;"></span>
-              </span>
-            } @else if (voiceStatus() === 'connecting') {
-              <!-- Spinner for connecting -->
-              <app-spinner size="md" label="Connecting" />
-            } @else {
-              <!-- Mic icon for idle -->
-              <ng-icon name="heroMicrophone" class="size-5" aria-hidden="true" />
+            <input
+              type="file"
+              class="sr-only"
+              (change)="onFileSelect($event)"
+              id="chat-input-file-upload"
+              [accept]="acceptedFileTypes"
+              multiple
+              aria-label="Attach a file"
+            />
+            <label for="chat-input-file-upload" class="flex size-full cursor-pointer items-center justify-center">
+              <ng-icon name="heroPlus" class="size-5" aria-hidden="true" />
+            </label>
+          </div>
+        }
+      </div>
+
+      <!--
+        Trailing controls. The last slot is voice mode's by default, and is
+        lent to Stop while a response streams and to Send on touch once there
+        is a draft (see `showVoiceSlot`). There is no desktop send button:
+        Enter sends.
+      -->
+      <div class="composer-tools flex items-center gap-1" role="group" [attr.aria-label]="isDictating() ? 'Dictation' : 'Model and speech controls'">
+        @if (isDictating()) {
+          <!--
+            Dictation in progress: the waveform stands in for the speech
+            controls, and Cancel / Done take the trailing slots. The textarea
+            stays focused (read-only), so Enter and Escape do the same as the
+            two buttons.
+          -->
+          <span class="sr-only" role="status">
+            {{ dictationStatus() === 'connecting' ? 'Starting dictation' : 'Dictating. Press Enter to insert, or Escape to cancel.' }}
+          </span>
+          <div class="composer-levels flex h-8 items-center gap-[3px]" aria-hidden="true">
+            @for (level of dictationLevels(); track $index) {
+              <span
+                class="w-[3px] rounded-full bg-gray-500 transition-[height] duration-100 dark:bg-gray-300"
+                [style.height.px]="3 + level * 21"
+              ></span>
             }
-          </button>
-          }
-
-          <!--
-            Mentioned-agent chip (D11). Says who is answering *this* message and gives
-            the only way back: the literal "@Name" in the text is what the user typed,
-            but the binding is this chip, so clearing it here is what un-mentions.
-          -->
-          @if (mentionedAgent(); as agent) {
-            <div
-              class="flex items-center gap-1 rounded-full border border-state-success-200 bg-state-success-50 pl-2.5 pr-1 py-1 text-xs font-medium text-state-success-700 dark:border-state-success-700 dark:bg-state-success-900/30 dark:text-state-success-300"
-              role="status"
-              [attr.aria-label]="'This message goes to ' + agent.name"
-            >
-              <span class="max-w-32 truncate">{{ agent.name }} answers this one</span>
-              <button
-                type="button"
-                (click)="clearMention()"
-                class="flex size-4 shrink-0 items-center justify-center rounded-full text-state-success-500 transition-colors hover:bg-state-success-200 hover:text-state-success-700 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-state-success-500 dark:text-state-success-400 dark:hover:bg-state-success-700 dark:hover:text-state-success-200"
-                aria-label="Send this message to the assistant instead"
-              >
-                <ng-icon name="heroXMark" class="size-3" aria-hidden="true" />
-              </button>
-            </div>
-          }
-
-          <!--
-            Invoked-skill chips. Says which skills this message will run, and gives the way
-            back out. Unlike the mention chip these are not a separate binding — they are
-            a read of the `/slug` tokens in the text, so clearing one edits the text.
-
-            Neutral surface, brand blue only in the label. `bg-primary-50` looks like a
-            pale tint by its name but is not one: the primary scale is generated from
-            #0033a0 by lightness offset alone and keeps full chroma, so `primary-50`
-            resolves to rgb(118,179,255) — a saturated mid-blue that reads as a filled
-            blob behind small text. The `state-*` scales ARE real tints; `primary` is not.
-          -->
-          @for (command of invokedSkills(); track command.skillId) {
-            <div
-              class="flex items-center gap-1 rounded-full border border-gray-300 bg-white pl-2.5 pr-1 py-1 text-xs font-medium text-primary-accessible dark:border-gray-500 dark:bg-gray-700 dark:text-primary-50"
-              role="status"
-              [attr.aria-label]="'This message runs the ' + command.name + ' skill'"
-            >
-              <span class="max-w-40 truncate">{{ command.name }}</span>
-              <button
-                type="button"
-                (click)="clearSkillCommand(command)"
-                class="flex size-4 shrink-0 items-center justify-center rounded-full text-gray-500 transition-colors hover:bg-gray-200 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:bg-gray-600 dark:hover:text-gray-200"
-                [attr.aria-label]="'Do not run the ' + command.name + ' skill'"
-              >
-                <ng-icon name="heroXMark" class="size-3" aria-hidden="true" />
-              </button>
-            </div>
-          }
-
-        </div>
-
-        <!-- Right Controls -->
-        <div class="flex items-center gap-3" role="group" aria-label="Model selection and send">
-          <!-- Model Selector -->
-          <app-model-dropdown />
-
-          <!-- Submit/Stop Button -->
+          </div>
           <button
             type="button"
-            (click)="onPrimaryButtonClick()"
-            [disabled]="!isLoading() && hasActivePendingUploads()"
-            [class]="isLoading()
-              ? 'flex size-10 items-center justify-center rounded-full bg-state-danger-500 text-white shadow-sm transition-all hover:bg-state-danger-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500'
-              : 'flex size-10 items-center justify-center rounded-full bg-secondary-500 text-white shadow-sm transition-all hover:bg-secondary-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-secondary-500 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-secondary-500'"
-            [attr.aria-label]="isLoading() ? 'Stop generation' : (hasActivePendingUploads() ? 'Upload in progress' : 'Submit message')"
+            (click)="cancelDictation()"
+            class="flex size-10 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-gray-300"
+            aria-label="Cancel dictation"
+            appTooltip="Cancel"
+            appTooltipPosition="top"
           >
-            @if (isLoading()) {
-              <!-- Stop Icon -->
-              <ng-icon name="heroStopSolid" class="size-5" aria-hidden="true" />
+            <ng-icon name="heroXMark" class="size-5" aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            (click)="finishDictation()"
+            [disabled]="dictationStatus() === 'finishing'"
+            class="flex size-10 items-center justify-center rounded-full bg-secondary-500 text-white shadow-sm transition-all hover:bg-secondary-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-secondary-500 disabled:cursor-wait disabled:opacity-60"
+            [attr.aria-label]="dictationStatus() === 'finishing' ? 'Finishing dictation' : 'Insert dictated text'"
+            appTooltip="Done"
+            appTooltipPosition="top"
+          >
+            @if (dictationStatus() === 'finishing') {
+              <app-spinner size="sm" variant="on-solid" label="Finishing" />
             } @else {
-              <!-- Send Icon -->
-              <ng-icon name="heroArrowUpSolid" class="size-5" aria-hidden="true" />
+              <ng-icon name="heroCheck" class="size-5" aria-hidden="true" />
             }
           </button>
-        </div>
+        } @else {
+          @if (!compact()) {
+            <!-- The empty state keeps the picker in its bar; compact moves it under the shell. -->
+            <app-model-dropdown />
+          }
+
+          @if (showDictateButton()) {
+            <!-- Dictate: speech-to-text into this composer -->
+            <button
+              type="button"
+              (click)="startDictation()"
+              [disabled]="isVoiceActive()"
+              class="flex size-10 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] disabled:cursor-not-allowed disabled:opacity-40 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-gray-300"
+              aria-label="Dictate"
+              appTooltip="Dictate"
+              appTooltipPosition="top"
+            >
+              <ng-icon name="heroMicrophone" class="size-5" aria-hidden="true" />
+            </button>
+          }
+
+          @if (showVoiceSlot()) {
+            <!-- Voice Toggle Button -->
+            <button
+              type="button"
+              (click)="toggleVoice()"
+              [disabled]="isDictating()"
+              [class]="voiceButtonClass() + ' disabled:cursor-not-allowed disabled:opacity-40'"
+              [attr.aria-label]="voiceAriaLabel()"
+              [appTooltip]="voiceTooltip()"
+              appTooltipPosition="top"
+            >
+              @if (voiceStatus() === 'listening') {
+                <!-- Pulsing dot indicator for listening -->
+                <span class="relative flex size-3">
+                  <span class="absolute inline-flex size-full animate-ping rounded-full bg-state-danger-400 opacity-75"></span>
+                  <span class="relative inline-flex size-3 rounded-full bg-state-danger-500"></span>
+                </span>
+              } @else if (voiceStatus() === 'speaking') {
+                <!-- Wave bars for speaking -->
+                <span class="flex items-center gap-0.5" aria-hidden="true">
+                  <span class="h-3 w-0.5 animate-bounce rounded-full bg-state-success-500" style="animation-delay: 0ms;"></span>
+                  <span class="h-4 w-0.5 animate-bounce rounded-full bg-state-success-500" style="animation-delay: 150ms;"></span>
+                  <span class="h-3 w-0.5 animate-bounce rounded-full bg-state-success-500" style="animation-delay: 300ms;"></span>
+                </span>
+              } @else if (voiceStatus() === 'connecting') {
+                <!-- Spinner for connecting -->
+                <app-spinner size="md" label="Connecting" />
+              } @else {
+                <!--
+                  Waveform for idle. Voice mode used to wear the microphone; the mic now
+                  means Dictate (speech into the composer), and a conversation is sound
+                  both ways — hence the waveform.
+                -->
+                <svg class="size-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
+                  <path d="M3 10.5v3M7 7.5v9M11 4v16M15 7.5v9M19 10.5v3" />
+                </svg>
+              }
+            </button>
+          }
+
+          @if (showStop()) {
+            <button
+              type="button"
+              (click)="cancelChatRequest()"
+              class="flex size-10 items-center justify-center rounded-full bg-gray-900 text-white shadow-sm transition-colors hover:bg-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-white"
+              aria-label="Stop response"
+              [appTooltip]="isCoarsePointer() ? 'Stop' : 'Stop (Esc)'"
+              appTooltipPosition="top"
+            >
+              <ng-icon name="heroStopSolid" class="size-4" aria-hidden="true" />
+            </button>
+          }
+
+          @if (showTouchSend()) {
+            <!-- Touch only: return adds a line on a phone keyboard, so sending needs a button. -->
+            <button
+              type="button"
+              (click)="onSubmit()"
+              [disabled]="hasActivePendingUploads()"
+              class="flex size-10 items-center justify-center rounded-full bg-secondary-500 text-white shadow-sm transition-colors hover:bg-secondary-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-secondary-500 disabled:cursor-not-allowed disabled:opacity-40"
+              [attr.aria-label]="hasActivePendingUploads() ? 'Upload in progress' : 'Send message'"
+            >
+              <ng-icon name="heroArrowUpSolid" class="size-5" aria-hidden="true" />
+            </button>
+          }
+        }
       </div>
     </div>
   </div>
+
+<!--
+  Meta line beneath the shell. The left side carries a short status while one
+  applies; the right side holds the model picker and, after it, the context
+  meter (projected by the container as `composerMeta`), whose panel also
+  reports what the conversation has cost.
+-->
+@if (showMetaLine()) {
+  <div class="flex min-h-8 items-center justify-between gap-3 pt-1 pl-3 text-xs text-gray-500 dark:text-gray-400">
+    <div class="flex min-w-0 items-center">
+      @if (statusHint(); as hint) {
+        <span class="truncate">{{ hint }}</span>
+      }
+    </div>
+    @if (compact()) {
+      <div class="flex shrink-0 items-center gap-0.5">
+        <app-model-dropdown size="compact" class="shrink-0" />
+        <ng-content select="[composerMeta]" />
+      </div>
+    }
+  </div>
+}

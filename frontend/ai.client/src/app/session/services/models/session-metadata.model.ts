@@ -17,6 +17,12 @@ export interface SessionPreferences {
   selectedPromptId?: string;
   customPromptText?: string;
   assistantId?: string;
+  /**
+   * Set when the session is a task in a shared project (stamped by the
+   * backend when a turn runs on the project's agent). Groups it under the
+   * project in the sidebar and enables "Project members" sharing.
+   */
+  projectId?: string;
   /** Display state for promoted visuals, keyed by tool_use_id */
   visualState?: Record<string, VisualDisplayState>;
 }

@@ -1,38 +1,54 @@
-import { Component, ChangeDetectionStrategy, signal, computed, inject } from '@angular/core';
+import {
+  Component,
+  ChangeDetectionStrategy,
+  Injector,
+  afterNextRender,
+  signal,
+  computed,
+  inject,
+} from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { FormsModule } from '@angular/forms';
-import { Dialog } from '@angular/cdk/dialog';
-import { firstValueFrom } from 'rxjs';
+import {
+  CdkDrag,
+  CdkDragDrop,
+  CdkDragHandle,
+  CdkDropList,
+  moveItemInArray,
+} from '@angular/cdk/drag-drop';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroPlus,
   heroMagnifyingGlass,
-  heroChevronDown,
   heroPencilSquare,
-  heroTrash,
+  heroBars2,
 } from '@ng-icons/heroicons/outline';
 import { heroStarSolid } from '@ng-icons/heroicons/solid';
 import { ManagedModelsService } from './services/managed-models.service';
-import { AppRolesService } from '../roles/services/app-roles.service';
 import type { ManagedModel } from './models/managed-model.model';
 import { SpinnerComponent } from '../../components/spinner/spinner.component';
 import { ModelIconComponent } from '../../components/model-icon/model-icon.component';
-import {
-  DeleteModelDialogComponent,
-  DeleteModelDialogData,
-  DeleteModelDialogResult,
-} from './components/delete-model-dialog.component';
+import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
 
 @Component({
   selector: 'app-manage-models-page',
-  imports: [RouterLink, FormsModule, NgIcon, ModelIconComponent, SpinnerComponent],
+  imports: [
+    RouterLink,
+    FormsModule,
+    NgIcon,
+    ModelIconComponent,
+    SpinnerComponent,
+    TooltipDirective,
+    CdkDropList,
+    CdkDrag,
+    CdkDragHandle,
+  ],
   providers: [
     provideIcons({
       heroPlus,
       heroMagnifyingGlass,
-      heroChevronDown,
       heroPencilSquare,
-      heroTrash,
+      heroBars2,
       heroStarSolid,
     }),
   ],
@@ -42,22 +58,15 @@ import {
 })
 export class ManageModelsPage {
   protected managedModelsService = inject(ManagedModelsService);
-  private appRolesService = inject(AppRolesService);
-  private dialog = inject(Dialog);
+  private injector = inject(Injector);
 
   // Search and filter signals
   searchQuery = signal<string>('');
   providerFilter = signal<string>('');
   enabledFilter = signal<string>('');
 
-  // Row detail expansion state (set of model ids currently expanded)
-  private expandedIds = signal<ReadonlySet<string>>(new Set());
-
   // Models with an in-flight enable/disable request
   private togglingIds = signal<ReadonlySet<string>>(new Set());
-
-  // Model currently being deleted (single in-flight delete at a time)
-  private deletingId = signal<string | null>(null);
 
   private allModels = computed(() => this.managedModelsService.getManagedModels());
 
@@ -107,28 +116,87 @@ export class ManageModelsPage {
   });
 
   /**
+   * Reordering is only offered on the unfiltered list. Dropping a row between
+   * two rows of a filtered subset has no single meaning in the full catalog —
+   * the hidden models in between would have to go somewhere the admin can't see.
+   */
+  readonly canReorder = computed(() => !this.hasActiveFilters() && this.allModels().length > 1);
+
+  /** True while an order is being saved; drives the "Saving order…" hint. */
+  protected readonly savingOrder = signal(false);
+
+  /** Screen-reader announcement for the last move (a polite live region). */
+  protected readonly reorderAnnouncement = signal('');
+
+  // Only the latest move reports a failure: every overlapping move awaits the
+  // same coalesced save, and one failure shouldn't raise one alert per keypress.
+  private moveSeq = 0;
+
+  onDrop(event: CdkDragDrop<ManagedModel[]>): void {
+    this.moveModel(event.previousIndex, event.currentIndex);
+  }
+
+  /**
+   * Keyboard reordering on the drag handle — CDK drag and drop is pointer-only.
+   * Arrow keys move one place, Home/End to either end.
+   */
+  onHandleKeydown(event: KeyboardEvent, index: number): void {
+    const last = this.allModels().length - 1;
+    const target =
+      event.key === 'ArrowUp' ? index - 1
+      : event.key === 'ArrowDown' ? index + 1
+      : event.key === 'Home' ? 0
+      : event.key === 'End' ? last
+      : null;
+    if (target === null) {
+      return;
+    }
+    event.preventDefault();
+    const modelId = this.allModels()[index]?.id;
+    this.moveModel(index, Math.max(0, Math.min(last, target)));
+
+    // The moved row's DOM node may be detached and re-inserted, which drops
+    // focus; put it back so the admin can keep pressing the arrow key.
+    afterNextRender(
+      () => document.getElementById(`reorder-handle-${modelId}`)?.focus(),
+      { injector: this.injector },
+    );
+  }
+
+  private async moveModel(from: number, to: number): Promise<void> {
+    if (from === to || !this.canReorder()) {
+      return;
+    }
+    const models = [...this.allModels()];
+    const moved = models[from];
+    moveItemInArray(models, from, to);
+    this.reorderAnnouncement.set(
+      `${moved.modelName} moved to position ${to + 1} of ${models.length}.`,
+    );
+
+    const seq = ++this.moveSeq;
+    this.savingOrder.set(true);
+    try {
+      await this.managedModelsService.reorderModels(models.map(m => m.id));
+    } catch (error) {
+      console.error('Error saving model order:', error);
+      if (seq === this.moveSeq) {
+        alert('Failed to save the model order. The list has been reloaded — please try again.');
+      }
+    } finally {
+      if (seq === this.moveSeq) {
+        this.savingOrder.set(false);
+      }
+    }
+  }
+
+  /**
    * Reset all filters
    */
   resetFilters(): void {
     this.searchQuery.set('');
     this.providerFilter.set('');
     this.enabledFilter.set('');
-  }
-
-  isExpanded(modelId: string): boolean {
-    return this.expandedIds().has(modelId);
-  }
-
-  toggleExpand(modelId: string): void {
-    this.expandedIds.update(current => {
-      const next = new Set(current);
-      if (next.has(modelId)) {
-        next.delete(modelId);
-      } else {
-        next.add(modelId);
-      }
-      return next;
-    });
   }
 
   isToggling(modelId: string): boolean {
@@ -155,50 +223,5 @@ export class ManageModelsPage {
         return next;
       });
     }
-  }
-
-  isDeleting(modelId: string): boolean {
-    return this.deletingId() === modelId;
-  }
-
-  /**
-   * Open the confirmation dialog and, if confirmed, delete the model.
-   * Errors stay on this page so the admin keeps their place in the list.
-   */
-  async deleteModel(model: ManagedModel): Promise<void> {
-    if (this.deletingId() !== null) {
-      return;
-    }
-
-    const dialogRef = this.dialog.open<DeleteModelDialogResult>(
-      DeleteModelDialogComponent,
-      {
-        data: { modelId: model.modelId, modelName: model.modelName } as DeleteModelDialogData,
-      },
-    );
-
-    const confirmed = await firstValueFrom(dialogRef.closed);
-    if (!confirmed) {
-      return;
-    }
-
-    this.deletingId.set(model.id);
-    try {
-      await this.managedModelsService.deleteModel(model.id);
-    } catch (error) {
-      console.error('Error deleting model:', error);
-      alert('Failed to delete model. Please try again.');
-    } finally {
-      this.deletingId.set(null);
-    }
-  }
-
-  /**
-   * Get the display name for a role ID.
-   * Falls back to the role ID if not found.
-   */
-  getRoleDisplayName(roleId: string): string {
-    const role = this.appRolesService.getRoleById(roleId);
-    return role?.displayName ?? roleId;
   }
 }

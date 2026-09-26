@@ -358,53 +358,133 @@ replay real trajectories under a policy.
 
 ## 5. Quality gate and tuning
 
-> ⛔ **WAIVED 2026-09-21 — the veto below did not run, and the defaults are
-> in production.** Recording it here because a gate merely unrun reads, to the
-> next person, exactly like a gate that passed.
+> ✅ **VETO RAN 2026-09-25 — the cut passes; the summary compression fails.**
+> This replaces the 2026-09-21 waiver, per its own rule ("deleted rather than
+> amended"). Harness: `backend/scripts/compaction_quality_harness.py`, which is
+> offline and replays an authored corpus through the production
+> `TurnBasedSessionManager`. Method and caveats are in
+> `docs/kaizen/scoping/2026-09-21-quality-veto-harness.md` §8.
 >
-> **What shipped anyway.** `COMPACTION_CEILING_RATIO = 0.5` / `HARD_CEILING_RATIO
-> = 0.7` and the rest of the model-relative stack (#1125–#1132) reached prod in
-> **1.23.0, 2026-09-20**. The §4.3 long-session eval named below has never
-> existed on disk — `find backend -name "*eval*"` returns only the unrelated
-> `feedback_eval` sampler and vendored site-packages. So the deepest, earliest
-> cut this codebase has ever shipped is defended by **cost alone** ($73.70 vs
-> $102.64 on the 20-session replay), with quality asserted rather than measured.
+> **Setup.** Haiku 4.5, 12 transcripts × 9 planted facts, k=3 (majority vote),
+> restore pace, a 200k window. `records` summaries sized to prod: ~20k tokens
+> per session, and `bound_summary` compressed them at the cut with Nova Micro
+> from ~15k tokens to a median of **~730**. Prod's readout shows ~20k → ~760.
+> There were three arms:
+> - `full`: the whole history (the control);
+> - `model_relative`: prod as shipped;
+> - `raw_summary`: the same cut with the summary budget lifted, so the
+>   summary is uncompressed.
 >
-> **Why it was waived rather than run.** Two reasons, and only the first was
-> foreseen. (1) No owner: the harness is the one deliverable in this epic that
-> ships no user-visible behaviour, and it lost to every PR that did. (2) The
-> fallback was measured on 2026-09-21 and does not exist either. The cheap
-> substitute — comparing down-thumb rate across arms from the `F#` rows #1142
-> shipped — turns out to have **no substrate**: every `F#` row in prod since
-> 1.23.0 is **13 rows, of which exactly 1 is a thumb**, against
-> `DEFAULT_MINIMUM_N = 20` per arm. At ~0.7 thumbs/day fleet-wide, no arm
-> reaches the floor this quarter. The outcome instrument this spec's §7.2 was
-> counting on is real, correct, and empty.
+> | family (n) | full | model_relative | raw_summary |
+> |---|---|---|---|
+> | constraint (36) | 1.00 | **0.72** (10 losses / 0 wins, p=0.002) | 1.00 |
+> | decision (24) | 1.00 | 0.79 (5 / 0, p=0.06) | 0.92 (2 / 0, p=0.5) |
+> | reference (24) | 0.96 | **0.58** (9 / 0, p=0.004) | 1.00 |
+> | superseded (24) | 0.96 | 0.92 (1 / 0, p=1.0) | 0.96 |
 >
-> **What this waiver is not.** It is not a finding that the cut is safe. Nobody
-> has looked. The honest statement is that a quality regression from these
-> thresholds would currently be **invisible to us** — there is no harness, and
-> the human signal is three orders of magnitude below its own reporting floor.
+> Facts whose stating turn was cut: **0.52** with `model_relative`, 0.96 with
+> `raw_summary`. Facts whose turn was kept: 0.96 and 0.98. Nearly every
+> `model_relative` miss was `UNKNOWN`, not a wrong value.
 >
-> **What reopens it** — any one, and the waiver is deleted rather than amended:
-> 1. The §4.3 harness gets built (the only path that does not wait on users);
-> 2. Any `turnClass` or `callsSinceCompaction` arm in
->    `GET /admin/feedback/fleet` clears `minimumN` — check before assuming, the
->    arm reports `downRate: null` with `belowFloor: true` until it does;
-> 3. A user-reported context-loss incident lands on a compacted session. That
->    is the expensive way to find out, and it is currently the most likely one.
+> **Reading.**
+> - **The floor-seeking cut, the thresholds and the deferred apply cost no
+>   measurable quality.** `raw_summary` makes the same cut as prod and matches
+>   `full`.
+> - **The loss is entirely in `compress_with_model`.** Nova Micro,
+>   instructed to keep instructions and identifiers verbatim within a
+>   4,400-word budget, returns ~730 tokens and drops about a third of standing
+>   instructions and about 40% of identifiers. `FLOOR_RATIO` is therefore not
+>   the lever this spec's tuning rule assumed.
 >
-> ⚠️ Do **not** reopen this by lowering `FEEDBACK_ARM_MINIMUM_N`. Manufacturing
-> a rate from n=3 produces the fleet-wide "quality score" that response-feedback
-> spec §9 exists to forbid, and it would close this waiver with a number that
-> means nothing.
+> **Caveats.**
+> - The records are an approximation written by Haiku, not AgentCore's
+>   (they are *better* at keeping identifiers, so `raw_summary` is an upper
+>   bound).
+> - The corpus is synthetic.
+> - There is one model, and n=24–36 per family.
+>
+> ✅ **SUMMARY MODEL FIXED 2026-09-25: Nova 2 Lite replaces Nova Micro.**
+> `Defaults.COMPACTION_SUMMARY_MODEL_ID` is now `us.amazon.nova-2-lite-v1:0`,
+> and `bound_summary` and its prompt are unchanged. It was screened free in
+> scoping §9 and confirmed with a paid run in §9.1: the same setup as above,
+> a fresh records pass, and the old default pinned as its own arm.
+>
+> | family (n) | full | model_relative (Nova 2 Lite) | Nova Micro |
+> |---|---|---|---|
+> | constraint (36) | 1.00 | 1.00 (0 / 0, p=1.0) | **0.83** (6 / 0, p=0.031) |
+> | decision (24) | 1.00 | 1.00 (0 / 0, p=1.0) | **0.75** (6 / 0, p=0.031) |
+> | reference (24) | 0.96 | 1.00 (0 / 1, p=1.0) | **0.62** (9 / 1, p=0.021) |
+> | superseded (24) | 0.96 | 0.96 (0 / 0, p=1.0) | 0.88 (2 / 0, p=0.5) |
+>
+> - **Facts whose stating turn was cut:** 1.00 on Nova 2 Lite, against 0.56
+>   on Nova Micro.
+> - **A second, explicitly pinned Nova 2 Lite arm** lost one constraint, a
+>   value its summary dropped (p=1.0).
+> - **Summaries** are a median of ~1.3k–1.8k tokens, against ~0.9k on Micro.
+> - **Cost:** about $0.01 per cut, and ~1k more cached-prefix tokens per turn.
+> - **The veto on the compression is lifted for Nova 2 Lite.** Extract, then
+>   compress (scoping §9, recommendation 2) remains the structural fix for
+>   the residual ~1%.
+
+> ✅ **FIX CONFIRMED 2026-09-25 — extract-then-compress clears the veto.**
+> `bound_summary(..., extract_enabled=True)` makes two concurrent calls:
+> - A verbatim **extraction**: standing instructions, decisions, labelled
+>   identifiers, and changed values at their latest value. It builds a pinned
+>   block, capped at half the budget.
+> - A **narrative** compression into the other half, with the prompt above.
+>
+> Both send `temperature` only. The persisted text is `PINNED FACTS (verbatim; …)`
+> followed by `SUMMARY:`, stored verbatim like every summary, so restores
+> prepend identical bytes.
+>
+> **Fallbacks.** At most two calls, and it never raises.
+> - Extraction fails → the narrative alone, which is a plain compression.
+> - Narrative fails → pinned block plus newest-first truncation
+>   (`extract_then_truncate`).
+> - Both fail → truncation.
+>
+> **Flag.** `COMPACTION_SUMMARY_EXTRACT_ENABLED`, **default on** since the
+> 2026-09-26 dev validation (scoping §9.4), with `=false` as the kill switch.
+> There is no CDK entry; a deployed opt-out is an out-of-band Runtime update.
+>
+> Same harness and setup as above, Nova 2 Lite as the summary model. This is
+> the first, sequential version, run before the Nova 2 Lite default, so
+> `model_relative` is Nova Micro:
+>
+> | family (n) | full | model_relative (Nova Micro) | extract + Nova 2 Lite |
+> |---|---|---|---|
+> | constraint (36) | 1.00 | 0.78 (8 / 0, p=0.008) | **1.00** (0 / 0, p=1.0) |
+> | decision (24) | 1.00 | 0.58 (10 / 0, p=0.002) | **1.00** (0 / 0, p=1.0) |
+> | reference (24) | 0.96 | 0.67 (8 / 1, p=0.039) | **1.00** (0 / 1, p=1.0) |
+> | superseded (24) | 0.96 | 0.96 (0 / 0, p=1.0) | 0.96 (0 / 0, p=1.0) |
+>
+> Facts whose stating turn was cut: **1.00** (n=52), against 0.50 today. The
+> summary grows from a median of ~770 tokens to ~1,700; the cut costs ~$0.02
+> instead of ~$0.001. Against the Nova 2 Lite default (~$0.011 a cut, ~1.8k
+> tokens), extraction adds about $0.01 a cut and ~500 summary tokens.
+>
+> **Concurrent rescore (scoping §9.3).** Run against the Nova 2 Lite
+> default, with the label fix: extract-then-compress matches `full` in every
+> family (constraint 1.00, decision 1.00, reference 1.00, superseded 0.96).
+> Facts whose turn was cut score 1.00. Plain Nova 2 Lite also matches `full`
+> at this n; extraction adds verbatim pinning (free availability 100% every
+> rep, against 96–100%) and a pinned block that survives a failed narrative.
+>
+> **Latency.** The summary step runs after the final `metadata` event, so
+> time to first token is unchanged. On a cut turn it takes a median of
+> **8.4 s** (max 15.4 s), against 7.6 s (max 12.9 s) for the default single
+> call. The calls in sequence would take 11.6 s (max 16.8 s).
+>
+> **Model choice.** The model matters: on Nova Micro the free screen kept
+> 88%.
 
 - **Veto before default change in prod:** the spiral spec §4.3 long-session
   eval (constraint retention / revision continuity / reference lookup) runs
   on PR-1 with the fixed-threshold arm as control. A deeper cut is a bigger
   context change than the summary cap, so the veto applies with full force.
 - **Tuning knobs move on evidence, not taste:** raise `FLOOR_RATIO` if the
-  eval shows retention loss; lower `CEILING_CAP_TOKENS` if the Sonnet 5
+  eval shows retention loss *on retained turns* (the 2026-09-25 run did not;
+  its loss was the summary compression, which `FLOOR_RATIO` cannot reach); lower `CEILING_CAP_TOKENS` if the Sonnet 5
   cohort's write:read ratio stays worse than 1:5 after PR-3; never raise the
   cap above 272k while GPT-family rows share the constants (pricing tier).
 - **Summarizer prompt:** preserve standing user instructions and constraints
@@ -444,7 +524,8 @@ constant above ceiling for 10 turns) produces exactly one checkpoint advance.
 As built (`compaction_summary.py`, stacked on PR-1): `bound_summary()` holds
 the persisted summary at `COMPACTION_SUMMARY_TOKEN_BUDGET` (8,000 tokens,
 chars/4 — the same estimate the admin `SUMMARY_OVER_BUDGET` diagnosis uses).
-Within budget → unchanged. Over budget → one Nova Micro `converse` call
+Within budget → unchanged. Over budget → one `converse` call on the summary
+model (Nova Micro as built; Nova 2 Lite since 2026-09-25, see §5)
 (`AGENTCORE_MEMORY_COMPACTION_SUMMARY_MODEL_ID`; kill switch
 `AGENTCORE_MEMORY_COMPACTION_SUMMARY_MODEL_ENABLED=false`) with a prompt that
 keeps standing instructions, decisions, current state of the work, open items

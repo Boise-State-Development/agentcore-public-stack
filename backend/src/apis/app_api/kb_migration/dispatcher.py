@@ -13,7 +13,8 @@ than from the worker.
 Why the index makes the queue correct by physics
 ------------------------------------------------
 ``GSI7_PK``/``GSI7_SK`` are written only while a record is work-eligible
-(``shadow``, ``verify``, ``promote``) and ``REMOVE``d on reaching a terminal state.
+(``born_managed``, ``teardown``, ``shadow``, ``verify``, ``promote``) and ``REMOVE``d
+on reaching a terminal state (a finished ``teardown`` removes the whole record).
 So this dispatcher cannot see a finished knowledge base even if it wanted to: there
 is no filter to get wrong, because ineligible records are not in the index. Same
 convention as ``DueSyncIndex``, ``AgentDirectoryIndex`` and ``AgentReportsIndex``
@@ -157,11 +158,14 @@ def _work_states() -> List[str]:
         BORN_MANAGED,
         PROMOTE,
         SHADOW,
+        TEARDOWN,
         VERIFY,
         WORK_ELIGIBLE_STATES,
     )
 
-    priority = (BORN_MANAGED, PROMOTE, VERIFY, SHADOW)
+    # `teardown` straight after born-managed: a deleted agent's knowledge base
+    # bills until it is gone, and nobody gains from it waiting behind migrations.
+    priority = (BORN_MANAGED, TEARDOWN, PROMOTE, VERIFY, SHADOW)
     ordered = [state for state in priority if state in WORK_ELIGIBLE_STATES]
     remainder = sorted(set(WORK_ELIGIBLE_STATES) - set(priority))
     if remainder:
@@ -184,16 +188,22 @@ def _enabled_work_states() -> List[str]:
     into a back door for step 3's blast radius; gating born-managed on the
     migration flag would make step 2 useless alone, queueing provisioning jobs that
     nothing ever picks up and parking every first upload on "Provisioning…".
+
+    ``teardown`` answers to either flag. It creates nothing and migrates nothing:
+    it deletes a knowledge base whose agent a user has already deleted, and a
+    deployment on either rung can have managed knowledge bases to delete.
     """
-    from apis.shared.kb_backend.records import BORN_MANAGED
+    from apis.shared.kb_backend.records import BORN_MANAGED, TEARDOWN
 
     allowed_migration = migration_enabled()
     allowed_born = new_default_enabled()
-    return [
-        state
-        for state in _work_states()
-        if (allowed_born if state == BORN_MANAGED else allowed_migration)
-    ]
+
+    def allowed(state: str) -> bool:
+        if state == TEARDOWN:
+            return allowed_born or allowed_migration
+        return allowed_born if state == BORN_MANAGED else allowed_migration
+
+    return [state for state in _work_states() if allowed(state)]
 
 
 def _invoke_worker(payload: Dict[str, Any]) -> None:

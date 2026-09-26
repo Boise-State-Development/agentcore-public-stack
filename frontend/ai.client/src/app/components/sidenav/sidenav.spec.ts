@@ -10,6 +10,7 @@ import { UserService } from '../../auth/user.service';
 import { SessionService as BffSessionService } from '../../auth/session.service';
 import { SidenavService } from '../../services/sidenav/sidenav.service';
 import { AgentService } from '../../agents/services/agent.service';
+import { FEATURES } from '../../services/features';
 
 describe('Sidenav', () => {
   let mockRouter: any;
@@ -133,6 +134,9 @@ describe('Sidenav — nav entries', () => {
   @Component({ selector: 'app-admin-nav', template: '<p>admin nav</p>' })
   class AdminNavStub {}
 
+  @Component({ selector: 'app-notification-bell', template: '<button>bell</button>' })
+  class NotificationBellStub {}
+
   let mockUserService: any;
   let mockAgentService: any;
   beforeEach(() => {
@@ -195,10 +199,11 @@ describe('Sidenav — nav entries', () => {
     const { SessionList } = await import('./components/session-list/session-list');
     const { UserDropdownComponent } = await import('../topnav/components/user-dropdown.component');
     const { AdminNav } = await import('../../admin/admin-nav');
+    const { NotificationBellComponent } = await import('../notification-bell/notification-bell.component');
 
     TestBed.overrideComponent(Sidenav, {
-      remove: { imports: [SessionList, UserDropdownComponent, AdminNav] },
-      add: { imports: [SessionListStub, UserDropdownStub, AdminNavStub] },
+      remove: { imports: [SessionList, UserDropdownComponent, AdminNav, NotificationBellComponent] },
+      add: { imports: [SessionListStub, UserDropdownStub, AdminNavStub, NotificationBellStub] },
     });
     stubsApplied = true;
     return Sidenav;
@@ -216,6 +221,26 @@ describe('Sidenav — nav entries', () => {
     const anchors = fixture.nativeElement.querySelectorAll('a[href="/agents"]');
     return anchors.length ? (anchors[0] as HTMLAnchorElement) : undefined;
   }
+
+  /**
+   * Projects follow this build's compile-time switch (environments/feature-flags.ts),
+   * never a request: present from first paint when on, absent when off.
+   */
+  it('shows Projects and the notification bell in a build with Projects on', async () => {
+    TestBed.overrideProvider(FEATURES, { useValue: { projects: true } });
+    const fixture = await renderSidenav();
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.querySelector('a[href="/projects"]')?.textContent).toContain('Projects');
+    expect(el.querySelector('app-notification-bell')).not.toBeNull();
+  });
+
+  it('has no Projects entry and no bell in a build with Projects off', async () => {
+    TestBed.overrideProvider(FEATURES, { useValue: { projects: false } });
+    const fixture = await renderSidenav();
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.querySelector('a[href="/projects"]')).toBeNull();
+    expect(el.querySelector('app-notification-bell')).toBeNull();
+  });
 
   it('renders the Agents nav entry for a NON-admin', async () => {
     mockUserService.isAdmin.set(false);

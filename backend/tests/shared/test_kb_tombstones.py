@@ -747,3 +747,108 @@ class TestFailureAnnotation:
         item = _tomb_item(table)
         assert item is not None
         assert "Throttling" in item["lastError"]
+
+
+# ── A cleared tombstone is not recreated by a late annotation ────────────────
+class TestAnnotationDoesNotRecreateAClearedTombstone:
+    """Two sagas over one key: the one that confirms absence clears the tombstone
+    while the other is still failing. ``UpdateItem`` is an upsert, so the loser's
+    annotation would otherwise leave a ghost tombstone holding only ``lastError``
+    — no intent, no AWS id, no TTL — in :func:`iter_tombstones` forever."""
+
+    def _doc_tomb_item(self, table):
+        return table.get_item(
+            Key={
+                "PK": f"AST#{ASSISTANT_ID}",
+                "SK": f"KBTOMB#{APP_KB_ID}#DOC#{DOCUMENT_ID}",
+            }
+        ).get("Item")
+
+    def test_kb_saga_failing_after_a_concurrent_clear_leaves_no_ghost(self, table):
+        def concurrent_saga_clears():
+            # The other saga confirms absence and clears between this saga's
+            # tombstone write and its failing AWS call.
+            tomb.clear_kb_tombstone(ASSISTANT_ID, APP_KB_ID, True)
+
+        client = FakeBedrockAgent(
+            knowledge_bases=[_kb()],
+            probe=concurrent_saga_clears,
+            delete_raises=ClientError(
+                {"Error": {"Code": "ConflictException", "Message": "already deleting"}},
+                "DeleteKnowledgeBase",
+            ),
+        )
+
+        # The saga's own failure still propagates; only the bookkeeping is dropped.
+        with pytest.raises(ClientError):
+            tomb.delete_knowledge_base(
+                ASSISTANT_ID, APP_KB_ID, AWS_KB_ID, AWS_DS_ID, client=client
+            )
+
+        assert _tomb_item(table) is None, "the failure annotation recreated a cleared tombstone"
+        assert tomb.iter_tombstones(ASSISTANT_ID) == []
+
+    def test_delete_unsuccessful_after_a_concurrent_clear_leaves_no_ghost(self, table):
+        """The ``awsStatus`` branch of the annotation, same race."""
+        client = FakeBedrockAgent(
+            knowledge_bases=[_kb(status="DELETE_UNSUCCESSFUL")],
+            polls_before_gone=10_000,
+            probe=lambda: tomb.clear_kb_tombstone(ASSISTANT_ID, APP_KB_ID, True),
+        )
+
+        with pytest.raises(tomb.DeleteUnsuccessful):
+            tomb.delete_knowledge_base(
+                ASSISTANT_ID,
+                APP_KB_ID,
+                AWS_KB_ID,
+                AWS_DS_ID,
+                client=client,
+                interval_seconds=0.0,
+                sleep=lambda _s: None,
+            )
+
+        assert _tomb_item(table) is None
+
+    def test_document_saga_failing_after_a_concurrent_clear_leaves_no_ghost(self, table):
+        def concurrent_saga_clears_then_aws_fails():
+            tomb.clear_document_tombstone(ASSISTANT_ID, APP_KB_ID, DOCUMENT_ID, True)
+            raise ClientError(
+                {"Error": {"Code": "ThrottlingException", "Message": "slow down"}},
+                "DeleteKnowledgeBaseDocuments",
+            )
+
+        client = FakeBedrockAgent(probe=concurrent_saga_clears_then_aws_fails)
+
+        with pytest.raises(ClientError):
+            tomb.delete_document(
+                ASSISTANT_ID, APP_KB_ID, DOCUMENT_ID, AWS_KB_ID, AWS_DS_ID, client=client
+            )
+
+        assert self._doc_tomb_item(table) is None
+        assert tomb.iter_tombstones(ASSISTANT_ID) == []
+
+    def test_annotating_an_absent_tombstone_writes_nothing(self, table):
+        tomb.record_tombstone_error(
+            ASSISTANT_ID, f"KBTOMB#{APP_KB_ID}", "boom", aws_status="DELETE_UNSUCCESSFUL"
+        )
+        assert _tomb_item(table) is None
+
+    def test_a_standing_tombstone_is_still_annotated(self, table):
+        """The guard must not cost the annotation on the path it exists for."""
+        tomb.write_kb_tombstone(ASSISTANT_ID, APP_KB_ID, AWS_KB_ID, AWS_DS_ID)
+
+        tomb.record_tombstone_error(
+            ASSISTANT_ID, f"KBTOMB#{APP_KB_ID}", "boom", aws_status="DELETE_UNSUCCESSFUL"
+        )
+
+        item = _tomb_item(table)
+        assert item["lastError"] == "boom"
+        assert item["awsStatus"] == "DELETE_UNSUCCESSFUL"
+        # The original work item is intact, not replaced by the annotation.
+        assert item["intent"] == tomb.INTENT_DELETE_KB
+        assert item["awsKbId"] == AWS_KB_ID
+
+    def test_writing_a_tombstone_still_creates_it(self, table):
+        """``_write_tombstone`` is the one intentional upsert: it must stay unguarded."""
+        tomb.write_kb_tombstone(ASSISTANT_ID, APP_KB_ID, AWS_KB_ID)
+        assert _tomb_item(table)["intent"] == tomb.INTENT_DELETE_KB

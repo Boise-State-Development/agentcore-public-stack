@@ -10,6 +10,7 @@ shared space cannot live under one user's partition):
   - ``PK=SPACE#{space_id}  SK=META``            → :class:`MemorySpace`
   - ``PK=SPACE#{space_id}  SK=INDEX``           → :class:`MemoryIndex` (manifest)
   - ``PK=SPACE#{space_id}  SK=MEMBER#{email}``  → :class:`SpaceMember`
+  - ``PK=SPACE#{space_id}  SK=FILEVER#{slug}#{n:06d}`` → :class:`FileVersion`
 
 Two GSIs list a user's spaces (mirroring assistant sharing — owned and
 shared-in are separate indexes unioned in code):
@@ -39,6 +40,26 @@ ShareRole = Literal["viewer", "editor"]
 # project). ``episodic`` = an append-only dated record (a daily log, a brief).
 # ``fact`` = a flat distilled fact (the catch-all).
 EntryType = Literal["entity", "episodic", "fact"]
+
+# How a space's entries are written. ``freeform`` entries are stored as the
+# caller wrote them (every space before Shared Projects 2.3). ``canonical``
+# entries are item lists with system-rendered frontmatter and anchors, checked
+# on every save (``format.py``, ``validation.py``).
+FileFormat = Literal["freeform", "canonical"]
+
+# Who a space belongs to (Shared Projects §3.3). ``personal`` spaces are owned
+# and shared by one user, as every space before 2.4 is. The two project scopes
+# take their permissions from the project and are never shared directly:
+# ``shared`` is the project's memory, ``personal_in_project`` is one member's
+# memory within one project.
+MemoryScope = Literal["personal", "shared", "personal_in_project"]
+PROJECT_SCOPES = ("shared", "personal_in_project")
+
+# Why a file version was written. ``baseline`` records the content an entry
+# had before history existed, the first time such an entry is replaced.
+FileVersionReason = Literal["edit", "save", "proposal", "maintenance", "restore", "baseline"]
+
+TokenMethod = Literal["count", "estimate"]
 
 
 class MemoryEntryRef(BaseModel):
@@ -82,6 +103,46 @@ class MemoryEntryRef(BaseModel):
         default_factory=dict,
         description="Allowlisted frontmatter fields copied out for querying",
     )
+    aliases: List[str] = Field(
+        default_factory=list, description="Other names [[links]] may use (canonical files)"
+    )
+    tokens: Optional[int] = Field(
+        None, description="Token size of the stored file, counted at save time"
+    )
+    tokens_method: Optional[TokenMethod] = Field(
+        None, alias="tokensMethod", description="count (CountTokens) | estimate (chars/4)"
+    )
+    item_count: Optional[int] = Field(
+        None, alias="itemCount", description="Number of items (canonical files)"
+    )
+    archived: bool = Field(False, description="Archived files still resolve as link targets")
+    version: int = Field(
+        0,
+        description="Number of FILEVER rows for this slug; 0 = written before history existed",
+    )
+
+
+class FileVersion(BaseModel):
+    """A ``FILEVER#{slug}#{n:06d}`` row: one saved version of one file.
+
+    Written after the manifest swap that commits the version, so ``version``
+    numbers can never collide. The bytes stay in the content-addressed store
+    for as long as a version row references them.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    slug: str
+    version: int
+    content_hash: str = Field(..., alias="contentHash")
+    size: int = 0
+    tokens: Optional[int] = None
+    tokens_method: Optional[TokenMethod] = Field(None, alias="tokensMethod")
+    updated_by: str = Field("", alias="updatedBy")
+    updated_at: str = Field("", alias="updatedAt")
+    reason: FileVersionReason = "edit"
+    proposal_id: Optional[str] = Field(None, alias="proposalId")
+    run_id: Optional[str] = Field(None, alias="runId")
 
 
 class MemoryIndex(BaseModel):
@@ -136,3 +197,13 @@ class MemorySpace(BaseModel):
     # only transiently during creation; always set on a persisted space.
     index_s3_key: Optional[str] = Field(None, alias="indexS3Key")
     index_content_hash: Optional[str] = Field(None, alias="indexContentHash")
+    file_format: FileFormat = Field("freeform", alias="fileFormat")
+    scope: MemoryScope = Field("personal")
+    # Set on the two project scopes; ``user_id`` names the member a
+    # ``personal_in_project`` space belongs to.
+    project_id: Optional[str] = Field(None, alias="projectId")
+    user_id: Optional[str] = Field(None, alias="userId")
+
+    @property
+    def is_project_space(self) -> bool:
+        return self.scope in PROJECT_SCOPES

@@ -18,6 +18,7 @@ from agents.builtin_tools.memory_spaces import (
 from apis.shared.memory.service import (
     MemorySpaceNotFoundError,
     MemorySpacePermissionError,
+    MemoryValidationError,
 )
 
 MODULE = "agents.builtin_tools.memory_spaces.tools"
@@ -103,6 +104,28 @@ class TestMemoryWrite:
         kwargs = svc.write_entry.call_args
         assert kwargs.args[0] == "spc_1" and kwargs.args[1] == "u1"
         assert kwargs.kwargs["entry_type"] == "entity"
+        # a tool write is the "direct save from a task" path in file history
+        assert kwargs.kwargs["reason"] == "save"
+        assert kwargs.kwargs["description"] == "person"
+
+    @pytest.mark.asyncio
+    async def test_an_omitted_description_is_not_sent_as_empty(self, monkeypatch):
+        svc = _patch_service(monkeypatch)
+        svc.write_entry.return_value = SimpleNamespace(slug="jane", entry_type="fact")
+        tool = make_memory_write_tool("spc_1", "Brain", "u1", "u1@x.edu")
+        await _call(tool, slug="jane", body="- x")
+        assert svc.write_entry.call_args.kwargs["description"] is None
+
+    @pytest.mark.asyncio
+    async def test_a_validation_failure_reaches_the_model_verbatim(self, monkeypatch):
+        svc = _patch_service(monkeypatch)
+        svc.write_entry.side_effect = MemoryValidationError(
+            "Line 1 is not part of a list item", code="prose_in_body"
+        )
+        tool = make_memory_write_tool("spc_1", "Brain", "u1", "u1@x.edu")
+        result = await _call(tool, slug="jane", body="prose")
+        assert result["status"] == "error"
+        assert "Line 1 is not part of a list item" in result["content"][0]["text"]
 
     @pytest.mark.asyncio
     async def test_write_permission_error_is_error_result(self, monkeypatch):
@@ -131,3 +154,72 @@ class TestMemoryWrite:
         tool = make_memory_write_tool("spc_1", "Brain", "u1", "u1@x.edu")
         result = await _call(tool, slug="MEMORY.md", body="x")
         assert result["status"] == "error" and "don't have write access" in result["content"][0]["text"]
+
+
+class TestSpecsAreByteIdentical:
+    """Shared Projects 2.4b added a scope-addressed family for project harnesses.
+
+    Ordinary Agents' specs are part of their prompt-cached ``toolConfig``, so
+    they must not move by a byte. Hashes pinned from ``origin/develop``
+    before 2.4b; a deliberate change updates them and says so in its PR.
+    """
+
+    PINNED = {
+        "memory_list": "555a3853395ac8b17c4f5d2affac75bd8904a4a129cfc33d2a12fd1d7f021bc2",
+        "memory_read": "e07c642b6e9692e5b85470b8b7e98087b2136922943b43a872d7d904f45627e1",
+        "memory_write": "c528910e334fd5fe9697c3a456594be0700c6b68e00b178de12a12dc35ed063e",
+    }
+
+    def test_spec_hashes(self):
+        import hashlib
+        import json
+
+        for factory in (make_memory_list_tool, make_memory_read_tool, make_memory_write_tool):
+            spec = factory("spc_1", "Brain", "u1", "u1@example.edu").tool_spec
+            digest = hashlib.sha256(json.dumps(spec, sort_keys=True).encode()).hexdigest()
+            assert digest == self.PINNED[spec["name"]], spec["name"]
+
+    def test_specs_do_not_depend_on_the_binding(self):
+        for factory in (make_memory_list_tool, make_memory_read_tool, make_memory_write_tool):
+            a = factory("spc_1", "Brain", "u1", "u1@example.edu").tool_spec
+            b = factory("spc_2", "Other", "u2", "u2@example.edu").tool_spec
+            assert a == b
+
+
+class TestProjectHarnessSpecs:
+    def _specs(self):
+        from agents.builtin_tools.memory_spaces.project_tools import (
+            ProjectMemoryScopes,
+            make_project_memory_tools,
+        )
+        from apis.shared.auth.models import User
+
+        user = User(email="member@example.edu", user_id="u1", name="M", roles=[])
+        tools = make_project_memory_tools(ProjectMemoryScopes.for_member("prj_1", "spc_1", None, user))
+        return {t.tool_spec["name"]: t.tool_spec for t in tools}
+
+    def test_every_tool_takes_a_scope_enum(self):
+        specs = self._specs()
+        assert list(specs) == ["memory_list", "memory_read", "memory_query", "memory_save"]
+        for spec in specs.values():
+            schema = spec["inputSchema"]["json"]
+            assert "scope" in schema["required"]
+            scope = schema["properties"]["scope"]
+            assert scope["enum"] == ["project", "mine"]
+
+    def test_save_teaches_the_item_format(self):
+        description = self._specs()["memory_save"]["description"]
+        assert 'one fact per "- " line' in description
+        assert "prose and headings are rejected" in description
+        assert "editor" in description
+
+    def test_specs_are_the_same_for_every_member_and_project(self):
+        from agents.builtin_tools.memory_spaces.project_tools import (
+            ProjectMemoryScopes,
+            make_project_memory_tools,
+        )
+        from apis.shared.auth.models import User
+
+        other = User(email="viewer@example.edu", user_id="u2", name="V", roles=[])
+        tools = make_project_memory_tools(ProjectMemoryScopes.for_member("prj_2", None, "spc_9", other))
+        assert {t.tool_spec["name"]: t.tool_spec for t in tools} == self._specs()

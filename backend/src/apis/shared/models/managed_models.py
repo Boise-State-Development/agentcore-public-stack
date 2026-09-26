@@ -16,7 +16,7 @@ import boto3
 from botocore.exceptions import ClientError
 
 from apis.shared.caching import config_cache
-from .models import ManagedModel, ManagedModelCreate, ManagedModelUpdate
+from .models import ManagedModel, ManagedModelCreate, ManagedModelUpdate, ModelStatus
 
 logger = logging.getLogger(__name__)
 
@@ -305,6 +305,10 @@ async def _create_managed_model_cloud(model_data: ManagedModelCreate, table_name
         mantle_api_mode=_resolve_mantle_api_mode(model_data.mantle_api_mode, model_data.provider),
         mantle_region=_resolve_mantle_region(model_data.mantle_region, model_data.provider),
         supported_params=model_data.supported_params,
+        status=model_data.status,
+        replaced_by=model_data.replaced_by,
+        retires_on=model_data.retires_on,
+        retirement_note=model_data.retirement_note,
         created_at=now,
         updated_at=now,
     )
@@ -330,6 +334,7 @@ async def _create_managed_model_cloud(model_data: ManagedModelCreate, table_name
         'supportsCaching': _resolve_supports_caching(model_data.supports_caching, model_data.provider),
         'isDefault': model_data.is_default,
         'isFeatured': model_data.is_featured,
+        'status': model_data.status.value,
         'createdAt': now.isoformat(),
         'updatedAt': now.isoformat(),
     }
@@ -355,6 +360,12 @@ async def _create_managed_model_cloud(model_data: ManagedModelCreate, table_name
         item['region'] = resolved_region
     if model_data.supported_params is not None:
         item['supportedParams'] = model_data.supported_params.model_dump(by_alias=True, exclude_none=True)
+    if model_data.replaced_by:
+        item['replacedBy'] = model_data.replaced_by
+    if model_data.retires_on:
+        item['retiresOn'] = model_data.retires_on
+    if model_data.retirement_note:
+        item['retirementNote'] = model_data.retirement_note
 
     # Convert floats to Decimal for DynamoDB
     item = _python_to_dynamodb(item)
@@ -479,6 +490,36 @@ async def list_all_managed_models() -> List[ManagedModel]:
     return await _list_managed_models_cloud(managed_models_table)
 
 
+async def get_default_managed_model() -> Optional[ManagedModel]:
+    """The catalog's admin-designated default model (``isDefault``), or ``None``.
+
+    The server-side answer to "which model runs when nothing names one" — a
+    scheduled run, an Agent with no ``modelConfig``, a request with
+    ``model_id: null``. It must be a catalog row, because that is where pricing
+    lives: a fallback id with no row prices every turn at ``None``, which is
+    unmetered and free against quota (docs/specs/model-retirement.md §6).
+
+    Only an enabled, non-retired row counts (``validate_lifecycle`` already
+    refuses a retired default at write time; this is the backstop, since a
+    retired id would be denied at the next hop). Several flagged rows can only come from a race
+    in ``_clear_default_flags``; the first in catalog order wins, and that order
+    is deterministic (``_sort_models``), so every process picks the same model
+    and the agent-cache key stays stable.
+
+    Best-effort: a catalog read failure returns ``None`` so the caller falls
+    back rather than blocking the turn. Reads through the 60s config cache.
+    """
+    try:
+        models = await list_all_managed_models()
+    except Exception as e:  # noqa: BLE001 - a fallback lookup must never fail the turn
+        logger.warning(f"Could not read the model catalog for its default model: {e}")
+        return None
+    return next(
+        (m for m in models if m.is_default and m.enabled and m.status != ModelStatus.RETIRED),
+        None,
+    )
+
+
 def _scan_managed_model_items(table_name: str) -> List[dict]:
     """Scan the raw MODEL# items. Blocking; call via ``asyncio.to_thread``."""
     table = dynamodb.Table(table_name)
@@ -504,6 +545,23 @@ def _scan_managed_model_items(table_name: str) -> List[dict]:
         items.extend(response.get('Items', []))
 
     return items
+
+
+def _sort_models(models: List[ManagedModel]) -> None:
+    """Order models in place: admin-ordered first, then unordered newest first.
+
+    Every reader of the catalog — the admin list and the user-facing picker —
+    goes through the list path, so sorting here is what makes the admin's drag
+    order the order users see. Two stable passes rather than one compound key
+    because the tiebreak runs the opposite direction (newest first) to the
+    primary key (lowest first).
+
+    An unordered model is one created before the catalog was ever ordered, or
+    since the last reorder. Sorting it last keeps a fresh addition from
+    displacing the curated top of the picker until an admin places it.
+    """
+    models.sort(key=lambda m: m.created_at, reverse=True)
+    models.sort(key=lambda m: (m.sort_order is None, m.sort_order or 0))
 
 
 async def _list_managed_models_cloud(table_name: str) -> List[ManagedModel]:
@@ -551,8 +609,7 @@ async def _list_managed_models_cloud(table_name: str) -> List[ManagedModel]:
                 logger.warning(f"Failed to parse model from DynamoDB: {e}")
                 continue
 
-        # Sort by creation date (newest first)
-        models.sort(key=lambda x: x.created_at, reverse=True)
+        _sort_models(models)
 
         logger.info(f"Found {len(models)} managed models in DynamoDB")
         return models
@@ -665,10 +722,16 @@ async def _update_managed_model_cloud(model_id: str, updates: ManagedModelUpdate
     # the model_dump above drops None fields, which is what makes a PATCH a
     # PATCH. Removing the attribute rather than storing '' keeps the record
     # shaped like one that never had an icon.
-    if update_data.get('iconSlug') == '':
-        update_data.pop('iconSlug')
-        remove_expression_parts.append('#iconSlug')
-        expression_attribute_names['#iconSlug'] = 'iconSlug'
+    # The lifecycle strings share that contract (docs/specs/model-retirement.md §7).
+    for clearable in ('iconSlug', 'replacedBy', 'retiresOn', 'retirementNote'):
+        if update_data.get(clearable) == '':
+            update_data.pop(clearable)
+            remove_expression_parts.append(f'#{clearable}')
+            expression_attribute_names[f'#{clearable}'] = clearable
+
+    # A str-Enum member must reach DynamoDB as its plain value.
+    if 'status' in update_data:
+        update_data['status'] = ModelStatus(update_data['status']).value
 
     # Add updatedAt timestamp
     update_data['updatedAt'] = datetime.now(timezone.utc).isoformat()
@@ -730,6 +793,73 @@ async def _update_managed_model_cloud(model_id: str, updates: ManagedModelUpdate
             return None  # Model not found
         logger.error(f"Failed to update managed model in DynamoDB: {e}")
         raise
+
+
+async def reorder_managed_models(ordered_ids: List[str]) -> List[ManagedModel]:
+    """Persist the catalog order: each model's ``sortOrder`` becomes its index.
+
+    A dedicated writer rather than a field on ``ManagedModelUpdate`` for the same
+    reason as ``write_model_icon_key``: an order is a property of the whole
+    catalog, not of one record. A per-model field would let the model form save
+    a stale position over a drag that happened after the form was opened.
+
+    Args:
+        ordered_ids: Every managed model's record id (the UUID), exactly once.
+
+    Returns:
+        The full catalog in its new order.
+
+    Raises:
+        ValueError: If ``ordered_ids`` has duplicates, or isn't exactly the set of
+            models in the table — the caller reordered a stale catalog.
+    """
+    table_name = os.environ.get('DYNAMODB_MANAGED_MODELS_TABLE_NAME')
+    if not table_name:
+        raise RuntimeError("DYNAMODB_MANAGED_MODELS_TABLE_NAME environment variable is required")
+
+    if len(set(ordered_ids)) != len(ordered_ids):
+        raise ValueError("Model order lists a model more than once")
+
+    # Read the table, not the cache: validating against a copy up to a minute
+    # old could accept an order that omits a model created in that window.
+    items = await asyncio.to_thread(_scan_managed_model_items, table_name)
+    current = {item.get('id'): item.get('sortOrder') for item in items}
+    if set(ordered_ids) != set(current):
+        raise ValueError(
+            "Model order doesn't match the current catalog — it was changed "
+            "elsewhere. Reload and try again."
+        )
+
+    table = dynamodb.Table(table_name)
+    try:
+        for index, model_id in enumerate(ordered_ids):
+            # A drag moves a few rows; skip the ones already in place.
+            if current[model_id] is not None and int(current[model_id]) == index:
+                continue
+            # The condition matters: update_item on a missing key creates it,
+            # and a model deleted mid-reorder would come back as a bare
+            # {PK, SK, sortOrder} item that fails to parse on every list.
+            table.update_item(
+                Key={'PK': f'MODEL#{model_id}', 'SK': f'MODEL#{model_id}'},
+                UpdateExpression='SET #sortOrder = :sortOrder',
+                ExpressionAttributeNames={'#sortOrder': 'sortOrder'},
+                ExpressionAttributeValues={':sortOrder': index},
+                ConditionExpression='attribute_exists(PK)',
+            )
+    except ClientError as e:
+        if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
+            raise ValueError(
+                "A model was deleted while the catalog was being reordered. "
+                "Reload and try again."
+            ) from e
+        logger.error(f"Failed to reorder managed models: {e}")
+        raise
+    finally:
+        # Also on failure: a reorder that dies partway has still moved rows.
+        config_cache.invalidate(config_cache.MANAGED_MODELS)
+
+    logger.info(f"↕️ Reordered {len(ordered_ids)} managed models")
+    return await _list_managed_models_cloud(table_name)
 
 
 async def write_model_icon_key(model_id: str, icon_key: Optional[str]) -> None:

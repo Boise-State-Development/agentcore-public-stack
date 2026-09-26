@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { TestBed } from '@angular/core/testing';
 import { signal } from '@angular/core';
+import { provideRouter } from '@angular/router';
 import { ChatPreferencesSettingsPage } from './chat-preferences-settings.page';
 import { ModelService } from '../../../session/services/model/model.service';
 import { UserSettingsService } from '../../../services/user-settings.service';
@@ -97,5 +98,96 @@ describe('ChatPreferencesSettingsPage — currentDefaultModelId', () => {
     ]);
     const page = TestBed.inject(ChatPreferencesSettingsPage);
     expect(page.currentDefaultModelId()).toBe('');
+  });
+});
+
+describe('ChatPreferencesSettingsPage — personal instructions', () => {
+  let settingsValue: ReturnType<typeof signal<{ defaultModelId: string | null; personalInstructions?: string | null } | undefined>>;
+  let updateSettings: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    TestBed.resetTestingModule();
+    settingsValue = signal<{ defaultModelId: string | null; personalInstructions?: string | null } | undefined>(undefined);
+    updateSettings = vi.fn();
+    TestBed.configureTestingModule({
+      imports: [ChatPreferencesSettingsPage],
+      providers: [
+        provideRouter([]),
+        { provide: ModelService, useValue: { availableModels: signal([]), modelsLoading: signal(false), successorFor: () => null, modelNameFor: () => null } },
+        {
+          provide: UserSettingsService,
+          useValue: { settingsResource: { value: () => settingsValue(), error: () => null, reload: vi.fn() }, updateSettings },
+        },
+        {
+          provide: LocalSettingsService,
+          useValue: { showTokenCount: signal(false), showDebugOutput: signal(false), setShowTokenCount: vi.fn(), setShowDebugOutput: vi.fn() },
+        },
+      ],
+    });
+  });
+
+  function render() {
+    const fixture = TestBed.createComponent(ChatPreferencesSettingsPage);
+    fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+    const textarea = () => el.querySelector<HTMLTextAreaElement>('#personal-instructions')!;
+    const save = () => Array.from(el.querySelectorAll('button')).find(b => b.textContent?.trim().startsWith('Sav'))!;
+    return { fixture, el, textarea, save };
+  }
+
+  function type(fixture: ReturnType<typeof render>['fixture'], textarea: HTMLTextAreaElement, value: string): void {
+    textarea.value = value;
+    textarea.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+  }
+
+  it('is disabled until settings load, then shows the saved text and its length', () => {
+    const { fixture, el, textarea } = render();
+    expect(textarea().disabled).toBe(true);
+    settingsValue.set({ defaultModelId: null, personalInstructions: 'Be brief.' });
+    fixture.detectChanges();
+    expect(textarea().disabled).toBe(false);
+    expect(textarea().value).toBe('Be brief.');
+    expect(el.textContent).toContain('9 / 4,000 characters');
+  });
+
+  it('saves only a real change, quietly, and says so', async () => {
+    settingsValue.set({ defaultModelId: null, personalInstructions: 'Be brief.' });
+    const { fixture, el, textarea, save } = render();
+    expect(save().disabled).toBe(true);
+    type(fixture, textarea(), 'Be brief.  ');
+    expect(save().disabled).toBe(true);
+
+    updateSettings.mockResolvedValue({ defaultModelId: null, personalInstructions: 'Use SI units.' });
+    type(fixture, textarea(), 'Use SI units.');
+    expect(save().disabled).toBe(false);
+    save().click();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(updateSettings).toHaveBeenCalledWith({ personalInstructions: 'Use SI units.' }, { silent: true });
+    expect(el.querySelector('[role=status]')?.textContent).toContain('Saved');
+  });
+
+  it('clearing says Cleared', async () => {
+    settingsValue.set({ defaultModelId: null, personalInstructions: 'Be brief.' });
+    const { fixture, el, textarea, save } = render();
+    updateSettings.mockResolvedValue({ defaultModelId: null, personalInstructions: null });
+    type(fixture, textarea(), '');
+    save().click();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(el.querySelector('[role=status]')?.textContent).toContain('Cleared');
+  });
+
+  it('shows the API’s sentence when the save fails', async () => {
+    settingsValue.set({ defaultModelId: null, personalInstructions: '' });
+    const { fixture, el, textarea, save } = render();
+    const { HttpErrorResponse } = await import('@angular/common/http');
+    updateSettings.mockRejectedValue(new HttpErrorResponse({ status: 503, error: { detail: 'Settings storage is not configured.' } }));
+    type(fixture, textarea(), 'Hi');
+    save().click();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(el.querySelector('[role=status]')?.textContent).toContain('Settings storage is not configured.');
   });
 });

@@ -120,7 +120,10 @@ async def _always_on_tool_ids_for_voice(
     if not user_info:
         return []
     from apis.shared.auth.models import User
-    from apis.shared.tools.always_on import resolve_always_on_tool_ids
+    from apis.shared.tools.always_on import (
+        resolve_always_on_tool_ids,
+        resolve_system_tool_ids,
+    )
 
     user = User(
         email=user_info.get("email", ""),
@@ -129,7 +132,12 @@ async def _always_on_tool_ids_for_voice(
         roles=user_info.get("roles") or [],
         raw_token=auth_token,
     )
-    return await resolve_always_on_tool_ids(user)
+    always_on = await resolve_always_on_tool_ids(user)
+    system = await resolve_system_tool_ids(user)
+    # Union preserving order; system ids appended after always-on. Dedup keeps
+    # a byte-stable list for the cacheable toolConfig prefix.
+    seen = set(always_on)
+    return always_on + [tid for tid in system if tid not in seen]
 
 
 async def _ensure_session_metadata(session_id: str, user_id: str) -> None:
@@ -295,6 +303,18 @@ async def _finalize_voice_session(session_id: str, user_id: str, voice_agent: An
                 }
             except Exception:
                 pass
+
+        # Voice prices from the catalog row for the Sonic model id; with no row
+        # the whole session is free against quota. Make that visible.
+        if cost is None and total_tokens > 0:
+            from apis.shared.observability.emf import emit_unmetered_model_call
+
+            reason = "calculation_failed" if pricing else "no_pricing"
+            logger.warning(
+                f"Unmetered voice session: model={_sanitize_log(model_id)} reason={reason} — "
+                "usage recorded with no cost; not counted against quota"
+            )
+            emit_unmetered_model_call(model_id, reason, surface="voice", session_id=session_id)
 
         message_metadata = MessageMetadata(
             token_usage=token_usage,

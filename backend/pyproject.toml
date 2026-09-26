@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agentcore-stack"
-version = "1.24.0"
+version = "1.25.0"
 requires-python = ">=3.10"
 description = "Multi-agent conversational AI system with AWS Bedrock AgentCore"
 readme = "README.md"
@@ -49,7 +49,11 @@ dependencies = [
     "urllib3==2.7.0",
     "idna==3.15",
     "pyasn1==0.6.4",
-    "soupsieve==2.8.4",
+    "soupsieve==2.9.0",
+    # Transitive via starlette/httpx/fastapi. Pinned to 4.14.2 for
+    # GHSA-82r6-8w77-94w6 (TLSStream IDNA 2003 host-name encoding allowed
+    # TLS certificate spoofing for internationalized domain names).
+    "anyio==4.14.2",
 
     # PDF page-1 rasterization for attachment thumbnails (Apache 2.0 / BSD).
     # Bundles PDFium (no system poppler/ghostscript needed).

@@ -56,3 +56,18 @@ async def test_invalid_signature_does_not_consume_jti() -> None:
     # The legitimate ticket must still be redeemable.
     verified = await service.verify_and_consume(ticket)
     assert verified.jti == claims.jti
+
+
+@pytest.mark.asyncio
+async def test_ticket_is_only_valid_for_its_purpose() -> None:
+    service = _make_service()
+    dictation_ticket, _ = service.issue(user_id="user-1", session_id="", purpose="dictation")
+    with pytest.raises(VoiceTicketError):
+        await service.verify_and_consume(dictation_ticket)  # voice by default
+    # A wrong-socket attempt must not burn the ticket for its real purpose.
+    verified = await service.verify_and_consume(dictation_ticket, purpose="dictation")
+    assert verified.purpose == "dictation"
+
+    voice_ticket, _ = service.issue(user_id="user-1", session_id="sess-A")
+    with pytest.raises(VoiceTicketError):
+        await service.verify_and_consume(voice_ticket, purpose="dictation")

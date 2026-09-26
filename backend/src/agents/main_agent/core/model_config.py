@@ -421,16 +421,20 @@ class ModelConfig:
             config, self.inference_params, _BEDROCK_PARAM_MAP, "bedrock", self.model_id
         )
 
-        # Native Bedrock CountTokens. With this on, Strands' per-turn estimate
-        # (BeforeModelCallEvent.projected_input_tokens) and agent.model.count_tokens()
-        # return authoritative Bedrock counts instead of the chars/4 heuristic —
-        # the foundation for per-turn context attribution (decomposing the
+        # Native Bedrock CountTokens is available to this model — the
+        # foundation for per-call context attribution (decomposing the
         # otherwise-aggregate inputTokens into system / tools / messages via the
-        # CountTokens differential). Every catalog model is Claude family and
-        # supports the API; the runtime-role IAM grant landed in #428. Strands
-        # falls back to the heuristic and caches the skip if a model ever
-        # AccessDenies or doesn't support counting, so this is safe to set
-        # unconditionally on the Bedrock path.
+        # CountTokens differential). The runtime-role IAM grant landed in #428.
+        # Strands' pre-call estimate stays the heuristic regardless: the
+        # factory builds the model with `native_projection=False`, so no count
+        # ever sits in front of a model call (see bedrock_count_tokens.py).
+        # Not every model supports the API — Claude Sonnet 5's base id is
+        # rejected as unsupported — and the count falls back to the heuristic
+        # and caches the skip when a model AccessDenies or doesn't support
+        # counting, so this is safe to set unconditionally on the Bedrock
+        # path. The attribution hook reads that skip
+        # (`token_count_is_authoritative`) and records nothing rather than a
+        # heuristic split.
         config["use_native_token_count"] = True
 
         # Bedrock prompt caching — three cachePoints per request (Bedrock

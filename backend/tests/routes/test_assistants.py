@@ -120,6 +120,39 @@ class TestListAssistantsAuthenticated:
         assert body["assistants"] == []
 
 
+class TestGetAssistantProjectHarness:
+    """GET /assistants/{id} says when the agent is a project's harness.
+
+    A project task binds the harness, and the chat's crumb renders it as the project
+    rather than an Agent with Edit / Share — both of which the harness refuses.
+    """
+
+    def _get(self, app, make_user, assistant):
+        mock_auth_user(app, make_user())
+        with patch(f"{ROUTES_MODULE}.assistant_exists", new_callable=AsyncMock, return_value=True), patch(
+            f"{ROUTES_MODULE}.get_assistant_with_access_check",
+            new_callable=AsyncMock,
+            return_value=(assistant, "viewer"),
+        ):
+            return TestClient(app).get(f"/assistants/{assistant.assistant_id}")
+
+    def test_harness_carries_kind_and_project_id(self, app, make_user):
+        resp = self._get(app, make_user, _make_assistant(kind="project", projectId="prj_1"))
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["kind"] == "project"
+        assert body["projectId"] == "prj_1"
+
+    def test_ordinary_agent_omits_both(self, app, make_user):
+        resp = self._get(app, make_user, _make_assistant())
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "kind" not in body
+        assert "projectId" not in body
+
+
 # ---------------------------------------------------------------------------
 # Requirement 13.2: Assistants endpoint returns 401 for unauthenticated
 # ---------------------------------------------------------------------------

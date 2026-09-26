@@ -63,9 +63,26 @@ def _create_cache_key(
     skills_hash: str = "",
     document_tools: bool = False,
     assistant_id: Optional[str] = None,
+    memory_binding: str = "",
+    memory_context: Optional[str] = None,
 ) -> Tuple:
     """
     Create a cache key for agent instances.
+
+    `memory_binding` is ``memory_binding_digest`` of what the turn's memory
+    tools close over, or "" when there are none. For an Agent's binding that is
+    the space id, name and access: the write tool exists only for
+    ``readwrite``, and the name is in the tools' result messages (their specs
+    are constant). For a project harness it is the project and its two space
+    ids (Shared Projects 2.4b). Either way the tools read the spaces live on
+    every call, so they are described once the key carries this. Empty string
+    without memory tools, so those turns key exactly as before apart from the
+    constant extra element.
+
+    `memory_context` is the rendered Memory-Space block sent after the system
+    prompt (Shared Projects 2.2). It used to be part of `system_prompt`, so it
+    is folded into the same prompt hash rather than adding an element; a turn
+    without memory hashes exactly as before.
 
     `assistant_id` is the assistant (RAG corpus) the turn ran against. The
     spreadsheet-analysis builders close over it, so without it in the key a
@@ -98,8 +115,11 @@ def _create_cache_key(
 
     # Hash system prompt if provided (can be very long)
     prompt_hash = None
-    if system_prompt:
-        prompt_hash = hashlib.md5(system_prompt.encode()).hexdigest()[:8]
+    if system_prompt or memory_context:
+        prompt_material = system_prompt or ""
+        if memory_context:
+            prompt_material += "\x00memory\x00" + memory_context
+        prompt_hash = hashlib.md5(prompt_material.encode()).hexdigest()[:8]
 
     return (
         session_id,
@@ -112,10 +132,45 @@ def _create_cache_key(
         provider or "bedrock",
         freshness_hash,
         agent_type or "chat",
+        memory_binding,  # ahead of the rest so their positions ([-1]..[-3]) stay put
         bool(document_tools),
         assistant_id or "",
-        skills_hash,
+        skills_hash,  # stays the trailing element; tests index it as [-1]
     )
+
+
+def memory_binding_digest(binding: Optional[Dict[str, Any]]) -> str:
+    """Short digest of a turn's memory tools' closure for the agent cache key.
+
+    ``binding`` is the shape stamped on the construction snapshot and replayed
+    from ``PausedTurnSnapshot``, or None:
+
+    - an Agent's binding, ``{"spaceId", "spaceName", "access"}``;
+    - a project harness's scopes, ``{"projectId", "sharedSpaceId",
+      "personalSpaceId"}`` (Shared Projects 2.4b). Its payload starts with a
+      ``"project"`` tag, so it can never collide with a binding's.
+
+    Returns "" for None so keys without memory do not change. The binding
+    digest is unchanged from 2.1, so ordinary Agents keep their keys.
+    """
+    if not binding:
+        return ""
+    if "projectId" in binding:
+        payload = json.dumps(
+            [
+                "project",
+                binding.get("projectId"),
+                binding.get("sharedSpaceId"),
+                binding.get("personalSpaceId"),
+            ],
+            default=str,
+        )
+        return hashlib.md5(payload.encode()).hexdigest()[:8]
+    payload = json.dumps(
+        [binding.get("spaceId"), binding.get("spaceName"), binding.get("access")],
+        default=str,
+    )
+    return hashlib.md5(payload.encode()).hexdigest()[:8]
 
 
 # LRU cache for agent instances
@@ -262,6 +317,8 @@ async def get_agent(
     has_document_tools: bool = False,
     assistant_id: Optional[str] = None,
     build_stage_recorder: Optional[Callable[[str], None]] = None,
+    memory_binding: Optional[Dict[str, Any]] = None,
+    memory_context: Optional[str] = None,
 ) -> BaseAgent:
     """
     Get or create agent instance with current configuration for session
@@ -290,6 +347,15 @@ async def get_agent(
             derive it with ``injected_tools_are_key_described``; the default
             (False) keeps the historical bypass, so any caller that has not
             reasoned about its closures gets the safe behavior.
+        memory_binding: The Agent's resolved Memory-Space binding as
+            ``{"spaceId", "spaceName", "access"}``, a project harness's
+            scopes as ``{"projectId", "sharedSpaceId", "personalSpaceId"}``,
+            or None. A key element (see ``memory_binding_digest``) and stamped
+            on the construction snapshot so a paused turn resumes into the
+            same slot.
+        memory_context: The rendered Memory-Space block, sent after the system
+            prompt behind its own cache point. Hashed with the prompt in the
+            key and snapshotted by ``BaseAgent`` for resume.
         cache_write: Whether this caller may *populate* the cache. Read stays
             allowed either way. Set False by callers that build a partial
             toolset for a session whose real turns build more — otherwise they
@@ -338,6 +404,8 @@ async def get_agent(
         skills_hash=skills_hash,
         document_tools=has_document_tools,
         assistant_id=assistant_id,
+        memory_binding=memory_binding_digest(memory_binding),
+        memory_context=memory_context,
     )
 
     # Whether this turn's injected tools (if any) let it use the cache at all.
@@ -405,6 +473,8 @@ async def get_agent(
         mantle_api_mode=mantle_api_mode,
         mantle_region=mantle_region,
     )
+    if memory_context:
+        create_kwargs["memory_context"] = memory_context
     # Skills v2: ChatAgent (now the target of both "chat" and "skill" types)
     # accepts accessible_skill_ids and conditionally adds the AgentSkills
     # plugin. Pass it through whenever resolved — VoiceAgent does not take the
@@ -451,6 +521,8 @@ async def get_agent(
         # The assistant is a key element (spreadsheet tools close over it), so
         # resume must replay it verbatim or the paused agent is orphaned.
         agent._construction_snapshot["assistant_id"] = assistant_id
+        # Same for the memory binding (memory tools close over it).
+        agent._construction_snapshot["memory_binding"] = dict(memory_binding) if memory_binding else None
 
     # Don't cache agents whose context-bound extra_tools captured anything the
     # key doesn't describe — a cached agent holds the *old* closures, so reuse
@@ -570,10 +642,11 @@ async def generate_conversation_title(
                 }
             ],
             "system": [{"text": TITLE_GENERATION_SYSTEM_PROMPT}],
+            # Temperature only: Claude 4.5+ rejects `temperature` and `topP`
+            # together, so sending both would break titles on a model swap.
             "inferenceConfig": {
                 "temperature": 0.3,  # Low temperature for consistent, focused output
                 "maxTokens": 50,      # Title should be very short
-                "topP": 0.9
             }
         }
 

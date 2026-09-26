@@ -95,67 +95,12 @@ export interface Tool {
  * must not be newly enabled. Existing selections are untouched: the backend
  * still grants it, still builds its client, and an Agent that binds it still
  * runs. This is a picker rule, never an access decision
- * (docs/specs/mcp-server-retirement.md §7).
- *
- * Absent/unknown `status` reads as active, so an older backend leaves every
- * tool freely togglable — i.e. today's behaviour.
+ * (docs/specs/mcp-server-retirement.md §7). The predicate and the date/copy
+ * helpers live in `shared/utils/retirement.ts`, shared with model retirement.
  */
-export function isRetiring(tool: Pick<Tool, 'status'>): boolean {
-  return typeof tool.status === 'string' && tool.status !== 'active';
-}
-
-/** The retirement facts a picker needs, however the surface happens to carry them. */
-export interface RetirementInfo {
-  retirementNote?: string | null;
-  retiresOn?: string | null;
-}
-
-/**
- * Render an ISO `retiresOn` for a human, or `null` if it is absent or unparseable.
- *
- * Parsed as UTC noon rather than `new Date('2026-10-31')`, which is midnight UTC
- * and prints as the day *before* for anyone west of Greenwich — which is
- * everyone here. A retirement date that reads a day early is the one kind of
- * wrong that would actually cost someone.
- */
-export function formatRetiresOn(retiresOn?: string | null): string | null {
-  if (!retiresOn) return null;
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(retiresOn);
-  if (!m) return null;
-  const [y, mo, day] = [+m[1], +m[2], +m[3]];
-  const d = new Date(Date.UTC(y, mo - 1, day, 12));
-  if (Number.isNaN(d.getTime())) return null;
-  // `Date.UTC` ROLLS OVER rather than failing: 2026-13-45 becomes February 2027,
-  // which would render as a confident, wrong retirement date. The backend
-  // validator rejects that shape, but an older row or a hand-edited DynamoDB
-  // item can still carry it, so re-read the parts and insist they match.
-  if (d.getUTCFullYear() !== y || d.getUTCMonth() !== mo - 1 || d.getUTCDate() !== day) {
-    return null;
-  }
-  return d.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
-}
-
-/**
- * The one sentence every retirement surface appends after its own lead-in.
- *
- * Four shapes, because both fields are independently optional and the sentence
- * has to stay grammatical in all of them — this exists so the Customize card,
- * the detail page, the Designer notice and the schedule form cannot drift into
- * four different phrasings of the same fact.
- *
- * Deliberately says nothing when both are absent: an admin who set neither has
- * told us nothing, and "no replacement is available" is a claim we would be
- * inventing on their behalf.
- */
-export function retirementDetail(info: RetirementInfo): string {
-  const when = formatRetiresOn(info.retiresOn);
-  // Admins punctuate or don't; strip a trailing stop so we never render "X..".
-  const note = info.retirementNote?.trim().replace(/[.\s]+$/, '') || null;
-  if (note && when) return `${note}. It stops working on ${when}.`;
-  if (note) return `${note}.`;
-  if (when) return `It stops working on ${when}.`;
-  return '';
-}
+import { isRetiring } from '../../shared/utils/retirement';
+export { formatRetiresOn, isRetiring, retirementDetail } from '../../shared/utils/retirement';
+export type { RetirementInfo } from '../../shared/utils/retirement';
 
 /**
  * Response from GET /tools

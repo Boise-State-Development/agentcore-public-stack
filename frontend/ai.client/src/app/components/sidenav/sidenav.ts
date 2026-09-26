@@ -9,13 +9,15 @@ import { SessionService } from '../../session/services/session/session.service';
 import { UserService } from '../../auth/user.service';
 import { SessionService as BffSessionService } from '../../auth/session.service';
 import { UserDropdownComponent } from '../topnav/components/user-dropdown.component';
+import { NotificationBellComponent } from '../notification-bell/notification-bell.component';
+import { FEATURES } from '../../services/features';
 import { SidenavService } from '../../services/sidenav/sidenav.service';
 import { TooltipDirective } from '../tooltip/tooltip.directive';
 import { BrandingService } from '../../../branding/branding.service';
 
 @Component({
   selector: 'app-sidenav',
-  imports: [SessionList, AdminNav, UserDropdownComponent, TooltipDirective, RouterLink, RouterLinkActive],
+  imports: [SessionList, AdminNav, UserDropdownComponent, NotificationBellComponent, TooltipDirective, RouterLink, RouterLinkActive],
   templateUrl: './sidenav.html',
   styleUrl: './sidenav.css',
 })
@@ -26,9 +28,15 @@ export class Sidenav {
   protected sidenavService = inject(SidenavService);
   protected userService = inject(UserService);
   protected branding = inject(BrandingService);
+  /** This build's front-end feature switches (compile-time; see environments/feature-flags.ts). */
+  protected readonly features = inject(FEATURES);
 
   /** Whether the branding logo image failed to load (Requirement 2.8). */
   protected logoLoadFailed = signal(false);
+
+  /** Whether the chat body has scrolled off its top, which reveals the fade
+   *  under the pinned New Session button. */
+  protected bodyScrolled = signal(false);
 
   /** Re-read on every completed navigation; the value itself is unused,
    *  it exists so `isAdminChrome` recomputes when the route changes. */
@@ -81,6 +89,10 @@ export class Sidenav {
   navigateToAgents() {
     this.sidenavService.close();
     this.router.navigate(['/agents']);
+  }
+
+  onBodyScroll(event: Event): void {
+    this.bodyScrolled.set((event.target as HTMLElement).scrollTop > 0);
   }
 
   toggleCollapse() {

@@ -196,6 +196,12 @@ jobs:
       # backfill.
       CDK_ARTIFACT_SHARE_INBOX_ENABLED: ${{ vars.CDK_ARTIFACT_SHARE_INBOX_ENABLED }}
       CDK_FRONTEND_CERTIFICATE_ARN: ${{ vars.CDK_FRONTEND_CERTIFICATE_ARN }}
+      # CloudFront access logs for the SPA distribution (S3, 90-day expiry,
+      # cookies excluded). Default ON with a kill switch: unset resolves to an
+      # empty string, which config.ts treats as the default (on). Set the
+      # `CDK_FRONTEND_ACCESS_LOGS_ENABLED` variable to "false" to stop logging
+      # in an environment; the log bucket stays either way.
+      CDK_FRONTEND_ACCESS_LOGS_ENABLED: ${{ vars.CDK_FRONTEND_ACCESS_LOGS_ENABLED }}
       # Hostnames Chromium refuses to navigate to during a browser session —
       # the control that stops a human in a browser takeover reaching a system
       # the agent must not act inside. Comma-separated, e.g.
@@ -234,6 +240,20 @@ jobs:
       # config.ts treats as the default (on). Set the `CDK_MEMORY_SPACES_ENABLED`
       # variable to "false" in an environment only to dark-stop the feature there.
       CDK_MEMORY_SPACES_ENABLED: ${{ vars.CDK_MEMORY_SPACES_ENABLED }}
+      # Shared Projects (project workspace, membership, harness, project memory).
+      # Opt-in while in development (CLAUDE.md "Feature flags"): set the
+      # `CDK_PROJECTS_ENABLED` variable to "true" in an environment to turn it on
+      # there. Unset (empty string) or anything else means off. The SPA's
+      # matching switch is `features.projects` in src/environments/*.ts.
+      CDK_PROJECTS_ENABLED: ${{ vars.CDK_PROJECTS_ENABLED }}
+      # Platform self-service (account tools: whoami / quota / settings reads +
+      # the confirmed set_default_model write). Opt-in while in development: set
+      # the `CDK_PLATFORM_SELF_SERVICE_ENABLED` variable to "true" in an
+      # environment to turn it on there. Unset (empty string) or anything else
+      # means off, so prod stays dark unless its own variable is set. The tool
+      # catalog rows must also be seeded in that environment before the tools
+      # appear (Seed Bootstrap Data workflow).
+      CDK_PLATFORM_SELF_SERVICE_ENABLED: ${{ vars.CDK_PLATFORM_SELF_SERVICE_ENABLED }}
       # Skills v2 (knowledge bundles: admin catalog, My Skills authoring, and
       # skill resolution on the invocation path). Default ON with a kill switch:
       # unset resolves to empty string, which config.ts treats as the default
@@ -267,6 +287,13 @@ jobs:
       # `CDK_AGENTS_API_ENABLED` variable to "true" in an environment (e.g. dev)
       # to enable it there for dogfooding.
       CDK_AGENTS_API_ENABLED: ${{ vars.CDK_AGENTS_API_ENABLED }}
+      # Composer dictation (Amazon Transcribe Streaming). Default ON with a kill
+      # switch: unset resolves to empty string, which config.ts treats as on.
+      # LANGUAGES is a comma-separated Transcribe code list; unset means en-US.
+      # Two or more codes (e.g. "en-US,es-US") turn on automatic language
+      # identification with the first as the preferred language.
+      CDK_DICTATION_ENABLED: ${{ vars.CDK_DICTATION_ENABLED }}
+      CDK_DICTATION_LANGUAGES: ${{ vars.CDK_DICTATION_LANGUAGES }}
       # Platform cost sync from AWS Cost Explorer (docs/specs/platform-cost-visibility.md).
       # Default OFF (opt-in): only the literal "true" enables it. Unset resolves
       # to empty string, which config.ts treats as "not set" and falls back to
@@ -351,6 +378,7 @@ jobs:
       CDK_OBSERVABILITY_XRAY_SAMPLING_RESERVOIR: ${{ vars.CDK_OBSERVABILITY_XRAY_SAMPLING_RESERVOIR }}
       CDK_OBSERVABILITY_XRAY_INSIGHTS_NOTIFICATIONS: ${{ vars.CDK_OBSERVABILITY_XRAY_INSIGHTS_NOTIFICATIONS }}
       CDK_OBSERVABILITY_AGENTCORE_APPLICATION_LOGS_ENABLED: ${{ vars.CDK_OBSERVABILITY_AGENTCORE_APPLICATION_LOGS_ENABLED }}
+      CDK_OBSERVABILITY_RUNTIME_LOG_RETENTION_SWEEP_ENABLED: ${{ vars.CDK_OBSERVABILITY_RUNTIME_LOG_RETENTION_SWEEP_ENABLED }}
       CDK_OBSERVABILITY_PROMPT_CACHE_AVOIDABLE_MISS_THRESHOLD: ${{ vars.CDK_OBSERVABILITY_PROMPT_CACHE_AVOIDABLE_MISS_THRESHOLD }}
       CDK_OBSERVABILITY_PROMPT_CACHE_WASTED_USD_THRESHOLD: ${{ vars.CDK_OBSERVABILITY_PROMPT_CACHE_WASTED_USD_THRESHOLD }}
       CDK_OBSERVABILITY_PROMPT_CACHE_SESSION_WASTED_USD_THRESHOLD: ${{ vars.CDK_OBSERVABILITY_PROMPT_CACHE_SESSION_WASTED_USD_THRESHOLD }}

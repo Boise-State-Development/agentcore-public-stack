@@ -38,6 +38,7 @@ from apis.shared.assistants.categories import get_category
 from apis.shared.assistants.compat import effective_bindings
 from apis.shared.assistants.models import (
     AgentCapability,
+    AgentModelRetirement,
     AgentRunnabilityResponse,
     Assistant,
     ListingPublisher,
@@ -46,6 +47,8 @@ from apis.shared.assistants.models import (
 from apis.shared.assistants.publishers import get_publisher
 from apis.shared.auth.models import User
 from apis.shared.models.managed_models import list_all_managed_models
+from apis.shared.models.models import ModelStatus
+from apis.shared.models.retirement import resolve_effective_model, resolve_from_catalog
 from apis.shared.skills.repository import get_skill_catalog_repository
 from apis.shared.tools.scoped_ids import base_tool_id
 from apis.shared.memory.service import MemorySpaceService
@@ -143,6 +146,55 @@ async def _model_label(model_id: str) -> Optional[str]:
         logger.warning(f"Failed to resolve model label for '{model_id}'", exc_info=True)
         return None
     return model.model_name if model else None
+
+
+async def _runnable_model_check(model_id: str) -> Tuple[Optional[str], Optional[MissingCapability]]:
+    """``(the model id that will actually run, a MissingCapability if none can)``.
+
+    Mirrors the run-time resolver (docs/specs/model-retirement.md §7): a retired model
+    runs as its successor, so the access question is asked of the successor; a retired
+    model with no successor is refused for everyone, so it is missing no matter what the
+    viewer or role is granted. Without this, "will it run?" answers *ready* for an Agent
+    the runtime now refuses.
+    """
+    effective = await resolve_effective_model(model_id)
+    if effective is not None and effective.denied:
+        name = effective.retired.model_name if effective.retired else None
+        label = f"{name} (retired)" if name else _fallback("model")
+        return None, MissingCapability(label=label, kind="model")
+    return (effective.model_id if effective else model_id), None
+
+
+async def resolve_model_retirement(model_id: str) -> Optional[AgentModelRetirement]:
+    """The pinned model's retirement, as the detail page shows it — ``None`` when active.
+
+    The successor is named only by display name: a successor with no catalog row gets no
+    label rather than its raw id, the same rule every other detail-page field follows.
+    """
+    try:
+        catalog = await list_all_managed_models()
+    except Exception:
+        logger.warning("Failed to resolve model retirement for detail read", exc_info=True)
+        return None
+    row = next((m for m in catalog if m.model_id == model_id), None)
+    if row is None or row.status == ModelStatus.ACTIVE:
+        return None
+
+    successor = None
+    if row.status == ModelStatus.RETIRED:
+        effective = resolve_from_catalog(model_id, catalog)
+        if effective.redirected and effective.record is not None:
+            successor = effective.record.model_name
+    elif row.replaced_by:
+        named = next((m for m in catalog if m.model_id == row.replaced_by), None)
+        successor = named.model_name if named else None
+
+    return AgentModelRetirement(
+        status=row.status.value,
+        successor_label=successor,
+        retires_on=row.retires_on,
+        retirement_note=row.retirement_note,
+    )
 
 
 async def _labels_by_kind(
@@ -280,9 +332,10 @@ async def resolve_runnability(
     # The pinned model. Not a binding — ``agent_binding_resolver`` blocks the turn
     # outright when the invoker cannot access it, same as every other gated kind.
     if assistant.model_settings is not None:
-        model_id = assistant.model_settings.model_id
-        available_models = {item.ref for item in await list_bindable("model", user)}
-        if model_id not in available_models:
+        model_id, retired_missing = await _runnable_model_check(assistant.model_settings.model_id)
+        if retired_missing is not None:
+            missing.append(retired_missing)
+        elif model_id not in {item.ref for item in await list_bindable("model", user)}:
             missing.append(
                 MissingCapability(
                     label=await _model_label(model_id) or _fallback("model"),

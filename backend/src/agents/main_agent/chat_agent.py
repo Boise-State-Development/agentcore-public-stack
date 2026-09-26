@@ -104,6 +104,7 @@ class ChatAgent(BaseAgent):
                 session_manager=self.session_manager,
                 hooks=hooks,
                 plugins=plugins,
+                memory_context=getattr(self, "memory_context", None),
             )
 
         except Exception as e:
@@ -160,6 +161,7 @@ class ChatAgent(BaseAgent):
         interrupt_responses: Optional[List[Dict[str, Any]]] = None,
         continue_truncated: bool = False,
         turn_agent_id: Optional[str] = None,
+        turn_project_id: Optional[str] = None,
         turn_lease: Any = None,
         turn_started_at: Optional[float] = None,
     ) -> AsyncGenerator[str, None]:
@@ -188,6 +190,9 @@ class ChatAgent(BaseAgent):
                 event loop re-runs against restored history whose tail is the
                 truncated assistant message — the model continues it
                 (assistant-prefill) instead of answering a new instruction.
+            turn_project_id: The Shared Project whose harness ran this turn, if
+                any; recorded on each cost row and in the project's monthly rollup.
+                Per turn for the same reason as `turn_agent_id`.
             turn_lease: This turn's single-flight `SessionLease`, which doubles
                 as the mid-turn steering inbox. Passed per turn rather than read
                 off the agent for the same reason as `turn_agent_id`: the agent
@@ -226,6 +231,7 @@ class ChatAgent(BaseAgent):
             citations=citations,
             original_message=original_message,
             turn_agent_id=turn_agent_id,
+            turn_project_id=turn_project_id,
             turn_lease=turn_lease,
             turn_started_at=turn_started_at,
         ):

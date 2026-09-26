@@ -538,3 +538,82 @@ class TestExport:
         zf = zipfile.ZipFile(io.BytesIO(resp.content))
         assert all(not n.startswith("..") and "/../" not in n for n in zf.namelist())
         assert "X/entries/fact/evil.md" in zf.namelist()
+
+
+class TestSavePipelineAndHistory:
+    """Shared Projects 2.3: validation, token accounting and FILEVER history."""
+
+    def test_freeform_save_reports_version_tokens_and_warnings(self, service, monkeypatch):
+        client = _client(service, monkeypatch)
+        sid = client.post("/memory/spaces", json={"name": "X"}).json()["spaceId"]
+        first = client.put(f"/memory/spaces/{sid}/entries/a", json={"body": "see [[nowhere]]"})
+        assert first.status_code == 200
+        body = first.json()
+        assert (body["version"], body["tokensMethod"]) == (1, "estimate")
+        assert body["tokens"] > 0
+        assert any("nowhere" in w for w in body["warnings"])
+        client.put(f"/memory/spaces/{sid}/entries/a", json={"body": "v2"})
+
+        history = client.get(f"/memory/spaces/{sid}/history", params={"slug": "a"})
+        assert history.status_code == 200
+        assert [v["version"] for v in history.json()["versions"]] == [2, 1]
+        old = client.get(f"/memory/spaces/{sid}/history/1", params={"slug": "a"})
+        assert old.status_code == 200
+        assert (old.json()["content"], old.json()["reason"]) == ("see [[nowhere]]", "edit")
+        assert client.get(f"/memory/spaces/{sid}/history/7", params={"slug": "a"}).status_code == 404
+        assert client.get(f"/memory/spaces/{sid}/history", params={"slug": "ghost"}).status_code == 404
+
+    def test_the_index_slug_is_reserved(self, service, monkeypatch):
+        client = _client(service, monkeypatch)
+        sid = client.post("/memory/spaces", json={"name": "X"}).json()["spaceId"]
+        resp = client.put(f"/memory/spaces/{sid}/entries/MEMORY.md", json={"body": "x"})
+        assert resp.status_code == 400
+        assert "space index" in resp.json()["detail"]
+
+    def test_canonical_space_round_trip(self, service, monkeypatch):
+        client = _client(service, monkeypatch)
+        created = client.post("/memory/spaces", json={"name": "P", "fileFormat": "canonical"})
+        assert created.status_code == 201 and created.json()["fileFormat"] == "canonical"
+        sid = created.json()["spaceId"]
+        assert client.get(f"/memory/spaces/{sid}").json()["fileFormat"] == "canonical"
+
+        saved = client.put(
+            f"/memory/spaces/{sid}/entries/canvas",
+            json={"body": "- one\n- two\n", "description": "Canvas notes", "aliases": ["lms"]},
+        )
+        assert saved.status_code == 200
+        body = saved.json()
+        assert (body["itemCount"], body["aliases"], body["description"]) == (2, ["lms"], "Canvas notes")
+        assert len(body["mintedAnchors"]) == 2
+
+        # Omitting description and aliases keeps them.
+        text = client.get(f"/memory/spaces/{sid}/entries/canvas").json()["content"]
+        again = client.put(f"/memory/spaces/{sid}/entries/canvas", json={"body": text + "- three\n"})
+        assert again.status_code == 200
+        assert (again.json()["description"], again.json()["aliases"], again.json()["version"]) == (
+            "Canvas notes",
+            ["lms"],
+            2,
+        )
+
+    def test_canonical_rejections_are_400_with_a_reason(self, service, monkeypatch):
+        client = _client(service, monkeypatch)
+        sid = client.post("/memory/spaces", json={"name": "P", "fileFormat": "canonical"}).json()["spaceId"]
+        prose = client.put(f"/memory/spaces/{sid}/entries/n", json={"body": "Just prose."})
+        assert prose.status_code == 400
+        assert "list item" in prose.json()["detail"]
+        dead = client.put(f"/memory/spaces/{sid}/index", json={"content": "[[nowhere]]"})
+        assert dead.status_code == 400
+        assert client.get(f"/memory/spaces/{sid}/entries").json()["entries"] == []
+
+    def test_create_rejects_unknown_format(self, service, monkeypatch):
+        client = _client(service, monkeypatch)
+        assert client.post("/memory/spaces", json={"name": "X", "fileFormat": "yaml"}).status_code == 422
+
+    def test_stranger_cannot_read_history(self, service, monkeypatch):
+        owner = _client(service, monkeypatch)
+        sid = owner.post("/memory/spaces", json={"name": "X"}).json()["spaceId"]
+        owner.put(f"/memory/spaces/{sid}/entries/a", json={"body": "v1"})
+        stranger = _client(service, monkeypatch, user=STRANGER)
+        assert stranger.get(f"/memory/spaces/{sid}/history", params={"slug": "a"}).status_code == 403
+        assert stranger.get(f"/memory/spaces/{sid}/history/1", params={"slug": "a"}).status_code == 403

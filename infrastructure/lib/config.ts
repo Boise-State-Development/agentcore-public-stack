@@ -77,10 +77,13 @@ export interface AppConfig {
   scheduledRuns: ScheduledRunsConfig;
   platformCosts: PlatformCostsConfig;
   memorySpaces: MemorySpacesConfig;
+  projects: ProjectsConfig;
+  platformSelfService: PlatformSelfServiceConfig;
   feedbackEvalSampling: FeedbackEvalSamplingConfig;
   skills: SkillsConfig;
   agents: AgentsConfig;
   agentMarketplace: AgentMarketplaceConfig;
+  dictation: DictationConfig;
   fineTuning: FineTuningConfig;
   artifacts: ArtifactsConfig;
   mcpSandbox: McpSandboxConfig;
@@ -169,6 +172,12 @@ export interface FrontendConfig {
   bucketName?: string;
   cloudFrontPriceClass: string;
   additionalCorsOrigins?: string; // Extra CORS origins to append (comma-separated)
+  /**
+   * CloudFront standard access logging for the SPA distribution. Default ON
+   * with a kill switch; `undefined` is treated as on so a hand-built config
+   * cannot silently turn it off by omission.
+   */
+  accessLogsEnabled?: boolean;
 }
 
 export interface AppApiConfig {
@@ -346,6 +355,35 @@ export interface MemorySpacesConfig {
 }
 
 /**
+ * Shared Projects feature flag (docs/specs/shared-projects.md). **Opt-in while the
+ * feature is in development**: off unless CDK_PROJECTS_ENABLED=true (or a
+ * `projects.enabled: true` cdk.json context), so a deployment turns it on by choice.
+ * See CLAUDE.md "Feature flags". Sets the PROJECTS_ENABLED env var
+ * on app-api and inference-api. The projects table is provisioned
+ * unconditionally, so this only gates route mounting and the project harness on
+ * the invocation path at runtime.
+ */
+export interface ProjectsConfig {
+  enabled: boolean;
+}
+
+/**
+ * Platform self-service feature flag (docs/specs/platform-self-service). **Opt-in
+ * while in development**: off unless CDK_PLATFORM_SELF_SERVICE_ENABLED=true (or a
+ * `platformSelfService.enabled: true` cdk.json context), so a deployment turns it
+ * on by choice. See CLAUDE.md "Feature flags". Sets the
+ * PLATFORM_SELF_SERVICE_ENABLED env var on inference-api ONLY — the flag is read
+ * solely by the AgentCore Runtime (inference_api/chat/routes.py); app-api never
+ * reads it, so wiring it there would only burn readability. With the flag off the
+ * runtime builds no account tools and injects nothing, so it is dark per
+ * environment until deliberately enabled. The tool catalog rows must also be
+ * seeded in that environment's DynamoDB before the tools appear.
+ */
+export interface PlatformSelfServiceConfig {
+  enabled: boolean;
+}
+
+/**
  * Feedback eval sampling (response-feedback spec §11 PR-4): lets an admin
  * send down-thumbed conversations to AgentCore Evaluations. **Opt-in** —
  * the managed evaluator reads the conversation's spans (system prompt and
@@ -394,6 +432,26 @@ export interface AgentsConfig {
  */
 export interface AgentMarketplaceConfig {
   enabled: boolean;
+}
+
+/**
+ * Composer dictation — speech-to-text into the message box via Amazon
+ * Transcribe Streaming, proxied by app-api (`/dictation/*`).
+ *
+ * Default ON with a kill switch: CDK_DICTATION_ENABLED=false (or a
+ * `dictation.enabled: false` cdk.json context) makes the routes 404, and the
+ * SPA hides the Dictate button on the first 404. Sets DICTATION_ENABLED and
+ * DICTATION_LANGUAGES on **app-api only**.
+ */
+export interface DictationConfig {
+  enabled: boolean;
+  /**
+   * Comma-separated Transcribe language codes. One code (the default,
+   * `en-US`) pins the language; two or more switch on automatic language
+   * identification with the first as the preferred language. At most one
+   * dialect per language (`en-US,en-GB` is rejected by the service).
+   */
+  languages: string;
 }
 
 export interface FineTuningConfig {
@@ -678,6 +736,13 @@ export interface ObservabilityConfig {
   /** AgentCore APPLICATION_LOGS vended delivery. Off by default: the records
    *  carry full prompts and responses, so it is both high-volume and PII. */
   agentCoreApplicationLogsEnabled: boolean;
+  /**
+   * Daily sweep that applies `logRetentionDays` to every generation of this
+   * deployment's AgentCore Runtime log groups, including ones left behind by
+   * a replaced Runtime. On by default; `false` for an account whose
+   * governance requires longer retention.
+   */
+  runtimeLogRetentionSweepEnabled: boolean;
 }
 
 /**
@@ -794,6 +859,13 @@ export function loadConfig(scope: cdk.App): AppConfig {
       bucketName: process.env.CDK_FRONTEND_BUCKET_NAME || scope.node.tryGetContext('frontend')?.bucketName,
       cloudFrontPriceClass: process.env.CDK_FRONTEND_CLOUDFRONT_PRICE_CLASS || scope.node.tryGetContext('frontend')?.cloudFrontPriceClass,
       additionalCorsOrigins: process.env.CDK_FRONTEND_CORS_ORIGINS || scope.node.tryGetContext('frontend')?.additionalCorsOrigins,
+      // Default ON with a kill switch, same empty-string-safe ternary as
+      // `projects` below: the workflow forwards an EMPTY STRING when the
+      // variable is unset, so treat empty/unset as the default (on) and only
+      // the literal "false" as the kill switch.
+      accessLogsEnabled: process.env.CDK_FRONTEND_ACCESS_LOGS_ENABLED
+        ? process.env.CDK_FRONTEND_ACCESS_LOGS_ENABLED !== 'false'
+        : scope.node.tryGetContext('frontend')?.accessLogsEnabled ?? true,
     },
     appApi: {
       // Precedence for every sizing knob: env var > FLAT dotted context >
@@ -988,6 +1060,23 @@ export function loadConfig(scope: cdk.App): AppConfig {
         ? process.env.CDK_MEMORY_SPACES_ENABLED !== 'false'
         : scope.node.tryGetContext('memorySpaces')?.enabled ?? true,
     },
+    projects: {
+      // Opt-in while in development (CLAUDE.md "Feature flags"): only the literal
+      // "true" turns it on. The workflow forwards an EMPTY STRING when the variable
+      // is unset, which falls through to the context and then to off.
+      enabled: process.env.CDK_PROJECTS_ENABLED
+        ? process.env.CDK_PROJECTS_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('projects')?.enabled ?? false,
+    },
+    platformSelfService: {
+      // Opt-in while in development (CLAUDE.md "Feature flags"): only the literal
+      // "true" turns it on. The workflow forwards an EMPTY STRING when the variable
+      // is unset, which falls through to the context and then to off. Sets
+      // PLATFORM_SELF_SERVICE_ENABLED on the inference-api runtime only.
+      enabled: process.env.CDK_PLATFORM_SELF_SERVICE_ENABLED
+        ? process.env.CDK_PLATFORM_SELF_SERVICE_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('platformSelfService')?.enabled ?? false,
+    },
     skills: {
       // Default ON with a kill switch (house style, mirroring memorySpaces /
       // scheduledRuns): the workflow forwards an EMPTY STRING when the variable is
@@ -1020,6 +1109,17 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_AGENT_MARKETPLACE_ENABLED
         ? process.env.CDK_AGENT_MARKETPLACE_ENABLED !== 'false'
         : scope.node.tryGetContext('agentMarketplace')?.enabled ?? true,
+    },
+    dictation: {
+      // Default ON with a kill switch, same empty-string-safe ternary as
+      // `agentMarketplace` above.
+      enabled: process.env.CDK_DICTATION_ENABLED
+        ? process.env.CDK_DICTATION_ENABLED !== 'false'
+        : scope.node.tryGetContext('dictation')?.enabled ?? true,
+      languages:
+        process.env.CDK_DICTATION_LANGUAGES
+        || scope.node.tryGetContext('dictation')?.languages
+        || 'en-US',
     },
     fineTuning: {
       additionalCorsOrigins: process.env.CDK_FINE_TUNING_CORS_ORIGINS || scope.node.tryGetContext('fineTuning')?.additionalCorsOrigins,
@@ -1252,6 +1352,11 @@ export function loadConfig(scope: cdk.App): AppConfig {
         ?? parseBooleanEnv(scope.node.tryGetContext('observability.agentCoreApplicationLogsEnabled'))
         ?? scope.node.tryGetContext('observability')?.agentCoreApplicationLogsEnabled
         ?? false,
+      runtimeLogRetentionSweepEnabled:
+        parseBooleanEnv(process.env.CDK_OBSERVABILITY_RUNTIME_LOG_RETENTION_SWEEP_ENABLED)
+        ?? parseBooleanEnv(scope.node.tryGetContext('observability.runtimeLogRetentionSweepEnabled'))
+        ?? scope.node.tryGetContext('observability')?.runtimeLogRetentionSweepEnabled
+        ?? true,
     },
     tags: {
       ...(scope.node.tryGetContext('tags') || {}),
@@ -1302,6 +1407,7 @@ export function loadConfig(scope: cdk.App): AppConfig {
     + ` xraySamplingRate=${config.observability.xraySamplingRate}`
     + ` xrayReservoir=${config.observability.xraySamplingReservoir}`
     + ` agentCoreAppLogs=${config.observability.agentCoreApplicationLogsEnabled}`
+    + ` runtimeLogRetentionSweep=${config.observability.runtimeLogRetentionSweepEnabled}`
   );
 
   // Printed because this list is a security control supplied entirely from

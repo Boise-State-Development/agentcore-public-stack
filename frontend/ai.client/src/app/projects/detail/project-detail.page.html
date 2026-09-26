@@ -1,0 +1,80 @@
+<div class="min-h-dvh">
+  <div class="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
+    <a
+      routerLink="/projects"
+      class="-ml-2 inline-flex items-center gap-1.5 rounded-2xl px-2 py-1 text-sm/6 font-medium text-gray-600 hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white"
+    >
+      <ng-icon name="heroArrowLeft" class="size-4" aria-hidden="true" />
+      Projects
+    </a>
+
+    @if (loading()) {
+      <div class="mt-6 animate-pulse" aria-busy="true">
+        <div class="h-8 w-1/3 rounded bg-gray-200 dark:bg-gray-700"></div>
+        <div class="mt-3 h-4 w-2/3 rounded bg-gray-100 dark:bg-gray-700/50"></div>
+      </div>
+    } @else if (error()) {
+      <div class="mt-6 rounded-2xl border border-dashed border-gray-300 bg-white p-12 text-center dark:border-gray-700 dark:bg-gray-800">
+        <p role="alert" class="text-sm/6 text-gray-600 dark:text-gray-400">{{ error() }}</p>
+      </div>
+    } @else if (project(); as p) {
+      <div class="mt-4 mb-6">
+        <div class="flex flex-wrap items-center gap-3">
+          <h1 class="text-2xl font-bold tracking-tight text-gray-900 sm:text-3xl dark:text-white">{{ p.name }}</h1>
+          <span class="inline-flex items-center gap-1 rounded-full border border-gray-300 bg-white px-2.5 py-0.5 text-xs/5 font-medium text-gray-700 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200">
+            <ng-icon [name]="p.role === 'owner' ? 'heroLockClosed' : p.role === 'editor' ? 'heroPencilSquare' : 'heroEye'" class="size-3.5" aria-hidden="true" />
+            {{ roleLabels[p.role] }}
+          </span>
+        </div>
+        @if (p.description) {
+          <p class="mt-1.5 max-w-3xl text-sm/6 text-gray-600 dark:text-gray-400">{{ p.description }}</p>
+        }
+      </div>
+
+      @if (p.status === 'archived') {
+        <div role="status" class="mb-6 flex items-start gap-3 rounded-2xl border border-state-warning-200 bg-state-warning-50 px-4 py-3 text-sm/6 text-state-warning-700 dark:border-state-warning-800 dark:bg-state-warning-900/20 dark:text-state-warning-400">
+          <ng-icon name="heroArchiveBox" class="mt-0.5 size-5 shrink-0" aria-hidden="true" />
+          <p>
+            This project is archived. It’s read-only, and it can’t start new tasks.
+            @if (p.role === 'owner') {
+              You can restore it from <a [routerLink]="['/projects', p.projectId, 'settings']" class="font-semibold underline">Settings</a>.
+            }
+          </p>
+        </div>
+      }
+
+      <nav class="mb-8 inline-flex max-w-full gap-1 overflow-x-auto rounded-2xl border border-gray-200 bg-gray-50 p-1 dark:border-gray-700 dark:bg-gray-800" aria-label="Project sections">
+        @for (t of tabs(); track t.value) {
+          <a
+            [routerLink]="['/projects', p.projectId, t.value]"
+            [attr.aria-current]="activeTab() === t.value ? 'page' : null"
+            class="rounded-xl px-4 py-1.5 text-sm/6 font-medium whitespace-nowrap text-gray-600 transition-colors hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 aria-[current=page]:bg-white aria-[current=page]:text-gray-900 aria-[current=page]:shadow-xs dark:text-gray-400 dark:hover:text-white dark:aria-[current=page]:bg-gray-900 dark:aria-[current=page]:text-white"
+          >
+            {{ t.label }}
+          </a>
+        }
+      </nav>
+
+      @switch (activeTab()) {
+        @case ('tasks') {
+          <app-project-tasks [project]="p" />
+        }
+        @case ('files') {
+          <app-project-files [project]="p" />
+        }
+        @case ('activity') {
+          <app-project-activity [project]="p" />
+        }
+        @case ('members') {
+          <app-project-members [project]="p" (projectChange)="onProjectChange($event)" />
+        }
+        @case ('settings') {
+          <app-project-settings [project]="p" (projectChange)="onProjectChange($event)" />
+        }
+        @default {
+          <app-project-overview [project]="p" />
+        }
+      }
+    }
+  </div>
+</div>

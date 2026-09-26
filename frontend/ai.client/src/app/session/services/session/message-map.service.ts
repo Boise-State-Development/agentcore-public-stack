@@ -11,6 +11,8 @@ import { validateUserQuestions } from '../../../shared/utils/stream-parser';
 import { McpAppStateService } from '../mcp-apps/mcp-app-state.service';
 import { ToolInsightService } from '../chat/tool-insight.service';
 import { normalizeSteeringMessages } from '../chat/steering';
+import { ChatStateService } from '../chat/chat-state.service';
+import { ContextBreakdown } from '../models/content-types';
 
 /** Regex to match file attachment marker in message text: [Attached files: file1.pdf, file2.png] */
 const ATTACHED_FILES_PATTERN = /\n\n\[Attached files: ([^\]]+)\]$/;
@@ -75,6 +77,7 @@ export class MessageMapService {
   private mcpAppState = inject(McpAppStateService);
   private toolInsight = inject(ToolInsightService);
   private injector = inject(Injector);
+  private chatStateService = inject(ChatStateService);
 
   /**
    * Start streaming for a session.
@@ -383,6 +386,23 @@ export class MessageMapService {
   }
 
   /**
+   * Seed the context meter's breakdown from persisted history. Only the
+   * conversation's last assistant message counts: the backend stores the
+   * breakdown on each turn's last message, so an older one would describe a
+   * prompt that is no longer the latest — and a last turn without one (a
+   * provider that can't attribute) must read "no breakdown", not an old one.
+   * Never overwrites a breakdown a live stream already set.
+   */
+  private hydrateContextBreakdown(sessionId: string, messages: Message[]): void {
+    if (this.chatStateService.contextBreakdownFor(sessionId)) return;
+    const last = [...messages].reverse().find((m) => m.role === 'assistant');
+    const breakdown = last?.metadata?.['contextBreakdown'] as ContextBreakdown | undefined;
+    if (breakdown && Array.isArray(breakdown.partitions) && breakdown.partitions.length > 0) {
+      this.chatStateService.seedContextBreakdown(sessionId, breakdown);
+    }
+  }
+
+  /**
    * Fetch a session's messages + file metadata, reconstruct tool results and
    * file attachments, and replace the message map entry. Shared by the
    * initial load and the post-resume reconcile.
@@ -436,6 +456,10 @@ export class MessageMapService {
       // matching how the live SSE flow already attaches prompts. Authorization
       // URL is intentionally omitted — fresh URL is fetched lazily on Connect.
       this.hydratePendingInterrupts(sessionId, messagesResponse.pendingInterrupts, processedMessages);
+
+      // The context meter's breakdown survives a reload on the last
+      // assistant message's metadata; session metadata has no copy of it.
+      this.hydrateContextBreakdown(sessionId, processedMessages);
 
       // MCP Apps (SEP-1865): re-seed the App registry from the persisted
       // resources the backend replays on this response. The inline

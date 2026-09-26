@@ -34,6 +34,11 @@ class TestBaseFoundationModelId:
             ("eu.anthropic.claude-x", "anthropic.claude-x"),
             ("apac.anthropic.claude-x", "anthropic.claude-x"),
             ("us-gov.anthropic.claude-x", "anthropic.claude-x"),
+            ("au.anthropic.claude-x", "anthropic.claude-x"),
+            ("jp.anthropic.claude-x", "anthropic.claude-x"),
+            # Global CRIS — what prod runs every model on.
+            ("global.anthropic.claude-haiku-4-5-20251001-v1:0", "anthropic.claude-haiku-4-5-20251001-v1:0"),
+            ("global.anthropic.claude-x", "anthropic.claude-x"),
         ],
     )
     def test_strips_known_geography_prefixes(self, profile_id, expected):
@@ -57,6 +62,9 @@ class TestBaseFoundationModelId:
         assert base_foundation_model_id("us.anthropic.claude") == "anthropic.claude"
         # "us" as part of a longer first segment is not a prefix to strip.
         assert base_foundation_model_id("uswest.anthropic.x") == "uswest.anthropic.x"
+        assert base_foundation_model_id("globalx.anthropic.x") == "globalx.anthropic.x"
+        # Undocumented geography codes are left alone rather than guessed at.
+        assert base_foundation_model_id("ca.anthropic.x") == "ca.anthropic.x"
 
 
 @pytest.fixture
@@ -220,6 +228,45 @@ class TestCountTokensBounded:
         assert isinstance(result, int)
 
 
+class TestCountIsNativeOrSaysSo:
+    """Callers that build arithmetic on counts (the context-attribution hook's
+    tools residual) must be able to tell a native count from the heuristic:
+    Claude Sonnet 5 has no CountTokens at all, and any count can fall back."""
+
+    @pytest.mark.asyncio
+    async def test_a_native_count_is_not_a_fallback(self, _aws_region):
+        model = _model(client=FakeCountClient(result=77))
+        assert await model.count_tokens([]) == 77
+        assert model.heuristic_count_fallbacks == 0
+        assert model.token_count_is_authoritative is True
+
+    @pytest.mark.asyncio
+    async def test_a_throttle_counts_as_a_fallback_but_stays_authoritative(self, _aws_region):
+        model = _model(client=FakeCountClient(raise_with=_client_error("ThrottlingException")))
+        await model.count_tokens([])
+        assert model.heuristic_count_fallbacks == 1
+        # Transient: the next count may well be native.
+        assert model.token_count_is_authoritative is True
+
+    @pytest.mark.asyncio
+    async def test_an_unsupported_model_stops_being_authoritative(self, _aws_region):
+        client = FakeCountClient(
+            raise_with=_client_error("ValidationException", "The provided model doesn't support counting tokens.")
+        )
+        model = _model(client=client)
+        await model.count_tokens([])
+        await model.count_tokens([])
+        assert model.heuristic_count_fallbacks == 2
+        assert model.token_count_is_authoritative is False
+
+    @pytest.mark.asyncio
+    async def test_native_counting_off_is_a_fallback_every_time(self, _aws_region):
+        model = _model(native=False)
+        await model.count_tokens([])
+        assert model.heuristic_count_fallbacks == 1
+        assert model.token_count_is_authoritative is False
+
+
 class TestCountTokensClientConfig:
     """The dedicated client is what bounds the cost of a throttle."""
 
@@ -264,3 +311,85 @@ class TestCountTokensClientConfig:
         assert boto_client.call_args.args == ("bedrock-runtime",)
         assert kwargs["region_name"] == "us-east-1"
         assert kwargs["config"].retries["total_max_attempts"] == 1
+
+
+class TestNativeCountTokens:
+    """The counter the context-attribution hook calls from its background
+    task: a native answer or ``None`` — never a heuristic — with the same
+    skip-list bookkeeping as ``count_tokens``."""
+
+    def test_counts_against_the_base_id(self, _aws_region):
+        client = FakeCountClient(result=777)
+        model = _model(model_id="global.anthropic.claude-haiku-4-5-20251001-v1:0", client=client)
+
+        assert model.native_count_tokens([{"role": "user", "content": [{"text": "hi"}]}]) == 777
+        assert client.calls[0]["modelId"] == BASE_ID
+
+    def test_native_counting_off_answers_none_without_a_request(self, _aws_region):
+        client = FakeCountClient()
+        model = _model(native=False, client=client)
+
+        assert model.native_count_tokens([{"role": "user", "content": [{"text": "hi"}]}]) is None
+        assert client.calls == []
+
+    def test_a_skip_listed_model_answers_none_without_a_request(self, _aws_region):
+        client = FakeCountClient()
+        model = _model(client=client)
+        _SKIP_COUNT_TOKENS_MODELS.add(BASE_ID)
+
+        assert model.native_count_tokens([{"role": "user", "content": [{"text": "hi"}]}]) is None
+        assert client.calls == []
+
+    def test_unsupported_answers_none_and_skip_lists_the_base_id(self, _aws_region):
+        client = FakeCountClient(
+            raise_with=_client_error("ValidationException", "The provided model doesn't support counting tokens.")
+        )
+        model = _model(client=client)
+
+        assert model.native_count_tokens([{"role": "user", "content": [{"text": "hi"}]}]) is None
+        assert BASE_ID in _SKIP_COUNT_TOKENS_MODELS
+        assert model.token_count_is_authoritative is False
+
+    def test_a_throttle_answers_none_and_does_not_skip_list(self, _aws_region):
+        client = FakeCountClient(raise_with=_client_error("ThrottlingException"))
+        model = _model(client=client)
+
+        assert model.native_count_tokens([{"role": "user", "content": [{"text": "hi"}]}]) is None
+        assert BASE_ID not in _SKIP_COUNT_TOKENS_MODELS
+        assert model.heuristic_count_fallbacks == 0, "no heuristic was answered"
+
+
+class TestNativeProjectionOff:
+    """``native_projection=False`` — how the factory builds every Converse
+    model — keeps the count Strands awaits before each model call local."""
+
+    @pytest.mark.asyncio
+    async def test_count_tokens_never_reaches_the_network(self, _aws_region):
+        client = FakeCountClient()
+        model = CountTokensBedrockModel(model_id=PROFILE_ID, use_native_token_count=True, native_projection=False)
+        model._count_client = client
+
+        with patch.object(Model, "count_tokens", return_value=42) as heuristic:
+            result = await model.count_tokens([{"role": "user", "content": [{"text": "hi"}]}], system_prompt="s")
+
+        assert result == 42
+        heuristic.assert_called_once()
+        assert client.calls == []
+
+    def test_native_counts_stay_available_to_the_hook(self, _aws_region):
+        client = FakeCountClient(result=99)
+        model = CountTokensBedrockModel(model_id=PROFILE_ID, use_native_token_count=True, native_projection=False)
+        model._count_client = client
+
+        assert model.token_count_is_authoritative is True
+        assert model.native_count_tokens([{"role": "user", "content": [{"text": "hi"}]}]) == 99
+
+    def test_the_factory_builds_models_with_the_projection_local(self, _aws_region):
+        from agents.main_agent.core.agent_factory import AgentFactory
+        from agents.main_agent.core.model_config import ModelConfig
+
+        model = AgentFactory._create_bedrock_model(ModelConfig(model_id=PROFILE_ID))
+
+        assert isinstance(model, CountTokensBedrockModel)
+        assert model._native_projection is False
+        assert model.config["use_native_token_count"] is True

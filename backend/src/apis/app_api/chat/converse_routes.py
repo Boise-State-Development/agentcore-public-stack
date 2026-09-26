@@ -52,6 +52,7 @@ from apis.shared.sessions.models import (
 )
 
 from apis.shared.models.bedrock_responses import build_bedrock_responses_model
+from apis.shared.models.retirement import resolve_effective_model, retired_model_message
 from apis.shared.models.mantle import (
     MantleApiMode,
     build_mantle_model,
@@ -626,6 +627,18 @@ async def api_converse(
                 f"Error checking quota for user {validated_key.user_id}: {exc}",
                 exc_info=True,
             )
+
+    # 2.65 Model retirement (docs/specs/model-retirement.md §7): a retired model
+    # runs as its successor — the response's ``model_id`` then names the model
+    # that actually answered — or, with no successor, is gone.
+    effective = await resolve_effective_model(request.model_id)
+    if effective is not None and effective.denied:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail=retired_model_message(effective.retired),
+        )
+    if effective is not None and effective.redirected:
+        request.model_id = effective.model_id
 
     # 2.7 Model access check (RBAC)
     app_role_service = get_app_role_service()

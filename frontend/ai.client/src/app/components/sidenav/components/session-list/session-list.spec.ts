@@ -7,6 +7,8 @@ import { of } from 'rxjs';
 import { SessionService } from '../../../../session/services/session/session.service';
 import { SidenavService } from '../../../../services/sidenav/sidenav.service';
 import { ToastService } from '../../../../services/toast/toast.service';
+import { ProjectsService } from '../../../../projects/services/projects.service';
+import { FEATURES } from '../../../../services/features';
 
 describe('SessionList', () => {
   let mockSessionService: any;
@@ -14,6 +16,7 @@ describe('SessionList', () => {
   let mockToastService: any;
   let mockDialog: any;
   let mockRouter: any;
+  let mockProjectsService: any;
 
   const mockSession = {
     sessionId: 'test-session',
@@ -31,7 +34,10 @@ describe('SessionList', () => {
       mergedSessionsResource: signal({ sessions: [mockSession], nextToken: null }),
       currentSession: signal(mockSession),
       deleteSession: vi.fn().mockResolvedValue(undefined),
-      sessionsResource: { value: vi.fn().mockReturnValue({ sessions: [mockSession], nextToken: null }), error: vi.fn().mockReturnValue(null), isPending: vi.fn().mockReturnValue(false) },
+      sessionsResource: { value: vi.fn().mockReturnValue({ sessions: [mockSession], nextToken: null }), error: vi.fn().mockReturnValue(null), isPending: vi.fn().mockReturnValue(false), isLoading: signal(false) },
+      isLoadingMoreSessions: signal(false),
+      loadMoreSessionsError: signal(false),
+      loadMoreSessions: vi.fn().mockResolvedValue(undefined),
       isLocallyRead: vi.fn().mockReturnValue(false),
       markSessionRead: vi.fn().mockResolvedValue(undefined),
       markSessionUnread: vi.fn().mockResolvedValue(undefined),
@@ -41,6 +47,12 @@ describe('SessionList', () => {
     mockToastService = { success: vi.fn(), error: vi.fn() };
     mockDialog = { open: vi.fn().mockReturnValue({ closed: of(true) }) };
     mockRouter = { navigate: vi.fn() };
+    mockProjectsService = {
+      projects$: signal([{ projectId: 'prj_1', name: 'Enrollment Sync' }]),
+      available$: signal<boolean | null>(null),
+      loading$: signal(false),
+      load: vi.fn().mockResolvedValue(undefined),
+    };
 
     TestBed.configureTestingModule({
       providers: [
@@ -49,6 +61,8 @@ describe('SessionList', () => {
         { provide: ToastService, useValue: mockToastService },
         { provide: Dialog, useValue: mockDialog },
         { provide: Router, useValue: mockRouter },
+        { provide: ProjectsService, useValue: mockProjectsService },
+        { provide: FEATURES, useValue: { projects: true } },
       ],
     });
   });
@@ -106,6 +120,64 @@ describe('SessionList', () => {
       const component = await createComponent();
 
       expect(component.isLoading()).toBe(false);
+    });
+  });
+
+  describe('loading more as the end of the list comes into view', () => {
+    beforeEach(() => {
+      mockSessionService.mergedSessionsResource.set({ sessions: [mockSession], nextToken: 'p2' });
+    });
+
+    it('fetches one page per sighting, then asks the sentinel to re-measure', async () => {
+      const component = await createComponent();
+      component['endOfListVisible'].set(true);
+      TestBed.tick();
+
+      expect(mockSessionService.loadMoreSessions).toHaveBeenCalledTimes(1);
+      // The sighting is spent — a stale "visible" must not buy a second page.
+      expect(component['endOfListVisible']()).toBe(false);
+      TestBed.tick();
+      expect(mockSessionService.loadMoreSessions).toHaveBeenCalledTimes(1);
+
+      await vi.waitFor(() => expect(component['endOfListRemeasure']()).toBe(1));
+    });
+
+    it('does nothing until the sentinel is in view', async () => {
+      await createComponent();
+      TestBed.tick();
+      expect(mockSessionService.loadMoreSessions).not.toHaveBeenCalled();
+    });
+
+    it('does nothing once the list is exhausted', async () => {
+      mockSessionService.mergedSessionsResource.set({ sessions: [mockSession], nextToken: null });
+      const component = await createComponent();
+      component['endOfListVisible'].set(true);
+      TestBed.tick();
+      expect(mockSessionService.loadMoreSessions).not.toHaveBeenCalled();
+    });
+
+    it('holds a sighting that arrives mid-reload until the reload settles', async () => {
+      mockSessionService.sessionsResource.isLoading.set(true);
+      const component = await createComponent();
+      component['endOfListVisible'].set(true);
+      TestBed.tick();
+      expect(mockSessionService.loadMoreSessions).not.toHaveBeenCalled();
+      expect(component['endOfListVisible']()).toBe(true);
+
+      mockSessionService.sessionsResource.isLoading.set(false);
+      TestBed.tick();
+      expect(mockSessionService.loadMoreSessions).toHaveBeenCalledTimes(1);
+    });
+
+    it('stops after a failed page until the user retries', async () => {
+      mockSessionService.loadMoreSessionsError.set(true);
+      const component = await createComponent();
+      component['endOfListVisible'].set(true);
+      TestBed.tick();
+      expect(mockSessionService.loadMoreSessions).not.toHaveBeenCalled();
+
+      component['retryLoadMore']();
+      expect(mockSessionService.loadMoreSessions).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -243,5 +315,72 @@ describe('SessionList', () => {
     // Stream ends without a title → shimmer clears; row shows the fallback.
     chatState.setChatLoading('test-session', false);
     expect(component['isTitlePending'](untitled)).toBe(false);
+  });
+
+  describe('project grouping', () => {
+    const now = new Date().toISOString();
+    const plain = (id: string) => ({ ...mockSession, sessionId: id, lastMessageAt: now, createdAt: now });
+    const task = (id: string, projectId: string) => ({ ...plain(id), preferences: { assistantId: 'ast', projectId } });
+
+    it('groups project tasks under their project inside the time bucket, in recency order', async () => {
+      mockSessionService.mergedSessionsResource.set({
+        sessions: [plain('a'), task('b', 'prj_1'), plain('c'), task('d', 'prj_1'), task('e', 'prj_gone')],
+        nextToken: null,
+      });
+      const component = await createComponent();
+      const [today] = component.groupedSessions();
+      expect(today.label).toBe('Today');
+      // Buckets keep every session; grouping only reshapes the rows.
+      expect(today.sessions.map((s: any) => s.sessionId)).toEqual(['a', 'b', 'c', 'd', 'e']);
+      expect(today.entries.map((e: any) => (e.kind === 'session' ? e.session.sessionId : `${e.name}:${e.sessions.map((s: any) => s.sessionId).join(',')}`))).toEqual([
+        'a',
+        'Enrollment Sync:b,d',
+        'c',
+        // Not in the caller's project list (left, or not loaded yet): a generic heading.
+        'Project:e',
+      ]);
+    });
+
+    it('lists project tasks as plain rows, loads no names, and offers no project share in a build with Projects off', async () => {
+      TestBed.overrideProvider(FEATURES, { useValue: { projects: false } });
+      mockSessionService.mergedSessionsResource.set({ sessions: [plain('a'), task('b', 'prj_1')], nextToken: null });
+      const component = await createComponent();
+      TestBed.tick();
+      const [today] = component.groupedSessions();
+      expect(today.entries.map((e: any) => e.kind)).toEqual(['session', 'session']);
+      expect(mockProjectsService.load).not.toHaveBeenCalled();
+      const event = { preventDefault: vi.fn(), stopPropagation: vi.fn() } as unknown as Event;
+      (component as any).onShareClick(event, task('b', 'prj_1'));
+      expect(mockDialog.open.mock.calls.at(-1)[1].data.projectId).toBeNull();
+    });
+
+    it('loads project names once, and only for someone with a project task', async () => {
+      await createComponent();
+      TestBed.tick();
+      expect(mockProjectsService.load).not.toHaveBeenCalled();
+
+      mockSessionService.mergedSessionsResource.set({ sessions: [task('b', 'prj_1')], nextToken: null });
+      TestBed.tick();
+      mockSessionService.mergedSessionsResource.set({ sessions: [task('b', 'prj_1'), task('x', 'prj_1')], nextToken: null });
+      TestBed.tick();
+      expect(mockProjectsService.load).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not reload a project list that is already loaded', async () => {
+      mockProjectsService.available$.set(true);
+      mockSessionService.mergedSessionsResource.set({ sessions: [task('b', 'prj_1')], nextToken: null });
+      await createComponent();
+      TestBed.tick();
+      expect(mockProjectsService.load).not.toHaveBeenCalled();
+    });
+
+    it('passes the project to the share modal', async () => {
+      const component = await createComponent();
+      const event = { preventDefault: vi.fn(), stopPropagation: vi.fn() } as unknown as Event;
+      (component as any).onShareClick(event, task('b', 'prj_1'));
+      expect(mockDialog.open.mock.calls.at(-1)[1].data.projectId).toBe('prj_1');
+      (component as any).onShareClick(event, plain('a'));
+      expect(mockDialog.open.mock.calls.at(-1)[1].data.projectId).toBeNull();
+    });
   });
 });

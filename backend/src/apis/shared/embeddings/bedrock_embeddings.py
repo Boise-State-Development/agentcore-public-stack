@@ -169,6 +169,10 @@ async def search_assistant_knowledgebase(assistant_id: str, query: str):
     return response
 
 
+#: The S3 Vectors ``GetVectors`` limit on ``keys`` per call.
+GET_VECTORS_MAX_KEYS = 100
+
+
 async def delete_vectors_for_document(document_id: str) -> int:
     """
     Delete all vectors for a specific document from the S3 vector store.
@@ -192,7 +196,9 @@ async def delete_vectors_for_document(document_id: str) -> int:
     vector_index = _get_vector_store_index()
 
     existing_keys = []
-    probe_batch_size = 500
+    # GetVectors accepts at most 100 keys. At 500 every probe was rejected
+    # (ValidationException) and each delete fell through to listing the whole index.
+    probe_batch_size = GET_VECTORS_MAX_KEYS
     probe_offset = 0
     max_probe = 10000  # Safety limit
 

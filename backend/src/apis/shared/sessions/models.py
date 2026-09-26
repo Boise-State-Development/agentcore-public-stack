@@ -180,6 +180,23 @@ class PausedTurnSnapshot(BaseModel):
                     "paused agent's slot. None for assistant-less turns and snapshots "
                     "written before the field existed (those miss and rebuild).",
     )
+    memory_binding: Optional[Dict[str, Any]] = Field(
+        default=None,
+        alias="memoryBinding",
+        description="What the paused turn's memory tools closed over: an Agent's "
+                    "resolved Memory-Space binding ({spaceId, spaceName, access}) or, for a "
+                    "project harness, its scopes ({projectId, sharedSpaceId, "
+                    "personalSpaceId}; Shared Projects 2.4b). A cache-key element: resume "
+                    "replays it or the paused agent is orphaned. None when the turn had no "
+                    "memory tools and on snapshots written before the field existed.",
+    )
+    memory_context: Optional[str] = Field(
+        default=None,
+        alias="memoryContext",
+        description="The rendered Memory-Space block the paused turn was built with. "
+                    "Hashed with the system prompt in the agent cache key, so resume "
+                    "replays it or the paused agent is orphaned.",
+    )
     captured_at: str = Field(..., alias="capturedAt", description="ISO 8601 timestamp when the turn paused")
     expires_at: str = Field(..., alias="expiresAt", description="ISO 8601 timestamp after which the snapshot is no longer valid for resume")
 
@@ -193,6 +210,7 @@ class SessionPreferences(BaseModel):
     selected_prompt_id: Optional[str] = Field(default=None, alias="selectedPromptId", description="ID of selected prompt template")
     custom_prompt_text: Optional[str] = Field(default=None, alias="customPromptText", description="Custom prompt text if used")
     assistant_id: Optional[str] = Field(default=None, alias="assistantId", description="Assistant ID attached to this session")
+    project_id: Optional[str] = Field(default=None, alias="projectId", description="Shared Project whose harness this session runs, when assistantId is a project's agent")
     agent_type: Optional[str] = Field(default=None, alias="agentType", description="Agent mode this conversation runs in ('skill' or 'chat'); reopening the session restores it")
 
     # System prompt hash for tracking exact prompt version sent to the model

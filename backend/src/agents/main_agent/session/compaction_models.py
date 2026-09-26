@@ -13,6 +13,7 @@ from typing import Optional, Dict, Any
 import os
 
 from agents.main_agent.config.constants import EnvVars, Defaults
+from apis.shared.feature_flags import compaction_summary_extract_enabled
 
 
 @dataclass
@@ -177,6 +178,9 @@ class CompactionConfig:
     summary_token_budget: int = Defaults.COMPACTION_SUMMARY_TOKEN_BUDGET
     summary_model_enabled: bool = Defaults.COMPACTION_SUMMARY_MODEL_ENABLED
     summary_model_id: str = Defaults.COMPACTION_SUMMARY_MODEL_ID
+    # Extract-then-compress: pin verbatim facts ahead of the compressed
+    # narrative. Default on, with a kill switch (feature_flags).
+    summary_extract_enabled: bool = True
     # Paid-when-free scheduling (spec §3.5). Only meaningful with the
     # model-relative policy on; legacy mode always applies immediately.
     deferred_apply_enabled: bool = Defaults.COMPACTION_DEFERRED_APPLY_ENABLED
@@ -199,5 +203,6 @@ class CompactionConfig:
             summary_token_budget=int(os.environ.get(EnvVars.COMPACTION_SUMMARY_TOKEN_BUDGET, str(Defaults.COMPACTION_SUMMARY_TOKEN_BUDGET))),
             summary_model_enabled=_env_flag_default_on(EnvVars.COMPACTION_SUMMARY_MODEL_ENABLED),
             summary_model_id=os.environ.get(EnvVars.COMPACTION_SUMMARY_MODEL_ID, "").strip() or Defaults.COMPACTION_SUMMARY_MODEL_ID,
+            summary_extract_enabled=compaction_summary_extract_enabled(),
             deferred_apply_enabled=_env_flag_default_on(EnvVars.COMPACTION_DEFERRED_APPLY_ENABLED),
         )

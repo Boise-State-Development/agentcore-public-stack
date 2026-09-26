@@ -8,13 +8,13 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
+from apis.shared.assistants.models import MAX_AGENT_INSTRUCTIONS_CHARS
 from apis.shared.sessions.session_lease import STEER_QUEUE_MAX_CHARS
 
-# Hard upper bound on a user-supplied custom system prompt. Mirrors the
-# limit applied inside SystemPromptBuilder.from_user_prompt — surfacing
-# it at the API layer so oversized payloads are rejected before any
-# downstream work runs.
-MAX_USER_SYSTEM_PROMPT_CHARS = 8 * 1024
+# Hard upper bound on a request's ``system_prompt``. The Agent Designer preview sends an
+# agent's live instructions here, so it is the save-time instructions cap: at the old
+# 8 KiB, previewing any agent with longer instructions failed validation.
+MAX_USER_SYSTEM_PROMPT_CHARS = MAX_AGENT_INSTRUCTIONS_CHARS
 
 
 class FileContent(BaseModel):

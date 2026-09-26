@@ -47,6 +47,8 @@ from apis.shared.assistants.version_diff import (
     behavior_changed,
     changed_fields,
     instructions_diff,
+    wire_field_name,
+    wire_value,
 )
 from apis.shared.assistants.version_repository import (
     create_version,
@@ -78,6 +80,7 @@ from apis.shared.assistants.publishers import (
 )
 from apis.shared.assistants.service import (
     _get_assistant_cloud_without_ownership_check,
+    is_project_harness,
     resolve_assistant_permission,
 )
 from apis.shared.auth.models import User
@@ -184,6 +187,12 @@ async def _load_any(agent_id: str) -> Assistant:
 
 
 # ── D7 disclosure ────────────────────────────────────────────────────────────────────
+PROJECT_HARNESS_LISTING_MESSAGE = (
+    "This agent belongs to a project and can't be published. "
+    "To share it beyond the project, create a separate agent."
+)
+
+
 async def _memory_space_block_reason(assistant: Assistant, user: User) -> Optional[str]:
     """The D7.2 blocking message for a ``memory_space`` binding, or ``None`` if clear.
 
@@ -359,7 +368,13 @@ async def preflight_listing(
     assistant = await _load_for_author(agent_id, user)
     reachability = _reachability(assistant)
     requires_public = _visibility_block_reason(assistant) is not None
-    block_reason = await _memory_space_block_reason(assistant, user)
+    # A project's harness is never publishable (shared-projects §3.2): its access is the
+    # project's membership, and a listing would hand it to everyone.
+    block_reason = (
+        PROJECT_HARNESS_LISTING_MESSAGE
+        if is_project_harness(assistant)
+        else await _memory_space_block_reason(assistant, user)
+    )
     # An agent that cannot be published at all is not first walked through a
     # skill-exposure confirmation.
     if block_reason:
@@ -382,6 +397,8 @@ async def submit_listing(
     for the whole review; only approval swaps it.
     """
     assistant = await _load_for_author(agent_id, user)
+    if is_project_harness(assistant):
+        raise ListingError(PROJECT_HARNESS_LISTING_MESSAGE, status_code=400)
     await _validate_category(request.category)
 
     try:
@@ -1101,21 +1118,6 @@ async def patch_listing_presentation(
 # ── admin reads ──────────────────────────────────────────────────────────────────────
 # camelCase for the wire, so the SPA reads the same field names it already knows from
 # ``AgentResponse``. Snake_case would leak the storage attribute names into the UI.
-_DIFF_FIELD_ALIASES = {
-    "model_settings": "modelConfig",
-    "icon_key": "iconKey",
-    "publisher_id": "publisherId",
-}
-
-
-def _wire_value(value):
-    """Serialize a snapshot value for the diff payload, keeping ``None`` distinct from ``[]``."""
-    if isinstance(value, list):
-        return [_wire_value(item) for item in value]
-    dump = getattr(value, "model_dump", None)
-    return dump(by_alias=True) if dump else value
-
-
 async def diff_pending_version(agent_id: str) -> AgentVersionDiffResponse:
     """What the pending submission changes against what is published (§6.1).
 
@@ -1168,9 +1170,9 @@ async def diff_pending_version(agent_id: str) -> AgentVersionDiffResponse:
 
     changes = [
         VersionFieldChange(
-            field=_DIFF_FIELD_ALIASES.get(field, field),
-            before=_wire_value(before),
-            after=_wire_value(after),
+            field=wire_field_name(field),
+            before=wire_value(before),
+            after=wire_value(after),
             behavior=field in ("instructions", "bindings", "model_settings"),
         )
         for field, before, after in changed_fields(published, pending)

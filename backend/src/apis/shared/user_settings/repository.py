@@ -11,7 +11,25 @@ logger = logging.getLogger(__name__)
 # Default settings returned when no record exists
 DEFAULT_SETTINGS = {
     "defaultModelId": None,
+    "personalInstructions": None,
 }
+
+
+_user_settings_repository: Optional["UserSettingsRepository"] = None
+
+
+def get_user_settings_repository() -> "UserSettingsRepository":
+    """Get or create the process-wide UserSettingsRepository singleton.
+
+    Lives in ``apis.shared`` (not ``app_api``) so both app_api routes and the
+    agents layer's account tools can reach one instance without crossing the
+    app_api ↔ agents import boundary. Mirrors the singleton getters in
+    ``apis.shared.quota``.
+    """
+    global _user_settings_repository
+    if _user_settings_repository is None:
+        _user_settings_repository = UserSettingsRepository()
+    return _user_settings_repository
 
 
 class UserSettingsRepository:
@@ -63,6 +81,7 @@ class UserSettingsRepository:
             item = response["Item"]
             return {
                 "defaultModelId": item.get("defaultModelId"),
+                "personalInstructions": item.get("personalInstructions"),
             }
         except ClientError as e:
             logger.error(f"Error getting settings for user {user_id}: {e}")

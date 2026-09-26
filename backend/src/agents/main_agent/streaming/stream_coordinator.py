@@ -3,6 +3,7 @@ Stream coordinator for managing agent streaming lifecycle
 """
 
 import asyncio
+import contextvars
 import json
 import logging
 import os
@@ -15,7 +16,10 @@ from agents.main_agent.session.hooks.prefix_fingerprint import (
     get_prefix_fingerprint,
     reset_prefix_fingerprints,
 )
-from agents.main_agent.session.hooks.context_attribution import get_prefix_token_split
+from agents.main_agent.session.hooks.context_attribution import (
+    get_context_breakdown,
+    get_prefix_token_split,
+)
 from apis.shared.observability.prefix_tokens import prompt_tokens_from_usage
 from apis.shared.feature_flags import (
     agent_status_live_drain_enabled,
@@ -249,6 +253,7 @@ class StreamCoordinator:
         citations: Optional[List] = None,
         original_message: Optional[str] = None,
         turn_agent_id: Optional[str] = None,
+        turn_project_id: Optional[str] = None,
         turn_lease: Any = None,
         turn_started_at: Optional[float] = None,
     ) -> AsyncGenerator[str, None]:
@@ -272,6 +277,9 @@ class StreamCoordinator:
                 nondeterministic-ordering regression the fingerprints exist to catch.
                 Passed per turn rather than read off the agent: the agent instance is cached
                 and shared across turns, so per-turn state must never live on it (#741/#751).
+            turn_project_id: The Shared Project whose harness ran this turn (None for any
+                other turn). Recorded on each cost row as ``projectId``; the metadata writer
+                also adds the call to the project's monthly ``COST#`` rollup.
             turn_lease: This turn's single-flight ``SessionLease``, which doubles as the
                 mid-turn steering inbox. Stamped onto the session manager for the life of
                 the turn so ``SteeringHook`` can read it at each tool boundary — and
@@ -834,16 +842,18 @@ class StreamCoordinator:
                             except Exception as ctx_err:
                                 logger.debug(f"Skipping contextWindow lookup: {ctx_err}")
 
-                            # Per-turn context attribution (system / tools /
-                            # messages), computed by ContextAttributionHook at
-                            # BeforeModelCallEvent and stashed on the agent.
+                            # Per-turn context attribution, measured by
+                            # ContextAttributionHook off the critical path (the
+                            # split in the background, the total from the last
+                            # call's billed prompt) and itemized here (skills, memory, tools by origin) —
+                            # after the model has answered, memoized per agent.
                             # Partitions sum to `total`; the frontend pairs it
                             # with `contextWindow` above for free-space.
                             try:
                                 from agents.main_agent.session.hooks.context_attribution import (
                                     get_context_breakdown,
                                 )
-                                breakdown = get_context_breakdown(agent)
+                                breakdown = get_context_breakdown(agent, itemized=True)
                                 if breakdown is not None:
                                     final_metadata["contextBreakdown"] = breakdown
                             except Exception as br_err:
@@ -899,6 +909,15 @@ class StreamCoordinator:
                                     context_window=turn_context_window,
                                     history_tokens=history_tokens,
                                 )
+                                # The cut (and its forced / floor_unreachable
+                                # flags) belongs on the call that triggered it,
+                                # whose C# row is written after this loop. Left
+                                # queued, it waited on a next call that a new
+                                # microVM, an agent-cache miss or an abandoned
+                                # session never provides.
+                                ledger_hook = getattr(main_agent_wrapper, "context_ledger_hook", None)
+                                if ledger_hook is not None:
+                                    ledger_hook.record_post_turn_events(session_manager)
                                 logger.info(f"   Compaction state updated: {total_input_tokens:,} input tokens")
                                 if compaction_result is not None:
                                     compaction_payload = {
@@ -1385,7 +1404,12 @@ class StreamCoordinator:
                                 if idx == len(message_ids_to_store) - 1
                                 else None
                             ),
+                            # The breakdown on the agent describes the turn's
+                            # LAST model call (the hook overwrites it per call),
+                            # so only the last message may carry it.
+                            include_context_breakdown=idx == len(message_ids_to_store) - 1,
                             turn_agent_id=turn_agent_id,  # Which Agent ran this turn (#756)
+                            turn_project_id=turn_project_id,
                             tool_calls=(
                                 tool_census_hook.tally_for_call(idx)
                                 if tool_census_hook is not None else None
@@ -1772,6 +1796,7 @@ class StreamCoordinator:
                         stream_end_time=time.time(),
                         first_token_time=first_token_time,
                         agent=main_agent_wrapper,
+                        include_context_breakdown=True,
                     )
                     logger.info(
                         "📊 Persisted interrupted-turn metadata for session %s (message_id=%s)",
@@ -1797,25 +1822,19 @@ class StreamCoordinator:
         A cut generation frequently never delivers Bedrock's terminal usage
         event, so ``accumulated_metadata['usage']`` is empty and the turn
         would persist with no token/cost/context data. The context-attribution
-        hook computed the turn's projected input at ``BeforeModelCallEvent``
-        (before the model call that got interrupted), so use its total as the
-        input-side occupancy. Output is unknown — the turn never finished — so
-        it's reported as zero (input-side cost only). Returns ``None`` if no
-        projection is available, leaving the caller to persist whatever it has.
+        hook keeps the best input size it has for the call in flight — a
+        native count of the exact request when it measured one, else Strands'
+        usage-anchored projection (see ``get_projected_input_tokens``). Output
+        is unknown — the turn never finished — so it's reported as zero
+        (input-side cost only). Returns ``None`` if no projection is
+        available, leaving the caller to persist whatever it has.
         """
         try:
             from agents.main_agent.session.hooks.context_attribution import (
-                get_context_breakdown,
+                get_projected_input_tokens,
             )
 
-            breakdown = get_context_breakdown(agent)
-            if not breakdown:
-                return None
-            total = (
-                breakdown.get("total")
-                if isinstance(breakdown, dict)
-                else getattr(breakdown, "total", None)
-            )
+            total = get_projected_input_tokens(agent)
             if not total or total <= 0:
                 return None
             return {"inputTokens": int(total), "outputTokens": 0, "totalTokens": int(total)}
@@ -1880,6 +1899,8 @@ class StreamCoordinator:
                 mantle_api_mode=snapshot_source.get("mantle_api_mode"),
                 mantle_region=snapshot_source.get("mantle_region"),
                 assistant_id=snapshot_source.get("assistant_id"),
+                memory_binding=snapshot_source.get("memory_binding"),
+                memory_context=snapshot_source.get("memory_context"),
                 captured_at=now.isoformat(),
                 expires_at=(now + timedelta(hours=1)).isoformat(),
             )
@@ -2701,15 +2722,33 @@ class StreamCoordinator:
         generator already documents and already took when the coordinator
         consumed it directly.
 
+        ONE CONTEXT FOR EVERY STEP
+        --------------------------
+        Each ``__anext__`` runs as its own task, and a task runs in a *copy* of
+        the context it was created from. Strands holds its spans open across
+        yields (``use_span`` around the whole invocation, each cycle, each model
+        stream), so a span attached in one step and detached in a later one
+        tried to reset an OpenTelemetry token in a context that never saw it:
+        ``Failed to detach context`` on every such exit (~5 per tool turn), and
+        every span opened from the ambient context in between — the Memory
+        ``CreateEvent`` calls, DynamoDB reads from hooks — parented to the
+        request span instead of the cycle that caused it. Running every step in
+        one ``Context`` restores what a plain ``async for`` gave the generator:
+        one context that persists across its yields.
+
         Best-effort in both directions: with no hook (voice, tests) or a failing
         drain this degrades to a plain pass-through of the agent stream.
         """
         iterator = events.__aiter__()
+        loop = asyncio.get_running_loop()
+        stream_context = contextvars.copy_context()
         pending: Optional[asyncio.Future] = None
         try:
             while True:
                 if pending is None:
-                    pending = asyncio.ensure_future(iterator.__anext__())
+                    pending = loop.create_task(
+                        iterator.__anext__(), context=stream_context
+                    )
 
                 done, _ = await asyncio.wait({pending}, timeout=_STATUS_POLL_SECONDS)
 
@@ -3236,9 +3275,11 @@ class StreamCoordinator:
         citations: Optional[List] = None,
         call_index: Optional[int] = None,
         turn_agent_id: Optional[str] = None,
+        turn_project_id: Optional[str] = None,
         tool_calls: Optional[Dict[str, Dict[str, int]]] = None,
         context_ledger: Optional[Dict[str, Any]] = None,
         turn_duration_ms: Optional[int] = None,
+        include_context_breakdown: bool = False,
     ) -> None:
         """
         Store message-level metadata (token usage, latency, model info, citations)
@@ -3372,6 +3413,18 @@ class StreamCoordinator:
                     if cost_result is not None:
                         cost = cost_result
 
+                # Tokens spent, nothing charged: the row is written with no
+                # cost, so the rollups and the user's quota never see it.
+                if token_usage and cost is None:
+                    reason = "calculation_failed" if pricing_snapshot else "no_pricing"
+                    logger.warning(
+                        f"Unmetered model call: model={model_id} reason={reason} — "
+                        "usage recorded with no cost; not counted against quota"
+                    )
+                    from apis.shared.observability.emf import emit_unmetered_model_call
+
+                    emit_unmetered_model_call(model_id, reason, surface="chat", session_id=session_id)
+
             # Create Attribution for cost tracking foundation
             attribution = Attribution(
                 user_id=user_id,
@@ -3424,6 +3477,10 @@ class StreamCoordinator:
                 # else on the row distinguishes them.
                 if turn_agent_id:
                     metadata_kwargs["turnAgentId"] = turn_agent_id
+                # Shared Projects: which project this call is billed to. The metadata
+                # writer reads it back to bump PROJECT#{id}/COST#{YYYY-MM}.
+                if turn_project_id:
+                    metadata_kwargs["projectId"] = turn_project_id
 
                 # Content-free tool census for this call (tool name → calls /
                 # errors), another extra field. Read by the admin session
@@ -3436,10 +3493,11 @@ class StreamCoordinator:
                 # Context ledger for this call: the conversation window's
                 # cumulative trim count (a rise between consecutive rows is a
                 # trim, i.e. a prefix re-write) and the compaction decisions
-                # taken since the previous call, each with the summary's
-                # token size. Plus the agent's stable prefix split (system /
-                # tools tokens) so "how big is the static prefix, and how much
-                # of it is tool schemas" is a stored fact. All numbers.
+                # attributed to this call (see ContextLedgerHook), each with
+                # the summary's token size. Plus the agent's stable prefix
+                # split (system / tools tokens) so "how big is the static
+                # prefix, and how much of it is tool schemas" is a stored
+                # fact. All numbers.
                 if context_ledger:
                     removed = context_ledger.get("windowRemovedMessages")
                     if removed is not None:
@@ -3486,6 +3544,18 @@ class StreamCoordinator:
                 # is where the SPA anchors the end-of-turn recap.
                 if turn_duration_ms is not None:
                     metadata_kwargs["turn_duration_ms"] = turn_duration_ms
+
+                # What filled the context window on this call — the same
+                # payload the final `metadata` SSE carried — so the context
+                # meter's breakdown survives a reload. Read off the agent, not
+                # recomputed: this write runs after `done`, and costs nothing
+                # the user waits on. Labels can name skills and MCP servers,
+                # so it stays out of the admin CALL_ROW_PROJECTION (``label``
+                # is a content-bearing path segment).
+                if include_context_breakdown and strands_agent is not None:
+                    breakdown = get_context_breakdown(strands_agent, itemized=True)
+                    if breakdown:
+                        metadata_kwargs["contextBreakdown"] = breakdown
 
                 message_metadata = MessageMetadata(**metadata_kwargs)
 
@@ -3563,9 +3633,12 @@ class StreamCoordinator:
             breakdown = get_context_breakdown(strands_agent) if strands_agent is not None else None
             if not breakdown:
                 return None
+            # Everything but the conversation is the static prefix — system,
+            # tools, and the skills / memory rows itemized out of the system
+            # total.
             total = 0
             for partition in breakdown.get("partitions", []) or []:
-                if isinstance(partition, dict) and partition.get("key") in ("system", "tools"):
+                if isinstance(partition, dict) and partition.get("key") != "messages":
                     total += int(partition.get("tokens") or 0)
             return total or None
         except Exception as e:  # noqa: BLE001

@@ -76,6 +76,17 @@ import { ToastService, ToastType } from '../../services/toast/toast.service';
                     {{ toast.message }}
                   </p>
                 }
+                @if (toast.action; as action) {
+                  <div class="mt-3 flex">
+                    <button
+                      type="button"
+                      (click)="runAction(toast.id, action.handler)"
+                      class="rounded-md text-sm font-semibold text-primary-accessible hover:underline focus:outline-2 focus:outline-offset-2 focus:outline-primary-accessible dark:text-primary-50 dark:focus:outline-primary-50"
+                    >
+                      {{ action.label }}
+                    </button>
+                  </div>
+                }
               </div>
 
               <!-- Dismiss button -->
@@ -127,6 +138,14 @@ export class ToastComponent {
    */
   protected dismiss(id: string): void {
     this.toastService.dismiss(id);
+  }
+
+  /**
+   * Run a toast's action, then dismiss it
+   */
+  protected runAction(id: string, handler: () => void): void {
+    this.toastService.dismiss(id);
+    handler();
   }
 
   /**

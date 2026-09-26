@@ -84,8 +84,16 @@ async def _list_models(user: User, svc: ModelAccessService) -> List[BindableItem
     except Exception:
         logger.warning("Failed to list bindable models", exc_info=True)
         return []
+    # Named from the whole catalog, not the accessible slice: the Designer notice
+    # names a successor the author may not hold yet.
+    names = {m.model_id: m.model_name for m in models}
     # ``ref`` is the Bedrock/provider model id — the identifier the runtime resolver,
     # RBAC (``permissions.models``) and invocation all key on. NOT the internal UUID.
+    #
+    # Non-active models stay listed: ``_validate_model`` reads the same list, so
+    # dropping one would 403 an author saving an Agent that keeps it. The SPA
+    # refuses a *new* selection from ``status`` instead
+    # (docs/specs/model-retirement.md §7).
     return [
         BindableItem(
             kind="model",
@@ -102,6 +110,11 @@ async def _list_models(user: User, svc: ModelAccessService) -> List[BindableItem
                 "inputModalities": m.input_modalities,
                 "outputModalities": m.output_modalities,
                 "supportedParams": m.supported_params,
+                "status": m.status.value,
+                "replacedBy": m.replaced_by,
+                "replacedByName": names.get(m.replaced_by) if m.replaced_by else None,
+                "retiresOn": m.retires_on,
+                "retirementNote": m.retirement_note,
             },
         )
         for m in accessible

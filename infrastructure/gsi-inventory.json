@@ -40,6 +40,10 @@
       "ProviderUsersIndex"
     ],
     "oidc-state": [],
+    "projects": [
+      "MemberIndex",
+      "OwnerIndex"
+    ],
     "quota-events": [
       "TierEventIndex"
     ],
@@ -54,6 +58,7 @@
     ],
     "sessions-metadata": [
       "DueScheduleIndex",
+      "ProjectSessionIndex",
       "SessionLookupIndex",
       "SessionRecencyIndex",
       "UserTimestampIndex"

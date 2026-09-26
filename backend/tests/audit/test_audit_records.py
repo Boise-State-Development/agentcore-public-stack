@@ -140,16 +140,18 @@ def test_response_projection_is_camel_cased() -> None:
 
 def test_every_action_is_namespaced() -> None:
     for action in ALL_ACTIONS:
-        assert action.startswith("app_role."), action
+        assert action.startswith(("app_role.", "project.")), action
 
 
 def test_no_action_exists_for_tool_or_skill_grants() -> None:
     """Those funnel through `update_role`; a second record would double-count.
 
     See the `AuditAction` docstring. If someone adds `app_role.tool_granted`
-    they need to also stop `update_role` recording the same mutation.
+    they need to also stop `update_role` recording the same mutation. (A
+    project's own `project.tools_updated` is a binding change, not a grant.)
     """
-    assert not any("tool" in a or "skill" in a for a in ALL_ACTIONS)
+    role_actions = [a for a in ALL_ACTIONS if a.startswith("app_role.")]
+    assert not any("tool" in a or "skill" in a for a in role_actions)
 
 
 # ---------------------------------------------------------------------------

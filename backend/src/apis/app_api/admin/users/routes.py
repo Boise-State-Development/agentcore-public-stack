@@ -108,13 +108,14 @@ async def search_users(
     service: UserAdminService = Depends(get_user_admin_service)
 ):
     """
-    Search for a user by exact email match.
+    Search for users by exact email match.
 
     Args:
         email: Email address to search for (case-insensitive)
 
     Returns:
-        UserListResponse with matching user (or empty if not found)
+        UserListResponse with every profile for the email, the live one
+        (most recent login) first; more than one means legacy duplicates.
     """
     logger.info("Admin searching for user by email")
 
@@ -122,10 +123,8 @@ async def search_users(
         logger.warning("User admin service is disabled - no table configured")
         return UserListResponse(users=[], next_cursor=None)
 
-    user = await service.search_by_email(email)
-    if not user:
-        return UserListResponse(users=[], next_cursor=None)
-    return UserListResponse(users=[user], next_cursor=None)
+    users = await service.search_by_email(email)
+    return UserListResponse(users=users, next_cursor=None)
 
 
 @router.get("/domains/list", response_model=List[str])

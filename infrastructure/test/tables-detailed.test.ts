@@ -224,6 +224,25 @@ describe('CostTrackingTablesConstruct — detailed', () => {
         Match.objectLike({ IndexName: 'SessionLookupIndex' }),
         Match.objectLike({ IndexName: 'DueScheduleIndex' }),
         Match.objectLike({ IndexName: 'SessionRecencyIndex' }),
+        Match.objectLike({ IndexName: 'ProjectSessionIndex' }),
+      ]),
+    });
+  });
+
+  it('ProjectSessionIndex is keyed GSI5_PK / GSI5_SK and projects everything', () => {
+    // Shared Projects PR-1.6 lists a member's tasks in a project from this index alone
+    // (GSI5_PK = PROJECT#{projectId}#USER#{userId}, GSI5_SK = {lastMessageAt}#{sessionId}).
+    t.hasResourceProperties('AWS::DynamoDB::Table', {
+      TableName: 'test-project-sessions-metadata',
+      GlobalSecondaryIndexes: Match.arrayWith([
+        Match.objectLike({
+          IndexName: 'ProjectSessionIndex',
+          KeySchema: [
+            { AttributeName: 'GSI5_PK', KeyType: 'HASH' },
+            { AttributeName: 'GSI5_SK', KeyType: 'RANGE' },
+          ],
+          Projection: { ProjectionType: 'ALL' },
+        }),
       ]),
     });
   });

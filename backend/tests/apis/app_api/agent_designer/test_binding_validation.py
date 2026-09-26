@@ -32,6 +32,9 @@ def _model_svc(allowed: bool) -> MagicMock:
     return svc
 
 
+_PERSONAL_SPACE = SimpleNamespace(is_project_space=False)
+
+
 def _mem_svc(space, role) -> MagicMock:
     svc = MagicMock()
     svc.resolve_permission = MagicMock(return_value=(space, role))
@@ -342,7 +345,7 @@ class TestToolValidation:
         await validate_agent_write(
             _user(),
             bindings=[AgentBinding(kind="memory_space", ref="spc_1", config={"access": "read"})],
-            memory_service=_mem_svc(space=object(), role="viewer"),
+            memory_service=_mem_svc(space=_PERSONAL_SPACE, role="viewer"),
             tool_service=svc,
         )
         svc.get_user_accessible_tools.assert_not_awaited()
@@ -444,7 +447,7 @@ class TestMemorySpace:
             await validate_agent_write(
                 _user(),
                 bindings=[AgentBinding(kind="memory_space", ref="spc_1", config={"access": "read"})],
-                memory_service=_mem_svc(space=object(), role="viewer"),
+                memory_service=_mem_svc(space=_PERSONAL_SPACE, role="viewer"),
             )
         assert ei.value.status_code == 400
 
@@ -454,7 +457,7 @@ class TestMemorySpace:
             await validate_agent_write(
                 _user(),
                 bindings=[AgentBinding(kind="memory_space", ref="spc_1", config={"access": "readwrite"})],
-                memory_service=_mem_svc(space=object(), role="viewer"),
+                memory_service=_mem_svc(space=_PERSONAL_SPACE, role="viewer"),
             )
         assert ei.value.status_code == 403
 
@@ -463,7 +466,7 @@ class TestMemorySpace:
         await validate_agent_write(
             _user(),
             bindings=[AgentBinding(kind="memory_space", ref="spc_1", config={"access": "readwrite"})],
-            memory_service=_mem_svc(space=object(), role="editor"),
+            memory_service=_mem_svc(space=_PERSONAL_SPACE, role="editor"),
         )
 
     @pytest.mark.asyncio
@@ -471,7 +474,7 @@ class TestMemorySpace:
         await validate_agent_write(
             _user(),
             bindings=[AgentBinding(kind="memory_space", ref="spc_1", config={"access": "read"})],
-            memory_service=_mem_svc(space=object(), role="viewer"),
+            memory_service=_mem_svc(space=_PERSONAL_SPACE, role="viewer"),
         )
 
     @pytest.mark.asyncio
@@ -480,7 +483,7 @@ class TestMemorySpace:
             await validate_agent_write(
                 _user(),
                 bindings=[AgentBinding(kind="memory_space", ref="spc_1", config={"access": "read"})],
-                memory_service=_mem_svc(space=object(), role=None),
+                memory_service=_mem_svc(space=_PERSONAL_SPACE, role=None),
             )
         assert ei.value.status_code == 403
 
@@ -495,12 +498,25 @@ class TestMemorySpace:
         assert ei.value.status_code == 400
 
     @pytest.mark.asyncio
+    async def test_project_space_cannot_be_bound_even_by_an_editor(self):
+        """A project member resolves editor on the project's space, but its memory
+        reaches agents only through the project (Shared Projects 2.4)."""
+        with pytest.raises(BindingValidationError) as ei:
+            await validate_agent_write(
+                _user(),
+                bindings=[AgentBinding(kind="memory_space", ref="spc_p", config={"access": "readwrite"})],
+                memory_service=_mem_svc(space=SimpleNamespace(is_project_space=True), role="editor"),
+            )
+        assert ei.value.status_code == 400
+        assert "project" in ei.value.message.lower()
+
+    @pytest.mark.asyncio
     async def test_bad_access_value_400(self):
         with pytest.raises(BindingValidationError) as ei:
             await validate_agent_write(
                 _user(),
                 bindings=[AgentBinding(kind="memory_space", ref="spc_1", config={"access": "admin"})],
-                memory_service=_mem_svc(space=object(), role="owner"),
+                memory_service=_mem_svc(space=_PERSONAL_SPACE, role="owner"),
             )
         assert ei.value.status_code == 400
 
@@ -512,6 +528,6 @@ class TestMemorySpace:
                 bindings=[
                     AgentBinding(kind="memory_space", ref="spc_1", config={"access": "read", "alwaysLoad": "nope"})
                 ],
-                memory_service=_mem_svc(space=object(), role="viewer"),
+                memory_service=_mem_svc(space=_PERSONAL_SPACE, role="viewer"),
             )
         assert ei.value.status_code == 400

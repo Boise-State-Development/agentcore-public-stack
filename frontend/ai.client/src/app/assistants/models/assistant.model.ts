@@ -27,6 +27,14 @@ export interface Assistant {
   firstInteracted?: boolean;
   isSharedWithMe?: boolean;
   userPermission?: UserPermission;
+
+  /**
+   * Shared Projects: `'project'` when this is a project's hidden harness, which a
+   * project task binds. The chat renders it as the project, not as an Agent.
+   */
+  kind?: 'project';
+  /** The owning project when `kind === 'project'`. */
+  projectId?: string;
 }
 
 export interface CreateAssistantDraftRequest {

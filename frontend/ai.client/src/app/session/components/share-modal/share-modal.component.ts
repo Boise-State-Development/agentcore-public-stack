@@ -15,16 +15,38 @@ import {
   heroArrowUpOnSquare,
   heroCheck,
 } from '@ng-icons/heroicons/outline';
-import { ShareService, ShareResponse } from '../../services/share/share.service';
+import { ShareAccessLevel, ShareService, ShareResponse } from '../../services/share/share.service';
 import { DialogDismissDirective } from '../../../components/dialog/dialog-dismiss.directive';
 import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 
 export interface ShareModalData {
   sessionId: string;
   ownerEmail: string;
+  /**
+   * The session's `preferences.projectId`, when it is a task in a project.
+   * Adds the "Project members" option (and makes it the default).
+   */
+  projectId?: string | null;
 }
 
-type AccessLevel = 'public' | 'specific';
+type AccessLevel = ShareAccessLevel;
+
+interface AccessOption {
+  value: AccessLevel;
+  label: string;
+  description: string;
+}
+
+const BASE_ACCESS_OPTIONS: AccessOption[] = [
+  { value: 'public', label: 'Public link', description: 'Any authenticated user with the link can view' },
+  { value: 'specific', label: 'Limited share', description: 'Only you and designated email addresses can view' },
+];
+
+const PROJECT_ACCESS_OPTION: AccessOption = {
+  value: 'project',
+  label: 'Project members',
+  description: 'Everyone in this task’s project can view it and continue it in their own task',
+};
 
 @Component({
   selector: 'app-share-modal',
@@ -164,12 +186,20 @@ type AccessLevel = 'public' | 'specific';
         <!-- Share result -->
         @if (shareResult()) {
           <div class="mt-4 rounded-md bg-state-success-50 p-3 dark:bg-state-success-500/10">
-            <p class="text-sm font-medium text-state-success-800 dark:text-state-success-300 mb-2">Chat shared</p>
-            <p class="text-xs text-state-success-700 dark:text-state-success-400 mb-2">Future messages aren't included in the share.</p>
+            <p class="text-sm font-medium text-state-success-800 dark:text-state-success-300 mb-2">
+              {{ shareResult()!.accessLevel === 'project' ? 'Shared with the project' : 'Chat shared' }}
+            </p>
+            <p class="text-xs text-state-success-700 dark:text-state-success-400 mb-2">
+              Future messages aren't included in the share.
+              @if (shareResult()!.accessLevel === 'project') {
+                It’s listed under Shared tasks in the project, replacing any earlier share of this task.
+              }
+            </p>
             <div class="flex items-center gap-2">
               <input
                 type="text"
                 readonly
+                aria-label="Share link"
                 [value]="shareUrl()"
                 class="flex-1 rounded-md border border-state-success-200 bg-white px-2.5 py-1.5 text-xs text-gray-700 dark:border-state-success-700 dark:bg-gray-700 dark:text-gray-300"
                 (click)="$event.target"
@@ -245,7 +275,7 @@ export class ShareModalComponent implements OnInit {
   private shareService = inject(ShareService);
 
   // State
-  protected selectedAccess = signal<AccessLevel>('public');
+  protected selectedAccess = signal<AccessLevel>(this.data.projectId ? 'project' : 'public');
   protected allowedEmails = signal<string[]>([]);
   protected emailInput = signal('');
   protected isSubmitting = signal(false);
@@ -254,10 +284,9 @@ export class ShareModalComponent implements OnInit {
   protected existingShares = signal<ShareResponse[]>([]);
   protected copied = signal(false);
 
-  protected readonly accessOptions = [
-    { value: 'public' as AccessLevel, label: 'Public link', description: 'Any authenticated user with the link can view' },
-    { value: 'specific' as AccessLevel, label: 'Limited share', description: 'Only you and designated email addresses can view' },
-  ];
+  protected readonly accessOptions: AccessOption[] = this.data.projectId
+    ? [PROJECT_ACCESS_OPTION, ...BASE_ACCESS_OPTIONS]
+    : BASE_ACCESS_OPTIONS;
 
   protected shareUrl = computed(() => {
     const result = this.shareResult();
@@ -305,10 +334,13 @@ export class ShareModalComponent implements OnInit {
           ? [this.data.ownerEmail, ...this.allowedEmails()]
           : undefined;
 
+      // The failure is shown below, with the API's own sentence (for a
+      // project share: "you're no longer a member" 403, "archived" 409).
       const result = await this.shareService.createShare(
         this.data.sessionId,
         this.selectedAccess(),
-        emails
+        emails,
+        { suppressErrorToast: true },
       );
 
       this.shareResult.set(result);

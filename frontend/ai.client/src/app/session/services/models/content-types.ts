@@ -245,13 +245,17 @@ export interface CostBreakdown {
 }
 
 /** One partition of the per-turn context-token attribution. The list is
- *  open-ended (system / tools / messages today; skills, per-server detail, and
- *  cache splits are future additive partitions), so consumers render whatever
- *  partitions arrive rather than reading fixed fields. */
+ *  open-ended (system / skills / memory / tools / messages today; cache splits
+ *  are a future additive partition), so consumers render whatever partitions
+ *  arrive rather than reading fixed fields. */
 export interface ContextPartition {
   key: string;
   label: string;
   tokens: number;
+  /** Itemization within the partition — e.g. Tools by origin (built-in, each
+   *  MCP server). Apportioned from the partition's measured total, so the
+   *  children sum to `tokens` but each one is an estimate. */
+  children?: ContextPartition[];
 }
 
 /** Per-turn breakdown of what is filling the context window. `partitions` sum

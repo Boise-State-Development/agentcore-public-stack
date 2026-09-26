@@ -24,20 +24,20 @@ export type TooltipPosition = 'top' | 'bottom' | 'left' | 'right';
 
 const POSITION_MAP: Record<TooltipPosition, ConnectedPosition[]> = {
   top: [
-    { originX: 'center', originY: 'top', overlayX: 'center', overlayY: 'bottom', offsetY: -8 },
-    { originX: 'center', originY: 'bottom', overlayX: 'center', overlayY: 'top', offsetY: 8 },
+    { originX: 'center', originY: 'top', overlayX: 'center', overlayY: 'bottom', offsetY: -4 },
+    { originX: 'center', originY: 'bottom', overlayX: 'center', overlayY: 'top', offsetY: 4 },
   ],
   bottom: [
-    { originX: 'center', originY: 'bottom', overlayX: 'center', overlayY: 'top', offsetY: 8 },
-    { originX: 'center', originY: 'top', overlayX: 'center', overlayY: 'bottom', offsetY: -8 },
+    { originX: 'center', originY: 'bottom', overlayX: 'center', overlayY: 'top', offsetY: 4 },
+    { originX: 'center', originY: 'top', overlayX: 'center', overlayY: 'bottom', offsetY: -4 },
   ],
   left: [
-    { originX: 'start', originY: 'center', overlayX: 'end', overlayY: 'center', offsetX: -8 },
-    { originX: 'end', originY: 'center', overlayX: 'start', overlayY: 'center', offsetX: 8 },
+    { originX: 'start', originY: 'center', overlayX: 'end', overlayY: 'center', offsetX: -4 },
+    { originX: 'end', originY: 'center', overlayX: 'start', overlayY: 'center', offsetX: 4 },
   ],
   right: [
-    { originX: 'end', originY: 'center', overlayX: 'start', overlayY: 'center', offsetX: 8 },
-    { originX: 'start', originY: 'center', overlayX: 'end', overlayY: 'center', offsetX: -8 },
+    { originX: 'end', originY: 'center', overlayX: 'start', overlayY: 'center', offsetX: 4 },
+    { originX: 'start', originY: 'center', overlayX: 'end', overlayY: 'center', offsetX: -4 },
   ],
 };
 

@@ -17,6 +17,42 @@ import { grantManagedKbRetrieval } from '../managed-kb/managed-kb-role-construct
  * Create the AgentCore Runtime execution role with all required
  * policy statements.
  */
+/**
+ * AgentCore Memory actions the Runtime role needs. Both memory statements on
+ * that role (`AgentCoreMemoryAccess` here, account-wide `memory/*`, and
+ * `MemoryAccess` in the Runtime construct, scoped to this deployment's memory)
+ * use this one list, so they cannot drift apart again. They did: the scoped
+ * statement once omitted GetMemory on the belief that it was not a real IAM
+ * action, and retrieval worked only because the wildcard statement carried it.
+ *
+ * Names mirror the AgentCore Data Plane API. GetMemory is required for
+ * long-term memory RETRIEVAL. At session creation the agent calls
+ * _discover_strategy_ids() -> MemoryClient.get_memory_strategies(), which
+ * invokes GetMemory to resolve the SEMANTIC / USER_PREFERENCE / SUMMARIZATION
+ * strategy ids used to build the retrieval namespaces. Without it that call
+ * AccessDenies, the retrieval config is left empty, and the agent silently runs
+ * with "long-term memory retrieval disabled": it keeps writing events
+ * (CreateEvent) but never recalls stored memories. Verified against the AWS
+ * Service Authorization Reference: GetMemory is a Read action on the `memory`
+ * resource type.
+ */
+export const RUNTIME_MEMORY_ACTIONS: readonly string[] = [
+  'bedrock-agentcore:GetMemory',
+  'bedrock-agentcore:CreateEvent',
+  'bedrock-agentcore:GetEvent',
+  'bedrock-agentcore:ListEvents',
+  'bedrock-agentcore:DeleteEvent',
+  'bedrock-agentcore:ListActors',
+  'bedrock-agentcore:ListSessions',
+  'bedrock-agentcore:RetrieveMemoryRecords',
+  'bedrock-agentcore:GetMemoryRecord',
+  'bedrock-agentcore:ListMemoryRecords',
+  'bedrock-agentcore:BatchCreateMemoryRecords',
+  'bedrock-agentcore:BatchUpdateMemoryRecords',
+  'bedrock-agentcore:BatchDeleteMemoryRecords',
+  'bedrock-agentcore:DeleteMemoryRecord',
+];
+
 export function createRuntimeExecutionRole(
   scope: Construct,
   config: AppConfig,
@@ -237,22 +273,26 @@ export function createRuntimeExecutionRole(
     resources: tableResources,
   }));
 
-  // ── User settings table (read-only) ──
+  // ── User settings table (read + write) ──
   // inference_api/chat/routes.py resolves the user's saved defaultModelId via
   // UserSettingsRepository.get_settings — a GetItem on PK=USER#<id>, SK=SETTINGS.
-  // The runtime never writes settings (app-api owns that), and the table has no
-  // GSIs, so this stays a bare-ARN GetItem rather than joining the read/write
-  // bulk grant above.
+  // As of the platform self-service pilot the runtime ALSO writes this table:
+  // the confirmation-gated `set_default_model` account tool calls
+  // UserSettingsRepository.update_settings, which does a PutItem (read-modify-
+  // write of the SETTINGS item) plus an UpdateItem when clearing a field. So
+  // this grant covers GetItem + PutItem + UpdateItem, scoped to the one table
+  // ARN (no GSIs), kept out of the broad DynamoDBTableAccess bulk grant above
+  // so the runtime's settings access stays explicit and least-privilege.
   //
   // inference-agentcore-construct.ts injects DYNAMODB_USER_SETTINGS_TABLE_NAME,
-  // which makes the repository report itself enabled — so without this grant the
-  // GetItem AccessDenied'd and get_settings swallowed it into DEFAULT_SETTINGS.
-  // The user's chosen default model was silently ignored with no user-visible
-  // error; only a stray ERROR line in the runtime log revealed it.
+  // which makes the repository report itself enabled — so without the read grant
+  // the GetItem AccessDenied'd and get_settings swallowed it into
+  // DEFAULT_SETTINGS; without the write grants update_settings' PutItem
+  // AccessDenied'd and set_default_model surfaced only a generic error.
   role.addToPolicy(new iam.PolicyStatement({
-    sid: 'UserSettingsTableReadAccess',
+    sid: 'UserSettingsTableReadWriteAccess',
     effect: iam.Effect.ALLOW,
-    actions: ['dynamodb:GetItem'],
+    actions: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem'],
     resources: [refs.userSettingsTable.tableArn],
   }));
 
@@ -343,6 +383,19 @@ export function createRuntimeExecutionRole(
     resources: [memorySpacesTableArn, `${memorySpacesTableArn}/index/*`],
   }));
 
+  // ── Shared Projects (DynamoDB) ──
+  // The invocation path resolves membership (META + MEMBER#), back-fills a
+  // member's userId on first resolve, and bumps the COST# monthly rollup. It
+  // never creates or deletes project rows — that is app-api's CRUD surface.
+  const projectsTableArn = refs.projectsTable.tableArn;
+  role.addToPolicy(new iam.PolicyStatement({
+    sid: 'ProjectsTableReadUpdate',
+    effect: iam.Effect.ALLOW,
+    actions: ['dynamodb:GetItem', 'dynamodb:BatchGetItem', 'dynamodb:Query',
+              'dynamodb:UpdateItem'],
+    resources: [projectsTableArn, `${projectsTableArn}/index/*`],
+  }));
+
   // ── S3 Vectors (RAG query) ──
   const vectorBucketName = refs.ragVectorBucketName;
   const vectorIndexName = refs.ragVectorIndexName;
@@ -387,36 +440,9 @@ export function createRuntimeExecutionRole(
   role.addToPolicy(new iam.PolicyStatement({
     sid: 'AgentCoreMemoryAccess',
     effect: iam.Effect.ALLOW,
-    // See app-api-iam-grants.ts for the rationale — these action names
-    // mirror the AgentCore Data Plane API. The previous list used
-    // speculative names (CreateMemoryEvent, ListMemoryEvents,
-    // RetrieveMemory) that don't exist as IAM actions.
-    actions: [
-      // GetMemory is required for long-term memory RETRIEVAL. At session
-      // creation the agent calls _discover_strategy_ids() ->
-      // MemoryClient.get_memory_strategies(), which invokes GetMemory to
-      // resolve the SEMANTIC / USER_PREFERENCE / SUMMARIZATION strategy IDs
-      // used to build the retrieval namespaces. Without it that call
-      // AccessDenies, the retrieval config is left empty, and the agent
-      // silently runs with "long-term memory retrieval disabled" — it keeps
-      // writing events (CreateEvent) but never recalls stored memories.
-      // Verified against the AWS Service Authorization Reference: GetMemory
-      // is a Read action on the `memory` resource type.
-      'bedrock-agentcore:GetMemory',
-      'bedrock-agentcore:CreateEvent',
-      'bedrock-agentcore:GetEvent',
-      'bedrock-agentcore:ListEvents',
-      'bedrock-agentcore:DeleteEvent',
-      'bedrock-agentcore:ListActors',
-      'bedrock-agentcore:ListSessions',
-      'bedrock-agentcore:RetrieveMemoryRecords',
-      'bedrock-agentcore:GetMemoryRecord',
-      'bedrock-agentcore:ListMemoryRecords',
-      'bedrock-agentcore:BatchCreateMemoryRecords',
-      'bedrock-agentcore:BatchUpdateMemoryRecords',
-      'bedrock-agentcore:BatchDeleteMemoryRecords',
-      'bedrock-agentcore:DeleteMemoryRecord',
-    ],
+    // See RUNTIME_MEMORY_ACTIONS. The Runtime construct grants the same list
+    // again, scoped to this deployment's memory (`MemoryAccess`).
+    actions: [...RUNTIME_MEMORY_ACTIONS],
     resources: [`arn:aws:bedrock-agentcore:${config.awsRegion}:${config.awsAccount}:memory/*`],
   }));
 

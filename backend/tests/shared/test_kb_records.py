@@ -388,3 +388,178 @@ class TestTombstoneKeys:
         doc = r.document_tombstone_sk(APP_KB_ID, "doc-9")
         assert doc.startswith(whole)
         assert doc != whole
+
+
+# ── writes that must not recreate a torn-down record ─────────────────────────
+def _absent(table):
+    return (
+        table.get_item(Key={"PK": r.kb_pk(ASSISTANT_ID), "SK": r.kb_sk(APP_KB_ID)}).get("Item")
+        is None
+    )
+
+
+class TestUpdateIfPresent:
+    """``UpdateItem`` is an upsert. A teardown ends by removing the KB_Record, and
+    any late writer aimed at that key would otherwise recreate it as a ghost item
+    holding only the attributes it happened to set."""
+
+    def test_writes_to_an_existing_record(self, table):
+        _seed(table)
+
+        assert r.update_if_present(
+            ASSISTANT_ID,
+            APP_KB_ID,
+            UpdateExpression="SET storedBytes = :b",
+            ExpressionAttributeValues={":b": 7},
+        )
+        assert int(_raw(table)["storedBytes"]) == 7
+
+    def test_does_not_create_a_removed_record(self, table):
+        assert (
+            r.update_if_present(
+                ASSISTANT_ID,
+                APP_KB_ID,
+                UpdateExpression="SET storedBytes = :b",
+                ExpressionAttributeValues={":b": 7},
+            )
+            is False
+        )
+        assert _absent(table)
+
+    def test_refuses_a_caller_supplied_condition(self, table):
+        """Silently replacing a caller's guard, or dropping ours, is the bug."""
+        with pytest.raises(TypeError):
+            r.update_if_present(
+                ASSISTANT_ID,
+                APP_KB_ID,
+                UpdateExpression="SET storedBytes = :b",
+                ConditionExpression="attribute_exists(SK)",
+                ExpressionAttributeValues={":b": 7},
+            )
+
+
+class TestUpdateIfExists:
+    """The key-taking form, for the ``DOC#`` and ``KBTOMB#`` rows around a record."""
+
+    DOC_KEY = {"PK": f"AST#{ASSISTANT_ID}", "SK": "DOC#doc-gone01"}
+
+    def _doc(self, table):
+        return table.get_item(Key=self.DOC_KEY).get("Item")
+
+    def test_does_not_create_a_removed_row(self, table):
+        assert (
+            r.update_if_exists(
+                self.DOC_KEY,
+                UpdateExpression="SET #s = :s",
+                ExpressionAttributeNames={"#s": "status"},
+                ExpressionAttributeValues={":s": "complete"},
+            )
+            is False
+        )
+        assert self._doc(table) is None
+
+    def test_a_remove_only_update_does_not_create_a_key_only_row(self, table):
+        assert r.update_if_exists(self.DOC_KEY, UpdateExpression="REMOVE lastError") is False
+        assert self._doc(table) is None
+
+    def test_writes_to_an_existing_row(self, table):
+        table.put_item(Item={**self.DOC_KEY, "status": "uploading", "filename": "a.pdf"})
+
+        assert r.update_if_exists(
+            self.DOC_KEY,
+            UpdateExpression="SET #s = :s",
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={":s": "complete"},
+        )
+        assert self._doc(table) == {**self.DOC_KEY, "status": "complete", "filename": "a.pdf"}
+
+    def test_refuses_a_caller_supplied_condition(self, table):
+        with pytest.raises(TypeError):
+            r.update_if_exists(
+                self.DOC_KEY,
+                UpdateExpression="SET a = :a",
+                ConditionExpression="attribute_exists(SK)",
+                ExpressionAttributeValues={":a": 1},
+            )
+
+    def test_other_errors_still_raise(self, table):
+        """Only the existence guard is swallowed; a real failure is not."""
+        from botocore.exceptions import ClientError
+
+        table.put_item(Item=dict(self.DOC_KEY))
+        with pytest.raises(ClientError):
+            r.update_if_exists(self.DOC_KEY, UpdateExpression="SET a = :missing")
+
+
+class TestResourcePolicyStateOnARemovedRecord:
+    def test_recording_a_policy_does_not_recreate_the_record(self, table):
+        r.set_resource_policy_state(ASSISTANT_ID, APP_KB_ID, "KBSYNTH01", "rev-1")
+        assert _absent(table)
+
+    def test_clearing_a_policy_does_not_recreate_the_record(self, table):
+        """A REMOVE-only ``UpdateItem`` still creates a key-only item."""
+        r.set_resource_policy_state(ASSISTANT_ID, APP_KB_ID, None, None)
+        assert _absent(table)
+
+    def test_an_existing_record_still_records_its_policy(self, table):
+        _seed(table)
+        r.set_resource_policy_state(ASSISTANT_ID, APP_KB_ID, "KBSYNTH01", "rev-1")
+        assert _raw(table)["policyAwsKbId"] == "KBSYNTH01"
+
+
+class TestByteCapOnARemovedRecord:
+    """An ingestion that settles after its agent's knowledge base was torn down."""
+
+    def test_commit_does_not_recreate_the_record(self, table):
+        from apis.shared.kb_backend import byte_cap
+
+        byte_cap.commit(ASSISTANT_ID, APP_KB_ID, 100)
+        assert _absent(table)
+
+    def test_release_does_not_recreate_the_record(self, table):
+        from apis.shared.kb_backend import byte_cap
+
+        byte_cap.release(ASSISTANT_ID, APP_KB_ID, 100)
+        assert _absent(table)
+
+    def test_reserve_does_not_recreate_the_record(self, table):
+        from apis.shared.kb_backend import byte_cap
+
+        byte_cap.reserve(ASSISTANT_ID, APP_KB_ID, 100, 1000)
+        assert _absent(table)
+
+    def test_reserve_still_rejects_over_the_cap_on_an_existing_record(self, table):
+        """The existence guard must not turn a cap rejection into a silent no-op."""
+        from apis.shared.kb_backend import byte_cap
+
+        _seed(table)
+        byte_cap.reserve(ASSISTANT_ID, APP_KB_ID, 900, 1000)
+        with pytest.raises(byte_cap.ByteCapExceeded):
+            byte_cap.reserve(ASSISTANT_ID, APP_KB_ID, 200, 1000)
+        assert int(_raw(table)["totalBytes"]) == 900
+
+
+class TestSettleOnceOnARemovedDocument:
+    """``attribute_not_exists(byteCapSettled)`` is trivially true on a missing item,
+    so an unguarded ``settle_once`` recreated a deleted ``DOC#`` row holding only the
+    marker, and handed its caller a claim to settle the bytes a second time."""
+
+    DOC_KEY = {"PK": f"AST#{ASSISTANT_ID}", "SK": "DOC#doc-gone01"}
+
+    def test_a_removed_row_is_not_recreated_and_nothing_is_settled(self, table):
+        from apis.shared.kb_backend import byte_cap
+
+        assert byte_cap.settle_once(ASSISTANT_ID, "doc-gone01") is False
+        assert table.get_item(Key=self.DOC_KEY).get("Item") is None
+
+    def test_an_existing_row_is_still_settled_exactly_once(self, table):
+        from apis.shared.kb_backend import byte_cap
+
+        table.put_item(Item={**self.DOC_KEY, "status": "uploading", "sizeBytes": 10})
+
+        assert byte_cap.settle_once(ASSISTANT_ID, "doc-gone01") is True
+        assert byte_cap.settle_once(ASSISTANT_ID, "doc-gone01") is False
+        assert byte_cap.settle_once(ASSISTANT_ID, "doc-gone01") is False
+        item = table.get_item(Key=self.DOC_KEY)["Item"]
+        assert item["byteCapSettled"] is True
+        assert item["status"] == "uploading" and int(item["sizeBytes"]) == 10

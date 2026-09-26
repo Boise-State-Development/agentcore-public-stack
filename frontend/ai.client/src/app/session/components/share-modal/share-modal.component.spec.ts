@@ -90,6 +90,7 @@ describe('ShareModalComponent', () => {
       'sess-001',
       'public',
       undefined,
+      { suppressErrorToast: true },
     );
   });
 
@@ -310,5 +311,70 @@ describe('ShareModalComponent', () => {
     fixture.detectChanges();
 
     expect((component as any).existingShares().length).toBe(2);
+  });
+
+  it('does not offer "Project members" for a task outside a project', async () => {
+    await component.ngOnInit();
+    fixture.detectChanges();
+    expect((fixture.nativeElement as HTMLElement).textContent).not.toContain('Project members');
+  });
+});
+
+describe('ShareModalComponent (a task in a project)', () => {
+  let fixture: ComponentFixture<ShareModalComponent>;
+  let component: ShareModalComponent;
+  const shareService = {
+    createShare: vi.fn(),
+    listSharesForSession: vi.fn(),
+  };
+
+  beforeEach(async () => {
+    TestBed.resetTestingModule();
+    vi.clearAllMocks();
+    shareService.listSharesForSession.mockResolvedValue({ shares: [] });
+    TestBed.configureTestingModule({
+      imports: [ShareModalComponent],
+      providers: [
+        { provide: ShareService, useValue: shareService },
+        { provide: DIALOG_DATA, useValue: { sessionId: 'sess-9', ownerEmail: 'me@x.edu', projectId: 'prj_1' } as ShareModalData },
+        { provide: DialogRef, useValue: { close: vi.fn() } },
+      ],
+    });
+    fixture = TestBed.createComponent(ShareModalComponent);
+    component = fixture.componentInstance;
+    await component.ngOnInit();
+    fixture.detectChanges();
+  });
+
+  it('offers "Project members" first and selects it', () => {
+    const labels = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll('label span')).map(
+      l => l.textContent?.trim(),
+    );
+    expect(labels).toEqual(['Project members', 'Public link', 'Limited share']);
+    const checked = (fixture.nativeElement as HTMLElement).querySelector<HTMLInputElement>('input[type=radio]:checked');
+    expect(checked?.value).toBe('project');
+  });
+
+  it('shares to the project and says where it is listed', async () => {
+    shareService.createShare.mockResolvedValue({
+      shareId: 'sh_1', sessionId: 'sess-9', ownerId: 'u', accessLevel: 'project', projectId: 'prj_1',
+      createdAt: '2026-09-24T00:00:00Z', shareUrl: '/shared/sh_1',
+    } as ShareResponse);
+    await (component as any).onShare();
+    fixture.detectChanges();
+    expect(shareService.createShare).toHaveBeenCalledWith('sess-9', 'project', undefined, { suppressErrorToast: true });
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
+    expect(text).toContain('Shared with the project');
+    expect(text).toContain('Shared tasks');
+  });
+
+  it.each([
+    [403, 'You are no longer a member of this project.'],
+    [409, 'This project is archived. Restore it to make changes.'],
+  ])('shows the API detail on a %s', async (status, detail) => {
+    shareService.createShare.mockRejectedValue({ status, error: { detail } });
+    await (component as any).onShare();
+    fixture.detectChanges();
+    expect((fixture.nativeElement as HTMLElement).textContent).toContain(detail);
   });
 });

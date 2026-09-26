@@ -272,7 +272,10 @@ async def generate_abstract(outline: DocumentDigest, sample: str, model_id: str 
             modelId=model_id,
             messages=[{"role": "user", "content": [{"text": _abstract_prompt(outline, sample)}]}],
             system=[{"text": _ABSTRACT_SYSTEM_PROMPT}],
-            inferenceConfig={"temperature": 0.2, "maxTokens": _ABSTRACT_MAX_OUTPUT_TOKENS, "topP": 0.9},
+            # Temperature only: Claude 4.5+ rejects `temperature` and `topP`
+            # together, so a Claude DOCUMENT_DIGEST_MODEL_ID would otherwise
+            # silently drop every abstract.
+            inferenceConfig={"temperature": 0.2, "maxTokens": _ABSTRACT_MAX_OUTPUT_TOKENS},
         )
         if response.get("stopReason") == "max_tokens":
             logger.debug("Document abstract hit the token ceiling; discarding")

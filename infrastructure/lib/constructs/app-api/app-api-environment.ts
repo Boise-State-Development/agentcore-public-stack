@@ -37,8 +37,6 @@ export interface AppApiSsmParams {
   oauthProvidersTableArn: string;
   oauthUserTokensTableName: string;
   oauthUserTokensTableArn: string;
-  oauthTokenEncryptionKeyArn: string;
-  oauthClientSecretsArn: string;
   userQuotasTableName: string;
   userQuotasTableArn: string;
   quotaEventsTableName: string;
@@ -103,6 +101,7 @@ export interface AppApiSsmParams {
   memoryId: string;
   // Memory Spaces
   memorySpacesTableName: string;
+  projectsTableName: string;
   memorySpacesBucketName: string;
   // Workload identity
   workloadIdentityName: string;
@@ -162,8 +161,6 @@ export function resolveAppApiParams(
     oauthProvidersTableArn: refs.oauthProvidersTable.tableArn,
     oauthUserTokensTableName: refs.oauthUserTokensTable.tableName,
     oauthUserTokensTableArn: refs.oauthUserTokensTable.tableArn,
-    oauthTokenEncryptionKeyArn: refs.oauthTokenEncryptionKey.keyArn,
-    oauthClientSecretsArn: refs.oauthClientSecretsSecret.secretArn,
     userQuotasTableName: refs.userQuotasTable.tableName,
     userQuotasTableArn: refs.userQuotasTable.tableArn,
     quotaEventsTableName: refs.quotaEventsTable.tableName,
@@ -227,6 +224,7 @@ export function resolveAppApiParams(
     memoryId: overrides.memoryId,
     // Memory Spaces
     memorySpacesTableName: refs.memorySpacesTable.tableName,
+    projectsTableName: refs.projectsTable.tableName,
     memorySpacesBucketName: refs.memorySpacesBucket.bucketName,
     // Workload identity
     workloadIdentityName: refs.platformWorkloadIdentity.name,
@@ -304,8 +302,6 @@ export function buildAppApiEnvironment(
     AGENTCORE_MEMORY_TYPE: 'dynamodb',
     AGENTCORE_MEMORY_ID: params.memoryId,
     DYNAMODB_API_KEYS_TABLE_NAME: params.apiKeysTableName,
-    OAUTH_TOKEN_ENCRYPTION_KEY_ARN: params.oauthTokenEncryptionKeyArn,
-    OAUTH_CLIENT_SECRETS_ARN: params.oauthClientSecretsArn,
     DYNAMODB_OAUTH_PROVIDERS_TABLE_NAME: params.oauthProvidersTableName,
     DYNAMODB_OAUTH_USER_TOKENS_TABLE_NAME: params.oauthUserTokensTableName,
     AGENTCORE_RUNTIME_WORKLOAD_NAME: params.workloadIdentityName,
@@ -357,6 +353,10 @@ export function buildAppApiEnvironment(
     AGENTCORE_RUNTIME_LOG_GROUP: params.agentCoreRuntimeLogGroupName,
     DYNAMODB_MEMORY_SPACES_TABLE_NAME: params.memorySpacesTableName,
     S3_MEMORY_SPACES_BUCKET_NAME: params.memorySpacesBucketName,
+    // Shared Projects (default ON with a kill switch per env). The table name
+    // is always wired; only PROJECTS_ENABLED gates whether the routes mount.
+    PROJECTS_ENABLED: config.projects.enabled ? 'true' : 'false',
+    DYNAMODB_PROJECTS_TABLE_NAME: params.projectsTableName,
     // Skills v2 (default ON with a kill switch per env). Skills live in the
     // shared app-roles table, which is already wired, so this only gates route
     // mounting. Cohort access is the separate `skills` RBAC capability — this
@@ -371,6 +371,10 @@ export function buildAppApiEnvironment(
     // inference-api routes. It reads and writes the same assistants table the Agent
     // surface already uses, so there is no extra wiring beyond the flag.
     AGENT_MARKETPLACE_ENABLED: config.agentMarketplace.enabled ? 'true' : 'false',
+    // Composer dictation (Transcribe Streaming via the `/dictation` WS proxy).
+    // Rides the voice ticket signing secret + replay table wired below.
+    DICTATION_ENABLED: config.dictation.enabled ? 'true' : 'false',
+    DICTATION_LANGUAGES: config.dictation.languages,
     VOICE_TICKET_REPLAY_TABLE_NAME: params.voiceTicketReplayTableName,
     VOICE_TICKET_SIGNING_SECRET_ARN: params.voiceTicketSigningSecretArn,
   };

@@ -5,7 +5,7 @@
    End-of-turn recap dot
    ========================================
 
-   The same 7px orb the loading line pulses while a turn runs, left in place
+   The same 11px orb the loading line pulses while a turn runs, left in place
    once the turn ends — at rest. It is the period on the sentence: the mark
    that says the response is finished, in the spot the user was already
    watching. Same geometry and same colour token as
@@ -15,8 +15,8 @@
 
    Nothing here animates, so there is no `prefers-reduced-motion` case. */
 .turn-recap-dot {
-  width: 7px;
-  height: 7px;
+  width: 11px;
+  height: 11px;
   border-radius: 9999px;
   flex: none;
   background-color: var(--color-secondary-500);

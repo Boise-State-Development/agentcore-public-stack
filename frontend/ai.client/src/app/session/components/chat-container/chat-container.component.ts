@@ -9,6 +9,7 @@ import {
   signal,
   viewChild,
 } from '@angular/core';
+import { NgTemplateOutlet } from '@angular/common';
 import { Message } from '../../services/models/message.model';
 import { MessageListComponent } from '../message-list/message-list.component';
 import { ChatInputComponent } from '../chat-input/chat-input.component';
@@ -27,13 +28,14 @@ import {
 } from '../../../agents/components/agent-launch-card.component';
 import {
   AgentGovernance,
-  AssistantIndicatorComponent,
-} from '../assistant-indicator/assistant-indicator.component';
+  AgentIndicatorComponent,
+} from '../agent-indicator/agent-indicator.component';
 import { ModelService } from '../../services/model/model.service';
-import { SessionCostBadgeComponent } from '../session-cost-badge/session-cost-badge.component';
+import { ContextMeterComponent } from '../context-meter/context-meter.component';
 import { VoiceOverlayComponent } from '../voice-overlay';
 import { VoiceChatService } from '../../services/voice';
 import { ChatStateService } from '../../services/chat/chat-state.service';
+import { ProjectsService } from '../../../projects/services/projects.service';
 
 /**
  * Configuration options for ChatContainerComponent.
@@ -68,14 +70,15 @@ export interface ChatContainerConfig {
   selector: 'app-chat-container',
   standalone: true,
   imports: [
+    NgTemplateOutlet,
     MessageListComponent,
     ChatInputComponent,
     AnimatedTextComponent,
     ParagraphSkeletonComponent,
     Topnav,
     AgentLaunchCardComponent,
-    AssistantIndicatorComponent,
-    SessionCostBadgeComponent,
+    AgentIndicatorComponent,
+    ContextMeterComponent,
     VoiceOverlayComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -98,6 +101,7 @@ export class ChatContainerComponent {
 
   private readonly chatState = inject(ChatStateService);
   private readonly modelService = inject(ModelService);
+  private readonly projectsService = inject(ProjectsService);
 
   /**
    * What the bound Agent fixes for this conversation, for the indicator.
@@ -320,6 +324,18 @@ export class ChatContainerComponent {
    *  fixed footer / topnav reserve right-side space so the pane doesn't
    *  cover them. */
   protected readonly artifactPanelOpen = this.dockedPane.isOpen;
+  /**
+   * The crumb's name. A project's harness keeps the name the project was created
+   * with, so a renamed project reads from the project list when the sidebar has
+   * loaded it, and from the harness when it has not.
+   */
+  protected readonly indicatorName = computed(() => {
+    const a = this.assistant();
+    if (!a) return '';
+    if (!a.projectId) return a.name;
+    return this.projectsService.projects$().find(p => p.projectId === a.projectId)?.name ?? a.name;
+  });
+
   protected readonly isAssistantOwner = computed(() => {
     const a = this.assistant();
     if (!a) return false;

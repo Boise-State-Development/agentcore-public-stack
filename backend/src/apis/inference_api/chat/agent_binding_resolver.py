@@ -31,18 +31,35 @@ Phase 3 lands incrementally:
   is what mounts the ``AgentSkills`` disclosure plugin. Absent skill bindings ⇒ the
   request's ``enabled_skills`` drive the turn as today.
 - ``knowledge_base`` stays with the existing RAG path.
+
+**Degrade with notice — a Shared Project's harness only** (shared-projects §9.6). A project
+can have 200 members, and blocking the whole turn because one member lacks one bound tool
+would make the project unusable to them. With ``degrade=True`` a missing capability is
+dropped instead of raised: unavailable tools and skills are left out, an unavailable model
+falls through to the invoker's default, an unreachable memory binding is skipped, and
+each drop is recorded in ``plan.unavailable`` for the route to surface as an
+``agent_notice``. Ordinary shared agents keep block-with-message (D5) unchanged. Nothing
+about a drop enters the prompt — the notice is for the person, not the model.
 """
 
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+import json
+from dataclasses import dataclass, field
 from typing import List, Optional
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from apis.shared.assistants.models import Assistant
 from apis.shared.auth.models import User
 from apis.shared.feature_flags import memory_spaces_enabled, skills_enabled
 from apis.shared.memory.service import MemorySpaceService
+from apis.shared.models.retirement import (
+    EffectiveModel,
+    resolve_effective_model,
+    retired_model_message,
+)
 from apis.shared.rbac.service import get_app_role_service
 from apis.shared.skills.access import resolve_invocable_skill_ids
 from apis.shared.tools.scoped_ids import base_tool_id
@@ -125,6 +142,75 @@ class ResolvedSkills:
 
 
 @dataclass
+class UnavailableCapabilities:
+    """What a degraded resolution dropped (``degrade=True`` only)."""
+
+    model_id: Optional[str] = None
+    tools: List[str] = field(default_factory=list)
+    skills: List[str] = field(default_factory=list)
+    memory: Optional[str] = None
+
+    def __bool__(self) -> bool:
+        return bool(self.model_id or self.tools or self.skills or self.memory)
+
+    def notice(self) -> str:
+        """One plain-language sentence naming everything that was left out."""
+        parts: List[str] = []
+        if self.model_id:
+            parts.append(f"the model {self.model_id} (your default model is used instead)")
+        if self.tools:
+            parts.append(("the tool " if len(self.tools) == 1 else "the tools ") + ", ".join(self.tools))
+        if self.skills:
+            parts.append(("the skill " if len(self.skills) == 1 else "the skills ") + ", ".join(self.skills))
+        if self.memory:
+            parts.append(f'the memory space "{self.memory}"')
+        return (
+            "Some of this project's setup isn't available to your account, so this "
+            f"conversation runs without {'; '.join(parts)}. Ask an administrator for access."
+        )
+
+
+class AgentNoticeEvent(BaseModel):
+    """SSE ``agent_notice``: the turn runs, but without some of the agent's setup.
+
+    Emitted before ``message_start`` (beside ``quota_session_notice``) when a degraded
+    resolution dropped something. Travels on the SSE channel only — never into the
+    prompt, so the cacheable prefix is untouched. Not persisted: it describes this turn's
+    resolution, which the next turn re-derives.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    type: str = "agent_notice"
+    session_id: str = Field(..., alias="sessionId")
+    agent_id: str = Field(..., alias="agentId")
+    project_id: Optional[str] = Field(None, alias="projectId")
+    message: str
+    unavailable_model_id: Optional[str] = Field(None, alias="unavailableModelId")
+    unavailable_tools: List[str] = Field(default_factory=list, alias="unavailableTools")
+    unavailable_skills: List[str] = Field(default_factory=list, alias="unavailableSkills")
+    unavailable_memory: Optional[str] = Field(None, alias="unavailableMemory")
+
+    @classmethod
+    def from_unavailable(
+        cls, dropped: "UnavailableCapabilities", *, session_id: str, agent_id: str, project_id: Optional[str]
+    ) -> "AgentNoticeEvent":
+        return cls(
+            session_id=session_id,
+            agent_id=agent_id,
+            project_id=project_id,
+            message=dropped.notice(),
+            unavailable_model_id=dropped.model_id,
+            unavailable_tools=list(dropped.tools),
+            unavailable_skills=list(dropped.skills),
+            unavailable_memory=dropped.memory,
+        )
+
+    def to_sse_format(self) -> str:
+        return f"event: agent_notice\ndata: {json.dumps(self.model_dump(by_alias=True, exclude_none=True))}\n\n"
+
+
+@dataclass
 class AgentInvocationPlan:
     """What the Harness should apply for this turn after resolving the Agent.
 
@@ -139,39 +225,66 @@ class AgentInvocationPlan:
     memory: Optional[ResolvedMemoryBinding] = None
     tools: Optional[ResolvedTools] = None
     skills: Optional[ResolvedSkills] = None
+    unavailable: UnavailableCapabilities = field(default_factory=UnavailableCapabilities)
 
 
-async def resolve_agent_invocation(assistant: Assistant, invoker: User) -> AgentInvocationPlan:
-    """Resolve an Agent's governed capabilities for ``invoker``; raise on a block (D5).
+async def resolve_agent_invocation(
+    assistant: Assistant, invoker: User, *, degrade: bool = False
+) -> AgentInvocationPlan:
+    """Resolve an Agent's governed capabilities for ``invoker``.
 
-    PR-A resolves only ``modelConfig``. The model is access-checked against the invoker
-    with the same ``AppRoleService.can_access_model`` the harness uses elsewhere (R2), so
-    an author cannot compose a model the invoker is later blocked on at model-resolution
-    time.
+    Raises ``AgentBindingBlockedError`` on the first missing capability (D5), unless
+    ``degrade`` is set — a project harness — in which case the capability is dropped and
+    recorded in ``plan.unavailable`` instead (see the module docstring).
+
+    The model is access-checked against the invoker with the same
+    ``AppRoleService.can_access_model`` the harness uses elsewhere (R2), so an author
+    cannot compose a model the invoker is later blocked on at model-resolution time.
     """
     plan = AgentInvocationPlan()
 
     model_settings = assistant.model_settings
     if model_settings is not None:
+        # A retired model runs as its successor — including from a published
+        # snapshot, which still names the model it was reviewed on — and the
+        # access check below is on the model that will actually run
+        # (docs/specs/model-retirement.md §5 Stage 3). The Agent's params ride
+        # along; the successor's own spec drops what it does not support.
+        effective = await resolve_effective_model(model_settings.model_id) or EffectiveModel(
+            requested_id=model_settings.model_id, model_id=model_settings.model_id
+        )
+        model_id = effective.model_id
+        provider = effective.provider if effective.redirected else model_settings.provider
         app_role_service = get_app_role_service()
-        if not await app_role_service.can_access_model(invoker, model_settings.model_id):
+        if effective.denied:
+            if degrade:
+                plan.unavailable.model_id = model_settings.model_id
+            else:
+                raise AgentBindingBlockedError(retired_model_message(effective.retired, agent=True))
+        elif await app_role_service.can_access_model(invoker, model_id):
+            plan.model_override = ResolvedModel(
+                model_id=model_id,
+                provider=provider,
+                params=model_settings.params,
+            )
+        elif degrade:
+            # No override: the route's normal chain picks the invoker's default model.
+            plan.unavailable.model_id = model_id
+        else:
             raise AgentBindingBlockedError(
-                f"This agent runs on **{model_settings.model_id}**, which isn't available "
+                f"This agent runs on **{model_id}**, which isn't available "
                 "to your account. Ask an administrator for access, or use a different agent."
             )
-        plan.model_override = ResolvedModel(
-            model_id=model_settings.model_id,
-            provider=model_settings.provider,
-            params=model_settings.params,
-        )
 
-    plan.memory = await _resolve_memory(assistant, invoker)
-    plan.tools = await _resolve_tools(assistant, invoker)
-    plan.skills = await _resolve_skills(assistant, invoker)
+    plan.memory = await _resolve_memory(assistant, invoker, plan.unavailable if degrade else None)
+    plan.tools = await _resolve_tools(assistant, invoker, plan.unavailable if degrade else None)
+    plan.skills = await _resolve_skills(assistant, invoker, plan.unavailable if degrade else None)
     return plan
 
 
-async def _resolve_skills(assistant: Assistant, invoker: User) -> Optional[ResolvedSkills]:
+async def _resolve_skills(
+    assistant: Assistant, invoker: User, dropped: Optional[UnavailableCapabilities] = None
+) -> Optional[ResolvedSkills]:
     """Resolve the Agent's ``skill`` bindings to an effective skill set for ``invoker`` (D5).
 
     Each bound skill is re-checked against the invoker with the **invoke-through**
@@ -201,30 +314,39 @@ async def _resolve_skills(assistant: Assistant, invoker: User) -> Optional[Resol
     if not skill_bindings:
         return None
 
-    if not skills_enabled():
-        raise AgentBindingBlockedError(
-            "This agent uses Skills, which aren't enabled in this environment."
-        )
-
     refs: List[str] = []
     for binding in skill_bindings:
         if binding.ref not in refs:
             refs.append(binding.ref)
 
+    if not skills_enabled():
+        if dropped is not None:
+            dropped.skills.extend(refs)
+            return None
+        raise AgentBindingBlockedError(
+            "This agent uses Skills, which aren't enabled in this environment."
+        )
+
     invocable = await resolve_invocable_skill_ids(
         invoker, refs, getattr(assistant, "owner_id", None)
     )
-    for ref in refs:
-        if ref not in invocable:
-            raise AgentBindingBlockedError(
-                f"This agent uses the skill **{ref}**, which isn't available to your account. "
-                "Ask an administrator for access, or use a different agent."
-            )
+    missing = [ref for ref in refs if ref not in invocable]
+    if missing and dropped is None:
+        raise AgentBindingBlockedError(
+            f"This agent uses the skill **{missing[0]}**, which isn't available to your account. "
+            "Ask an administrator for access, or use a different agent."
+        )
+    if missing:
+        dropped.skills.extend(missing)
+    kept = [ref for ref in refs if ref in invocable]
+    # Always non-empty (see ResolvedSkills): a degraded harness left with no skills runs
+    # as if it bound none.
+    return ResolvedSkills(skill_ids=kept) if kept else None
 
-    return ResolvedSkills(skill_ids=refs)
 
-
-async def _resolve_tools(assistant: Assistant, invoker: User) -> Optional[ResolvedTools]:
+async def _resolve_tools(
+    assistant: Assistant, invoker: User, dropped: Optional[UnavailableCapabilities] = None
+) -> Optional[ResolvedTools]:
     """Resolve the Agent's ``tool`` bindings to an effective allowlist for ``invoker`` (D5).
 
     Each bound tool is re-checked against the invoker with the same
@@ -248,23 +370,37 @@ async def _resolve_tools(assistant: Assistant, invoker: User) -> Optional[Resolv
     # Access is per server, so check each base once: an Agent binding seven tools of one
     # MCP server is the normal shape here, and it should cost one gate call, not seven.
     checked_bases: set = set()
+    # Degrading, a denied base drops *every* ref of that server: the gate is per base, so
+    # skipping only the ref that was checked would let a later scoped ref of the same
+    # server through unchecked.
+    denied_bases: set = set()
     for binding in tool_bindings:
         ref = binding.ref
         base = base_tool_id(ref)
+        if base in denied_bases:
+            continue
         if base not in checked_bases:
             if not await app_role_service.can_access_tool(invoker, ref):
-                raise AgentBindingBlockedError(
-                    f"This agent uses the tool **{base}**, which isn't available to your "
-                    "account. Ask an administrator for access, or use a different agent."
-                )
+                if dropped is None:
+                    raise AgentBindingBlockedError(
+                        f"This agent uses the tool **{base}**, which isn't available to your "
+                        "account. Ask an administrator for access, or use a different agent."
+                    )
+                denied_bases.add(base)
+                dropped.tools.append(base)
+                continue
             checked_bases.add(base)
         if ref not in resolved:
             resolved.append(ref)
 
+    # Possibly empty after degrading, which still means "this agent's toolset is these
+    # tools" — never a fall-through to the request's enabled_tools.
     return ResolvedTools(tool_ids=resolved)
 
 
-async def _resolve_memory(assistant: Assistant, invoker: User) -> Optional[ResolvedMemoryBinding]:
+async def _resolve_memory(
+    assistant: Assistant, invoker: User, dropped: Optional[UnavailableCapabilities] = None
+) -> Optional[ResolvedMemoryBinding]:
     """Resolve the Agent's ``memory_space`` binding for ``invoker`` (D5); raise on block.
 
     v1 supports one Memory Space per Agent (Phase-1 UI writes at most one); any extras are
@@ -279,6 +415,9 @@ async def _resolve_memory(assistant: Assistant, invoker: User) -> Optional[Resol
     if not memory_spaces_enabled():
         # Design-time validation refuses to create these while the flag is off, so
         # hitting this means environment drift — block rather than silently drop (D5).
+        if dropped is not None:
+            dropped.memory = "memory"
+            return None
         raise AgentBindingBlockedError(
             "This agent uses Memory, which isn't enabled in this environment."
         )
@@ -290,13 +429,21 @@ async def _resolve_memory(assistant: Assistant, invoker: User) -> Optional[Resol
     space, role = await asyncio.to_thread(
         service.resolve_permission, binding.ref, invoker.user_id, invoker.email
     )
-    if space is None:
+    if space is None or space.is_project_space:
+        # A project's space never serves an agent binding (design-time validation
+        # refuses one); it reaches the model only through its project.
+        if dropped is not None:
+            dropped.memory = "memory"
+            return None
         raise AgentBindingBlockedError(
             "This agent's Memory Space no longer exists. Ask its owner to reconnect it."
         )
 
     required = "editor" if access == "readwrite" else "viewer"
     if role is None or _ROLE_RANK[role] < _ROLE_RANK[required]:
+        if dropped is not None:
+            dropped.memory = space.name
+            return None
         raise AgentBindingBlockedError(
             f"This agent needs **{required}** access to its Memory Space "
             f'"{space.name}", which your account doesn\'t have.'

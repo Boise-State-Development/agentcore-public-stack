@@ -71,6 +71,15 @@ def _kb_record(state: str = r.SHADOW, **overrides) -> Dict[str, Any]:
     return record
 
 
+@pytest.fixture(autouse=True)
+def _no_corpus_adoption():
+    """``run_promote`` adopts the corpus's bytes through the real table, and these
+    tests have none — unpatched it would reach for AWS. The adoption itself is
+    covered against moto in ``test_kb_byte_cap_lifecycle.py``."""
+    with patch.object(worker, "adopt_corpus", return_value=0):
+        yield
+
+
 async def _async_noop(*args, **kwargs):
     """An awaitable that does nothing.
 
@@ -171,6 +180,8 @@ class TestDispatcherLimit:
         rows = [_kb_record(r.SHADOW, appKbId=f"kb-{i}") for i in range(10)]
 
         def _query(state, now_iso, limit):
+            if state == r.TEARDOWN:
+                return []  # swept first; nothing queued here
             asked.append(limit)
             # promote yields 2 of the 4 allowed; the rest could fill the tick.
             available = 2 if state == r.PROMOTE else 10
@@ -226,12 +237,13 @@ class TestDispatcherSweep:
         ``born_managed`` now leads the whole list — a first upload has somebody
         watching a spinner for it, whereas every migration state is background work
         — so this asserts the ordering among the MIGRATION states, which is what the
-        drain-first argument was ever about.
+        drain-first argument was ever about. ``teardown`` comes next: a deleted
+        agent's knowledge base bills until it is gone.
         """
         states = dispatcher._work_states()
-        migration_states = [s for s in states if s != r.BORN_MANAGED]
+        migration_states = [s for s in states if s not in (r.BORN_MANAGED, r.TEARDOWN)]
         assert migration_states[0] == r.PROMOTE
-        assert states[0] == r.BORN_MANAGED
+        assert states[:2] == [r.BORN_MANAGED, r.TEARDOWN]
 
     def test_no_terminal_state_is_swept(self):
         assert not set(dispatcher._work_states()) & set(r.TERMINAL_STATES)

@@ -330,6 +330,52 @@ class TestMarkComplete:
         assert backend.ingested == []
 
 
+    def test_a_row_deleted_mid_pass_is_not_recreated(self, table):
+        """The document is deleted between the scan and the terminal write. The
+        write is skipped rather than recreating a ghost ``complete`` row, and the
+        report does not claim a correction it did not make."""
+        _seed_kb(table, "ast-1")
+        _seed_doc(table, "ast-1", "doc-1", status="uploading", updated_at=OLD)
+
+        class _DeletedDuringProbe(_FakeBackend):
+            async def search(self, kb_ref, query, top_k=5, retrieval_filter=None):
+                table.delete_item(Key={"PK": "AST#ast-1", "SK": "DOC#doc-1"})
+                return await super().search(kb_ref, query, top_k, retrieval_filter)
+
+        backend = _DeletedDuringProbe(statuses={"doc-1": "INDEXED"}, retrievable={"doc-1"})
+
+        report = _run(table, backend, armed=True)
+
+        assert [a.kind for a in report.planned_actions] == [dr.ACTION_MARK_COMPLETE]
+        assert report.actions_performed == 0
+        assert report.planned_actions[0].error is None
+        assert _doc(table, "ast-1", "doc-1") is None
+
+    def test_a_row_soft_deleted_mid_pass_is_not_revived(self, table):
+        """Soft-deleted between the scan and the write: the row stays ``deleting``.
+        ``complete`` over it would make a document its owner deleted retrievable."""
+        _seed_kb(table, "ast-1")
+        _seed_doc(table, "ast-1", "doc-1", status="uploading", updated_at=OLD)
+
+        class _SoftDeletedDuringProbe(_FakeBackend):
+            async def search(self, kb_ref, query, top_k=5, retrieval_filter=None):
+                table.update_item(
+                    Key={"PK": "AST#ast-1", "SK": "DOC#doc-1"},
+                    UpdateExpression="SET #s = :d",
+                    ExpressionAttributeNames={"#s": "status"},
+                    ExpressionAttributeValues={":d": "deleting"},
+                )
+                return await super().search(kb_ref, query, top_k, retrieval_filter)
+
+        backend = _SoftDeletedDuringProbe(statuses={"doc-1": "INDEXED"}, retrievable={"doc-1"})
+
+        report = _run(table, backend, armed=True)
+
+        assert report.actions_performed == 0
+        assert report.planned_actions[0].error is None
+        assert _doc(table, "ast-1", "doc-1")["status"] == "deleting"
+
+
 # ── Bedrock FAILED → failed ──────────────────────────────────────────────────
 class TestMarkFailed:
     @pytest.mark.parametrize("bedrock_status", ["FAILED", "METADATA_UPDATE_FAILED"])
@@ -400,6 +446,41 @@ class TestReIngest:
         assert report.planned_actions == []
         assert backend.ingested == []
         assert report.skipped_not_retrievable == ["doc-1"]
+
+    @pytest.mark.parametrize("deletion", ["soft-deleted", "hard-deleted"])
+    def test_a_document_deleted_mid_pass_is_not_re_ingested(self, table, deletion):
+        """The scan skips ``deleting`` rows, but a delete can land between the scan
+        and the re-ingest. Submitting anyway would put the bytes back into the
+        knowledge base after cleanup removed them — content no row points at."""
+        _seed_kb(table, "ast-1")
+        _seed_doc(
+            table, "ast-1", "doc-1", status="uploading", updated_at=OLD,
+            s3_key="assistants/ast-1/documents/doc-1/report.pdf", filename="report.pdf",
+        )
+        key = {"PK": "AST#ast-1", "SK": "DOC#doc-1"}
+
+        class _DeletedDuringProbe(_FakeAgent):
+            def get_knowledge_base_documents(self, **kwargs):
+                if deletion == "hard-deleted":
+                    table.delete_item(Key=key)
+                else:
+                    table.update_item(
+                        Key=key,
+                        UpdateExpression="SET #s = :d",
+                        ExpressionAttributeNames={"#s": "status"},
+                        ExpressionAttributeValues={":d": "deleting"},
+                    )
+                return super().get_knowledge_base_documents(**kwargs)
+
+        backend = _FakeBackend(statuses={"doc-1": "NOT_FOUND"})
+        backend._agent_client = _DeletedDuringProbe(backend)
+
+        report = _run(table, backend, armed=True)
+
+        assert [a.kind for a in report.planned_actions] == [dr.ACTION_RE_INGEST]
+        assert backend.ingested == [], "a deleted document was pushed back into the KB"
+        assert report.actions_performed == 0
+        assert report.planned_actions[0].error is None
 
 
 # ── In-flight and unknown statuses are left alone ─────────────────────────────

@@ -140,6 +140,20 @@ class ManagedModelsListResponse(BaseModel):
     total_count: int = Field(..., alias="totalCount")
 
 
+class ManagedModelOrderRequest(BaseModel):
+    """The full catalog, in the order it should be shown.
+
+    Every managed model's record id, exactly once. A partial list is rejected
+    rather than merged: it means the admin reordered a stale copy of the catalog
+    (a model was added or deleted elsewhere since they loaded it), and guessing
+    where the missing model belongs would silently reorder something they never
+    saw.
+    """
+    model_config = ConfigDict(populate_by_name=True)
+
+    model_ids: List[str] = Field(..., alias="modelIds", min_length=1)
+
+
 class ManagedModelIconResponse(BaseModel):
     """The result of uploading or clearing a managed model's icon.
 

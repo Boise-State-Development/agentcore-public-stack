@@ -99,6 +99,7 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
       xraySamplingReservoir: OBSERVABILITY_DEFAULT_XRAY_SAMPLING_RESERVOIR,
       xrayInsightsNotifications: false,
       agentCoreApplicationLogsEnabled: false,
+      runtimeLogRetentionSweepEnabled: true,
     },
     ragIngestion: {
       lambdaMemorySize: 3008,
@@ -137,6 +138,12 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     memorySpaces: {
       enabled: false,
     },
+    projects: {
+      enabled: false,
+    },
+    platformSelfService: {
+      enabled: false,
+    },
     feedbackEvalSampling: { enabled: false },
     skills: {
       enabled: false,
@@ -146,6 +153,10 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     },
     agentMarketplace: {
       enabled: false,
+    },
+    dictation: {
+      enabled: true,
+      languages: 'en-US',
     },
     fineTuning: {
       enabled: true,

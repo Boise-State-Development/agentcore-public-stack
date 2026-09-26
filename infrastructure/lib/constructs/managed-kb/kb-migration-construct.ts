@@ -448,6 +448,12 @@ export class KbMigrationConstruct extends Construct {
     // existing S3 keys — the same re-ingest path as the ingestion consumer,
     // so it needs the same read grant. Read-only: it never writes documents.
     documentsBucket.grantRead(this.documentReconcilerLambda);
+    // The KB reconciler re-anchors each knowledge base's `storedBytes`
+    // from a ListObjectsV2 of `assistants/{id}/documents/`. Without this
+    // grant every listing is AccessDenied, and the refresh never ran.
+    // Scoped to the `assistants/` prefix (the bucket-level List action
+    // cannot be narrowed by the key pattern). Read-only.
+    documentsBucket.grantRead(this.reconcilerLambda, 'assistants/*');
 
     this.workerLambda.grantInvoke(this.dispatcherLambda);
 
@@ -627,8 +633,13 @@ export class KbMigrationConstruct extends Construct {
         detailType: ['Object Created'],
         detail: {
           bucket: { name: [documentsBucket.bucketName] },
-          // Same key scope as the legacy notification's prefix filter.
-          object: { key: events.Match.prefix('assistants/') },
+          // Documents only. `assistants/` alone also matches agent icons
+          // (`assistants/{id}/icons/...`), which the consumer would only skip.
+          // The legacy S3 notification can't be narrowed the same way — its
+          // filter is prefix/suffix only and the assistant id comes first —
+          // but an EventBridge wildcard can, and changing a rule's pattern is
+          // an in-place update that leaves the bucket notification untouched.
+          object: { key: events.Match.wildcard('assistants/*/documents/*') },
         },
       },
     });

@@ -1,0 +1,235 @@
+{
+  "_about": "Synthetic eval set for `audit.py calibrate`. Every fact is invented for a synthetic memory-audit-probe-* actor. A retrieved record counts as a correct match for a fact when its text contains any of the fact's `keys` at the start of a word, case-insensitive (chosen to survive the extraction model's paraphrasing). `shape` says how the fact is stated; `sessions` groups the user turns into conversations, in order. `related` names facts on the same topic: their records are on-topic for this fact's questions, so they count as neither a match nor noise; so does any record containing one of `relatedKeys` (side facts extracted from the same message, such as field notes).",
+  "fillers": {
+    "pasted": "Here are my notes from lecture so the context is clear. Plate boundaries come in three kinds: divergent, where plates move apart and new crust forms at mid-ocean ridges; convergent, where one plate subducts beneath another and builds volcanic arcs or mountain belts; and transform, where plates slide past each other along faults such as the one that runs through coastal California. Earthquake depth increases with distance from the trench along a subduction zone, tracing the descending slab."
+  },
+  "sessions": [
+    ["capstone", "graduation", "advisor"],
+    ["dog", "allergy", "sister", "car"],
+    ["coop", "icelandic", "study_spot", "reminders"],
+    ["bullets", "rust", "vegetarian"],
+    ["dog_storms", "capstone_update"]
+  ],
+  "facts": [
+    {
+      "id": "capstone",
+      "related": ["capstone_update"],
+      "relatedKeys": ["capstone", "transect"],
+      "shape": "long_message",
+      "namespaces": ["SEMANTIC"],
+      "keys": ["pollinator"],
+      "say": "Quick background before my question. My capstone research project is about sagebrush pollinators on the Owyhee plateau. My field notes from last week say the bee traps on the north transect caught mostly sweat bees and a few bumblebees, the soil was still damp from the rain, and two of the pan traps had been knocked over by cattle, so the counts for that line are low. Anyway, can you help me think about sampling design?",
+      "queries": {
+        "direct": "What is my capstone research project about?",
+        "indirect": "Which journals would be a good fit for my capstone research?",
+        "filler": "Different question: what is my capstone research project about?"
+      }
+    },
+    {
+      "id": "graduation",
+      "shape": "short_fact",
+      "namespaces": ["SEMANTIC"],
+      "keys": ["cartography", "2028"],
+      "say": "I plan to graduate in May 2028 with a minor in cartography.",
+      "queries": {
+        "direct": "When am I planning to graduate?",
+        "indirect": "How many semesters do I have left before I finish my degree?",
+        "filler": "{pasted}\n\nAnyway, totally unrelated, what minor did I say I'm doing?"
+      }
+    },
+    {
+      "id": "advisor",
+      "shape": "short_fact",
+      "namespaces": ["SEMANTIC"],
+      "keys": ["vantrell"],
+      "say": "My thesis advisor is Dr. Imogen Vantrell in the Geosciences department.",
+      "queries": {
+        "direct": "Who is my thesis advisor?",
+        "indirect": "Draft an email to my advisor asking for a meeting next week.",
+        "filler": "ok thanks, that helps a lot. hmm, one more thing before I forget: who is my thesis advisor again?"
+      }
+    },
+    {
+      "id": "dog",
+      "related": ["dog_storms"],
+      "shape": "merge_candidate",
+      "namespaces": ["SEMANTIC"],
+      "keys": ["quillon", "greyhound"],
+      "say": "My dog is a three-legged greyhound named Quillon.",
+      "queries": {
+        "direct": "What kind of dog do I have?",
+        "indirect": "What's a good harness for my dog, given his situation?",
+        "filler": "Different question: what's my dog's name?"
+      }
+    },
+    {
+      "id": "allergy",
+      "shape": "short_fact",
+      "namespaces": ["SEMANTIC", "USER_PREFERENCE"],
+      "keys": ["cashew"],
+      "say": "Heads up, I'm allergic to cashews.",
+      "queries": {
+        "direct": "What am I allergic to?",
+        "indirect": "Is pesto safe for me to eat?",
+        "filler": "{pasted}\n\nSeparate thing: do I have any food allergies?"
+      }
+    },
+    {
+      "id": "sister",
+      "shape": "short_fact",
+      "namespaces": ["SEMANTIC"],
+      "keys": ["wren", "duluth"],
+      "say": "My sister Wren lives in Duluth and teaches middle-school orchestra.",
+      "queries": {
+        "direct": "Where does my sister live?",
+        "indirect": "I want to send my sister a gift for her students. Any ideas?",
+        "filler": "cool, thanks! also, random, what does my sister do for work?"
+      }
+    },
+    {
+      "id": "car",
+      "shape": "short_fact",
+      "namespaces": ["SEMANTIC"],
+      "keys": ["forester", "pickle"],
+      "say": "I drive a 2009 teal Subaru Forester that I call the Pickle.",
+      "queries": {
+        "direct": "What car do I drive?",
+        "indirect": "How often should I change the oil in my car?",
+        "filler": "Different question: what did I say I nicknamed my car?"
+      }
+    },
+    {
+      "id": "coop",
+      "shape": "long_message",
+      "namespaces": ["SEMANTIC"],
+      "keys": ["co-op", "coop"],
+      "say": "Ugh, this week is a mess. I have two midterms, the lab report is due Friday, my roommate is moving out, and I still have my shifts at the campus bike co-op on Tuesday and Thursday afternoons, which I can't really skip. Can you help me plan the week?",
+      "queries": {
+        "direct": "When are my shifts at work?",
+        "indirect": "Which afternoons am I free for a group study session?",
+        "filler": "{pasted}\n\nAnyway, where did I say I work?"
+      }
+    },
+    {
+      "id": "icelandic",
+      "shape": "long_message",
+      "namespaces": ["SEMANTIC", "USER_PREFERENCE"],
+      "keys": ["icelandic"],
+      "say": "Mornings are my only quiet time. I wake up at six, make tea, and practice Icelandic on the language app for twenty minutes before class because I want to be conversational before a trip to Reykjavik next summer. After that it is nonstop until evening. How can I fit a workout in?",
+      "queries": {
+        "direct": "What language am I learning?",
+        "indirect": "Recommend a podcast that would help my language practice.",
+        "filler": "ok great. hmm, quick one: which language did I say I'm studying?"
+      }
+    },
+    {
+      "id": "study_spot",
+      "shape": "preference",
+      "namespaces": ["USER_PREFERENCE", "SEMANTIC"],
+      "keys": ["window seat", "third-floor", "third floor", "carrel"],
+      "say": "I study best in the third-floor window seats of the library. The basement carrels are too dark for me.",
+      "queries": {
+        "direct": "Where do I like to study on campus?",
+        "indirect": "Plan a study session for my exam tomorrow, including where to go.",
+        "filler": "Different question: where do I like to study on campus?"
+      }
+    },
+    {
+      "id": "reminders",
+      "shape": "preference",
+      "namespaces": ["USER_PREFERENCE"],
+      "keys": ["evening before", "night before", "reminder"],
+      "say": "For meetings, I want reminders the evening before, not the same morning.",
+      "queries": {
+        "direct": "When do I like to get meeting reminders?",
+        "indirect": "Set up a reminder for my advising meeting on Thursday at 10.",
+        "filler": "{pasted}\n\nOk, separate thing: how do I like my meeting reminders?"
+      }
+    },
+    {
+      "id": "bullets",
+      "shape": "preference",
+      "namespaces": ["USER_PREFERENCE"],
+      "keys": ["bullet"],
+      "say": "Please keep your answers short: bullet points, no more than five bullets.",
+      "queries": {
+        "direct": "How do I like my answers formatted?",
+        "indirect": "Explain how photosynthesis works.",
+        "filler": "thanks! btw, remind me, what answer format did I ask you for?"
+      }
+    },
+    {
+      "id": "rust",
+      "shape": "preference",
+      "namespaces": ["USER_PREFERENCE", "SEMANTIC"],
+      "keys": ["rust"],
+      "say": "When you show me code examples, I prefer Rust rather than Python.",
+      "queries": {
+        "direct": "Which programming language do I prefer for examples?",
+        "indirect": "Show me how to read a CSV file and sum a column.",
+        "filler": "Different question: what language should code examples be in for me?"
+      }
+    },
+    {
+      "id": "vegetarian",
+      "shape": "short_fact",
+      "namespaces": ["SEMANTIC", "USER_PREFERENCE"],
+      "keys": ["vegetarian", "pescatarian"],
+      "say": "I'm vegetarian during the week but I eat fish on weekends.",
+      "queries": {
+        "direct": "What is my diet?",
+        "indirect": "Suggest a dinner I could cook on a Wednesday.",
+        "filler": "{pasted}\n\nAlso, what did I tell you about what I eat?"
+      }
+    },
+    {
+      "id": "dog_storms",
+      "related": ["dog"],
+      "shape": "merge_candidate",
+      "namespaces": ["SEMANTIC"],
+      "keys": ["thunder", "storm"],
+      "say": "Quillon is terrified of thunderstorms, so I stay home with him when a storm is forecast.",
+      "queries": {
+        "direct": "What is my dog afraid of?",
+        "indirect": "There's a storm forecast Saturday night. Should I still go to the concert?",
+        "filler": "Different question: why do I stay home when it storms?"
+      }
+    },
+    {
+      "id": "capstone_update",
+      "related": ["capstone"],
+      "relatedKeys": ["capstone", "transect"],
+      "shape": "merge_candidate",
+      "namespaces": ["SEMANTIC"],
+      "keys": ["nine sites", "9 sites", "switched"],
+      "say": "Update on my capstone: I've switched from bee traps to pan traps at nine sites across the plateau.",
+      "queries": {
+        "direct": "What sampling method am I using for my capstone now?",
+        "indirect": "How many trap sites should I budget supplies for?",
+        "filler": "ok thanks. another thing: what did I change about my capstone sampling?"
+      }
+    }
+  ],
+  "negatives": [
+    "What's the capital of Mongolia?",
+    "Explain how TCP slow start works.",
+    "Write a haiku about autumn leaves.",
+    "How do I convert a pandas DataFrame to JSON?",
+    "What year did the Berlin Wall fall?",
+    "Summarize the causes of the French Revolution.",
+    "What is the derivative of x cubed?",
+    "Help me write a cover letter for a barista job.",
+    "How do vaccines train the immune system?",
+    "What's the difference between a stock and a bond?",
+    "Translate 'good morning' into Japanese.",
+    "Why is the sky blue?",
+    "Give me three tips for a job interview.",
+    "How does a bill become law in the United States?",
+    "What is the Pythagorean theorem?",
+    "Explain the difference between mitosis and meiosis.",
+    "Can you proofread this sentence: their going to the store tomorow.",
+    "What are the rules of chess castling?",
+    "Different question: how do solar panels generate electricity?",
+    "{pasted}\n\nAnyway, can you summarize these notes in two sentences?"
+  ]
+}

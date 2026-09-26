@@ -102,6 +102,20 @@ def stub_model_role_service():
         yield service
 
 
+@pytest.fixture(autouse=True)
+def stub_catalog():
+    """The lifecycle validation and the delete guard read the whole catalog.
+
+    Empty by default; a test that exercises those rules sets ``return_value``.
+    """
+    with patch(
+        f"{MANAGED_MODELS_PATH}.list_all_managed_models",
+        new_callable=AsyncMock,
+        return_value=[],
+    ) as catalog:
+        yield catalog
+
+
 # ---------------------------------------------------------------------------
 # Requirement 7.1: Admin endpoint returns 200 for user with Admin role
 # ---------------------------------------------------------------------------
@@ -313,6 +327,70 @@ class TestCreateManagedModel:
         assert role_ids == ["staff"]
 
 
+class TestReorderManagedModels:
+    """PUT /admin/managed-models/order sets the catalog order."""
+
+    def test_reorder_returns_the_reordered_catalog(self, app, make_user):
+        admin = make_user(email="admin@example.com", user_id="admin-001", roles=["Admin"])
+        _override_require_admin(app, admin)
+
+        ordered = SAMPLE_MODEL.model_copy(update={"sort_order": 0})
+        with patch(
+            f"{MANAGED_MODELS_PATH}.reorder_managed_models",
+            new_callable=AsyncMock,
+            return_value=[ordered],
+        ) as reorder:
+            client = TestClient(app)
+            resp = client.put("/admin/managed-models/order", json={"modelIds": ["model-001"]})
+
+        assert resp.status_code == 200
+        reorder.assert_awaited_once_with(["model-001"])
+        body = resp.json()
+        assert body["totalCount"] == 1
+        assert body["models"][0]["sortOrder"] == 0
+
+    def test_is_not_routed_to_the_per_model_update(self, app, make_user):
+        """"order" must not be captured as a model id by PUT /managed-models/{model_id}."""
+        admin = make_user(email="admin@example.com", user_id="admin-001", roles=["Admin"])
+        _override_require_admin(app, admin)
+
+        with patch(
+            f"{MANAGED_MODELS_PATH}.reorder_managed_models",
+            new_callable=AsyncMock,
+            return_value=[],
+        ), patch(
+            f"{MANAGED_MODELS_PATH}.update_managed_model",
+            new_callable=AsyncMock,
+        ) as update:
+            client = TestClient(app)
+            client.put("/admin/managed-models/order", json={"modelIds": ["model-001"]})
+
+        update.assert_not_awaited()
+
+    def test_stale_catalog_returns_409(self, app, make_user):
+        admin = make_user(email="admin@example.com", user_id="admin-001", roles=["Admin"])
+        _override_require_admin(app, admin)
+
+        with patch(
+            f"{MANAGED_MODELS_PATH}.reorder_managed_models",
+            new_callable=AsyncMock,
+            side_effect=ValueError("Model order doesn't match the current catalog"),
+        ):
+            client = TestClient(app)
+            resp = client.put("/admin/managed-models/order", json={"modelIds": ["model-001"]})
+
+        assert resp.status_code == 409
+
+    def test_empty_order_is_rejected(self, app, make_user):
+        admin = make_user(email="admin@example.com", user_id="admin-001", roles=["Admin"])
+        _override_require_admin(app, admin)
+
+        client = TestClient(app)
+        resp = client.put("/admin/managed-models/order", json={"modelIds": []})
+
+        assert resp.status_code == 422
+
+
 # ---------------------------------------------------------------------------
 # Requirement 7.7: DELETE managed model returns 204 for admin
 # ---------------------------------------------------------------------------
@@ -367,3 +445,76 @@ class TestDeleteManagedModel:
             stub_model_role_service.revoke_model_from_all_roles.await_args.args[0]
             == SAMPLE_MODEL.model_id
         )
+
+
+# ---------------------------------------------------------------------------
+# Model retirement (docs/specs/model-retirement.md §7)
+# ---------------------------------------------------------------------------
+
+
+def _catalog_model(model_id: str, **kw) -> ManagedModel:
+    return SAMPLE_MODEL.model_copy(update={"id": f"uuid-{model_id}", "model_id": model_id, **kw})
+
+
+class TestModelLifecycleRules:
+    def test_update_rejects_a_replacement_that_is_not_in_the_catalog(self, app, make_user, stub_catalog):
+        _override_require_admin(app, make_user(email="admin@example.com", user_id="admin-001", roles=["Admin"]))
+        stub_catalog.return_value = [SAMPLE_MODEL]
+        update = AsyncMock()
+
+        with patch(f"{MANAGED_MODELS_PATH}.get_managed_model", new_callable=AsyncMock, return_value=SAMPLE_MODEL), \
+             patch(f"{MANAGED_MODELS_PATH}.update_managed_model", update):
+            resp = TestClient(app).put(
+                "/admin/managed-models/model-001",
+                json={"status": "retired", "replacedBy": "anthropic.claude-nope"},
+            )
+
+        assert resp.status_code == 400
+        assert "not in the model catalog" in resp.json()["detail"]
+        update.assert_not_awaited()
+
+    def test_update_validates_against_the_stored_default_flag(self, app, make_user, stub_catalog):
+        # A PATCH that only flips status must still see the stored isDefault.
+        _override_require_admin(app, make_user(email="admin@example.com", user_id="admin-001", roles=["Admin"]))
+        default_model = SAMPLE_MODEL.model_copy(update={"is_default": True})
+
+        with patch(f"{MANAGED_MODELS_PATH}.get_managed_model", new_callable=AsyncMock, return_value=default_model), \
+             patch(f"{MANAGED_MODELS_PATH}.update_managed_model", AsyncMock()):
+            resp = TestClient(app).put("/admin/managed-models/model-001", json={"status": "deprecated"})
+
+        assert resp.status_code == 400
+        assert "cannot be the default" in resp.json()["detail"]
+
+    def test_update_accepts_an_active_replacement(self, app, make_user, stub_catalog):
+        _override_require_admin(app, make_user(email="admin@example.com", user_id="admin-001", roles=["Admin"]))
+        successor = _catalog_model("anthropic.claude-next")
+        stub_catalog.return_value = [SAMPLE_MODEL, successor]
+        retired = SAMPLE_MODEL.model_copy(update={"status": "retired", "replaced_by": successor.model_id})
+
+        with patch(f"{MANAGED_MODELS_PATH}.get_managed_model", new_callable=AsyncMock, return_value=SAMPLE_MODEL), \
+             patch(f"{MANAGED_MODELS_PATH}.update_managed_model", new_callable=AsyncMock, return_value=retired):
+            resp = TestClient(app).put(
+                "/admin/managed-models/model-001",
+                json={"status": "retired", "replacedBy": successor.model_id},
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "retired"
+        assert resp.json()["replacedBy"] == successor.model_id
+
+    def test_delete_refuses_a_model_that_is_another_models_replacement(self, app, make_user, stub_catalog):
+        _override_require_admin(app, make_user(email="admin@example.com", user_id="admin-001", roles=["Admin"]))
+        stub_catalog.return_value = [
+            SAMPLE_MODEL,
+            _catalog_model("anthropic.claude-old", model_name="Claude Old", status="retired",
+                           replaced_by=SAMPLE_MODEL.model_id),
+        ]
+        delete = AsyncMock(return_value=True)
+
+        with patch(f"{MANAGED_MODELS_PATH}.get_managed_model", new_callable=AsyncMock, return_value=SAMPLE_MODEL), \
+             patch(f"{MANAGED_MODELS_PATH}.delete_managed_model", delete):
+            resp = TestClient(app).delete("/admin/managed-models/model-001")
+
+        assert resp.status_code == 409
+        assert "Claude Old" in resp.json()["detail"]
+        delete.assert_not_awaited()

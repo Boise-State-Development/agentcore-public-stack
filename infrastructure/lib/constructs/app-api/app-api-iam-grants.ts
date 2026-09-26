@@ -215,6 +215,7 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
     { sid: 'VoiceTicketReplayAccess', arn: props.refs.voiceTicketReplayTable.tableArn },
     { sid: 'UserFilesTableAccess', arn: props.refs.fileUploadTable.tableArn },
     { sid: 'SharedConversationsAccess', arn: props.refs.sharedConversationsTable.tableArn },
+    { sid: 'ProjectsTableAccess', arn: props.refs.projectsTable.tableArn },
   ];
 
   for (const { sid, arn } of coreTables) {
@@ -245,9 +246,22 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
     }),
   );
 
+  // ── Transcribe Streaming (composer dictation) ──
+  // The `/dictation/stream` proxy presigns a Transcribe WebSocket URL with the
+  // task role's credentials. Streaming transcription has no resource-level
+  // permissions, so the resource is `*`. Granted regardless of
+  // DICTATION_ENABLED so flipping the kill switch never needs an IAM deploy.
+  taskRole.addToPrincipalPolicy(
+    new iam.PolicyStatement({
+      sid: 'TranscribeStreamingDictation',
+      effect: iam.Effect.ALLOW,
+      actions: ['transcribe:StartStreamTranscriptionWebSocket'],
+      resources: ['*'],
+    }),
+  );
+
   // ── Secrets Manager ──
   const secrets = [
-    props.refs.oauthClientSecretsSecret.secretArn,
     props.refs.authProviderSecretsSecret.secretArn,
     props.refs.voiceTicketSigningSecret.secretArn,
     props.refs.bffCookieDataKeySecret.secretArn,
@@ -281,10 +295,12 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
   // ── KMS (OAuth token encryption + BFF cookie signing) ──
   // Two separate statements because the access patterns differ:
   //
-  //   - OAuth token encryption key: the app encrypts external-MCP
-  //     OAuth tokens before persisting them to DDB and decrypts on
-  //     read. Needs the full Encrypt + Decrypt + GenerateDataKey
-  //     trio.
+  //   - OAuth token encryption key: the CMK on the oauth-user-tokens
+  //     table. The app never calls KMS on it directly (tokens live in
+  //     the AgentCore Identity vault since 1.0.0-beta.23), but the
+  //     /connectors disconnect flag is a row in that table, and
+  //     DynamoDB calls Encrypt/Decrypt/GenerateDataKey on the
+  //     caller's behalf for every read and write.
   //   - BFF cookie signing key: the app NEVER calls KMS directly
   //     on this key. The plaintext data key lives in Secrets
   //     Manager (BFF_COOKIE_DATA_KEY_SECRET_ARN); the cookie codec
@@ -641,11 +657,16 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
   // `bedrock:InvokeModel` on the account's DEFAULT PROJECT —
   // `arn:aws:bedrock:<region>:<account>:project/default`, already matched by
   // the `:*` suffix. Do not narrow this to `inference-profile/*`.
+  //
+  // CountTokens sizes a memory file once per save (Shared Projects 2.3,
+  // apis/shared/memory/tokens.py) against the base foundation-model id,
+  // which the foundation-model resource below already covers. Without it
+  // every save falls back to the chars/4 estimate (the save still succeeds).
   taskRole.addToPrincipalPolicy(
     new iam.PolicyStatement({
       sid: 'BedrockInvokeModel',
       effect: iam.Effect.ALLOW,
-      actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
+      actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'bedrock:CountTokens'],
       resources: [
         `arn:aws:bedrock:*::foundation-model/*`,
         `arn:aws:bedrock:${config.awsRegion}:${config.awsAccount}:*`,

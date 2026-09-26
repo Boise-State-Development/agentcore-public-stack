@@ -32,6 +32,7 @@ from fastapi import (
     status,
 )
 
+from apis.app_api.agent_designer.services.agent_deletion import delete_owned_agent
 from apis.app_api.agent_designer.services.bindable_catalog import (
     BINDABLE_KINDS,
     list_bindable,
@@ -39,6 +40,7 @@ from apis.app_api.agent_designer.services.bindable_catalog import (
 from apis.app_api.agent_designer.services.agent_detail import (
     resolve_capabilities,
     resolve_listing_display,
+    resolve_model_retirement,
     resolve_runnability,
 )
 from apis.app_api.agent_designer.services.binding_validation import (
@@ -65,12 +67,13 @@ from apis.shared.assistants.version_resolution import (
     resolve_display_agent,
 )
 from apis.shared.assistants.service import (
+    PROJECT_HARNESS_EDIT_MESSAGE,
     assistant_exists,
     create_assistant,
     create_assistant_draft,
     AssistantListedError,
-    delete_assistant,
     get_assistant_with_access_check,
+    is_project_harness,
     list_assistant_shares,
     list_shared_with_user,
     list_user_assistants,
@@ -411,6 +414,10 @@ async def get_agent_endpoint(agent_id: str, current_user: User = Depends(require
             capabilities, model_label = await resolve_capabilities(assistant, current_user)
             response.capabilities = capabilities
             response.model_label = model_label
+            if assistant.model_settings is not None:
+                response.model_retirement = await resolve_model_retirement(
+                    assistant.model_settings.model_id
+                )
             response.publisher, response.category_label = await resolve_listing_display(assistant)
         except Exception:
             logger.warning(f"Failed to resolve capabilities for agent {scrub_log(agent_id)}", exc_info=True)
@@ -467,6 +474,9 @@ async def update_agent_endpoint(
             raise HTTPException(status_code=403, detail="You do not have permission to edit this agent")
         if permission == "editor" and request.visibility is not None and request.visibility != assistant.visibility:
             raise HTTPException(status_code=400, detail="Only the owner can change agent visibility")
+        # A project's harness is edited only through the project, which versions every save.
+        if is_project_harness(assistant):
+            raise HTTPException(status_code=409, detail=PROJECT_HARNESS_EDIT_MESSAGE)
 
         try:
             await validate_agent_write(
@@ -504,9 +514,11 @@ async def update_agent_endpoint(
 
 @router.delete("/{agent_id}", status_code=204)
 async def delete_agent_endpoint(agent_id: str, current_user: User = Depends(require_agents_enabled)):
-    """Delete an Agent (owner only)."""
+    """Delete an Agent (owner only) and everything it owns: documents, sync policies and its
+    managed knowledge base (``agent_deletion.delete_owned_agent``). This route used to
+    delete only the record, and it is the one the Agents page calls."""
     try:
-        deleted = await delete_assistant(agent_id, current_user.user_id)
+        deleted = await delete_owned_agent(agent_id, current_user.user_id)
         if not deleted:
             raise HTTPException(status_code=404, detail=f"Agent not found: {agent_id}")
     except HTTPException:

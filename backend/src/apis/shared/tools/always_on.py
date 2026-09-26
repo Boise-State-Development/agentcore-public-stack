@@ -26,7 +26,7 @@ import logging
 from typing import List, Optional
 
 from apis.shared.auth.models import User
-from apis.shared.tools.freshness import get_always_on_tool_ids
+from apis.shared.tools.freshness import get_always_on_tool_ids, get_system_tool_ids
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +73,43 @@ async def resolve_always_on_tool_ids(user: User) -> List[str]:
     except Exception:  # noqa: BLE001 - an RBAC lookup failure must not fail the turn
         logger.warning(
             "RBAC check for the always-on tool set failed; pinning nothing",
+            exc_info=True,
+        )
+        return []
+
+
+async def resolve_system_tool_ids(user: User) -> List[str]:
+    """The platform-shipped ('system') tool ids ``user`` is entitled to.
+
+    Like :func:`resolve_always_on_tool_ids` this **enables, never grants** — a
+    system tool the caller's roles do not carry is dropped by the same
+    ``filter_requested_tools`` predicate, so the surfaces cannot drift apart.
+
+    The one deliberate difference: this is **NOT** gated on
+    ``admin_always_on_tools_enabled()``. A system tool is part of the app, not a
+    per-deployment admin choice, so its inclusion does not hang on the admin
+    always-on feature flag. Everything else — the sorted order for a
+    byte-stable ``toolConfig`` prefix, verbatim ids, the never-raise contract —
+    matches the always-on resolver.
+    """
+    try:
+        system_ids = await get_system_tool_ids()
+    except Exception:  # noqa: BLE001 - a catalog blip must not fail the turn
+        logger.warning("Failed to read the system tool snapshot", exc_info=True)
+        return []
+
+    if not system_ids:
+        return []
+
+    try:
+        from apis.shared.rbac.service import get_app_role_service
+
+        return await get_app_role_service().filter_requested_tools(
+            user, sorted(system_ids)
+        )
+    except Exception:  # noqa: BLE001 - an RBAC lookup failure must not fail the turn
+        logger.warning(
+            "RBAC check for the system tool set failed; pinning nothing",
             exc_info=True,
         )
         return []

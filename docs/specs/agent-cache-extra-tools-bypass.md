@@ -191,7 +191,7 @@ arm 1, so the next promotion is mechanical rather than another audit):
 | `WORD_DOCUMENT` / `EXCEL_SPREADSHEET` / `POWERPOINT_PRESENTATION` | session, user | yes on identical reasoning — held back only so the experiment measures one variable |
 | `WORKSPACE` | session, user | same |
 | `SPREADSHEET` | session, user, **`assistant_id`** | no — needs the key + snapshot work above |
-| Memory-Space | user, email, **resolved binding** | no — and not gated on `enabled_tools`, so it can never be represented by an id; callers pass it as a separate veto |
+| Memory-Space | user, email, **resolved binding** | yes since Shared Projects 2.1: not gated on `enabled_tools`, so it is keyed directly (`memory_binding` digest of space id, name and access) and replayed on resume via `PausedTurnSnapshot.memory_binding` |
 
 So four of the six families are a one-line change to that frozenset once the
 artifact arm reads clean; only spreadsheets need the key extended.

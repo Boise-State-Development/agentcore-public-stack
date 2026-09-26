@@ -1,4 +1,5 @@
 import { Injectable, Signal, WritableSignal, computed, signal } from '@angular/core';
+import { ContextBreakdown } from '../models/content-types';
 
 /**
  * Mutable chat state for one conversation. Every stream-scoped flag lives
@@ -19,6 +20,9 @@ interface SessionChatState {
     costDollars: WritableSignal<number>;
     contextTokens: WritableSignal<number>;
     contextWindow: WritableSignal<number>;
+    /** What filled the context on the most recent turn, when the backend
+     *  could attribute it (Bedrock Converse only; null until a turn streams). */
+    contextBreakdown: WritableSignal<ContextBreakdown | null>;
     /** In-flight SSE request controller, one per session. */
     abortController: AbortController | null;
 }
@@ -66,6 +70,7 @@ export class ChatStateService {
     readonly costDollars = computed(() => this.viewedState()?.costDollars() ?? 0);
     readonly contextTokens = computed(() => this.viewedState()?.contextTokens() ?? 0);
     readonly contextWindowSize = computed(() => this.viewedState()?.contextWindow() ?? 0);
+    readonly contextBreakdown = computed(() => this.viewedState()?.contextBreakdown() ?? null);
 
     readonly contextPct = computed(() => {
         const window = this.contextWindowSize();
@@ -108,6 +113,15 @@ export class ChatStateService {
         }
     }
 
+    /**
+     * Whether ANY conversation is streaming, viewed or not. Navigating away
+     * from a streaming session keeps its stream alive on purpose, so "the
+     * viewed session is idle" does not mean a full page load is safe.
+     */
+    readonly anySessionLoading = computed(() =>
+        [...this.states().values()].some(state => state.loading())
+    );
+
     /** Whether a specific session is currently streaming (loading). */
     isSessionLoading(sessionId: string): boolean {
         return this.states().get(sessionId)?.loading() ?? false;
@@ -138,6 +152,11 @@ export class ChatStateService {
     /** A session's context window size, or 0 when unknown. */
     contextWindowFor(sessionId: string): number {
         return this.states().get(sessionId)?.contextWindow() ?? 0;
+    }
+
+    /** A session's most-recent-turn context breakdown, or null when unknown. */
+    contextBreakdownFor(sessionId: string): ContextBreakdown | null {
+        return this.states().get(sessionId)?.contextBreakdown() ?? null;
     }
 
     /** A session's context usage as a percentage of its window. */
@@ -229,11 +248,22 @@ export class ChatStateService {
         totalCost?: number;
         lastContextTokens?: number;
         contextWindow?: number;
+        contextBreakdown?: ContextBreakdown | null;
     } = {}): void {
         const state = this.stateFor(sessionId);
         state.costDollars.set(values.totalCost ?? 0);
         state.contextTokens.set(values.lastContextTokens ?? 0);
         state.contextWindow.set(values.contextWindow ?? 0);
+        // Session metadata carries no breakdown, and this re-runs whenever that
+        // metadata refreshes — so keep the live one unless a caller has one.
+        if (values.contextBreakdown !== undefined) {
+            state.contextBreakdown.set(values.contextBreakdown);
+        }
+    }
+
+    /** Restore a session's breakdown from persisted history (see MessageMapService). */
+    seedContextBreakdown(sessionId: string, breakdown: ContextBreakdown): void {
+        this.stateFor(sessionId).contextBreakdown.set(breakdown);
     }
 
     /** Add the cost of a completed turn to a session's running total. */
@@ -242,9 +272,20 @@ export class ChatStateService {
         this.stateFor(sessionId).costDollars.update(prev => prev + amount);
     }
 
-    /** Set a session's most-recent-turn context tokens (and optionally the window). */
-    setContext(sessionId: string, tokens: number, window?: number): void {
+    /**
+     * Set a session's most-recent-turn context tokens (and optionally the
+     * window and breakdown). A turn without a breakdown clears the previous
+     * one: it described a different prompt, and pairing it with this turn's
+     * total would misstate what is in the window.
+     */
+    setContext(
+        sessionId: string,
+        tokens: number,
+        window?: number,
+        breakdown?: ContextBreakdown | null,
+    ): void {
         const state = this.stateFor(sessionId);
+        state.contextBreakdown.set(breakdown ?? null);
         if (Number.isFinite(tokens) && tokens >= 0) {
             state.contextTokens.set(tokens);
         }
@@ -333,6 +374,7 @@ export class ChatStateService {
             costDollars: signal(0),
             contextTokens: signal(0),
             contextWindow: signal(0),
+            contextBreakdown: signal<ContextBreakdown | null>(null),
             abortController: null,
         };
         this.states.update(map => {

@@ -10,7 +10,7 @@ The service preserves cost records (C# prefix) for audit trails and billing accu
 
 import logging
 import os
-from typing import Optional
+from typing import Any, List, Optional
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -244,22 +244,23 @@ class SessionService:
 
             if old_sk == target_sk:
                 # Already migrated — soft-delete in place: flip status + drop the sparse
-                # recency keys so the row leaves the active listing. No row move.
+                # recency keys (user and project) so the row leaves both active
+                # listings. No row move.
                 self.table.update_item(
                     Key={'PK': pk, 'SK': target_sk},
                     UpdateExpression=(
                         "SET #s = :d, deleted = :true, deletedAt = :da "
-                        "REMOVE GSI4_PK, GSI4_SK"
+                        "REMOVE GSI4_PK, GSI4_SK, GSI5_PK, GSI5_SK"
                     ),
                     ExpressionAttributeNames={'#s': 'status'},
                     ExpressionAttributeValues={':d': 'deleted', ':true': True, ':da': deleted_at},
                 )
             else:
-                # Legacy row — migrate to the static tombstone (status=deleted, no GSI4)
-                # and drop the old row. One-time move; carry existing fields.
+                # Legacy row — migrate to the static tombstone (status=deleted, no
+                # recency keys) and drop the old row. One-time move; carry existing fields.
                 deleted_item = {
                     k: v for k, v in existing.items()
-                    if k not in ('PK', 'SK', 'GSI4_PK', 'GSI4_SK')
+                    if k not in ('PK', 'SK', 'GSI4_PK', 'GSI4_SK', 'GSI5_PK', 'GSI5_SK')
                 }
                 deleted_item.update({
                     'PK': pk,
@@ -335,68 +336,126 @@ class SessionService:
 
             client = boto3.client('bedrock-agentcore', region_name=config.region)
 
-            # List all events for this session with pagination (max 100 per request)
-            all_event_ids = []
-            next_token = None
-
-            try:
-                while True:
-                    list_params = {
-                        'memoryId': config.memory_id,
-                        'actorId': user_id,
-                        'sessionId': session_id,
-                        'maxResults': 100  # API max is 100
-                    }
-                    if next_token:
-                        list_params['nextToken'] = next_token
-
-                    events_response = client.list_events(**list_params)
-                    events = events_response.get('events', [])
-
-                    # Extract event IDs from this page
-                    for event in events:
-                        if event.get('eventId'):
-                            all_event_ids.append(event['eventId'])
-
-                    # Check for more pages
-                    next_token = events_response.get('nextToken')
-                    if not next_token:
-                        break
-
-            except client.exceptions.ResourceNotFoundException:
-                # Session doesn't exist in AgentCore Memory - nothing to delete
-                logger.debug("Session not found in AgentCore Memory")
-                return
-            except Exception as e:
-                logger.warning("Failed to list events for session")
-                return
-
-            if not all_event_ids:
-                logger.debug("No events found for session in AgentCore Memory")
-                return
-
-            # Delete events sequentially - this runs in background so no need
-            # for parallel execution overhead
-            deleted_count = 0
-            for event_id in all_event_ids:
-                try:
-                    client.delete_event(
-                        memoryId=config.memory_id,
-                        actorId=user_id,
-                        sessionId=session_id,
-                        eventId=event_id
-                    )
-                    deleted_count += 1
-                except Exception as e:
-                    logger.warning("Failed to delete event from AgentCore Memory")
-
-            logger.info("Deleted events from AgentCore Memory")
+            self._delete_session_events(client, config.memory_id, session_id, user_id)
+            # Events expire after 90 days; the summaries extracted from them do
+            # not, so purge runs whether or not any events were left.
+            self._purge_session_summaries(client, config.memory_id, session_id, user_id)
 
         except ImportError:
             logger.debug("AgentCore Memory SDK not available, skipping content deletion")
         except Exception as e:
             # Log but don't raise - content deletion failures shouldn't block session deletion
             logger.error("Failed to delete AgentCore Memory content for session")
+
+    def _delete_session_events(self, client: Any, memory_id: str, session_id: str, user_id: str) -> None:
+        """Delete every short-term event of one session (list, then delete one by one)."""
+        # List all events for this session with pagination (max 100 per request)
+        all_event_ids = []
+        next_token = None
+
+        try:
+            while True:
+                list_params = {
+                    'memoryId': memory_id,
+                    'actorId': user_id,
+                    'sessionId': session_id,
+                    'maxResults': 100  # API max is 100
+                }
+                if next_token:
+                    list_params['nextToken'] = next_token
+
+                events_response = client.list_events(**list_params)
+                events = events_response.get('events', [])
+
+                # Extract event IDs from this page
+                for event in events:
+                    if event.get('eventId'):
+                        all_event_ids.append(event['eventId'])
+
+                # Check for more pages
+                next_token = events_response.get('nextToken')
+                if not next_token:
+                    break
+
+        except client.exceptions.ResourceNotFoundException:
+            # Session doesn't exist in AgentCore Memory - nothing to delete
+            logger.debug("Session not found in AgentCore Memory")
+            return
+        except Exception as e:
+            logger.warning("Failed to list events for session")
+            return
+
+        if not all_event_ids:
+            logger.debug("No events found for session in AgentCore Memory")
+            return
+
+        # Delete events sequentially - this runs in background so no need
+        # for parallel execution overhead
+        deleted_count = 0
+        for event_id in all_event_ids:
+            try:
+                client.delete_event(
+                    memoryId=memory_id,
+                    actorId=user_id,
+                    sessionId=session_id,
+                    eventId=event_id
+                )
+                deleted_count += 1
+            except Exception as e:
+                logger.warning("Failed to delete event from AgentCore Memory")
+
+        logger.info("Deleted events from AgentCore Memory")
+
+    def _purge_session_summaries(self, client: Any, memory_id: str, session_id: str, user_id: str) -> None:
+        """Delete the long-term SUMMARIZATION records extracted from this session.
+
+        Summaries live under a per-session namespace
+        (``/strategies/{summaryId}/actors/{userId}/sessions/{sessionId}/``), so
+        they can be found and removed exactly. Semantic facts and preferences
+        live under the actor namespace, are consolidated across sessions and
+        carry no source-session metadata, so they are not attributable to one
+        session and are left alone (docs/specs/memory-baseline-decision.md).
+        """
+        from apis.app_api.memory.services.memory_service import _get_strategy_namespaces
+
+        _, _, summary_strategy_id = _get_strategy_namespaces()
+        if not summary_strategy_id:
+            logger.debug("No summary strategy discovered, skipping summary purge")
+            return
+
+        session_ns = f"/strategies/{summary_strategy_id}/actors/{user_id}/sessions/{session_id}"
+        record_ids: List[str] = []
+        next_token = None
+        try:
+            while True:
+                params = {"memoryId": memory_id, "namespace": session_ns, "maxResults": 100}
+                if next_token:
+                    params["nextToken"] = next_token
+                page = client.list_memory_records(**params)
+                for record in page.get("memoryRecordSummaries", []):
+                    # The namespace filter is a prefix; keep only this exact session.
+                    if any(ns.rstrip("/") == session_ns for ns in record.get("namespaces") or []):
+                        record_ids.append(record["memoryRecordId"])
+                next_token = page.get("nextToken")
+                if not next_token:
+                    break
+        except Exception:
+            logger.warning("Failed to list summary records for session")
+            return
+
+        deleted = 0
+        for i in range(0, len(record_ids), 100):
+            chunk = record_ids[i:i + 100]
+            try:
+                resp = client.batch_delete_memory_records(
+                    memoryId=memory_id,
+                    records=[{"memoryRecordId": rid} for rid in chunk],
+                )
+                deleted += len(resp.get("successfulRecords", chunk))
+            except Exception:
+                logger.warning("Failed to delete summary records for session")
+        if record_ids:
+            logger.info("Purged %d of %d summary records for deleted session", deleted, len(record_ids))
 
     def delete_session_files(self, session_id: str) -> None:
         """

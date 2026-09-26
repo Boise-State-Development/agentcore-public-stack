@@ -176,6 +176,7 @@ const ICON_ACCEPTED_MIME_TYPES = [
                 <button
                   type="button"
                   (click)="copyCallbackUrl(created.callbackUrl || '')"
+                  aria-label="Copy callback URL"
                   class="inline-flex items-center gap-2 rounded-2xl border border-gray-300 bg-white px-3 py-2.5 text-sm/6 font-semibold text-gray-700 hover:bg-gray-50 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600"
                   [appTooltip]="callbackCopied() ? 'Copied!' : 'Copy to clipboard'"
                 >
@@ -352,6 +353,7 @@ const ICON_ACCEPTED_MIME_TYPES = [
                       <button
                         type="button"
                         (click)="copyCallbackUrl(loaded.callbackUrl || '')"
+                        aria-label="Copy callback URL"
                         class="inline-flex items-center gap-2 rounded-2xl border border-gray-300 bg-white px-3 py-2.5 text-sm/6 font-semibold text-gray-700 hover:bg-gray-50 focus:outline-hidden focus:ring-3 focus:ring-primary-500/50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600"
                         [appTooltip]="callbackCopied() ? 'Copied!' : 'Copy to clipboard'"
                       >
@@ -418,6 +420,7 @@ const ICON_ACCEPTED_MIME_TYPES = [
                     <button
                       type="button"
                       (click)="showClientSecret.set(!showClientSecret())"
+                      [attr.aria-label]="showClientSecret() ? 'Hide client secret' : 'Show client secret'"
                       class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
                       [appTooltip]="showClientSecret() ? 'Hide secret' : 'Show secret'"
                     >

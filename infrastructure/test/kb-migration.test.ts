@@ -437,13 +437,15 @@ describe('KbMigrationConstruct — ingestion consumer (task 2.2)', () => {
     });
   });
 
-  it('is triggered by documents-bucket Object Created events under assistants/', () => {
+  it('is triggered by documents-bucket Object Created events under assistants/*/documents/', () => {
+    // Not a bare `assistants/` prefix: that also matches agent icons at
+    // `assistants/{id}/icons/...`, which are not documents.
     t.hasResourceProperties('AWS::Events::Rule', {
       EventPattern: Match.objectLike({
         source: ['aws.s3'],
         'detail-type': ['Object Created'],
         detail: Match.objectLike({
-          object: { key: [{ prefix: 'assistants/' }] },
+          object: { key: [{ wildcard: 'assistants/*/documents/*' }] },
         }),
       }),
       Targets: Match.arrayWith([
@@ -1042,6 +1044,24 @@ describe('KbMigrationConstruct — IAM', () => {
     );
     expect(allS3Actions).not.toContain('s3:PutObject');
     expect(allS3Actions).not.toContain('s3:DeleteObject');
+  });
+
+  it('lets the reconciler list and read the documents bucket, read-only', () => {
+    // `refresh_stored_bytes` totals a ListObjectsV2 of each assistant's
+    // documents prefix. Without a grant the listing is AccessDenied on
+    // every run and storedBytes is never re-anchored — which is exactly
+    // what happened until this grant existed.
+    const s3Actions = statementsForRole(t, /KbMigrationReconcilerLambdaServiceRole/).flatMap((s) =>
+      (Array.isArray(s.Action) ? s.Action : [s.Action]).filter(
+        (a): a is string => typeof a === 'string' && a.startsWith('s3:'),
+      ),
+    );
+    expect(s3Actions).toContain('s3:List*');
+    expect(s3Actions).toContain('s3:GetObject*');
+    for (const action of s3Actions) {
+      expect(action.startsWith('s3:Put')).toBe(false);
+      expect(action.startsWith('s3:Delete')).toBe(false);
+    }
   });
 });
 

@@ -102,6 +102,13 @@ class AgentModelConfig(BaseModel):
     )
 
 
+# The most an author may write as an agent's instructions (characters). Enforced where
+# instructions are saved and where a preview sends them live. The prompt builder's
+# runtime bound is this plus room for the platform text composed around it, so a saved
+# agent is never truncated. Prod's longest was 32,887 on 2026-09-24.
+MAX_AGENT_INSTRUCTIONS_CHARS = 100_000
+
+
 class AgentBinding(BaseModel):
     """A single primitive binding on an Agent (D3).
 
@@ -415,6 +422,15 @@ class Assistant(BaseModel):
     listing: Optional[AgentListing] = Field(
         None, description="Marketplace publication state (D2); absent = never submitted (D3)"
     )
+    # Shared Projects (docs/specs/shared-projects.md §3.2). A project's harness is an
+    # ordinary Agent record marked with the project that owns it: access resolves through
+    # project membership, and it never appears in agent lists, pins or the store.
+    kind: Optional[Literal["project"]] = Field(
+        None, description="'project' for a Shared Project's hidden harness; absent for every other agent"
+    )
+    project_id: Optional[str] = Field(
+        None, alias="projectId", description="The owning project when kind == 'project'"
+    )
 
 
 class CreateAssistantDraftRequest(BaseModel):
@@ -432,7 +448,7 @@ class CreateAssistantRequest(BaseModel):
 
     name: str = Field(..., description="Assistant display name")
     description: str = Field(..., description="Short summary")
-    instructions: str = Field(..., description="System prompt")
+    instructions: str = Field(..., max_length=MAX_AGENT_INSTRUCTIONS_CHARS, description="System prompt")
     visibility: Literal["PRIVATE", "PUBLIC", "SHARED"] = Field("PRIVATE", description="Access control")
     tags: Optional[List[str]] = Field(default_factory=list, description="Search keywords")
     starters: Optional[List[str]] = Field(default_factory=list, description="Conversation starter prompts")
@@ -456,7 +472,7 @@ class UpdateAssistantRequest(BaseModel):
 
     name: Optional[str] = Field(None, description="Assistant display name")
     description: Optional[str] = Field(None, description="Short summary")
-    instructions: Optional[str] = Field(None, description="System prompt")
+    instructions: Optional[str] = Field(None, max_length=MAX_AGENT_INSTRUCTIONS_CHARS, description="System prompt")
     visibility: Optional[Literal["PRIVATE", "PUBLIC", "SHARED"]] = Field(None, description="Access control")
     tags: Optional[List[str]] = Field(None, description="Search keywords")
     starters: Optional[List[str]] = Field(None, description="Conversation starter prompts")
@@ -513,6 +529,15 @@ class AssistantResponse(BaseModel):
         None, alias="userPermission", description="Requesting user's permission level on this assistant"
     )
 
+    # Shared Projects: a project task binds the project's harness, and the chat's crumb
+    # renders it as the project (not an Agent with Edit / Share, which the harness refuses).
+    kind: Optional[Literal["project"]] = Field(
+        None, description="'project' for a Shared Project's hidden harness; absent for every other agent"
+    )
+    project_id: Optional[str] = Field(
+        None, alias="projectId", description="The owning project when kind == 'project'"
+    )
+
 
 class AssistantsListResponse(BaseModel):
     """Response for listing assistants with pagination support"""
@@ -521,6 +546,24 @@ class AssistantsListResponse(BaseModel):
 
     assistants: List[AssistantResponse] = Field(..., description="List of assistants for the user")
     next_token: Optional[str] = Field(None, alias="nextToken", description="Pagination token for next page")
+
+
+class AgentModelRetirement(BaseModel):
+    """The pinned model is being retired, as the detail page says so (docs/specs/model-retirement.md).
+
+    Present only when the model is ``deprecated`` or ``retired``: without it the Details
+    panel names a model the runtime no longer runs. ``successorLabel`` is the model that
+    answers in its place — a display name, like every other detail-page field, never an id.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    status: str = Field(..., description="'deprecated' or 'retired'")
+    successor_label: Optional[str] = Field(
+        None, alias="successorLabel", description="Display name of the replacement model, when there is one"
+    )
+    retires_on: Optional[str] = Field(None, alias="retiresOn", description="ISO date of the cutover")
+    retirement_note: Optional[str] = Field(None, alias="retirementNote", description="Admin note for users")
 
 
 class AgentCapability(BaseModel):
@@ -649,6 +692,11 @@ class AgentResponse(BaseModel):
         None,
         alias="modelLabel",
         description="Display name of the pinned model, for the detail Details panel; absent when no model is pinned",
+    )
+    model_retirement: Optional[AgentModelRetirement] = Field(
+        None,
+        alias="modelRetirement",
+        description="Set when the pinned model is deprecated or retired; absent for an active model",
     )
     publisher: Optional["ListingPublisher"] = Field(
         None,

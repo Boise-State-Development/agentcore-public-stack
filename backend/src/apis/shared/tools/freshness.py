@@ -72,6 +72,14 @@ _public_tool_ids_cache: List[Optional[Tuple[FrozenSet[str], float]]] = [None]
 # server, which is the bug scoping exists to prevent.
 _always_on_tool_ids_cache: List[Optional[Tuple[FrozenSet[str], float]]] = [None]
 
+# Single-slot snapshot of (frozen_set_of_system_tool_ids, monotonic_fetched_at).
+# The ids of platform-shipped ('system') tools. Unlike the always-on slot this
+# holds only bare catalog ids (a system tool is pinned as a whole tool), and it
+# is filled by the SAME single catalog pass as the other three. Kept separate
+# from the always-on slot because system inclusion is NOT gated on the
+# ADMIN_ALWAYS_ON_TOOLS_ENABLED flag — see resolve_system_tool_ids.
+_system_tool_ids_cache: List[Optional[Tuple[FrozenSet[str], float]]] = [None]
+
 _TTL_SECONDS = 10.0
 
 
@@ -80,6 +88,7 @@ def _reset_for_tests() -> None:
     _all_tool_ids_cache[0] = None
     _public_tool_ids_cache[0] = None
     _always_on_tool_ids_cache[0] = None
+    _system_tool_ids_cache[0] = None
 
 
 async def _fetch_updated_at(tool_id: str) -> Optional[str]:
@@ -194,6 +203,23 @@ async def get_always_on_tool_ids() -> FrozenSet[str]:
     return await _get_snapshot(_always_on_tool_ids_cache, "always-on")
 
 
+async def get_system_tool_ids() -> FrozenSet[str]:
+    """Return the platform-shipped ('system') tool ids, TTL-cached per process.
+
+    Bare catalog ids only — a system tool is pinned as a whole tool, never as
+    one tool of an MCP server. **Enables, never grants**: the caller must still
+    filter these against its own grant set (`resolve_system_tool_ids`).
+
+    Derived from the same `list_tools()` read that fills the all-ids,
+    public-ids and always-on slots, so it adds no DynamoDB round trip. Distinct
+    from the always-on slot because system tools are included regardless of the
+    admin always-on feature flag.
+
+    Same never-raise contract as `get_all_tool_ids`.
+    """
+    return await _get_snapshot(_system_tool_ids_cache, "system")
+
+
 def _always_on_ids_for(tool) -> List[str]:
     """The pinned ids one catalog row contributes.
 
@@ -262,7 +288,31 @@ async def _get_snapshot(
                 exc_info=True,
             )
     _always_on_tool_ids_cache[0] = (frozenset(always_on_ids), now)
+    # System snapshot is status-filtered, UNLIKE the public/always-on slots.
+    # A system tool is force-injected on every granted turn, so an admin's only
+    # runtime kill-switch is the row's status: flipping it to `disabled` (or
+    # `deprecated`) in the Tools panel must drop it from the injected set on the
+    # next turn, with no redeploy. `_is_active_status` treats a ToolStatus enum
+    # and its bare string value the same, and a missing status as active (every
+    # row written before the status field, and the seeder's "active").
+    _system_tool_ids_cache[0] = (
+        frozenset(
+            t.tool_id
+            for t in tools
+            if getattr(t, "system", False) and _is_active_status(t)
+        ),
+        now,
+    )
     return slot[0][0]  # type: ignore[index]
+
+
+def _is_active_status(tool) -> bool:
+    """Whether a catalog row counts as active (enum or bare string, absent = active)."""
+    status = getattr(tool, "status", None)
+    if status is None:
+        return True
+    value = getattr(status, "value", status)
+    return value == "active"
 
 
 def invalidate(tool_id: Optional[str] = None) -> None:
@@ -283,3 +333,4 @@ def invalidate(tool_id: Optional[str] = None) -> None:
     _all_tool_ids_cache[0] = None
     _public_tool_ids_cache[0] = None
     _always_on_tool_ids_cache[0] = None
+    _system_tool_ids_cache[0] = None

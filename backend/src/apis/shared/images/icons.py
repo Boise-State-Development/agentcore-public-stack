@@ -278,3 +278,39 @@ class IconStore:
             self._client().delete_object(Bucket=self.bucket_name, Key=icon_key)
         except ClientError as e:  # pragma: no cover - network/permission path
             logger.warning(f"{self.label}: delete failed for key={icon_key}: {e}")
+
+    def delete_prefix(self, prefix: str) -> int:
+        """Delete every object under ``prefix`` and return how many went.
+
+        For an owner that is itself going away: its record held one key, but a key is
+        not the whole story (an upload that failed after its put leaves an object no
+        record names), so the owner's whole icon folder goes. Raises on a list or
+        delete failure; the caller decides whether that may fail its own operation.
+
+        ``prefix`` must end in ``/`` so ``assistants/ast-1/icons`` can never also
+        match ``assistants/ast-10/icons``.
+        """
+        if not prefix or not prefix.endswith("/"):
+            raise ValueError(f"refusing to delete under an unterminated prefix: {prefix!r}")
+        if not self.enabled:
+            return 0
+        client = self._client()
+        deleted = 0
+        for page in client.get_paginator("list_objects_v2").paginate(Bucket=self.bucket_name, Prefix=prefix):
+            keys = [{"Key": obj["Key"]} for obj in page.get("Contents", [])]
+            if not keys:
+                continue
+            # A list page is at most 1,000 keys, which is also delete_objects' ceiling.
+            response = client.delete_objects(
+                Bucket=self.bucket_name, Delete={"Objects": keys, "Quiet": True}
+            )
+            errors = response.get("Errors", [])
+            if errors:
+                raise IconStoreError(
+                    f"{self.label}: {len(errors)} of {len(keys)} deletes failed under {prefix} "
+                    f"(first: {errors[0].get('Key')}: {errors[0].get('Code')})"
+                )
+            deleted += len(keys)
+        if deleted:
+            logger.info(f"🖼️ {self.label}: deleted {deleted} object(s) under {prefix}")
+        return deleted

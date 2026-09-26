@@ -9,6 +9,7 @@ A failed update never raises — the caller is a fire-and-forget background
 task and we'd rather lose a progress tick than abort the crawl.
 """
 
+import asyncio
 import logging
 import os
 import time
@@ -52,6 +53,18 @@ def _table():
     if not table_name:
         raise ValueError("DYNAMODB_ASSISTANTS_TABLE_NAME environment variable not set")
     return boto3.resource("dynamodb").Table(table_name)
+
+
+async def _run_ddb(fn: "Any") -> "Any":
+    """Run a synchronous boto3 table call in the default thread pool.
+
+    Every DynamoDB call in this module is blocking boto3 network I/O. Called
+    directly inside an `async def` it stalls the shared event loop that serves
+    all HTTP traffic — and the crawler hits these per page (see
+    `increment_counters`). Offloading to a thread lets the loop keep serving
+    other requests during each round-trip.
+    """
+    return await asyncio.get_running_loop().run_in_executor(None, fn)
 
 
 def _ddb_safe(value: Any) -> Any:
@@ -103,7 +116,7 @@ async def create_crawl_job(
     item = job.model_dump(by_alias=True, exclude_none=True)
     item["PK"] = f"AST#{assistant_id}"
     item["SK"] = f"CRAWL#{job.crawl_id}"
-    _table().put_item(Item=_ddb_safe(item))
+    await _run_ddb(lambda: _table().put_item(Item=_ddb_safe(item)))
     logger.info(
         "Created crawl %s for assistant %s (root=%s)",
         job.crawl_id,
@@ -114,8 +127,10 @@ async def create_crawl_job(
 
 
 async def get_crawl_job(assistant_id: str, crawl_id: str) -> Optional[CrawlJob]:
-    response = _table().get_item(
-        Key={"PK": f"AST#{assistant_id}", "SK": f"CRAWL#{crawl_id}"}
+    response = await _run_ddb(
+        lambda: _table().get_item(
+            Key={"PK": f"AST#{assistant_id}", "SK": f"CRAWL#{crawl_id}"}
+        )
     )
     item = response.get("Item")
     if not item:
@@ -137,9 +152,11 @@ async def list_all_crawls(assistant_id: str) -> List[CrawlJob]:
     try:
         from boto3.dynamodb.conditions import Key
 
-        response = _table().query(
-            KeyConditionExpression=Key("PK").eq(f"AST#{assistant_id}")
-            & Key("SK").begins_with("CRAWL#"),
+        response = await _run_ddb(
+            lambda: _table().query(
+                KeyConditionExpression=Key("PK").eq(f"AST#{assistant_id}")
+                & Key("SK").begins_with("CRAWL#"),
+            )
         )
     except Exception as e:
         logger.error("Failed to list crawls for %s: %s", assistant_id, e)
@@ -161,8 +178,10 @@ async def hard_delete_crawl_job(assistant_id: str, crawl_id: str) -> bool:
     referencing this crawl's root_url is removed. Returns True on success.
     """
     try:
-        _table().delete_item(
-            Key={"PK": f"AST#{assistant_id}", "SK": f"CRAWL#{crawl_id}"}
+        await _run_ddb(
+            lambda: _table().delete_item(
+                Key={"PK": f"AST#{assistant_id}", "SK": f"CRAWL#{crawl_id}"}
+            )
         )
         logger.info("Hard-deleted crawl %s for assistant %s", crawl_id, assistant_id)
         return True
@@ -213,10 +232,12 @@ async def list_active_crawls(assistant_id: str) -> List[CrawlJob]:
     try:
         from boto3.dynamodb.conditions import Attr, Key
 
-        response = _table().query(
-            KeyConditionExpression=Key("PK").eq(f"AST#{assistant_id}")
-            & Key("SK").begins_with("CRAWL#"),
-            FilterExpression=Attr("status").eq("running"),
+        response = await _run_ddb(
+            lambda: _table().query(
+                KeyConditionExpression=Key("PK").eq(f"AST#{assistant_id}")
+                & Key("SK").begins_with("CRAWL#"),
+                FilterExpression=Attr("status").eq("running"),
+            )
         )
     except Exception as e:
         logger.error("Failed to list active crawls for %s: %s", assistant_id, e)
@@ -281,11 +302,13 @@ async def increment_counters(
         expression_parts.append("ADD " + ", ".join(add_parts))
 
     try:
-        _table().update_item(
-            Key={"PK": f"AST#{assistant_id}", "SK": f"CRAWL#{crawl_id}"},
-            UpdateExpression=" ".join(expression_parts),
-            ExpressionAttributeValues=values,
-            ConditionExpression="attribute_exists(PK)",
+        await _run_ddb(
+            lambda: _table().update_item(
+                Key={"PK": f"AST#{assistant_id}", "SK": f"CRAWL#{crawl_id}"},
+                UpdateExpression=" ".join(expression_parts),
+                ExpressionAttributeValues=values,
+                ConditionExpression="attribute_exists(PK)",
+            )
         )
     except Exception as e:
         logger.warning(
@@ -307,15 +330,17 @@ async def restore_crawl_ttl(*, assistant_id: str, crawl_id: str) -> None:
     from botocore.exceptions import ClientError
 
     try:
-        _table().update_item(
-            Key={"PK": f"AST#{assistant_id}", "SK": f"CRAWL#{crawl_id}"},
-            UpdateExpression="SET #ttl = :ttl",
-            ExpressionAttributeNames={"#ttl": "ttl", "#status": "status"},
-            ExpressionAttributeValues={
-                ":ttl": int(time.time()) + _FINALIZED_TTL_DAYS * 86400,
-                ":running": "running",
-            },
-            ConditionExpression="attribute_exists(PK) AND #status <> :running",
+        await _run_ddb(
+            lambda: _table().update_item(
+                Key={"PK": f"AST#{assistant_id}", "SK": f"CRAWL#{crawl_id}"},
+                UpdateExpression="SET #ttl = :ttl",
+                ExpressionAttributeNames={"#ttl": "ttl", "#status": "status"},
+                ExpressionAttributeValues={
+                    ":ttl": int(time.time()) + _FINALIZED_TTL_DAYS * 86400,
+                    ":running": "running",
+                },
+                ConditionExpression="attribute_exists(PK) AND #status <> :running",
+            )
         )
     except ClientError as e:
         if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
@@ -335,16 +360,18 @@ async def reset_crawl_for_refresh(*, assistant_id: str, crawl_id: str) -> bool:
 
     expression_attribute_names = {"#status": "status", "#ttl": "ttl", "#err": "error"}
     try:
-        _table().update_item(
-            Key={"PK": f"AST#{assistant_id}", "SK": f"CRAWL#{crawl_id}"},
-            UpdateExpression=(
-                "SET #status = :running, startedAt = :now, updatedAt = :now, "
-                "discoveredCount = :zero, fetchedCount = :zero, failedCount = :zero "
-                "REMOVE #ttl, #err, completedAt"
-            ),
-            ExpressionAttributeValues={":running": "running", ":now": _now(), ":zero": 0},
-            ExpressionAttributeNames=expression_attribute_names,
-            ConditionExpression="attribute_exists(PK)",
+        await _run_ddb(
+            lambda: _table().update_item(
+                Key={"PK": f"AST#{assistant_id}", "SK": f"CRAWL#{crawl_id}"},
+                UpdateExpression=(
+                    "SET #status = :running, startedAt = :now, updatedAt = :now, "
+                    "discoveredCount = :zero, fetchedCount = :zero, failedCount = :zero "
+                    "REMOVE #ttl, #err, completedAt"
+                ),
+                ExpressionAttributeValues={":running": "running", ":now": _now(), ":zero": 0},
+                ExpressionAttributeNames=expression_attribute_names,
+                ConditionExpression="attribute_exists(PK)",
+            )
         )
         return True
     except ClientError as e:
@@ -403,12 +430,14 @@ async def finalize_crawl(
         update_expression += " REMOVE " + ", ".join(remove_parts)
 
     try:
-        _table().update_item(
-            Key={"PK": f"AST#{assistant_id}", "SK": f"CRAWL#{crawl_id}"},
-            UpdateExpression=update_expression,
-            ExpressionAttributeValues=values,
-            ExpressionAttributeNames=expression_attribute_names,
-            ConditionExpression="attribute_exists(PK)",
+        await _run_ddb(
+            lambda: _table().update_item(
+                Key={"PK": f"AST#{assistant_id}", "SK": f"CRAWL#{crawl_id}"},
+                UpdateExpression=update_expression,
+                ExpressionAttributeValues=values,
+                ExpressionAttributeNames=expression_attribute_names,
+                ConditionExpression="attribute_exists(PK)",
+            )
         )
     except Exception as e:
         logger.error(

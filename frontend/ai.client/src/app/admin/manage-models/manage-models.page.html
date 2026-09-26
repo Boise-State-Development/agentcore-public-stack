@@ -5,7 +5,8 @@
       <div>
         <h1 class="text-2xl/8 font-bold text-gray-900 dark:text-white">Manage Models</h1>
         <p class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">
-          Enable, configure, and remove the models available to users.
+          Enable, configure, and remove the models available to users. Their order here
+          is the order they appear in the chat model picker.
         </p>
       </div>
       <a
@@ -75,6 +76,13 @@
     <div class="mb-3 flex flex-col gap-1 text-xs/5 sm:flex-row sm:items-center sm:justify-between">
       <p class="text-gray-500 dark:text-gray-400">
         {{ filteredModels().length }} model{{ filteredModels().length !== 1 ? 's' : '' }}
+        @if (savingOrder()) {
+          <span class="text-gray-400 dark:text-gray-500">· Saving order…</span>
+        } @else if (canReorder()) {
+          <span class="text-gray-400 dark:text-gray-500">· Drag to reorder</span>
+        } @else if (hasActiveFilters() && filteredModels().length > 1) {
+          <span class="text-gray-400 dark:text-gray-500">· Clear filters to reorder</span>
+        }
       </p>
       <div class="flex flex-wrap items-center gap-x-4 gap-y-1">
         <span class="text-gray-400 dark:text-gray-500">Add from catalog:</span>
@@ -113,35 +121,49 @@
         </p>
       </div>
     } @else {
-      <ul class="divide-y divide-gray-200 overflow-hidden rounded-2xl border border-gray-200 bg-white dark:divide-gray-700 dark:border-gray-700 dark:bg-gray-800">
-        @for (model of filteredModels(); track model.id) {
-          <li>
+      <!-- Announces keyboard and pointer moves; the list itself doesn't. -->
+      <p class="sr-only" aria-live="polite">{{ reorderAnnouncement() }}</p>
+
+      <ul
+        cdkDropList
+        cdkDropListLockAxis="y"
+        [cdkDropListData]="filteredModels()"
+        [cdkDropListDisabled]="!canReorder()"
+        (cdkDropListDropped)="onDrop($event)"
+        class="divide-y divide-gray-200 overflow-hidden rounded-2xl border border-gray-200 bg-white dark:divide-gray-700 dark:border-gray-700 dark:bg-gray-800"
+      >
+        @for (model of filteredModels(); track model.id; let i = $index) {
+          <li
+            cdkDrag
+            [cdkDragData]="model"
+            cdkDragPreviewClass="manage-models-drag-preview"
+            class="bg-white dark:bg-gray-800"
+          >
             <!-- Row -->
             <div class="flex items-center gap-3 px-3 py-2.5 sm:px-4">
-              <!-- Expand toggle -->
-              <button
-                type="button"
-                (click)="toggleExpand(model.id)"
-                [attr.aria-expanded]="isExpanded(model.id)"
-                [attr.aria-controls]="'model-detail-' + model.id"
-                [attr.aria-label]="(isExpanded(model.id) ? 'Hide' : 'Show') + ' details for ' + model.modelName"
-                class="flex size-7 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
-              >
-                <ng-icon
-                  name="heroChevronDown"
-                  class="size-4 transition-transform duration-150"
-                  [class.rotate-180]="isExpanded(model.id)"
-                  aria-hidden="true"
-                />
-              </button>
+              <!-- Drag handle. Absent while filtered: see canReorder(). -->
+              @if (canReorder()) {
+                <button
+                  type="button"
+                  cdkDragHandle
+                  [id]="'reorder-handle-' + model.id"
+                  (keydown)="onHandleKeydown($event, i)"
+                  [attr.aria-label]="'Reorder ' + model.modelName + ', position ' + (i + 1) + ' of ' + filteredModels().length + '. Use the arrow keys to move.'"
+                  [appTooltip]="'Drag to reorder'"
+                  appTooltipPosition="top"
+                  class="-mx-1 flex size-7 shrink-0 cursor-grab touch-none items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 active:cursor-grabbing dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+                >
+                  <ng-icon name="heroBars2" class="size-4" aria-hidden="true" />
+                </button>
+              }
 
               <!-- Decorative: the row names the model right beside it. Shown here
                    so an admin can confirm the icon they configured is the one
                    users will see, without opening the chat picker. -->
-              <app-model-icon [model]="model" [size]="28" />
+              <app-model-icon [model]="model" [size]="28" [class.opacity-50]="!model.enabled" />
 
               <!-- Name + model id -->
-              <div class="min-w-0 flex-1">
+              <div class="min-w-0 flex-1" [class.opacity-60]="!model.enabled">
                 <div class="flex items-center gap-1.5">
                   <span
                     class="truncate text-sm/6 font-medium text-gray-900 dark:text-white"
@@ -156,6 +178,12 @@
                       aria-label="Default model"
                     />
                   }
+                  @if (model.status && model.status !== 'active') {
+                    <span
+                      class="shrink-0 rounded-sm bg-state-warning-50 px-1.5 font-mono text-[10px]/5 font-medium text-state-warning-700 dark:bg-state-warning-900/30 dark:text-state-warning-300"
+                      >{{ model.status }}</span
+                    >
+                  }
                 </div>
                 <p
                   class="truncate font-mono text-xs/5 text-gray-500 dark:text-gray-400"
@@ -165,110 +193,45 @@
                 </p>
               </div>
 
-              <!-- Provider -->
-              <span class="hidden shrink-0 rounded-2xl bg-gray-100 px-2.5 py-0.5 text-xs/5 font-medium text-gray-600 sm:inline-block dark:bg-gray-700 dark:text-gray-300">
-                {{ model.providerName }}
+              <!-- Price per 1M tokens, input / output. The one detail admins
+                   compare across rows, so it lives on the row. -->
+              <span
+                class="hidden shrink-0 text-right font-mono text-xs/5 tabular-nums text-gray-500 sm:inline-block dark:text-gray-400"
+                [title]="'Per 1M tokens: $' + model.inputPricePerMillionTokens.toFixed(2) + ' input, $' + model.outputPricePerMillionTokens.toFixed(2) + ' output'"
+              >
+                ${{ model.inputPricePerMillionTokens.toFixed(2) }} / ${{ model.outputPricePerMillionTokens.toFixed(2) }}
               </span>
 
-              <!-- Enable toggle -->
-              <div class="flex shrink-0 items-center gap-2">
-                <span
-                  class="hidden w-14 text-right text-xs/5 font-medium sm:inline-block"
-                  [class]="model.enabled ? 'text-state-success-700 dark:text-state-success-400' : 'text-gray-500 dark:text-gray-400'"
-                >
-                  {{ model.enabled ? 'Enabled' : 'Disabled' }}
-                </span>
-                <button
-                  type="button"
-                  role="switch"
-                  [attr.aria-checked]="model.enabled"
-                  [attr.aria-label]="(model.enabled ? 'Disable' : 'Enable') + ' ' + model.modelName"
-                  [disabled]="isToggling(model.id)"
-                  (click)="toggleEnabled(model)"
-                  class="relative inline-flex h-6 w-11 shrink-0 items-center rounded-2xl transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
-                  [class]="model.enabled ? 'bg-state-success-600 dark:bg-state-success-500' : 'bg-gray-300 dark:bg-gray-600'"
-                >
-                  <span
-                    class="inline-block size-5 transform rounded-full bg-white shadow transition-transform duration-150"
-                    [class]="model.enabled ? 'translate-x-5' : 'translate-x-0.5'"
-                  ></span>
-                </button>
-              </div>
+              <!-- Edit -->
+              <a
+                [routerLink]="['/admin/manage-models/edit', model.id]"
+                [attr.aria-label]="'Edit ' + model.modelName"
+                [title]="'Edit ' + model.modelName"
+                class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+              >
+                <ng-icon name="heroPencilSquare" class="size-4" aria-hidden="true" />
+              </a>
 
-              <!-- Actions -->
-              <div class="flex shrink-0 items-center gap-1">
-                <a
-                  [routerLink]="['/admin/manage-models/edit', model.id]"
-                  [attr.aria-label]="'Edit ' + model.modelName"
-                  [title]="'Edit ' + model.modelName"
-                  class="flex size-8 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
-                >
-                  <ng-icon name="heroPencilSquare" class="size-4" aria-hidden="true" />
-                </a>
-                <button
-                  type="button"
-                  (click)="deleteModel(model)"
-                  [disabled]="isDeleting(model.id)"
-                  [attr.aria-label]="'Delete ' + model.modelName"
-                  [title]="'Delete ' + model.modelName"
-                  class="flex size-8 items-center justify-center rounded-2xl text-gray-400 hover:bg-state-danger-50 hover:text-state-danger-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-500 dark:hover:bg-state-danger-900/20 dark:hover:text-state-danger-400"
-                >
-                  <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
-                </button>
-              </div>
+              <!-- Enable toggle. Far right so every row's state reads down one
+                   column; the switch itself carries the state, so no label. -->
+              <button
+                type="button"
+                role="switch"
+                [attr.aria-checked]="model.enabled"
+                [attr.aria-label]="(model.enabled ? 'Disable' : 'Enable') + ' ' + model.modelName"
+                [title]="model.enabled ? 'Enabled' : 'Disabled'"
+                [disabled]="isToggling(model.id)"
+                (click)="toggleEnabled(model)"
+                class="relative inline-flex h-6 w-11 shrink-0 items-center rounded-2xl transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
+                [class]="model.enabled ? 'bg-state-success-600 dark:bg-state-success-500' : 'bg-gray-300 dark:bg-gray-600'"
+              >
+                <span
+                  class="inline-block size-5 transform rounded-full bg-white shadow transition-transform duration-150"
+                  [class]="model.enabled ? 'translate-x-5' : 'translate-x-0.5'"
+                ></span>
+              </button>
             </div>
 
-            <!-- Expanded detail -->
-            @if (isExpanded(model.id)) {
-              <div
-                [id]="'model-detail-' + model.id"
-                class="border-t border-gray-100 bg-gray-50 px-4 py-3 sm:pl-14 dark:border-gray-700/60 dark:bg-gray-900/40"
-              >
-                <dl class="grid grid-cols-1 gap-x-8 gap-y-3 sm:grid-cols-3">
-                  <div>
-                    <dt class="text-xs/5 font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
-                      Pricing / 1M tokens
-                    </dt>
-                    <dd class="mt-0.5 text-sm/6 text-gray-700 dark:text-gray-300">
-                      <span class="font-semibold text-gray-900 dark:text-white">${{ model.inputPricePerMillionTokens.toFixed(2) }}</span> in
-                      ·
-                      <span class="font-semibold text-gray-900 dark:text-white">${{ model.outputPricePerMillionTokens.toFixed(2) }}</span> out
-                    </dd>
-                  </div>
-
-                  <div>
-                    <dt class="text-xs/5 font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
-                      Modalities
-                    </dt>
-                    <dd class="mt-0.5 text-sm/6 text-gray-700 dark:text-gray-300">
-                      {{ model.inputModalities.join(', ') }}
-                      <span class="text-gray-400 dark:text-gray-500">→</span>
-                      {{ model.outputModalities.join(', ') }}
-                    </dd>
-                  </div>
-
-                  <div>
-                    <dt class="text-xs/5 font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
-                      Allowed roles
-                    </dt>
-                    <dd class="mt-1 flex flex-wrap gap-1.5">
-                      @if (model.allowedAppRoles && model.allowedAppRoles.length > 0) {
-                        @for (roleId of model.allowedAppRoles; track roleId) {
-                          <span
-                            class="inline-flex items-center rounded-2xl bg-category-accent-skills-100 px-2 py-0.5 text-xs/5 text-category-accent-skills-700 dark:bg-category-accent-skills-900/50 dark:text-category-accent-skills-300"
-                            [title]="roleId"
-                          >
-                            {{ getRoleDisplayName(roleId) }}
-                          </span>
-                        }
-                      } @else {
-                        <span class="text-xs/5 italic text-gray-500 dark:text-gray-400">No roles assigned</span>
-                      }
-                    </dd>
-                  </div>
-                </dl>
-              </div>
-            }
           </li>
         }
       </ul>

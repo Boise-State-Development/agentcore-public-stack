@@ -7,19 +7,22 @@ matching the assistants/schedules API models.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from apis.shared.memory.models import (
     EntryType,
+    FileFormat,
+    MemoryScope,
+    FileVersion,
     MemoryEntryRef,
     MemorySpace,
     Role,
     ShareRole,
     SpaceMember,
 )
-from apis.shared.memory.service import ConsolidationReport
+from apis.shared.memory.service import ConsolidationReport, SaveResult
 from apis.shared.memory.templates import TEMPLATES, SpaceTemplate
 
 
@@ -27,8 +30,15 @@ from apis.shared.memory.templates import TEMPLATES, SpaceTemplate
 
 
 class CreateSpaceRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     name: str = Field(..., min_length=1, max_length=200)
     template: str = Field("blank")
+    file_format: FileFormat = Field(
+        "freeform",
+        alias="fileFormat",
+        description="canonical = item lists checked on every save; fixed for the life of the space",
+    )
 
 
 class UpsertEntryRequest(BaseModel):
@@ -38,6 +48,9 @@ class UpsertEntryRequest(BaseModel):
     entry_type: EntryType = Field("fact", alias="type")
     description: str = Field("")
     indexed: Dict[str, Any] = Field(default_factory=dict)
+    aliases: Optional[List[str]] = Field(
+        None, description="Other names [[links]] may use (canonical spaces only); omit to keep"
+    )
 
 
 class UpdateIndexRequest(BaseModel):
@@ -78,6 +91,9 @@ class SpaceSummaryResponse(BaseModel):
     owner_id: str = Field(..., alias="ownerId")
     created_at: str = Field("", alias="createdAt")
     updated_at: str = Field("", alias="updatedAt")
+    file_format: FileFormat = Field("freeform", alias="fileFormat")
+    scope: MemoryScope = "personal"
+    project_id: Optional[str] = Field(None, alias="projectId")
 
     @classmethod
     def from_space(cls, space: MemorySpace, role: Role) -> "SpaceSummaryResponse":
@@ -89,6 +105,9 @@ class SpaceSummaryResponse(BaseModel):
             owner_id=space.owner_id,
             created_at=space.created_at,
             updated_at=space.updated_at,
+            file_format=space.file_format,
+            scope=space.scope,
+            project_id=space.project_id,
         )
 
 
@@ -107,6 +126,12 @@ class EntryRefResponse(BaseModel):
     updated: str = ""
     updated_by: str = Field("", alias="updatedBy")
     indexed: Dict[str, Any] = Field(default_factory=dict)
+    aliases: List[str] = Field(default_factory=list)
+    tokens: Optional[int] = None
+    tokens_method: Optional[str] = Field(None, alias="tokensMethod")
+    item_count: Optional[int] = Field(None, alias="itemCount")
+    archived: bool = False
+    version: int = 0
 
     @classmethod
     def from_ref(cls, r: MemoryEntryRef) -> "EntryRefResponse":
@@ -118,7 +143,71 @@ class EntryRefResponse(BaseModel):
             updated=r.updated,
             updated_by=r.updated_by,
             indexed=r.indexed,
+            aliases=list(r.aliases),
+            tokens=r.tokens,
+            tokens_method=r.tokens_method,
+            item_count=r.item_count,
+            archived=r.archived,
+            version=r.version,
         )
+
+
+class SaveEntryResponse(EntryRefResponse):
+    """A saved entry plus what the save pipeline wants the caller to know."""
+
+    warnings: List[str] = Field(default_factory=list)
+    minted_anchors: List[str] = Field(default_factory=list, alias="mintedAnchors")
+    removed_anchors: List[str] = Field(default_factory=list, alias="removedAnchors")
+    archived_links: List[str] = Field(default_factory=list, alias="archivedLinks")
+    over_soft_threshold: bool = Field(False, alias="overSoftThreshold")
+
+    @classmethod
+    def from_result(cls, result: SaveResult) -> "SaveEntryResponse":
+        base = EntryRefResponse.from_ref(result.ref).model_dump()
+        return cls(
+            **base,
+            warnings=result.warnings,
+            minted_anchors=result.minted_anchors,
+            removed_anchors=result.removed_anchors,
+            archived_links=result.archived_links,
+            over_soft_threshold=result.over_soft_threshold,
+        )
+
+
+class FileVersionResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    version: int
+    content_hash: str = Field(..., alias="contentHash")
+    size: int = 0
+    tokens: Optional[int] = None
+    tokens_method: Optional[str] = Field(None, alias="tokensMethod")
+    updated_by: str = Field("", alias="updatedBy")
+    updated_at: str = Field("", alias="updatedAt")
+    reason: str = "edit"
+
+    @classmethod
+    def from_version(cls, v: FileVersion) -> "FileVersionResponse":
+        return cls(
+            version=v.version,
+            content_hash=v.content_hash,
+            size=v.size,
+            tokens=v.tokens,
+            tokens_method=v.tokens_method,
+            updated_by=v.updated_by,
+            updated_at=v.updated_at,
+            reason=v.reason,
+        )
+
+
+class FileHistoryResponse(BaseModel):
+    slug: str
+    versions: List[FileVersionResponse]
+
+
+class FileVersionContentResponse(FileVersionResponse):
+    slug: str
+    content: str
 
 
 class SpaceDetailResponse(BaseModel):
@@ -131,6 +220,9 @@ class SpaceDetailResponse(BaseModel):
     owner_id: str = Field(..., alias="ownerId")
     created_at: str = Field("", alias="createdAt")
     updated_at: str = Field("", alias="updatedAt")
+    file_format: FileFormat = Field("freeform", alias="fileFormat")
+    scope: MemoryScope = "personal"
+    project_id: Optional[str] = Field(None, alias="projectId")
     index: str = Field("", description="The MEMORY.md index text")
     entries: List[EntryRefResponse] = Field(default_factory=list)
 

@@ -17,10 +17,20 @@ Objects land in the existing assistants asset bucket
 ``assistants/{agent_id}/`` prefix that assistant documents already use:
 
     assistants/{agent_id}/icons/{sha256[:16]}.{png|jpg}
+
+Lifecycle: replacing or removing an icon deletes the previous object
+(``agent_designer/services/icon_service.py``), and deleting the agent deletes the whole
+``icons/`` folder (:func:`delete_agent_icons`). Nothing the app writes references a key
+after its agent is gone: version snapshots and share rows go with the record, and a
+listed agent can't be deleted at all. (``PATCH /admin/agents/{id}/listing`` and publisher
+profiles accept a free-text ``iconKey`` the SPA never sends; one hand-pointed at another
+agent's icon would drop to the generated fallback when that agent is deleted, because
+the serve route 404s a key whose object is gone.)
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Optional
 
@@ -43,9 +53,16 @@ logger = logging.getLogger(__name__)
 # ── keys and URLs ────────────────────────────────────────────────────────────────────
 
 
+def icon_prefix(agent_id: str) -> str:
+    """``assistants/{agent_id}/icons/`` — every icon an agent has ever stored lives here."""
+    if not agent_id or "/" in agent_id:
+        raise ValueError(f"not an agent id: {agent_id!r}")
+    return f"assistants/{agent_id}/icons/"
+
+
 def build_icon_key(agent_id: str, digest: str, ext: str) -> str:
     """``assistants/{agent_id}/icons/{digest}.{ext}`` — the content-addressed key."""
-    return f"assistants/{agent_id}/icons/{digest}.{ext}"
+    return f"{icon_prefix(agent_id)}{digest}.{ext}"
 
 
 def icon_version(icon_key: Optional[str]) -> Optional[str]:
@@ -93,6 +110,10 @@ class AgentIconStore(IconStore):
         key = build_icon_key(agent_id, content_digest(content), ext)
         return self.put_object(key=key, content=content, content_type=content_type)
 
+    def delete_all(self, agent_id: str) -> int:
+        """Delete every icon object the agent has, returning how many. Raises on failure."""
+        return self.delete_prefix(icon_prefix(agent_id))
+
 
 _store: Optional[AgentIconStore] = None
 
@@ -103,3 +124,22 @@ def get_icon_store() -> AgentIconStore:
     if _store is None:
         _store = AgentIconStore()
     return _store
+
+
+async def delete_agent_icons(agent_id: str) -> int:
+    """Delete a deleted agent's icon objects. Best effort: never raises.
+
+    Called by both agent delete paths (``agent_deletion.delete_owned_agent`` and the
+    project-harness purge) *after* the record is gone, so a failure here costs only a
+    stray object, never an agent that still exists but lost its icon. What a failure
+    leaves behind, ``scripts/cleanup_orphaned_agent_rows.py --s3-prefixes`` finds.
+    """
+    try:
+        return await asyncio.to_thread(get_icon_store().delete_all, agent_id)
+    except Exception:
+        logger.warning(
+            f"Failed to delete icon objects for deleted agent {agent_id}; "
+            "they are orphaned until cleanup_orphaned_agent_rows.py --s3-prefixes runs",
+            exc_info=True,
+        )
+        return 0

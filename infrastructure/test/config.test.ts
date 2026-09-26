@@ -102,6 +102,7 @@ const OBSERVABILITY_ENV_KEYS = [
   'CDK_OBSERVABILITY_PROMPT_CACHE_SESSION_WASTED_USD_THRESHOLD',
   'CDK_OBSERVABILITY_BEDROCK_TPM_QUOTA_PERCENT',
   'CDK_OBSERVABILITY_BEDROCK_TPM_QUOTAS',
+  'CDK_OBSERVABILITY_RUNTIME_LOG_RETENTION_SWEEP_ENABLED',
 ] as const;
 
 function clearObservabilityEnv(): void {
@@ -626,6 +627,79 @@ describe('RAG Ingestion Configuration', () => {
   });
 
   // ============================================================
+  // Shared Projects feature flag — opt-in while in development
+  // (unset / empty GitHub Actions variable means off)
+  // ============================================================
+
+  describe('Shared Projects feature flag', () => {
+    test('defaults to disabled when CDK_PROJECTS_ENABLED is unset', () => {
+      delete process.env.CDK_PROJECTS_ENABLED;
+
+      expect(loadConfig(app).projects.enabled).toBe(false);
+    });
+
+    test('treats empty string (unset GitHub Actions variable) as disabled', () => {
+      process.env.CDK_PROJECTS_ENABLED = '';
+
+      expect(loadConfig(app).projects.enabled).toBe(false);
+    });
+
+    test('CDK_PROJECTS_ENABLED="true" turns it on', () => {
+      process.env.CDK_PROJECTS_ENABLED = 'true';
+
+      expect(loadConfig(app).projects.enabled).toBe(true);
+    });
+
+    test('anything but "true" leaves it off', () => {
+      process.env.CDK_PROJECTS_ENABLED = 'yes';
+
+      expect(loadConfig(app).projects.enabled).toBe(false);
+    });
+
+    test('cdk.json context projects.enabled=true enables when env is unset', () => {
+      delete process.env.CDK_PROJECTS_ENABLED;
+      app.node.setContext('projects', { enabled: true });
+
+      expect(loadConfig(app).projects.enabled).toBe(true);
+    });
+  });
+
+  // ============================================================
+  // SPA CloudFront access logs — default ON with a kill switch
+  // (empty GitHub Actions variable must not disable)
+  // ============================================================
+
+  describe('SPA access logs flag', () => {
+    test('defaults to enabled when CDK_FRONTEND_ACCESS_LOGS_ENABLED is unset', () => {
+      delete process.env.CDK_FRONTEND_ACCESS_LOGS_ENABLED;
+
+      expect(loadConfig(app).frontend.accessLogsEnabled).toBe(true);
+    });
+
+    test('treats empty string (unset GitHub Actions variable) as enabled', () => {
+      process.env.CDK_FRONTEND_ACCESS_LOGS_ENABLED = '';
+
+      expect(loadConfig(app).frontend.accessLogsEnabled).toBe(true);
+    });
+
+    test('CDK_FRONTEND_ACCESS_LOGS_ENABLED="false" is the kill switch', () => {
+      process.env.CDK_FRONTEND_ACCESS_LOGS_ENABLED = 'false';
+
+      expect(loadConfig(app).frontend.accessLogsEnabled).toBe(false);
+    });
+
+    test('cdk.json context frontend.accessLogsEnabled=false disables when env is unset', () => {
+      delete process.env.CDK_FRONTEND_ACCESS_LOGS_ENABLED;
+      app.node.setContext('frontend', {
+        cloudFrontPriceClass: 'PriceClass_100',
+        accessLogsEnabled: false,
+      });
+
+      expect(loadConfig(app).frontend.accessLogsEnabled).toBe(false);
+    });
+  });
+
+  // ============================================================
   // Agents API (Agent Designer) feature flag — default ON with a kill switch
   // (complete feature; ships enabled for forkers, empty var must not disable)
   // ============================================================
@@ -660,6 +734,45 @@ describe('RAG Ingestion Configuration', () => {
       app.node.setContext('agents', { enabled: false });
 
       expect(loadConfig(app).agents.enabled).toBe(false);
+    });
+  });
+
+  // ============================================================
+  // Composer dictation — default ON with a kill switch; languages default en-US
+  // ============================================================
+
+  describe('Dictation config', () => {
+    // Per-key deletion, not the suite's `process.env` snapshot restore — see
+    // the RAG_ENV_KEYS note at the top of this file.
+    afterEach(() => {
+      delete process.env.CDK_DICTATION_ENABLED;
+      delete process.env.CDK_DICTATION_LANGUAGES;
+    });
+
+    test('defaults to enabled, English only', () => {
+      delete process.env.CDK_DICTATION_ENABLED;
+      delete process.env.CDK_DICTATION_LANGUAGES;
+
+      expect(loadConfig(app).dictation).toEqual({ enabled: true, languages: 'en-US' });
+    });
+
+    test('empty strings (unset GitHub Actions variables) keep the defaults', () => {
+      process.env.CDK_DICTATION_ENABLED = '';
+      process.env.CDK_DICTATION_LANGUAGES = '';
+
+      expect(loadConfig(app).dictation).toEqual({ enabled: true, languages: 'en-US' });
+    });
+
+    test('CDK_DICTATION_ENABLED="false" is the kill switch', () => {
+      process.env.CDK_DICTATION_ENABLED = 'false';
+
+      expect(loadConfig(app).dictation.enabled).toBe(false);
+    });
+
+    test('CDK_DICTATION_LANGUAGES passes the list through', () => {
+      process.env.CDK_DICTATION_LANGUAGES = 'en-US,es-US';
+
+      expect(loadConfig(app).dictation.languages).toBe('en-US,es-US');
     });
   });
 
@@ -1806,6 +1919,18 @@ describe('Observability Configuration', () => {
       expect(loadConfig(app).observability.alarmTopicEnabled).toBe(true);
     });
 
+    // Privacy, not just cost: runtime log groups carry conversation text.
+    test('runtime log retention sweep defaults to ON, even for a forwarded empty var', () => {
+      expect(loadConfig(app).observability.runtimeLogRetentionSweepEnabled).toBe(true);
+      process.env.CDK_OBSERVABILITY_RUNTIME_LOG_RETENTION_SWEEP_ENABLED = '';
+      expect(loadConfig(app).observability.runtimeLogRetentionSweepEnabled).toBe(true);
+    });
+
+    test('runtime log retention sweep turns off on an explicit false', () => {
+      process.env.CDK_OBSERVABILITY_RUNTIME_LOG_RETENTION_SWEEP_ENABLED = 'false';
+      expect(loadConfig(app).observability.runtimeLogRetentionSweepEnabled).toBe(false);
+    });
+
     test('latency floors are streaming-aware, well above a normal agent turn', () => {
       const obs = loadConfig(app).observability;
       expect(obs.agentCoreLatencyMs).toBe(OBSERVABILITY_DEFAULT_P99_LATENCY_MS);
@@ -1974,6 +2099,7 @@ describe('Observability Configuration', () => {
       app.node.setContext('observability.xraySamplingReservoir', '21');
       app.node.setContext('observability.xrayInsightsNotifications', 'true');
       app.node.setContext('observability.agentCoreApplicationLogsEnabled', 'true');
+      app.node.setContext('observability.runtimeLogRetentionSweepEnabled', 'false');
       app.node.setContext('observability.promptCacheAvoidableMissThreshold', '22');
       app.node.setContext('observability.promptCacheWastedUsdThreshold', '2.5');
       app.node.setContext('observability.promptCacheSessionWastedUsdThreshold', '23');
@@ -1995,6 +2121,7 @@ describe('Observability Configuration', () => {
         xraySamplingReservoir: 21,
         xrayInsightsNotifications: true,
         agentCoreApplicationLogsEnabled: true,
+        runtimeLogRetentionSweepEnabled: false,
         promptCacheAvoidableMissThreshold: 22,
         promptCacheWastedUsdThreshold: 2.5,
         promptCacheSessionWastedUsdThreshold: 23,

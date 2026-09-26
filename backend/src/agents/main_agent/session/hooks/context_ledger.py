@@ -10,11 +10,16 @@ data, both found missing during the 2026-09-15 prod cost audit:
   prefix. Distinguishing "pure window slide" sessions from "compaction spiral"
   sessions took an hour of fingerprint reading; with this field it is one
   query.
-- ``compactionEvents`` — the compaction decisions the session manager made
-  since the previous call (restore-time slice applied, checkpoint advanced,
-  and whatever a future scheduling policy records: forced cut, floor
-  unreachable). Each carries the summary's token size at that moment, which
-  is what proves a summary cap shrank summaries without another scan.
+- ``compactionEvents`` — the compaction decisions the session manager made,
+  on the call they belong to. Head-of-turn decisions (restore-time slice or
+  parked cut applied, truncation anchor advanced, documents offloaded) change
+  the bytes the next call sends, so they land on that call. Post-turn
+  decisions (``checkpoint``, ``forced``, ``floor_unreachable``) are taken by
+  ``update_after_turn`` from the turn's last call and land on *that* call via
+  :meth:`ContextLedgerHook.record_post_turn_events` — their ``inputTokens``
+  is that row's own prompt. Each carries the summary's token size at that
+  moment, which is what proves a summary cap shrank summaries without
+  another scan.
 - ``documentReads`` — how many ``document_read`` retrievals the call
   requested and how many pages / bytes they pulled back into context
   (docs/specs/document-context-offload.md §6.1). With the per-row document
@@ -104,7 +109,12 @@ def _drain_compaction_events(agent: Any) -> List[Dict[str, Any]]:
     ``drain_compaction_events``. Anything else (tests, other managers) yields
     an empty list.
     """
-    manager = getattr(agent, "_session_manager", None)
+    return _drain_manager(getattr(agent, "_session_manager", None))
+
+
+def _drain_manager(manager: Any) -> List[Dict[str, Any]]:
+    """``manager.drain_compaction_events()``, bounded; ``[]`` for anything
+    without one or on any failure."""
     drain = getattr(manager, "drain_compaction_events", None)
     if not callable(drain):
         return []
@@ -157,6 +167,33 @@ class ContextLedgerHook(HookProvider):
             return None
         entry = self._ledger.get(call_index + 1)
         return copy.deepcopy(entry) if entry else None
+
+    def record_post_turn_events(self, session_manager: Any) -> None:
+        """Attach the decisions ``update_after_turn`` just queued to this
+        turn's LAST call — the call whose input triggered them.
+
+        The stream coordinator calls this right after ``update_after_turn``,
+        which runs after the model has answered but before the turn's ``C#``
+        rows are written. Left in the session manager's queue, a cut waited
+        for the next turn's first call on the *same* manager instance, and
+        about 43% of prod cuts never got one (2026-09-25 readout): the next
+        turn landed on a new microVM or an agent-cache miss (a fresh manager
+        with an empty queue), or the session was never resumed. Attaching
+        here needs no later call at all. Never raises.
+        """
+        if not cost_diagnostics_enabled() or self._cycle <= 0:
+            # No model call to attach to: leave the events queued so the next
+            # call still carries them, as before.
+            return
+        try:
+            events = _drain_manager(session_manager)
+            if not events:
+                return
+            entry = self._ledger.setdefault(self._cycle, {})
+            existing = entry.get("compactionEvents") or []
+            entry["compactionEvents"] = (existing + events)[:_MAX_EVENTS_PER_CALL]
+        except Exception as e:  # noqa: BLE001 - a ledger must never break a turn
+            logger.debug("Context ledger skipped post-turn events: %s", e)
 
     def _on_turn_start(self, event: BeforeInvocationEvent) -> None:
         self._cycle = 0

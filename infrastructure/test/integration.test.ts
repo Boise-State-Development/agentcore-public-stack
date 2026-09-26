@@ -91,6 +91,30 @@ describe('Single-stack integration', () => {
       });
     });
 
+    it('grants the App API task role bedrock:CountTokens for memory-file token accounting', () => {
+      // Memory saves count tokens once (apis/shared/memory/tokens.py). The
+      // action rides on app-api's BedrockInvokeModel statement and its
+      // foundation-model resource scope. The task role's statements are not
+      // all on AWS::IAM::Policy resources, so gather them from every IAM
+      // resource type, as the Mantle test below does.
+      const statementsOf = (resources: Record<string, any>) =>
+        Object.values(resources).flatMap((res: any) => [
+          ...(res.Properties?.PolicyDocument?.Statement ?? []),
+          ...(res.Properties?.Policies ?? []).flatMap(
+            (p: any) => p.PolicyDocument?.Statement ?? [],
+          ),
+        ]);
+      const invokeStatements = [
+        ...statementsOf(template.findResources('AWS::IAM::Policy')),
+        ...statementsOf(template.findResources('AWS::IAM::ManagedPolicy')),
+        ...statementsOf(template.findResources('AWS::IAM::Role')),
+      ].filter((stmt: any) => stmt.Sid === 'BedrockInvokeModel');
+      expect(invokeStatements.length).toBeGreaterThanOrEqual(1);
+      for (const stmt of invokeStatements) {
+        expect(stmt.Action).toContain('bedrock:CountTokens');
+      }
+    });
+
     it('grants bedrock-mantle:CallWithBearerToken for Bedrock Mantle (runtime + app-api)', () => {
       // Bedrock Mantle (the OpenAI-compatible Bedrock surface) has its own
       // IAM service namespace — `bedrock-mantle:*`, NOT `bedrock:*`. It

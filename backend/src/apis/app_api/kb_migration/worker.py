@@ -686,6 +686,11 @@ async def run_promote(
             f"so the byte cap is not being enforced on it (Requirement 12.9)"
         )
 
+    # Settle the corpus's bytes before traffic moves. Ahead of the promotion on
+    # purpose, and on every attempt: both steps are idempotent, and a resume that
+    # finds the engine already promoted still owes them.
+    await asyncio.to_thread(adopt_corpus, assistant_id, app_kb_id, record)
+
     # Resuming after a crash *between* the promotion and the state transition. The
     # promotion write is guarded on `attribute_not_exists(retrievalEngine)`, so
     # retrying it here would be refused — and treating that refusal as a failure
@@ -738,6 +743,60 @@ async def run_promote(
     )
 
 
+def adopt_corpus(assistant_id: str, app_kb_id: str, record: Dict[str, Any]) -> int:
+    """Move the migrated corpus from the snapshot reservation into ``storedBytes``.
+
+    ``run_shadow`` reserves the whole corpus up front so a migration that cannot
+    fit fails before it starts. Nothing ever settled that reservation: carried
+    documents never pass through the ingestion consumer, so no commit arrives. In
+    prod every migrated knowledge base held its entire corpus in ``reservedBytes``
+    with ``storedBytes=0``, and its documents carried no settlement markers — so a
+    later delete had nothing to refund and the reconciler, re-anchoring
+    ``storedBytes`` from S3, would have counted every byte twice.
+
+    Settled per document rather than as one ``reserved -> stored`` move, because
+    the reserved sum is a snapshot and the corpus drifted from it: documents
+    deleted during ``shadow`` (a legacy delete touches no counters) and documents
+    added by catch-up (never reserved). So:
+
+    1. Every ``complete`` document is claimed with ``settle_as_committed`` — which
+       stamps ``committedBytes`` so its delete refunds it — and, on a won claim,
+       counted with ``add_stored``. A resumed run's claims lose, so nothing is
+       counted twice.
+    2. The snapshot reservation is returned whole, conditioned on the amount
+       recorded when it was taken, so it is returned once.
+
+    Between the two the corpus is briefly counted twice, the safe direction. A
+    record reserved before ``snapshotReservedBytes`` existed has no amount to
+    return; ``scripts/repair_managed_kb_byte_counters.py`` settles those.
+
+    Returns the bytes adopted by this call.
+    """
+    from apis.shared.kb_backend import byte_cap
+
+    adopted = 0
+    for item in list_document_items(assistant_id):
+        if not is_complete(item):
+            continue
+        document_id = document_id_of(item)
+        n_bytes = document_bytes(item)
+        if not document_id or n_bytes <= 0:
+            continue
+        if byte_cap.settle_as_committed(assistant_id, document_id, n_bytes):
+            byte_cap.add_stored(assistant_id, app_kb_id, n_bytes)
+            adopted += n_bytes
+
+    snapshot = int(record.get("snapshotReservedBytes") or 0)
+    if snapshot:
+        byte_cap.release_snapshot(assistant_id, app_kb_id, snapshot)
+
+    logger.info(
+        f"kb {app_kb_id}: adopted {adopted} bytes into storedBytes; returned a "
+        f"{snapshot}-byte snapshot reservation"
+    )
+    return adopted
+
+
 def _set_retain_until(assistant_id: str, app_kb_id: str, retain_until: str) -> None:
     """Stamp the rollback deadline. Unconditional, and deliberately so.
 
@@ -745,11 +804,16 @@ def _set_retain_until(assistant_id: str, app_kb_id: str, retain_until: str) -> N
     write were also guarded and lost, the record would be promoted with no
     ``retainUntil`` — which reads as "no rollback window" to anything that checks
     it. Writing the later date twice is harmless; writing it never is not.
-    """
-    import boto3
 
-    boto3.resource("dynamodb").Table(os.environ["DYNAMODB_ASSISTANTS_TABLE_NAME"]).update_item(
-        Key={"PK": f"AST#{assistant_id}", "SK": f"KB#{app_kb_id}"},
+    Guarded only on the record existing, so a write that outlives a teardown
+    cannot recreate the record it removed.
+    """
+    from apis.shared.kb_backend.records import update_if_present
+
+    update_if_present(
+        assistant_id,
+        app_kb_id,
+        table=_table(),
         UpdateExpression="SET retainUntil = :until",
         ExpressionAttributeValues={":until": retain_until},
     )
@@ -812,6 +876,8 @@ async def _record_progress(
     """
     from decimal import Decimal
 
+    from apis.shared.kb_backend.records import update_if_present
+
     expression = "SET #progress = :progress"
     names = {"#progress": "migrationProgress"}
     values: Dict[str, Any] = {
@@ -836,8 +902,12 @@ async def _record_progress(
             f"is safe but slow (customDocumentIdentifier makes re-ingest a replace)"
         )
 
-    _table().update_item(
-        Key={"PK": f"AST#{assistant_id}", "SK": f"KB#{app_kb_id}"},
+    # Guarded on the record existing: progress for a knowledge base that was torn
+    # down underneath the step must not recreate its record.
+    update_if_present(
+        assistant_id,
+        app_kb_id,
+        table=_table(),
         UpdateExpression=expression,
         ExpressionAttributeNames=names,
         ExpressionAttributeValues=values,
@@ -909,7 +979,13 @@ async def run_step(
         # the clause would be unreachable, which is how a guard becomes decoration.
         await take_lease(assistant_id, app_kb_id)
 
-        if state == r.BORN_MANAGED:
+        if state == r.TEARDOWN:
+            # The agent was deleted. Not a migration step either, and it never
+            # ends in `failed`: run_teardown re-queues itself on every error.
+            from apis.app_api.kb_migration.teardown import run_teardown
+
+            result = await run_teardown(assistant_id, app_kb_id, record)
+        elif state == r.BORN_MANAGED:
             # Born-managed provisioning (MANAGED_KB_NEW_DEFAULT). Not part of the
             # shadow→verify→promote migration — there is no legacy corpus to carry
             # across — but it runs here to inherit the lease and the work-key

@@ -251,6 +251,7 @@ async def generate_upload_url_endpoint(
                 s3_key=s3_key,
                 document_id=document_id,
                 status=STATUS_PROVISIONING if provisioning else "uploading",
+                added_by_user_id=current_user.user_id,
             )
 
             # 4. Generate presigned S3 URL

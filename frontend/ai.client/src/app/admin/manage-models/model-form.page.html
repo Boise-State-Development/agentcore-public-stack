@@ -557,6 +557,93 @@
               stay fully available — this only changes where users find them.
             </p>
           </div>
+
+          <!-- Lifecycle (docs/specs/model-retirement.md) -->
+          <div>
+            <label for="status" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+              Status
+            </label>
+            <select
+              id="status"
+              formControlName="status"
+              class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 sm:max-w-xs dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+            >
+              @for (stat of modelStatuses; track stat.value) {
+                <option [value]="stat.value">{{ stat.label }}</option>
+              }
+            </select>
+          </div>
+
+          <!--
+            Retirement metadata. Hidden while Status is Active, NOT disabled: the
+            controls keep their values, so flipping Status back and forth while
+            drafting does not silently discard what was typed. Same rule as the
+            tool form.
+          -->
+          @if (selectedStatus() !== 'active') {
+            <div class="space-y-6 rounded-2xl border border-state-warning-200 bg-state-warning-50 p-4 dark:border-state-warning-800 dark:bg-state-warning-900/20">
+              <p class="text-xs/5 text-state-warning-800 dark:text-state-warning-200">
+                @if (selectedStatus() === 'deprecated') {
+                  A deprecated model keeps working for every conversation, default and agent
+                  that already uses it — it just can't be newly chosen.
+                } @else {
+                  A retired model never runs again. Every conversation, saved default and
+                  agent that uses it runs on its replacement instead — or, with no replacement,
+                  is refused. Never delete a retired model: this row is what makes that happen.
+                }
+              </p>
+
+              <div>
+                <label for="replacedBy" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                  Replaced by
+                </label>
+                <select
+                  id="replacedBy"
+                  formControlName="replacedBy"
+                  class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 sm:max-w-md dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                >
+                  <option value="">No replacement</option>
+                  @for (m of successorOptions(); track m.id) {
+                    <option [value]="m.modelId">{{ m.modelName }} ({{ m.modelId }})</option>
+                  }
+                </select>
+                <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+                  Grant the replacement to every role that grants this model before retiring it,
+                  or those users are refused instead of redirected.
+                </p>
+              </div>
+
+              <div>
+                <label for="retiresOn" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                  Retires on
+                </label>
+                <input
+                  id="retiresOn"
+                  type="date"
+                  formControlName="retiresOn"
+                  class="mt-1 block rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 sm:max-w-xs dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                />
+                <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+                  The day you'll set Status to Retired — ahead of the AWS end-of-life date on the
+                  model card, not the same day.
+                </p>
+              </div>
+
+              <div>
+                <label for="retirementNote" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                  Note for users
+                </label>
+                <input
+                  id="retirementNote"
+                  type="text"
+                  formControlName="retirementNote"
+                  maxlength="300"
+                  placeholder="Sonnet 5 is faster and uses less of your quota"
+                  class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                />
+              </div>
+            </div>
+          }
         </section>
 
         <!-- Pricing Section -->
@@ -1064,6 +1151,33 @@
           </div>
         </div>
       </form>
+
+      <!-- Delete lives here rather than on the list row: a deleted model's usage
+           prices to nothing, and a retired model must keep its row. -->
+      @if (isEditMode()) {
+        <section class="mt-12 rounded-2xl border border-state-danger-200 p-4 sm:p-6 dark:border-state-danger-800">
+          <h2 class="text-base/7 font-semibold text-gray-900 dark:text-white">Danger zone</h2>
+          <div class="mt-2 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <p class="text-sm/6 text-gray-600 dark:text-gray-400">
+              Deleting removes the model from the catalog and revokes it for every user.
+              To stop a model running without losing its history, set Status to Retired instead.
+            </p>
+            <button
+              type="button"
+              (click)="deleteModel()"
+              [disabled]="isDeleting() || isSubmitting()"
+              class="inline-flex shrink-0 items-center justify-center gap-2 rounded-2xl border border-state-danger-300 px-4 py-2 text-sm/6 font-medium text-state-danger-700 hover:bg-state-danger-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-state-danger-700 dark:text-state-danger-400 dark:hover:bg-state-danger-900/20"
+            >
+              <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
+              @if (isDeleting()) {
+                Deleting…
+              } @else {
+                Delete model
+              }
+            </button>
+          </div>
+        </section>
+      }
     }
   </div>
 </div>

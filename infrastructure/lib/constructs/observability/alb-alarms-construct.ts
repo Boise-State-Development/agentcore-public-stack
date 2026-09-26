@@ -73,16 +73,30 @@ export class AlbAlarmsConstruct extends Construct {
 
     // BREACHING: UnHealthyHostCount stops being published entirely when no
     // targets are registered, so absent data is the outage, not health.
+    //
+    // Sustained window, not a raised threshold. A single App API target that
+    // fails one health-check probe is replaced by ECS within ~5 min while the
+    // other targets keep serving — a benign self-healing blip that was paging
+    // ~daily at evaluationPeriods:2 (10 min). Requiring the condition to hold
+    // for a full 20 min (4 consecutive 5-min periods) filters those transient
+    // replacements while still firing on the two states that matter: a target
+    // stuck unhealthy, and a total outage (metric goes missing -> BREACHING).
+    // This mirrors the window-not-threshold approach documented for the
+    // runtime-active-sessions alarm in .kiro/steering/observability.md §11 —
+    // raising the threshold instead would blind us to a single stuck target.
     alarms.alarm('AlbUnhealthyHostAlarm', {
       name: 'alb-unhealthy-hosts',
       alarmDescription:
-        'One or more App API targets are failing their health check, or no targets are reporting at all',
+        'One or more App API targets have been failing their health check for a '
+        + 'sustained period (20 min), or no targets are reporting at all. A brief '
+        + 'single-target blip that ECS self-heals does not trip this.',
       metric: targetGroup.metrics.unhealthyHostCount({
         period: ALARM_PERIOD,
         statistic: 'Maximum',
       }),
       threshold: 0,
-      evaluationPeriods: 2,
+      evaluationPeriods: 4,
+      datapointsToAlarm: 4,
       comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
       treatMissingData: cloudwatch.TreatMissingData.BREACHING,
     });

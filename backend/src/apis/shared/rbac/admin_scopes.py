@@ -128,6 +128,12 @@ ADMIN_SCOPES: tuple[AdminScope, ...] = (
         ),
     ),
     AdminScope(
+        id="admin.projects",
+        label="Projects",
+        group=GROUP_MARKETPLACE,
+        description="See every Shared Project, read its audit trail, and archive or restore it.",
+    ),
+    AdminScope(
         id="admin.users",
         label="Users",
         group=GROUP_IDENTITY,

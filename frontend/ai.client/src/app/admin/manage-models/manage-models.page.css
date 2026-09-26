@@ -1,1 +1,31 @@
-/* Component-specific styles for manage-models page */
+/* Drag-and-drop reordering (CDK). The CDK adds these classes itself, so they
+   can't be Tailwind utilities in the template. */
+
+/* The row left behind in the list while its preview follows the pointer. */
+.cdk-drag-placeholder {
+  opacity: 0.35;
+}
+
+/* The floating copy under the pointer. It is appended to <body>, outside the
+   bordered <ul>, so it needs its own card treatment. */
+.manage-models-drag-preview {
+  box-sizing: border-box;
+  border-radius: 1rem;
+  box-shadow:
+    0 10px 15px -3px rgb(0 0 0 / 0.1),
+    0 4px 6px -4px rgb(0 0 0 / 0.1);
+  list-style: none;
+}
+
+/* Siblings sliding out of the way, and the drop settling into place. */
+.cdk-drop-list-dragging .cdk-drag:not(.cdk-drag-placeholder),
+.cdk-drag-animating {
+  transition: transform 200ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cdk-drop-list-dragging .cdk-drag:not(.cdk-drag-placeholder),
+  .cdk-drag-animating {
+    transition: none;
+  }
+}

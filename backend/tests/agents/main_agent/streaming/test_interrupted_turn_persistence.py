@@ -314,8 +314,8 @@ async def test_interruption_persists_partial_turn_metadata():
     ), patch.object(
         StreamCoordinator, "_store_message_metadata", _fake_store_metadata
     ), patch(
-        "agents.main_agent.session.hooks.context_attribution.get_context_breakdown",
-        return_value={"total": 1234, "partitions": []},
+        "agents.main_agent.session.hooks.context_attribution.get_projected_input_tokens",
+        return_value=1234,
     ):
         await coordinator._persist_interruption(
             agent=_InterruptingAgent(),

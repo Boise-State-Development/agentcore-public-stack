@@ -22,6 +22,7 @@ from .models import (
     MantleModelsResponse,
     MantleModelSummary,
     ManagedModelIconResponse,
+    ManagedModelOrderRequest,
     ManagedModelsListResponse,
 )
 from apis.shared.models.models import (
@@ -31,14 +32,17 @@ from apis.shared.models.models import (
     ModelRoleAssignment,
 )
 from apis.shared.auth import User, require_admin_scope
-from apis.shared.feature_flags import announcements_enabled, skills_enabled
+from apis.shared.feature_flags import announcements_enabled, projects_enabled, skills_enabled
 from apis.shared.models.managed_models import (
     create_managed_model,
     get_managed_model,
     list_managed_models,
     update_managed_model,
     delete_managed_model,
+    list_all_managed_models,
+    reorder_managed_models,
 )
+from apis.shared.models.retirement import validate_lifecycle
 from .services.model_icons import (
     ModelIconError,
     remove_model_icon,
@@ -564,6 +568,48 @@ async def list_managed_models_endpoint(
         )
 
 
+# Declared ahead of PUT /managed-models/{model_id}: routes match in order, and
+# that one would otherwise take "order" as a model id.
+@router.put("/managed-models/order", response_model=ManagedModelsListResponse)
+async def reorder_managed_models_endpoint(
+    order: ManagedModelOrderRequest,
+    admin_user: User = Depends(require_models_admin),
+):
+    """
+    Set the catalog order (admin only).
+
+    The order is what both the admin list and the chat model picker show.
+    Takes every managed model's record id exactly once, first to last.
+
+    Returns:
+        ManagedModelsListResponse with the full catalog in its new order
+
+    Raises:
+        HTTPException:
+            - 409 if the ids aren't exactly the current catalog (reload and retry)
+            - 500 if server error
+    """
+    logger.info("Admin reordering managed models")
+
+    try:
+        models = await reorder_managed_models(order.model_ids)
+        await get_model_role_service().hydrate_model_roles(models)
+
+        return ManagedModelsListResponse(
+            models=[model.model_dump(by_alias=True) for model in models],
+            total_count=len(models),
+        )
+
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except Exception as e:
+        logger.error("Unexpected error reordering managed models", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error reordering managed models: {str(e)}"
+        )
+
+
 @router.post("/managed-models", response_model=ManagedModel, status_code=status.HTTP_201_CREATED)
 async def create_managed_model_endpoint(
     model_data: ManagedModelCreate,
@@ -592,6 +638,14 @@ async def create_managed_model_endpoint(
     logger.info("Admin creating enabled model")
 
     try:
+        validate_lifecycle(
+            model_id=model_data.model_id,
+            status=model_data.status,
+            replaced_by=model_data.replaced_by,
+            is_default=model_data.is_default,
+            catalog=await list_all_managed_models(),
+        )
+
         model = await create_managed_model(model_data)
 
         # Grant the model to the requested roles. This is the write that actually
@@ -709,6 +763,21 @@ async def update_managed_model_endpoint(
             )
         previous_model_id = existing.model_id
 
+        # Validate the lifecycle fields against the row as it will be after the
+        # write: a PATCH that only flips status must still meet the replacedBy
+        # rules, and '' on replacedBy means "clear it".
+        validate_lifecycle(
+            model_id=updates.model_id or existing.model_id,
+            status=updates.status if updates.status is not None else existing.status,
+            replaced_by=(
+                (updates.replaced_by or None)
+                if updates.replaced_by is not None
+                else existing.replaced_by
+            ),
+            is_default=updates.is_default if updates.is_default is not None else existing.is_default,
+            catalog=await list_all_managed_models(),
+        )
+
         model = await update_managed_model(model_id, updates)
 
         if not model:
@@ -783,6 +852,24 @@ async def delete_managed_model_endpoint(
         # Read the provider model id before deleting — roles key their grants on
         # it, and we need to strip those so no role keeps granting a dead model.
         existing = await get_managed_model(model_id)
+
+        # A retired model redirects to this one: deleting it would leave that
+        # redirect pointing at a model with no row, which runs unmetered
+        # (docs/specs/model-retirement.md §2).
+        if existing:
+            dependants = [
+                m.model_name
+                for m in await list_all_managed_models()
+                if m.replaced_by == existing.model_id and m.id != existing.id
+            ]
+            if dependants:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        f"{existing.model_name} is the replacement for "
+                        f"{', '.join(sorted(dependants))}. Choose a different replacement first."
+                    ),
+                )
 
         deleted = await delete_managed_model(model_id)
 
@@ -1018,6 +1105,13 @@ if announcements_enabled():
     from .announcements.routes import router as announcements_admin_router
 
     router.include_router(announcements_admin_router)
+
+# ========== Include Projects Admin Subrouter (conditional) ==========
+# Mounted only while PROJECTS_ENABLED (default on), like announcements above.
+if projects_enabled():
+    from .projects.routes import router as projects_admin_router
+
+    router.include_router(projects_admin_router)
 
 # ========== Include Fine-Tuning Admin Subrouter (conditional) ==========
 if os.environ.get("FINE_TUNING_ENABLED", "false").lower() == "true":

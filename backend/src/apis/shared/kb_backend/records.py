@@ -88,6 +88,20 @@ MIGRATION_FAILED = "failed"
 #: different meanings is how the wrong one gets read.
 BORN_MANAGED = "born_managed"
 
+#: The agent that owned this knowledge base was deleted, and the knowledge base
+#: (data source, knowledge base, then this record) is to be torn down.
+#:
+#: Entered from app-api by :func:`request_teardown` when an agent or a project's
+#: harness is deleted. The *deleting* is the migration worker's, because it holds
+#: the provisioning grant (``bedrock:DeleteKnowledgeBase``) that app-api is
+#: deliberately never given. Borrowing the work-key queue again, for the same
+#: reason born-managed does: a delete that polls for minutes has to survive a
+#: crash, and the queue plus the lease is what already does that.
+#:
+#: Not terminal. A teardown ends with the record *removed*, so there is no state
+#: to arrive in, and a failed attempt stays queued: an unfinished delete is a bill.
+TEARDOWN = "teardown"
+
 #: Reserved in the enum so a stored value round-trips, but never entered in this
 #: phase. Reclaiming legacy vectors is explicitly a follow-up spec; a worker that
 #: found itself here would delete data this phase has promised to retain.
@@ -100,7 +114,7 @@ RECLAIM = "reclaim"
 #: work the dispatcher must keep handing back until it reaches a terminal state.
 #: Adding it here is what makes the dispatcher sweep it — ``_work_states`` derives
 #: from this set rather than restating it.
-WORK_ELIGIBLE_STATES = frozenset({BORN_MANAGED, SHADOW, VERIFY, PROMOTE})
+WORK_ELIGIBLE_STATES = frozenset({TEARDOWN, BORN_MANAGED, SHADOW, VERIFY, PROMOTE})
 
 #: States that take a record out of the queue for good. Work keys are removed on
 #: entering one of these. ``RETAIN`` is the terminal state this phase reaches;
@@ -109,7 +123,7 @@ WORK_ELIGIBLE_STATES = frozenset({BORN_MANAGED, SHADOW, VERIFY, PROMOTE})
 TERMINAL_STATES = frozenset({RETAIN, MIGRATION_FAILED})
 
 ALL_MIGRATION_STATES = frozenset(
-    {BORN_MANAGED, SHADOW, VERIFY, PROMOTE, RETAIN, MIGRATION_FAILED, RECLAIM}
+    {TEARDOWN, BORN_MANAGED, SHADOW, VERIFY, PROMOTE, RETAIN, MIGRATION_FAILED, RECLAIM}
 )
 
 
@@ -303,6 +317,73 @@ def _conditional(operation, **kwargs):
         raise
 
 
+#: The guard :func:`update_if_present` adds. Exported so a writer that already
+#: carries a condition of its own (the byte cap's reservation) can AND it in.
+RECORD_EXISTS = "attribute_exists(PK)"
+
+
+def update_if_exists(key: Mapping[str, str], table=None, what: Optional[str] = None, **kwargs) -> bool:
+    """``update_item`` on any row of this table that cannot bring the row into existence.
+
+    The key-taking form of :func:`update_if_present`, for the rows around a
+    KB_Record that are removed out from under late writers in the same way: a
+    ``KBTOMB#`` tombstone cleared by a concurrent saga, a ``DOC#`` row deleted
+    with its document or its agent. ``UpdateItem`` is an upsert, and even a write
+    that only annotates or stamps a marker would otherwise leave a ghost item
+    holding the key plus that one attribute.
+
+    Returns ``False``, without raising, when the row is gone. ``what`` names the
+    row in that log line. Callers must not pass a ``ConditionExpression``; a
+    writer with a condition of its own ANDs :data:`RECORD_EXISTS` in itself.
+    """
+    from botocore.exceptions import ClientError
+
+    if "ConditionExpression" in kwargs:
+        raise TypeError("update_if_exists owns the ConditionExpression")
+    try:
+        (table if table is not None else _table()).update_item(
+            Key=dict(key),
+            ConditionExpression=RECORD_EXISTS,
+            **kwargs,
+        )
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            logger.info(
+                f"{what or key.get('PK', '') + '/' + key.get('SK', '')} is gone; "
+                f"skipping the write rather than recreating it"
+            )
+            return False
+        raise
+    return True
+
+
+def update_if_present(assistant_id: str, app_kb_id: str, table=None, **kwargs) -> bool:
+    """``update_item`` on a KB_Record that cannot bring the record into existence.
+
+    ``UpdateItem`` is an upsert: aimed at a key that is not there, it creates an
+    item holding the key plus whatever the expression sets. For a KB_Record that is
+    how a teardown gets undone. The migration worker removes the record as the
+    last step of deleting an agent's knowledge base, and any writer still holding
+    a copy it read earlier (the reconciler's snapshot, an ingestion settling its
+    bytes, a policy write finishing late) would otherwise write a ghost ``KB#``
+    item carrying only its own attributes. That orphaned row is exactly what the
+    teardown exists to remove.
+
+    Returns ``False``, without raising, when the record is gone: the write had
+    nothing left to describe, so dropping it is the correct outcome and not an
+    error. ``table`` lets a caller pass its own module's table handle. Callers
+    must not pass a ``ConditionExpression``; this function owns it.
+    """
+    if "ConditionExpression" in kwargs:
+        raise TypeError("update_if_present owns the ConditionExpression")
+    return update_if_exists(
+        {"PK": kb_pk(assistant_id), "SK": kb_sk(app_kb_id)},
+        table=table,
+        what=f"KB_Record {assistant_id}/{app_kb_id} (torn down or never created)",
+        **kwargs,
+    )
+
+
 def create_provisioning(
     assistant_id: str,
     record: KbRecord,
@@ -411,19 +492,23 @@ def set_resource_policy_state(
     somebody has to remember to fire into a comparison
     (``resource_policy.policy_is_stale``).
 
-    Unconditional, deliberately. Every other writer here guards on the state it
-    expects, because those transitions must not race. This one records what AWS has
-    just confirmed, and a stale overwrite of the *same* fact is harmless while a
+    Not guarded on state, deliberately. Every other writer here guards on the state
+    it expects, because those transitions must not race. This one records what AWS
+    has just confirmed, and a stale overwrite of the *same* fact is harmless while a
     refused write would leave the record claiming a policy target that is no longer
     true — the failure mode the attribute exists to prevent.
+
+    Guarded only on the record existing (:func:`update_if_present`). A record that
+    has been torn down claims nothing, so there is nothing for a late write to keep
+    true, and an unguarded one would recreate it as a ghost.
 
     Passing ``None`` clears both attributes, for a knowledge base that stopped
     being shared.
     """
-    key = {"PK": kb_pk(assistant_id), "SK": kb_sk(app_kb_id)}
     if aws_kb_id is None:
-        _table().update_item(
-            Key=key,
+        update_if_present(
+            assistant_id,
+            app_kb_id,
             UpdateExpression="REMOVE policyAwsKbId, policyRevisionId",
         )
         return
@@ -436,8 +521,9 @@ def set_resource_policy_state(
     else:
         expression += " REMOVE policyRevisionId"
 
-    _table().update_item(
-        Key=key,
+    update_if_present(
+        assistant_id,
+        app_kb_id,
         UpdateExpression=expression,
         ExpressionAttributeValues=values,
     )
@@ -764,6 +850,106 @@ def retry_from_failed(
             ":wpk": work_pk(SHADOW),
             ":wsk": due_at,
         },
+    )
+
+
+def request_teardown(
+    assistant_id: str,
+    app_kb_id: str,
+    now_iso: str,
+    *,
+    attempts: int = 3,
+) -> Optional[Dict[str, Any]]:
+    """Queue this knowledge base for teardown because its agent is being deleted.
+
+    Returns the record as it stood before the request, or ``None`` when there is
+    no record (a legacy agent, or a retried delete that already finished). A
+    record that is already queued is returned as-is, so a retried delete neither
+    re-writes it nor fences the worker that may be tearing it down right now.
+
+    **Never refuses because a worker is busy.** The generation bump is the fence:
+    every write a born-managed or migration worker makes is guarded on the
+    generation it read, so a worker still running against this record loses its
+    next write (``TransitionLost``) instead of finishing a provisioning or a
+    cutover nobody wants. The worker lease is left alone on purpose. The teardown
+    step takes that same lease, so it cannot start until an in-flight step has
+    let go, and a provisioning that is mid-``CreateKnowledgeBase`` still gets to
+    record ``awsKbId`` (that write is guarded on ``provisioningState``, which this
+    does not touch). That id is what the teardown then deletes.
+
+    Guarded on the generation this call read, so two concurrent deletes and a
+    worker's own transition cannot interleave into a lost update; a lost race
+    re-reads and tries again.
+    """
+    table = _table()
+    key = {"PK": kb_pk(assistant_id), "SK": kb_sk(app_kb_id)}
+    for _ in range(attempts):
+        record = table.get_item(Key=key).get("Item")
+        if not record:
+            return None
+        if record.get("migrationState") == TEARDOWN:
+            return record
+        values: Dict[str, Any] = {
+            ":teardown": TEARDOWN,
+            ":wpk": work_pk(TEARDOWN),
+            ":due": now_iso,
+            ":now": now_iso,
+            ":one": Decimal(1),
+        }
+        if record.get("migrationGeneration") is None:
+            condition = "attribute_exists(PK) AND attribute_not_exists(migrationGeneration)"
+        else:
+            condition = "attribute_exists(PK) AND migrationGeneration = :gen"
+            values[":gen"] = record["migrationGeneration"]
+        try:
+            _conditional(
+                table.update_item,
+                Key=key,
+                UpdateExpression=(
+                    "SET migrationState = :teardown, GSI7_PK = :wpk, GSI7_SK = :due, "
+                    "teardownRequestedAt = if_not_exists(teardownRequestedAt, :now), "
+                    "updatedAt = :now ADD migrationGeneration :one"
+                ),
+                ConditionExpression=condition,
+                ExpressionAttributeValues=values,
+            )
+        except TransitionLost:
+            continue
+        return record
+    raise TransitionLost(
+        f"could not queue kb {app_kb_id} for teardown: it kept changing underneath "
+        f"{attempts} attempts"
+    )
+
+
+def defer_teardown(
+    assistant_id: str,
+    app_kb_id: str,
+    generation: int,
+    due_at: str,
+    error: Optional[str] = None,
+) -> None:
+    """Push a teardown that did not finish back onto the queue, due at ``due_at``.
+
+    Guarded on still being ``teardown`` at this generation, so a straggler cannot
+    re-queue a record that a newer attempt already removed (the update would
+    otherwise create a ghost item holding nothing but work keys).
+    """
+    values: Dict[str, Any] = {
+        ":due": due_at,
+        ":gen": Decimal(generation),
+        ":teardown": TEARDOWN,
+    }
+    expression = "SET GSI7_SK = :due"
+    if error is not None:
+        expression += ", migrationError = :err"
+        values[":err"] = error[:1000]
+    _conditional(
+        _table().update_item,
+        Key={"PK": kb_pk(assistant_id), "SK": kb_sk(app_kb_id)},
+        UpdateExpression=expression,
+        ConditionExpression="migrationGeneration = :gen AND migrationState = :teardown",
+        ExpressionAttributeValues=values,
     )
 
 

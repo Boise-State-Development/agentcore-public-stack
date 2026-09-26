@@ -1,10 +1,13 @@
 """Process-level feature flags resolved from environment variables.
 
 These gate optional product surfaces per environment. Each flag documents
-its own default: deferred features default off until explicitly turned on
-(the ``FINE_TUNING_ENABLED`` pattern), while shipping features default on
-with a kill switch (the ``KB_SYNC_ENABLED`` pattern). Each flag is read on
-every call (not cached at import) so that:
+its own default. **New and in-development features default off** until a
+deployment turns them on (only ``"true"`` enables; ``PROJECTS_ENABLED`` is the
+current example). Finished features default on with a kill switch (the
+``KB_SYNC_ENABLED`` pattern), and moving a feature there is a deliberate change.
+The SPA has a matching compile-time switch per feature in
+``frontend/ai.client/src/environments`` (see CLAUDE.MD "Feature Flags").
+Each flag is read on every call (not cached at import) so that:
 
 * import-time callers (conditional router mounting) and per-request callers
   observe the same value, and
@@ -552,5 +555,101 @@ def feedback_eval_sampling_enabled() -> bool:
     a scope. Flipping this flag is that decision. The read surfaces (the
     queue list, the profile's judged aggregates) are not gated — they show
     numbers only and tolerate the absence of any judged row.
+
+    ⚠️ Turning this on is not enough by itself. The inference-api image
+    redacts Strands' message content in telemetry
+    (``OTEL_SEMCONV_STABILITY_OPT_IN`` in ``Dockerfile.inference-api``), so
+    the judge would read ``[REDACTED]`` in place of every message. An
+    environment that opts in must also override that variable on the
+    AgentCore Runtime, e.g. ``gen_ai_unredacted_attributes=gen_ai.*``. That
+    records every conversation in the runtime log group, not just the
+    sampled ones.
     """
     return os.environ.get("FEEDBACK_EVAL_SAMPLING_ENABLED", "false").strip().lower() == "true"
+
+
+def dictation_enabled() -> bool:
+    """Whether the composer's Dictate button may transcribe speech.
+
+    Covers app-api's ``POST /dictation/ticket`` and ``WS /dictation/stream``,
+    the Amazon Transcribe Streaming proxy behind the composer's Dictate button.
+    **Default ON with a kill switch** (house style, mirroring
+    ``mid_turn_steering_enabled``): unset or empty resolves to enabled; only
+    the literal ``"false"`` (case-insensitive) disables.
+
+    While off both routes 404 (the socket closes before accept), and the SPA
+    hides the Dictate button on the first 404 for the rest of the tab session.
+    Nothing dictation produces reaches the model except the text the user
+    chooses to send, so the flag has no prompt-cache or token surface.
+    """
+    return os.environ.get("DICTATION_ENABLED", "").strip().lower() != "false"
+
+
+def platform_self_service_enabled() -> bool:
+    """Whether the platform self-service account tools are injected on a turn.
+
+    Covers the ``system`` account tools built per request and handed to the
+    agent as ``extra_tools`` — the read-only pilot ``whoami`` / ``get_my_quota``
+    / ``get_my_settings`` (``.kiro/specs/platform-self-service/``), and the
+    confirmed-write tools as they land. **Defaults OFF** (the
+    ``FINE_TUNING_ENABLED``-style opt-in): set
+    ``PLATFORM_SELF_SERVICE_ENABLED=true`` to turn it on.
+
+    Off by default on purpose, not by caution. These tools are injected on
+    **every** turn for every authenticated user (they are platform plumbing,
+    not a picker toggle), so while off a turn carries no self-service
+    ``extra_tools`` and its agent-cache eligibility is exactly what it was
+    before this feature — no per-turn cost, no prefix change. The tools close
+    over only the invoking ``User`` (keyed by ``user_id`` in the agent cache
+    key), so when on they are key-described and cacheable; identity is
+    captured by closure, never taken as a model argument (the same pattern the
+    six existing per-request tool families use, since the runtime does not
+    populate Strands' ToolContext). See the spec's design doc.
+    """
+    return os.environ.get("PLATFORM_SELF_SERVICE_ENABLED", "false").strip().lower() == "true"
+
+
+def projects_enabled() -> bool:
+    """Whether Shared Projects exist in this environment.
+
+    Covers app-api's ``/projects`` surface and the project harness everywhere it
+    is reachable (``docs/specs/shared-projects.md``). **Opt-in while the feature
+    is in development** (CLAUDE.md "Feature flags"): only ``"true"``
+    (case-insensitive) enables it; unset or anything else is off, so a
+    deployment turns Projects on by choice. CDK sets it on app-api and the
+    AgentCore Runtime from ``config.projects.enabled``. The SPA's matching
+    switch is ``features.projects`` in ``frontend/ai.client/src/environments``.
+
+    While off the routes 404 after authentication (the auth sweep requires a
+    401 first), the harness refuses everyone, and existing rows are left untouched.
+    """
+    return os.environ.get("PROJECTS_ENABLED", "").strip().lower() == "true"
+
+
+def compaction_summary_extract_enabled() -> bool:
+    """Whether a compaction cut pins verbatim facts ahead of its summary.
+
+    Extract-then-compress (``agents/main_agent/session/compaction_summary.py``):
+    one extraction call copies standing instructions, decisions, identifiers
+    and changed values verbatim into a pinned block, then the narrative is
+    compressed into the rest of the budget; the two calls run concurrently.
+    **Default ON with a kill switch** (house style, mirroring
+    ``TOOL_SUMMARIES_ENABLED``): unset or empty resolves to enabled; only the
+    literal ``"false"`` (case-insensitive) disables. Flipped from opt-in once
+    the quality harness showed no loss against the full history and a forced
+    cut on dev pinned and answered every planted fact (scoping doc
+    ``2026-09-21-quality-veto-harness.md`` §9.2–9.3). There is no CDK entry
+    and no SPA switch: a default-on flag needs no AgentCore Runtime env var
+    slot, so setting ``=false`` in a deployed environment is an out-of-band
+    Runtime update.
+
+    Read once per session manager, through ``CompactionConfig.from_env``. It
+    runs only when a cut advances the checkpoint, after the turn's final
+    ``metadata`` event, so it adds nothing before the first token; the cut
+    turn pays one extra side-channel call. The result is persisted verbatim,
+    so the restore bytes stay stable. While off, the cut makes the single
+    plain compression call. Needs ``AGENTCORE_MEMORY_COMPACTION_SUMMARY_MODEL_ENABLED`` on,
+    and a summary model that can extract: Nova 2 Lite and Haiku 4.5 held
+    every planted fact on the quality harness, Nova Micro 88%.
+    """
+    return os.environ.get("COMPACTION_SUMMARY_EXTRACT_ENABLED", "").strip().lower() != "false"

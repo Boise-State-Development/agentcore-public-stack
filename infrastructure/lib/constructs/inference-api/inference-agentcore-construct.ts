@@ -14,8 +14,10 @@ import { AppConfig, getResourceName, getTruncatedResourceName, applyStandardTags
 import { AlarmFactory } from '../observability/alarm-factory';
 import { PlatformComputeRefs } from '../platform-compute-refs';
 import {
+  RUNTIME_MEMORY_ACTIONS,
   createRuntimeExecutionRole,
 } from './inference-api-iam-roles';
+import { RuntimeLogRetentionSweepConstruct } from './runtime-log-retention-sweep-construct';
 
 export interface InferenceAgentCoreConstructProps {
   config: AppConfig;
@@ -160,8 +162,6 @@ export class InferenceAgentCoreConstruct extends Construct {
 
     // ── Additional SSM reads needed by the runtime container env ──
     const authProviderSecretsArn = props.refs.authProviderSecretsSecret.secretArn;
-    const oauthTokenEncryptionKeyArn = props.refs.oauthTokenEncryptionKey.keyArn;
-    const oauthClientSecretsArn = props.refs.oauthClientSecretsSecret.secretArn;
 
     // Memory + Code Interpreter + Browser are owned by PlatformStack
     // IDs flow in via typed props (`props.memoryArn`, etc.). We grant
@@ -171,26 +171,13 @@ export class InferenceAgentCoreConstruct extends Construct {
     // AgentCore Runtime
     // ============================================================
 
-    // Grant Runtime permission to access Memory.
-    // Action list mirrors the AgentCore Data Plane API surface — see
-    // https://docs.aws.amazon.com/bedrock-agentcore/latest/APIReference/API_Operations.html
-    // GetMemory and GetMemoryStrategies are control-plane shapes that do
-    // not exist as separate IAM actions; the same data-plane policy
-    // covers them. RetrieveMemory / ListMemorySessions / GetMemorySession
-    // were also speculative and removed.
+    // Grant Runtime permission to access Memory, scoped to this deployment's
+    // memory. Same action list as the role's account-wide statement
+    // (RUNTIME_MEMORY_ACTIONS), so the two cannot disagree.
     runtimeExecutionRole.addToPolicy(new iam.PolicyStatement({
       sid: 'MemoryAccess',
       effect: iam.Effect.ALLOW,
-      actions: [
-        'bedrock-agentcore:CreateEvent',
-        'bedrock-agentcore:GetEvent',
-        'bedrock-agentcore:ListEvents',
-        'bedrock-agentcore:ListActors',
-        'bedrock-agentcore:ListSessions',
-        'bedrock-agentcore:RetrieveMemoryRecords',
-        'bedrock-agentcore:GetMemoryRecord',
-        'bedrock-agentcore:ListMemoryRecords',
-      ],
+      actions: [...RUNTIME_MEMORY_ACTIONS],
       resources: [props.memoryArn],
     }));
 
@@ -366,10 +353,6 @@ export class InferenceAgentCoreConstruct extends Construct {
         DYNAMODB_AUTH_PROVIDERS_TABLE_NAME: authProvidersTableName,
         AUTH_PROVIDER_SECRETS_ARN: authProviderSecretsArn,
 
-        // OAuth configuration
-        OAUTH_TOKEN_ENCRYPTION_KEY_ARN: oauthTokenEncryptionKeyArn,
-        OAUTH_CLIENT_SECRETS_ARN: oauthClientSecretsArn,
-
         // AgentCore resources
         AGENTCORE_MEMORY_ID: props.memoryId,
         MEMORY_ARN: props.memoryArn,
@@ -425,6 +408,13 @@ export class InferenceAgentCoreConstruct extends Construct {
         DYNAMODB_MEMORY_SPACES_TABLE_NAME: props.refs.memorySpacesTable.tableName,
         MEMORY_SPACES_ENABLED: config.memorySpaces.enabled ? 'true' : 'false',
 
+        // Shared Projects (default ON with a kill switch, mirroring app-api).
+        // The invocation path resolves project membership and bumps COST#
+        // rollups; creates and deletes are app-api's (see the read+update
+        // grant in inference-api-iam-roles.ts).
+        DYNAMODB_PROJECTS_TABLE_NAME: props.refs.projectsTable.tableName,
+        PROJECTS_ENABLED: config.projects.enabled ? 'true' : 'false',
+
         // Skills v2 (default ON with a kill switch, mirroring the app-api flag).
         // Gates skill resolution on the invocation path — the AgentSkills plugin's
         // <available_skills> block, the `skills` activation tool, and
@@ -438,6 +428,14 @@ export class InferenceAgentCoreConstruct extends Construct {
         // default off, mirrors the app-api flag. Without it the harness ignores
         // bindings entirely (today's behavior).
         AGENTS_API_ENABLED: config.agents.enabled ? 'true' : 'false',
+
+        // Platform self-service (opt-in per env; default off). Read ONLY here on
+        // the invocation path (inference_api/chat/routes.py) — with it off,
+        // _build_account_tools returns [] so no account tool schema or system
+        // text reaches the model. Costs one of the 50 runtime env slots; see the
+        // ceiling warning below. app-api does not read this flag, so it is not
+        // wired there.
+        PLATFORM_SELF_SERVICE_ENABLED: config.platformSelfService.enabled ? 'true' : 'false',
 
         // ENABLE_QUOTA_ENFORCEMENT is deliberately NOT set. `quota.py` reads
         // it with a 'true' default, and this was hardcoded to 'true' — so the
@@ -535,9 +533,22 @@ export class InferenceAgentCoreConstruct extends Construct {
       `/aws/bedrock-agentcore/runtimes/${this.runtime.attrAgentRuntimeId}-DEFAULT`;
     this.runtimeMetricName = `${agentRuntimeName}::DEFAULT`;
 
-    // PutRetentionPolicy is idempotent and creates the group if absent, which
-    // matters before the runtime's first invocation. No onDelete: dropping the
-    // policy on teardown would revert the group to "keep forever".
+    // PutRetentionPolicy is idempotent but does NOT create the group: on a
+    // missing group it returns ResourceNotFoundException and creates nothing
+    // (checked in dev). The Runtime's own execution role creates the group on
+    // its first container start, which in practice lands well before this
+    // call. If that start ever loses the race, a thrown error would fail the
+    // custom resource and roll back the whole stack update, so a missing
+    // group is tolerated instead and the daily RuntimeLogRetentionSweep below
+    // sets retention within a day. An environment that has turned the sweep
+    // off (`runtimeLogRetentionSweepEnabled`) has no such backstop: there the
+    // group keeps no retention until CloudFormation re-runs this call, which
+    // only happens when the retention value or the Runtime id changes, so an
+    // operator must set it by hand.
+    //
+    // Deliberately no CreateLogGroup first: it would race the Runtime's own
+    // create the other way round. No onDelete: dropping the policy on
+    // teardown would revert the group to "keep forever".
     const runtimeLogRetention = new cr.AwsCustomResource(this, 'RuntimeLogRetention', {
       onCreate: {
         service: 'CloudWatchLogs',
@@ -550,6 +561,7 @@ export class InferenceAgentCoreConstruct extends Construct {
         physicalResourceId: cr.PhysicalResourceId.of(
           `${this.runtimeLogGroupName}-retention-${config.observability.logRetentionDays}`,
         ),
+        ignoreErrorCodesMatching: 'ResourceNotFoundException',
       },
       onUpdate: {
         service: 'CloudWatchLogs',
@@ -561,10 +573,11 @@ export class InferenceAgentCoreConstruct extends Construct {
         physicalResourceId: cr.PhysicalResourceId.of(
           `${this.runtimeLogGroupName}-retention-${config.observability.logRetentionDays}`,
         ),
+        ignoreErrorCodesMatching: 'ResourceNotFoundException',
       },
       policy: cr.AwsCustomResourcePolicy.fromStatements([
         new iam.PolicyStatement({
-          actions: ['logs:PutRetentionPolicy', 'logs:CreateLogGroup'],
+          actions: ['logs:PutRetentionPolicy'],
           resources: [
             `arn:aws:logs:${config.awsRegion}:${config.awsAccount}:log-group:${this.runtimeLogGroupName}:*`,
           ],
@@ -573,6 +586,16 @@ export class InferenceAgentCoreConstruct extends Construct {
       installLatestAwsSdk: false,
     });
     runtimeLogRetention.node.addDependency(this.runtime);
+
+    // The custom resource above covers the live group once per deploy. The
+    // sweep covers the groups it cannot: those left behind by a replaced
+    // Runtime, and any whose retention something else changed afterwards.
+    if (config.observability.runtimeLogRetentionSweepEnabled) {
+      new RuntimeLogRetentionSweepConstruct(this, 'RuntimeLogRetentionSweep', {
+        config,
+        agentRuntimeName,
+      });
+    }
 
     // NOTE: X-Ray TransactionSearchConfig is an account-level singleton.
     // It cannot be created via CloudFormation if it already exists.

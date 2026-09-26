@@ -342,6 +342,14 @@ async def _store_message_metadata_cloud(
             message_metadata=message_metadata
         )
 
+        # Shared Projects: a call made by a project's harness also counts toward that
+        # project's month. Best-effort, like every aggregate above.
+        await _update_project_rollup_async(
+            user_id=user_id,
+            timestamp=timestamp,
+            message_metadata=message_metadata,
+        )
+
     except Exception as e:
         logger.error(f"Failed to store message metadata in DynamoDB: {e}", exc_info=True)
         # Propagate error - metadata storage is critical for cost tracking and audit trail
@@ -642,6 +650,48 @@ def _emit_cache_metrics(
         )
     except Exception as e:  # noqa: BLE001 - metrics must never break the write path
         logger.debug("Cache EMF emission skipped: %s", e)
+
+
+async def _update_project_rollup_async(
+    user_id: str,
+    timestamp: str,
+    message_metadata: MessageMetadata,
+) -> None:
+    """Add this call to ``PROJECT#{id}/COST#{YYYY-MM}`` when it ran a project's harness.
+
+    The project id rides on the row as the ``projectId`` extra (set per turn by the stream
+    coordinator), exactly like ``turnAgentId``. Rows without one — every call that did not
+    run a project harness — return immediately and touch nothing. Never raises: a missed
+    rollup costs a number on a usage page, and the ``C#`` row it came from is still the
+    source of truth.
+    """
+    project_id = (message_metadata.model_extra or {}).get("projectId")
+    if not project_id:
+        return
+    try:
+        import asyncio
+        from datetime import datetime, timezone
+
+        from apis.shared.projects.repository import ProjectRepository
+
+        try:
+            period = datetime.fromisoformat(timestamp.replace("Z", "+00:00")).strftime("%Y-%m")
+        except (ValueError, AttributeError):
+            period = datetime.now(timezone.utc).strftime("%Y-%m")
+
+        usage = message_metadata.token_usage
+        await asyncio.to_thread(
+            ProjectRepository().add_call_cost,
+            project_id,
+            user_id,
+            period,
+            Decimal(str(_coerce_cost_total(message_metadata.cost))),
+            (usage.input_tokens or 0) if usage else 0,
+            (usage.output_tokens or 0) if usage else 0,
+            timestamp,
+        )
+    except Exception as e:
+        logger.warning("Project cost rollup failed for project %s: %s", project_id, e)
 
 
 async def _update_cost_summary_async(
@@ -964,8 +1014,12 @@ async def _store_session_metadata_cloud(
         # First, check if session exists via GSI to get current SK
         existing_session = await _get_session_by_gsi(session_id, user_id, table)
 
-        # Prepare item for DynamoDB
+        # Prepare item for DynamoDB. A model read back through get_session_metadata
+        # carries the row's recency keys as extras; drop them so the keys written
+        # below are derived from this write alone.
         item = session_metadata.model_dump(by_alias=True, exclude_none=True)
+        for gsi_key in _RECENCY_KEY_ATTRS:
+            item.pop(gsi_key, None)
 
         # Convert floats to Decimal for DynamoDB compatibility
         item = _convert_floats_to_decimal(item)
@@ -985,6 +1039,14 @@ async def _store_session_metadata_cloud(
         item['GSI_SK'] = 'META'
         # Sparse recency keys — added for active, absent for deleted.
         item.update(_recency_gsi_keys(user_id, session_id, last_message_at, is_active))
+        # ProjectSessionIndex (GSI5) rides beside GSI4 for project sessions. A write
+        # without `preferences` leaves the row's map untouched, so the project id then
+        # comes from the stored row.
+        prefs_source = item if 'preferences' in item else (existing_session or {})
+        project_keys = _project_gsi_keys(
+            user_id, session_id, last_message_at, _preferences_project_id(prefs_source), is_active
+        )
+        item.update(project_keys)
 
         if existing_session:
             # Session exists - check if the (now static) SK needs to change, which
@@ -993,17 +1055,19 @@ async def _store_session_metadata_cloud(
 
             if old_sk and old_sk != new_sk:
                 # Legacy row → migrate to the static SK. Deep-merge existing onto the
-                # new item, but drop any stale GSI4 keys so status drives them freshly.
+                # new item, but drop any stale recency keys so state drives them freshly.
                 merged_item = _deep_merge(
                     {k: v for k, v in existing_session.items()
-                     if k not in ['PK', 'SK', 'GSI4_PK', 'GSI4_SK']},
+                     if k not in ('PK', 'SK', *_RECENCY_KEY_ATTRS)},
                     item
                 )
                 merged_item['PK'] = pk
                 merged_item['SK'] = new_sk
-                if not is_active:
-                    merged_item.pop('GSI4_PK', None)
-                    merged_item.pop('GSI4_SK', None)
+                # The merge can surface a project id only the old row had.
+                merged_item.update(_project_gsi_keys(
+                    user_id, session_id, last_message_at,
+                    _preferences_project_id(merged_item), is_active,
+                ))
 
                 # Put new SK first, then delete old — if the put fails the original
                 # is untouched. This is the row's one-time migration move.
@@ -1037,10 +1101,12 @@ async def _store_session_metadata_cloud(
                     expression_attribute_values[placeholder_value] = value
 
                 remove_parts = []
-                if not is_active:
-                    for gsi_key in ('GSI4_PK', 'GSI4_SK'):
-                        expression_attribute_names[f"#{gsi_key}"] = gsi_key
-                        remove_parts.append(f"#{gsi_key}")
+                stale_keys = [] if is_active else ['GSI4_PK', 'GSI4_SK']
+                if not project_keys:
+                    stale_keys += ['GSI5_PK', 'GSI5_SK']
+                for gsi_key in stale_keys:
+                    expression_attribute_names[f"#{gsi_key}"] = gsi_key
+                    remove_parts.append(f"#{gsi_key}")
 
                 update_expression = ""
                 if update_expression_parts:
@@ -1102,6 +1168,45 @@ def _recency_gsi_keys(
             "GSI4_SK": f"{last_message_at}#{session_id}",
         }
     return {}
+
+
+# Sparse index keys derived from a session row's state. Never read back as
+# session fields, and never carried from one write to the next.
+_RECENCY_KEY_ATTRS = ("GSI4_PK", "GSI4_SK", "GSI5_PK", "GSI5_SK")
+
+PROJECT_SESSION_INDEX = "ProjectSessionIndex"
+
+
+def _project_gsi_pk(project_id: str, user_id: str) -> str:
+    return f"PROJECT#{project_id}#USER#{user_id}"
+
+
+def _project_gsi_keys(
+    user_id: str,
+    session_id: str,
+    last_message_at: str,
+    project_id: Optional[str],
+    is_active: bool,
+) -> Dict[str, str]:
+    """ProjectSessionIndex (GSI5) keys: one member's tasks in one project, newest first.
+
+    The same recency sort key as GSI4, and present exactly when GSI4 is, but only
+    for a session bound to a project (``preferences.projectId``).
+    """
+    if is_active and project_id:
+        return {
+            "GSI5_PK": _project_gsi_pk(project_id, user_id),
+            "GSI5_SK": f"{last_message_at}#{session_id}",
+        }
+    return {}
+
+
+def _preferences_project_id(row: Dict[str, Any]) -> Optional[str]:
+    """``preferences.projectId`` of a raw row or dumped model, if any."""
+    prefs = row.get("preferences")
+    if isinstance(prefs, dict):
+        return prefs.get("projectId") or None
+    return None
 
 
 async def ensure_session_metadata_exists(
@@ -1398,25 +1503,31 @@ async def update_session_activity(
         pk = f"USER#{user_id}"
         target_sk = _static_session_sk(session_id)
         gsi4 = _recency_gsi_keys(user_id, session_id, now, is_active=True)
+        gsi5 = _project_gsi_keys(
+            user_id, session_id, now, merged_prefs.get("projectId"), is_active=True
+        )
 
         if old_sk == target_sk:
             # Already migrated (issue #175): pure in-place update — lastMessageAt is a
             # plain attribute and recency lives in GSI4_SK, so SET-ting GSI4_SK just
             # re-positions the index entry. No row move → no SK rotation → the
             # ghost-row race is structurally gone.
+            set_clause = "SET lastMessageAt = :t, preferences = :p, GSI4_PK = :gp, GSI4_SK = :gs"
+            values = {
+                ":one": 1,
+                ":t": now,
+                ":p": _convert_floats_to_decimal(merged_prefs),
+                ":gp": gsi4["GSI4_PK"],
+                ":gs": gsi4["GSI4_SK"],
+            }
+            if gsi5:
+                set_clause += ", GSI5_PK = :pp, GSI5_SK = :ps"
+                values[":pp"] = gsi5["GSI5_PK"]
+                values[":ps"] = gsi5["GSI5_SK"]
             table.update_item(
                 Key={"PK": pk, "SK": target_sk},
-                UpdateExpression=(
-                    "ADD messageCount :one "
-                    "SET lastMessageAt = :t, preferences = :p, GSI4_PK = :gp, GSI4_SK = :gs"
-                ),
-                ExpressionAttributeValues={
-                    ":one": 1,
-                    ":t": now,
-                    ":p": _convert_floats_to_decimal(merged_prefs),
-                    ":gp": gsi4["GSI4_PK"],
-                    ":gs": gsi4["GSI4_SK"],
-                },
+                UpdateExpression="ADD messageCount :one " + set_clause,
+                ExpressionAttributeValues=values,
             )
             logger.info("Updated session activity for %s (in-place, static SK)", session_id)
             return True
@@ -1432,12 +1543,12 @@ async def update_session_activity(
             )
             return True
         carried = {
-            k: v for k, v in fresh.items() if k not in ("PK", "SK", "GSI4_PK", "GSI4_SK")
+            k: v for k, v in fresh.items() if k not in ("PK", "SK", *_RECENCY_KEY_ATTRS)
         }
         carried["lastMessageAt"] = now
         carried["messageCount"] = int(fresh.get("messageCount", 0) or 0) + 1
         carried["preferences"] = _convert_floats_to_decimal(merged_prefs)
-        new_item = {"PK": pk, "SK": target_sk, **carried, **gsi4}
+        new_item = {"PK": pk, "SK": target_sk, **carried, **gsi4, **gsi5}
         table.put_item(Item=new_item)
         table.delete_item(Key={"PK": pk, "SK": old_sk})
 
@@ -2361,7 +2472,7 @@ async def _get_session_metadata_cloud(
             )
 
         # Remove DynamoDB keys before validation
-        for key in ['PK', 'SK', 'GSI_PK', 'GSI_SK']:
+        for key in ('PK', 'SK', 'GSI_PK', 'GSI_SK', *_RECENCY_KEY_ATTRS):
             item.pop(key, None)
 
         # Dedupe pending interrupts at the storage boundary so list_append
@@ -2481,7 +2592,7 @@ def _item_to_session_metadata(item: Dict[str, Any]) -> Optional[SessionMetadata]
     """
     try:
         item = _convert_decimal_to_float(item)
-        for key in ('PK', 'SK', 'GSI_PK', 'GSI_SK', 'GSI4_PK', 'GSI4_SK'):
+        for key in ('PK', 'SK', 'GSI_PK', 'GSI_SK', *_RECENCY_KEY_ATTRS):
             item.pop(key, None)
 
         # Skip preview sessions - they should not appear in user's session list
@@ -2727,6 +2838,54 @@ async def _list_user_sessions_cloud(
                 detail=str(e)
             )
         )
+
+
+async def list_project_sessions(
+    user_id: str,
+    project_id: str,
+    limit: int = 50,
+    next_token: Optional[str] = None,
+) -> Tuple[list[SessionMetadata], Optional[str]]:
+    """One member's active sessions in one project, newest first (ProjectSessionIndex).
+
+    Only the caller's own sessions: the index partition is per member, so a
+    project's tasks are never listed across people. Uses the same value cursor as
+    ``list_user_sessions``. While the index is still building, or absent, the list
+    is empty rather than an error (``dynamo_errors``).
+    """
+    from boto3.dynamodb.conditions import Key
+    from botocore.exceptions import ClientError
+
+    from apis.shared.dynamo_errors import is_missing_index_error, log_missing_index
+
+    table_name = os.environ.get('DYNAMODB_SESSIONS_METADATA_TABLE_NAME')
+    if not table_name:
+        raise RuntimeError("DYNAMODB_SESSIONS_METADATA_TABLE_NAME environment variable is required")
+    table = get_dynamodb_table(table_name)
+
+    condition = Key('GSI5_PK').eq(_project_gsi_pk(project_id, user_id))
+    cursor = _decode_list_cursor(next_token)
+    if cursor:
+        la, sid = cursor
+        condition = condition & Key('GSI5_SK').lt(f'{la}#{sid}')
+    want = limit + 1
+    params: Dict[str, Any] = {
+        'IndexName': PROJECT_SESSION_INDEX,
+        'KeyConditionExpression': condition,
+        'ScanIndexForward': False,
+        'Limit': want,
+    }
+    try:
+        sessions = _collect_valid_sessions(table, params, want)
+    except ClientError as e:
+        if is_missing_index_error(e):
+            log_missing_index(PROJECT_SESSION_INDEX, "a project's tasks")
+            return [], None
+        raise
+
+    has_more = len(sessions) > limit
+    page = sessions[:limit]
+    return page, (_encode_list_cursor(page[-1]) if has_more and page else None)
 
 
 def _deep_merge(base: dict, updates: dict) -> dict:

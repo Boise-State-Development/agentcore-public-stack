@@ -56,7 +56,12 @@ ARG NODE_SHA256_AMD64=2e5d13569282d016861fae7c8f935e741693c269101a5bebcf761a5376
 ARG NODE_SHA256_ARM64=1c4a9933a5e45bc88f54f70b5f91232c127ec49f1a5989d23fb85824c7adf9b7
 
 # npm — pinned to match frontend/ai.client/package.json "packageManager".
-ARG NPM_VERSION=11.2.0
+# 12.x is required: npm 11.2.0 crashes with "Cannot read properties of null
+# (reading 'edgesOut')" in arborist's peer-set builder when resolving this
+# repo's frontend dependency graph (vitest <-> @vitest/coverage-v8 peer
+# cycle), which makes `npm install` unusable for authoring the lockfile.
+# `npm ci` was unaffected, so this only ever blocked dependency changes.
+ARG NPM_VERSION=12.1.0
 
 # AWS CLI v2 — pinned exact version, sha256-verified, AND PGP-verified
 # against the AWS CLI Team public key (Key ID A6310ACC4672475C).

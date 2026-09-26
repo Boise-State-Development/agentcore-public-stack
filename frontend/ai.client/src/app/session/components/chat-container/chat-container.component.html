@@ -6,14 +6,17 @@
     class="chat-topnav-wrapper"
     [class.sidenav-expanded]="!isSidenavCollapsed()"
     [class.artifact-pane-open]="artifactPanelOpen()">
-    <app-topnav
-      [assistant]="assistant()"
-      [agentGovernance]="agentGovernance()"
-      [isAssistantOwner]="isAssistantOwner()"
-      [isLoadingAssistant]="isLoadingAssistant()"
-      (assistantNewSession)="onAssistantNewSession()"
-      (assistantEdit)="onAssistantEdit()"
-      (assistantShare)="onAssistantShare()" />
+    <app-topnav>
+      <!-- The bound agent, as a breadcrumb before the conversation title: the
+           conversation lives inside the agent. Only once there are messages —
+           the empty state already introduces the agent with its launch card. -->
+      @if (hasMessages() && (assistant() || isLoadingAssistant())) {
+        <div topnavCrumb class="flex min-w-0 shrink-[4] items-center gap-x-1.5">
+          <ng-container *ngTemplateOutlet="agentIndicator" />
+          <span aria-hidden="true" class="text-gray-300 dark:text-gray-600">/</span>
+        </div>
+      }
+    </app-topnav>
   </div>
 }
 
@@ -274,32 +277,7 @@
       </div>
 
       <!-- Fixed input at bottom -->
-      <div class="chat-input-footer embedded">
-        <!-- Assistant Indicator (floating badge above input) -->
-        @if (isLoadingAssistant()) {
-          <div class="flex justify-center mb-2">
-            <div class="animate-pulse inline-flex items-center gap-2.5 rounded-xl bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 pr-3 h-10">
-              <div class="w-9 h-full rounded-l-xl bg-gray-200 dark:bg-gray-700"></div>
-              <div class="flex flex-col gap-1">
-                <div class="h-3 w-32 rounded-sm bg-gray-200 dark:bg-gray-700"></div>
-                <div class="h-2 w-16 rounded-sm bg-gray-200 dark:bg-gray-700"></div>
-              </div>
-              <div class="h-3 w-3 rounded-full bg-gray-200 dark:bg-gray-700"></div>
-            </div>
-          </div>
-        } @else if (assistant()) {
-          <div class="assistant-indicator-input-wrapper embedded">
-            <app-assistant-indicator
-              [name]="assistant()!.name"
-              [emoji]="assistant()!.emoji ?? ''"
-              [ownerName]="assistant()!.ownerName"
-              [isOwner]="isAssistantOwner()"
-              [governance]="agentGovernance()"
-              (newSessionClicked)="onAssistantNewSession()"
-              (editClicked)="onAssistantEdit()"
-              (shareClicked)="onAssistantShare()" />
-          </div>
-        }
+      <div class="chat-input-footer embedded compact">
         <app-chat-input
           [showAnnouncements]="showAnnouncements()"
           [announcementPlacement]="announcementPlacement()"
@@ -311,13 +289,14 @@
           (messageSubmitted)="onMessageSubmitted($event)"
           (messageCancelled)="onMessageCancelled()"
           (fileAttached)="onFileAttached($event)"
+          [compact]="true"
 >
-          <!-- Cost + context, sharing the composer's meta row with the quota
-               tab. Pinned to this chat's own session: an embedded chat is
-               deliberately NOT the viewed session, so an unpinned badge would
+          <!-- Context meter (cost lives in its panel), beside the model
+               picker. Pinned to this chat's own session: an embedded chat is
+               deliberately NOT the viewed session, so an unpinned meter would
                report whatever conversation the user last opened — a plausible
                number belonging to something else. -->
-          <app-session-cost-badge composerMeta class="pb-1" [sessionId]="sessionId()" />
+          <app-context-meter composerMeta [sessionId]="sessionId()" />
         </app-chat-input>
       </div>
     </div>
@@ -346,7 +325,7 @@
 
     <!-- Chat input footer -->
     <div
-      class="chat-input-footer full-page"
+      class="chat-input-footer full-page compact"
       [class.sidenav-expanded]="!isSidenavCollapsed()"
       [class.artifact-pane-open]="artifactPanelOpen()">
       <div class="mx-auto px-4 max-w-[720px]">
@@ -361,15 +340,38 @@
           (messageSubmitted)="onMessageSubmitted($event)"
           (messageCancelled)="onMessageCancelled()"
           (fileAttached)="onFileAttached($event)"
+          [compact]="true"
 >
-          <!-- Cost + context, sharing the composer's meta row with the quota
-               tab; unpinned so it follows the viewed session. -->
-          <app-session-cost-badge composerMeta class="pb-1" />
+          <!-- Context meter (cost lives in its panel), beside the model
+               picker; unpinned so it follows the viewed session. -->
+          <app-context-meter composerMeta />
         </app-chat-input>
       </div>
     </div>
   }
 }
+
+<!-- The bound agent, projected into the top nav as the conversation's breadcrumb. -->
+<ng-template #agentIndicator>
+  @if (isLoadingAssistant()) {
+    <div
+      class="h-6 w-28 animate-pulse rounded-md bg-gray-200/70 motion-reduce:animate-none dark:bg-white/5"
+      role="status"
+      aria-label="Loading agent"
+    ></div>
+  } @else if (assistant(); as agent) {
+    <app-agent-indicator
+      [name]="indicatorName()"
+      [emoji]="agent.emoji ?? ''"
+      [ownerName]="agent.ownerName"
+      [isOwner]="isAssistantOwner()"
+      [projectId]="agent.projectId ?? null"
+      [governance]="agentGovernance()"
+      (newSessionClicked)="onAssistantNewSession()"
+      (editClicked)="onAssistantEdit()"
+      (shareClicked)="onAssistantShare()" />
+  }
+</ng-template>
 
 <!-- Voice Conversation Overlay -->
 @if (isVoiceActive()) {

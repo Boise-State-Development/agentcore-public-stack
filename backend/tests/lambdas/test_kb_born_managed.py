@@ -425,6 +425,22 @@ class TestProvisioningJob:
         assert _doc(table)["status"] == "uploading"
 
     @pytest.mark.asyncio
+    async def test_a_document_deleted_while_provisioning_is_not_recreated(self, table):
+        """The handoff's ``provisioning → uploading`` write is an upsert. A document
+        deleted while its knowledge base was being built must not come back as a
+        ghost ``uploading`` row, and there is nothing left to ingest it for."""
+        _seed_doc(table)
+        waiting = [_doc(table)]
+        table.delete_item(Key={"PK": f"AST#{ASSISTANT_ID}", "SK": f"DOC#{DOCUMENT_ID}"})
+
+        with patch.object(ic, "handle_object") as handled:
+            done = await pv._ingest_waiting(ASSISTANT_ID, waiting)
+
+        assert done == 0
+        handled.assert_not_called()
+        assert _doc(table) is None
+
+    @pytest.mark.asyncio
     async def test_more_documents_than_one_invocation_can_finish_are_requeued(self, table):
         """One document per invocation: the worker's timeout is 15 minutes and one
         document's indexing budget is already 10.5, so a second could not finish and
@@ -572,7 +588,7 @@ class TestDispatcherFlagGating:
         monkeypatch.delenv("MANAGED_KB_MIGRATION_ENABLED", raising=False)
 
         assert d.dispatcher_enabled() is True
-        assert d._enabled_work_states() == [r.BORN_MANAGED]
+        assert d._enabled_work_states() == [r.BORN_MANAGED, r.TEARDOWN]
 
     def test_migration_states_are_not_swept_under_new_default_alone(self, monkeypatch):
         """MUTATION GUARD: gate the states on ``migration_enabled or
@@ -597,7 +613,7 @@ class TestDispatcherFlagGating:
 
         swept = d._enabled_work_states()
         assert r.BORN_MANAGED not in swept
-        assert swept == [r.PROMOTE, r.VERIFY, r.SHADOW]
+        assert swept == [r.TEARDOWN, r.PROMOTE, r.VERIFY, r.SHADOW]
 
     def test_born_managed_is_served_first(self, monkeypatch):
         """Somebody is watching an upload spinner for it; the migration states are

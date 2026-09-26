@@ -1,8 +1,9 @@
-import { ChangeDetectionStrategy, Component, input } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroCheck } from '@ng-icons/heroicons/outline';
 import { ManagedModel } from '../../../admin/manage-models/models/managed-model.model';
 import { ModelIconComponent } from '../../model-icon/model-icon.component';
+import { isRetiring, modelRetirementDetail } from '../../../shared/utils/retirement';
 
 /**
  * One model row in the chat model picker.
@@ -47,16 +48,34 @@ import { ModelIconComponent } from '../../model-icon/model-icon.component';
     <span class="flex min-w-0 items-center gap-2.5">
       <app-model-icon [model]="model()" [size]="24" />
       <span class="min-w-0 text-left">
-        <span class="block truncate">
-          <span class="font-medium">{{ model().modelName }}</span>
-          <span class="ml-1.5 text-xs/4 text-gray-500 dark:text-gray-400"
-            ><span aria-hidden="true" class="mr-1">&bull;</span>{{ model().providerName }}</span
-          >
-        </span>
+        @if (retiring()) {
+          <!-- The badge takes the provider's place and sits outside the truncating
+               span, so a long name clips the name — never the badge. -->
+          <span class="flex min-w-0 items-center gap-1.5">
+            <span class="truncate font-medium">{{ model().modelName }}</span>
+            <span
+              class="shrink-0 rounded-sm bg-state-warning-50 px-1.5 font-mono text-[10px]/5 font-medium text-state-warning-700 dark:bg-state-warning-900/30 dark:text-state-warning-300"
+              >retiring</span
+            >
+          </span>
+        } @else {
+          <span class="block truncate">
+            <span class="font-medium">{{ model().modelName }}</span>
+            <span class="ml-1.5 text-xs/4 text-gray-500 dark:text-gray-400"
+              ><span aria-hidden="true" class="mr-1">&bull;</span>{{ model().providerName }}</span
+            >
+          </span>
+        }
         <!-- Second line only when there's something to say. A model with no
              description collapses to a single line rather than leaving a blank
-             one, which is most of what makes the menu shorter. -->
-        @if (model().shortDescription) {
+             one, which is most of what makes the menu shorter. A retiring model
+             only appears here while it is the selection (ModelService), so its
+             second line says what is happening instead of selling it. -->
+        @if (retiring()) {
+          <span class="mt-0.5 block text-xs/4 text-state-warning-700 dark:text-state-warning-300"
+            >Being retired.{{ retirementText() ? ' ' + retirementText() : '' }}</span
+          >
+        } @else if (model().shortDescription) {
           <span class="mt-0.5 block truncate text-xs/4 text-gray-500 dark:text-gray-400">{{
             model().shortDescription
           }}</span>
@@ -80,6 +99,19 @@ import { ModelIconComponent } from '../../model-icon/model-icon.component';
 })
 export class ModelOptionComponent {
   readonly model = input.required<ManagedModel>();
+  /** Display name of the model's `replacedBy`, resolved by the menu. */
+  readonly successorName = input<string | null>(null);
+
+  protected readonly retiring = computed(() => isRetiring(this.model()));
+  // The admin's note is left to the roomier surfaces (Designer, Settings): in a
+  // narrow menu it turned a two-line row into five.
+  protected readonly retirementText = computed(() =>
+    modelRetirementDetail({
+      ...this.model(),
+      retirementNote: null,
+      successorName: this.successorName(),
+    }),
+  );
   readonly selected = input<boolean>(false);
   /** Show the "New chat" hint — picking a different model starts a new session. */
   readonly showNewChatHint = input<boolean>(false);

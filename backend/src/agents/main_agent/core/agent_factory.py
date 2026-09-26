@@ -36,7 +36,10 @@ class AgentFactory:
             so native CountTokens works for inference-profile model ids).
         """
         bedrock_config = model_config.to_bedrock_config()
-        return CountTokensBedrockModel(**bedrock_config)
+        # Strands awaits count_tokens before every model call; keep that local.
+        # Native counts are taken off the critical path by the
+        # context-attribution hook (native_count_tokens in a background task).
+        return CountTokensBedrockModel(native_projection=False, **bedrock_config)
 
     @staticmethod
     def _create_openai_model(model_config: ModelConfig) -> OpenAIModel:
@@ -186,6 +189,7 @@ class AgentFactory:
         session_manager: Any,
         hooks: Optional[List[Any]] = None,
         plugins: Optional[List[Any]] = None,
+        memory_context: Optional[str] = None,
     ) -> Agent:
         """
         Create a Strands Agent instance with the appropriate model provider
@@ -199,6 +203,9 @@ class AgentFactory:
             plugins: Optional list of Strands plugins (e.g. AgentSkills). A
                 plugin auto-registers its hooks and tools with the agent, so
                 this is how skills disclosure is wired (Skills v2).
+            memory_context: Optional rendered Memory-Space block. Sent after
+                the system prompt, behind a cache point of its own when the
+                model supports cache points (see below).
 
         Returns:
             Agent: Configured Strands Agent instance
@@ -310,16 +317,41 @@ class AgentFactory:
         # Agent.system_prompt remains the plain string (split_system_prompt
         # concatenates the text blocks), so hashing/attribution/voice consumers
         # are unaffected.
+        #
+        # Shared Projects 2.2: a bound Memory-Space block gets the FOURTH and
+        # last cache point (tools, system, memory, auto message = Bedrock's
+        # maximum of 4). The system point stays exactly where it was, so the
+        # static prefix (tools + platform floor + instructions) is still read
+        # from cache when members edit memory; only the memory block and what
+        # follows are rewritten. Turns without memory send today's bytes. With
+        # AGENTCORE_PROMPT_CACHE_STATIC_PREFIX_TTL=1h upstream gives BOTH
+        # TTL-less system points the same 1h, which keeps the non-increasing
+        # TTL order Bedrock requires. Skills XML is appended by the plugin
+        # after the last block, as it always was.
         agent_system_prompt: Any = system_prompt
         if system_prompt and model_config.bedrock_cache_points_supported():
             agent_system_prompt = [
                 {"text": system_prompt},
                 {"cachePoint": {"type": "default"}},
             ]
+            if memory_context:
+                agent_system_prompt += [
+                    {"text": memory_context},
+                    {"cachePoint": {"type": "default"}},
+                ]
+        elif memory_context:
+            agent_system_prompt = f"{system_prompt}\n\n{memory_context}" if system_prompt else memory_context
 
         # Create agent with session manager, hooks, and system prompt
         # Use SequentialToolExecutor to prevent concurrent browser operations
         # This prevents "Failed to start and initialize Playwright" errors with NovaAct
+        #
+        # callback_handler=None is load-bearing. Left unset, Strands installs
+        # PrintingCallbackHandler, which print()s every streamed text delta to
+        # stdout with end="". The runtime ships stdout to CloudWatch, so that
+        # put user conversation content in the logs and glued unterminated text
+        # onto the front of EMF lines. Nothing here consumes callback events:
+        # the stream processor reads agent.stream_async() directly.
         agent = Agent(
             model=model,
             system_prompt=agent_system_prompt,
@@ -330,6 +362,7 @@ class AgentFactory:
             hooks=hooks if hooks else None,
             plugins=plugins if plugins else None,
             retry_strategy=retry_strategy,
+            callback_handler=None,
         )
 
         return agent

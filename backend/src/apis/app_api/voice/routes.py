@@ -33,8 +33,9 @@ from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.models import User
 from apis.shared.sessions_bff.config import SESSION_COOKIE_NAME
 from apis.shared.sessions_bff.cookie import CookieDecodeError, get_default_codec
+from apis.shared.sessions_bff.models import SessionRecord
 from apis.shared.sessions_bff.repository import SessionRepository
-from apis.shared.voice_ticket import VoiceTicketError, get_default_service
+from apis.shared.voice_ticket import PURPOSE_VOICE, VoiceTicketError, get_default_service
 
 from .proxy import relay_voice_stream
 
@@ -129,24 +130,35 @@ def _get_session_repository() -> SessionRepository:
     return _session_repository
 
 
-@router.websocket("/stream")
-async def voice_stream(websocket: WebSocket, ticket: Optional[str] = None) -> None:
-    """Cookie + ticket gated WebSocket; relays to the AgentCore Runtime.
+async def authenticate_ticketed_websocket(
+    websocket: WebSocket,
+    ticket: Optional[str],
+    *,
+    purpose: str,
+) -> Optional[SessionRecord]:
+    """Run the pre-accept auth gates for a ticketed BFF WebSocket.
 
-    Auth flow runs *before* the ``accept`` so a rejected connection closes
-    cleanly without the SPA seeing a half-open socket. After acceptance,
-    everything is plumbing — the relay handles its own teardown.
+    Shared by voice mode and dictation: both are browser WebSockets that the
+    HTTP-only middleware stack never sees, so each gate is re-implemented here
+    once — Origin allowlist, session cookie unseal + lookup, ticket signature /
+    expiry / purpose / single-use, and ticket↔session user binding.
+
+    Returns the BFF session record when every gate passes. On any failure the
+    socket is closed (before ``accept``, so the SPA never sees a half-open
+    connection) and ``None`` is returned; the caller just returns.
     """
     # Browser-WS CSRF defense — Origin is set by the browser, not JS.
     origin = websocket.headers.get("origin")
     if not _is_origin_allowed(origin):
-        logger.warning("Voice WS rejected: origin %r not in CORS_ORIGINS", _sanitize_for_log(origin))
+        logger.warning(
+            "%s WS rejected: origin %r not in CORS_ORIGINS", purpose, _sanitize_for_log(origin)
+        )
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="origin not allowed")
-        return
+        return None
 
     if not ticket:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="ticket required")
-        return
+        return None
 
     # Resolve the BFF session from the cookie. WebSockets don't run
     # SessionRefreshMiddleware, so we replicate the cookie unseal + DDB
@@ -156,62 +168,81 @@ async def voice_stream(websocket: WebSocket, ticket: Optional[str] = None) -> No
     sealed_cookie = websocket.cookies.get(SESSION_COOKIE_NAME)
     if not sealed_cookie:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="no session")
-        return
+        return None
 
     try:
         codec = get_default_codec()
         cookie_payload = codec.unseal(sealed_cookie)
     except CookieDecodeError:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="bad session")
-        return
+        return None
     except Exception as exc:
-        logger.error("Voice WS cookie unseal error: %s", exc, exc_info=True)
+        logger.error("%s WS cookie unseal error: %s", purpose, exc, exc_info=True)
         await websocket.close(code=status.WS_1011_INTERNAL_ERROR, reason="server error")
-        return
+        return None
 
     repository = _get_session_repository()
     if not repository.enabled:
-        logger.error("Voice WS rejected: BFF session repository not configured")
+        logger.error("%s WS rejected: BFF session repository not configured", purpose)
         await websocket.close(code=status.WS_1011_INTERNAL_ERROR, reason="server error")
-        return
+        return None
     try:
         session_record = await repository.get(cookie_payload.session_id)
     except Exception as exc:
-        logger.error("Voice WS session lookup error: %s", exc, exc_info=True)
+        logger.error("%s WS session lookup error: %s", purpose, exc, exc_info=True)
         await websocket.close(code=status.WS_1011_INTERNAL_ERROR, reason="server error")
-        return
+        return None
     if session_record is None:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="session expired")
-        return
+        return None
 
-    # Verify + consume the ticket. Replay attempts surface as VoiceTicketError.
+    # Verify + consume the ticket. Replay and wrong-purpose attempts surface
+    # as VoiceTicketError.
     try:
         service = get_default_service()
     except RuntimeError as exc:
-        logger.error("Voice WS rejected: ticket service not configured: %s", exc)
+        logger.error("%s WS rejected: ticket service not configured: %s", purpose, exc)
         await websocket.close(code=status.WS_1011_INTERNAL_ERROR, reason="server error")
-        return
+        return None
 
     try:
-        claims = await service.verify_and_consume(ticket)
+        claims = await service.verify_and_consume(ticket, purpose=purpose)
     except VoiceTicketError as exc:
-        logger.info("Voice WS ticket rejected: %s", exc)
+        logger.info("%s WS ticket rejected: %s", purpose, exc)
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="invalid ticket")
-        return
+        return None
     except Exception as exc:
-        logger.error("Voice WS ticket verify error: %s", exc, exc_info=True)
+        logger.error("%s WS ticket verify error: %s", purpose, exc, exc_info=True)
         await websocket.close(code=status.WS_1011_INTERNAL_ERROR, reason="server error")
-        return
+        return None
 
     if claims.user_id != session_record.user_id:
         # Defense in depth: a leaked ticket from a different user can't be
         # used even if presented with this user's cookie. The cookie's
         # session_id is the authoritative identity for the WS connection.
         logger.warning(
-            "Voice WS rejected: ticket user_id %s does not match session user_id",
+            "%s WS rejected: ticket user_id %s does not match session user_id",
+            purpose,
             claims.user_id,
         )
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="ticket mismatch")
+        return None
+
+    return session_record
+
+
+@router.websocket("/stream")
+async def voice_stream(websocket: WebSocket, ticket: Optional[str] = None) -> None:
+    """Cookie + ticket gated WebSocket; relays to the AgentCore Runtime.
+
+    Auth flow runs *before* the ``accept`` so a rejected connection closes
+    cleanly without the SPA seeing a half-open socket. After acceptance,
+    everything is plumbing — the relay handles its own teardown.
+    """
+    session_record = await authenticate_ticketed_websocket(
+        websocket, ticket, purpose=PURPOSE_VOICE
+    )
+    if session_record is None:
         return
 
     await websocket.accept()

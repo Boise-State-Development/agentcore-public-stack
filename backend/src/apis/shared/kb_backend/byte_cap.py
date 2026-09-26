@@ -38,6 +38,36 @@ up front, converted to stored on success, and returned on failure. A crash betwe
 reserve and commit leaks a reservation, which is the safe direction — it
 under-permits rather than over-permits, and the reconciler can recover it.
 
+Refund on delete
+----------------
+Commit is not the end of a document's accounting: deleting a document that reached
+``complete`` has to give its stored bytes back, or every delete permanently shaves
+the allowance (verified in dev: a 98-byte document uploaded, completed and deleted
+left ``storedBytes`` and ``totalBytes`` 98 higher for good). Two ``DOC#`` markers
+make that exact and exactly-once:
+
+* ``committedBytes`` is stamped by :func:`record_commit` *before* the ``KB#``
+  commit, and only while the row exists and is not ``deleting``. It is the amount
+  a delete must return, and the true S3 size can differ from the declared
+  ``sizeBytes``, so the row has to carry it.
+* ``byteCapRefunded`` is claimed by :func:`refund_once`, which returns the amount
+  once and 0 for every caller after it.
+
+The ordering is what closes the race with a concurrent delete. The soft-delete
+write and the ``committedBytes`` stamp hit the same item, so one of them is first:
+stamp first, and the delete (which refunds after its own status write) sees the
+stamp; delete first, and the stamp is refused and the settling path releases the
+reservation instead of committing it. Both ``ADD`` writes commute, so a refund
+landing before its commit still nets to zero.
+
+Guards against driving a counter negative
+-----------------------------------------
+:func:`release` refuses to take ``reservedBytes`` below zero, and :func:`refund`
+refuses to take ``storedBytes`` below zero. Either refusal means the caller is
+settling bytes that were never counted — a document written while the knowledge
+base was legacy, say — and letting it through would hand the owner allowance they
+never had. The refusal leaves the counters too high, which is the safe direction.
+
 Sizing
 ------
 Size always comes from an S3 ``HEAD`` on the stored object, never from a
@@ -65,6 +95,9 @@ from apis.shared.kb_backend.metrics import emit_count
 logger = logging.getLogger(__name__)
 
 METRIC_BYTE_CAP_REJECTED = "KbByteCapRejected"
+#: A settlement that would have driven ``reservedBytes`` or ``storedBytes`` below
+#: zero, and was refused. Each one is accounting that was already wrong.
+METRIC_BYTE_CAP_SKEW = "KbByteCapAccountingSkew"
 
 #: Defaults mirror the CDK config (Requirement 12.2). Both are read from the
 #: environment so an operator can tune them without a code change; the fallbacks
@@ -177,10 +210,29 @@ def reserve(
 
     ``attribute_not_exists`` covers the first reservation on a record that has
     never held bytes, so a fresh knowledge base does not need initialising.
+
+    The record itself must exist, though. Every caller has just read it and found
+    it managed, so an absent record means a teardown removed it in between, and an
+    unguarded ``ADD`` would recreate it as a ghost ``KB#`` item holding only
+    counters. That case returns without reserving: with no managed knowledge base
+    there is no managed storage to bill, which is the same reason a legacy
+    knowledge base is uncapped (Requirement 12.11). The paired :func:`commit` or
+    :func:`release` is then a no-op too, so the accounting stays consistent.
     """
+    _reserve(assistant_id, app_kb_id, n_bytes, cap, snapshot=False)
+
+
+def _reserve(
+    assistant_id: str,
+    app_kb_id: str,
+    n_bytes: int,
+    cap: int,
+    snapshot: bool,
+) -> None:
+    """:func:`reserve`, optionally recording the amount as the migration snapshot."""
     from botocore.exceptions import ClientError
 
-    from apis.shared.kb_backend.records import kb_pk, kb_sk
+    from apis.shared.kb_backend.records import RECORD_EXISTS, kb_pk, kb_sk
 
     if n_bytes < 0:
         raise ValueError("n_bytes must not be negative")
@@ -191,11 +243,16 @@ def reserve(
         emit_count(METRIC_BYTE_CAP_REJECTED)
         raise ByteCapExceeded(requested=n_bytes, cap=cap)
 
+    update = "ADD #total :n, #reserved :n"
+    if snapshot:
+        update += " SET snapshotReservedBytes = :n"
     try:
         _table().update_item(
             Key={"PK": kb_pk(assistant_id), "SK": kb_sk(app_kb_id)},
-            UpdateExpression="ADD #total :n, #reserved :n",
-            ConditionExpression="attribute_not_exists(#total) OR #total <= :max_before",
+            UpdateExpression=update,
+            ConditionExpression=(
+                f"{RECORD_EXISTS} AND (attribute_not_exists(#total) OR #total <= :max_before)"
+            ),
             ExpressionAttributeNames={
                 # `total` is a DynamoDB reserved keyword, so these are aliased.
                 "#total": "totalBytes",
@@ -205,9 +262,18 @@ def reserve(
                 ":n": Decimal(n_bytes),
                 ":max_before": Decimal(cap - n_bytes),
             },
+            # Hands back the record on a rejection, which is what tells "over the
+            # cap" apart from "the record is gone" without a second read.
+            ReturnValuesOnConditionCheckFailure="ALL_OLD",
         )
     except ClientError as exc:
         if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            if not exc.response.get("Item"):
+                logger.info(
+                    f"KB_Record {assistant_id}/{app_kb_id} is gone (torn down); "
+                    f"not reserving {n_bytes} bytes against it"
+                )
+                return
             emit_count(METRIC_BYTE_CAP_REJECTED)
             raise ByteCapExceeded(requested=n_bytes, cap=cap) from exc
         raise
@@ -219,36 +285,149 @@ def commit(assistant_id: str, app_kb_id: str, n_bytes: int) -> None:
     ``totalBytes`` is untouched: the bytes were already counted at reserve time.
     Adding here as well would double-count and shrink the owner's allowance on
     every successful upload.
+
+    Guarded on the record existing (:func:`records.update_if_present`): settling
+    bytes against a knowledge base that was torn down mid-ingestion must not
+    recreate its record.
     """
-    from apis.shared.kb_backend.records import kb_pk, kb_sk
+    from apis.shared.kb_backend.records import update_if_present
 
     if n_bytes == 0:
         return
-    _table().update_item(
-        Key={"PK": kb_pk(assistant_id), "SK": kb_sk(app_kb_id)},
+    update_if_present(
+        assistant_id,
+        app_kb_id,
+        table=_table(),
         UpdateExpression="ADD #reserved :neg, #stored :n",
         ExpressionAttributeNames={"#reserved": "reservedBytes", "#stored": "storedBytes"},
         ExpressionAttributeValues={":neg": Decimal(-n_bytes), ":n": Decimal(n_bytes)},
     )
 
 
-def release(assistant_id: str, app_kb_id: str, n_bytes: int) -> None:
+def release(assistant_id: str, app_kb_id: str, n_bytes: int) -> bool:
     """Return a reservation after a failed ingestion.
 
     Decrements both the reservation and the accumulator, restoring the allowance
     exactly. Not releasing would silently shrink the owner's cap with every failed
     upload until they could not upload at all — a leak that presents as "the
     product stopped working" long after the failures that caused it.
+
+    Guarded on the record existing, as :func:`commit` is, and on
+    ``reservedBytes`` covering the amount. A release larger than every outstanding
+    reservation is returning bytes that were never reserved — prod carries
+    ``failed`` rows written while their knowledge base was still legacy, whose
+    ``sizeBytes`` never touched the cap — and applying it would drive the counter
+    negative and credit the owner allowance they never had. It is refused and
+    counted instead. Returns whether the bytes were released.
     """
-    from apis.shared.kb_backend.records import kb_pk, kb_sk
+    if n_bytes == 0:
+        return True
+    return _settle_counter(
+        assistant_id,
+        app_kb_id,
+        n_bytes,
+        counter="reservedBytes",
+        what="release",
+    )
+
+
+def refund(assistant_id: str, app_kb_id: str, n_bytes: int) -> bool:
+    """Return a deleted document's committed bytes to the allowance.
+
+    The mirror of :func:`commit` + :func:`reserve`: ``storedBytes`` and
+    ``totalBytes`` both drop by the amount, so the invariant holds. Guarded like
+    :func:`release`, on the record existing and on ``storedBytes`` covering the
+    amount. Returns whether the bytes were refunded.
+    """
+    if n_bytes == 0:
+        return True
+    return _settle_counter(
+        assistant_id,
+        app_kb_id,
+        n_bytes,
+        counter="storedBytes",
+        what="refund",
+    )
+
+
+def _settle_counter(
+    assistant_id: str,
+    app_kb_id: str,
+    n_bytes: int,
+    counter: str,
+    what: str,
+) -> bool:
+    """Take ``n_bytes`` off ``counter`` and ``totalBytes``, never below zero.
+
+    A comparison against an absent attribute is false, so a record with no
+    ``counter`` refuses too: nothing was ever counted there to give back.
+    """
+    from botocore.exceptions import ClientError
+
+    from apis.shared.kb_backend.records import RECORD_EXISTS, kb_pk, kb_sk
+
+    try:
+        _table().update_item(
+            Key={"PK": kb_pk(assistant_id), "SK": kb_sk(app_kb_id)},
+            UpdateExpression="ADD #counter :neg, #total :neg",
+            ConditionExpression=f"{RECORD_EXISTS} AND #counter >= :n",
+            ExpressionAttributeNames={"#counter": counter, "#total": "totalBytes"},
+            ExpressionAttributeValues={":neg": Decimal(-n_bytes), ":n": Decimal(n_bytes)},
+            ReturnValuesOnConditionCheckFailure="ALL_OLD",
+        )
+        return True
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+            raise
+        item = exc.response.get("Item")
+        if not item:
+            logger.info(
+                f"KB_Record {assistant_id}/{app_kb_id} is gone (torn down); "
+                f"skipping the {what} of {n_bytes} bytes rather than recreating it"
+            )
+            return False
+        emit_count(METRIC_BYTE_CAP_SKEW)
+        logger.warning(
+            f"refusing to {what} {n_bytes} bytes on KB_Record {assistant_id}/{app_kb_id}: "
+            f"{counter} is {_attr_int(item, counter)}, so these bytes were never counted "
+            f"there; leaving the counters as they are"
+        )
+        return False
+
+
+def _attr_int(item, name: str) -> Optional[int]:
+    """A numeric attribute from a low-level (``{"N": "..."}``) or resource item."""
+    value = (item or {}).get(name)
+    if isinstance(value, dict):
+        value = value.get("N")
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def add_stored(assistant_id: str, app_kb_id: str, n_bytes: int) -> None:
+    """Count bytes that are already stored, without a reservation in front of them.
+
+    For migration adoption only (:func:`settle_as_committed`): a document carried
+    across from the legacy engine never went through :func:`reserve`, and its bytes
+    are in S3 already, so they go straight to ``storedBytes``. Deliberately not
+    cap-checked — refusing to count bytes that exist would not remove them, only
+    hide them. Guarded on the record existing.
+    """
+    from apis.shared.kb_backend.records import update_if_present
 
     if n_bytes == 0:
         return
-    _table().update_item(
-        Key={"PK": kb_pk(assistant_id), "SK": kb_sk(app_kb_id)},
-        UpdateExpression="ADD #reserved :neg, #total :neg",
-        ExpressionAttributeNames={"#reserved": "reservedBytes", "#total": "totalBytes"},
-        ExpressionAttributeValues={":neg": Decimal(-n_bytes)},
+    update_if_present(
+        assistant_id,
+        app_kb_id,
+        table=_table(),
+        UpdateExpression="ADD #stored :n, #total :n",
+        ExpressionAttributeNames={"#stored": "storedBytes", "#total": "totalBytes"},
+        ExpressionAttributeValues={":n": Decimal(n_bytes)},
     )
 
 
@@ -274,15 +453,179 @@ def settle_once(assistant_id: str, document_id: str) -> bool:
 
     Keyed on the ``DOC#`` row rather than a separate ledger so the claim shares the
     document's own lifetime: delete the document and the marker goes with it.
+
+    That lifetime is also why an absent row returns ``False``. Without the
+    ``RECORD_EXISTS`` guard, ``attribute_not_exists(byteCapSettled)`` is trivially
+    true on a missing item and the upsert would recreate the row as a ghost
+    ``DOC#`` holding only the marker, then hand the caller a claim to settle
+    bytes a second time. A row is removed in two ways, and neither leaves
+    anything to settle: deleting one document soft-deletes it and releases its
+    reservation through this same claim *before* the hard delete, and deleting
+    the agent tears its ``KB#`` record down too, so the paired
+    :func:`commit`/:func:`release` would no-op anyway. The rejected item is
+    returned (``ALL_OLD``) only so the log can tell "already settled" from "gone".
     """
     from botocore.exceptions import ClientError
+
+    from apis.shared.kb_backend.records import RECORD_EXISTS
 
     try:
         _table().update_item(
             Key={"PK": f"AST#{assistant_id}", "SK": f"DOC#{document_id}"},
             UpdateExpression="SET byteCapSettled = :true",
-            ConditionExpression="attribute_not_exists(byteCapSettled)",
+            ConditionExpression=f"{RECORD_EXISTS} AND attribute_not_exists(byteCapSettled)",
             ExpressionAttributeValues={":true": True},
+            ReturnValuesOnConditionCheckFailure="ALL_OLD",
+        )
+        return True
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            if not exc.response.get("Item"):
+                logger.info(
+                    f"DOC# row {assistant_id}/{document_id} is gone (document or agent "
+                    f"deleted); nothing to settle, and not recreating it"
+                )
+            return False
+        raise
+
+
+def record_commit(assistant_id: str, document_id: str, n_bytes: int) -> bool:
+    """Stamp the amount about to be committed on the ``DOC#`` row, before committing.
+
+    Called by the settling path after :func:`settle_once` has handed it the claim
+    and immediately before :func:`commit`. ``committedBytes`` is what
+    :func:`refund_once` later returns on delete, and it is the S3 size, which can
+    differ from the declared ``sizeBytes``.
+
+    Refused — returns ``False`` — when the row is gone or ``deleting``. The caller
+    must then :func:`release` the reservation instead of committing it: the delete
+    already ran its refund before this stamp existed, so bytes committed now would
+    never be given back. See the module docstring for why the stamp has to come
+    first.
+    """
+    from botocore.exceptions import ClientError
+
+    from apis.shared.kb_backend.records import RECORD_EXISTS
+
+    try:
+        _table().update_item(
+            Key={"PK": f"AST#{assistant_id}", "SK": f"DOC#{document_id}"},
+            UpdateExpression="SET committedBytes = :n",
+            ConditionExpression=f"{RECORD_EXISTS} AND #status <> :deleting",
+            ExpressionAttributeNames={"#status": "status"},
+            ExpressionAttributeValues={":n": Decimal(n_bytes), ":deleting": "deleting"},
+            ReturnValuesOnConditionCheckFailure="ALL_OLD",
+        )
+        return True
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            state = "being deleted" if exc.response.get("Item") else "gone"
+            logger.info(
+                f"DOC# row {assistant_id}/{document_id} is {state}; not committing its "
+                f"{n_bytes} bytes"
+            )
+            return False
+        raise
+
+
+def settle_as_committed(assistant_id: str, document_id: str, n_bytes: int) -> bool:
+    """Claim a ``complete`` document that was never settled as already committed.
+
+    Migration adoption: a document carried across from the legacy engine was never
+    reserved or committed, so it has neither marker. Stamping ``byteCapSettled``
+    and ``committedBytes`` together, in one conditional write, makes it
+    indistinguishable from a document the ingestion consumer completed — which is
+    what lets a later delete refund it through :func:`refund_once`, and stops the
+    delete path's :func:`settle_once` releasing a reservation it never had.
+
+    Returns ``True`` for exactly one caller. ``False`` when the row is gone, not
+    ``complete`` (including ``deleting``), or already settled. The caller counts
+    the bytes (:func:`add_stored` or :func:`commit`) only on ``True``.
+    """
+    from botocore.exceptions import ClientError
+
+    from apis.shared.kb_backend.records import RECORD_EXISTS
+
+    try:
+        _table().update_item(
+            Key={"PK": f"AST#{assistant_id}", "SK": f"DOC#{document_id}"},
+            UpdateExpression="SET byteCapSettled = :true, committedBytes = :n",
+            ConditionExpression=(
+                f"{RECORD_EXISTS} AND attribute_not_exists(byteCapSettled) "
+                f"AND #status = :complete"
+            ),
+            ExpressionAttributeNames={"#status": "status"},
+            ExpressionAttributeValues={
+                ":true": True,
+                ":n": Decimal(n_bytes),
+                ":complete": "complete",
+            },
+        )
+        return True
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            return False
+        raise
+
+
+def refund_once(assistant_id: str, document_id: str) -> int:
+    """Claim the one-time refund of a deleted document's committed bytes.
+
+    Returns ``committedBytes`` for exactly one caller and 0 for everyone else:
+    a re-delete, a row that is gone, and a row that never committed anything (an
+    upload still in flight, whose reservation is :func:`settle_once`'s to release).
+
+    Only ``committedBytes`` is trusted, never ``sizeBytes``. A row settled before
+    ``committedBytes`` existed may have been settled by a *release* and then
+    completed by a late ingestion, and refunding it would return bytes that were
+    never stored. Those rows are backfilled by
+    ``scripts/repair_managed_kb_byte_counters.py`` instead.
+    """
+    from botocore.exceptions import ClientError
+
+    from apis.shared.kb_backend.records import RECORD_EXISTS
+
+    try:
+        response = _table().update_item(
+            Key={"PK": f"AST#{assistant_id}", "SK": f"DOC#{document_id}"},
+            UpdateExpression="SET byteCapRefunded = :true",
+            ConditionExpression=(
+                f"{RECORD_EXISTS} AND attribute_exists(committedBytes) "
+                f"AND attribute_not_exists(byteCapRefunded)"
+            ),
+            ExpressionAttributeValues={":true": True},
+            ReturnValues="ALL_NEW",
+        )
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            return 0
+        raise
+    return int(response.get("Attributes", {}).get("committedBytes") or 0)
+
+
+def release_snapshot(assistant_id: str, app_kb_id: str, n_bytes: int) -> bool:
+    """Return a migration's whole-corpus reservation, once.
+
+    :func:`reserve_snapshot` holds the corpus against the cap while the migration
+    runs; at promotion every carried document is adopted into ``storedBytes``
+    individually (:func:`settle_as_committed` + :func:`add_stored`) and this drops
+    the snapshot reservation in one write. Conditioned on the recorded amount and
+    removing it, so a resumed promotion cannot release it twice. ``n_bytes`` is
+    the ``snapshotReservedBytes`` the caller read.
+    """
+    from botocore.exceptions import ClientError
+
+    from apis.shared.kb_backend.records import RECORD_EXISTS, kb_pk, kb_sk
+
+    if n_bytes <= 0:
+        return False
+    try:
+        _table().update_item(
+            Key={"PK": kb_pk(assistant_id), "SK": kb_sk(app_kb_id)},
+            UpdateExpression="ADD #reserved :neg, #total :neg REMOVE snapshotReservedBytes",
+            ConditionExpression=f"{RECORD_EXISTS} AND snapshotReservedBytes = :n",
+            ExpressionAttributeNames={"#reserved": "reservedBytes", "#total": "totalBytes"},
+            ExpressionAttributeValues={":neg": Decimal(-n_bytes), ":n": Decimal(n_bytes)},
         )
         return True
     except ClientError as exc:
@@ -309,7 +652,12 @@ def reserve_snapshot(
     corpus that cannot fit fails immediately, with numbers the caller can turn into
     "this needs an elevated tier" rather than a stack trace.
 
-    Deliberately the same conditional write as :func:`reserve`; the distinction is
-    the caller's contract, not the mechanism.
+    The same conditional write as :func:`reserve`, which also records the amount as
+    ``snapshotReservedBytes``. Nothing ever commits this reservation — the bytes
+    are already in S3, so there is no ingestion to settle it — and before that
+    marker existed it stayed in ``reservedBytes`` for good: every migrated knowledge
+    base in prod carried its whole corpus as a reservation and ``storedBytes=0``.
+    Promotion now adopts each document and hands the snapshot back through
+    :func:`release_snapshot`.
     """
-    reserve(assistant_id, app_kb_id, total_bytes, cap)
+    _reserve(assistant_id, app_kb_id, total_bytes, cap, snapshot=True)

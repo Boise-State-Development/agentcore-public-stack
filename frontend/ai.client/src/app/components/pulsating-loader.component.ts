@@ -87,16 +87,16 @@ import { isPlatformBrowser } from '@angular/common';
       }
 
       /*
-       * A 7px core with a halo emanating from it.
+       * An 11px core with a halo emanating from it.
        *
        * The halo is the expanding ring this indicator used to have and lost:
        * it is what made the dot read as something happening rather than
-       * something blinking. What it does NOT get back is the old scale — that
-       * ring was 36px around a 12px dot and out-shouted the sentence beside
-       * it. At 7px with a 13px halo it holds the same motion inside a
-       * footprint that stays subordinate to the text.
+       * something blinking. At 7px with a 13px halo it was subordinate to the
+       * text to the point of being easy to miss; at 14px with a 26px halo it
+       * outweighed the line beside it. 11px with a 21px halo keeps the same
+       * motion, proportions and timing between the two.
        *
-       * The element itself paints nothing; it is a 7px positioning box that
+       * The element itself paints nothing; it is an 11px positioning box that
        * carries the colour as a colour property, and both layers draw in
        * currentColor. That is what keeps them in sync — the dark and notice
        * variants each set one property instead of three.
@@ -111,8 +111,8 @@ import { isPlatformBrowser } from '@angular/common';
        */
       .pulse-dot {
         position: relative;
-        width: 7px;
-        height: 7px;
+        width: 11px;
+        height: 11px;
         flex: none;
         color: var(--color-secondary-500);
       }
@@ -136,7 +136,7 @@ import { isPlatformBrowser } from '@angular/common';
       .pulse-dot::before {
         content: '';
         position: absolute;
-        inset: -3px;
+        inset: -5px;
         border-radius: 9999px;
         background-color: currentColor;
         animation: loader-ring 1.25s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
@@ -154,7 +154,7 @@ import { isPlatformBrowser } from '@angular/common';
         inset: 0;
         border-radius: 9999px;
         background-color: currentColor;
-        box-shadow: 0 0 6px color-mix(in srgb, currentColor 45%, transparent);
+        box-shadow: 0 0 10px color-mix(in srgb, currentColor 45%, transparent);
         animation: loader-core 1.25s cubic-bezier(0.455, 0.03, 0.515, 0.955) -0.4s
           infinite;
       }

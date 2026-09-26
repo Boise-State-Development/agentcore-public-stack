@@ -16,6 +16,7 @@ yielded yet at the moment each frame arrived.
 """
 
 import asyncio
+import contextvars
 import json
 from typing import Any, AsyncIterator, Dict, List, Optional
 
@@ -236,3 +237,73 @@ class TestEarlyExit:
                 session_manager.cancelled = True
 
         assert any(f.startswith("event: done") for f in frames)
+
+
+_ACTIVE_SPAN: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "_ACTIVE_SPAN", default=None
+)
+
+
+class _SpanHoldingAgent(_StallingAgent):
+    """Holds a context value open across its yields, the way Strands' spans do.
+
+    Strands wraps the invocation, each cycle and each model stream in
+    ``use_span``, which sets an OpenTelemetry ContextVar on entry and resets it
+    with the token on exit — with yields in between. The reset only succeeds in
+    the Context that made the token, and anything opened from the ambient
+    context during the silence (a Memory ``CreateEvent`` span) parents to
+    whatever is current then.
+    """
+
+    def __init__(self, hook: _Hook) -> None:
+        super().__init__(hook, silence=0.25)
+        self.seen_during_silence: Optional[str] = None
+        self.reset_error: Optional[BaseException] = None
+
+    def stream_async(self, prompt: Any) -> AsyncIterator[Dict[str, Any]]:
+        async def _gen() -> AsyncIterator[Dict[str, Any]]:
+            token = _ACTIVE_SPAN.set("execute_event_loop_cycle")
+            yield {"event": {"messageStart": {"role": "assistant"}}}
+
+            self._hook.record({"phase": "tool_start", "cycle": 1, "toolName": "t"})
+            await asyncio.sleep(self._silence)
+            self.seen_during_silence = _ACTIVE_SPAN.get()
+
+            self.spoke_again = True
+            yield {"event": {"messageStop": {"stopReason": "end_turn"}}}
+            try:
+                _ACTIVE_SPAN.reset(token)
+            except ValueError as exc:
+                self.reset_error = exc
+
+        return _gen()
+
+
+class TestContextAcrossSteps:
+    @pytest.mark.asyncio
+    async def test_a_value_set_before_a_yield_resets_after_it(self, monkeypatch):
+        """Each `__anext__` is its own task; they must share one Context.
+
+        A fresh context copy per step made every span Strands held across a
+        yield fail to detach ("was created in a different Context"), ~5 logged
+        errors per tool turn in the runtime.
+        """
+        monkeypatch.delenv("AGENT_STATUS_LIVE_DRAIN_ENABLED", raising=False)
+        hook = _Hook()
+        agent = _SpanHoldingAgent(hook)
+
+        frames = await _collect_with_arrival(agent, _Wrapper(hook))
+
+        assert _arrival_of_phase(frames, "tool_start") is False  # merge engaged
+        assert agent.reset_error is None
+
+    @pytest.mark.asyncio
+    async def test_the_ambient_value_survives_into_the_next_step(self, monkeypatch):
+        """Otherwise spans opened mid-turn parent to the request span."""
+        monkeypatch.delenv("AGENT_STATUS_LIVE_DRAIN_ENABLED", raising=False)
+        hook = _Hook()
+        agent = _SpanHoldingAgent(hook)
+
+        await _collect_with_arrival(agent, _Wrapper(hook))
+
+        assert agent.seen_during_silence == "execute_event_loop_cycle"

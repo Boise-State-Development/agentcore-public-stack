@@ -174,8 +174,8 @@ recreates the session component on a legitimate navigation (`session.page.ts:498
 destroy-time clear would drop and re-apply the lock mid-flow.
 
 The proper resolution is step 4 — the lock is a fact about the *conversation*, so it belongs
-on the assistant indicator pill
-(`session/components/assistant-indicator/assistant-indicator.component.ts`), which is already
+on the agent indicator pill
+(`session/components/agent-indicator/agent-indicator.component.ts`), which is already
 in the conversation and already has an actions menu.
 
 **Step 4's shape.** The indicator takes an `AgentGovernance` input (`modelName`, `toolCount`,

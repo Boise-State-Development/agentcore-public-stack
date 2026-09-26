@@ -87,18 +87,6 @@
   min-width: 0;
 }
 
-/* Assistant indicator wrapper - positioned above chat input */
-.assistant-indicator-input-wrapper {
-  display: flex;
-  justify-content: center;
-  padding-bottom: 0.75rem;
-}
-
-/* Embedded mode indicator - same styling */
-.assistant-indicator-input-wrapper.embedded {
-  padding-bottom: 0.5rem;
-}
-
 /* Sidenav-aware positioning for lg screens */
 @media (min-width: 1024px) {
   .chat-input-footer.full-page.sidenav-expanded,
@@ -203,6 +191,14 @@
   height: 2rem;
   pointer-events: none;
   background: linear-gradient(to top, var(--color-gray-50), transparent);
+}
+
+/* A compact composer ends in its cost/model meta line, whose 32px row already
+   leaves slack beneath the text; the full 1rem on top of that reads as a gap
+   twice the one between the shell and the line. */
+.chat-input-footer.full-page.compact,
+.chat-input-footer.embedded.compact {
+  padding-bottom: 0.5rem;
 }
 
 /* Keep the composer on the same 720px measure as the messages above it. */
