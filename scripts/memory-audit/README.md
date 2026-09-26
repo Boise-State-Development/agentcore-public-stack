@@ -31,6 +31,11 @@ python scripts/memory-audit/audit.py ... cleanup --cleanup-actor memory-audit-pr
 `inventory` walks every actor's sessions, so it takes a few minutes on a
 deployment with ~100 actors.
 
+`inventory` also histograms the per-namespace top retrieval score from the
+runtime's `memory retrieval scores` log lines (one per namespace per turn:
+top score, records returned, records kept, cut in force). Those lines carry the
+namespace template, never the resolved actor id, and no record text.
+
 ## Output and privacy
 
 `--out` gets two things:

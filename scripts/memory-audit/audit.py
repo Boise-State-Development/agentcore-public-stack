@@ -20,7 +20,8 @@ Subcommands
     4. CloudWatch (``FilterLogEvents``, no Logs Insights): discovery failures
        (``No memory strategies found``), retrieval hit lines
        (``Retrieved N customer context items``), retrieval failures and
-       throttles in the runtime log group.
+       throttles in the runtime log group, and a histogram of the per-namespace
+       top retrieval score (``memory retrieval scores``) by strategy type.
 
 ``probe`` (writes, dev only)
     The service half of the behavioral test (spec §1.2 step 5). Writes a
@@ -95,6 +96,7 @@ LOG_PATTERNS = {
     "retrieval_failed": '"memory retrieval failed"',
     "retrieval_throttled": '"memory retrieval throttled"',
     "retrieval_reconnected": '"memory retrieval reconnected"',
+    "retrieval_scores": '"memory retrieval scores"',
     "retrieval_error": '"Failed to retrieve customer context"',
     "ltm_enabled": '"Long-term memory"',
 }
@@ -167,6 +169,40 @@ def histogram(values: Iterable[int], edges: tuple[int, ...] = (0, 1, 2, 5, 10, 2
     return dict(buckets)
 
 
+# One line per namespace per turn from retrieve_customer_context. The namespace
+# is the template (``{actorId}`` unresolved); no record text.
+SCORE_LINE_RE = re.compile(
+    r"memory retrieval scores namespace=(\S+) top=(none|[0-9.]+) returned=(\d+) kept=(\d+) cut=(\S+)"
+)
+
+
+def score_line_stats(messages: Iterable[str], type_by_id: dict[str, str]) -> dict[str, Any]:
+    """Per strategy type: lines, lines with nothing returned, lines that kept
+    at least one record, the cut(s) in force, and a 0.05-wide histogram of the
+    top score."""
+    out: dict[str, dict[str, Any]] = {}
+    for message in messages:
+        m = SCORE_LINE_RE.search(message)
+        if not m:
+            continue
+        sid = re.search(r"/strategies/([^/]+)", m.group(1))
+        stype = type_by_id.get(sid.group(1), "UNKNOWN") if sid else "UNKNOWN"
+        d = out.setdefault(stype, {"lines": 0, "returnedNone": 0, "keptAny": 0,
+                                   "cuts": Counter(), "topScoreHistogram": Counter()})
+        d["lines"] += 1
+        d["cuts"][m.group(5)] += 1
+        d["keptAny"] += int(int(m.group(4)) > 0)
+        if m.group(2) == "none":
+            d["returnedNone"] += 1
+        else:
+            lo = min(int(float(m.group(2)) * 20), 19) / 20
+            d["topScoreHistogram"][f"{lo:.2f}-{lo + 0.05:.2f}"] += 1
+    for d in out.values():
+        d["cuts"] = dict(d["cuts"])
+        d["topScoreHistogram"] = dict(sorted(d["topScoreHistogram"].items()))
+    return out
+
+
 def pct(values: list[float], p: float) -> float | None:
     if not values:
         return None
@@ -228,6 +264,7 @@ class Audit:
                     any(t.rstrip("/") == expected.rstrip("/") for t in templates) if expected else None
                 ),
             })
+        self._type_by_id = type_by_id
         self.summary["inventory"] = {
             "status": mem.get("status"),
             "eventExpiryDays": mem.get("eventExpiryDuration"),
@@ -338,6 +375,12 @@ class Audit:
                 counts = [int(m.group(1)) for e in events
                           if (m := re.search(r"Retrieved (\d+) customer context items", e["message"]))]
                 entry["itemsPerHitTurnHistogram"] = histogram(counts)
+            if key == "retrieval_scores":
+                # The runtime writes each line twice: its own stream and an
+                # OTEL JSON copy on otel-* streams. Count the plain copy only.
+                entry["byStrategyType"] = score_line_stats(
+                    (e["message"] for e in events if not e.get("logStreamName", "").startswith("otel-")),
+                    getattr(self, "_type_by_id", {}))
             result[key] = entry
             raw.extend({"pattern": key, "ts": e["timestamp"], "message": e["message"][:2000]} for e in events)
         self.write_raw("log_lines.jsonl", raw)

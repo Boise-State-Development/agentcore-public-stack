@@ -126,6 +126,66 @@ class TestRetrieval:
         get_client.assert_not_called()
 
 
+class TestScoreLogging:
+    """One score-only line per namespace per turn, for calibrating the cut.
+    Runtime logs must carry no user identifiers or memory text."""
+
+    def _lines(self, caplog):
+        return sorted(r.getMessage() for r in caplog.records if r.getMessage().startswith("memory retrieval scores"))
+
+    def test_logs_top_returned_kept_and_cut_per_namespace(self, make_session_manager, caplog):
+        client = FakeRetrievalClient(results={
+            "/strategies/pref-1/actors/secret-actor-7": [_record("likes short answers", 0.49), _record("x", 0.38)],
+            "/strategies/sem-1/actors/secret-actor-7": [
+                _record("name is Ada", 0.8123), _record("studies geology", 0.52), _record("owns a dog", 0.31)],
+        })
+        mgr = _manager(make_session_manager, client, relevance=0.5)
+        mgr.config.actor_id = "secret-actor-7"
+
+        with caplog.at_level("INFO", logger=tbsm.logger.name):
+            mgr.retrieve_customer_context(_event())
+
+        assert self._lines(caplog) == [
+            "memory retrieval scores namespace=/strategies/pref-1/actors/{actorId} top=0.490 returned=2 kept=0 cut=0.5",
+            "memory retrieval scores namespace=/strategies/sem-1/actors/{actorId} top=0.812 returned=3 kept=2 cut=0.5",
+        ]
+        assert len(client.calls) == 2  # computed from the response in hand, no extra calls
+
+    def test_no_actor_id_or_record_text_in_any_log_line(self, make_session_manager, caplog):
+        client = FakeRetrievalClient(results={
+            "/strategies/sem-1/actors/secret-actor-7": [_record("name is Ada", 0.9)],
+        })
+        mgr = _manager(make_session_manager, client)
+        mgr.config.actor_id = "secret-actor-7"
+
+        event = _event()
+
+        with caplog.at_level("DEBUG", logger=tbsm.logger.name):
+            mgr.retrieve_customer_context(event)
+
+        assert "name is Ada" in event.agent.messages[-1]["content"][0]["text"]  # it was injected
+        assert "secret-actor-7" not in caplog.text
+        assert "name is Ada" not in caplog.text
+
+    def test_empty_namespace_logs_none(self, make_session_manager, caplog):
+        mgr = _manager(make_session_manager, FakeRetrievalClient(), namespaces=(FACTS,), relevance=0.5)
+
+        with caplog.at_level("INFO", logger=tbsm.logger.name):
+            mgr.retrieve_customer_context(_event())
+
+        assert self._lines(caplog) == [
+            "memory retrieval scores namespace=/strategies/sem-1/actors/{actorId} top=none returned=0 kept=0 cut=0.5",
+        ]
+
+    def test_failed_namespace_logs_no_score_line(self, make_session_manager, caplog):
+        mgr = _manager(make_session_manager, FakeRetrievalClient(raise_with=_throttle()), namespaces=(FACTS,))
+
+        with caplog.at_level("INFO", logger=tbsm.logger.name):
+            mgr.retrieve_customer_context(_event())
+
+        assert self._lines(caplog) == []
+
+
 class TestBounded:
     def test_throttle_costs_one_attempt_and_the_turn_proceeds_without_context(self, make_session_manager):
         client = FakeRetrievalClient(raise_with=_throttle())
