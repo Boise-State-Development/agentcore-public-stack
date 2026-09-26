@@ -1,3 +1,31 @@
+# Release Notes — v1.25.1
+
+**Release Date:** September 26, 2026
+**Previous Release:** v1.25.0 (September 25, 2026)
+
+---
+
+> 📣 **This is a one-fix patch on top of [v1.25.0](https://github.com/Boise-State-Development/agentcore-public-stack/releases/tag/v1.25.0), which is where this week's features are.** 1.25.0 made long-term memory reach the model and made compaction keep the facts that matter. It also added personal instructions, dictation, the compact composer, the context meter and model retirement.
+>
+> **Upgrading from 1.24.x? Follow the v1.25.0 Deployment notes.** 1.25.1 does not change them. That upgrade still needs the CDK deploy, the required managed-KB byte-counter repair and the recommended cleanups listed there.
+
+---
+
+## Highlights
+
+A new conversation no longer opens with a message that was already sent. The first message sent from the empty-state composer stayed in the saved new-conversation draft, so every later **New Session** opened with it already typed in. This is an SPA-only fix, with no backend or infrastructure changes.
+
+## 🐛 Bug fixes
+
+- **New Session reopened with the previous first message.** Composer drafts are saved to `localStorage` by an effect in `ChatInputComponent`, which removes the draft once a send empties the input. On the first send, the view swaps to the compact composer and destroys the empty-state composer before that effect runs again. The effect therefore never removed the draft, and `composer-draft:new` kept the sent text. `submitChatRequest` now writes the cleared draft immediately (`persistDraftNow()`), and an empty draft is removed. A new spec covers the destroy-without-change-detection path that the existing spec missed (#1362).
+
+## 🚀 Deployment notes
+
+- **From 1.25.0:** no special steps. Only the SPA changes; there is no CDK change and no script to run.
+- **From 1.24.x or earlier:** follow the v1.25.0 Deployment notes first.
+
+---
+
 # Release Notes — v1.25.0
 
 **Release Date:** September 25, 2026

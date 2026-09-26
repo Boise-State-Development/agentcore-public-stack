@@ -1549,6 +1549,20 @@ describe('ChatInputComponent — unsent text survives leaving the conversation',
     expect(component.userInput()).toBe('question for s1');
   });
 
+  it('forgets the new-conversation draft when the first send tears the composer down', async () => {
+    await mount(NEW_CONVERSATION_DRAFT_KEY);
+    type('first message');
+
+    // The empty state's composer is replaced by the compact one on the first
+    // send, so it is destroyed before another change detection pass can run
+    // its draft effect.
+    component.submitChatRequest();
+    fixture.destroy();
+
+    await mount(NEW_CONVERSATION_DRAFT_KEY);
+    expect(component.userInput()).toBe('');
+  });
+
   it('forgets the draft once the message is sent', async () => {
     await mount('s1');
     type('about to send');
