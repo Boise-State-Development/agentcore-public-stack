@@ -13,7 +13,7 @@ Side           Action
 =============  ============================================================
 AWS only       Orphan. Delete **only if AWS's own ``createdAt`` is >24 h old**
 Record only    Mark ``vectorState: missing``. **Never delete the record**
-Both           Refresh ``storedBytes`` for quota accounting
+Both           Re-anchor ``storedBytes`` + ``totalBytes`` (quota)
 =============  ============================================================
 
 A record in ``migrationState: teardown`` takes none of those actions, on either
@@ -86,7 +86,7 @@ from decimal import Decimal
 from typing import Any, Callable, Dict, Iterator, List, Optional
 
 from apis.shared.kb_backend.metrics import emit_count, emit_fleet_gauges
-from apis.shared.kb_backend.records import TEARDOWN, update_if_present
+from apis.shared.kb_backend.records import TEARDOWN, WORK_ELIGIBLE_STATES, update_if_present
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -438,6 +438,19 @@ def mark_vector_state_missing(assistant_id: str, app_kb_id: str) -> bool:
 def refresh_stored_bytes(assistant_id: str, app_kb_id: str, stored_bytes: int) -> bool:
     """Re-anchor quota accounting, and clear any stale ``vectorState``.
 
+    ``totalBytes`` is re-anchored in the same write, to ``storedBytes +
+    reservedBytes``. It is the accumulator the cap guard actually reads
+    (``byte_cap.reserve``), and re-anchoring ``storedBytes`` alone did nothing for
+    the owner's allowance while breaking the invariant the guard rests on: a
+    stored-bytes drift corrected here stayed in ``totalBytes`` for good. The sum
+    is computed by DynamoDB from the ``reservedBytes`` on the item at write time,
+    so a reservation taken between this pass's read and its write is still
+    counted.
+
+    An upload whose object has landed but whose reservation has not been
+    committed yet is in both terms until it commits. That over-counts by the
+    in-flight bytes until the next pass, which is the safe direction.
+
     The ``REMOVE`` matters: a record marked ``missing`` on an earlier run that has
     since been re-provisioned would otherwise stay marked for ever, and the UI
     would keep telling its owner their knowledge base is broken after it was
@@ -451,10 +464,16 @@ def refresh_stored_bytes(assistant_id: str, app_kb_id: str, stored_bytes: int) -
         app_kb_id,
         table=_table(),
         UpdateExpression=(
-            "SET storedBytes = :bytes, updatedAt = :now "
+            "SET storedBytes = :bytes, "
+            "totalBytes = :bytes + if_not_exists(reservedBytes, :zero), "
+            "updatedAt = :now "
             "REMOVE vectorState, vectorStateObservedAt"
         ),
-        ExpressionAttributeValues={":bytes": Decimal(int(stored_bytes)), ":now": _now_iso()},
+        ExpressionAttributeValues={
+            ":bytes": Decimal(int(stored_bytes)),
+            ":zero": Decimal(0),
+            ":now": _now_iso(),
+        },
     )
 
 
@@ -776,8 +795,15 @@ def _reconcile_matched(
 
     A record being torn down is skipped: its bytes are about to be deleted with
     it, and refreshing them would only give a late write a record to recreate.
+
+    So is a record the migration worker is part-way through (any work-eligible
+    state). During ``shadow``/``verify`` its corpus is held as a snapshot
+    reservation that promotion converts into ``storedBytes``
+    (``worker.adopt_corpus``); anchoring ``storedBytes`` to S3 underneath that
+    would count the corpus in both terms. The worker owns those counters until
+    it finishes.
     """
-    if record.get("migrationState") == TEARDOWN:
+    if record.get("migrationState") in WORK_ELIGIBLE_STATES:
         return
 
     app_kb_id = str(record.get("appKbId") or "")
@@ -792,7 +818,11 @@ def _reconcile_matched(
 
     current = int(record.get("storedBytes") or 0)
     stale_state = record.get("vectorState") is not None
-    if actual == current and not stale_state:
+    # A broken invariant is worth the write even when storedBytes is already right.
+    total_drift = record.get("totalBytes") is not None and int(record["totalBytes"]) != (
+        current + int(record.get("reservedBytes") or 0)
+    )
+    if actual == current and not stale_state and not total_drift:
         return
 
     if refresh_stored_bytes(assistant_id, app_kb_id, actual):

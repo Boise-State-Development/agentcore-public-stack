@@ -71,6 +71,15 @@ def _kb_record(state: str = r.SHADOW, **overrides) -> Dict[str, Any]:
     return record
 
 
+@pytest.fixture(autouse=True)
+def _no_corpus_adoption():
+    """``run_promote`` adopts the corpus's bytes through the real table, and these
+    tests have none — unpatched it would reach for AWS. The adoption itself is
+    covered against moto in ``test_kb_byte_cap_lifecycle.py``."""
+    with patch.object(worker, "adopt_corpus", return_value=0):
+        yield
+
+
 async def _async_noop(*args, **kwargs):
     """An awaitable that does nothing.
 
