@@ -479,3 +479,137 @@ compression is lifted for Nova 2 Lite.
 - Recommendation 3, `topP` for Claude summarizers, which is a separate task.
 - The §8 caveats all still apply: Haiku-written stand-in records, a
   synthetic corpus, one answering model, and only the restore pace.
+
+### 9.2 Paid confirmation: extract-then-compress in production code (2026-09-25)
+
+This section is the first, **sequential** version, run before the Nova 2
+Lite default landed, so `model_relative` here is Nova Micro. §9.3 supersedes
+its latency and makes the calls concurrent.
+
+Recommendation 2 moved into `compaction_summary.py`, behind
+`COMPACTION_SUMMARY_EXTRACT_ENABLED` (in development, default off). The
+harness's `extract_*` arms now set `summary_extract_enabled` on the config
+and run the production `bound_summary`. They no longer swap in the
+prototype copy in `summarizers.py`, which is deleted (`compress_only` stays).
+
+**Configuration.** Same as §8 except the arms:
+- fresh `records` (`--chunk-turns 1 --record-words 600`);
+- `cut --summary records --summary-model` with arms
+  `full,model_relative,extract_nova2lite` on the restore pace at 200k;
+- `ask --k 3 --workers 4` on Haiku 4.5 in dev;
+- 972 calls, all `end_turn`.
+
+**Summaries.** Records came to ~12.2k–16.3k tokens at the cut.
+`model_relative` (Nova Micro, plain) compressed them to 377–1,722 tokens.
+`extract_nova2lite` returned `extract_then_compress` in all 12 sessions, at
+702–3,865 tokens (median ~1,700).
+
+| family (n) | full | model_relative | extract_nova2lite |
+|---|---|---|---|
+| constraint (36) | 1.00 | **0.78** (8 losses / 0 wins, p=0.008) | **1.00** (0 / 0, p=1.0) |
+| decision (24) | 1.00 | **0.58** (10 / 0, p=0.002) | **1.00** (0 / 0, p=1.0) |
+| reference (24) | 0.96 | **0.67** (8 / 1, p=0.039) | **1.00** (0 / 1, p=1.0) |
+| superseded (24) | 0.96 | 0.96 (0 / 0, p=1.0) | 0.96 (0 / 0, p=1.0) |
+
+- **By retention.** Facts whose stating turn was cut scored **1.00** with
+  extract-then-compress (n=52), against 0.50 with today's compression. Facts
+  whose turn was kept scored 0.98 under both (n=56).
+- **Free availability predicted it again.** It was 100% in every family for
+  `extract_nova2lite`, and 77.8 / 58.3 / 70.8 / 100 for `model_relative`.
+- **Misses.** `model_relative` had 82 wrong samples, 77 of them `UNKNOWN`.
+  `extract_nova2lite` had 3.
+
+**Spend.** About $7.20 for `ask` (actual tokens at Regional Haiku 4.5 rates,
+against a $13.42 estimate). About $3.50 for `records`. About $11 in total.
+
+**Latency of the sequential version, measured on these records** (4 cuts
+each, dev, us-west-2). The summary step takes:
+- Nova Micro plain: 3.3–7.3 s;
+- Nova Micro extract: 4.2–10.2 s;
+- Nova 2 Lite plain: 5.7–9.1 s;
+- **Nova 2 Lite extract: 11.4–22.7 s.**
+
+It runs in `update_after_turn`, after the turn's final `metadata` event and
+before `done`, only on the turn that advances the checkpoint. So it adds
+nothing before the first token, but on a cut turn it delays `done`, and with
+it the release of the session's single-flight lease, by that much.
+
+**Verdict.** Extract-then-compress on Nova 2 Lite, in production code, clears
+the veto: no family loses to the full history. It relies on the Nova
+2 Lite default (§9.1); on Nova Micro it screened at 88% (§9).
+
+### 9.3 Concurrent calls, and a labelling fix (2026-09-25)
+
+**Change.** The budget is now split up front:
+- the pinned block gets at most half;
+- the narrative gets the rest, less its joiner and header.
+
+So the extraction and the narrative compression run side by side (`asyncio.gather`).
+- An extraction failure now keeps the narrative as a plain compression
+  (outcome `model`), instead of making a third call.
+- A cut never makes more than two calls.
+- The narrative's word limit roughly halves, to 2,198 at the default 8k
+  budget. Nova 2 Lite's narratives mostly come in under that.
+
+**Latency, per call, 12 cuts on the §9.2 records** (Nova 2 Lite, 8k budget):
+
+| | median | max |
+|---|---|---|
+| extraction alone | 1.7 s | 9.7 s |
+| narrative alone | 8.2 s | 15.4 s |
+| **concurrent cut (what ships)** | **8.4 s** | **15.4 s** |
+| the same two calls back to back | 11.6 s | 16.8 s |
+| plain `bound_summary` (the default) | 7.6 s | 12.9 s |
+
+The cut costs the narrative call; extraction finishes under it. So
+extract-then-compress now costs about what the default does. The slow tail
+is Nova 2 Lite's own output length, which swings from ~600 to ~3,500 tokens
+on the same records.
+
+**Rescore.**
+- Free check, three reps on the §9.2 records: `extract_nova2lite` held
+  **100%** in every family. Plain Nova 2 Lite (`model_relative`, now the
+  default) held 97.2–100% constraint and 95.8% decision.
+- Paid `ask` on the concurrent code, against the same `full` answers:
+
+| family (n) | full | model_relative (Nova 2 Lite) | extract, concurrent |
+|---|---|---|---|
+| constraint (36) | 1.00 | 1.00 (0 / 0, p=1.0) | 1.00 (0 / 0, p=1.0) |
+| decision (24) | 1.00 | 0.96 (1 / 0, p=1.0) | 1.00 (0 / 0, p=1.0) |
+| reference (24) | 0.96 | 1.00 (0 / 1, p=1.0) | 0.96 → **1.00** after the label fix (see below) |
+| superseded (24) | 0.96 | 0.96 (0 / 0, p=1.0) | 0.96 (0 / 0, p=1.0) |
+
+- **A labelling defect.** Before the fix, one reference fact came back
+  `UNKNOWN` on all three samples although its value was in context. The
+  extractor had copied `GJ-64861` verbatim but relabelled it
+  "Budget reference". The question asked for "the budget workbook version
+  tag", and the answering model could not connect the two.
+  - Free availability cannot see this, because it only checks that the
+    value is present. Only the paid `ask` can.
+  - `IDENTIFIERS` now asks for each value "labelled with the conversation's
+    own name for what it identifies".
+  - Rescored with that prompt, `extract_nova2lite` answered every fact
+    `full` does: constraint 1.00, decision 1.00, reference 1.00 (0 / 1),
+    superseded 0.96. Facts whose stating turn was cut scored 1.00 (n=52).
+  - **The fix itself is unproven.** In that run the pinned line still read
+    "Budget reference"; the fact was answered because the narrative carried
+    the label. Treat the prompt change as a reasonable instruction, not a
+    measured one.
+- **Narrative ceiling.** In 2 of 72 cuts the narrative hit its 4,000-token
+  output cap. `compress_with_model` discards a `max_tokens` generation, so
+  those cuts fell back to `extract_then_truncate`: the pinned block plus
+  newest-first records. Availability stayed at 100% in both. The default
+  single-call path has the same cap and the same discard (0 of 36 here);
+  keeping a cut-off generation's complete lines is a separate fix for both.
+- **Spend.** $8.28 for the first concurrent `ask`, and $1.85 for the rescore
+  of the extract arm alone. The rescore reused the `full` answers, whose
+  histories do not change.
+
+**Verdict.** Concurrent extract-then-compress keeps the §9.2 result, with
+no loss to the full history in any family, and brings the cut's latency to
+the default's. Against plain Nova 2 Lite the paid run cannot separate the
+two: both match `full` at this n. What extraction buys over the new default
+is:
+- facts pinned verbatim regardless of how the narrative is sampled
+  (free availability 100% every rep against 96–100%);
+- a pinned block that survives a failed narrative call.

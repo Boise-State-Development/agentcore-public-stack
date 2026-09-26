@@ -624,3 +624,26 @@ def projects_enabled() -> bool:
     401 first), the harness refuses everyone, and existing rows are left untouched.
     """
     return os.environ.get("PROJECTS_ENABLED", "").strip().lower() == "true"
+
+
+def compaction_summary_extract_enabled() -> bool:
+    """Whether a compaction cut pins verbatim facts ahead of its summary.
+
+    Extract-then-compress (``agents/main_agent/session/compaction_summary.py``):
+    one extraction call copies standing instructions, decisions, identifiers
+    and changed values verbatim into a pinned block, then the narrative is
+    compressed into the rest of the budget. **Opt-in while in development**
+    (CLAUDE.md "Feature flags"): only ``"true"`` (case-insensitive) enables it.
+    CDK sets it on the AgentCore Runtime only, from
+    ``config.compactionSummaryExtract.enabled``; there is no SPA switch.
+
+    Read once per session manager, through ``CompactionConfig.from_env``. It
+    runs only when a cut advances the checkpoint, after the turn's final
+    ``metadata`` event, so it adds nothing before the first token; the cut
+    turn pays one extra side-channel call. The result is persisted verbatim,
+    so the restore bytes stay stable. While off, the cut compresses exactly
+    as before. Needs ``AGENTCORE_MEMORY_COMPACTION_SUMMARY_MODEL_ENABLED`` on,
+    and a summary model that can extract: Nova 2 Lite and Haiku 4.5 held
+    every planted fact on the quality harness, Nova Micro 88%.
+    """
+    return os.environ.get("COMPACTION_SUMMARY_EXTRACT_ENABLED", "").strip().lower() == "true"

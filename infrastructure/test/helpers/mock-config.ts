@@ -144,6 +144,9 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     platformSelfService: {
       enabled: false,
     },
+    compactionSummaryExtract: {
+      enabled: false,
+    },
     feedbackEvalSampling: { enabled: false },
     skills: {
       enabled: false,

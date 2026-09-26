@@ -43,7 +43,7 @@ from agents.main_agent.session.turn_based_session_manager import TurnBasedSessio
 from agents.main_agent.session import turn_based_session_manager as _tbsm
 
 from .corpus import Transcript, message_text
-from .summarizers import compress_only, extract_then_compress
+from .summarizers import compress_only
 
 PREFIX_KEY = "harness-model|harness-agent"
 PACE_GAP_SECONDS = {"restore": 600, "cold": 600, "warm": 60}
@@ -98,19 +98,16 @@ def default_arms(*, summary_model_enabled: bool = False) -> Dict[str, Arm]:
             summarizer=compress_only(HAIKU_4_5),
         ),
         "extract_nova_micro": Arm(
-            "extract_nova_micro", CompactionConfig(**base),
-            "Option 3: verbatim facts pinned, then the narrative compressed, on Nova Micro.",
-            summarizer=extract_then_compress(NOVA_MICRO),
+            "extract_nova_micro", CompactionConfig(**{**base, "summary_model_id": NOVA_MICRO, "summary_extract_enabled": True}),
+            "Option 3 (production, COMPACTION_SUMMARY_EXTRACT_ENABLED): verbatim facts pinned, then the narrative compressed, on Nova Micro.",
         ),
         "extract_nova2lite": Arm(
-            "extract_nova2lite", CompactionConfig(**base),
-            "Option 3: verbatim facts pinned, then the narrative compressed, on Nova 2 Lite.",
-            summarizer=extract_then_compress(NOVA_2_LITE),
+            "extract_nova2lite", CompactionConfig(**{**base, "summary_model_id": NOVA_2_LITE, "summary_extract_enabled": True}),
+            "Option 3 (production, COMPACTION_SUMMARY_EXTRACT_ENABLED): verbatim facts pinned, then the narrative compressed, on Nova 2 Lite.",
         ),
         "extract_haiku": Arm(
-            "extract_haiku", CompactionConfig(**base),
-            "Option 3: verbatim facts pinned, then the narrative compressed, on Haiku 4.5.",
-            summarizer=extract_then_compress(HAIKU_4_5),
+            "extract_haiku", CompactionConfig(**{**base, "summary_model_id": HAIKU_4_5, "summary_extract_enabled": True}),
+            "Option 3 (production, COMPACTION_SUMMARY_EXTRACT_ENABLED): verbatim facts pinned, then the narrative compressed, on Haiku 4.5.",
         ),
         "floor_50": Arm(
             "floor_50", CompactionConfig(floor_ratio=0.5, **base),
