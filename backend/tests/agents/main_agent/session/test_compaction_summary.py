@@ -517,7 +517,8 @@ class TestThroughUpdateAfterTurn:
     async def test_salvaged_summary_is_persisted_and_labelled(self, make_session_manager, bedrock):
         bedrock.return_value = _model_reply("Instructions: cite APA.\nOpen: the conclu", stop="max_tokens")
         records = [f"record {i} " + "z" * 600 for i in range(10)]
-        mgr = self._manager(make_session_manager, records)
+        # The plain single-call path; extraction is on by default.
+        mgr = self._manager(make_session_manager, records, summary_extract_enabled=False)
         await mgr.update_after_turn(2000)
         state = mgr.compaction_state
         assert state.summary == "Instructions: cite APA."
