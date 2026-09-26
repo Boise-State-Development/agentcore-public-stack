@@ -3,6 +3,7 @@ Stream coordinator for managing agent streaming lifecycle
 """
 
 import asyncio
+import contextvars
 import json
 import logging
 import os
@@ -2721,15 +2722,33 @@ class StreamCoordinator:
         generator already documents and already took when the coordinator
         consumed it directly.
 
+        ONE CONTEXT FOR EVERY STEP
+        --------------------------
+        Each ``__anext__`` runs as its own task, and a task runs in a *copy* of
+        the context it was created from. Strands holds its spans open across
+        yields (``use_span`` around the whole invocation, each cycle, each model
+        stream), so a span attached in one step and detached in a later one
+        tried to reset an OpenTelemetry token in a context that never saw it:
+        ``Failed to detach context`` on every such exit (~5 per tool turn), and
+        every span opened from the ambient context in between — the Memory
+        ``CreateEvent`` calls, DynamoDB reads from hooks — parented to the
+        request span instead of the cycle that caused it. Running every step in
+        one ``Context`` restores what a plain ``async for`` gave the generator:
+        one context that persists across its yields.
+
         Best-effort in both directions: with no hook (voice, tests) or a failing
         drain this degrades to a plain pass-through of the agent stream.
         """
         iterator = events.__aiter__()
+        loop = asyncio.get_running_loop()
+        stream_context = contextvars.copy_context()
         pending: Optional[asyncio.Future] = None
         try:
             while True:
                 if pending is None:
-                    pending = asyncio.ensure_future(iterator.__anext__())
+                    pending = loop.create_task(
+                        iterator.__anext__(), context=stream_context
+                    )
 
                 done, _ = await asyncio.wait({pending}, timeout=_STATUS_POLL_SECONDS)
 
