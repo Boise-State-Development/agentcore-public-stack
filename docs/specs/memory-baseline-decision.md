@@ -247,7 +247,7 @@ In production terms, expect the share of turns logging `Retrieved N customer con
 - **Safety valve.** If noise rises for those users, set `AGENTCORE_MEMORY_TOP_K=3` (a no-op at 0.40 on this set). Adding filler stripping is next in line after that.
 - **Extraction varies between runs.** In the 2026-09-25 manual test, the capstone fact was merged with a field-notes sentence and scored 0.41. In both runs here it was extracted cleanly and scored 0.45–0.46.
 
-### Score logging (companion PR)
+### Score logging (#1349)
 
 `retrieve_customer_context` logs one line per namespace per turn:
 
