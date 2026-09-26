@@ -5,6 +5,32 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 ## Open
 <!-- Newest at top. -->
 
+### [2026-09-26] Verify native token counts for `global.*` models in production — after #1343 reaches `main`
+- **Source**: Phil-initiated, from #1343 and its dev validation.
+  - **The gap.** `base_foundation_model_id` never stripped `global.`, so every prod model counted with the heuristic. Since #1337, that means prod records no `prefixTokens` and no `contextBreakdown` at all.
+  - **The fix.** #1343 strips `global.` (plus `au.` and `jp.`), and takes every CountTokens call off the model-call path. The attribution hook now counts in a background task, concurrently with the model call, and places the messages partition against the billed prompt.
+  - **Dev validation, 2026-09-26.** Dev's SCP denies `global.*`, so this ran on `us.*`, which takes the same off-path code.
+    - All 4 `C#` rows of a 2-turn tool conversation carried `prefixTokens`, the first call included.
+    - `contextBreakdown` was on both final messages.
+    - In `aws/spans`: 0 of 4 model calls had a CountTokens call in front of them, against 108 of 108 in the 2 days before (65 ms median blocked, 1,255 ms max).
+  - **Not validated.** The `global.` id itself, which only production can exercise.
+- **Surface**: ops only, read-only. The prod `sessions-metadata` `C#` rows (or `GET /admin/costs/sessions/{id}/calls` on `boisestate.ai`), and the `aws/spans` and runtime log groups in the prod account. No code change.
+- **Effort × Impact**: L × M. Until it's confirmed, the context meter's breakdown bar, the cost page's `prefixTokens`, compaction's history calibration and the 1h-TTL cost correction are all unverified for every production model.
+- **Subtracts**: no. It closes the last open question on #1343.
+- **Status**: blocked on release. Everything here is read-only; do not stage anything in production.
+  1. **Deploy.** Confirm the release's Backend Deploy finished green, and that the production runtime's image was built after the release was cut.
+  2. **Cost rows.** Pick a few production sessions that started after the deploy on a `global.*` Claude model that supports CountTokens (Haiku 4.5 does; Sonnet 5 has no CountTokens and stays "not tracked" by design).
+     - Their `C#` rows should carry `prefixTokens`.
+     - `system + tools` should sit below the call's billed prompt (input + cache read + cache write).
+     - Before this release, the same query returns no `prefixTokens` at all.
+  3. **Breakdown.** The final assistant message of those turns should carry `contextBreakdown` in its metadata. Its partitions should sum to the billed prompt of the turn's last call.
+  4. **Nothing in front of a model call.** In `aws/spans`, filter on `{ $.scope.name = "opentelemetry.instrumentation.botocore.bedrock-runtime" }` and group the spans by `traceId`.
+     - For each `rpc.method = CountTokens` span, check whether it ran *in front of* a model call: it starts after the previous `ConverseStream` in that trace ended, and ends at or before the next one starts. Otherwise it overlapped an open `ConverseStream`, which is expected.
+     - Expect **0** in front. Most turns should make no CountTokens call at all: the split is measured once per agent (4 counts, 3 after the first per model per process) and memoised per session and configuration.
+     - Report counts and durations only. Spans carry session ids and access-key ids, so none of them go in this entry.
+  5. **Runtime logs.** No new error family. The OpenTelemetry "Token was created in a different Context" errors predate #1343 (about 4 per turn in dev) and have their own investigation.
+- **Done when**: steps 2–4 pass on at least one `global.*` Haiku 4.5 session. Record the counts here (no ids) and close the entry.
+
 ### [2026-09-26] Chore: repair managed-KB byte counters in production — after #1347 and #1348 reach `main`
 - **Source**: Phil-initiated, from the byte-cap accounting fix (#1347) and the reconciler read grant (#1348). A read-only look at production on 2026-09-25 found every promoted knowledge base (12) with `storedBytes=0` and its whole corpus still in `reservedBytes`. One of them also carries 9 unsettled legacy `failed` rows (about 12.4 MB). #1347 fixes the code but not the counters it already wrote. `backend/scripts/repair_managed_kb_byte_counters.py` fixes those. #1348 turns on the reconciler's daily `storedBytes` refresh, which never ran before because the Lambda had no read access to the documents bucket.
 - **Surface**: ops only. No code change.
