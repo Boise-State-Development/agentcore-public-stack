@@ -254,6 +254,12 @@ jobs:
       # catalog rows must also be seeded in that environment before the tools
       # appear (Seed Bootstrap Data workflow).
       CDK_PLATFORM_SELF_SERVICE_ENABLED: ${{ vars.CDK_PLATFORM_SELF_SERVICE_ENABLED }}
+      # Compaction extract-then-compress (a compaction cut pins verbatim facts
+      # ahead of its compressed summary). Opt-in while in development: set the
+      # `CDK_COMPACTION_SUMMARY_EXTRACT_ENABLED` variable to "true" in an
+      # environment to turn it on there. Unset (empty string) or anything else
+      # means off. Runtime only; there is no SPA switch.
+      CDK_COMPACTION_SUMMARY_EXTRACT_ENABLED: ${{ vars.CDK_COMPACTION_SUMMARY_EXTRACT_ENABLED }}
       # Skills v2 (knowledge bundles: admin catalog, My Skills authoring, and
       # skill resolution on the invocation path). Default ON with a kill switch:
       # unset resolves to empty string, which config.ts treats as the default

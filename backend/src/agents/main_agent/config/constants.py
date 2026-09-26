@@ -147,12 +147,13 @@ class Defaults:
     AWS_REGION = "us-west-2"
 
     # --- Memory Retrieval ---
-    # Retrieved long-term memory records scoring below this are dropped. 0.7
-    # dropped everything realistic: in dev, a natural question about a stored
-    # fact scored 0.57-0.67 while unrelated records scored <= 0.40, so no turn
-    # ever received memory context (docs/specs/memory-baseline-decision.md).
-    # Override per environment with AGENTCORE_MEMORY_RELEVANCE_SCORE.
-    MEMORY_RELEVANCE_SCORE = 0.5
+    # Retrieved long-term memory records scoring below this are dropped. On a
+    # labelled synthetic eval set in dev, the right record for a natural
+    # question scored a median 0.38-0.44 and unrelated records mostly stayed
+    # under 0.40 (max 0.43): 0.5 kept the right record for 7% of questions,
+    # 0.4 for 59% at 94% precision (docs/specs/memory-baseline-decision.md,
+    # "Relevance cut calibration"). Override with AGENTCORE_MEMORY_RELEVANCE_SCORE.
+    MEMORY_RELEVANCE_SCORE = 0.4
     MEMORY_TOP_K = 10
 
     # --- Compaction ---

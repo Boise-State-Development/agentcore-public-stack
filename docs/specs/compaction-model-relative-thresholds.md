@@ -426,6 +426,57 @@ replay real trajectories under a policy.
 >   compress (scoping §9, recommendation 2) remains the structural fix for
 >   the residual ~1%.
 
+> ✅ **FIX CONFIRMED 2026-09-25 — extract-then-compress clears the veto.**
+> `bound_summary(..., extract_enabled=True)` makes two concurrent calls:
+> - A verbatim **extraction**: standing instructions, decisions, labelled
+>   identifiers, and changed values at their latest value. It builds a pinned
+>   block, capped at half the budget.
+> - A **narrative** compression into the other half, with the prompt above.
+>
+> Both send `temperature` only. The persisted text is `PINNED FACTS (verbatim; …)`
+> followed by `SUMMARY:`, stored verbatim like every summary, so restores
+> prepend identical bytes.
+>
+> **Fallbacks.** At most two calls, and it never raises.
+> - Extraction fails → the narrative alone, which is a plain compression.
+> - Narrative fails → pinned block plus newest-first truncation
+>   (`extract_then_truncate`).
+> - Both fail → truncation.
+>
+> **Flag.** `COMPACTION_SUMMARY_EXTRACT_ENABLED`, in development and default
+> off. Set it from `CDK_COMPACTION_SUMMARY_EXTRACT_ENABLED` on the Runtime only.
+>
+> Same harness and setup as above, Nova 2 Lite as the summary model. This is
+> the first, sequential version, run before the Nova 2 Lite default, so
+> `model_relative` is Nova Micro:
+>
+> | family (n) | full | model_relative (Nova Micro) | extract + Nova 2 Lite |
+> |---|---|---|---|
+> | constraint (36) | 1.00 | 0.78 (8 / 0, p=0.008) | **1.00** (0 / 0, p=1.0) |
+> | decision (24) | 1.00 | 0.58 (10 / 0, p=0.002) | **1.00** (0 / 0, p=1.0) |
+> | reference (24) | 0.96 | 0.67 (8 / 1, p=0.039) | **1.00** (0 / 1, p=1.0) |
+> | superseded (24) | 0.96 | 0.96 (0 / 0, p=1.0) | 0.96 (0 / 0, p=1.0) |
+>
+> Facts whose stating turn was cut: **1.00** (n=52), against 0.50 today. The
+> summary grows from a median of ~770 tokens to ~1,700; the cut costs ~$0.02
+> instead of ~$0.001. Against the Nova 2 Lite default (~$0.011 a cut, ~1.8k
+> tokens), extraction adds about $0.01 a cut and ~500 summary tokens.
+>
+> **Concurrent rescore (scoping §9.3).** Run against the Nova 2 Lite
+> default, with the label fix: extract-then-compress matches `full` in every
+> family (constraint 1.00, decision 1.00, reference 1.00, superseded 0.96).
+> Facts whose turn was cut score 1.00. Plain Nova 2 Lite also matches `full`
+> at this n; extraction adds verbatim pinning (free availability 100% every
+> rep, against 96–100%) and a pinned block that survives a failed narrative.
+>
+> **Latency.** The summary step runs after the final `metadata` event, so
+> time to first token is unchanged. On a cut turn it takes a median of
+> **8.4 s** (max 15.4 s), against 7.6 s (max 12.9 s) for the default single
+> call. The calls in sequence would take 11.6 s (max 16.8 s).
+>
+> **Model choice.** The model matters: on Nova Micro the free screen kept
+> 88%.
+
 - **Veto before default change in prod:** the spiral spec §4.3 long-session
   eval (constraint retention / revision continuity / reference lookup) runs
   on PR-1 with the fixed-threshold arm as control. A deeper cut is a bigger

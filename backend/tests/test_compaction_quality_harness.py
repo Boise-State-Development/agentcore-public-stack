@@ -201,3 +201,13 @@ class TestSummarizerSwap:
         assert calls and run.summary == "CANDIDATE SUMMARY"
         assert run.policy["lastCut"]["summaryOutcome"] == "candidate"
         assert tbsm.bound_summary is production
+
+    def test_extract_arms_screen_the_production_code(self):
+        arms = default_arms(summary_model_enabled=True)
+        for name in ("extract_nova_micro", "extract_nova2lite", "extract_haiku"):
+            arm = arms[name]
+            assert arm.summarizer is None
+            assert arm.config.summary_extract_enabled is True
+            assert arm.config.summary_model_enabled is True
+        assert arms["extract_nova2lite"].config.summary_model_id == "us.amazon.nova-2-lite-v1:0"
+        assert arms["model_relative"].config.summary_extract_enabled is False

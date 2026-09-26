@@ -360,8 +360,19 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
                     namespace, type(e).__name__, (time.monotonic() - started) * 1000,
                 )
             records = response.get("memoryRecordSummaries", [])
-            if getattr(cfg, "relevance_score", None):
-                records = [r for r in records if r.get("score", 0.0) >= cfg.relevance_score]
+            returned = len(records)
+            top = max((r.get("score", 0.0) for r in records), default=None)
+            cut = getattr(cfg, "relevance_score", None)
+            if cut:
+                records = [r for r in records if r.get("score", 0.0) >= cut]
+            # Scores only, from the response in hand: the namespace TEMPLATE
+            # (never the resolved actor id) and no record text, so runtime logs
+            # carry no user identifiers or memory content. Feeds relevance-cut
+            # calibration (scripts/memory-audit `inventory`).
+            logger.info(
+                "memory retrieval scores namespace=%s top=%s returned=%d kept=%d cut=%s",
+                namespace, "none" if top is None else f"{top:.3f}", returned, len(records), cut,
+            )
             items: List[str] = []
             for record in records:
                 text = (record.get("content") or {}).get("text", "") if isinstance(record, dict) else ""
@@ -1329,6 +1340,7 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
             model_enabled=self.compaction_config.summary_model_enabled,
             model_id=self.compaction_config.summary_model_id,
             region=self.region_name,
+            extract_enabled=self.compaction_config.summary_extract_enabled,
         )
         summary = bounded.text
 
