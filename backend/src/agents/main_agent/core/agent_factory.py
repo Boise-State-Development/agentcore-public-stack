@@ -36,7 +36,10 @@ class AgentFactory:
             so native CountTokens works for inference-profile model ids).
         """
         bedrock_config = model_config.to_bedrock_config()
-        return CountTokensBedrockModel(**bedrock_config)
+        # Strands awaits count_tokens before every model call; keep that local.
+        # Native counts are taken off the critical path by the
+        # context-attribution hook (native_count_tokens in a background task).
+        return CountTokensBedrockModel(native_projection=False, **bedrock_config)
 
     @staticmethod
     def _create_openai_model(model_config: ModelConfig) -> OpenAIModel:

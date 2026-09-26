@@ -4,10 +4,10 @@ and keeps a throttled count from ever stalling the reply.
 Two problems, one subclass.
 
 **Model id.** Bedrock's CountTokens API rejects cross-region inference-profile
-model ids (``us.anthropic.…`` / ``eu.…`` / ``apac.…`` / ``us-gov.…``) with a
-misleading ``ValidationException: The provided model doesn't support counting
-tokens.`` — even though on-demand invocation of the newer Claude models
-*requires* the inference-profile id. CountTokens only accepts the base
+model ids (geographic ``us.anthropic.…`` / ``eu.…`` / ``jp.…`` and so on, and
+``global.…``) with a misleading ``ValidationException: The provided model
+doesn't support counting tokens.`` — even though on-demand invocation of the
+newer Claude models *requires* the inference-profile id. CountTokens only accepts the base
 foundation-model id (``anthropic.…``). The inference profile is pure
 cross-region routing, so the base-id count is exact, not an approximation.
 This subclass passes the base id to CountTokens explicitly; invocation
@@ -17,23 +17,25 @@ for the duration of the call, which is only safe while a count and a stream
 can never overlap on one instance. That stops being true the moment any count
 runs concurrently with the model call, so the swap is gone.
 
-**Latency under throttling.** With ``use_native_token_count`` on, Strands
-awaits one CountTokens call in front of *every* model call
+**Latency.** Strands awaits ``count_tokens`` in front of *every* model call
 (``event_loop._estimate_input_tokens`` → ``BeforeModelCallEvent
-.projected_input_tokens``). CountTokens has its own request-rate quota,
-separate from the model's token quota, and under load it throttles before the
-model does. A throttled count is harmless in itself — Strands falls back to
-the chars/4 heuristic — but the SDK's shared ``bedrock-runtime`` client
-retries with backoff first, so the *reply* waited out that backoff (p95 5.8 s
-measured on a 40k-user load run, docs/specs/load-test-assessment-2026-09.md
-§1 fix 3). Counting therefore goes through a dedicated client with a single
-attempt and a short read timeout: a throttle costs at most one failed request
-before the heuristic, and a healthy count is unchanged.
+.projected_input_tokens``). A native count there is a CountTokens round trip
+added to time to first token: ~70 ms at minimum, ~150 ms for a 30k-token
+prompt, measured against dev Bedrock (#1343). Nothing in this stack needs that
+projection to be native — Strands' proactive compression is off (we build
+``SlidingWindowConversationManager`` without a compression threshold) and our
+compaction does not read it — so the factory builds this model with
+``native_projection=False`` and ``count_tokens`` answers with the heuristic.
+Native counts come from ``native_count_tokens``, which the context-attribution
+hook calls from a background task, concurrently with the model call.
 
-Because Strands' per-turn estimate routes through ``count_tokens``, making it
-authoritative improves proactive context-compaction decisions in addition to
-feeding the context-attribution hook — both stop relying on the chars/4
-heuristic.
+**Throttling.** CountTokens has its own request-rate quota, separate from the
+model's token quota, and under load it throttles before the model does. The
+SDK's shared ``bedrock-runtime`` client retries with backoff first, so while
+counts sat in front of the model call the *reply* waited out that backoff (p95
+5.8 s measured on a 40k-user load run, docs/specs/load-test-assessment-2026-09.md
+§1 fix 3). Counting therefore goes through a dedicated client with a single
+attempt and a short read timeout: a throttle costs at most one failed request.
 """
 
 import asyncio
@@ -54,9 +56,13 @@ from strands.types.tools import ToolSpec
 
 logger = logging.getLogger(__name__)
 
-# Cross-region inference-profile geography prefixes. Closed set per AWS — we
-# only strip these exact codes so a real model id is never mangled.
-_INFERENCE_PROFILE_PREFIX = re.compile(r"^(us|eu|apac|us-gov)\.")
+# Cross-region inference-profile prefixes: the geographic profiles (``us``,
+# ``us-gov``, ``eu``, ``apac``, ``au``, ``jp``) plus ``global``. Closed set per
+# the AWS docs (the per-model cards list each profile id) — we only strip these
+# exact codes so a real model id is never mangled. Missing one is silent: the
+# profile id reaches CountTokens, Bedrock rejects it as unsupported, the model
+# lands on the skip list and every count for it is the heuristic.
+_INFERENCE_PROFILE_PREFIX = re.compile(r"^(us|us-gov|eu|apac|au|jp|global)\.")
 
 # Bound on a single CountTokens attempt. Read + connect timeout, seconds. A
 # healthy count answers in well under a second; anything slower is the quota
@@ -74,10 +80,10 @@ _THROTTLE_CODES = frozenset({"ThrottlingException", "TooManyRequestsException", 
 def base_foundation_model_id(model_id: str) -> str:
     """Return the base foundation-model id for ``model_id``.
 
-    Strips a leading cross-region inference-profile prefix (``us.`` / ``eu.`` /
-    ``apac.`` / ``us-gov.``). No-op for ids that are already base ids or that
-    belong to another provider — so it is safe to call unconditionally on the
-    Bedrock path.
+    Strips a leading cross-region inference-profile prefix (``us.`` /
+    ``us-gov.`` / ``eu.`` / ``apac.`` / ``au.`` / ``jp.`` / ``global.``).
+    No-op for ids that are already base ids or that belong to another
+    provider — so it is safe to call unconditionally on the Bedrock path.
     """
     return _INFERENCE_PROFILE_PREFIX.sub("", model_id, count=1)
 
@@ -127,9 +133,13 @@ class CountTokensBedrockModel(BedrockModel):
     Everything else (invocation, config, streaming) is inherited unchanged.
     """
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
+    def __init__(self, *args: Any, native_projection: bool = True, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._count_client: Any = None
+        #: Whether ``count_tokens`` — which Strands awaits before every model
+        #: call — goes to CountTokens. ``False`` keeps that call local (the
+        #: heuristic) so it adds nothing to time to first token.
+        self._native_projection = native_projection
         #: Counts this instance answered with the chars/4 heuristic rather than
         #: natively — native counting off, a model on the skip list, a
         #: throttle, any failure. Monotonic, so a reader that needs to know
@@ -184,43 +194,35 @@ class CountTokensBedrockModel(BedrockModel):
         self.heuristic_count_fallbacks += 1
         return await Model.count_tokens(self, messages, tool_specs, system_prompt, system_prompt_content)
 
-    async def count_tokens(
+    def native_count_tokens(
         self,
         messages: Messages,
-        tool_specs: list[ToolSpec] | None = None,
-        system_prompt: str | None = None,
-        system_prompt_content: list[SystemContentBlock] | None = None,
-    ) -> int:
-        """Count tokens natively against the de-prefixed base model id.
+        tool_specs: Optional[list[ToolSpec]] = None,
+        system_prompt_content: Optional[list[SystemContentBlock]] = None,
+    ) -> Optional[int]:
+        """One native CountTokens call, or ``None`` when it can't be had.
 
-        Mirrors ``BedrockModel.count_tokens`` (native-flag gate, per-model skip
-        cache on AccessDenied / unsupported, heuristic fallback on any failure)
-        with two differences: the request goes through the bounded dedicated
-        client, and the model id is passed to the API rather than written into
-        ``self.config``.
+        Blocking — callers off the event loop (``asyncio.to_thread``) only.
+        This is the counter the context-attribution hook uses from its
+        background task, so a count never sits in front of a model call.
+        ``None`` covers every non-answer: native counting off, the base id on
+        the SDK's skip list, a throttle, any failure. An unsupported model or
+        an AccessDenied puts the base id on the skip list, as ``count_tokens``
+        always has. Never falls back to the heuristic: a caller that gets
+        ``None`` knows it has no native count, instead of having to infer it
+        from ``heuristic_count_fallbacks``.
         """
         if self.config.get("use_native_token_count") is not True:
-            return await self._heuristic_count(messages, tool_specs, system_prompt, system_prompt_content)
-
-        profile_id: str = self.config["model_id"]
-        base_id = base_foundation_model_id(profile_id)
+            return None
+        base_id = base_foundation_model_id(self.config["model_id"])
         if base_id in _strands_bedrock._SKIP_COUNT_TOKENS_MODELS:
-            return await self._heuristic_count(messages, tool_specs, system_prompt, system_prompt_content)
-
+            return None
         try:
-            if system_prompt and system_prompt_content is None:
-                system_prompt_content = [{"text": system_prompt}]
-
             request = self.format_request(messages, tool_specs, system_prompt_content)
             converse_input: dict[str, Any] = {
                 key: request[key] for key in ("messages", "system", "toolConfig") if key in request
             }
-
-            response = await asyncio.to_thread(
-                self._get_count_client().count_tokens,
-                modelId=base_id,
-                input={"converse": converse_input},
-            )
+            response = self._get_count_client().count_tokens(modelId=base_id, input={"converse": converse_input})
             input_tokens = response.get("inputTokens")
             if input_tokens is None:
                 raise ProviderTokenCountError("Bedrock count_tokens returned None for inputTokens")
@@ -262,4 +264,33 @@ class CountTokensBedrockModel(BedrockModel):
                 base_id,
                 e,
             )
-        return await self._heuristic_count(messages, tool_specs, system_prompt, system_prompt_content)
+        return None
+
+    async def count_tokens(
+        self,
+        messages: Messages,
+        tool_specs: list[ToolSpec] | None = None,
+        system_prompt: str | None = None,
+        system_prompt_content: list[SystemContentBlock] | None = None,
+    ) -> int:
+        """Count tokens natively against the de-prefixed base model id.
+
+        Mirrors ``BedrockModel.count_tokens`` (native-flag gate, per-model skip
+        cache on AccessDenied / unsupported, heuristic fallback on any failure)
+        with two differences: the request goes through the bounded dedicated
+        client, and the model id is passed to the API rather than written into
+        ``self.config``.
+
+        This is the method Strands awaits in front of every model call. With
+        ``native_projection=False`` it never goes to the network: the
+        projection is the heuristic, and native counts come only from
+        ``native_count_tokens``, off the critical path.
+        """
+        if not self._native_projection:
+            return await self._heuristic_count(messages, tool_specs, system_prompt, system_prompt_content)
+        if system_prompt and system_prompt_content is None:
+            system_prompt_content = [{"text": system_prompt}]
+        count = await asyncio.to_thread(self.native_count_tokens, messages, tool_specs, system_prompt_content)
+        if count is None:
+            return await self._heuristic_count(messages, tool_specs, system_prompt, system_prompt_content)
+        return count

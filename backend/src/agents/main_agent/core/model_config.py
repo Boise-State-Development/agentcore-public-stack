@@ -421,12 +421,13 @@ class ModelConfig:
             config, self.inference_params, _BEDROCK_PARAM_MAP, "bedrock", self.model_id
         )
 
-        # Native Bedrock CountTokens. With this on, Strands' per-turn estimate
-        # (BeforeModelCallEvent.projected_input_tokens) and agent.model.count_tokens()
-        # return authoritative Bedrock counts instead of the chars/4 heuristic —
-        # the foundation for per-turn context attribution (decomposing the
+        # Native Bedrock CountTokens is available to this model — the
+        # foundation for per-call context attribution (decomposing the
         # otherwise-aggregate inputTokens into system / tools / messages via the
         # CountTokens differential). The runtime-role IAM grant landed in #428.
+        # Strands' pre-call estimate stays the heuristic regardless: the
+        # factory builds the model with `native_projection=False`, so no count
+        # ever sits in front of a model call (see bedrock_count_tokens.py).
         # Not every model supports the API — Claude Sonnet 5's base id is
         # rejected as unsupported — and the count falls back to the heuristic
         # and caches the skip when a model AccessDenies or doesn't support
