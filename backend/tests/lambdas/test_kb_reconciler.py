@@ -618,20 +618,175 @@ class TestBothSidesRefreshStoredBytes:
 
         assert _record(table, "ast-both").get("vectorState") is None
 
-    def test_stored_bytes_from_s3_totals_the_prefix(self, table):
-        class FakeS3:
-            def list_objects_v2(self, **kwargs):
-                assert kwargs["Prefix"] == "assistants/ast-s3/documents/"
-                return {"Contents": [{"Size": 100}, {"Size": 23}], "IsTruncated": False}
+    def test_stored_bytes_from_s3_totals_the_counted_documents(self, table):
+        _seed_doc(table, "ast-s3", "doc-a", committedBytes=100)
+        _seed_doc(table, "ast-s3", "doc-b", committedBytes=23)
+        s3 = FakeS3({"doc-a/a.pdf": 100, "doc-b/b.txt": 23})
 
-        assert rec.stored_bytes_from_s3("ast-s3", bucket="b", s3_client=FakeS3()) == 123
+        assert rec.stored_bytes_from_s3("ast-s3", bucket="b", s3_client=s3) == 123
+        assert s3.prefixes == ["assistants/ast-s3/documents/"]
 
     def test_stored_bytes_from_s3_returns_none_on_failure(self, table):
+        _seed_doc(table, "ast-s3", "doc-a", committedBytes=100)
+
         class Boom:
             def list_objects_v2(self, **kwargs):
                 raise RuntimeError("access denied")
 
         assert rec.stored_bytes_from_s3("ast-s3", bucket="b", s3_client=Boom()) is None
+
+
+# ── What the storedBytes anchor counts ───────────────────────────────────────
+def _seed_doc(table, assistant_id, document_id, status="complete", **extra):
+    item = {"PK": f"AST#{assistant_id}", "SK": f"DOC#{document_id}", "status": status}
+    item.update(extra)
+    table.put_item(Item=item)
+
+
+class FakeS3:
+    """``list_objects_v2`` over one assistant's documents, paged ``page_size`` at
+    a time. Keys are given relative to the documents prefix."""
+
+    def __init__(self, sizes, assistant_id="ast-s3", page_size=1000):
+        self.prefix = f"assistants/{assistant_id}/documents/"
+        self.objects = [{"Key": self.prefix + k, "Size": n} for k, n in sizes.items()]
+        self.page_size = page_size
+        self.prefixes = []
+
+    def list_objects_v2(self, **kwargs):
+        self.prefixes.append(kwargs["Prefix"])
+        assert kwargs["Prefix"] == self.prefix
+        start = int(kwargs.get("ContinuationToken") or 0)
+        page = self.objects[start : start + self.page_size]
+        more = start + self.page_size < len(self.objects)
+        response = {"Contents": page, "IsTruncated": more}
+        if more:
+            response["NextContinuationToken"] = str(start + self.page_size)
+        return response
+
+
+class TestStoredBytesAnchorCountsTheLedger:
+    """The anchor counts a document's S3 bytes only while the ledger does: from
+    its ``committedBytes`` stamp until its refund is claimed. A bare total of the
+    prefix charged owners for failed rows, stuck legacy rows and orphaned
+    uploads, and counted in-flight uploads twice. MUTATION GUARD: drop the
+    membership test in ``stored_bytes_from_s3`` and the first test and the
+    failed-rows refresh test both fail."""
+
+    def test_only_ledger_counted_documents_reach_the_anchor(self, table):
+        _seed_doc(table, "ast-s3", "doc-done", committedBytes=100)
+        # Mid-delete: `deleting` is written before the refund, so the ledger
+        # still holds these bytes and so must the anchor.
+        _seed_doc(table, "ast-s3", "doc-deleting", status="deleting", committedBytes=20)
+        _seed_doc(
+            table, "ast-s3", "doc-refunded", status="deleting",
+            committedBytes=4000, byteCapRefunded=True,
+        )
+        _seed_doc(table, "ast-s3", "doc-failed", status="failed", sizeBytes=5000)
+        _seed_doc(table, "ast-s3", "doc-stuck", status="chunking", sizeBytes=6000)
+        _seed_doc(table, "ast-s3", "doc-inflight", status="uploading", sizeBytes=7000)
+        # Committed but not yet `complete`: the consumer commits first.
+        _seed_doc(table, "ast-s3", "doc-committing", status="embedding", committedBytes=3)
+        s3 = FakeS3({
+            "doc-done/a.pdf": 100,
+            "doc-deleting/b.pdf": 20,
+            "doc-refunded/c.pdf": 4000,
+            "doc-failed/d.pdf": 5000,
+            "doc-stuck/e.pdf": 6000,
+            "doc-inflight/f.pdf": 7000,
+            "doc-committing/g.pdf": 3,
+            "doc-no-row/h.pdf": 8000,
+            "doc-done": 9000,  # not under a document folder
+        })
+
+        assert rec.stored_bytes_from_s3("ast-s3", bucket="b", s3_client=s3) == 123
+
+    def test_sizes_come_from_s3_not_the_row(self, table):
+        """The ledger decides membership; S3 decides size."""
+        _seed_doc(table, "ast-s3", "doc-a", committedBytes=100)
+
+        assert rec.stored_bytes_from_s3(
+            "ast-s3", bucket="b", s3_client=FakeS3({"doc-a/a.pdf": 90})
+        ) == 90
+
+    def test_a_listing_is_paged_to_exhaustion(self, table):
+        for i in range(5):
+            _seed_doc(table, "ast-s3", f"doc-{i}", committedBytes=10)
+        s3 = FakeS3({f"doc-{i}/x.pdf": 10 for i in range(5)}, page_size=2)
+
+        assert rec.stored_bytes_from_s3("ast-s3", bucket="b", s3_client=s3) == 50
+        assert len(s3.prefixes) == 3
+
+    def test_nothing_counted_is_zero_without_listing(self, table):
+        _seed_doc(table, "ast-s3", "doc-failed", status="failed", sizeBytes=5000)
+
+        class NoCall:
+            def list_objects_v2(self, **kwargs):
+                raise AssertionError("listed S3 with nothing to count")
+
+        assert rec.stored_bytes_from_s3("ast-s3", bucket="b", s3_client=NoCall()) == 0
+
+    def test_an_unreadable_ledger_leaves_stored_bytes_alone(self, table):
+        class Boom:
+            def query(self, **kwargs):
+                raise RuntimeError("throttled")
+
+        assert rec.stored_bytes_from_s3(
+            "ast-s3", bucket="b", s3_client=FakeS3({}), table=Boom()
+        ) is None
+
+    def test_failed_rows_are_not_charged_on_a_refresh(self, table):
+        """The prod shape: a knowledge base carrying unsettled legacy `failed`
+        rows. With the prefix total the refresh would add them to its owner's
+        cap."""
+        _seed_record(
+            table, "ast-s3", aws_kb_id="KBS3",
+            storedBytes=100, reservedBytes=0, totalBytes=100,
+        )
+        _seed_doc(table, "ast-s3", "doc-done", committedBytes=100)
+        sizes = {"doc-done/a.pdf": 100}
+        for i in range(9):
+            _seed_doc(table, "ast-s3", f"doc-failed-{i}", status="failed", sizeBytes=1_000_000)
+            sizes[f"doc-failed-{i}/x.pdf"] = 1_000_000
+        s3 = FakeS3(sizes)
+        client = FakeBedrockAgent(
+            knowledge_bases=[_aws_kb("KBS3", NOW - timedelta(days=8))],
+            tags=_ours("KBS3", "ast-s3"),
+        )
+
+        report = _run(
+            client, table, armed=False,
+            stored_bytes_resolver=lambda a: rec.stored_bytes_from_s3(a, bucket="b", s3_client=s3),
+        )
+
+        assert report.refreshed_bytes == []
+        record = _record(table, "ast-s3")
+        assert int(record["storedBytes"]) == 100
+        assert int(record["totalBytes"]) == 100
+
+    def test_an_unadopted_migrated_corpus_is_not_counted_twice(self, table):
+        """A promoted KB whose corpus is still in `reservedBytes` (before the
+        repair adopts it) has no ledger markers, so the anchor leaves it out
+        rather than adding it to `storedBytes` on top of the reservation."""
+        _seed_record(
+            table, "ast-s3", aws_kb_id="KBS3",
+            storedBytes=0, reservedBytes=600, totalBytes=600,
+        )
+        _seed_doc(table, "ast-s3", "doc-a", sizeBytes=600)
+        s3 = FakeS3({"doc-a/a.pdf": 600})
+        client = FakeBedrockAgent(
+            knowledge_bases=[_aws_kb("KBS3", NOW - timedelta(days=8))],
+            tags=_ours("KBS3", "ast-s3"),
+        )
+
+        _run(
+            client, table, armed=False,
+            stored_bytes_resolver=lambda a: rec.stored_bytes_from_s3(a, bucket="b", s3_client=s3),
+        )
+
+        record = _record(table, "ast-s3")
+        assert int(record["storedBytes"]) == 0
+        assert int(record["totalBytes"]) == 600
 
 
 # ── Requirement 14.8: bounded per-run action limit ───────────────────────────

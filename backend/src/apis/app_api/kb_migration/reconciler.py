@@ -83,7 +83,7 @@ import os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Any, Callable, Dict, Iterator, List, Optional
+from typing import Any, Callable, Dict, Iterator, List, Optional, Set
 
 from apis.shared.kb_backend.metrics import emit_count, emit_fleet_gauges
 from apis.shared.kb_backend.records import TEARDOWN, WORK_ELIGIBLE_STATES, update_if_present
@@ -447,9 +447,11 @@ def refresh_stored_bytes(assistant_id: str, app_kb_id: str, stored_bytes: int) -
     so a reservation taken between this pass's read and its write is still
     counted.
 
-    An upload whose object has landed but whose reservation has not been
-    committed yet is in both terms until it commits. That over-counts by the
-    in-flight bytes until the next pass, which is the safe direction.
+    ``stored_bytes`` counts only documents the ledger counts
+    (:func:`stored_bytes_from_s3`), so an upload still in flight sits in
+    ``reservedBytes`` alone. The one overlap is a document whose
+    ``committedBytes`` stamp has landed but whose ``KB#`` commit has not: it is
+    in both terms until the next pass, which over-counts, the safe direction.
 
     The ``REMOVE`` matters: a record marked ``missing`` on an earlier run that has
     since been re-provisioned would otherwise stay marked for ever, and the UI
@@ -477,21 +479,85 @@ def refresh_stored_bytes(assistant_id: str, app_kb_id: str, stored_bytes: int) -
     )
 
 
-def stored_bytes_from_s3(assistant_id: str, bucket: Optional[str] = None, s3_client=None) -> Optional[int]:
-    """Total size of an assistant's uploaded documents, straight from S3.
+def counted_document_ids(assistant_id: str, table=None) -> Optional[Set[str]]:
+    """The ids of the documents whose bytes the ledger holds in ``storedBytes``.
+
+    A ``DOC#`` row is counted from the moment ``committedBytes`` is stamped on it
+    (``byte_cap.record_commit``, or ``settle_as_committed`` for an adopted
+    migrated document) until its refund is claimed (``byteCapRefunded``,
+    ``byte_cap.refund_once``). Those are the two writes that move bytes into and
+    out of ``storedBytes``, so this is exactly the ledger's own membership.
+
+    Not the ``status``, because the status moves at different moments. The
+    ingestion consumer commits *before* it writes ``complete``, and a delete
+    writes ``deleting`` *before* it refunds. Anchoring on ``complete`` would drop
+    a document from the anchor while the ledger still counts it, and hand its
+    bytes back to the owner until the next pass.
+
+    Everything else is left out on purpose: ``failed`` rows (their reservation
+    was released, or they predate the byte cap and never had one), legacy rows
+    stuck in ``chunking``, uploads still in flight (those bytes are in
+    ``reservedBytes``), and objects with no row at all. Counting any of them
+    would charge the owner for bytes the ledger has already given back, or has
+    never taken.
+
+    Returns ``None`` when the rows cannot be read, and the caller leaves
+    ``storedBytes`` alone.
+    """
+    from boto3.dynamodb.conditions import Key
+
+    if table is None:
+        table = _table()
+    counted: Set[str] = set()
+    kwargs: Dict[str, Any] = {
+        "KeyConditionExpression": Key("PK").eq(f"AST#{assistant_id}") & Key("SK").begins_with("DOC#"),
+        "ProjectionExpression": "SK, committedBytes, byteCapRefunded",
+    }
+    try:
+        while True:
+            response = table.query(**kwargs)
+            for row in response.get("Items") or []:
+                if row.get("committedBytes") is not None and not row.get("byteCapRefunded"):
+                    counted.add(str(row["SK"])[len("DOC#") :])
+            start = response.get("LastEvaluatedKey")
+            if not start:
+                return counted
+            kwargs["ExclusiveStartKey"] = start
+    except Exception as exc:  # noqa: BLE001 - an unreadable ledger must not zero the quota
+        logger.warning(f"could not read document rows for {assistant_id}: {exc}")
+        return None
+
+
+def stored_bytes_from_s3(
+    assistant_id: str, bucket: Optional[str] = None, s3_client=None, table=None
+) -> Optional[int]:
+    """Total S3 size of the documents the ledger counts as stored.
 
     S3 rather than a client-reported or previously-stored value, for the same
     reason the byte cap uses a ``HEAD``: this number gates a $150,000/month
     exposure at full adoption, and the only trustworthy source for it is the
     service holding the bytes.
 
-    Returns ``None`` when no bucket is configured or the listing fails, and the
-    caller then leaves ``storedBytes`` alone. Writing a zero on a failed listing
+    The *sizes* come from S3; *which* objects count comes from the ledger
+    (:func:`counted_document_ids`). A bare total of the prefix would charge
+    owners for ``failed`` documents, stuck legacy rows and orphaned uploads, and
+    would count every in-flight upload twice (here and in ``reservedBytes``).
+    An object belongs to the document named by the first path segment under the
+    prefix: ``assistants/{assistant_id}/documents/{document_id}/{filename}``.
+
+    Returns ``None`` when no bucket is configured or either read fails, and the
+    caller then leaves ``storedBytes`` alone. Writing a zero on a failed read
     would silently hand every owner their whole allowance back.
     """
     bucket = bucket or os.environ.get("S3_ASSISTANTS_DOCUMENTS_BUCKET_NAME")
     if not bucket:
         return None
+
+    counted = counted_document_ids(assistant_id, table=table)
+    if counted is None:
+        return None
+    if not counted:
+        return 0
 
     if s3_client is None:
         import boto3
@@ -508,7 +574,9 @@ def stored_bytes_from_s3(assistant_id: str, bucket: Optional[str] = None, s3_cli
                 kwargs["ContinuationToken"] = token
             response = s3_client.list_objects_v2(**kwargs)
             for obj in response.get("Contents") or []:
-                total += int(obj.get("Size") or 0)
+                document_id, sep, _ = str(obj.get("Key") or "")[len(prefix) :].partition("/")
+                if sep and document_id in counted:
+                    total += int(obj.get("Size") or 0)
             if not response.get("IsTruncated"):
                 return total
             token = response.get("NextContinuationToken")
@@ -917,6 +985,7 @@ __all__ = [
     "parse_aws_timestamp",
     "reconcile",
     "reconciler_armed",
+    "counted_document_ids",
     "refresh_stored_bytes",
     "stored_bytes_from_s3",
 ]

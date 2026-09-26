@@ -448,6 +448,12 @@ export class KbMigrationConstruct extends Construct {
     // existing S3 keys — the same re-ingest path as the ingestion consumer,
     // so it needs the same read grant. Read-only: it never writes documents.
     documentsBucket.grantRead(this.documentReconcilerLambda);
+    // The KB reconciler re-anchors each knowledge base's `storedBytes`
+    // from a ListObjectsV2 of `assistants/{id}/documents/`. Without this
+    // grant every listing is AccessDenied, and the refresh never ran.
+    // Scoped to the `assistants/` prefix (the bucket-level List action
+    // cannot be narrowed by the key pattern). Read-only.
+    documentsBucket.grantRead(this.reconcilerLambda, 'assistants/*');
 
     this.workerLambda.grantInvoke(this.dispatcherLambda);
 
