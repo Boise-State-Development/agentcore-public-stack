@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [1.25.1] - 2026-09-26
+
+A single SPA fix on top of 1.25.0, which carries this week's features. **Upgrading from 1.24.x? Follow the 1.25.0 deployment notes** (CDK deploy plus post-deploy scripts). 1.25.1 adds no steps of its own.
+
+### 🐛 Fixed
+
+- New Session reopened with the previous conversation's first message, because the empty-state composer was destroyed before its draft effect could clear the saved `composer-draft:new` (#1362)
+
 ## [1.25.0] - 2026-09-25
 
 The assistant remembers more, and it is cheaper to see why. **Long-term memory reaches the model for the first time**: the relevance cut drops from 0.7 to 0.4, retrieval survives dead pooled connections, and it logs its scores. **Compaction keeps the facts that matter**: extract-then-compress is on by default, the summary model moves to Nova 2 Lite, and a truncated summary is salvaged rather than discarded. Users get **personal instructions**, **dictation**, a **redesigned compact composer**, a **context meter** that itemizes the window, and a paged sidebar. Admins get **model retirement with redirect to a successor** and drag-to-order for the model picker. **Shared Projects** lands as an in-development preview that is **off by default** (`CDK_PROJECTS_ENABLED=true` to opt in). The release also closes three channels that exported conversation text to logs and traces, stops agent deletes leaking documents and knowledge bases, and repairs managed-KB byte accounting. **A CDK deploy is required, and three post-deploy scripts should be run** (see the release notes).
