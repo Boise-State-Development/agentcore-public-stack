@@ -196,6 +196,32 @@ def object_size_bytes(bucket: str, key: str) -> int:
     return int(response["ContentLength"])
 
 
+def reserved_at_request(size_bytes: object, source_adapter_key: Optional[str]) -> int:
+    """The bytes a document reserved when it was requested, from its ``DOC#`` row.
+
+    Only the interactive upload (``POST /upload-url``) reserves at request time,
+    and it reserves the ``sizeBytes`` it writes. Every other producer — a
+    file-source import, a web crawl, a KB sync — reserves nothing up front and is
+    the only kind of row that carries a ``sourceAdapterKey``. Those producers
+    still write ``sizeBytes``, though: an import backfills the downloaded size
+    before its ``PUT``, a crawl after it. So ``sizeBytes`` alone says nothing
+    about what was reserved.
+
+    Reading it as a reservation is what corrupted prod: the ingestion consumer
+    committed an import's size out of ``reservedBytes`` it had never added to, so
+    the import never counted against the cap and the corpus reservation beside
+    it shrank by the same amount. On a knowledge base with nothing else
+    reserved, the counter goes negative. The failure paths had the mirror image,
+    releasing the size of an import that failed or was deleted in flight.
+    """
+    if source_adapter_key:
+        return 0
+    try:
+        return max(int(size_bytes or 0), 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def reserve(
     assistant_id: str,
     app_kb_id: str,
