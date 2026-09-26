@@ -1,8 +1,8 @@
 """AgentCore Memory baseline audit (Shared Projects spec §1, Phase 0.1).
 
 Answers one question with evidence: does long-term memory work in a deployed
-environment? Read-only by default. Only ``probe`` and ``cleanup`` write, and
-both touch nothing but a synthetic ``memory-audit-probe-*`` actor.
+environment? Read-only by default. Only ``probe``, ``calibrate`` and ``cleanup`` write,
+and they touch nothing but a synthetic ``memory-audit-probe-*`` actor.
 
 Subcommands
 -----------
@@ -30,6 +30,16 @@ Subcommands
     ``topK=10`` and its relevance cut). Deletes the records and events afterwards
     unless ``--keep``. The app half (session A states a fact, session B recalls
     it) is a manual chat-UI step; see ``README.md``.
+
+``calibrate`` (writes, dev only)
+    Relevance-cut calibration on ``calibration_set.json``: one synthetic actor
+    states ~15 facts and preferences, extraction is polled until the record
+    count settles, then each fact is queried three ways (direct, indirect,
+    wrapped in filler) plus ~20 unrelated questions, raw and with filler
+    stripped. Every returned record is labelled from its text; ``summary.json``
+    gets score distributions and per-policy recall, precision and noise.
+    Cleans up in ``finally``, with late sweeps. ``--reanalyze`` recomputes the
+    summary from ``raw/`` without AWS calls.
 
 Output
 ------
@@ -84,7 +94,7 @@ BACKEND_NAMESPACE_TEMPLATES = {
 
 # Retrieval parameters of TurnBasedSessionManager.retrieve_customer_context.
 RETRIEVAL_TOP_K = 10
-RETRIEVAL_RELEVANCE = 0.5
+RETRIEVAL_RELEVANCE = 0.4
 
 UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-([0-9a-f])[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
 PREVIEW_RE = re.compile(r"^preview[-_]", re.I)
@@ -172,6 +182,175 @@ def pct(values: list[float], p: float) -> float | None:
         return None
     s = sorted(values)
     return s[min(len(s) - 1, int(round(p * (len(s) - 1))))]
+
+
+# --------------------------------------------------------------------------- #
+# Calibration helpers (pure; covered by tests/supply_chain)                   #
+# --------------------------------------------------------------------------- #
+CALIBRATION_SET = Path(__file__).resolve().parent / "calibration_set.json"
+RETRIEVED_TYPES = ("SEMANTIC", "USER_PREFERENCE")
+
+# Leading conversational filler: acknowledgements, discourse markers and
+# "different question:"-style pivots. Deliberately conservative: it only ever
+# removes words from the front of the last paragraph.
+_FILLER_LEAD = re.compile(
+    r"^\s*(?:(?:ok(?:ay)?|thanks|thank you|thx|cool|great|nice|hmm+|um+|so|anyway|also|and|btw|by the way"
+    r"|random|separate thing|totally unrelated|unrelated|quick one|remind me|another thing"
+    r"|one more thing(?: before i forget)?|(?:a )?(?:different|another|new|quick|separate|unrelated) question)"
+    r"\b\s*[,.:;!\-–—]*\s*)+",
+    re.I,
+)
+_ACK_SENTENCE = re.compile(
+    r"^\s*(?:ok(?:ay)?|thanks|thank you|cool|great|nice|got it|perfect|awesome)\b[^.!?\n]{0,40}[.!]\s+", re.I
+)
+
+
+def strip_query_filler(text: str) -> str:
+    """The question a message asks, minus pasted context and filler.
+
+    Keeps the last paragraph (a pasted block usually precedes the question),
+    then drops leading acknowledgement sentences and discourse markers. Falls
+    back to the original text rather than ever returning an empty query.
+    """
+    paras = [p for p in re.split(r"\n\s*\n", text) if p.strip()]
+    q = paras[-1] if paras else text
+    prev = None
+    while prev != q:
+        prev = q
+        q = _FILLER_LEAD.sub("", _ACK_SENTENCE.sub("", q))
+    q = q.strip()
+    if not q:
+        return text.strip()
+    return q[0].upper() + q[1:]
+
+
+def record_matches(text: str, keys: Iterable[str]) -> bool:
+    """A record matches a fact when any key starts a word in its text."""
+    return any(re.search(r"(?<![a-z0-9])" + re.escape(k.lower()), text.lower()) for k in keys)
+
+
+def _cut(c: float):
+    return lambda hits: [h for h in hits if h["score"] >= c]
+
+
+def _top_k_floor(k: int, floor: float):
+    return lambda hits: [h for h in hits[:k] if h["score"] >= floor]
+
+
+def _margin(floor: float, margin: float, high: float):
+    """Everything >= ``high``, plus the top hit when it is >= ``floor`` and
+    beats the runner-up by ``margin`` (a lone hit always clears the margin)."""
+    def policy(hits: list[dict]) -> list[dict]:
+        kept = [h for h in hits if h["score"] >= high]
+        if hits and hits[0]["score"] >= floor and hits[0] not in kept:
+            runner_up = hits[1]["score"] if len(hits) > 1 else 0.0
+            if hits[0]["score"] - runner_up >= margin:
+                kept.insert(0, hits[0])
+        return kept
+    return policy
+
+
+CALIBRATION_POLICIES = {
+    **{f"cut>={c:.2f}": _cut(c) for c in (0.30, 0.35, 0.38, 0.40, 0.42, 0.45, 0.50, 0.55)},
+    **{f"top1>={f:.2f}": _top_k_floor(1, f) for f in (0.35, 0.38, 0.40, 0.42)},
+    **{f"top3>={f:.2f}": _top_k_floor(3, f) for f in (0.35, 0.40)},
+    **{f"margin{m:.2f}>={f:.2f}|>={hi:.2f}": _margin(f, m, hi)
+       for f in (0.35, 0.40) for m in (0.03, 0.05) for hi in (0.50,)},
+}
+
+
+def _dist(values: list[float]) -> dict[str, Any]:
+    r = lambda v: None if v is None else round(v, 3)  # noqa: E731
+    return {"n": len(values), "min": r(min(values, default=None)), "p10": r(pct(values, 0.1)),
+            "p50": r(pct(values, 0.5)), "p90": r(pct(values, 0.9)), "max": r(max(values, default=None))}
+
+
+def analyze_calibration(rows: list[dict]) -> dict[str, Any]:
+    """Aggregate labelled retrieval results into distributions and policy metrics.
+
+    ``rows``: one per (query, variant, namespace type), each with ``query``,
+    ``fact`` (None for a negative), ``style``, ``variant`` and ``hits`` sorted
+    by score descending, each hit ``{"score", "correct", "chars"}`` and
+    optionally ``related`` (an on-topic record of a related fact: neither a
+    match nor noise). Returns aggregates only (no text).
+    """
+    def wrong(h: dict) -> bool:
+        return not h["correct"] and not h.get("related")
+
+    queries: dict[tuple[str, str], dict[str, list[dict]]] = {}
+    meta: dict[str, dict] = {}
+    for row in rows:
+        queries.setdefault((row["query"], row["variant"]), {})[row["namespace"]] = row["hits"]
+        meta[row["query"]] = {"fact": row["fact"], "style": row["style"]}
+    variants = sorted({v for _, v in queries})
+
+    # Score distributions, per namespace type, variant and style.
+    dists: dict[str, Any] = {}
+    for (qid, variant), by_ns in queries.items():
+        style = meta[qid]["style"]
+        for ns, hits in by_ns.items():
+            d = dists.setdefault(variant, {}).setdefault(ns, {}).setdefault(
+                style, {"bestCorrect": [], "bestIncorrect": [], "allIncorrect": [], "gap": [], "rank1OnTopic": 0,
+                        "queriesWithCorrect": 0, "queries": 0, "related": 0})
+            d["queries"] += 1
+            correct = [h["score"] for h in hits if h["correct"]]
+            incorrect = [h["score"] for h in hits if wrong(h)]
+            d["allIncorrect"].extend(incorrect)
+            if incorrect:
+                d["bestIncorrect"].append(max(incorrect))
+            if correct:
+                d["queriesWithCorrect"] += 1
+                d["bestCorrect"].append(max(correct))
+                d["rank1OnTopic"] += int(not wrong(hits[0]))
+                d["gap"].append(max(correct) - (max(incorrect) if incorrect else 0.0))
+            d["related"] += sum(1 for h in hits if h.get("related"))
+    for variant in dists.values():
+        for ns in variant.values():
+            for style, d in ns.items():
+                ns[style] = {k: (_dist(v) if isinstance(v, list) else v) for k, v in d.items()}
+
+    # Policy metrics. A turn is a hit when any namespace keeps a correct record.
+    metrics: dict[str, Any] = {}
+    for variant in variants:
+        for name, policy in CALIBRATION_POLICIES.items():
+            fact_turns = neg_turns = hits_ = ceiling = 0
+            kept_correct = kept_wrong = neg_with_any = neg_items = chars = 0
+            by_style: dict[str, list[int]] = {}
+            for (qid, v), by_ns in queries.items():
+                if v != variant:
+                    continue
+                kept = [h for hs in by_ns.values() for h in policy(hs)]
+                chars += sum(h["chars"] for h in kept)
+                if meta[qid]["fact"] is None:
+                    neg_turns += 1
+                    neg_with_any += int(bool(kept))
+                    neg_items += len(kept)
+                    continue
+                kept = [h for h in kept if not h.get("related")]
+                fact_turns += 1
+                hit = any(h["correct"] for h in kept)
+                hits_ += int(hit)
+                ceiling += int(any(h["correct"] for hs in by_ns.values() for h in hs))
+                kept_correct += sum(h["correct"] for h in kept)
+                kept_wrong += sum(wrong(h) for h in kept)
+                s = by_style.setdefault(meta[qid]["style"], [0, 0])
+                s[0] += int(hit)
+                s[1] += 1
+            total_turns = fact_turns + neg_turns
+            metrics.setdefault(variant, {})[name] = {
+                "recall": round(hits_ / fact_turns, 3) if fact_turns else None,
+                "recallByStyle": {k: round(a / b, 3) for k, (a, b) in sorted(by_style.items())},
+                "retrievable": round(ceiling / fact_turns, 3) if fact_turns else None,
+                "precision": round(kept_correct / (kept_correct + kept_wrong), 3) if kept_correct + kept_wrong else None,
+                "wrongItemsPerFactTurn": round(kept_wrong / fact_turns, 2) if fact_turns else None,
+                "negativeTurnsWithInjection": round(neg_with_any / neg_turns, 3) if neg_turns else None,
+                "itemsPerNegativeTurn": round(neg_items / neg_turns, 2) if neg_turns else None,
+                "injectedTokensPerTurn": round(chars / 4 / total_turns) if total_turns else None,
+            }
+    return {"scoreDistributions": dists, "policies": metrics,
+            "turns": {"fact": sum(1 for (q, v) in queries if v == variants[0] and meta[q]["fact"]),
+                      "negative": sum(1 for (q, v) in queries if v == variants[0] and not meta[q]["fact"])}
+            if variants else {}}
 
 
 class Audit:
@@ -438,6 +617,179 @@ class Audit:
         self.summary["probe"] = result
         (self.out / "raw" / "probe_actor.txt").write_text(actor + "\n")
 
+    # ---- calibrate: relevance cut on a labelled synthetic eval set -------- #
+    def _actor_records(self, mid: str, actor: str) -> list[dict]:
+        """Every record of ``actor`` in any strategy. ``namespace`` is a prefix
+        filter, so this reads the actor's records only, not the whole memory."""
+        out = []
+        for sid in self._strategy_ids:
+            out += [r for r in _paginate(self.dp.list_memory_records, "memoryRecordSummaries", memoryId=mid,
+                                         namespace=f"/strategies/{sid}/actors/{actor}/", maxResults=100)
+                    if any(f"/actors/{actor}/" in ns + "/" for ns in r.get("namespaces") or [])]
+        return out
+
+    def _delete_actor_records(self, mid: str, actor: str) -> int:
+        n = 0
+        for r in self._actor_records(mid, actor):
+            try:
+                self.dp.delete_memory_record(memoryId=mid, memoryRecordId=r["memoryRecordId"])
+                n += 1
+            except ClientError as exc:
+                if exc.response["Error"]["Code"] != "ResourceNotFoundException":
+                    raise
+        return n
+
+    def run_calibrate(self) -> None:
+        spec = json.loads(CALIBRATION_SET.read_text())
+        if self.args.reanalyze:
+            rows = [json.loads(line) for line in open(self.out / "raw" / "calibrate_hits.jsonl")]
+            self._label(rows, {f["id"]: f for f in spec["facts"]})
+            prior = json.loads((self.out / "summary.json").read_text()) if (self.out / "summary.json").exists() else {}
+            result = {k: v for k, v in (prior.get("calibrate") or {}).items() if k in ("extraction", "cleanup")}
+            result.update(analyze_calibration([self._strip_row(r) for r in rows]))
+            self.summary["calibrate"] = result
+            return
+
+        mid = self.memory_id()
+        type_by_id = self.step_inventory(mid)
+        self._strategy_ids = list(type_by_id)
+        sid_by_type = {t: s for s, t in type_by_id.items()}
+        actor = f"memory-audit-probe-{uuid.uuid4()}"
+        (self.out / "raw" / "calibrate_actor.txt").write_text(actor + "\n")
+        print(f"calibrate: synthetic actor {actor}", file=sys.stderr)
+        facts = {f["id"]: f for f in spec["facts"]}
+        fill = lambda s: s.replace("{pasted}", spec["fillers"]["pasted"])  # noqa: E731
+        written: list[tuple[str, str]] = []  # (sessionId, eventId)
+        result: dict[str, Any] = {"actor": "synthetic (memory-audit-probe-*)"}
+        try:
+            # 1. Write the conversations: one event per message, as the runtime does.
+            t = datetime.now(timezone.utc)
+            for group in spec["sessions"]:
+                session = f"memory-audit-probe-session-{uuid.uuid4()}"
+                for fid in group:
+                    for role, text in (("USER", facts[fid]["say"]),
+                                       ("ASSISTANT", "Thanks, noted. Happy to help with that.")):
+                        t += timedelta(seconds=1)
+                        ev = self.dp.create_event(
+                            memoryId=mid, actorId=actor, sessionId=session, eventTimestamp=t,
+                            payload=[{"conversational": {"content": {"text": text}, "role": role}}],
+                        )["event"]
+                        written.append((session, ev["eventId"]))
+            result["eventsWritten"] = len(written)
+
+            # 2. Wait for extraction to settle: both retrieved types present and
+            #    the record count unchanged for --settle-seconds.
+            started = time.monotonic()
+            first_seen: dict[str, int] = {}
+            last_count, last_change = -1, started
+            records: list[dict] = []
+            while time.monotonic() - started < self.args.wait_seconds:
+                records = self._actor_records(mid, actor)
+                now = time.monotonic()
+                for r in records:
+                    first_seen.setdefault(type_by_id.get(r["memoryStrategyId"], "UNKNOWN"), round(now - started))
+                if len(records) != last_count:
+                    last_count, last_change = len(records), now
+                print(f"calibrate: t+{round(now - started)}s records={len(records)} "
+                      f"types={sorted(first_seen)}", file=sys.stderr)
+                if set(RETRIEVED_TYPES) <= set(first_seen) and now - last_change >= self.args.settle_seconds:
+                    break
+                time.sleep(15)
+            by_type = Counter(type_by_id.get(r["memoryStrategyId"], "UNKNOWN") for r in records)
+            labelled = []
+            for r in records:
+                text = (r.get("content") or {}).get("text", "")
+                labelled.append({"id": r["memoryRecordId"], "type": type_by_id.get(r["memoryStrategyId"]),
+                                 "facts": [f for f in facts if record_matches(text, facts[f]["keys"])],
+                                 "text": text})
+            self.write_raw("calibrate_records.jsonl", labelled)
+            retrievable = [x for x in labelled if x["type"] in RETRIEVED_TYPES]
+            result["extraction"] = {
+                "secondsToFirstRecordByType": first_seen,
+                "waitedSeconds": round(time.monotonic() - started),
+                "recordsByType": dict(by_type),
+                "factsFoundByType": {t: sorted({f for x in retrievable if x["type"] == t for f in x["facts"]})
+                                     for t in RETRIEVED_TYPES},
+                "factsMissing": sorted(set(facts) - {f for x in retrievable for f in x["facts"]}),
+                "recordsMatchingSeveralFacts": sum(1 for x in retrievable if len(x["facts"]) > 1),
+                "recordsMatchingNoFact": sum(1 for x in retrievable if not x["facts"]),
+                "recordChars": {t: _dist([len(x["text"]) for x in retrievable if x["type"] == t])
+                                for t in RETRIEVED_TYPES},
+            }
+
+            # 3. Replay retrieval as retrieve_customer_context does, raw and
+            #    with filler stripped, for every fact query and negative.
+            queries = [(f"{fid}/{style}", fid, style, fill(q))
+                       for fid, f in facts.items() for style, q in f["queries"].items()]
+            queries += [(f"neg{i:02d}", None, "negative", fill(q)) for i, q in enumerate(spec["negatives"])]
+            rows = []
+            for qid, fid, style, text in queries:
+                for variant, q in (("raw", text), ("stripped", strip_query_filler(text))):
+                    for stype in RETRIEVED_TYPES:
+                        sid = sid_by_type.get(stype)
+                        if not sid:
+                            continue
+                        path = BACKEND_NAMESPACE_TEMPLATES[stype].format(memoryStrategyId=sid, actorId=actor)
+                        hits = self.dp.retrieve_memory_records(
+                            memoryId=mid, namespacePath=path,
+                            searchCriteria={"searchQuery": q[:10_000], "topK": RETRIEVAL_TOP_K},
+                        ).get("memoryRecordSummaries", [])
+                        out = [{"score": h.get("score", 0.0), "recordId": h["memoryRecordId"],
+                                "text": (h.get("content") or {}).get("text", "")}
+                               for h in sorted(hits, key=lambda h: -h.get("score", 0.0))]
+                        rows.append({"query": qid, "fact": fid, "style": style, "variant": variant,
+                                     "namespace": stype, "queryText": q, "hits": out})
+            self._label(rows, facts)
+            self.write_raw("calibrate_hits.jsonl", rows)
+            result.update(analyze_calibration([self._strip_row(r) for r in rows]))
+        finally:
+            # 4. Always clean up, including records that extraction delivers late.
+            if not self.args.keep:
+                cleanup = {"recordsDeleted": self._delete_actor_records(mid, actor), "eventsDeleted": 0}
+                for session, eid in written:
+                    try:
+                        self.dp.delete_event(memoryId=mid, actorId=actor, sessionId=session, eventId=eid)
+                        cleanup["eventsDeleted"] += 1
+                    except ClientError as exc:
+                        if exc.response["Error"]["Code"] != "ResourceNotFoundException":
+                            raise
+                sweeps = 0
+                while sweeps < self.args.late_sweeps:
+                    time.sleep(60)
+                    sweeps += 1
+                    late = self._delete_actor_records(mid, actor)
+                    cleanup["recordsDeleted"] += late
+                    if not late and sweeps >= 2:
+                        break
+                cleanup["lateSweeps"] = sweeps
+                cleanup["recordsRemaining"] = len(self._actor_records(mid, actor))
+                cleanup["eventsRemaining"] = sum(
+                    1 for s in {s for s, _ in written}
+                    for _ in _paginate(self.dp.list_events, "events", memoryId=mid, actorId=actor,
+                                       sessionId=s, maxResults=100))
+                result["cleanup"] = cleanup
+                print(f"calibrate: cleanup {cleanup}; if records appear later run "
+                      f"cleanup --cleanup-actor {actor}", file=sys.stderr)
+            self.summary["calibrate"] = result
+
+    @staticmethod
+    def _label(rows: list[dict], facts: dict[str, dict]) -> None:
+        """Label every hit from its text with the eval set's current keys, so a
+        key fix can be applied to a finished run with ``--reanalyze``."""
+        for row in rows:
+            for h in row["hits"]:
+                h["facts"] = [f for f in facts if record_matches(h["text"], facts[f]["keys"])]
+                h["correct"] = row["fact"] in h["facts"]
+                fact = facts.get(row["fact"], {})
+                h["related"] = not h["correct"] and (
+                    bool(set(h["facts"]) & set(fact.get("related", [])))
+                    or record_matches(h["text"], fact.get("relatedKeys", [])))
+                h["chars"] = len(h["text"])
+
+    @staticmethod
+    def _strip_row(row: dict) -> dict:
+        return {**row, "hits": [{k: h[k] for k in ("score", "correct", "related", "chars")} for h in row["hits"]]}
+
     def run_cleanup(self, actor: str) -> None:
         if not actor.startswith("memory-audit-probe-"):
             sys.exit("--cleanup-actor only accepts synthetic memory-audit-probe-* actors")
@@ -489,6 +841,14 @@ def main(argv: list[str] | None = None) -> int:
     pr.add_argument("--expect", default="Z-999")
     pr.add_argument("--wait-seconds", type=int, default=600)
     pr.add_argument("--keep", action="store_true", help="leave the probe records and events in place")
+    ca = sub.add_parser("calibrate")
+    ca.add_argument("--wait-seconds", type=int, default=900, help="give up waiting for extraction after this")
+    ca.add_argument("--settle-seconds", type=int, default=90,
+                    help="extraction counts as done once the record count is stable this long")
+    ca.add_argument("--late-sweeps", type=int, default=5, help="max 60 s cleanup sweeps for late records")
+    ca.add_argument("--keep", action="store_true", help="leave the synthetic records and events in place")
+    ca.add_argument("--reanalyze", action="store_true",
+                    help="recompute the summary from --out/raw/calibrate_hits.jsonl; no AWS calls")
     cl = sub.add_parser("cleanup")
     cl.add_argument("--cleanup-actor", required=True)
     args = p.parse_args(argv)
@@ -504,6 +864,8 @@ def main(argv: list[str] | None = None) -> int:
         audit.run_inventory()
     elif args.cmd == "probe":
         audit.run_probe()
+    elif args.cmd == "calibrate":
+        audit.run_calibrate()
     elif args.cmd == "cleanup":
         audit.run_cleanup(args.cleanup_actor)
     (audit.out / "summary.json").write_text(json.dumps(audit.summary, indent=2, default=_json_default))

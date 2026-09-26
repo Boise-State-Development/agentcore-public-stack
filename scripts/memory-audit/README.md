@@ -24,6 +24,20 @@ python scripts/memory-audit/audit.py --profile dev-ai --region us-west-2 \
 python scripts/memory-audit/audit.py --profile dev-ai --region us-west-2 \
   --prefix dev-boisestateai-v2 --out /tmp/memaudit probe
 
+# Writes (dev only): relevance-cut calibration. One synthetic actor states the
+# 16 facts in calibration_set.json across 5 conversations; after extraction
+# settles, every fact is asked 3 ways (direct, indirect, wrapped in filler) plus
+# 20 unrelated questions, raw and with filler stripped. Each returned record is
+# labelled (match / related / noise) and summary.json gets score distributions
+# and recall/precision per candidate policy. Always deletes what it created,
+# with late sweeps. ~6 minutes.
+python scripts/memory-audit/audit.py --profile dev-ai --region us-west-2 \
+  --prefix dev-boisestateai-v2 --out /tmp/memcal calibrate
+
+# Recompute the summary from raw/ after editing calibration_set.json keys or
+# policies (no AWS calls)
+python scripts/memory-audit/audit.py --prefix x --out /tmp/memcal calibrate --reanalyze
+
 # Late-arriving probe records (the probe prints the actor to pass)
 python scripts/memory-audit/audit.py ... cleanup --cleanup-actor memory-audit-probe-<uuid>
 ```

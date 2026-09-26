@@ -1,8 +1,8 @@
 # AgentCore Memory baseline: decision record (Shared Projects Phase 0)
 
-**Status:** **Decided: C (hybrid).** Dev evidence 2026-09-25; the step-5 re-test passed after Phase 0.2 (see "Re-test after Phase 0.2"). Prod read path and record census checked 2026-09-25 (see "Production (read-only)").
+**Status:** **Decided: C (hybrid).** Relevance cut recalibrated to 0.40 (see "Relevance cut calibration"). Dev evidence 2026-09-25; the step-5 re-test passed after Phase 0.2 (see "Re-test after Phase 0.2"). Prod read path and record census checked 2026-09-25 (see "Production (read-only)").
 **Spec:** `shared-projects.md` §1 (procedure §1.2, options §1.3), PR plan §7 Phase 0.
-**Tool:** `scripts/memory-audit/audit.py` (`inventory` and `probe`), plus a manual two-chat test on dev.boisestate.ai.
+**Tool:** `scripts/memory-audit/audit.py` (`inventory`, `probe` and `calibrate`), plus a manual two-chat test on dev.boisestate.ai.
 **Privacy:** every figure below is an aggregate. Record text, actor ids and account-specific identifiers stay in the auditor's scratch directory.
 
 ## Answer in one paragraph
@@ -98,6 +98,7 @@ The stored fact was the only hit in each case. The ranking is right; the cut is 
 
 1. **Relevance cut.** The runtime default for `AGENTCORE_MEMORY_RELEVANCE_SCORE` drops from 0.7 to **0.5** (`agents/main_agent/config/constants.py`).
    - The 0.5 is backed by dev scores: correct records 0.57–0.67, unrelated records ≤ 0.40.
+   - **Superseded:** a labelled eval set put realistic questions at 0.35–0.55, and the default is now **0.40**. See "Relevance cut calibration".
    - **Deviation:** not set in CDK. The AgentCore Runtime is at 47 of its 50 environment variables, and the existing variable already overrides the default wherever it is set. Adding it to CDK is a one-line follow-up if a per-environment value is ever wanted.
    - This changes what users' turns contain: turns with a relevant record gain a `<user_context>` block on the user message, after the prompt-cache point. The step-5 re-test after deploy passed; see "Re-test after Phase 0.2".
 2. **Session delete purges extracted summaries.** `SessionService.delete_agentcore_memory` now also deletes the SUMMARIZATION records under `…/sessions/{sessionId}/` (exact session match; batches of 100). This runs even when the session's events have already expired.
@@ -126,6 +127,137 @@ Run against the Runtime version that shipped 0.2, which has no relevance overrid
 | Session delete purges summaries (0.2 fix 2) | Deleting chat A removed its summary record. The semantic fact stayed, as designed, and was then removed by hand. |
 
 Chat B was a new session with a newly built agent, so the fact could only have come from long-term memory, not from the in-process agent cache or the conversation history.
+
+## Relevance cut calibration (dev, 2026-09-25)
+
+**Why.** The 0.5 cut came from one synthetic fact. After #1338 reached dev, a second synthetic fact was extracted correctly and ranked first, but scored 0.41–0.49, under the cut. This section replaces the single fact with a labelled eval set.
+
+**Method.** `audit.py calibrate`, run twice, each time with a fresh synthetic actor. Everything it created was deleted, and a later sweep found no late records.
+
+- **Facts.** 16 synthetic facts and preferences (`scripts/memory-audit/calibration_set.json`), stated across 5 conversations:
+  - short facts;
+  - facts inside long, busy messages;
+  - explicit preferences;
+  - two pairs written to be merged or consolidated (a pet, then its fear of storms; a research project, then a change of method).
+- **Extraction.** Each run produced 29 semantic records, 7 preferences and 5 summaries. Every fact was extracted. About 10 semantic records per run were side facts from the long messages, such as a wake-up time or field notes.
+- **Questions.** Each fact was asked three ways:
+  - **direct:** "What car do I drive?";
+  - **indirect:** "How often should I change the oil in my car?";
+  - **filler:** "Different question: …", an acknowledgement before the question, or a pasted lecture paragraph and then the question.
+  
+  Twenty unrelated questions were added, such as "Why is the sky blue?". That makes 96 fact questions and 40 unrelated questions over the two runs.
+- **Replay.** Every question was replayed exactly as `retrieve_customer_context` sends it (backend namespace, `topK=10`), in two forms: raw, and with leading filler and pasted context stripped by a regex (`strip_query_filler`).
+- **Labels.** Each returned record was labelled from its text:
+  - **match:** it states the fact asked about;
+  - **related:** it is on the same topic, such as the capstone update for a capstone question, or the field notes;
+  - **noise:** anything else.
+
+  Related records count as neither hits nor noise.
+- **Control.** The Phase 0 `probe` fact, re-run the same day, scored 0.566 / 0.623 / 0.907, identical to Phase 0 to three decimals. The score scale has not moved. Phase 0's fact was easy because its questions repeated the fact's own distinctive words ("test office for the memory audit").
+
+### Score distributions (both runs, raw query)
+
+For each question: the score of the matching record, and the best noise record in the same namespace.
+
+| Namespace | Style | Matching record: p10 / median / max | Best noise: median / p90 / max | Match ranked #1 (or a related record did) |
+|---|---|---|---|---|
+| Semantic | direct | 0.40 / 0.44 / 0.51 | 0.37 / 0.38 / 0.38 | 30 of 30 |
+| Semantic | indirect | 0.35 / 0.38 / 0.47 | 0.37 / 0.39 / 0.40 | 20 of 30 |
+| Semantic | filler | 0.37 / 0.40 / 0.56 | 0.37 / 0.39 / 0.39 | 24 of 32 |
+| Semantic | unrelated question | — | 0.36 / 0.38 / **0.43** | — |
+| Preference | direct | 0.37 / 0.41 / 0.64 | 0.36 / 0.38 / 0.39 | 13 of 14 |
+| Preference | indirect | 0.34 / 0.40 / 0.48 | 0.36 / 0.40 / 0.41 | 10 of 14 |
+| Preference | filler | 0.36 / 0.40 / 0.49 | 0.36 / 0.37 / 0.38 | 12 of 14 |
+| Preference | unrelated question | — | 0.35 / 0.38 / 0.40 | — |
+
+The counts differ by namespace because only preference-shaped facts have a preference record.
+
+**Readings.**
+- **Everything lives in a narrow band.** Noise sits at 0.34–0.40. The right record sits 0.02–0.10 above it: a median gap of 0.06 for direct questions and 0.01 for indirect ones.
+- **Ranking is good; absolute scores are low.** For direct questions the right record is first in every case, but it clears 0.5 only 16% of the time.
+- **Filler costs about 0.03.** On the semantic namespace, stripping it lifts the median from 0.40 to 0.43, and the right record ranks first in 29 of 32 questions instead of 24.
+- **The worst noise comes from side facts.** The highest-scoring noise was a side fact from a long message: a morning-routine record scoring 0.43 against "translate 'good morning' into Japanese".
+
+### Policies (both runs)
+
+Definitions:
+- **Recall:** fact questions where a matching record is injected.
+- **Precision:** injected records that match, with related records excluded.
+- **Unrelated turns hit:** unrelated questions that get any injection.
+- **Tokens / turn:** mean injected tokens over all 136 turns, at about 4 characters per token.
+
+| Policy | Recall raw | Recall stripped | Precision | Noise records / fact turn | Unrelated turns hit | Tokens / turn |
+|---|---|---|---|---|---|---|
+| cut ≥ 0.35 | 96% | 96% | 14% | 9.6 | 100% (8 records each) | 277 |
+| cut ≥ 0.38 | 76% | 81% | 72% | 0.42 | 12% | 38 |
+| **cut ≥ 0.40** | **59%** | **68%** | **94%** | **0.05** | **5%** | **21** |
+| cut ≥ 0.42 | 40% | 48% | 100% | 0 | 5% | 12 |
+| cut ≥ 0.45 | 27% | 31% | 100% | 0 | 0% | 8 |
+| cut ≥ 0.50 (current) | 7% | 10% | 100% | 0 | 0% | 3 |
+| top-1 per namespace, ≥ 0.40 | 53% | 62% | 94% | 0.04 | 5% | 17 |
+| top-3 per namespace, ≥ 0.40 | 59% | 68% | 94% | 0.05 | 5% | 21 |
+| top-3 per namespace, ≥ 0.35 | 92% | 94% | 30% | 3.4 | 100% | 154 |
+| margin: top beats runner-up by ≥ 0.03, floor 0.40 (plus anything ≥ 0.50) | 47% | 55% | 98% | 0.01 | 0% | 13 |
+| margin: top beats runner-up by ≥ 0.05, floor 0.40 (plus anything ≥ 0.50) | 33% | 41% | 100% | 0 | 0% | 10 |
+
+Recall by style at cut ≥ 0.40:
+
+| Style | Raw | Stripped |
+|---|---|---|
+| Direct | 78% | 78% |
+| Indirect | 47% | 47% |
+| Filler | 53% | 78% |
+
+Recall by style at cut ≥ 0.50:
+
+| Style | Raw |
+|---|---|
+| Direct | 16% |
+| Indirect | 0% |
+| Filler | 6% |
+
+**Alternatives.**
+- **Margin rule.** It rejects all noise on unrelated turns, but gives up about 12 recall points against a plain 0.40 cut. The gaps are simply too narrow to separate on. It is not worth a code change today.
+- **Small topK.** A top-3 cap changes nothing at 0.40, because no namespace kept more than 3 records. Top-1 loses 6 points of recall. At a low floor (0.35) no topK rescues precision.
+- **Filler stripping.** Worth about +8 points of recall, all of it on filler-wrapped questions (53% to 78%), with no precision cost. It is a regex on text already in hand, so it adds no latency before the first token. It is a follow-up, not part of this change: the heuristic keeps the last paragraph, so it needs care with messages that put the question before a pasted block.
+- **Token cost.** At 0.40 an injected block is small:
+  - at most 3 records;
+  - median 180 characters (about 45 tokens), maximum 490 (about 125 tokens), on the turns that inject at all;
+  - about 21 tokens a turn averaged over all turns.
+  
+  It sits after the cache point, so the cached prefix is untouched. The real cost of a false positive is distraction, not tokens.
+
+### Recommendation
+
+**Lower the default to 0.40** (`MEMORY_RELEVANCE_SCORE`, this PR). Keep `topK=10`, and keep the query as the raw user text.
+
+0.40 is the knee of the curve:
+- 0.42 gives up 19 points of recall to remove 0.05 noise records per fact turn;
+- 0.38 buys 17 points of recall for 8× the noise, and injects on 1 in 8 unrelated turns.
+
+**Expected effect.** On this eval set, recall on realistic questions goes from 7% to 59%: direct questions from 16% to 78%, indirect from 0% to 47%. The cost:
+- 1 in 20 unrelated turns gains one short, wrong record;
+- turns about a stored fact carry 0.05 wrong records on average.
+
+In production terms, expect the share of turns logging `Retrieved N customer context items` to rise several-fold over what 0.5 gives. The new score lines (next section) make that measurable per namespace.
+
+**Caveats.**
+- **Small namespaces.** Both actors had 36 retrievable records, close to the median prod user. Heavy users (175 prod actors hold 100+ records) have more chances for a side fact to reach 0.40.
+- **Signals to watch.** The score log's `kept` counts per namespace and the top-score histogram for actors with dense namespaces.
+- **Safety valve.** If noise rises for those users, set `AGENTCORE_MEMORY_TOP_K=3` (a no-op at 0.40 on this set). Adding filler stripping is next in line after that.
+- **Extraction varies between runs.** In the 2026-09-25 manual test, the capstone fact was merged with a field-notes sentence and scored 0.41. In both runs here it was extracted cleanly and scored 0.45–0.46.
+
+### Score logging (companion PR)
+
+`retrieve_customer_context` logs one line per namespace per turn:
+
+```
+memory retrieval scores namespace=/strategies/<strategyId>/actors/{actorId} top=0.431 returned=10 kept=1 cut=0.4
+```
+
+- **What it logs.** The namespace template, with the actor id left unresolved, and no record text.
+- **Cost.** It is computed from the response already in hand, so it adds no calls and no latency before the first token beyond one log line.
+- **Reading it.** `audit.py inventory` histograms the top score per strategy type (`logs.retrieval_scores`). It counts the plain runtime stream only, because every line also has an OTEL copy.
 
 ## Production (read-only, 2026-09-25)
 
@@ -232,6 +364,6 @@ Other data-plane calls (`CreateEvent`, `ListEvents`) go through the SDK client w
 
 ## Not yet covered
 
-- **Prod after Phase 0.2.** Hit rate and failure rate once a release carries the 0.5 cut, and Fixes 1–2 above, to prod.
+- **Prod after Phase 0.2.** Hit rate and failure rate once a release carries the relevance cut (now 0.40) and Fixes 1–2 above to prod. The `memory retrieval scores` lines give the top-score histogram per namespace.
 - **Legacy-actor records and failed extraction jobs in prod.** Both need a prod write (delete 112 unreachable records; restart 7 jobs). Neither affects correctness; an operator decides.
 - **Consolidation of directly written records.** Whether the service ever consolidates records written straight into a strategy-less namespace (§1.3 residual) was not probed. It matters only for the Phase 3 derived index.
