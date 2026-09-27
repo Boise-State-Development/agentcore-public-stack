@@ -60,6 +60,17 @@ stamp; delete first, and the stamp is refused and the settling path releases the
 reservation instead of committing it. Both ``ADD`` writes commute, so a refund
 landing before its commit still nets to zero.
 
+Re-ingesting a changed source
+-----------------------------
+A KB sync that finds its source changed overwrites the settled document's S3
+object in place, so the new version's size has to replace the old one in the
+ledger. Only the difference moves: growth is reserved against the cap *before*
+the new version is submitted (:func:`claim_reingest`), so a file that grew past
+the cap is refused while its previous version is still being served, and on
+completion ``committedBytes`` is re-stamped and the difference committed or
+refunded (:func:`settle_reingest`). A delete mid-flight returns the growth
+reservation through :func:`release_reingest_once`.
+
 Guards against driving a counter negative
 -----------------------------------------
 :func:`release` refuses to take ``reservedBytes`` below zero, and :func:`refund`
@@ -88,7 +99,7 @@ from __future__ import annotations
 import logging
 import os
 from decimal import Decimal
-from typing import Optional
+from typing import Any, Dict, Optional, Tuple
 
 from apis.shared.kb_backend.metrics import emit_count
 
@@ -601,6 +612,153 @@ def refund_once(assistant_id: str, document_id: str) -> int:
             return 0
         raise
     return int(response.get("Attributes", {}).get("committedBytes") or 0)
+
+
+#: The ``DOC#`` attributes one in-flight re-ingest holds (:func:`claim_reingest`).
+REINGEST_CLAIM_ATTRIBUTES = (
+    "reingestHash",
+    "reingestBytes",
+    "reingestReservedBytes",
+    "reingestSubmittedAt",
+)
+
+
+def claim_reingest(
+    assistant_id: str,
+    document_id: str,
+    content_hash: str,
+    new_bytes: int,
+    reserved_bytes: int,
+) -> Tuple[bool, int]:
+    """Claim the re-ingest of one staged version of an already-settled document.
+
+    A KB sync that finds its source changed overwrites the document's S3 object in
+    place. The document already settled its bytes, so :func:`settle_once` cannot
+    account for the new version; this claim does. It stamps the version
+    (``reingestHash``, the ``stagedContentHash`` the sync wrote), its S3 size and
+    the growth the caller has just reserved for it, conditioned on no claim for
+    this version existing. That makes the reservation exactly-once per version
+    under redelivery: the caller reserves *before* claiming, and releases its own
+    reservation again when the claim is refused.
+
+    Returns ``(claimed, superseded)``. ``superseded`` is the reservation of an
+    older version's claim this one replaced — a re-ingest that never completed —
+    and the caller must release it: nothing else ever will. Only one claim can
+    replace it, so it is released once.
+
+    Refused for a row that is gone, ``deleting``, or not terminal: an upload still
+    in flight is its first ingestion's to settle.
+    """
+    from botocore.exceptions import ClientError
+
+    from apis.shared.kb_backend.records import RECORD_EXISTS
+
+    try:
+        response = _table().update_item(
+            Key={"PK": f"AST#{assistant_id}", "SK": f"DOC#{document_id}"},
+            UpdateExpression=(
+                "SET reingestHash = :h, reingestBytes = :b, reingestReservedBytes = :r "
+                "REMOVE reingestSubmittedAt"
+            ),
+            ConditionExpression=(
+                f"{RECORD_EXISTS} AND #status IN (:complete, :failed) "
+                f"AND (attribute_not_exists(reingestHash) OR reingestHash <> :h)"
+            ),
+            ExpressionAttributeNames={"#status": "status"},
+            ExpressionAttributeValues={
+                ":h": content_hash,
+                ":b": Decimal(new_bytes),
+                ":r": Decimal(reserved_bytes),
+                ":complete": "complete",
+                ":failed": "failed",
+            },
+            ReturnValues="UPDATED_OLD",
+        )
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            return False, 0
+        raise
+    old = response.get("Attributes") or {}
+    if not old.get("reingestHash"):
+        return True, 0
+    return True, int(old.get("reingestReservedBytes") or 0)
+
+
+def release_reingest_once(
+    assistant_id: str,
+    document_id: str,
+    content_hash: Optional[str] = None,
+) -> int:
+    """Drop a document's re-ingest claim and return the bytes it had reserved.
+
+    Returns the reservation for exactly one caller, 0 for everyone else. For a
+    re-ingest that ends without committing — Bedrock failed it, or the owner
+    deleted the document mid-flight — so its growth reservation does not leak.
+    ``content_hash`` restricts the drop to that version's claim.
+
+    The completing path removes the claim in the same conditional write that
+    stamps the new ``committedBytes``, so a delete racing a completion either
+    finds the claim (and releases it) or finds the new stamp (and refunds it).
+    """
+    from botocore.exceptions import ClientError
+
+    from apis.shared.kb_backend.records import RECORD_EXISTS
+
+    condition = f"{RECORD_EXISTS} AND attribute_exists(reingestHash)"
+    values: Dict[str, Any] = {}
+    if content_hash is not None:
+        condition += " AND reingestHash = :h"
+        values[":h"] = content_hash
+    kwargs: Dict[str, Any] = {
+        "Key": {"PK": f"AST#{assistant_id}", "SK": f"DOC#{document_id}"},
+        "UpdateExpression": "REMOVE " + ", ".join(REINGEST_CLAIM_ATTRIBUTES),
+        "ConditionExpression": condition,
+        "ReturnValues": "ALL_OLD",
+    }
+    if values:
+        kwargs["ExpressionAttributeValues"] = values
+    try:
+        response = _table().update_item(**kwargs)
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            return 0
+        raise
+    return int((response.get("Attributes") or {}).get("reingestReservedBytes") or 0)
+
+
+def settle_reingest(
+    assistant_id: str,
+    app_kb_id: str,
+    previous_bytes: int,
+    new_bytes: int,
+    reserved_bytes: int,
+) -> None:
+    """Move the ledger from a document's old committed size to its re-ingested one.
+
+    Called after the ``DOC#`` row's ``committedBytes`` has been re-stamped to
+    ``new_bytes`` — the stamp first, for the same reason :func:`record_commit`
+    comes before :func:`commit`. Growth was reserved when the re-ingest was
+    claimed, so it is committed out of that reservation; shrinkage is refunded.
+
+    The growth can only differ from the reservation if ``committedBytes`` moved
+    between the claim's read and its write — an older version's re-ingest
+    completing in that window. Any reservation left over is released, and growth
+    beyond it is counted as stored without a cap check (:func:`add_stored`): the
+    bytes are already indexed, and refusing to count them would only hide them.
+    """
+    growth = new_bytes - previous_bytes
+    committed = min(reserved_bytes, max(growth, 0))
+    commit(assistant_id, app_kb_id, committed)
+    if reserved_bytes > committed:
+        release(assistant_id, app_kb_id, reserved_bytes - committed)
+    if growth > committed:
+        logger.warning(
+            f"re-ingest of a document in {assistant_id} grew {growth} bytes but reserved "
+            f"only {reserved_bytes}; counting the difference as stored"
+        )
+        add_stored(assistant_id, app_kb_id, growth - committed)
+    elif growth < 0:
+        refund(assistant_id, app_kb_id, -growth)
 
 
 def release_snapshot(assistant_id: str, app_kb_id: str, n_bytes: int) -> bool:

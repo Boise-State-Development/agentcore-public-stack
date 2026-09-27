@@ -81,11 +81,19 @@ def update_document_sync_fields(
     previous_chunk_count: Optional[int] = None,
     last_synced_at: Optional[str] = None,
     sync_policy_id: Optional[str] = None,
+    staged_content_hash: Optional[str] = None,
 ) -> None:
     """Targeted update of the sync-bookkeeping fields on a document record.
 
     Only sets the fields passed — safe alongside the ingestion pipeline's
     own targeted UpdateExpressions (which never touch these attributes).
+
+    ``staged_content_hash`` is for a sync that is about to overwrite the
+    document's S3 object with changed bytes, and must be written BEFORE the
+    overwrite. A managed knowledge base's ingestion consumer reads it to tell
+    the overwrite's event from a redelivery of the original upload's
+    (``kb_migration.ingestion_consumer.staged_version_to_reingest``); without
+    it the changed bytes are never re-ingested. The legacy pipeline ignores it.
     """
     set_parts = []
     values: Dict[str, Any] = {}
@@ -104,6 +112,9 @@ def update_document_sync_fields(
     if sync_policy_id is not None:
         set_parts.append("syncPolicyId = :spid")
         values[":spid"] = sync_policy_id
+    if staged_content_hash is not None:
+        set_parts.append("stagedContentHash = :staged")
+        values[":staged"] = staged_content_hash
     if not set_parts:
         return
 
