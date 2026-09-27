@@ -8,6 +8,7 @@ own test lives beside it in ``test_compaction_summary.py``. These pin the
 other side channels to the same shape.
 """
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -27,6 +28,16 @@ def _client(text: str, stop_reason: str = "end_turn") -> MagicMock:
     client = MagicMock()
     client.converse.side_effect = converse
     return client
+
+
+@pytest.fixture(autouse=True)
+def _fresh_title_client(monkeypatch):
+    """The title client is cached per process; each test builds its own."""
+    monkeypatch.setattr(chat_service, "_title_bedrock_client", None)
+
+
+async def _drain_title_writes() -> None:
+    await asyncio.gather(*list(chat_service._pending_title_writes))
 
 
 def _patch_boto3_module(monkeypatch, client: MagicMock) -> None:
@@ -64,6 +75,7 @@ async def test_conversation_title(monkeypatch):
     title = await chat_service.generate_conversation_title(session_id="s", user_id="u", user_input="hi")
     assert title == "Planning a biology syllabus"
     assert "topP" not in client.converse.call_args.kwargs["inferenceConfig"]
+    await _drain_title_writes()
 
 
 @pytest.mark.asyncio
@@ -86,3 +98,44 @@ async def test_conversation_title_at_the_token_ceiling_is_still_clipped(monkeypa
     monkeypatch.setattr(chat_service, "update_session_title", AsyncMock())
     title = await chat_service.generate_conversation_title(session_id="s", user_id="u", user_input="hi")
     assert title == "A" * 47 + "..."
+    await _drain_title_writes()
+
+
+@pytest.mark.asyncio
+async def test_conversation_title_returns_before_its_write_lands(monkeypatch):
+    """The stream pushes `session_title` when this task finishes, so the
+    DynamoDB write must not sit between Nova answering and the user seeing it."""
+    client = _client("Planning a biology syllabus")
+    monkeypatch.setattr(chat_service.boto3, "client", MagicMock(return_value=client))
+    write_may_finish = asyncio.Event()
+    written: list = []
+
+    async def slow_write(session_id, user_id, title):
+        await write_may_finish.wait()
+        written.append(title)
+
+    monkeypatch.setattr(chat_service, "update_session_title", slow_write)
+
+    title = await chat_service.generate_conversation_title(session_id="s", user_id="u", user_input="hi")
+
+    assert title == "Planning a biology syllabus"
+    assert written == []
+    write_may_finish.set()
+    await _drain_title_writes()
+    assert written == ["Planning a biology syllabus"]
+
+
+@pytest.mark.asyncio
+async def test_conversation_title_reuses_one_bedrock_client(monkeypatch):
+    """A client per title paid botocore's model load and a fresh TLS handshake."""
+    client = _client("Planning a biology syllabus")
+    factory = MagicMock(return_value=client)
+    monkeypatch.setattr(chat_service.boto3, "client", factory)
+    monkeypatch.setattr(chat_service, "update_session_title", AsyncMock())
+
+    for _ in range(3):
+        await chat_service.generate_conversation_title(session_id="s", user_id="u", user_input="hi")
+    await _drain_title_writes()
+
+    assert factory.call_count == 1
+    assert client.converse.call_count == 3

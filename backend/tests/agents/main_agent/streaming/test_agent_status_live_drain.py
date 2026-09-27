@@ -206,6 +206,98 @@ class TestFailSoft:
         assert any(f.startswith("event: done") for f, _ in frames)
 
 
+_TITLE_FRAME = 'event: session_title\ndata: {"type": "session_title", "title": "T"}\n\n'
+
+
+class _OneShotTitle:
+    """The routes' `_session_title_sse` contract: ready once, emitted once.
+
+    It becomes ready when the agent stream goes silent (the hook's first
+    record), which models a title that lands during a tool call or the
+    model's time-to-first-token.
+    """
+
+    def __init__(self, hook: _Hook) -> None:
+        self.ready = False
+        self.emitted = 0
+        record = hook.record
+
+        def _record(status: dict) -> None:
+            self.ready = True
+            record(status)
+
+        hook.record = _record
+
+    def __call__(self) -> Optional[str]:
+        if self.emitted or not self.ready:
+            return None
+        self.emitted += 1
+        return _TITLE_FRAME
+
+
+async def _collect_with_side_frame(agent, wrapper, poll) -> List[tuple]:
+    coordinator = StreamCoordinator()
+    seen: List[tuple] = []
+    async for sse in coordinator.stream_response(
+        agent=agent,
+        prompt="hi",
+        session_manager=_SessionManager(),
+        session_id="sess-1",
+        user_id="user-1",
+        main_agent_wrapper=wrapper,
+        poll_side_frame=poll,
+    ):
+        seen.append((sse, agent.spoke_again))
+    return seen
+
+
+class TestSideFrame:
+    """The first turn's `session_title` rides the same poll as the statuses."""
+
+    @pytest.mark.asyncio
+    async def test_a_ready_title_goes_out_during_the_silence(self, monkeypatch):
+        monkeypatch.delenv("AGENT_STATUS_LIVE_DRAIN_ENABLED", raising=False)
+        hook = _Hook()
+        agent = _StallingAgent(hook)
+        poll = _OneShotTitle(hook)
+
+        frames = await _collect_with_side_frame(agent, _Wrapper(hook), poll)
+
+        arrivals = [spoke for sse, spoke in frames if sse == _TITLE_FRAME]
+        assert arrivals == [False]
+        assert poll.emitted == 1
+
+    @pytest.mark.asyncio
+    async def test_it_is_polled_even_without_a_status_hook(self, monkeypatch):
+        """No hook means no statuses, not no title."""
+        monkeypatch.delenv("AGENT_STATUS_LIVE_DRAIN_ENABLED", raising=False)
+        agent = _StallingAgent(_Hook(), silence=0.25)
+        emitted: List[str] = []
+
+        def poll() -> Optional[str]:
+            if emitted:
+                return None
+            emitted.append(_TITLE_FRAME)
+            return _TITLE_FRAME
+
+        frames = await _collect_with_side_frame(agent, _Wrapper(None), poll)
+
+        assert [sse for sse, _ in frames].count(_TITLE_FRAME) == 1
+
+    @pytest.mark.asyncio
+    async def test_a_failing_poll_does_not_break_the_turn(self, monkeypatch):
+        monkeypatch.delenv("AGENT_STATUS_LIVE_DRAIN_ENABLED", raising=False)
+        hook = _Hook()
+        agent = _StallingAgent(hook, silence=0.05)
+
+        def poll() -> Optional[str]:
+            raise RuntimeError("title task exploded")
+
+        frames = await _collect_with_side_frame(agent, _Wrapper(hook), poll)
+
+        assert any(f.startswith("event: done") for f, _ in frames)
+
+
 class TestEarlyExit:
     @pytest.mark.asyncio
     async def test_a_cooperative_stop_mid_silence_ends_cleanly(self, monkeypatch):

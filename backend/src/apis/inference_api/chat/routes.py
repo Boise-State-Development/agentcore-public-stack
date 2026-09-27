@@ -3809,9 +3809,13 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             # (kicked off before the quota check on first turns) finishes,
             # push the title to the client so the sidebar/header rename in
             # parallel with the pending response instead of at stream end.
-            # Checked between agent events — never awaited, so it adds no
-            # latency; a stream that outruns Nova Micro simply never emits
-            # and the SPA's post-close metadata refresh covers it.
+            # Never awaited, so it adds no latency. Polled from two places:
+            # the coordinator's live status merge (every 100ms, so a title
+            # that lands during the model's time-to-first-token or a long
+            # tool call goes out right away) and between agent events below
+            # (the only route while that merge is switched off). A stream
+            # that outruns Nova Micro simply never emits and the SPA's
+            # post-close metadata refresh covers it.
             title_emitted = False
 
             def _session_title_sse() -> Optional[str]:
@@ -3993,6 +3997,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 # is not. None for preview sessions and the local
                 # no-DynamoDB path, where steering is simply inert.
                 turn_lease=session_lease,
+                poll_side_frame=_session_title_sse if title_task is not None else None,
             ):
                 yield event
                 # Interleave the finished title between agent events (same

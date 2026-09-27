@@ -9,7 +9,7 @@ import logging
 import os
 import time
 from datetime import datetime, timezone
-from typing import Any, AsyncGenerator, Dict, List, Optional, Union
+from typing import Any, AsyncGenerator, Callable, Dict, List, Optional, Union
 
 from agents.main_agent.config.constants import EnvVars
 from agents.main_agent.session.hooks.prefix_fingerprint import (
@@ -256,6 +256,7 @@ class StreamCoordinator:
         turn_project_id: Optional[str] = None,
         turn_lease: Any = None,
         turn_started_at: Optional[float] = None,
+        poll_side_frame: Optional[Callable[[], Optional[str]]] = None,
     ) -> AsyncGenerator[str, None]:
         """
         Stream agent responses with proper lifecycle management
@@ -286,6 +287,12 @@ class StreamCoordinator:
                 stamped *unconditionally*, including to None, for the same reason
                 ``reset_cancellation_state`` exists: a lease left behind by a previous
                 turn on a cached agent would be read against a row that no longer names us.
+            poll_side_frame: Non-blocking check for one formatted SSE frame produced
+                outside the agent stream (the first turn's ``session_title``). Polled
+                on every pass of the live status merge, so the frame goes out within
+                one poll interval of being ready instead of waiting for the agent
+                stream's next event. Must be idempotent: the caller keeps checking it
+                between events too, which is its only route while the merge is off.
 
         Yields:
             str: SSE formatted events
@@ -472,7 +479,8 @@ class StreamCoordinator:
             )
             if agent_status_live_drain_enabled():
                 processed_stream = self._merge_agent_status(
-                    processed_stream, main_agent_wrapper, session_id
+                    processed_stream, main_agent_wrapper, session_id,
+                    poll_side_frame=poll_side_frame,
                 )
 
             async for event in processed_stream:
@@ -2686,6 +2694,7 @@ class StreamCoordinator:
         events: AsyncGenerator[Dict[str, Any], None],
         main_agent_wrapper: Any,
         session_id: str,
+        poll_side_frame: Optional[Callable[[], Optional[str]]] = None,
     ) -> AsyncGenerator[Any, None]:
         """Yield the agent's events, interleaved with status transitions as they happen.
 
@@ -2758,6 +2767,9 @@ class StreamCoordinator:
                     main_agent_wrapper, session_id
                 ):
                     yield _StatusFrame(sse)
+                side_frame = self._poll_side_frame(poll_side_frame)
+                if side_frame:
+                    yield _StatusFrame(side_frame)
 
                 if not done:
                     continue
@@ -2788,6 +2800,19 @@ class StreamCoordinator:
                         "Agent stream raised while cancelling the status merge",
                         exc_info=True,
                     )
+
+    @staticmethod
+    def _poll_side_frame(
+        poll_side_frame: Optional[Callable[[], Optional[str]]],
+    ) -> Optional[str]:
+        """Best-effort: a failing poll must never break the stream it rides on."""
+        if poll_side_frame is None:
+            return None
+        try:
+            return poll_side_frame()
+        except Exception:  # noqa: BLE001 - side-channel frames are never load-bearing
+            logger.warning("Side-frame poll failed", exc_info=True)
+            return None
 
     def _drain_agent_status_events(
         self, main_agent_wrapper: Any, session_id: str
