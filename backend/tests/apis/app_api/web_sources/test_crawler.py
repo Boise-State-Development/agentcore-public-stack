@@ -650,3 +650,41 @@ async def test_refresh_robots_disallow_is_not_seen(recorder: _Recorder):
     # Robots said stop indexing: the URL is deliberately NOT seen, so the
     # worker's miss counter starts ticking toward removal.
     assert state.seen_urls == set()
+
+
+@pytest.mark.asyncio
+async def test_refresh_stage_failure_emits_stage_failed(
+    recorder: _Recorder, monkeypatch: pytest.MonkeyPatch
+):
+    async def failing_put(*, assistant_id, document_id, markdown, filename):
+        raise RuntimeError("S3 PutObject failed")
+
+    monkeypatch.setattr(crawler, "_put_markdown", failing_put)
+    pages = {
+        ROOT: '<html><body><p>changed words</p><a href="/new">n</a></body></html>',
+        "https://example.com/new": "<html><body><p>new page</p></body></html>",
+    }
+    state, log = _refresh_state(
+        recorder, {ROOT: crawler.RefreshDoc(document_id="DOC-root", content_hash="different")}
+    )
+
+    await _run_refresh(recorder, pages, state)
+
+    # Each pre-stage emit is followed by stage_failed, so the worker can roll
+    # back the gate values it wrote for bytes that never reached S3.
+    outcomes = sorted((outcome, url) for outcome, url, _ in log.events)
+    assert outcomes == [
+        ("changed", ROOT),
+        ("created", "https://example.com/new"),
+        ("stage_failed", ROOT),
+        ("stage_failed", "https://example.com/new"),
+    ]
+    assert state.stage_failed == 2
+    assert recorder.failed_delta == 2
+    assert recorder.metadata_updates == []
+    # The existing page keeps serving its last-good version; the new page,
+    # which has nothing staged at all, is marked failed.
+    new_doc_id = recorder.created_docs[0][0]
+    assert (new_doc_id, "failed") in recorder.status_updates
+    assert ("DOC-root", "failed") not in recorder.status_updates
+    assert recorder.finalized_status == "complete"
