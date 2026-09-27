@@ -660,3 +660,78 @@ describe('StreamParserService - session_title events', () => {
     expect(applyServerTitle).not.toHaveBeenCalled();
   });
 });
+
+describe('StreamParserService - hasReceivedDone (Stop guard)', () => {
+  // The Stop path reads this to decide whether a click can still interrupt
+  // anything. It must mean exactly "the server sent this stream's `done`":
+  // per session, per stream, and not tripped by a client-side parse error.
+  let service: StreamParserService;
+
+  beforeEach(() => {
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({
+      providers: [
+        StreamParserService,
+        ChatStateService,
+        ErrorService,
+        QuotaWarningService,
+        { provide: SessionService, useValue: { applyServerTitle: vi.fn() } },
+      ],
+    });
+    service = TestBed.inject(StreamParserService);
+    service.reset('s1');
+  });
+
+  afterEach(() => {
+    TestBed.resetTestingModule();
+  });
+
+  it('is false mid-stream and true once done arrives', () => {
+    service.parseEventSourceMessage('s1', 'message_start', { role: 'assistant' });
+    expect(service.hasReceivedDone('s1')).toBe(false);
+
+    service.parseEventSourceMessage('s1', 'done', null);
+    expect(service.hasReceivedDone('s1')).toBe(true);
+  });
+
+  it('resets to false when the session starts a new stream', () => {
+    service.parseEventSourceMessage('s1', 'done', null);
+    service.reset('s1');
+    expect(service.hasReceivedDone('s1')).toBe(false);
+  });
+
+  it('is scoped to its session', () => {
+    service.reset('s2');
+    service.parseEventSourceMessage('s1', 'done', null);
+    expect(service.hasReceivedDone('s2')).toBe(false);
+    expect(service.hasReceivedDone('unknown')).toBe(false);
+  });
+
+  it('ignores a done from a superseded stream', () => {
+    const oldStreamId = service.getCurrentStreamId('s1');
+    service.reset('s1');
+    service.parseEventSourceMessage('s1', 'done', null, oldStreamId);
+    expect(service.hasReceivedDone('s1')).toBe(false);
+  });
+
+  it('is not set by a client parse error — the server turn may still be running', () => {
+    // A delta with no active message puts the parser in its Error state.
+    service.parseEventSourceMessage('s1', 'content_block_delta', {
+      contentBlockIndex: 0,
+      type: 'text',
+      text: 'x',
+    });
+    expect(service.errorFor('s1')()).not.toBeNull();
+    expect(service.hasReceivedDone('s1')).toBe(false);
+  });
+
+  it('still records done after a parse error, even though the state gate drops the event', () => {
+    service.parseEventSourceMessage('s1', 'content_block_delta', {
+      contentBlockIndex: 0,
+      type: 'text',
+      text: 'x',
+    });
+    service.parseEventSourceMessage('s1', 'done', null);
+    expect(service.hasReceivedDone('s1')).toBe(true);
+  });
+});

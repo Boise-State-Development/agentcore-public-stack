@@ -30,7 +30,7 @@ describe('ChatHttpService', () => {
         // attaching a Bearer manually.
         { provide: BffSessionService, useValue: { csrfHeaders: vi.fn().mockReturnValue({}), handleUnauthorized: vi.fn() } },
         { provide: SessionService, useValue: { currentSession: signal({ sessionId: 's1' }), updateSessionTitleInCache: vi.fn(), getSessionMetadata: vi.fn().mockResolvedValue({}), isNewSession: vi.fn().mockReturnValue(false) } },
-        { provide: StreamParserService, useValue: { getCurrentStreamId: vi.fn().mockReturnValue('stream-1'), parseEventSourceMessage: vi.fn() } },
+        { provide: StreamParserService, useValue: { getCurrentStreamId: vi.fn().mockReturnValue('stream-1'), parseEventSourceMessage: vi.fn(), hasReceivedDone: vi.fn().mockReturnValue(false) } },
         { provide: ChatStateService, useValue: { abortRequest: vi.fn(), setChatLoading: vi.fn(), setLastTurnInterrupted: vi.fn(), seedSessionAggregates: vi.fn(), createAbortController: vi.fn().mockReturnValue(new AbortController()), releaseAbortController: vi.fn(), streamingSessionIds: vi.fn().mockReturnValue([]) } },
         { provide: MessageMapService, useValue: { endStreaming: vi.fn() } },
         { provide: ErrorService, useValue: { handleHttpError: vi.fn(), addError: vi.fn() } },
@@ -210,6 +210,128 @@ describe('ChatHttpService', () => {
     const [, message] = errorSvc.addError.mock.calls[0];
     expect(message).toBe('This conversation is busy generating a response.');
     vi.restoreAllMocks();
+  });
+
+  describe('Stop racing the end of the turn', () => {
+    // `done` means the server's turn is over, but loading (and so the Stop
+    // button) only clears on the transport's close, which can trail it — on a
+    // first turn `session_title` may arrive after `done`. A Stop in that
+    // window must not stamp a false "interrupted" marker on a finished turn.
+
+    const encoder = new TextEncoder();
+    let controller: AbortController;
+    let parser: any;
+    let fetchSpy: any;
+
+    /**
+     * Serve `/chat/stream` from a body that emits `frames` and then stays
+     * open — the transport has not closed, so `onclose` has not run.
+     */
+    function openStream(frames: string): void {
+      fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+        if (!String(input).endsWith('/chat/stream')) {
+          return new Response(null, { status: 204 });
+        }
+        const body = new ReadableStream<Uint8Array>({
+          start(c) {
+            c.enqueue(encoder.encode(frames));
+          },
+        });
+        return new Response(body, {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream' },
+        });
+      });
+    }
+
+    function interruptPosts(): [string, RequestInit][] {
+      return fetchSpy.mock.calls.filter(([url]: [string]) => String(url).includes('/interrupt'));
+    }
+
+    beforeEach(() => {
+      controller = new AbortController();
+      chatStateService.createAbortController.mockReturnValue(controller);
+      chatStateService.abortRequest.mockImplementation(() => controller.abort());
+
+      // Stand-in for the parser's own bookkeeping: record `done` per session.
+      parser = TestBed.inject(StreamParserService);
+      const doneFor = new Set<string>();
+      parser.parseEventSourceMessage.mockImplementation((sessionId: string, event: string) => {
+        if (event === 'done') doneFor.add(sessionId);
+      });
+      parser.hasReceivedDone.mockImplementation((sessionId: string) => doneFor.has(sessionId));
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('a Stop after done but before close tears down the transport without marking the turn interrupted', async () => {
+      const messageMap = TestBed.inject(MessageMapService) as any;
+      openStream('event: message_start\ndata: {"role":"assistant"}\n\nevent: done\ndata: {}\n\n');
+
+      const streaming = service.sendChatRequest({ session_id: 's1', message: 'hi' });
+      await vi.waitFor(() => expect(parser.hasReceivedDone('s1')).toBe(true));
+      // Still open: the stream's own teardown has not run.
+      expect(chatStateService.releaseAbortController).not.toHaveBeenCalled();
+      expect(chatStateService.setChatLoading).not.toHaveBeenCalled();
+
+      service.cancelChatRequest('s1');
+      await streaming;
+
+      expect(interruptPosts()).toHaveLength(0);
+      expect(chatStateService.setLastTurnInterrupted).not.toHaveBeenCalled();
+      // The transport is still torn down and the UI leaves its streaming state.
+      expect(controller.signal.aborted).toBe(true);
+      expect(messageMap.endStreaming).toHaveBeenCalledWith('s1');
+      expect(chatStateService.setChatLoading).toHaveBeenCalledWith('s1', false);
+    });
+
+    it('a Stop mid-stream still marks the turn interrupted', async () => {
+      openStream('event: message_start\ndata: {"role":"assistant"}\n\n');
+
+      const streaming = service.sendChatRequest({ session_id: 's1', message: 'hi' });
+      await vi.waitFor(() =>
+        expect(parser.parseEventSourceMessage).toHaveBeenCalledWith(
+          's1',
+          'message_start',
+          expect.anything(),
+          'stream-1',
+        ),
+      );
+
+      service.cancelChatRequest('s1');
+      await streaming;
+
+      const posts = interruptPosts();
+      expect(posts).toHaveLength(1);
+      expect(JSON.parse(String(posts[0][1].body))).toEqual({ reason: 'user_stopped' });
+      expect(chatStateService.setLastTurnInterrupted).toHaveBeenCalledWith('s1', true, 'user_stopped');
+      expect(controller.signal.aborted).toBe(true);
+    });
+
+    it('runs the title fallback the skipped onclose would have, and no interrupted-turn cost refresh', async () => {
+      vi.useFakeTimers();
+      try {
+        vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 204 }));
+        parser.hasReceivedDone.mockReturnValue(true);
+        const sessionSvc = TestBed.inject(SessionService) as any;
+        sessionSvc.isNewSession.mockReturnValue(true);
+        sessionSvc.applyServerTitle = vi.fn();
+        sessionSvc.getSessionMetadata.mockResolvedValue({ title: 'Finished Turn Title' });
+
+        service.cancelChatRequest('s1');
+        await vi.runAllTimersAsync();
+
+        // Aborting skips onclose, whose job on a first turn is to pull a
+        // title that `session_title` may not have delivered yet.
+        expect(sessionSvc.applyServerTitle).toHaveBeenCalledWith('s1', 'Finished Turn Title');
+        expect(sessionSvc.getSessionMetadata).toHaveBeenCalledTimes(1);
+        expect(chatStateService.seedSessionAggregates).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   describe('page-departure attribution', () => {
