@@ -16,6 +16,11 @@ functions in sequence against one moto table:
 * **Deleting a ``failed`` document released bytes it never reserved.** Prod has
   unsettled ``failed`` rows from before their knowledge base migrated, with
   multi-megabyte ``sizeBytes``; each delete credited that much allowance back.
+* **An import was committed out of a reservation it never made.** A file-source
+  import writes its real ``sizeBytes`` before its ``PUT`` but reserves nothing, and
+  the consumer read that size as the reservation. In prod two Drive imports left a
+  migrated knowledge base's ``reservedBytes`` and ``totalBytes`` short by exactly
+  their 499,835 bytes, so they never counted against the cap.
 """
 
 from __future__ import annotations
@@ -149,6 +154,18 @@ def _upload_and_complete(table, document_id, declared, real):
     ic.set_document_terminal(ASSISTANT_ID, document_id, ic.STATUS_COMPLETE)
 
 
+def _import_and_complete(table, document_id, size, adapter="google-drive"):
+    """A file-source import (or crawl, or sync): nothing reserved at request time,
+    and ``sizeBytes`` already real by the time the consumer reads the row."""
+    _seed_doc(table, document_id, size=size, sourceAdapterKey=adapter)
+    _put_object(document_id, size)
+    ic._reconcile_bytes_on_complete(
+        ASSISTANT_ID, document_id, BUCKET, _key(document_id), _kb(table),
+        ic._declared_bytes(_doc(table, document_id)),
+    )
+    ic.set_document_terminal(ASSISTANT_ID, document_id, ic.STATUS_COMPLETE)
+
+
 def _delete(document_id):
     return asyncio.run(soft_delete_document(ASSISTANT_ID, document_id, OWNER))
 
@@ -242,6 +259,70 @@ class TestDeletingAFailedDocumentReleasesNothing:
         _delete("DOC-legacyfail")
 
         assert _counters(table) == (0, 5000, 5000)
+
+
+class TestImportsReserveAtIngestion:
+    def test_an_import_is_counted_against_the_cap(self, table):
+        """MUTATION GUARD: read ``sizeBytes`` as the reservation again and this ends
+        at (500, -500, 0) — stored, but never counted in ``totalBytes``."""
+        _seed_kb(table)
+
+        _import_and_complete(table, "DOC-imp", 500)
+
+        assert _counters(table) == (500, 0, 500)
+        assert _doc(table, "DOC-imp")["committedBytes"] == 500
+
+    def test_the_prod_shape_does_not_recur(self, table):
+        """A migrated corpus still held as a reservation, then two imports. Before
+        the fix this ended at (499835, 1664866, 2164701)."""
+        corpus = 2_164_701
+        _seed_kb(table, storedBytes=0, reservedBytes=corpus, totalBytes=corpus)
+        _seed_doc(table, "DOC-migrated", status="complete", size=corpus)
+
+        _import_and_complete(table, "DOC-imp1", 140_270)
+        _import_and_complete(table, "DOC-imp2", 359_565)
+
+        assert _counters(table) == (499_835, corpus, corpus + 499_835)
+
+    def test_a_crawled_page_reserves_whether_or_not_its_size_landed_first(self, table):
+        """The crawler writes ``sizeBytes`` after its ``PUT``, so the consumer can
+        read either 0 or the real size. Both must end the same way."""
+        _seed_kb(table)
+
+        _import_and_complete(table, "DOC-page", 300, adapter="http")
+
+        assert _counters(table) == (300, 0, 300)
+
+    def test_an_import_over_the_cap_fails_instead_of_slipping_past_it(self, table):
+        cap = byte_cap.effective_cap()
+        _seed_kb(table, storedBytes=cap - 100, reservedBytes=0, totalBytes=cap - 100)
+        _seed_doc(table, "DOC-big", size=500, sourceAdapterKey="google-drive")
+        _put_object("DOC-big", 500)
+
+        with pytest.raises(byte_cap.ByteCapExceeded):
+            ic._reconcile_bytes_on_complete(
+                ASSISTANT_ID, "DOC-big", BUCKET, _key("DOC-big"), _kb(table),
+                ic._declared_bytes(_doc(table, "DOC-big")),
+            )
+
+        assert _counters(table) == (cap - 100, 0, cap - 100)
+
+    def test_an_upload_still_reserves_its_declared_size(self, table):
+        assert ic._declared_bytes({"sizeBytes": Decimal(700)}) == 700
+        assert ic._declared_bytes({"sizeBytes": Decimal(700), "sourceAdapterKey": "google-drive"}) == 0
+        assert ic._declared_bytes(None) == 0
+
+    def test_deleting_an_import_in_flight_releases_nothing(self, table, owned):
+        """MUTATION GUARD: without the provenance check the delete releases 400
+        bytes out of the other document's reservation: (0, 300, 300)."""
+        _seed_kb(table)
+        _seed_doc(table, "DOC-upload", size=700)
+        byte_cap.reserve(ASSISTANT_ID, ASSISTANT_ID, 700, CAP)
+        _seed_doc(table, "DOC-imp", size=400, sourceAdapterKey="google-drive")
+
+        _delete("DOC-imp")
+
+        assert _counters(table) == (0, 700, 700)
 
 
 # ── Guards ───────────────────────────────────────────────────────────────────

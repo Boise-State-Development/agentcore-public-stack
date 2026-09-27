@@ -581,18 +581,18 @@ def _deleted_reason(doc_row: Optional[Dict[str, Any]]) -> Optional[str]:
 
 
 def _declared_bytes(doc_row: Optional[Dict[str, Any]]) -> int:
-    """The size the client declared at request time, or 0 if the row has none.
+    """The bytes this document reserved at request time, or 0 if it reserved none.
 
-    0 is the correct default for a document that reserved nothing at request time
-    (an imported file, whose row is created with ``sizeBytes=0`` and whose true
-    size is only known here) — the reconcile then reserves the whole real size.
+    0 for anything but an interactive upload (``byte_cap.reserved_at_request``):
+    an imported, crawled or synced document carries a real ``sizeBytes`` by the
+    time it lands, but reserved nothing, so the reconcile reserves the whole real
+    size and a failure has nothing to release.
     """
     if not doc_row:
         return 0
-    try:
-        return int(doc_row.get("sizeBytes") or 0)
-    except (TypeError, ValueError):
-        return 0
+    from apis.shared.kb_backend import byte_cap
+
+    return byte_cap.reserved_at_request(doc_row.get("sizeBytes"), doc_row.get("sourceAdapterKey"))
 
 
 def _delete_s3_object(bucket: str, key: str) -> None:
@@ -772,8 +772,8 @@ def handle_object(bucket: str, key: str) -> Dict[str, Any]:
     from apis.shared.kb_backend.managed_backend import ManagedKbBackend
     from apis.shared.kb_backend.protocol import DocumentSource
 
-    # The DOC# row carries the size declared and reserved at request time
-    # (sizeBytes) and the byteCapSettled marker. Read it once. If a PRIOR delivery
+    # The DOC# row carries what was reserved at request time (`_declared_bytes`)
+    # and the byteCapSettled marker. Read it once. If a PRIOR delivery
     # already drove this document terminal AND settled its bytes, this is a
     # redelivery and re-running the byte accounting would double-count — a second
     # commit drives reservedBytes negative, a second release over-credits the cap.

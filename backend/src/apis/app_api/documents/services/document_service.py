@@ -98,8 +98,10 @@ async def release_reservation_if_managed(document: Document) -> None:
     released by whichever terminal path the document reaches first — a
     client-reported upload failure, this stale sweep, or the ingestion consumer's
     own failure path — and the guard stops two of them double-crediting the
-    allowance. A no-op for legacy knowledge bases (uncapped) and for zero-size
-    rows (nothing was reserved).
+    allowance. A no-op for legacy knowledge bases (uncapped) and for rows that
+    reserved nothing: zero-size rows, and imported, crawled or synced documents,
+    whose ``sizeBytes`` is real but was never reserved
+    (``byte_cap.reserved_at_request``).
 
     ``app_kb_id == assistant_id`` this phase. boto3 is called synchronously here,
     matching the rest of this module.
@@ -107,7 +109,7 @@ async def release_reservation_if_managed(document: Document) -> None:
     from apis.shared.kb_backend import byte_cap
     from apis.shared.kb_backend.records import ENGINE_MANAGED, get_kb_record, resolve_engine
 
-    size_bytes = int(document.size_bytes or 0)
+    size_bytes = byte_cap.reserved_at_request(document.size_bytes, document.source_adapter_key)
     if size_bytes <= 0:
         return
     assistant_id = document.assistant_id
