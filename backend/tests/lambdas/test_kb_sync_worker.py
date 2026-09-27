@@ -166,6 +166,7 @@ class TestChangeDetection:
         assert staged == []
         doc = assistants_table.get_item(Key={"PK": f"AST#{assistant_id}", "SK": "DOC#doc-1"})["Item"]
         assert doc["sourceEtag"] == "42"  # gate 1 passes next run
+        assert "stagedContentHash" not in doc  # nothing staged, nothing to re-ingest
 
     async def test_changed_bytes_staged_with_stash(self, assistants_table, staged, token_ok, provider_ok, monkeypatch):
         adapter = FakeDriveAdapter(metadata={"version": "42", "trashed": False}, content=b"new bytes")
@@ -183,6 +184,8 @@ class TestChangeDetection:
         assert item["sourceEtag"] == "42"
         assert item["contentHash"] == worker._sha256(b"new bytes")
         assert item["previousChunkCount"] == 7
+        # Marks the version a managed KB's consumer still has to re-ingest.
+        assert item["stagedContentHash"] == worker._sha256(b"new bytes")
         assert "lastSyncedAt" in item
         updated_policy = await get_sync_policy(assistant_id, policy.policy_id)
         assert updated_policy.last_result == "changed"
@@ -465,6 +468,8 @@ class TestWebCrawlSync:
         assert item["previousChunkCount"] == 4
         assert item["sourceEtag"] == '"e2"'
         assert item["contentHash"] == "hash2"
+        # Marks the version a managed KB's consumer still has to re-ingest.
+        assert item["stagedContentHash"] == "hash2"
         # crawler invoked in refresh mode without TTL finalization
         assert fake_crawl["captured"]["finalize_with_ttl"] is False
         assert fake_crawl["captured"]["settings"].max_pages == 10

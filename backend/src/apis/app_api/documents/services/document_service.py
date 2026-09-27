@@ -153,10 +153,25 @@ async def settle_bytes_on_delete(document: Document, previous_status: Optional[s
 
     Refund runs first. A row can hold both markers only because a consumer settled
     it, and then it has nothing left to release.
+
+    Independently, a document deleted while a KB sync's changed source was being
+    re-ingested holds the growth reserved for that version
+    (``byte_cap.claim_reingest``). The consumer's completion is refused on a
+    ``deleting`` row, so this is the only path left to return it.
     """
     from apis.shared.kb_backend import byte_cap
 
     assistant_id = document.assistant_id
+    try:
+        reingest_reserved = byte_cap.release_reingest_once(assistant_id, document.document_id)
+        if reingest_reserved:
+            byte_cap.release(assistant_id, assistant_id, reingest_reserved)
+    except Exception as e:  # noqa: BLE001 - a bookkeeping failure must not break the delete
+        logger.error(
+            f"Failed to release re-ingest reservation for document {document.document_id}: {e}",
+            exc_info=True,
+        )
+
     try:
         refunded = byte_cap.refund_once(assistant_id, document.document_id)
         if refunded:

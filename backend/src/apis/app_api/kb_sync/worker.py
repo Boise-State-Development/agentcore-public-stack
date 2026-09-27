@@ -208,7 +208,9 @@ async def _sync_drive_file(policy: SyncPolicy) -> Dict[str, Any]:
             return await _finish(policy, "unchanged")
 
         # Changed: stash the old chunk count for the ingestion tail-delete
-        # (shrinkage cleanup) BEFORE staging, then overwrite the S3 object.
+        # (shrinkage cleanup) and mark the version being staged — what a managed
+        # KB's consumer uses to tell this overwrite from a redelivery — BEFORE
+        # staging, then overwrite the S3 object.
         previous_chunk_count = int(document.get("chunkCount") or 0)
         records.update_document_sync_fields(
             assistant_id,
@@ -217,6 +219,7 @@ async def _sync_drive_file(policy: SyncPolicy) -> Dict[str, Any]:
             content_hash=content_hash,
             previous_chunk_count=previous_chunk_count,
             last_synced_at=_now_timestamp(),
+            staged_content_hash=content_hash,
         )
         _stage_to_s3(document["s3Key"], downloaded.content, downloaded.content_type)
         logger.info(
@@ -299,7 +302,8 @@ async def _sync_web_crawl(policy: SyncPolicy) -> Dict[str, Any]:
     async def on_result(url: str, document_id: str, outcome: str, etag, content_hash) -> None:
         if outcome == "changed":
             # BEFORE the S3 overwrite: stash the previous chunk count for
-            # the ingestion tail-delete, alongside the new gate values.
+            # the ingestion tail-delete and the staged version for a managed
+            # KB's re-ingest, alongside the new gate values.
             records.update_document_sync_fields(
                 assistant_id,
                 document_id,
@@ -307,6 +311,7 @@ async def _sync_web_crawl(policy: SyncPolicy) -> Dict[str, Any]:
                 content_hash=content_hash,
                 previous_chunk_count=int(web_docs[url].get("chunkCount") or 0),
                 last_synced_at=now,
+                staged_content_hash=content_hash,
             )
         elif outcome == "unchanged":
             records.update_document_sync_fields(
