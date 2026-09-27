@@ -84,6 +84,12 @@ _MAX_OUTPUT_TOKENS_BY_MODEL: Tuple[Tuple[str, int], ...] = (
 # cap (half the budget) is 4k, so this is what binds; it is the figure the
 # harness screen ran with.
 _EXTRACTION_MAX_OUTPUT_TOKENS = 3_000
+# A generation is used only on a positive completion signal. ``max_tokens``
+# is the one exception, because it is salvaged (see the module docstring).
+# Anything else (a guardrail stop, a content-filter refusal, an unknown
+# reason) could be the refusal text itself, and a summary persists into the
+# cacheable history until the next cut, so it falls back instead.
+_ACCEPTED_STOP_REASONS = frozenset({"end_turn", "max_tokens"})
 
 _COMPRESSION_SYSTEM_PROMPT = """You maintain the running summary of a long conversation between a user and an AI assistant. You are given the existing summary notes (oldest first). Rewrite them into ONE compact summary the assistant can continue the conversation from.
 
@@ -240,8 +246,14 @@ async def _compress(
                 "maxTokens": min(_max_output_tokens(model_id), max(256, int(budget_tokens))),
             },
         )
+        stop_reason = response.get("stopReason")
+        if stop_reason not in _ACCEPTED_STOP_REASONS:
+            logger.info(
+                "compaction_summary_model_refused: stopReason=%s; falling back to truncation", stop_reason,
+            )
+            return None, False
         out = response["output"]["message"]["content"][0]["text"].strip()
-        if response.get("stopReason") == "max_tokens":
+        if stop_reason == "max_tokens":
             salvaged = _salvage(out, budget_tokens)
             logger.info(
                 "compaction_summary_model_truncated: generation hit the token ceiling; kept %d of %d chars",
@@ -305,8 +317,14 @@ async def extract_with_model(
             messages=[{"role": "user", "content": [{"text": "Summary notes, oldest first:\n\n" + text}]}],
             inferenceConfig={"temperature": 0.0, "maxTokens": max(256, int(max_tokens))},
         )
+        stop_reason = response.get("stopReason")
+        if stop_reason not in _ACCEPTED_STOP_REASONS:
+            logger.info(
+                "compaction_summary_extract_refused: stopReason=%s; falling back to plain compression", stop_reason,
+            )
+            return None
         out = response["output"]["message"]["content"][0]["text"].strip()
-        if response.get("stopReason") == "max_tokens":
+        if stop_reason == "max_tokens":
             logger.info("compaction_summary_extract_truncated: keeping the complete lines")
             cut = out.rfind("\n")
             out = out[:cut].rstrip() if cut > 0 else ""

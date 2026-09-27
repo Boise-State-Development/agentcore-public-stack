@@ -277,8 +277,14 @@ async def generate_abstract(outline: DocumentDigest, sample: str, model_id: str 
             # silently drop every abstract.
             inferenceConfig={"temperature": 0.2, "maxTokens": _ABSTRACT_MAX_OUTPUT_TOKENS},
         )
-        if response.get("stopReason") == "max_tokens":
+        stop_reason = response.get("stopReason")
+        if stop_reason == "max_tokens":
             logger.debug("Document abstract hit the token ceiling; discarding")
+            return None
+        # A guardrail or content-filter stop may carry the refusal as its
+        # text; only a finished generation is an abstract.
+        if stop_reason != "end_turn":
+            logger.debug("Document abstract stopped with stopReason=%s; discarding", stop_reason)
             return None
         text = response["output"]["message"]["content"][0]["text"].strip()
         return re.sub(r"\s+", " ", text) or None

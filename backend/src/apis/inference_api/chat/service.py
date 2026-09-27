@@ -664,6 +664,14 @@ async def generate_conversation_title(
             inferenceConfig=request_body["inferenceConfig"],
         )
 
+        # A guardrail or content-filter stop may carry the refusal as its
+        # text, which must not become the sidebar title. `max_tokens` is
+        # still accepted: the 50-char clip below already handles an overrun.
+        stop_reason = response.get("stopReason")
+        if stop_reason not in ("end_turn", "max_tokens"):
+            logger.warning("Title generation stopped with stopReason=%s; keeping the placeholder", stop_reason)
+            return "New Conversation"
+
         # Extract generated title from response
         title = response["output"]["message"]["content"][0]["text"].strip()
 
