@@ -350,9 +350,25 @@ export class ChatHttpService {
     // that will never be loaded again. Abort the transport and tear down
     // locally; that is the whole of "stop" for a session nobody persists.
     if (isPreviewSession(sessionId)) {
-      this.chatStateService.abortRequest(sessionId);
-      this.messageMapService.endStreaming(sessionId);
-      this.chatStateService.setChatLoading(sessionId, false);
+      this.stopLocally(sessionId);
+      return;
+    }
+
+    // The server already sent `done`: the turn finished, and the socket is
+    // only open because the transport's close hasn't landed yet (widest on a
+    // first turn, where `session_title` can trail `done`). The Stop button is
+    // still showing because loading clears on close, so a click here is
+    // real — but there is nothing left to interrupt. Signalling
+    // `user_stopped` would stamp a false "interrupted" marker on a complete
+    // answer (and a false interruption note on the next prompt), so just
+    // close the transport. Aborting skips `onclose`, so run its title
+    // fallback here; the aggregates re-fetch below is unneeded, because the
+    // turn's `metadata` event arrived before `done`.
+    if (this.streamParserService.hasReceivedDone(sessionId)) {
+      this.stopLocally(sessionId);
+      if (this.sessionService.isNewSession(sessionId)) {
+        void this.refreshTitleFromServer(sessionId);
+      }
       return;
     }
 
@@ -370,9 +386,7 @@ export class ChatHttpService {
     // refresh-survival source of truth.
     this.chatStateService.setLastTurnInterrupted(sessionId, true, 'user_stopped');
 
-    this.chatStateService.abortRequest(sessionId);
-    this.messageMapService.endStreaming(sessionId);
-    this.chatStateService.setChatLoading(sessionId, false);
+    this.stopLocally(sessionId);
 
     // Aborting the fetch cut the socket before the stream's terminal
     // `metadata` SSE (usage / cost / context) could arrive, so the session
@@ -383,6 +397,17 @@ export class ChatHttpService {
     // per-message token/cost badges hydrate from the same persisted row on
     // the next message reload.)
     setTimeout(() => void this.refreshAggregatesAfterStop(sessionId), 900);
+  }
+
+  /**
+   * Abort a session's transport and tear its streaming state down here.
+   * fetch-event-source calls neither `onclose` nor `onerror` on abort, so
+   * the stream's own `finalizeStream` never runs for a stopped stream.
+   */
+  private stopLocally(sessionId: string): void {
+    this.chatStateService.abortRequest(sessionId);
+    this.messageMapService.endStreaming(sessionId);
+    this.chatStateService.setChatLoading(sessionId, false);
   }
 
   /**
