@@ -34,9 +34,12 @@ The wrapper is also where ``cache_write_tokens`` re-enters the pipeline.
 Strands never reads it off the Responses usage object, so
 ``cacheWriteInputTokens`` is structurally 0 for GPT-5.6 — which pins
 ``wastedUsd`` at $0 and makes the 1.25x write premium invisible, the same
-blind spot that let the compaction spiral run unnoticed. An upstream patch is
-in flight; until it lands (and on any older pin) this mapping is the only
-source of the field.
+blind spot that let the compaction spiral run unnoticed. For Responses this
+mapping is still the only source of the field. Chat Completions gained it
+upstream in strands-agents 1.57 (#4361): ``OpenAIModel`` now reports
+``cacheWriteInputTokens`` itself, beside an ``inputTokens`` that is still
+inclusive, and :func:`normalize_usage` subtracts it once like any other
+write bucket.
 
 ⚠️ :func:`normalize_usage` is **not idempotent** for the OpenAI family — it
 subtracts. Apply it exactly once per usage payload, at the model seam. Do not

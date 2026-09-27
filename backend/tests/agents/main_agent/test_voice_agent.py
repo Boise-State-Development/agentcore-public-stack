@@ -78,19 +78,57 @@ class TestBidiProviderContract:
             f"stale 1.51 provider name still imported: {sorted(imported)}"
         )
 
-    def test_provider_takes_flattened_audio_and_region_kwargs(self):
-        """1.55.0 replaced provider_config/client_config with audio/region."""
+    def test_provider_takes_audio_voice_and_region_kwargs(self):
+        """1.57 split `voice` out of the audio config; region stays a kwarg."""
         source = self._provider_source()
-        assert "audio: AudioConfig | None = None" in source
+        assert "audio: BedrockNovaSonicAudioConfig | None = None" in source
+        assert "voice: str =" in source
         assert "region: str | None = None" in source
         assert "provider_config" not in source
 
-    def test_audio_config_still_carries_the_five_keys_we_send(self):
-        from strands.experimental.bidi.types.model import AudioConfig
-
-        assert {"voice", "input_rate", "output_rate", "channels", "format"} <= set(
-            AudioConfig.__annotations__
+    def test_audio_config_carries_the_per_direction_rates_we_send(self):
+        """VoiceAgent sends {"input": {"sample_rate"}, "output": {"sample_rate"}}."""
+        from strands.experimental.bidi.models.configs import (
+            BedrockNovaSonicAudioConfig,
+            BedrockNovaSonicAudioStreamConfig,
         )
+
+        assert {"input", "output"} == set(BedrockNovaSonicAudioConfig.__annotations__)
+        assert set(BedrockNovaSonicAudioStreamConfig.__annotations__) == {"sample_rate"}
+        assert Defaults.NOVA_SONIC_INPUT_RATE in (8000, 16000, 24000)
+        assert Defaults.NOVA_SONIC_OUTPUT_RATE in (8000, 16000, 24000)
+
+    def test_agent_send_accepts_the_input_shapes_we_use(self):
+        """send_audio / send_text build `audio_delta` and `text` dicts."""
+        import importlib.util
+        import pathlib
+
+        spec = importlib.util.find_spec("strands.experimental.bidi")
+        source = (pathlib.Path(spec.origin).parent / "agent" / "agent.py").read_text()
+        assert '"audio_delta" in content_data' in source
+        assert '"text" in content_data' in source
+
+    def test_output_event_names_the_wire_adapter_translates(self):
+        """If upstream renames these again, VoiceWireAdapter must follow."""
+        import importlib.util
+        import pathlib
+
+        spec = importlib.util.find_spec("strands.experimental.bidi")
+        source = (pathlib.Path(spec.origin).parent / "types" / "events.py").read_text()
+        for name in (
+            "bidi_response_start",
+            "bidi_response_stop",
+            "bidi_transcript_start",
+            "bidi_transcript_delta",
+            "bidi_transcript_stop",
+            "bidi_audio_start",
+            "bidi_audio_delta",
+            "bidi_audio_stop",
+            "bidi_barge_in",
+            "bidi_usage",
+            "bidi_connection_stop",
+        ):
+            assert f'"type": "{name}"' in source, name
 
     def test_nova_sonic_usage_is_still_cumulative(self):
         """VoiceAgent de-cumulates bidi_usage; a switch to deltas would double-count."""
@@ -320,9 +358,10 @@ class TestUsageModalitySplit:
 
     @pytest.mark.asyncio
     async def test_receive_events_accumulates_the_split_and_prices_it(self, monkeypatch):
-        from agents.main_agent.voice_agent import VoiceAgent
+        from agents.main_agent.voice_agent import VoiceAgent, VoiceWireAdapter
 
         agent = VoiceAgent.__new__(VoiceAgent)
+        agent._wire = VoiceWireAdapter()
         agent._accumulated_usage = {"inputTokens": 0, "outputTokens": 0, "totalTokens": 0}
         agent._per_turn_usage = []
         agent._turn_count = 0
@@ -391,14 +430,31 @@ class TestProviderSubclass:
         # The hook we override must still be the provider's name for it.
         assert callable(getattr(va.BedrockNovaSonicModel, "_convert_nova_event", None))
 
+    def test_override_signature_matches_the_providers(self):
+        """The provider calls the hook positionally; a stale arity raises on every event.
+
+        1.57 added ``response_state``. A name-only check passed straight through
+        that change, so pin the parameter list itself.
+        """
+        import inspect
+
+        import agents.main_agent.voice_agent as va
+
+        if not va.BIDI_AVAILABLE:
+            pytest.skip("strands-agents[bidi] not installed")
+        ours = list(inspect.signature(va.NovaSonicModelWithUsageDetails._convert_nova_event).parameters)
+        theirs = list(inspect.signature(va.BedrockNovaSonicModel._convert_nova_event).parameters)
+        assert ours == theirs
+
     def test_converter_keeps_the_split_on_the_usage_event(self):
         import agents.main_agent.voice_agent as va
 
         if not va.BIDI_AVAILABLE:
             pytest.skip("strands-agents[bidi] not installed")
         model = va.NovaSonicModelWithUsageDetails.__new__(va.NovaSonicModelWithUsageDetails)
-        event = model._convert_nova_event({"usageEvent": TestUsageModalitySplit.NOVA_USAGE})
-        d = event.as_dict()
+        events = model._convert_nova_event({"usageEvent": TestUsageModalitySplit.NOVA_USAGE}, MagicMock())
+        assert len(events) == 1
+        d = events[0].as_dict()
         assert d["inputTokens"] == 1_300 and d["outputTokens"] == 2_400
         assert [r["modality"] for r in d["modality_details"]] == ["audio", "text"]
         assert d["modality_details"][0]["input_tokens"] == 1_000
@@ -409,6 +465,192 @@ class TestProviderSubclass:
         if not va.BIDI_AVAILABLE:
             pytest.skip("strands-agents[bidi] not installed")
         model = va.NovaSonicModelWithUsageDetails.__new__(va.NovaSonicModelWithUsageDetails)
-        with patch.object(va.BedrockNovaSonicModel, "_convert_nova_event", return_value="delegated") as sup:
-            assert model._convert_nova_event({"completionStart": {"completionId": "c1"}}) == "delegated"
-            sup.assert_called_once()
+        state = MagicMock()
+        with patch.object(va.BedrockNovaSonicModel, "_convert_nova_event", return_value=["delegated"]) as sup:
+            assert model._convert_nova_event({"completionStart": {"completionId": "c1"}}, state) == ["delegated"]
+            sup.assert_called_once_with({"completionStart": {"completionId": "c1"}}, state)
+
+    @pytest.mark.asyncio
+    async def test_drain_keeps_the_split_too(self):
+        """Usage that only arrives after stop() must price on the same buckets as the live stream."""
+        from agents.main_agent.voice_agent import VoiceAgent, VoiceWireAdapter
+
+        class _Ev:
+            def as_dict(self):
+                return {
+                    "type": "bidi_usage",
+                    "inputTokens": 1_300,
+                    "outputTokens": 2_400,
+                    "totalTokens": 3_700,
+                    "modality_details": [
+                        {"modality": "audio", "input_tokens": 1_000, "output_tokens": 2_000},
+                        {"modality": "text", "input_tokens": 300, "output_tokens": 400},
+                    ],
+                }
+
+        class _Bidi:
+            async def receive(self):
+                yield _Ev()
+
+        agent = VoiceAgent.__new__(VoiceAgent)
+        agent._bidi_agent = _Bidi()
+        agent._wire = VoiceWireAdapter()
+        agent._accumulated_usage = {"inputTokens": 0, "outputTokens": 0, "totalTokens": 0}
+        agent._per_turn_usage = []
+        agent._turn_count = 0
+
+        await agent.drain_remaining_events(timeout=1.0)
+
+        assert agent.accumulated_usage["speechInputTokens"] == 1_000
+        assert agent.accumulated_usage["textOutputTokens"] == 400
+        assert agent.accumulated_usage["totalTokens"] == 3_700
+
+
+class TestVoiceWireAdapter:
+    """Strands 1.57 Bidi events -> the 1.55 wire contract the SPA speaks."""
+
+    def _turn(self, *events):
+        from agents.main_agent.voice_agent import VoiceWireAdapter
+
+        adapter = VoiceWireAdapter()
+        out = []
+        for event in events:
+            out.extend(adapter.translate(event))
+        return out
+
+    def test_user_speech_is_flushed_before_the_assistant_starts(self):
+        out = self._turn(
+            {"type": "bidi_response_start", "response_id": "r1"},
+            {"type": "bidi_transcript_start", "role": "user", "content_id": "u"},
+            {"type": "bidi_transcript_delta", "delta": "hello", "role": "user", "content_id": "u"},
+            {"type": "bidi_transcript_stop", "transcript": "hello", "role": "user", "content_id": "u"},
+            {"type": "bidi_transcript_start", "role": "assistant", "content_id": "a"},
+            {"type": "bidi_transcript_delta", "delta": "hi there", "role": "assistant", "content_id": "a"},
+            {"type": "bidi_audio_start"},
+            {"type": "bidi_audio_delta", "audio": "QUJD", "format": "pcm", "sample_rate": 16000, "channels": 1},
+            {"type": "bidi_audio_stop"},
+            {"type": "bidi_transcript_stop", "transcript": "hi there", "role": "assistant", "content_id": "a"},
+            {"type": "bidi_response_stop", "response_id": "r1"},
+        )
+        assert [e["type"] for e in out] == [
+            "bidi_transcript_stream",
+            "bidi_response_start",
+            "bidi_transcript_stream",
+            "bidi_audio_stream",
+            "bidi_response_complete",
+        ]
+        assert out[0]["role"] == "user" and out[0]["delta"] == {"text": "hello"}
+        assert out[1]["response_id"] == "r1"
+        assert out[2]["role"] == "assistant" and out[2]["is_final"] is True
+        assert out[3] == {
+            "type": "bidi_audio_stream",
+            "audio": "QUJD",
+            "format": "pcm",
+            "sample_rate": 16000,
+            "channels": 1,
+        }
+        assert out[4] == {"type": "bidi_response_complete", "response_id": "r1", "stop_reason": "complete"}
+
+    def test_exactly_one_start_per_response(self):
+        out = self._turn(
+            {"type": "bidi_response_start", "response_id": "r1"},
+            {"type": "bidi_transcript_start", "role": "assistant", "content_id": "a"},
+            {"type": "bidi_audio_start"},
+            {"type": "bidi_response_stop", "response_id": "r1"},
+            {"type": "bidi_response_start", "response_id": "r2"},
+            {"type": "bidi_audio_start"},
+            {"type": "bidi_response_stop", "response_id": "r2"},
+        )
+        assert [e["type"] for e in out].count("bidi_response_start") == 2
+
+    def test_barge_in_maps_to_interruption_and_an_interrupted_complete(self):
+        out = self._turn(
+            {"type": "bidi_response_start", "response_id": "r1"},
+            {"type": "bidi_audio_start"},
+            {"type": "bidi_barge_in", "reason": "user_speech"},
+            {"type": "bidi_response_stop", "response_id": "r1"},
+        )
+        assert out[1] == {"type": "bidi_interruption", "reason": "user_speech"}
+        assert out[-1]["stop_reason"] == "interrupted"
+
+    def test_a_response_with_no_assistant_output_still_opens_before_it_closes(self):
+        out = self._turn(
+            {"type": "bidi_response_start", "response_id": "r1"},
+            {"type": "bidi_response_stop", "response_id": "r1"},
+        )
+        assert [e["type"] for e in out] == ["bidi_response_start", "bidi_response_complete"]
+
+    def test_connection_stop_maps_to_close_and_the_rest_pass_through(self):
+        out = self._turn(
+            {"type": "bidi_connection_start", "connection_id": "c", "model": "m"},
+            {"type": "bidi_usage", "inputTokens": 1, "outputTokens": 2, "totalTokens": 3},
+            {"type": "bidi_connection_stop", "connection_id": "c", "reason": "complete"},
+        )
+        assert out[0]["type"] == "bidi_connection_start"
+        assert out[1]["type"] == "bidi_usage" and out[1]["totalTokens"] == 3
+        assert out[2] == {"type": "bidi_connection_close", "connection_id": "c", "reason": "complete"}
+
+
+class TestVoiceAgentSend:
+    """send_audio / send_text speak the 1.57 BidiAgent.send() input shapes."""
+
+    def _agent(self):
+        from unittest.mock import AsyncMock
+
+        from agents.main_agent.voice_agent import VoiceAgent
+
+        agent = VoiceAgent.__new__(VoiceAgent)
+        agent._bidi_agent = MagicMock()
+        agent._bidi_agent.send = AsyncMock()
+        return agent
+
+    @pytest.mark.asyncio
+    async def test_send_audio_decodes_base64_into_an_audio_delta(self):
+        import base64
+
+        agent = self._agent()
+        await agent.send_audio(base64.b64encode(b"\x00\x01").decode(), sample_rate=16000)
+        agent._bidi_agent.send.assert_awaited_once_with(
+            {"audio_delta": {"format": "pcm", "source": {"bytes": b"\x00\x01"}}}
+        )
+
+    @pytest.mark.asyncio
+    async def test_send_text_sends_a_text_block(self):
+        agent = self._agent()
+        await agent.send_text("hello")
+        agent._bidi_agent.send.assert_awaited_once_with({"text": "hello"})
+
+    @pytest.mark.asyncio
+    async def test_receive_events_counts_turns_on_the_translated_stream(self):
+        from agents.main_agent.voice_agent import VoiceWireAdapter
+
+        class _Evt(dict):
+            def as_dict(self):
+                return dict(self)
+
+        raw = [
+            _Evt(type="bidi_response_start", response_id="r1"),
+            _Evt(type="bidi_audio_start"),
+            _Evt(type="bidi_usage", inputTokens=10, outputTokens=5, totalTokens=15),
+            _Evt(type="bidi_response_stop", response_id="r1"),
+        ]
+
+        async def _receive():
+            for event in raw:
+                yield event
+
+        agent = self._agent()
+        agent._bidi_agent.receive = _receive
+        agent._wire = VoiceWireAdapter()
+        agent._accumulated_usage = {"inputTokens": 0, "outputTokens": 0, "totalTokens": 0}
+        agent._per_turn_usage = []
+        agent._turn_count = 0
+        agent._response_start_count = 0
+
+        with patch("apis.shared.costs.pricing_config.get_model_pricing", side_effect=RuntimeError("no pricing")):
+            out = [e async for e in agent.receive_events()]
+
+        assert [e["type"] for e in out] == ["bidi_response_start", "bidi_usage", "bidi_response_complete"]
+        assert agent.response_start_count == 1
+        assert agent.turn_count == 1
+        assert agent.per_turn_usage == [{"inputTokens": 10, "outputTokens": 5, "totalTokens": 15}]
