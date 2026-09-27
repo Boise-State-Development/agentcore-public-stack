@@ -11,6 +11,15 @@ import { SessionService } from '../session/session.service';
 import { ErrorService } from '../../../services/error/error.service';
 import { isPreviewSession } from '../../../shared/constants/session.constants';
 
+/**
+ * Title fallback polling. A stream that outruns title generation closes a few
+ * hundred ms before Nova Micro answers, so one early read usually sees the
+ * placeholder; short, bounded retries pick the title up as soon as it lands
+ * instead of after a single fixed wait. 5 x 400ms keeps the old ~1.5s window.
+ */
+const TITLE_REFRESH_RETRY_MS = 400;
+const TITLE_REFRESH_MAX_RETRIES = 5;
+
 class RetriableError extends Error {
   constructor(message?: string) {
     super(message);
@@ -509,18 +518,22 @@ export class ChatHttpService {
    * and is normally PUSHED mid-stream as a `session_title` SSE event; this
    * fetch only runs when the stream closed while the session still looked
    * new (see onclose). On a "New Conversation" placeholder — generation
-   * still in flight or failed — we retry once after a short delay before
-   * giving up.
+   * still in flight or failed — we poll a few more times at a short interval
+   * before giving up, stopping early if the title arrived another way.
    */
-  private async refreshTitleFromServer(sessionId: string, retried = false): Promise<void> {
+  private async refreshTitleFromServer(sessionId: string, attempt = 0): Promise<void> {
     try {
       const metadata = await this.sessionService.getSessionMetadata(sessionId);
       if (metadata.title && metadata.title !== 'New Conversation') {
         this.sessionService.applyServerTitle(sessionId, metadata.title);
         return;
       }
-      if (!retried) {
-        setTimeout(() => this.refreshTitleFromServer(sessionId, true), 1500);
+      if (attempt < TITLE_REFRESH_MAX_RETRIES) {
+        setTimeout(() => {
+          if (this.sessionService.isNewSession(sessionId)) {
+            void this.refreshTitleFromServer(sessionId, attempt + 1);
+          }
+        }, TITLE_REFRESH_RETRY_MS);
       }
     } catch (error) {
       console.error('Failed to refresh session title:', error);

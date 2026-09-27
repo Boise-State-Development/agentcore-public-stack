@@ -334,6 +334,62 @@ describe('ChatHttpService', () => {
     });
   });
 
+  describe('title fallback polling', () => {
+    // A stream that outran title generation closes before Nova Micro answers,
+    // so the first read sees the placeholder. Short retries pick the title up
+    // as soon as it is written instead of after one fixed 1.5s wait.
+    let sessionSvc: any;
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      sessionSvc = TestBed.inject(SessionService) as any;
+      sessionSvc.isNewSession.mockReturnValue(true);
+      sessionSvc.applyServerTitle = vi.fn();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('applies the title on the first retry that sees it', async () => {
+      sessionSvc.getSessionMetadata = vi
+        .fn()
+        .mockResolvedValueOnce({ title: 'New Conversation' })
+        .mockResolvedValueOnce({ title: 'New Conversation' })
+        .mockResolvedValue({ title: 'Biology Syllabus' });
+
+      void (service as any).refreshTitleFromServer('s1');
+      await vi.advanceTimersByTimeAsync(800);
+
+      expect(sessionSvc.getSessionMetadata).toHaveBeenCalledTimes(3);
+      expect(sessionSvc.applyServerTitle).toHaveBeenCalledWith('s1', 'Biology Syllabus');
+      await vi.runAllTimersAsync();
+      expect(sessionSvc.getSessionMetadata).toHaveBeenCalledTimes(3);
+    });
+
+    it('gives up after a bounded number of retries', async () => {
+      sessionSvc.getSessionMetadata = vi.fn().mockResolvedValue({ title: 'New Conversation' });
+
+      void (service as any).refreshTitleFromServer('s1');
+      await vi.runAllTimersAsync();
+
+      expect(sessionSvc.getSessionMetadata).toHaveBeenCalledTimes(6);
+      expect(sessionSvc.applyServerTitle).not.toHaveBeenCalled();
+    });
+
+    it('stops polling once the title arrived another way', async () => {
+      sessionSvc.getSessionMetadata = vi.fn().mockResolvedValue({ title: 'New Conversation' });
+
+      void (service as any).refreshTitleFromServer('s1');
+      await vi.advanceTimersByTimeAsync(0);
+      // A late `session_title` event applied the title and cleared the flag.
+      sessionSvc.isNewSession.mockReturnValue(false);
+      await vi.runAllTimersAsync();
+
+      expect(sessionSvc.getSessionMetadata).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('page-departure attribution', () => {
     // A refresh / tab close / navigation is the one interruption cause only
     // the browser witnesses. Unattested it lands server-side as
