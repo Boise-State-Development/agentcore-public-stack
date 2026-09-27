@@ -212,11 +212,13 @@ describe('ChatHttpService', () => {
     vi.restoreAllMocks();
   });
 
-  describe('Stop racing the end of the turn', () => {
+  describe('Stop or page-hide racing the end of the turn', () => {
     // `done` means the server's turn is over, but loading (and so the Stop
     // button) only clears on the transport's close, which can trail it — on a
     // first turn `session_title` may arrive after `done`. A Stop in that
-    // window must not stamp a false "interrupted" marker on a finished turn.
+    // window must not stamp a false "interrupted" marker on a finished turn,
+    // and neither may a page departure: the session is still listed as
+    // streaming until close, so page-hide attribution would otherwise pick it.
 
     const encoder = new TextEncoder();
     let controller: AbortController;
@@ -308,6 +310,48 @@ describe('ChatHttpService', () => {
       expect(JSON.parse(String(posts[0][1].body))).toEqual({ reason: 'user_stopped' });
       expect(chatStateService.setLastTurnInterrupted).toHaveBeenCalledWith('s1', true, 'user_stopped');
       expect(controller.signal.aborted).toBe(true);
+    });
+
+    it('a page-hide after done but before close sends no navigated_away', async () => {
+      chatStateService.streamingSessionIds.mockReturnValue(['s1']);
+      openStream('event: message_start\ndata: {"role":"assistant"}\n\nevent: done\ndata: {}\n\n');
+
+      const streaming = service.sendChatRequest({ session_id: 's1', message: 'hi' });
+      await vi.waitFor(() => expect(parser.hasReceivedDone('s1')).toBe(true));
+      expect(chatStateService.releaseAbortController).not.toHaveBeenCalled();
+
+      window.dispatchEvent(new Event('pagehide'));
+
+      expect(interruptPosts()).toHaveLength(0);
+      // Attribution never intervenes, so the stream is left to close itself.
+      expect(controller.signal.aborted).toBe(false);
+      controller.abort();
+      await streaming;
+    });
+
+    it('a page-hide mid-stream still signals navigated_away', async () => {
+      chatStateService.streamingSessionIds.mockReturnValue(['s1']);
+      openStream('event: message_start\ndata: {"role":"assistant"}\n\n');
+
+      const streaming = service.sendChatRequest({ session_id: 's1', message: 'hi' });
+      await vi.waitFor(() =>
+        expect(parser.parseEventSourceMessage).toHaveBeenCalledWith(
+          's1',
+          'message_start',
+          expect.anything(),
+          'stream-1',
+        ),
+      );
+
+      window.dispatchEvent(new Event('pagehide'));
+
+      const posts = interruptPosts();
+      expect(posts).toHaveLength(1);
+      expect(String(posts[0][0])).toContain('/sessions/s1/interrupt');
+      expect(JSON.parse(String(posts[0][1].body))).toEqual({ reason: 'navigated_away' });
+      expect(posts[0][1].keepalive).toBe(true);
+      controller.abort();
+      await streaming;
     });
 
     it('runs the title fallback the skipped onclose would have, and no interrupted-turn cost refresh', async () => {

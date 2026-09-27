@@ -490,6 +490,12 @@ export class ChatHttpService {
     if (typeof window === 'undefined') return;
     const onPageHide = () => {
       for (const sessionId of this.chatStateService.streamingSessionIds()) {
+        // A session stays "streaming" until the transport closes, which can
+        // trail `done`. A departure in that window interrupts nothing, and
+        // the backend's lease gate can't be relied on to drop it — the lease
+        // is released in the stream generator's `finally`, which can itself
+        // come after `done` — so skip it here, as the Stop path does.
+        if (this.streamParserService.hasReceivedDone(sessionId)) continue;
         this.signalInterrupt(sessionId, 'navigated_away');
       }
     };
