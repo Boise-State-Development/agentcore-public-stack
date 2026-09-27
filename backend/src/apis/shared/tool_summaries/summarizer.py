@@ -187,8 +187,15 @@ async def summarize_tool_batch(calls: List[Dict[str, Any]]) -> Optional[str]:
         # deterministic formatter speak. (Defensive: the dangling quotes seen
         # on dev turned out to be `_unwrap_quotes`, not truncation, but
         # nothing guarded this boundary and a fragment must never persist.)
-        if response.get("stopReason") == "max_tokens":
+        # Any other non-`end_turn` stop (a guardrail or content-filter
+        # refusal, an unknown reason) is dropped too: its text may be the
+        # refusal itself, which is no summary of the batch.
+        stop_reason = response.get("stopReason")
+        if stop_reason == "max_tokens":
             logger.debug("Tool-batch summary hit the token ceiling; discarding")
+            return None
+        if stop_reason != "end_turn":
+            logger.debug("Tool-batch summary stopped with stopReason=%s; discarding", stop_reason)
             return None
 
         summary = _clean(response["output"]["message"]["content"][0]["text"])

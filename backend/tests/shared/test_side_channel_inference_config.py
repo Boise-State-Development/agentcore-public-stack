@@ -17,12 +17,12 @@ from apis.shared.files import document_digest as dd
 from apis.shared.tool_summaries.summarizer import summarize_tool_batch
 
 
-def _client(text: str) -> MagicMock:
+def _client(text: str, stop_reason: str = "end_turn") -> MagicMock:
     def converse(**kwargs):
         config = kwargs.get("inferenceConfig", {})
         if "temperature" in config and "topP" in config:
             raise RuntimeError("ValidationException: `temperature` and `top_p` cannot both be specified")
-        return {"stopReason": "end_turn", "output": {"message": {"content": [{"text": text}]}}}
+        return {"stopReason": stop_reason, "output": {"message": {"content": [{"text": text}]}}}
 
     client = MagicMock()
     client.converse.side_effect = converse
@@ -64,3 +64,25 @@ async def test_conversation_title(monkeypatch):
     title = await chat_service.generate_conversation_title(session_id="s", user_id="u", user_input="hi")
     assert title == "Planning a biology syllabus"
     assert "topP" not in client.converse.call_args.kwargs["inferenceConfig"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stop_reason", ["guardrail_intervened", "content_filtered", None])
+async def test_conversation_title_refusal_keeps_the_placeholder(monkeypatch, stop_reason):
+    """A guardrail stop's text is the refusal; it must never become the title."""
+    client = _client("Sorry, the model cannot answer this.", stop_reason=stop_reason)
+    monkeypatch.setattr(chat_service.boto3, "client", MagicMock(return_value=client))
+    update = AsyncMock()
+    monkeypatch.setattr(chat_service, "update_session_title", update)
+    title = await chat_service.generate_conversation_title(session_id="s", user_id="u", user_input="hi")
+    assert title == "New Conversation"
+    update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_conversation_title_at_the_token_ceiling_is_still_clipped(monkeypatch):
+    client = _client("A" * 80, stop_reason="max_tokens")
+    monkeypatch.setattr(chat_service.boto3, "client", MagicMock(return_value=client))
+    monkeypatch.setattr(chat_service, "update_session_title", AsyncMock())
+    title = await chat_service.generate_conversation_title(session_id="s", user_id="u", user_input="hi")
+    assert title == "A" * 47 + "..."

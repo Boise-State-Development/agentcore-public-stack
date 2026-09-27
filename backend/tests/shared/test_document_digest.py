@@ -146,6 +146,13 @@ class TestAbstract:
         assert await dd.generate_abstract(dd.DocumentDigest(), "text") is None
         assert await dd.generate_abstract(dd.DocumentDigest(), "   ") is None
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("stop", ["guardrail_intervened", "content_filtered", "something_new", None])
+    async def test_a_refused_generation_is_none(self, monkeypatch, stop):
+        """Only a finished generation is an abstract; a refusal's text is not."""
+        _bedrock(monkeypatch, text="Sorry, the model cannot answer this.", stop=stop)
+        assert await dd.generate_abstract(dd.DocumentDigest(), "text") is None
+
 
 class TestBuild:
     @pytest.mark.asyncio
