@@ -7,7 +7,7 @@ This is the default agent type for standard chat interactions.
 
 import logging
 import os
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import Any, AsyncGenerator, Callable, Dict, List, Optional
 
 from agents.main_agent.base_agent import BaseAgent
 from agents.main_agent.core import AgentFactory
@@ -164,6 +164,7 @@ class ChatAgent(BaseAgent):
         turn_project_id: Optional[str] = None,
         turn_lease: Any = None,
         turn_started_at: Optional[float] = None,
+        poll_side_frame: Optional[Callable[[], Optional[str]]] = None,
     ) -> AsyncGenerator[str, None]:
         """
         Stream agent responses.
@@ -198,6 +199,9 @@ class ChatAgent(BaseAgent):
                 off the agent for the same reason as `turn_agent_id`: the agent
                 instance is cached across turns, so per-turn state must never
                 live on it (#741/#751).
+            poll_side_frame: Non-blocking check for a frame produced outside the
+                agent stream (the first turn's `session_title`), polled by the
+                coordinator's live status merge. Per turn, like `turn_lease`.
 
         Yields:
             str: SSE formatted events
@@ -234,5 +238,6 @@ class ChatAgent(BaseAgent):
             turn_project_id=turn_project_id,
             turn_lease=turn_lease,
             turn_started_at=turn_started_at,
+            poll_side_frame=poll_side_frame,
         ):
             yield event

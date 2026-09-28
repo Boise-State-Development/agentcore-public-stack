@@ -8,6 +8,7 @@ import json
 import logging
 import hashlib
 import os
+import threading
 from typing import Any, Callable, Dict, Optional, List, Tuple
 
 import boto3
@@ -596,6 +597,44 @@ Output: Debug TypeError Map Error
 
 Focus on being informative and scannable. The title should allow users to quickly identify this conversation in a list."""
 
+# One Bedrock client for every title, built on first use. A client per call
+# cost ~250ms the first time in a process (botocore loads the service model)
+# and, every time, a fresh connection pool — a new TCP+TLS handshake to
+# bedrock-runtime on the path of a title the user is watching for. boto3
+# clients are thread-safe, so the worker threads below can share it.
+_title_bedrock_client: Any = None
+# Guards the first build: boto3's default session is not thread-safe, and two
+# first-turn titles can reach it from separate worker threads at once.
+_title_client_lock = threading.Lock()
+
+# Strong references to in-flight title writes. The event loop only holds weak
+# references to tasks, so a fire-and-forget write could otherwise be
+# garbage-collected before it lands.
+_pending_title_writes: set = set()
+
+
+def _get_title_bedrock_client() -> Any:
+    global _title_bedrock_client
+    if _title_bedrock_client is None:
+        with _title_client_lock:
+            if _title_bedrock_client is None:
+                bedrock_region = os.environ.get('AWS_REGION', 'us-east-1')
+                _title_bedrock_client = boto3.client('bedrock-runtime', region_name=bedrock_region)
+    return _title_bedrock_client
+
+
+def _converse_for_title(**kwargs: Any) -> Dict[str, Any]:
+    """Run in a worker thread, so a first-use client build stays off the event loop."""
+    return _get_title_bedrock_client().converse(**kwargs)
+
+
+def _schedule_title_write(session_id: str, user_id: str, title: str) -> None:
+    task = asyncio.create_task(
+        update_session_title(session_id=session_id, user_id=user_id, title=title)
+    )
+    _pending_title_writes.add(task)
+    task.add_done_callback(_pending_title_writes.discard)
+
 
 async def generate_conversation_title(
     session_id: str,
@@ -608,8 +647,8 @@ async def generate_conversation_title(
     This function:
     1. Truncates user input to ~500 tokens (2000 chars as rough approximation)
     2. Calls Nova Micro with optimized system prompt
-    3. Updates session metadata both locally and in cloud
-    4. Returns generated title or fallback on error
+    3. Returns the title as soon as Nova does, persisting it in the background
+    4. Returns fallback on error
 
     Args:
         session_id: Session identifier
@@ -628,10 +667,6 @@ async def generate_conversation_title(
         logger.debug(f"Truncated input from {len(user_input)} to {MAX_INPUT_LENGTH} chars")
 
     try:
-        # Initialize Bedrock Runtime client
-        bedrock_region = os.environ.get('AWS_REGION', 'us-east-1')
-        bedrock_client = boto3.client('bedrock-runtime', region_name=bedrock_region)
-
         # Prepare request for Nova Micro
         # us.amazon.nova-micro-v1:0 is the fastest, most cost-effective model
         request_body = {
@@ -657,7 +692,7 @@ async def generate_conversation_title(
         # whole Nova round-trip, stalling the agent stream this task runs
         # concurrently with.
         response = await asyncio.to_thread(
-            bedrock_client.converse,
+            _converse_for_title,
             modelId="us.amazon.nova-micro-v1:0",
             messages=request_body["messages"],
             system=request_body["system"],
@@ -682,10 +717,13 @@ async def generate_conversation_title(
 
         logger.info("✅ Generated title successfully")
 
-        # Targeted update — only writes the title attribute. The post-stream
-        # update_session_activity write is also targeted and disjoint, so the
-        # two cannot clobber each other on overlapping turns.
-        await update_session_title(session_id=session_id, user_id=user_id, title=title)
+        # Persist without holding the title back. This task finishing is what
+        # lets the stream push `session_title`, so awaiting the DynamoDB write
+        # here would put its round trips between Nova answering and the user
+        # seeing the name. Targeted update — only writes the title attribute.
+        # The post-stream update_session_activity write is also targeted and
+        # disjoint, so the two cannot clobber each other on overlapping turns.
+        _schedule_title_write(session_id, user_id, title)
 
         return title
 

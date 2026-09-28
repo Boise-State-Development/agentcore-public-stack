@@ -1322,8 +1322,13 @@ async def update_session_title(session_id: str, user_id: str, title: str) -> Non
 
     Uses a targeted ``UpdateExpression`` so it can run concurrently with
     ``store_session_metadata`` (which does a full-row merge) without racing
-    on other fields like ``messageCount`` or ``lastMessageAt``. Looks up the
-    current SK via the GSI because the SK contains a timestamp.
+    on other fields like ``messageCount`` or ``lastMessageAt``.
+
+    One round trip in the common case: every row is born with the static
+    ``S#{session_id}`` SK (issue #175), and this runs on a session's first
+    turn, so the key is known without a lookup. A row still on a legacy
+    timestamped SK fails the ``attribute_exists`` guard and falls back to
+    resolving the SK through the GSI.
 
     No-op when the session row doesn't exist (preview sessions, sessions
     deleted mid-turn).
@@ -1336,8 +1341,22 @@ async def update_session_title(session_id: str, user_id: str, title: str) -> Non
         raise RuntimeError("DYNAMODB_SESSIONS_METADATA_TABLE_NAME environment variable is required")
 
     try:
+        from botocore.exceptions import ClientError
 
         table = get_dynamodb_table(sessions_metadata_table)
+
+        try:
+            table.update_item(
+                Key={"PK": f"USER#{user_id}", "SK": _static_session_sk(session_id)},
+                UpdateExpression="SET title = :t",
+                ConditionExpression="attribute_exists(PK)",
+                ExpressionAttributeValues={":t": title},
+            )
+            logger.info(f"💾 Updated title for session {session_id}")
+            return
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+                raise
 
         existing = await _get_session_by_gsi(session_id, user_id, table)
         if not existing:
