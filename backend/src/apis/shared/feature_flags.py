@@ -15,7 +15,9 @@ Each flag is read on every call (not cached at import) so that:
   module reload (import-time paths) without a process restart.
 """
 
+import hashlib
 import os
+from typing import Optional
 
 
 def skills_enabled() -> bool:
@@ -653,3 +655,88 @@ def compaction_summary_extract_enabled() -> bool:
     every planted fact on the quality harness, Nova Micro 88%.
     """
     return os.environ.get("COMPACTION_SUMMARY_EXTRACT_ENABLED", "").strip().lower() != "false"
+
+
+
+AGENT_BUILD_ARMS = ("control", "shared_clients", "shared_clients_off_loop")
+
+
+def agent_build_experiment_arm(session_id: Optional[str]) -> str:
+    """Which agent-build variant this session runs (an A/B experiment, default OFF).
+
+    Two changes to the first-turn agent build, measured before either ships:
+
+    - ``shared_clients``: AgentCore Memory session managers share one set of
+      boto3 clients (``memory_shared_clients_enabled``).
+    - ``shared_clients_off_loop``: that, plus the synchronous build runs in a
+      worker thread (``agent_build_off_loop_enabled``).
+
+    ``AGENT_BUILD_EXPERIMENT`` selects the mode:
+
+    - unset / empty / anything unrecognised: ``control`` for every session.
+      This is the default everywhere, so other deployments see no change.
+    - ``ab``: each session is hashed into one of the three arms. Every
+      conversation runs in its own Runtime process, so arms never share
+      process state, and they run interleaved in time, which cancels network
+      drift between arms.
+    - an arm name: every session runs that arm.
+
+    The arm is stamped on ``turn_prelude`` (``buildArm``) so Logs Insights can
+    compare stage timings per arm. There is no CDK entry: the Runtime's
+    environment is capped at 50 variables and this is a temporary experiment,
+    so it is set out of band on the Runtime (``update-agent-runtime``), which
+    ``backend.yml`` deploys preserve and a ``platform.yml`` deploy resets.
+    """
+    mode = os.environ.get("AGENT_BUILD_EXPERIMENT", "").strip().lower()
+    if mode in AGENT_BUILD_ARMS:
+        return mode
+    if mode != "ab" or not session_id:
+        return "control"
+    digest = hashlib.sha256(session_id.encode("utf-8")).digest()
+    return AGENT_BUILD_ARMS[digest[0] % len(AGENT_BUILD_ARMS)]
+
+
+def memory_shared_clients_enabled(session_id: Optional[str]) -> bool:
+    """Whether this session's AgentCore Memory session manager uses shared clients.
+
+    The SDK's ``AgentCoreMemorySessionManager.__init__`` builds a
+    ``MemoryClient`` (a fresh ``boto3.Session`` plus two clients) and then a
+    second fresh session plus two more clients that replace the first pair.
+    A fresh session re-loads botocore's service models, so every session
+    manager paid ~360ms of CPU (measured locally, before any network call),
+    and each one opened its own connection pool, so its first ``list_events``
+    also paid a TLS handshake. With this on, the factory hands the SDK one
+    process-wide session whose ``client()`` returns the same client per
+    configuration. In a fresh process that halves the model loading; in a
+    warm one (a later cache-miss build in the same conversation) the clients
+    cost nothing and their connections are already open.
+
+    Arm of ``agent_build_experiment_arm``; off by default. Nothing reaches
+    the prompt.
+    """
+    return agent_build_experiment_arm(session_id) in ("shared_clients", "shared_clients_off_loop")
+
+
+def agent_build_off_loop_enabled(session_id: Optional[str]) -> bool:
+    """Whether ``get_agent`` runs this session's synchronous build in a worker thread.
+
+    ``create_agent`` is synchronous: prompt assembly, tool catalog lookups,
+    external MCP ``tools/list``, session manager construction and the
+    AgentCore Memory restore all run on the calling thread. Called from
+    ``get_agent`` on the event loop, a first-turn build (1.0-1.2s on dev)
+    freezes everything else in the process, including the concurrent
+    session-title task, whose Nova reply sits unprocessed until the build
+    ends. Off the loop, the stream can emit that title during the build.
+
+    ``asyncio.to_thread`` copies contextvars (the build-stage recorder, the
+    AgentCore request context) into the worker. The build's sync-to-async
+    bridges then take their no-loop branch and ``asyncio.run`` their
+    coroutine directly. Builds stay one at a time (``_build_agent_off_loop``),
+    because the external MCP layer relied on the frozen loop for that, and
+    ``ExternalMCPIntegration`` locks its maps and pins handed-out clients for
+    the build (see ``load_external_tools``'s ``consumer_pin``).
+
+    Arm of ``agent_build_experiment_arm``; off by default. Nothing reaches
+    the prompt.
+    """
+    return agent_build_experiment_arm(session_id) == "shared_clients_off_loop"

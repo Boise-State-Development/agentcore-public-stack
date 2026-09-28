@@ -251,3 +251,78 @@ class TestRouteContract:
         source = Path(routes_module.__file__).read_text()
 
         assert "_PREPARING_NOTICE_SECONDS" not in source
+
+
+class TestTitleDuringTheBuild:
+    """A first turn's title can land while the agent is still being built.
+
+    The route races the deferred build against the title task and emits a
+    finished title before `prepared`. That only helps when the build runs off
+    the event loop (`agent_build_off_loop_enabled`): a synchronous build on the
+    loop stops the title task from finishing first, so the race reduces to the
+    plain await it replaced, which is the control arm's behaviour.
+    """
+
+    @staticmethod
+    async def _stream(build, title_task) -> List[str]:
+        """Mirrors the route: preparing, race, prepared."""
+        frames = ['event: agent_status\ndata: {"phase": "preparing"}\n\n']
+        emitted = False
+
+        def title_sse() -> Optional[str]:
+            nonlocal emitted
+            if emitted or not title_task.done():
+                return None
+            emitted = True
+            return f'event: session_title\ndata: {{"title": "{title_task.result()}"}}\n\n'
+
+        task = asyncio.ensure_future(build())
+        if not title_task.done():
+            await asyncio.wait({task, title_task}, return_when=asyncio.FIRST_COMPLETED)
+            frame = title_sse()
+            if frame:
+                frames.append(frame)
+        await task
+        frames.append('event: agent_status\ndata: {"phase": "prepared"}\n\n')
+        return frames
+
+    @staticmethod
+    def _kinds(frames: List[str]) -> List[str]:
+        return [f.split("\n", 1)[0].removeprefix("event: ") for f in frames]
+
+    @pytest.mark.asyncio
+    async def test_a_build_off_the_loop_lets_the_title_out_first(self):
+        import time
+
+        async def title() -> str:
+            await asyncio.sleep(0.02)
+            return "Biology Syllabus"
+
+        async def build_in_a_thread() -> object:
+            return await asyncio.to_thread(time.sleep, 0.2)
+
+        frames = await self._stream(build_in_a_thread, asyncio.ensure_future(title()))
+
+        assert self._kinds(frames) == ["agent_status", "session_title", "agent_status"]
+
+    @pytest.mark.asyncio
+    async def test_a_build_on_the_loop_cannot(self):
+        import time
+
+        async def title() -> str:
+            await asyncio.sleep(0.02)
+            return "Biology Syllabus"
+
+        async def build_on_the_loop() -> object:
+            time.sleep(0.2)  # synchronous, as `create_agent` is
+            return object()
+
+        frames = await self._stream(build_on_the_loop, asyncio.ensure_future(title()))
+
+        assert "session_title" not in self._kinds(frames)
+
+    def test_route_still_races_the_build_against_the_title(self):
+        source = Path(routes_module.__file__).read_text()
+
+        assert "{build, title_task}" in source
+        assert "return_when=asyncio.FIRST_COMPLETED" in source

@@ -1,8 +1,10 @@
 """
 Session manager factory for creating AgentCore Memory session managers
 """
+import contextvars
 import os
 import logging
+import threading
 from typing import Optional, Any, Dict, Tuple
 from functools import lru_cache
 
@@ -68,9 +70,110 @@ def session_async_persistence_enabled() -> bool:
 try:
     from bedrock_agentcore.memory.integrations.strands.config import AgentCoreMemoryConfig, RetrievalConfig
     from bedrock_agentcore.memory import MemoryClient
+    from bedrock_agentcore.memory.integrations.strands import session_manager as _sdk_session_manager
     AGENTCORE_MEMORY_AVAILABLE = True
 except ImportError:
     AGENTCORE_MEMORY_AVAILABLE = False
+
+
+# ---------------------------------------------------------------------------
+# One set of AgentCore Memory clients per process
+# ---------------------------------------------------------------------------
+#
+# The SDK's session manager builds its clients from scratch on every
+# construction, twice (see ``memory_shared_clients_enabled``). Everything
+# below exists to hand it one process-wide session instead.
+
+# Set by the factory for the duration of one session manager's construction.
+# The SDK builds its ``MemoryClient`` with no session and no session id, so this
+# is how the per-session decision reaches ``_SharedSessionMemoryClient``.
+_use_shared_memory_clients: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "use_shared_memory_clients", default=False
+)
+
+# Sized for concurrent sessions sharing one pool. Async persistence writes each
+# message through ``asyncio.to_thread``, so a busy container can have dozens of
+# ``CreateEvent`` calls in flight on these clients at once, where each session
+# used to have a pool of its own. Past the pool size urllib3 still serves the
+# request, but discards the extra connection afterwards (and warns).
+_SHARED_MEMORY_MAX_POOL_CONNECTIONS = 50
+
+
+def _client_cache_key(service_name: str, region_name: Optional[str], config: Any) -> Tuple[str, Optional[str], str]:
+    # ``Config`` is not hashable; its user-provided options are what makes two
+    # configs different (the SDK and ``MemoryClient`` differ only in user agent).
+    options = getattr(config, "_user_provided_options", None) or {}
+    return service_name, region_name, repr(sorted(options.items()))
+
+
+if AGENTCORE_MEMORY_AVAILABLE:
+    import boto3
+    from botocore.config import Config as _BotocoreConfig
+
+    class _ClientReusingSession(boto3.Session):
+        """A boto3 session whose ``client()`` returns one client per configuration.
+
+        boto3 clients are thread-safe; building them is not, and building one
+        is the expensive part, so creation happens once, under a lock. Calls
+        carrying anything beyond region and config (explicit credentials, an
+        endpoint override) are not ours to share and pass straight through.
+        """
+
+        def __init__(self, **kwargs: Any) -> None:
+            super().__init__(**kwargs)
+            self._shared_clients: Dict[Tuple[str, Optional[str], str], Any] = {}
+            self._shared_clients_lock = threading.Lock()
+
+        def client(self, service_name: str, region_name: Optional[str] = None, config: Any = None, **kwargs: Any) -> Any:  # type: ignore[override]
+            if kwargs:
+                return super().client(service_name, region_name=region_name, config=config, **kwargs)
+            key = _client_cache_key(service_name, region_name, config)
+            with self._shared_clients_lock:
+                client = self._shared_clients.get(key)
+                if client is None:
+                    pooled = _BotocoreConfig(max_pool_connections=_SHARED_MEMORY_MAX_POOL_CONNECTIONS)
+                    merged = pooled.merge(config) if config is not None else pooled
+                    client = super().client(service_name, region_name=region_name, config=merged)
+                    self._shared_clients[key] = client
+                return client
+
+    _shared_memory_session: Optional[_ClientReusingSession] = None
+    _shared_memory_session_lock = threading.Lock()
+
+    def shared_memory_boto_session() -> _ClientReusingSession:
+        global _shared_memory_session
+        if _shared_memory_session is None:
+            with _shared_memory_session_lock:
+                if _shared_memory_session is None:
+                    _shared_memory_session = _ClientReusingSession()
+        return _shared_memory_session
+
+    class _SharedSessionMemoryClient(MemoryClient):
+        """``MemoryClient`` built from the shared session when the flag is on.
+
+        The SDK session manager constructs ``MemoryClient(region_name=...)``
+        with no session, so it cannot be handed one; its clients are then
+        replaced a few lines later, so they were pure cost. Rebinding the name
+        in the SDK module is the only seam. Pinned by
+        ``test_session_factory_shared_clients.py``, which fails if an SDK
+        upgrade stops going through it.
+        """
+
+        def __init__(
+            self,
+            region_name: Optional[str] = None,
+            integration_source: Optional[str] = None,
+            boto3_session: Any = None,
+        ) -> None:
+            if boto3_session is None and _use_shared_memory_clients.get():
+                boto3_session = shared_memory_boto_session()
+            super().__init__(
+                region_name=region_name,
+                integration_source=integration_source,
+                boto3_session=boto3_session,
+            )
+
+    _sdk_session_manager.MemoryClient = _SharedSessionMemoryClient
 
 
 @lru_cache(maxsize=1)
@@ -282,13 +385,21 @@ class SessionFactory:
             compaction_config.token_threshold = compaction_threshold
 
         # Create session manager with compaction built-in
-        session_manager = TurnBasedSessionManager(
-            agentcore_memory_config=agentcore_memory_config,
-            region_name=aws_region,
-            compaction_config=compaction_config if compaction_config.enabled else None,
-            user_id=user_id,
-            summarization_strategy_id=summary_id,
-        )
+        from apis.shared.feature_flags import memory_shared_clients_enabled
+
+        shared_clients = memory_shared_clients_enabled(session_id)
+        token = _use_shared_memory_clients.set(shared_clients)
+        try:
+            session_manager = TurnBasedSessionManager(
+                agentcore_memory_config=agentcore_memory_config,
+                region_name=aws_region,
+                compaction_config=compaction_config if compaction_config.enabled else None,
+                user_id=user_id,
+                summarization_strategy_id=summary_id,
+                boto_session=shared_memory_boto_session() if shared_clients else None,
+            )
+        finally:
+            _use_shared_memory_clients.reset(token)
 
         logger.info("✅ AgentCore Memory initialized")
         logger.info("   • Storage: AWS-managed DynamoDB")
@@ -299,6 +410,7 @@ class SessionFactory:
         else:
             logger.info("   • Compaction: Disabled")
         logger.info("   • Persistence: %s", "Async (off the event loop)" if async_persistence else "Sync (blocking)")
+        logger.info("   • Clients: %s", "Shared (process-wide)" if shared_clients else "Per session manager")
 
         return session_manager
 

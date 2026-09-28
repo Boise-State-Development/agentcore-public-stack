@@ -15,6 +15,7 @@ OAuth Support:
 
 import logging
 import re
+import threading
 from typing import Any, Callable, Iterator, Optional, List, Set
 from urllib.parse import urlparse
 
@@ -371,6 +372,13 @@ class ExternalMCPIntegration:
         # tool silently. Keyed by user because this integration is a
         # process-wide singleton shared across concurrent sessions.
         self._pending_consents: dict[str, dict[str, str]] = {}
+        # Guards every dict above. Agent builds run in a worker thread
+        # (``agent_build_off_loop_enabled``) while the event loop reads these
+        # maps (``get_client``, ``take_pending_consents``); iterating one while
+        # a build inserts raises. Held only around dict access, never across
+        # an await: a lock held through an MCP pre-flight would stall the loop
+        # for the length of a network round trip.
+        self._lock = threading.RLock()
 
     def take_pending_consents(self, user_id: str) -> dict[str, str]:
         """Pop and return {provider_id: authorization_url} for `user_id`.
@@ -381,7 +389,8 @@ class ExternalMCPIntegration:
         agent-cache hit no loading happens, nothing is recorded, and nothing
         is emitted — correct, because the prompt already went out once.
         """
-        return self._pending_consents.pop(user_id, {})
+        with self._lock:
+            return self._pending_consents.pop(user_id, {})
 
     async def _recover_oauth_preflight(
         self,
@@ -485,7 +494,8 @@ class ExternalMCPIntegration:
             )
             return False
 
-        self._pending_consents.setdefault(user_id, {})[provider_id] = authorization_url
+        with self._lock:
+            self._pending_consents.setdefault(user_id, {})[provider_id] = authorization_url
         logger.info(
             f"External MCP tool {tool_id} needs {provider_id} consent; "
             "surfacing oauth_required instead of dropping it silently"
@@ -510,6 +520,7 @@ class ExternalMCPIntegration:
         enabled_tool_ids: List[str],
         user_id: Optional[str] = None,
         auth_token: Optional[str] = None,
+        consumer_pin: Any = None,
     ) -> List[MCPClient]:
         """
         Load external MCP clients for enabled tools.
@@ -524,6 +535,15 @@ class ExternalMCPIntegration:
             enabled_tool_ids: List of enabled tool IDs
             user_id: User ID (required for OAuth-gated and OIDC-forwarded tools)
             auth_token: Raw OIDC token for forwarding
+            consumer_pin: When given, registered as a consumer of every
+                returned client, so no client can be stopped between this
+                hand-out and the new agent registering itself as a consumer.
+                A cached client is shared across agents, and Strands stops one
+                the moment its last consumer goes (``remove_consumer``). With
+                the build in a worker thread, a turn ending on the event loop
+                could drop that last consumer mid-build and leave the new agent
+                holding tools from a stopped client. The caller removes the pin
+                once the agent exists (``BaseAgent.__init__``).
 
         Returns:
             List of MCPClient instances to add to the agent's tools
@@ -569,21 +589,22 @@ class ExternalMCPIntegration:
                     to_iso(tool.updated_at) if tool.updated_at else ""
                 )
 
-                if (
-                    cache_key in self.clients
-                    and self._client_versions.get(cache_key) == tool_version
-                ):
-                    clients.append(self.clients[cache_key])
-                    continue
+                with self._lock:
+                    cached = self.clients.get(cache_key)
+                    if cached is not None and self._client_versions.get(cache_key) == tool_version:
+                        if consumer_pin is not None:
+                            cached.add_consumer(consumer_pin)
+                        clients.append(cached)
+                        continue
 
-                # Stale entry — admin edited this tool since the client
-                # was built. Drop it so the block below creates a fresh
-                # client with the current config.
-                if cache_key in self.clients:
-                    stale = self.clients.pop(cache_key)
-                    self._client_versions.pop(cache_key, None)
-                    self._provider_for_client_id.pop(id(stale), None)
-                    self._approval_names_for_client_id.pop(id(stale), None)
+                    # Stale entry — admin edited this tool since the client
+                    # was built. Drop it so the block below creates a fresh
+                    # client with the current config.
+                    if cached is not None:
+                        self.clients.pop(cache_key, None)
+                        self._client_versions.pop(cache_key, None)
+                        self._provider_for_client_id.pop(id(cached), None)
+                        self._approval_names_for_client_id.pop(id(cached), None)
 
                 static_token: Optional[str] = None
                 token_provider: Optional[Callable[[], Optional[str]]] = None
@@ -698,13 +719,16 @@ class ExternalMCPIntegration:
                         if not recovered:
                             continue
 
-                    self.clients[cache_key] = client
-                    self._client_versions[cache_key] = tool_version
-                    if provider_id:
-                        self._provider_for_client_id[id(client)] = provider_id
                     approval_names = tool.mcp_config.approval_required_names()
-                    if approval_names:
-                        self._approval_names_for_client_id[id(client)] = approval_names
+                    with self._lock:
+                        self.clients[cache_key] = client
+                        self._client_versions[cache_key] = tool_version
+                        if provider_id:
+                            self._provider_for_client_id[id(client)] = provider_id
+                        if approval_names:
+                            self._approval_names_for_client_id[id(client)] = approval_names
+                        if consumer_pin is not None:
+                            client.add_consumer(consumer_pin)
                     clients.append(client)
                     auth_label = (
                         " (with OIDC forwarding)" if forward_auth and static_token
@@ -739,19 +763,22 @@ class ExternalMCPIntegration:
         base = base_tool_id(tool_id)
         # Exact keys win — a whole-server binding has no "|allow:" suffix.
         exact_keys = [f"{user_id}:{base}", base] if user_id else [base]
-        for key in exact_keys:
-            if key in self.clients:
-                return self.clients[key]
-        # Subset-scoped fallback: cache key is "<base>|allow:<names>".
-        for key in exact_keys:
-            prefix = f"{key}|allow:"
-            for cache_key, client in self.clients.items():
-                if cache_key.startswith(prefix):
-                    return client
+        with self._lock:
+            for key in exact_keys:
+                if key in self.clients:
+                    return self.clients[key]
+            # Subset-scoped fallback: cache key is "<base>|allow:<names>".
+            for key in exact_keys:
+                prefix = f"{key}|allow:"
+                for cache_key, client in self.clients.items():
+                    if cache_key.startswith(prefix):
+                        return client
         return None
 
     def add_to_tool_list(self, tools: List[Any]) -> List[Any]:
-        for client in self.clients.values():
+        with self._lock:
+            cached = list(self.clients.values())
+        for client in cached:
             if client not in tools:
                 tools.append(client)
         return tools
@@ -764,15 +791,16 @@ class ExternalMCPIntegration:
         agent build creates fresh clients (and the token cache miss forces a
         new consent flow).
         """
-        keys_to_remove = [
-            key for key in self.clients.keys()
-            if key.startswith(f"{user_id}:")
-        ]
-        for key in keys_to_remove:
-            client = self.clients.pop(key)
-            self._client_versions.pop(key, None)
-            self._provider_for_client_id.pop(id(client), None)
-            self._approval_names_for_client_id.pop(id(client), None)
+        with self._lock:
+            keys_to_remove = [
+                key for key in self.clients.keys()
+                if key.startswith(f"{user_id}:")
+            ]
+            for key in keys_to_remove:
+                client = self.clients.pop(key)
+                self._client_versions.pop(key, None)
+                self._provider_for_client_id.pop(id(client), None)
+                self._approval_names_for_client_id.pop(id(client), None)
 
         if keys_to_remove:
             logger.info(f"Cleared {len(keys_to_remove)} cached MCP clients for user {user_id}")
@@ -786,26 +814,36 @@ class ExternalMCPIntegration:
         config. Without this, clients cached at process start continue to
         point at the old URL for the lifetime of the process.
         """
-        keys_to_remove = [
-            key for key in self.clients.keys()
-            if key == tool_id or key.endswith(f":{tool_id}")
-        ]
-        for key in keys_to_remove:
-            client = self.clients.pop(key)
-            self._client_versions.pop(key, None)
-            self._provider_for_client_id.pop(id(client), None)
-            self._approval_names_for_client_id.pop(id(client), None)
+        with self._lock:
+            keys_to_remove = [
+                key for key in self.clients.keys()
+                if key == tool_id or key.endswith(f":{tool_id}")
+            ]
+            for key in keys_to_remove:
+                client = self.clients.pop(key)
+                self._client_versions.pop(key, None)
+                self._provider_for_client_id.pop(id(client), None)
+                self._approval_names_for_client_id.pop(id(client), None)
 
         if keys_to_remove:
             logger.info(f"Cleared {len(keys_to_remove)} cached MCP clients for tool {tool_id}")
 
 
 _external_mcp_integration: Optional[ExternalMCPIntegration] = None
+_external_mcp_integration_lock = threading.Lock()
 
 
 def get_external_mcp_integration() -> ExternalMCPIntegration:
-    """Get or create the global ExternalMCPIntegration instance."""
+    """Get or create the global ExternalMCPIntegration instance.
+
+    Locked because two first builds can now run concurrently in worker
+    threads. Two instances would split the maps: the approval hook built
+    against one would read an empty ``approval_names_for_client`` from the
+    other, and a ``needs_approval`` tool would run without asking.
+    """
     global _external_mcp_integration
     if _external_mcp_integration is None:
-        _external_mcp_integration = ExternalMCPIntegration()
+        with _external_mcp_integration_lock:
+            if _external_mcp_integration is None:
+                _external_mcp_integration = ExternalMCPIntegration()
     return _external_mcp_integration

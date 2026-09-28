@@ -841,3 +841,152 @@ class TestMemoryContextCacheKey:
             session_id="s1", user_id="u1", system_prompt="P", is_resume=True, cache_write=False,
         )
         assert stale is not first
+
+
+# ---------------------------------------------------------------------------
+# The build runs off the event loop
+# ---------------------------------------------------------------------------
+
+
+class TestBuildOffLoop:
+    """``create_agent`` is synchronous and ~1s on a first turn. On the loop it
+    froze every coroutine in the container, including other users' streams."""
+
+    @pytest.mark.asyncio
+    async def test_the_build_runs_in_a_worker_thread(self, mock_freshness_hash, monkeypatch):
+        import threading
+
+        monkeypatch.setenv("AGENT_BUILD_EXPERIMENT", "shared_clients_off_loop")
+        loop_thread = threading.get_ident()
+        build_threads = []
+
+        def fake_create_agent(**kwargs):
+            build_threads.append(threading.get_ident())
+            return _fake_agent()
+
+        with patch.object(service, "create_agent", side_effect=fake_create_agent):
+            await service.get_agent(session_id="s", user_id="u")
+
+        assert build_threads and build_threads[0] != loop_thread
+
+    @pytest.mark.asyncio
+    async def test_the_loop_keeps_serving_while_a_build_runs(self, mock_freshness_hash, monkeypatch):
+        import asyncio
+        import time
+
+        monkeypatch.setenv("AGENT_BUILD_EXPERIMENT", "shared_clients_off_loop")
+        ticks = 0
+
+        async def other_stream():
+            nonlocal ticks
+            while True:
+                await asyncio.sleep(0.01)
+                ticks += 1
+
+        def slow_create_agent(**kwargs):
+            time.sleep(0.2)
+            return _fake_agent()
+
+        ticker = asyncio.create_task(other_stream())
+        try:
+            with patch.object(service, "create_agent", side_effect=slow_create_agent):
+                await service.get_agent(session_id="s", user_id="u")
+        finally:
+            ticker.cancel()
+
+        assert ticks >= 5
+
+    @pytest.mark.asyncio
+    async def test_build_stages_are_recorded_from_the_worker(self, mock_freshness_hash, monkeypatch):
+        from apis.shared.observability.build_stages import mark_stage
+
+        monkeypatch.setenv("AGENT_BUILD_EXPERIMENT", "shared_clients_off_loop")
+        recorded = []
+
+        def fake_create_agent(**kwargs):
+            mark_stage("session_mgr")
+            return _fake_agent()
+
+        with patch.object(service, "create_agent", side_effect=fake_create_agent):
+            await service.get_agent(session_id="s", user_id="u", build_stage_recorder=recorded.append)
+
+        assert recorded == ["session_mgr"]
+
+    @pytest.mark.asyncio
+    async def test_the_control_arm_builds_on_the_loop(self, mock_freshness_hash, monkeypatch):
+        """The default: no experiment set means the build stays where it was."""
+        import threading
+
+        monkeypatch.delenv("AGENT_BUILD_EXPERIMENT", raising=False)
+        loop_thread = threading.get_ident()
+        build_threads = []
+
+        def fake_create_agent(**kwargs):
+            build_threads.append(threading.get_ident())
+            return _fake_agent()
+
+        with patch.object(service, "create_agent", side_effect=fake_create_agent):
+            await service.get_agent(session_id="s", user_id="u")
+
+        assert build_threads == [loop_thread]
+
+    @pytest.mark.asyncio
+    async def test_builds_never_overlap(self, mock_freshness_hash, monkeypatch):
+        """The external MCP layer is only safe one build at a time, which the
+        frozen loop used to guarantee for free."""
+        import asyncio
+        import threading
+        import time
+
+        monkeypatch.setenv("AGENT_BUILD_EXPERIMENT", "shared_clients_off_loop")
+        active, peak = 0, 0
+        guard = threading.Lock()
+
+        def slow_create_agent(**kwargs):
+            nonlocal active, peak
+            with guard:
+                active += 1
+                peak = max(peak, active)
+            time.sleep(0.05)
+            with guard:
+                active -= 1
+            return _fake_agent()
+
+        with patch.object(service, "create_agent", side_effect=slow_create_agent):
+            await asyncio.gather(*(service.get_agent(session_id=f"s{i}", user_id="u") for i in range(4)))
+
+        assert peak == 1
+
+    @pytest.mark.asyncio
+    async def test_a_cancelled_build_still_holds_the_lock_until_its_thread_ends(
+        self, mock_freshness_hash, monkeypatch
+    ):
+        """A client disconnect cancels the await, not the thread."""
+        import asyncio
+        import threading
+
+        monkeypatch.setenv("AGENT_BUILD_EXPERIMENT", "shared_clients_off_loop")
+        first_started, release_first = threading.Event(), threading.Event()
+        order = []
+
+        def create_agent(**kwargs):
+            if kwargs["session_id"] == "first":
+                first_started.set()
+                release_first.wait(5)
+                order.append("first-finished")
+            else:
+                order.append("second-started")
+            return _fake_agent()
+
+        with patch.object(service, "create_agent", side_effect=create_agent):
+            first = asyncio.create_task(service.get_agent(session_id="first", user_id="u"))
+            await asyncio.to_thread(first_started.wait, 5)
+            first.cancel()
+            second = asyncio.create_task(service.get_agent(session_id="second", user_id="u"))
+            await asyncio.sleep(0.05)
+            assert order == []
+            release_first.set()
+            await second
+
+        assert order == ["first-finished", "second-started"]
+        assert first.cancelled()

@@ -746,7 +746,74 @@ synchronous SDK handshake, TLS setup, or tool-registry work nobody has looked
 at.
 
 Second target after that: `agent_build.session_mgr` at 830ms (AgentCore Memory
-restore, never timed).
+restore, never timed). Now PR-6.
+
+## PR-6 — agent-build A/B: shared Memory clients, and the build off the loop (IN PROGRESS)
+
+The second target named above, `agent_build.session_mgr`, measured **616-738ms**
+on dev first turns (2026-09-28) — more than half the 1.0-1.2s build.
+
+**What it does.** The AgentCore SDK's `AgentCoreMemorySessionManager.__init__`
+builds a `MemoryClient` (a fresh `boto3.Session` plus two clients), then a second
+fresh session plus two more clients that **replace** the first pair, then calls
+`read_session`. For a new session that is two sequential `list_events` (the
+second is a legacy-format fallback) and a `create_event`, each on a cold
+connection pool. Laptop timing: ~360ms of client construction per session
+manager. PR-3 above is the warning about reading that number: construction was
+~30x slower on the container than on a laptop.
+
+**Every first turn is a fresh process.** Each conversation's turns run in their
+own Runtime process (`service.instance.id` differs per session in the runtime
+logs). So a first turn always pays cold construction, and "a build freezes other
+users' streams" does not happen: a process serves one conversation. Process-wide
+caching helps a first turn only by doing less cold work (one session loads the
+service models once instead of twice); it helps later cache-miss builds in the
+same conversation (an `@`-mention, a changed toolset) fully.
+
+**Two changes, behind one per-session experiment flag, default off**
+(`agent_build_experiment_arm` in `apis/shared/feature_flags.py`,
+`AGENT_BUILD_EXPERIMENT`):
+
+| Arm | Change |
+|---|---|
+| `control` | today's build |
+| `shared_clients` | the factory hands the SDK one process-wide boto3 session whose `client()` returns one client per configuration, and rebinds the SDK module's `MemoryClient` so the discarded pair is built from it too |
+| `shared_clients_off_loop` | that, plus `create_agent` runs under `asyncio.to_thread`, one build at a time, and the route emits a title that lands mid-build |
+
+The off-loop arm needed hardening that the frozen loop used to provide for free:
+builds stay serialized (the lock is released when the *thread* ends, so a
+cancelled request cannot let a second build overlap an orphan),
+`ExternalMCPIntegration` locks its maps and creates its singleton under a lock
+(two instances would split the approval map, so a `needs_approval` tool could run
+unapproved), and each build pins the external MCP clients it is handed until its
+agent registers as their consumer (Strands stops a client whose last consumer
+goes).
+
+**New sub-stages.** `agent_build.session_mgr_clients` (everything before the SDK's
+`read_session`, i.e. client setup) now precedes `agent_build.session_mgr` (the
+session read/create network). `agent_build.strands_agent` (Strands' own `Agent`
+construction, including MCP `load_tools`) now precedes `agent_build.finalize`
+(the session restore). `turn_prelude` carries `buildArm` and `processBuilds`
+(1 on a first turn).
+
+**How to run it.** Set `AGENT_BUILD_EXPERIMENT=ab` on the dev Runtime out of band
+(`update-agent-runtime`; the Runtime is at 48 of its 50 environment variables,
+and a temporary experiment should not take a CDK slot). `backend.yml` deploys
+preserve it; a `platform.yml` deploy resets it. Then:
+
+    cd backend
+    AWS_PROFILE=dev-ai uv run python scripts/experiment_agent_build_arms.py \
+        --user-id <sub> --per-arm 15 --cleanup
+
+Arms are assigned by hashing the session id, and the script runs one turn per
+arm per round in rotating order, so time-of-day drift hits every arm alike.
+
+**Decision rule, fixed before the data.** Ship `shared_clients` (default on, with
+a kill switch) if its median `agent_build.session_mgr_clients` +
+`agent_build.session_mgr` beats control's by more than the run-to-run spread
+and no stage regresses. Ship the off-loop build only if the title demonstrably
+lands before `prepared` and time to first token does not regress; otherwise
+remove it and the MCP hardening that exists only for it.
 
 ## Declined / overtaken — `asyncio.to_thread` for the DynamoDB calls
 

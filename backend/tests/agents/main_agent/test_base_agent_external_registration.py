@@ -73,3 +73,40 @@ class TestRegisterExternalMcpToolsScoped:
             BaseAgent._register_external_mcp_tools(agent)
 
         assert tool_filter._external_mcp_tools == {"canvas"}
+
+
+class _PinnedClient:
+    def __init__(self, pin, fail: bool = False) -> None:
+        self.consumers = {pin}
+        self._fail = fail
+
+    def remove_consumer(self, consumer_id, **kwargs) -> None:
+        if self._fail:
+            raise RuntimeError("stop failed")
+        self.consumers.discard(consumer_id)
+
+
+class TestMcpBuildPinRelease:
+    """The build pins external MCP clients (see `load_external_tools`'s
+    `consumer_pin`) until the agent has registered as their consumer."""
+
+    def test_release_drops_every_pin_and_disarms(self):
+        pin = object()
+        clients = [_PinnedClient(pin), _PinnedClient(pin)]
+        agent = SimpleNamespace(_mcp_build_pin=pin, _mcp_pinned_clients=list(clients))
+
+        BaseAgent._release_mcp_build_pins(agent)
+
+        assert all(c.consumers == set() for c in clients)
+        assert agent._mcp_pinned_clients == []
+        # A later `_create_agent` (the stream_async fallback) takes no pin.
+        assert agent._mcp_build_pin is None
+
+    def test_a_failing_release_does_not_fail_the_build(self):
+        pin = object()
+        broken, healthy = _PinnedClient(pin, fail=True), _PinnedClient(pin)
+        agent = SimpleNamespace(_mcp_build_pin=pin, _mcp_pinned_clients=[broken, healthy])
+
+        BaseAgent._release_mcp_build_pins(agent)
+
+        assert healthy.consumers == set()

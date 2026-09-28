@@ -201,9 +201,28 @@ class BaseAgent(ABC):
         # Initialize streaming coordinator
         self.stream_coordinator = StreamCoordinator()
 
-        # Create the agent (subclass-specific)
-        self._create_agent()
+        # Create the agent (subclass-specific). External MCP clients handed to
+        # it are pinned for the build (see `load_external_tools`'s
+        # `consumer_pin`); once the agent has registered as their consumer, or
+        # failed to, the pin goes.
+        self._mcp_build_pin = object()
+        self._mcp_pinned_clients: List[Any] = []
+        try:
+            self._create_agent()
+        finally:
+            self._release_mcp_build_pins()
         mark_stage("finalize")
+
+    def _release_mcp_build_pins(self) -> None:
+        for client in self._mcp_pinned_clients:
+            try:
+                client.remove_consumer(self._mcp_build_pin)
+            except Exception:  # noqa: BLE001 - a failed stop must not fail the build
+                logger.warning("Releasing an MCP build pin failed", exc_info=True)
+        self._mcp_pinned_clients = []
+        # Scoped to the constructor's build: a later `_create_agent` (the
+        # `stream_async` fallback) takes no pin, so it can never leak one.
+        self._mcp_build_pin = None
 
     @abstractmethod
     def _create_agent(self) -> None:
@@ -550,6 +569,7 @@ class BaseAgent(ABC):
                     external_mcp_tool_ids,
                     user_id=self.user_id,
                     auth_token=self.auth_token,
+                    consumer_pin=getattr(self, "_mcp_build_pin", None),
                 )
 
             # Probe with ``get_running_loop`` rather than ``get_event_loop``:
@@ -572,6 +592,8 @@ class BaseAgent(ABC):
                     future = executor.submit(asyncio.run, _load_with_context())
                     external_clients = future.result()
 
+            if getattr(self, "_mcp_build_pin", None) is not None:
+                self._mcp_pinned_clients = list(external_clients)
             for client in external_clients:
                 if client not in local_tools:
                     local_tools.append(client)
