@@ -1,6 +1,6 @@
 import { Injectable, computed, inject, resource, signal } from '@angular/core';
-import { HttpClient, HttpContext } from '@angular/common/http';
-import { firstValueFrom } from 'rxjs';
+import { HttpClient, HttpContext, HttpErrorResponse } from '@angular/common/http';
+import { firstValueFrom, retry, throwError, timer } from 'rxjs';
 import { SUPPRESS_ERROR_TOAST } from '../../auth/error.interceptor';
 import { ConfigService } from '../config.service';
 import {
@@ -10,6 +10,22 @@ import {
   AnnouncementFeed,
   AnnouncementSurface,
 } from './announcement.model';
+
+/** How long to wait before the single ack retry. */
+export const ACK_RETRY_DELAY_MS = 1000;
+
+/**
+ * Failures worth one more attempt: the request never landed (status 0 — a
+ * mobile network blip, a backgrounded tab) or a gateway in front of app-api
+ * gave up. A 4xx is the server's considered answer and retrying won't change
+ * it.
+ */
+function isTransient(error: unknown): boolean {
+  return (
+    error instanceof HttpErrorResponse &&
+    (error.status === 0 || error.status === 502 || error.status === 503 || error.status === 504)
+  );
+}
 
 const EMPTY_FEED: AnnouncementFeed = {
   panel: [],
@@ -106,7 +122,12 @@ export class AnnouncementsService {
    *
    * Fails open (§D7): a rejected POST still hides the item locally and
    * resolves rather than throwing, so no caller has to remember to catch.
-   * Returns whether the server accepted it, for tests and for a future retry.
+   * Returns whether the server accepted it.
+   *
+   * A transient failure is retried once. The endpoint is idempotent and
+   * monotonic (§D2), so a duplicate that did land server-side is a no-op —
+   * and without the retry, a dropped `acknowledged` resurfaces the modal on
+   * the next load.
    */
   async ack(
     announcementId: string,
@@ -125,6 +146,12 @@ export class AnnouncementsService {
           `${this.baseUrl()}/${announcementId}/ack`,
           body,
           this.options,
+        ).pipe(
+          retry({
+            count: 1,
+            delay: error =>
+              isTransient(error) ? timer(ACK_RETRY_DELAY_MS) : throwError(() => error),
+          }),
         ),
       );
       return true;

@@ -6,7 +6,7 @@ import {
 } from '@angular/common/http/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { signal } from '@angular/core';
-import { AnnouncementsService } from './announcements.service';
+import { ACK_RETRY_DELAY_MS, AnnouncementsService } from './announcements.service';
 import { SUPPRESS_ERROR_TOAST } from '../../auth/error.interceptor';
 import { Announcement, AnnouncementFeed } from './announcement.model';
 import { ConfigService } from '../config.service';
@@ -249,10 +249,76 @@ describe('AnnouncementsService', () => {
       await vi.waitFor(() => {
         const req = httpMock.expectOne(`${API}/announcements/a1/ack`);
         expect(req.request.context.get(SUPPRESS_ERROR_TOAST)).toBe(true);
-        req.error(new ProgressEvent('error'), { status: 0, statusText: 'Unknown Error' });
+        req.flush('nope', { status: 500, statusText: 'Server Error' });
       });
 
       expect(await done).toBe(false);
+    });
+
+    describe('retry', () => {
+      const ACK_URL = `${API}/announcements/a1/ack`;
+      const networkDrop = (req: ReturnType<HttpTestingController['expectOne']>) =>
+        req.error(new ProgressEvent('error'), { status: 0, statusText: 'Unknown Error' });
+
+      afterEach(() => vi.useRealTimers());
+
+      it('retries once after a network drop and reports success', async () => {
+        await loadFeed();
+        vi.useFakeTimers();
+
+        const done = service.ack('a1', 'acknowledged', 'modal');
+        networkDrop(httpMock.expectOne(ACK_URL));
+
+        // Nothing is resent until the delay has elapsed.
+        httpMock.expectNone(ACK_URL);
+        await vi.advanceTimersByTimeAsync(ACK_RETRY_DELAY_MS);
+
+        const retried = httpMock.expectOne(ACK_URL);
+        expect(retried.request.body).toEqual({ action: 'acknowledged', surface: 'modal' });
+        retried.flush(null);
+
+        expect(await done).toBe(true);
+      });
+
+      it('retries a gateway 503', async () => {
+        await loadFeed();
+        vi.useFakeTimers();
+
+        const done = service.ack('a1', 'acknowledged', 'modal');
+        httpMock
+          .expectOne(ACK_URL)
+          .flush('nope', { status: 503, statusText: 'Service Unavailable' });
+        await vi.advanceTimersByTimeAsync(ACK_RETRY_DELAY_MS);
+        httpMock.expectOne(ACK_URL).flush(null);
+
+        expect(await done).toBe(true);
+      });
+
+      it('gives up after the one retry', async () => {
+        await loadFeed();
+        vi.useFakeTimers();
+
+        const done = service.ack('a1', 'acknowledged', 'modal');
+        networkDrop(httpMock.expectOne(ACK_URL));
+        await vi.advanceTimersByTimeAsync(ACK_RETRY_DELAY_MS);
+        networkDrop(httpMock.expectOne(ACK_URL));
+        await vi.advanceTimersByTimeAsync(ACK_RETRY_DELAY_MS * 5);
+
+        httpMock.expectNone(ACK_URL);
+        expect(await done).toBe(false);
+      });
+
+      it('does not retry a 4xx', async () => {
+        await loadFeed();
+        vi.useFakeTimers();
+
+        const done = service.ack('a1', 'acknowledged', 'modal');
+        httpMock.expectOne(ACK_URL).flush('nope', { status: 404, statusText: 'Not Found' });
+        await vi.advanceTimersByTimeAsync(ACK_RETRY_DELAY_MS * 5);
+
+        httpMock.expectNone(ACK_URL);
+        expect(await done).toBe(false);
+      });
     });
 
     it('a local dismissal hides the modal too', async () => {
