@@ -170,7 +170,11 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Unlocks**:
   - Pay-for-used Runtime memory — the first lever on the 73%-of-AICC line that is neither a token change nor a session-lifetime change.
   - P75 cold start ~1.9–2.0 s (vs 5.4–30 s on V1) — first-turn TTFT.
-- **Status**: open. ⚠️ `aws-cdk-lib` 2.270.0 has no typed `platformVersion`; needs `addPropertyOverride('PlatformVersion', 'V2')` behind a dev-only config flag. Gate 1: does CFN accept the key today. Gate 2: does V2 change the `/ping`/`/invocations` contract, idle reaper, or 30 s init budget. Measure with the turn-latency EMF (#1184) and Cost Explorer sync (#1235).
+- **Status**: open. The plan and pre-work findings are in **`docs/specs/agentcore-runtime-v2.md`**.
+  - ✅ **Gate 1 answered (2026-09-27).** The CFN schema has `PlatformVersion`, and it is **not** create-only, so flipping it is an in-place update and the runtime ID stays stable. The dev runtime reports `V1` today.
+  - ⚠️ **Blocker B1.** `scripts/build/deploy-runtime-image-if-changed.sh` rebuilds a full-replacement `update-agent-runtime` payload from an allow-list that omits `platformVersion`. Every `backend.yml` deploy could therefore revert the runtime to V1. Fix it before the flag goes on.
+  - ⚠️ **Gate 2 reframed.** V2 restores a snapshot of the running environment. The risk is less a contract change than import-time state cloned into every session. The concrete case is `runtime_health.py`, which stamps its idle clock at import (B2).
+  - ⚠️ **The turn-latency EMF (#1184) can't see a Runtime cold start**, because it starts at handler entry. Measure cold starts from the client side (`tests/load`) (B3).
 
 ### [2026-09-25] Treat any non-`end_turn` stop reason as a failed side-channel call
 - **Source**: research/2026-09-25.md ▸ Top 5 #2 — Claude Code 2.1.282 (refused compaction retries on fallback); verified on disk.
