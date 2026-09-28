@@ -7,6 +7,7 @@ import {
 import { provideHttpClient } from '@angular/common/http';
 import { signal } from '@angular/core';
 import { AnnouncementsService } from './announcements.service';
+import { SUPPRESS_ERROR_TOAST } from '../../auth/error.interceptor';
 import { Announcement, AnnouncementFeed } from './announcement.model';
 import { ConfigService } from '../config.service';
 
@@ -124,6 +125,16 @@ describe('AnnouncementsService', () => {
       expect(service.unreadCount()).toBe(0);
       expect(service.hasUnread()).toBe(false);
     });
+
+    it('opts out of the global error toast', async () => {
+      service.feedResource.reload();
+      service.panelItems();
+      await vi.waitFor(() => {
+        const req = httpMock.expectOne(FEED_URL);
+        expect(req.request.context.get(SUPPRESS_ERROR_TOAST)).toBe(true);
+        req.flush(makeFeed());
+      });
+    });
   });
 
   describe('unread count', () => {
@@ -227,6 +238,21 @@ describe('AnnouncementsService', () => {
 
       // No caller should have to remember to catch this.
       await expect(done).resolves.toBe(false);
+    });
+
+    it('opts out of the global error toast', async () => {
+      // A status-0 network drop on mobile surfaced as "An error occurred"
+      // even though the failure is swallowed here by design (§D7).
+      await loadFeed();
+
+      const done = service.ack('a1', 'acknowledged', 'modal');
+      await vi.waitFor(() => {
+        const req = httpMock.expectOne(`${API}/announcements/a1/ack`);
+        expect(req.request.context.get(SUPPRESS_ERROR_TOAST)).toBe(true);
+        req.error(new ProgressEvent('error'), { status: 0, statusText: 'Unknown Error' });
+      });
+
+      expect(await done).toBe(false);
     });
 
     it('a local dismissal hides the modal too', async () => {
