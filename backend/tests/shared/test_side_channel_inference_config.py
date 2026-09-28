@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import apis.inference_api.chat.service as chat_service
+from apis.shared import aws_clients
 from apis.shared.files import document_digest as dd
 from apis.shared.tool_summaries.summarizer import summarize_tool_batch
 
@@ -33,6 +34,16 @@ def _patch_boto3_module(monkeypatch, client: MagicMock) -> None:
     module = MagicMock()
     module.client.return_value = client
     monkeypatch.setitem(__import__("sys").modules, "boto3", module)
+    # The side channels share a process-cached client; drop the previous fake.
+    aws_clients.reset_cached_clients()
+
+
+@pytest.fixture(autouse=True)
+def _fresh_bedrock_client():
+    """The Bedrock client is cached per process; each test builds its own."""
+    aws_clients.reset_cached_clients()
+    yield
+    aws_clients.reset_cached_clients()
 
 
 @pytest.mark.asyncio

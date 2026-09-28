@@ -35,6 +35,8 @@ import logging
 import os
 from typing import Any, Dict, List, Optional
 
+from apis.shared.aws_clients import get_client
+
 logger = logging.getLogger(__name__)
 
 # Nova Micro: the cheapest Bedrock model that reliably follows a one-line
@@ -140,6 +142,16 @@ def _clean(text: str) -> str:
     return summary.rstrip(".").strip()
 
 
+def _converse(region: str, **kwargs: Any) -> Dict[str, Any]:
+    """Run in a worker thread, so a first-use client build stays off the event loop.
+
+    The client is process-cached: one per batch paid botocore's service-model
+    load (~250ms the first time in a process) and, every time, a fresh
+    connection pool — a new TCP+TLS handshake per summary.
+    """
+    return get_client("bedrock-runtime", region).converse(**kwargs)
+
+
 async def summarize_tool_batch(calls: List[Dict[str, Any]]) -> Optional[str]:
     """Summarize one finished tool batch, or return ``None``.
 
@@ -157,19 +169,12 @@ async def summarize_tool_batch(calls: List[Dict[str, Any]]) -> Optional[str]:
         return None
 
     try:
-        import boto3
-    except ImportError:  # pragma: no cover - dev without boto3
-        return None
-
-    try:
-        region = os.environ.get("AWS_REGION", "us-west-2")
-        client = boto3.client("bedrock-runtime", region_name=region)
-
         # boto3's converse() is synchronous — awaited inline it would block
         # the event loop for the whole Nova round trip, stalling the agent
         # stream this task runs concurrently with.
         response = await asyncio.to_thread(
-            client.converse,
+            _converse,
+            os.environ.get("AWS_REGION", "us-west-2"),
             modelId=_MODEL_ID,
             messages=[{"role": "user", "content": [{"text": _build_prompt(calls)}]}],
             system=[{"text": _SUMMARY_SYSTEM_PROMPT}],
