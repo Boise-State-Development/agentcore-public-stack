@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from apis.shared import aws_clients
 from apis.shared.files import document_digest as dd
 from tests.shared.test_document_read import build_docx, build_pdf
 
@@ -123,7 +124,17 @@ def _bedrock(monkeypatch, text="A crisp abstract.", stop="end_turn", fail=False)
     boto3 = MagicMock()
     boto3.client.return_value = client
     monkeypatch.setitem(__import__("sys").modules, "boto3", boto3)
+    # The client is cached per process; drop the previous fake so this one is built.
+    aws_clients.reset_cached_clients()
     return client
+
+
+@pytest.fixture(autouse=True)
+def _fresh_bedrock_client():
+    """The Bedrock client is cached per process; each test builds its own."""
+    aws_clients.reset_cached_clients()
+    yield
+    aws_clients.reset_cached_clients()
 
 
 class TestAbstract:
@@ -152,6 +163,18 @@ class TestAbstract:
         """Only a finished generation is an abstract; a refusal's text is not."""
         _bedrock(monkeypatch, text="Sorry, the model cannot answer this.", stop=stop)
         assert await dd.generate_abstract(dd.DocumentDigest(), "text") is None
+
+    @pytest.mark.asyncio
+    async def test_abstracts_reuse_one_bedrock_client(self, monkeypatch):
+        """A client per upload paid botocore's model load and a fresh TLS handshake."""
+        client = _bedrock(monkeypatch)
+        factory = __import__("sys").modules["boto3"].client
+
+        for _ in range(3):
+            assert await dd.generate_abstract(dd.DocumentDigest(), "text") == "A crisp abstract."
+
+        assert factory.call_count == 1
+        assert client.converse.call_count == 3
 
 
 class TestBuild:

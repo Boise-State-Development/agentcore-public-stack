@@ -16,6 +16,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from apis.shared import aws_clients
 from apis.shared.tool_summaries.summarizer import (
     _build_prompt,
     _clean,
@@ -50,6 +51,14 @@ def summaries_enabled(monkeypatch):
     monkeypatch.setenv("TOOL_SUMMARIES_ENABLED", "true")
 
 
+@pytest.fixture(autouse=True)
+def _fresh_bedrock_client():
+    """The Bedrock client is cached per process; each test builds its own."""
+    aws_clients.reset_cached_clients()
+    yield
+    aws_clients.reset_cached_clients()
+
+
 @pytest.fixture
 def bedrock(monkeypatch):
     """Patch boto3.client so no test ever reaches Bedrock."""
@@ -58,6 +67,19 @@ def bedrock(monkeypatch):
     module.client.return_value = client
     monkeypatch.setitem(__import__("sys").modules, "boto3", module)
     return client
+
+
+@pytest.mark.asyncio
+async def test_batches_reuse_one_bedrock_client(bedrock):
+    """A client per batch paid botocore's model load and a fresh TLS handshake."""
+    bedrock.converse.return_value = _response("Found the BIO 101 course")
+    factory = __import__("sys").modules["boto3"].client
+
+    for _ in range(3):
+        assert await summarize_tool_batch(_calls()) == "Found the BIO 101 course"
+
+    assert factory.call_count == 1
+    assert bedrock.converse.call_count == 3
 
 
 # -- the truncation regression -------------------------------------------

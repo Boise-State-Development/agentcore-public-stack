@@ -58,7 +58,9 @@ import asyncio
 import logging
 import os
 from dataclasses import dataclass
-from typing import List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+from apis.shared.aws_clients import get_client
 
 from .compaction_policy import CHARS_PER_TOKEN
 
@@ -212,6 +214,17 @@ def _salvage(text: str, budget_tokens: int) -> Optional[str]:
     return _keep_head_lines(head, budget_tokens) if head else None
 
 
+def _converse(region: Optional[str], **kwargs: Any) -> Dict[str, Any]:
+    """Run in a worker thread, so a first-use client build stays off the event loop.
+
+    The client is process-cached: one per call paid botocore's service-model
+    load (~250ms the first time in a process) and, every time, a fresh
+    connection pool — a new TCP+TLS handshake per compaction call.
+    """
+    region = region or os.environ.get("AWS_REGION", "us-west-2")
+    return get_client("bedrock-runtime", region).converse(**kwargs)
+
+
 async def _compress(
     records: Sequence[str],
     budget_tokens: int,
@@ -224,17 +237,12 @@ async def _compress(
     if not text.strip():
         return None, False
     try:
-        import boto3
-    except ImportError:  # pragma: no cover - dev without boto3
-        return None, False
-    try:
-        region = region or os.environ.get("AWS_REGION", "us-west-2")
-        client = boto3.client("bedrock-runtime", region_name=region)
         # ~0.75 words/token; aim well under the budget so the chars/4 check
         # below passes with margin.
         word_budget = max(150, int(budget_tokens * 0.55))
         response = await asyncio.to_thread(
-            client.converse,
+            _converse,
+            region,
             modelId=model_id,
             system=[{"text": _COMPRESSION_SYSTEM_PROMPT.replace("{word_budget}", f"{word_budget:,}")}],
             messages=[{"role": "user", "content": [{"text": "Summary notes, oldest first:\n\n" + text}]}],
@@ -304,14 +312,9 @@ async def extract_with_model(
     if not text.strip():
         return None
     try:
-        import boto3
-    except ImportError:  # pragma: no cover - dev without boto3
-        return None
-    try:
-        region = region or os.environ.get("AWS_REGION", "us-west-2")
-        client = boto3.client("bedrock-runtime", region_name=region)
         response = await asyncio.to_thread(
-            client.converse,
+            _converse,
+            region,
             modelId=model_id,
             system=[{"text": _EXTRACTION_SYSTEM_PROMPT}],
             messages=[{"role": "user", "content": [{"text": "Summary notes, oldest first:\n\n" + text}]}],

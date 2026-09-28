@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import os
+import threading
 from typing import Any, Dict, List
 
 import boto3
@@ -32,6 +33,27 @@ BEDROCK_EMBEDDING_CONFIG = {
 }
 
 logger = logging.getLogger(__name__)
+
+# One Bedrock client for every embedding, built on first use. A client per call
+# cost ~250ms the first time in a process (botocore loads the service model) and,
+# every time, a fresh connection pool — a new TCP+TLS handshake on each knowledge
+# base search, which sits in front of the model's first token. boto3 clients are
+# thread-safe, so the executor workers below can share it. Held here rather than
+# in `apis.shared.aws_clients` because the kb-sync and rag-ingestion Lambda
+# images copy this package without that module.
+_bedrock_runtime_client: Any = None
+# Guards the first build: boto3's default session is not thread-safe, and
+# parallel embeddings can reach it from separate worker threads at once.
+_bedrock_runtime_client_lock = threading.Lock()
+
+
+def _get_bedrock_runtime_client() -> Any:
+    global _bedrock_runtime_client
+    if _bedrock_runtime_client is None:
+        with _bedrock_runtime_client_lock:
+            if _bedrock_runtime_client is None:
+                _bedrock_runtime_client = boto3.client("bedrock-runtime", region_name=AWS_REGION)
+    return _bedrock_runtime_client
 
 
 def _get_vector_store_bucket() -> str:
@@ -74,18 +96,17 @@ async def generate_embeddings(chunks: List[str]) -> List[List[float]]:
     Raises:
         Exception: If Bedrock API call fails
     """
-    bedrock_runtime = boto3.client("bedrock-runtime", region_name=AWS_REGION)
-
     logger.info(f"Generating embeddings for {len(chunks)} chunks in parallel...")
 
     async def get_single_embedding(chunk: str, index: int) -> List[float]:
         """Generate embedding for a single chunk"""
         loop = asyncio.get_event_loop()
 
-        # Run synchronous boto3 call in thread pool to avoid blocking
+        # Run synchronous boto3 call in thread pool to avoid blocking; the
+        # client is fetched there too, so its first build stays off the loop.
         response = await loop.run_in_executor(
             None,
-            lambda: bedrock_runtime.invoke_model(
+            lambda: _get_bedrock_runtime_client().invoke_model(
                 modelId=BEDROCK_EMBEDDING_CONFIG["model_id"],
                 contentType="application/json",
                 accept="application/json",
