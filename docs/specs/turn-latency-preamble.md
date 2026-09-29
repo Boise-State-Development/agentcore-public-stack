@@ -1,5 +1,7 @@
 # Turn latency: inside the preamble
 
+**Continued by:** `docs/specs/turn-path-ttft.md` (2026-09-29), which maps the whole path from send to first token, assesses PR #1377, and orders what is left — including this spec's unstarted PR-5.
+
 **Status:** COMPLETE for the warm path. Five PRs shipped, merged, deployed and
 validated on dev (#1184, #1191, #1193, #1198, #1201):
 
