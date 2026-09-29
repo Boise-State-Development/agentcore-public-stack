@@ -40,7 +40,7 @@ def test_the_main_turn_passes_the_binding_it_built_tools_from():
         if _is_false(kw.get("is_resume")) and "extra_tools_key_described" in kw
     ]
     assert len(mains) == 1
-    assert ast.unparse(mains[0]["memory_binding"]) == "memory_binding_key"
+    assert ast.unparse(mains[0]["memory_binding"]) == "turn_tools.memory_binding_key"
 
 
 def test_memory_context_is_passed_on_the_main_turn_and_replayed_on_resume():
