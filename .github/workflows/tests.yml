@@ -67,10 +67,13 @@ jobs:
         run: uv sync --extra agentcore --extra dev
       - name: Run pytest
         working-directory: backend
-        # `-n auto` fans the suite across all runner cores (pytest-xdist).
-        # Verbosity/--tb live in backend/pytest.ini. The nightly coverage run
-        # (scripts/backend/test.sh) is deliberately left serial.
-        run: uv run pytest tests/ -n auto
+        # `-n logical` fans the suite across every vCPU (pytest-xdist). Not
+        # `auto`: with psutil installed, `auto` counts PHYSICAL cores, and the
+        # 4-vCPU runner reports 2, so it started 2 workers for ~11k tests
+        # (`created: 2/2 workers` in the log). Verbosity/--tb live in
+        # backend/pytest.ini. The nightly coverage run (scripts/backend/test.sh)
+        # is deliberately left serial.
+        run: uv run pytest tests/ -n logical
       # The repo-ROOT supply-chain suite (not backend/tests/supply_chain):
       # cross-package contracts that read CDK, the backup/restore scripts and
       # the python env-var readers side by side, so it lives above backend/.
