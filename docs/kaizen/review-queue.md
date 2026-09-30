@@ -5,6 +5,15 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 ## Open
 <!-- Newest at top. -->
 
+### [2026-09-30] Backend test suite: shard across runners (#1390) and fix fixture scope (#1391)
+- **Source**: Phil-initiated. The PR gate ran every suite on every pull request: a two-file docs PR paid the same 7–8 minutes as a backend change, and the backend pytest job alone was 7:02 with every other job under 2 minutes. Two things landed together in the path-filter PR: the `changes` job in `ci.yml` now runs only the suites a PR's paths can reach (`scripts/ci/classify-changes.sh`, fail-open, pinned by `test_ci_path_filter.py`), and the backend job runs `-n logical` — `-n auto` counts physical cores when psutil is installed, so the 4-vCPU runner started 2 workers.
+  - **What the profile showed.** Of the time measured across the suite (every phase ≥50 ms), fixture setup was 1,846 s against 399 s of test body. 77 files enter `mock_aws()` and create tables per test function; 5 files use any broader scope. One file alone: 21.8 s setup, 0.9 s test code. The top 25 files are ~950 s of ~2,245 s and are listed in #1391.
+  - **Two follow-ups, complementary.** #1390 shards the backend job across 3 runners with `pytest-split` (new dev dep, needs approval) — a CI-only win, floor ~2–2.5 min. #1391 scopes the moto fixtures at module level file by file — the bigger lever, and the only one that speeds up local runs.
+- **Surface**: CI only for #1390; test files only for #1391. No production code.
+- **Effort × Impact**: #1390 M × M (one workflow change plus a durations file with an owner). #1391 M × H, incremental (one PR per handful of files; track the setup:call ratio).
+- **Subtracts**: no. Both reduce PR wall clock without dropping a test.
+- **Status**: open; issues carry the acceptance criteria. Also worth a decision: `develop` has no required status checks, so the PR gate is advisory today. The job-level filter shape was chosen so that adding them later does not strand a skipped suite as "Expected".
+
 ### [2026-09-26] Verify native token counts for `global.*` models in production — after #1343 reaches `main`
 - **Source**: Phil-initiated, from #1343 and its dev validation.
   - **The gap.** `base_foundation_model_id` never stripped `global.`, so every prod model counted with the heuristic. Since #1337, that means prod records no `prefixTokens` and no `contextBreakdown` at all.
