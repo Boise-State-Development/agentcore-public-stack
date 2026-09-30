@@ -6,7 +6,8 @@ clients, on every construction. That was ~360ms of CPU per session manager on
 the event loop, plus a cold connection pool. These tests build REAL
 ``TurnBasedSessionManager`` instances through the factory, with only the SDK's
 network calls stubbed, so they fail if an SDK upgrade stops going through the
-seams the factory relies on.
+seams the factory relies on. The session itself lives in
+``apis.shared.aws_clients`` (``shared_boto_session``), where warm-up builds it.
 """
 
 import threading
@@ -17,6 +18,7 @@ import boto3
 import pytest
 
 from agents.main_agent.session import session_factory as factory
+from apis.shared import aws_clients
 from bedrock_agentcore.memory.integrations.strands import session_manager as sdk
 
 
@@ -26,11 +28,13 @@ def memory_env(monkeypatch):
     monkeypatch.setenv("AGENTCORE_MEMORY_ID", "mem-test")
     monkeypatch.setenv("AWS_REGION", "us-west-2")
     monkeypatch.setenv("AGENT_BUILD_EXPERIMENT", "shared_clients")
-    monkeypatch.setattr(factory, "_discover_strategy_ids", lambda memory_id, region: (None, None, None))
+    monkeypatch.setattr(factory, "_discover_strategy_ids", lambda memory_id, region, **kwargs: (None, None, None))
     monkeypatch.setattr(sdk.AgentCoreMemorySessionManager, "read_session", lambda self, session_id, **k: None)
     monkeypatch.setattr(sdk.AgentCoreMemorySessionManager, "create_session", lambda self, session, **k: session)
     # A fresh shared session per test, so client counts start from zero.
-    monkeypatch.setattr(factory, "_shared_memory_session", None)
+    aws_clients.reset_cached_clients()
+    yield
+    aws_clients.reset_cached_clients()
 
 
 @pytest.fixture
@@ -79,11 +83,11 @@ class TestSharedClients:
         manager = _build("session-a")
         config = manager.memory_client.gmdp_client.meta.config
 
-        assert config.max_pool_connections == factory._SHARED_MEMORY_MAX_POOL_CONNECTIONS
+        assert config.max_pool_connections == aws_clients.SHARED_SESSION_MAX_POOL_CONNECTIONS
         assert "strands-agents" in (config.user_agent_extra or "")
 
     def test_concurrent_first_builds_share_one_client(self, memory_env, client_builds):
-        """Builds run in worker threads; the first ones race to create the clients."""
+        """Two builds racing for the first client must still end up with one."""
         barrier = threading.Barrier(4)
 
         def build(i: int) -> Any:
@@ -112,14 +116,14 @@ class TestControlArm:
         """The rebinding in the SDK module must not change a MemoryClient built
         anywhere else (e.g. `_discover_strategy_ids`)."""
         client = sdk.MemoryClient(region_name="us-west-2")
-        assert client.gmdp_client is not factory.shared_memory_boto_session().client(
+        assert client.gmdp_client is not aws_clients.shared_boto_session().client(
             "bedrock-agentcore", region_name="us-west-2"
         )
 
 
 class TestClientReusingSession:
     def test_explicit_credentials_are_never_shared(self):
-        session = factory._ClientReusingSession()
+        session = aws_clients.ClientReusingSession()
         kwargs = dict(region_name="us-west-2", aws_access_key_id="a", aws_secret_access_key="b")
 
         assert session.client("sts", **kwargs) is not session.client("sts", **kwargs)
@@ -127,7 +131,7 @@ class TestClientReusingSession:
     def test_different_configs_get_different_clients(self):
         from botocore.config import Config
 
-        session = factory._ClientReusingSession()
+        session = aws_clients.ClientReusingSession()
         a = session.client("sts", region_name="us-west-2", config=Config(user_agent_extra="a"))
         b = session.client("sts", region_name="us-west-2", config=Config(user_agent_extra="b"))
 

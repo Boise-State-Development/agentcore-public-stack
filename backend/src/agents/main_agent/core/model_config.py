@@ -414,9 +414,27 @@ class ModelConfig:
             and ("claude" in model_lower or "anthropic" in model_lower)
         )
 
-    def to_bedrock_config(self) -> Dict[str, Any]:
-        """Convert to BedrockModel kwargs, translating canonical inference params."""
+    def to_bedrock_config(self, session_id: Optional[str] = None) -> Dict[str, Any]:
+        """Convert to BedrockModel kwargs, translating canonical inference params.
+
+        ``session_id`` decides the agent-build A/B arm
+        (``memory_shared_clients_enabled``): on the shared arm the model is
+        built on the process-wide boto3 session instead of the fresh
+        ``boto3.Session()`` Strands would otherwise construct (and re-parse
+        the bedrock-runtime model on). Nothing here reaches the prompt.
+        """
         config: Dict[str, Any] = {"model_id": self.model_id}
+
+        from apis.shared.feature_flags import memory_shared_clients_enabled
+
+        if memory_shared_clients_enabled(session_id):
+            from apis.shared.aws_clients import shared_boto_session
+
+            # Never alongside `region_name`: BedrockModel.__init__ raises when
+            # both are given (strands-agents 1.55.0). This config sets no
+            # region on either arm; the session resolves it from the
+            # environment exactly as Strands' own fresh session would.
+            config["boto_session"] = shared_boto_session()
         _apply_canonical_params(
             config, self.inference_params, _BEDROCK_PARAM_MAP, "bedrock", self.model_id
         )
