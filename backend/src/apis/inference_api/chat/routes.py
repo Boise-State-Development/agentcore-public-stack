@@ -27,6 +27,7 @@ from apis.shared.errors import (
 )
 from apis.inference_api.runtime_health import ping_payload
 from apis.shared.feature_flags import (
+    agent_build_experiment_arm,
     agent_preparing_phase_enabled,
     agents_enabled,
     attachment_turn_guard_enabled,
@@ -90,7 +91,7 @@ from apis.shared.mcp_apps.error_envelope import app_tool_error_response
 from .app_tool_dispatch import AppToolCallError, dispatch_app_tool_call
 from .agent_binding_policy import binds_conversation
 from .models import FileContent, InvocationRequest
-from .service import generate_conversation_title, get_agent
+from .service import generate_conversation_title, get_agent, process_build_count
 from .turn_timing import TurnPrelude
 from .system_prompt_resolver import (
     append_active_prompt,
@@ -4164,6 +4165,12 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                         "isResume": is_resume,
                         "hasAssistant": bool(input_data.rag_assistant_id),
                         "deferredBuild": deferred_build,
+                        # The agent-build A/B (`agent_build_experiment_arm`),
+                        # and how many builds this process has run: 1 on a
+                        # conversation's first turn, which is always a fresh
+                        # Runtime process.
+                        "buildArm": agent_build_experiment_arm(input_data.session_id),
+                        "processBuilds": process_build_count(),
                     },
                 )
 

@@ -295,6 +295,16 @@ def _adopt_session_conversation(agent: BaseAgent, session_id: str) -> None:
         logger.debug("Session %s: could not sync compaction live offset", scrub_log(session_id), exc_info=True)
 
 
+# Agent builds (cache misses) this process has run. Every conversation's first
+# turn runs in a fresh Runtime process, so 1 marks exactly the cold-process
+# build the agent-build experiment is about (stamped on `turn_prelude`).
+_process_build_count = 0
+
+
+def process_build_count() -> int:
+    return _process_build_count
+
+
 async def get_agent(
     session_id: str,
     user_id: Optional[str] = None,
@@ -494,6 +504,8 @@ async def get_agent(
         set_stage_recorder,
     )
 
+    global _process_build_count
+    _process_build_count += 1
     _stage_token = set_stage_recorder(build_stage_recorder)
     try:
         agent = create_agent(**create_kwargs)

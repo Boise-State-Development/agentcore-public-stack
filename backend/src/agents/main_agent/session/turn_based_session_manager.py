@@ -38,6 +38,7 @@ from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List, Tuple, TYPE_CHECKING
 
 from agents.main_agent.config.constants import Defaults, EnvVars
+from apis.shared.observability.build_stages import mark_stage
 
 from bedrock_agentcore.memory.integrations.strands.session_manager import AgentCoreMemorySessionManager
 from bedrock_agentcore.memory.integrations.strands.config import AgentCoreMemoryConfig
@@ -419,6 +420,17 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
             logger.error("Failed to retrieve customer context: %s", e)
         return None
 
+    def read_session(self, session_id: str, **kwargs: Any) -> Any:
+        """The SDK's session read, preceded by a build-stage mark.
+
+        The SDK constructor builds its boto3 clients and then calls this, so the
+        mark splits ``agent_build.session_mgr`` into client setup
+        (``session_mgr_clients``) and the network calls that follow. A no-op
+        outside a turn's build.
+        """
+        mark_stage("session_mgr_clients")
+        return super().read_session(session_id, **kwargs)
+
     def initialize(self, agent: "Agent", **kwargs: Any) -> None:
         """
         Initialize agent with two-feature compaction.
@@ -428,6 +440,10 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
         2. Let the SDK restore agent state and load messages from AgentCore Memory
         3. Apply compaction (checkpoint + truncation) on the loaded messages
         """
+        # Splits `agent_build.finalize`: everything before this is Strands'
+        # own Agent construction (tool registration, including MCP
+        # `load_tools`); everything after is the session restore.
+        mark_stage("strands_agent")
         logger.info(f"TurnBasedSessionManager.initialize() called for agent_id={agent.agent_id}")
 
         # Let the SDK handle all session restore logic:

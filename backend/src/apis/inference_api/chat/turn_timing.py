@@ -280,7 +280,9 @@ class TurnPrelude:
             metrics.setdefault(_metric_name(prefix), total)
 
         properties: Dict[str, Any] = {"streamKind": stream_kind, "sessionId": session_id}
-        for key in ("isResume", "deferredBuild", "hasAssistant"):
+        # Properties, never dimensions: `buildArm` is the agent-build A/B and
+        # `processBuilds` is unbounded.
+        for key in ("isResume", "deferredBuild", "hasAssistant", "buildArm", "processBuilds"):
             if extra and key in extra:
                 properties[key] = extra[key]
 

@@ -746,7 +746,87 @@ synchronous SDK handshake, TLS setup, or tool-registry work nobody has looked
 at.
 
 Second target after that: `agent_build.session_mgr` at 830ms (AgentCore Memory
-restore, never timed).
+restore, never timed). Now PR-6.
+
+## PR-6 — agent-build A/B: shared boto3 clients, built at warm-up (IN PROGRESS)
+
+The second target named above, `agent_build.session_mgr`, measured **616-738ms**
+on dev first turns (2026-09-28) — more than half the 1.0-1.2s build.
+
+**What it does.** The AgentCore SDK's `AgentCoreMemorySessionManager.__init__`
+builds a `MemoryClient` (a fresh `boto3.Session` plus two clients), then a second
+fresh session plus two more clients that **replace** the first pair, then calls
+`read_session`. For a new session that is two sequential `list_events` (the
+second is a legacy-format fallback) and a `create_event`, each on a cold
+connection pool. Laptop timing: ~360ms of client construction per session
+manager. PR-3 above is the warning about reading that number: construction was
+~30x slower on the container than on a laptop. Two more fresh sessions sit next
+to it on the same first turn: `_discover_strategy_ids` builds its own
+`MemoryClient`, and Strands' `BedrockModel` builds its own `boto3.Session`.
+
+**Every first turn is a fresh process.** Each conversation's turns run in their
+own Runtime process (`service.instance.id` differs per session in the runtime
+logs). So a first turn always pays cold construction, and "a build freezes other
+users' streams" does not happen: a process serves one conversation. Process-wide
+caching helps a first turn only if the shared work is done **before** the turn
+arrives, which is why the shared session is built at container warm-up
+(`apis/inference_api/warmup.py`, on the startup daemon thread): its
+`bedrock-agentcore`, `bedrock-agentcore-control` and `bedrock-runtime` clients
+are constructed there, and `_discover_strategy_ids` is called once so the
+strategy ids are cached before any turn. That discovery is a control-plane read
+of static configuration, and it opens the one connection warm-up otherwise
+avoids; `docs/specs/turn-path-ttft.md` §5 P2 accepts that (botocore retries a
+connection error on this idempotent call) and names it as the thing to watch on
+the Runtime V2 restore.
+
+**One change, behind one per-session experiment flag, default off**
+(`agent_build_experiment_arm` in `apis/shared/feature_flags.py`,
+`AGENT_BUILD_EXPERIMENT`):
+
+| Arm | Change |
+|---|---|
+| `control` | today's build |
+| `shared_clients` | the factory hands the SDK the process-wide boto3 session (whose `client()` returns one client per configuration) and rebinds the SDK module's `MemoryClient` so the discarded pair is built from it too; `_discover_strategy_ids` builds its `MemoryClient` on it; `ModelConfig.to_bedrock_config` passes it to `BedrockModel` as `boto_session` (and then no `region_name`, which Strands rejects alongside a session) |
+
+**The off-loop arm was withdrawn before the A/B.** The PR as opened had a third
+arm, `shared_clients_off_loop`, which ran `create_agent` under
+`asyncio.to_thread` so the route could emit a first-turn title mid-build. It
+came with hardening the frozen loop used to provide for free: process-wide
+build serialization, locks on `ExternalMCPIntegration`'s maps and singleton,
+and a consumer pin on every external MCP client handed to a build. It was
+dropped, and the hardening with it, on the assessment in
+`docs/specs/turn-path-ttft.md` §4: moving a synchronous build to a thread does
+not make it faster (CPU-bound parts contend on the GIL, network-bound parts take
+the same time), so the arm could not reduce time to first token and its A/B
+would have read as noise; and the concurrency it would have bought — running
+the build's independent IO at the same time — is reachable inside the
+constructor itself (§5 P3a, two threads of one executor for `session_mgr` and
+`tools`) without any of the hardening. A title that lands before `prepared` is
+not worth shipping locks for.
+
+**New sub-stages.** `agent_build.session_mgr_clients` (everything before the SDK's
+`read_session`, i.e. client setup) now precedes `agent_build.session_mgr` (the
+session read/create network). `agent_build.strands_agent` (Strands' own `Agent`
+construction, including MCP `load_tools`) now precedes `agent_build.finalize`
+(the session restore). `turn_prelude` carries `buildArm` and `processBuilds`
+(1 on a first turn).
+
+**How to run it.** Set `AGENT_BUILD_EXPERIMENT=ab` on the dev Runtime out of band
+(`update-agent-runtime`; the Runtime is at 48 of its 50 environment variables,
+and a temporary experiment should not take a CDK slot). `backend.yml` deploys
+preserve it; a `platform.yml` deploy resets it. Then:
+
+    cd backend
+    AWS_PROFILE=dev-ai uv run python scripts/experiment_agent_build_arms.py \
+        --user-id <sub> --per-arm 15 --cleanup
+
+Arms are assigned by hashing the session id, and the script runs one turn per
+arm per round in rotating order, so time-of-day drift hits every arm alike.
+
+**Decision rule, fixed before the data.** Ship `shared_clients` (default on, with
+a kill switch) if its median `agent_build.session_mgr_clients` +
+`agent_build.session_mgr` beats control's by more than the run-to-run spread
+and no stage regresses. Otherwise remove the arm and keep the instrumentation.
 
 ## Declined / overtaken — `asyncio.to_thread` for the DynamoDB calls
 

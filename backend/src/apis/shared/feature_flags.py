@@ -15,7 +15,9 @@ Each flag is read on every call (not cached at import) so that:
   module reload (import-time paths) without a process restart.
 """
 
+import hashlib
 import os
+from typing import Optional
 
 
 def skills_enabled() -> bool:
@@ -653,3 +655,68 @@ def compaction_summary_extract_enabled() -> bool:
     every planted fact on the quality harness, Nova Micro 88%.
     """
     return os.environ.get("COMPACTION_SUMMARY_EXTRACT_ENABLED", "").strip().lower() != "false"
+
+
+
+AGENT_BUILD_ARMS = ("control", "shared_clients")
+
+
+def agent_build_experiment_arm(session_id: Optional[str]) -> str:
+    """Which agent-build variant this session runs (an A/B experiment, default OFF).
+
+    One change to the first-turn agent build, measured before it ships:
+
+    - ``shared_clients``: AgentCore Memory session managers, the strategy-id
+      discovery and the Bedrock model client share one process-wide boto3
+      session (``memory_shared_clients_enabled``).
+
+    A second arm, ``shared_clients_off_loop`` (the synchronous build on a
+    worker thread), was withdrawn before the A/B ran: a thread does not make
+    a synchronous build faster, and the overlap it would have enabled is
+    reachable inside the constructor without the MCP hardening it needed
+    (docs/specs/turn-path-ttft.md, sections 4 and 5 P3).
+
+    ``AGENT_BUILD_EXPERIMENT`` selects the mode:
+
+    - unset / empty / anything unrecognised: ``control`` for every session.
+      This is the default everywhere, so other deployments see no change.
+    - ``ab``: each session is hashed into one of the two arms. Every
+      conversation runs in its own Runtime process, so arms never share
+      process state, and they run interleaved in time, which cancels network
+      drift between arms.
+    - an arm name: every session runs that arm.
+
+    The arm is stamped on ``turn_prelude`` (``buildArm``) so Logs Insights can
+    compare stage timings per arm. There is no CDK entry: the Runtime's
+    environment is capped at 50 variables and this is a temporary experiment,
+    so it is set out of band on the Runtime (``update-agent-runtime``), which
+    ``backend.yml`` deploys preserve and a ``platform.yml`` deploy resets.
+    """
+    mode = os.environ.get("AGENT_BUILD_EXPERIMENT", "").strip().lower()
+    if mode in AGENT_BUILD_ARMS:
+        return mode
+    if mode != "ab" or not session_id:
+        return "control"
+    digest = hashlib.sha256(session_id.encode("utf-8")).digest()
+    return AGENT_BUILD_ARMS[digest[0] % len(AGENT_BUILD_ARMS)]
+
+
+def memory_shared_clients_enabled(session_id: Optional[str]) -> bool:
+    """Whether this session's AgentCore Memory session manager uses shared clients.
+
+    The SDK's ``AgentCoreMemorySessionManager.__init__`` builds a
+    ``MemoryClient`` (a fresh ``boto3.Session`` plus two clients) and then a
+    second fresh session plus two more clients that replace the first pair.
+    A fresh session re-loads botocore's service models, so every session
+    manager paid ~360ms of CPU (measured locally, before any network call),
+    and each one opened its own connection pool, so its first ``list_events``
+    also paid a TLS handshake. With this on, the factory hands the SDK one
+    process-wide session whose ``client()`` returns the same client per
+    configuration. In a fresh process that halves the model loading; in a
+    warm one (a later cache-miss build in the same conversation) the clients
+    cost nothing and their connections are already open.
+
+    Arm of ``agent_build_experiment_arm``; off by default. Nothing reaches
+    the prompt.
+    """
+    return agent_build_experiment_arm(session_id) == "shared_clients"
