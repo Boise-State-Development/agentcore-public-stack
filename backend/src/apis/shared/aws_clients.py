@@ -28,8 +28,8 @@ their clients on it. A fresh session re-parses every service model it
 touches (the parse is per session, not per process), so a cold first turn
 paid that parse several times over — see `docs/specs/turn-path-ttft.md`
 §5 P2. Both SDKs accept a session, so `shared_boto_session()` is the one
-process-wide session handed to them (behind `memory_shared_clients_enabled`,
-an A/B arm) and to `apis/inference_api/warmup.py`, which builds its clients
+process-wide session handed to them (`agent_build_shared_session_enabled`,
+default on) and to `apis/inference_api/warmup.py`, which builds its clients
 at container start so a first turn finds them already parsed. Its `client()`
 returns one client per configuration, so every caller that asks for the same
 service with the same config shares one client and one connection pool.

@@ -24,20 +24,18 @@ class AgentFactory:
     """Factory for creating configured Strands Agent instances with multi-provider support"""
 
     @staticmethod
-    def _create_bedrock_model(model_config: ModelConfig, session_id: Optional[str] = None) -> BedrockModel:
+    def _create_bedrock_model(model_config: ModelConfig) -> BedrockModel:
         """
         Create a BedrockModel instance
 
         Args:
             model_config: Model configuration
-            session_id: The conversation, which decides the agent-build A/B
-                arm (see ``ModelConfig.to_bedrock_config``).
 
         Returns:
             BedrockModel: Configured Bedrock model (a ``CountTokensBedrockModel``
             so native CountTokens works for inference-profile model ids).
         """
-        bedrock_config = model_config.to_bedrock_config(session_id=session_id)
+        bedrock_config = model_config.to_bedrock_config()
         # Strands awaits count_tokens before every model call; keep that local.
         # Native counts are taken off the critical path by the
         # context-attribution hook (native_count_tokens in a background task).
@@ -192,7 +190,6 @@ class AgentFactory:
         hooks: Optional[List[Any]] = None,
         plugins: Optional[List[Any]] = None,
         memory_context: Optional[str] = None,
-        session_id: Optional[str] = None,
     ) -> Agent:
         """
         Create a Strands Agent instance with the appropriate model provider
@@ -209,8 +206,6 @@ class AgentFactory:
             memory_context: Optional rendered Memory-Space block. Sent after
                 the system prompt, behind a cache point of its own when the
                 model supports cache points (see below).
-            session_id: The conversation this agent serves. Only the Bedrock
-                provider reads it, to pick the agent-build A/B arm.
 
         Returns:
             Agent: Configured Strands Agent instance
@@ -224,7 +219,7 @@ class AgentFactory:
 
         # Create appropriate model based on provider
         if provider == ModelProvider.BEDROCK:
-            model = AgentFactory._create_bedrock_model(model_config, session_id=session_id)
+            model = AgentFactory._create_bedrock_model(model_config)
         elif provider == ModelProvider.OPENAI:
             model = AgentFactory._create_openai_model(model_config)
         elif provider == ModelProvider.MANTLE:
