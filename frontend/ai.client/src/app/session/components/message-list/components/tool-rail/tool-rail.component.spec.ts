@@ -72,17 +72,12 @@ describe('ToolRailComponent', () => {
                   }
                   @if (call.result) {
                     <div class="call-result">
-                      @if (isResultExpanded(call.id)) {
-                        @for (item of call.result.content; track $index) {
-                          @if (item.text) { <div>{{ item.text }}</div> }
-                        }
-                      } @else {
-                        <span>{{ truncateResult(getResultText(call)) }}</span>
-                      }
-                      @if (getResultText(call).length > 200) {
-                        <button type="button" class="toggle-result" (click)="toggleFullResult(call.id)">
-                          {{ isResultExpanded(call.id) ? 'Show less' : 'Show full result' }}
-                        </button>
+                      @if (hasResultBody(call)) {
+                        <div class="result-body">
+                          @for (item of call.result.content; track $index) {
+                            @if (item.text) { <pre>{{ item.text }}</pre> }
+                          }
+                        </div>
                       }
                     </div>
                     @for (item of getResultImages(call); track $index) {
@@ -402,29 +397,29 @@ describe('ToolRailComponent', () => {
       expect(fixture.nativeElement.querySelector('.call-input')).toBeNull();
     });
 
-    // Split into two cases on purpose: the detail is now a real `@if`, so a
-    // second `toggle*` call in one case folds it back up and the assertion
-    // silently measures the wrong state.
-    it('offers no "show full result" for a short result', () => {
+    it('renders a long result in full, with no "show full result" toggle', () => {
+      // Long results scroll inside a bounded box instead of being cut off
+      // behind a toggle — the whole payload is always there to check.
+      const long = 'A'.repeat(300);
       render(
         makeGroup({
-          calls: [makeCall({ result: { status: 'success', content: [{ text: 'short' }] } })],
+          calls: [makeCall({ result: { status: 'success', content: [{ text: long }] } })],
         }),
       );
       component.toggleExpanded();
       component.toggleCallDetail('tool-1');
       fixture.detectChanges();
 
-      expect(fixture.nativeElement.querySelector('.call-result')).toBeTruthy();
-      expect(fixture.nativeElement.querySelector('.toggle-result')).toBeNull();
+      expect(fixture.nativeElement.querySelector('.result-body').textContent).toContain(long);
+      expect(fixture.nativeElement.textContent).not.toContain('Show full result');
     });
 
-    it('offers "show full result" for a truncated one', () => {
+    it('renders no result body for an image-only result', () => {
       render(
         makeGroup({
           calls: [
             makeCall({
-              result: { status: 'success', content: [{ text: 'A'.repeat(300) }] },
+              result: { status: 'success', content: [{ image: { format: 'png', data: 'x' } }] },
             }),
           ],
         }),
@@ -433,19 +428,8 @@ describe('ToolRailComponent', () => {
       component.toggleCallDetail('tool-1');
       fixture.detectChanges();
 
-      expect(fixture.nativeElement.querySelector('.toggle-result')).toBeTruthy();
-    });
-
-    it('tracks result expansion per call', () => {
-      render(
-        makeGroup({
-          calls: [makeCall({ id: 'a' }), makeCall({ id: 'b' })],
-        }),
-      );
-
-      component.toggleFullResult('a');
-      expect(component.isResultExpanded('a')).toBe(true);
-      expect(component.isResultExpanded('b')).toBe(false);
+      expect(fixture.nativeElement.querySelector('.call-result')).toBeTruthy();
+      expect(fixture.nativeElement.querySelector('.result-body')).toBeNull();
     });
 
     it('renders images from result content', () => {
@@ -634,20 +618,10 @@ describe('ToolRailComponent', () => {
       expect(component.formatDuration(250)).toBe('250ms');
     });
 
-    it('formats input as key-value pairs', () => {
-      const result = component.formatInput({ query: 'test', limit: 5 });
-      expect(result).toContain('query: "test"');
-      expect(result).toContain('limit: 5');
-    });
-
-    it('truncates long text', () => {
-      const truncated = component.truncateResult('A'.repeat(300), 200);
-      expect(truncated.length).toBe(203);
-      expect(truncated.endsWith('...')).toBe(true);
-    });
-
-    it('leaves short text alone', () => {
-      expect(component.truncateResult('Hello')).toBe('Hello');
+    it('formats input as one key-value pair per line', () => {
+      expect(component.formatInput({ query: 'test', limit: 5 })).toBe(
+        'query: "test"\nlimit: 5',
+      );
     });
 
     it('builds an image data URL', () => {
@@ -660,27 +634,25 @@ describe('ToolRailComponent', () => {
       expect(component.getImageDataUrl({ text: 'hello' })).toBe('');
     });
 
-    it('combines text and json result items', () => {
-      const text = component.getResultText(
-        makeCall({
-          result: {
-            status: 'success',
-            content: [{ text: 'hello' }, { json: { key: 'value' } }],
-          },
-        }),
-      );
-      expect(text).toContain('hello');
-      expect(text).toContain('"key"');
+    it('has a result body for text or json items', () => {
+      expect(
+        component.hasResultBody(
+          makeCall({ result: { status: 'success', content: [{ json: { key: 'value' } }] } }),
+        ),
+      ).toBe(true);
     });
 
-    it('represents an image item as [image]', () => {
+    it('has no result body for an image-only or empty result', () => {
       expect(
-        component.getResultText(
+        component.hasResultBody(
           makeCall({
             result: { status: 'success', content: [{ image: { format: 'png', data: 'x' } }] },
           }),
         ),
-      ).toBe('[image]');
+      ).toBe(false);
+      expect(component.hasResultBody(makeCall({ result: { status: 'success', content: [] } }))).toBe(
+        false,
+      );
     });
   });
 });
