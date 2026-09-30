@@ -270,6 +270,47 @@ describe('ModelDropdownComponent', () => {
     expect(setEffort).toHaveBeenCalledWith('high');
   });
 
+  it('rotates the trigger chevron while the menu is open', () => {
+    // The open state comes from the trigger's cdkMenuOpened/cdkMenuClosed
+    // outputs. CdkMenu has no `opened` output, so an `(opened)` binding on the
+    // panel compiles to a DOM listener that never fires and the chevron sticks.
+    const { fixture } = setup();
+    const trigger: HTMLButtonElement = fixture.nativeElement.querySelector(
+      'button[aria-label="Select model"]',
+    );
+    const chevron = () => trigger.querySelector('svg')!;
+    expect(chevron().classList).not.toContain('rotate-180');
+
+    trigger.click();
+    fixture.detectChanges();
+    expect(menuItems().length).toBeGreaterThan(0);
+    expect(chevron().classList).toContain('rotate-180');
+
+    // A second click on the trigger toggles the menu closed.
+    trigger.click();
+    fixture.detectChanges();
+    expect(menuItems().length).toBe(0);
+    expect(chevron().classList).not.toContain('rotate-180');
+  });
+
+  it('un-rotates the chevron when choosing a model closes the menu', () => {
+    const { fixture, setSelectedModel } = setup({
+      featured: [
+        makeModel({ id: 'a', modelId: 'a', modelName: 'Alpha' }),
+        makeModel({ id: 'b', modelId: 'b', modelName: 'Beta' }),
+      ],
+    });
+    const chevron = () =>
+      fixture.nativeElement.querySelector('button[aria-label="Select model"] svg') as SVGElement;
+    openMenu(fixture);
+    expect(chevron().classList).toContain('rotate-180');
+
+    itemLabelled('Beta')!.click();
+    fixture.detectChanges();
+    expect(setSelectedModel).toHaveBeenCalled();
+    expect(chevron().classList).not.toContain('rotate-180');
+  });
+
   it('locks the picker to a plain label when an agent pins the model', () => {
     const { fixture, modelService } = setup();
     modelService.agentModelLocked.set(true);
