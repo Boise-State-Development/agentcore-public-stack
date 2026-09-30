@@ -27,7 +27,7 @@ from apis.shared.errors import (
 )
 from apis.inference_api.runtime_health import ping_payload
 from apis.shared.feature_flags import (
-    agent_build_experiment_arm,
+    agent_build_shared_session_enabled,
     agent_preparing_phase_enabled,
     agents_enabled,
     attachment_turn_guard_enabled,
@@ -4165,11 +4165,12 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                         "isResume": is_resume,
                         "hasAssistant": bool(input_data.rag_assistant_id),
                         "deferredBuild": deferred_build,
-                        # The agent-build A/B (`agent_build_experiment_arm`),
-                        # and how many builds this process has run: 1 on a
-                        # conversation's first turn, which is always a fresh
-                        # Runtime process.
-                        "buildArm": agent_build_experiment_arm(input_data.session_id),
+                        # Whether the build's SDK clients came from the
+                        # process-wide session (`agent_build_shared_session_enabled`,
+                        # a kill switch), and how many builds this process has
+                        # run: 1 on a conversation's first turn, which is
+                        # always a fresh Runtime process.
+                        "sharedSession": agent_build_shared_session_enabled(),
                         "processBuilds": process_build_count(),
                     },
                 )

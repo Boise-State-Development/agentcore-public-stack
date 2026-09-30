@@ -148,6 +148,21 @@ class TestWarmSharedSession:
             warmup.warm_shared_session()
         session.assert_not_called()
 
+    def test_the_kill_switch_skips_the_whole_step(self, monkeypatch):
+        """Off means the SDKs build their own sessions, so nothing here would
+        be used — including the one connection the strategy read opens."""
+        monkeypatch.setenv("AWS_REGION", "us-west-2")
+        monkeypatch.setenv("AGENT_BUILD_SHARED_SESSION_ENABLED", "false")
+        from agents.main_agent.session import session_factory
+
+        with patch("apis.shared.aws_clients.shared_boto_session") as session, patch.object(
+            session_factory, "_discover_strategy_ids"
+        ) as discover:
+            warmup.warm_shared_session()
+
+        session.assert_not_called()
+        discover.assert_not_called()
+
     def test_a_failing_client_does_not_stop_the_rest(self, monkeypatch):
         monkeypatch.setenv("AWS_REGION", "us-west-2")
         session = MagicMock()

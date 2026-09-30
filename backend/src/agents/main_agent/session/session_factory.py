@@ -80,7 +80,7 @@ except ImportError:
 # ---------------------------------------------------------------------------
 #
 # The SDK's session manager builds its clients from scratch on every
-# construction, twice (see ``memory_shared_clients_enabled``). Everything
+# construction, twice (see ``agent_build_shared_session_enabled``). Everything
 # below exists to hand it the process-wide session from
 # ``apis.shared.aws_clients`` instead, which warm-up builds at container
 # start (``apis/inference_api/warmup.py``).
@@ -142,10 +142,10 @@ def _discover_strategy_ids(
         memory_id: AgentCore Memory ID
         region: AWS region
         shared_session: Build the ``MemoryClient`` on the process-wide session
-            (``memory_shared_clients_enabled``) instead of a fresh one. Part
-            of the cache key on purpose: warm-up primes the shared entry at
-            container start, and the control arm's first turn must still do
-            exactly what it did before the experiment.
+            (``agent_build_shared_session_enabled``) instead of a fresh one.
+            Part of the cache key on purpose: warm-up primes the shared entry
+            at container start, and a process with the kill switch set must
+            still do exactly what it did before.
 
     Returns:
         Tuple of (semantic_strategy_id, preference_strategy_id, summary_strategy_id)
@@ -189,8 +189,7 @@ def warm_strategy_ids() -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """Discover the memory's strategy ids on the shared session, once, at container start.
 
     Called from ``apis/inference_api/warmup.py`` on the startup daemon thread
-    so the shared arm's first turn finds the ids cached and its clients
-    built. Raises when no memory is configured (``load_memory_config``); the
+    so the first turn finds the ids cached and its clients built. Raises when no memory is configured (``load_memory_config``); the
     warm-up step logs that and moves on.
     """
     if not AGENTCORE_MEMORY_AVAILABLE:
@@ -282,12 +281,12 @@ class SessionFactory:
         logger.info(f"   • Memory ID: {memory_id}")
         logger.info(f"   • Region: {aws_region}")
 
-        # Discover actual strategy IDs from the memory configuration. On the
-        # shared arm this is a cache hit: warm-up discovered them at
+        # Discover actual strategy IDs from the memory configuration. With the
+        # shared session on this is a cache hit: warm-up discovered them at
         # container start (`warm_strategy_ids`).
-        from apis.shared.feature_flags import memory_shared_clients_enabled
+        from apis.shared.feature_flags import agent_build_shared_session_enabled
 
-        shared_clients = memory_shared_clients_enabled(session_id)
+        shared_clients = agent_build_shared_session_enabled()
         semantic_id, preference_id, summary_id = _discover_strategy_ids(
             memory_id, aws_region, shared_session=shared_clients
         )

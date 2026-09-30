@@ -105,7 +105,6 @@ class ChatAgent(BaseAgent):
                 hooks=hooks,
                 plugins=plugins,
                 memory_context=getattr(self, "memory_context", None),
-                session_id=getattr(self, "session_id", None),
             )
 
         except Exception as e:

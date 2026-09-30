@@ -55,10 +55,9 @@ WARM_BOTO_SERVICES: tuple[str, ...] = (
 
 # The parse above is per *session*, and the two SDKs on the agent build (the
 # AgentCore Memory session manager, Strands' BedrockModel) build their clients
-# on the process-wide session from `apis.shared.aws_clients` when the
-# `shared_clients` arm is on. Build those clients on it here, so the arm's
-# first turn finds them parsed; on the control arm the session sits unused,
-# which costs nothing on the request path.
+# on the process-wide session from `apis.shared.aws_clients`
+# (`agent_build_shared_session_enabled`, default on). Build those clients on
+# it here, so the first turn finds them parsed.
 WARM_SHARED_SESSION_SERVICES: tuple[str, ...] = (
     "bedrock-agentcore",
     "bedrock-agentcore-control",
@@ -113,6 +112,11 @@ def warm_shared_session(services: Iterable[str] = WARM_SHARED_SESSION_SERVICES) 
     restore's first turn is the thing to watch for a pool holding a socket
     that did not survive.
     """
+    from apis.shared.feature_flags import agent_build_shared_session_enabled
+
+    if not agent_build_shared_session_enabled():
+        logger.info("warmup step=shared outcome=skipped error=AGENT_BUILD_SHARED_SESSION_ENABLED=false")
+        return
     region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
     if not region:
         logger.info("warmup step=shared outcome=skipped error=no region configured")

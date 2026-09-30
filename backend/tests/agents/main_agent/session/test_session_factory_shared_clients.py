@@ -28,7 +28,7 @@ def memory_env(monkeypatch):
     """Real construction, no network: the SDK's session read/create are stubbed."""
     monkeypatch.setenv("AGENTCORE_MEMORY_ID", "mem-test")
     monkeypatch.setenv("AWS_REGION", "us-west-2")
-    monkeypatch.setenv("AGENT_BUILD_EXPERIMENT", "shared_clients")
+    monkeypatch.delenv("AGENT_BUILD_SHARED_SESSION_ENABLED", raising=False)  # default on
     monkeypatch.setattr(factory, "_discover_strategy_ids", lambda memory_id, region, **kwargs: (None, None, None))
     monkeypatch.setattr(sdk.AgentCoreMemorySessionManager, "read_session", lambda self, session_id, **k: None)
     monkeypatch.setattr(sdk.AgentCoreMemorySessionManager, "create_session", lambda self, session, **k: session)
@@ -101,10 +101,10 @@ class TestSharedClients:
         assert len({id(m.memory_client.gmdp_client) for m in managers}) == 1
 
 
-class TestControlArm:
-    def test_control_keeps_the_sdks_per_manager_clients(self, memory_env, client_builds, monkeypatch):
-        """The default: no experiment set means every session is control."""
-        monkeypatch.delenv("AGENT_BUILD_EXPERIMENT", raising=False)
+class TestKillSwitch:
+    def test_off_keeps_the_sdks_per_manager_clients(self, memory_env, client_builds, monkeypatch):
+        """`AGENT_BUILD_SHARED_SESSION_ENABLED=false` restores the SDK's own sessions."""
+        monkeypatch.setenv("AGENT_BUILD_SHARED_SESSION_ENABLED", "false")
 
         first = _build("session-a")
         built_by_first = len(client_builds)
@@ -141,11 +141,11 @@ class TestClientReusingSession:
 
 
 class TestWhatTheFactoryHandsTheSdk:
-    """The seam the arm rides on: the SDK's constructor takes ``boto_session``,
-    and ``MemoryClient`` takes ``boto3_session``. On the arm both get the
-    shared session; off it, nothing — the SDKs build their own, as before."""
+    """The seam the shared session rides on: the SDK's constructor takes ``boto_session``,
+    and ``MemoryClient`` takes ``boto3_session``. On (the default) both get the
+    shared session; off, nothing — the SDKs build their own, as before."""
 
-    def test_the_sdk_constructor_gets_the_shared_session_on_the_arm(self, memory_env, monkeypatch):
+    def test_the_sdk_constructor_gets_the_shared_session_by_default(self, memory_env, monkeypatch):
         captured = {}
         original = sdk.AgentCoreMemorySessionManager.__init__
 
@@ -159,8 +159,8 @@ class TestWhatTheFactoryHandsTheSdk:
 
         assert captured["boto_session"] is aws_clients.shared_boto_session()
 
-    def test_the_sdk_constructor_gets_nothing_off_the_arm(self, memory_env, monkeypatch):
-        monkeypatch.delenv("AGENT_BUILD_EXPERIMENT", raising=False)
+    def test_the_sdk_constructor_gets_nothing_with_the_kill_switch(self, memory_env, monkeypatch):
+        monkeypatch.setenv("AGENT_BUILD_SHARED_SESSION_ENABLED", "false")
         captured = {}
         original = sdk.AgentCoreMemorySessionManager.__init__
 
@@ -174,7 +174,7 @@ class TestWhatTheFactoryHandsTheSdk:
 
         assert captured["boto_session"] is None
 
-    def test_strategy_discovery_builds_its_client_on_the_shared_session_on_the_arm(self):
+    def test_strategy_discovery_builds_its_client_on_the_shared_session(self):
         fetch = factory._discover_strategy_ids.__wrapped__
         with patch.object(factory, "MemoryClient") as memory_client:
             memory_client.return_value.get_memory_strategies.return_value = []
@@ -184,7 +184,7 @@ class TestWhatTheFactoryHandsTheSdk:
             region_name="us-west-2", boto3_session=aws_clients.shared_boto_session()
         )
 
-    def test_strategy_discovery_builds_a_fresh_client_off_the_arm(self):
+    def test_strategy_discovery_builds_a_fresh_client_when_asked_not_to_share(self):
         fetch = factory._discover_strategy_ids.__wrapped__
         with patch.object(factory, "MemoryClient") as memory_client:
             memory_client.return_value.get_memory_strategies.return_value = []
@@ -192,7 +192,7 @@ class TestWhatTheFactoryHandsTheSdk:
 
         memory_client.assert_called_once_with(region_name="us-west-2", boto3_session=None)
 
-    def test_the_factory_asks_for_the_shared_entry_only_on_the_arm(self, memory_env, monkeypatch):
+    def test_the_factory_asks_for_the_shared_entry_unless_switched_off(self, memory_env, monkeypatch):
         asked: List[bool] = []
         monkeypatch.setattr(
             factory,
@@ -201,13 +201,13 @@ class TestWhatTheFactoryHandsTheSdk:
         )
 
         _build("session-a")
-        monkeypatch.delenv("AGENT_BUILD_EXPERIMENT", raising=False)
+        monkeypatch.setenv("AGENT_BUILD_SHARED_SESSION_ENABLED", "false")
         _build("session-b")
 
         assert asked == [True, False]
 
     def test_warm_strategy_ids_primes_the_shared_entry(self, memory_env, monkeypatch):
-        """Warm-up's call and the arm's first turn must hit the same cache key,
+        """Warm-up's call and the first turn must hit the same cache key,
         or the first turn pays the call warm-up already made."""
         with patch.object(factory, "_discover_strategy_ids", return_value=(None, None, None)) as discover:
             factory.warm_strategy_ids()
