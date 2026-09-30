@@ -5,7 +5,6 @@ Contains business logic for chat operations, including agent creation and manage
 
 import asyncio
 import json
-import weakref
 import logging
 import hashlib
 import os
@@ -296,23 +295,6 @@ def _adopt_session_conversation(agent: BaseAgent, session_id: str) -> None:
         logger.debug("Session %s: could not sync compaction live offset", scrub_log(session_id), exc_info=True)
 
 
-# One agent build at a time per process. Builds used to be serialized for
-# free, because each one froze the event loop, and the external MCP layer
-# relies on that: a process-wide client cache and Strands' `MCPClient`
-# start/stop are not safe against two builds at once. Keyed by loop because an
-# asyncio.Lock binds to the loop that first waits on it (one loop in
-# production, one per test).
-_agent_build_locks: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock]" = weakref.WeakKeyDictionary()
-
-
-def _agent_build_lock() -> asyncio.Lock:
-    loop = asyncio.get_running_loop()
-    lock = _agent_build_locks.get(loop)
-    if lock is None:
-        lock = _agent_build_locks[loop] = asyncio.Lock()
-    return lock
-
-
 # Agent builds (cache misses) this process has run. Every conversation's first
 # turn runs in a fresh Runtime process, so 1 marks exactly the cold-process
 # build the agent-build experiment is about (stamped on `turn_prelude`).
@@ -321,32 +303,6 @@ _process_build_count = 0
 
 def process_build_count() -> int:
     return _process_build_count
-
-
-async def _build_agent_off_loop(create_kwargs: Dict[str, Any]) -> BaseAgent:
-    """Run the synchronous build in a worker thread, one build at a time.
-
-    The lock is released when the THREAD finishes, not when this coroutine
-    does: a client disconnect cancels the await but cannot stop the thread,
-    and releasing early would let the next build overlap the orphaned one.
-    """
-    lock = _agent_build_lock()
-    await lock.acquire()
-    try:
-        build = asyncio.ensure_future(asyncio.to_thread(create_agent, **create_kwargs))
-    except BaseException:
-        lock.release()
-        raise
-
-    def _on_build_done(finished: "asyncio.Future[BaseAgent]") -> None:
-        lock.release()
-        # Retrieve the outcome so an orphaned build's failure is not
-        # reported as "exception was never retrieved".
-        if not finished.cancelled():
-            finished.exception()
-
-    build.add_done_callback(_on_build_done)
-    return await asyncio.shield(build)
 
 
 async def get_agent(
@@ -548,19 +504,11 @@ async def get_agent(
         set_stage_recorder,
     )
 
-    from apis.shared.feature_flags import agent_build_off_loop_enabled
-
     global _process_build_count
     _process_build_count += 1
     _stage_token = set_stage_recorder(build_stage_recorder)
     try:
-        if agent_build_off_loop_enabled(session_id):
-            # The build is synchronous and ~1s on a first turn; on the loop it
-            # froze every other coroutine in the container for that long. The
-            # worker gets a copy of this context, recorder included.
-            agent = await _build_agent_off_loop(create_kwargs)
-        else:
-            agent = create_agent(**create_kwargs)
+        agent = create_agent(**create_kwargs)
     finally:
         reset_stage_recorder(_stage_token)
 

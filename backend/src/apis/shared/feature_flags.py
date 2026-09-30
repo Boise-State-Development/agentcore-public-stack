@@ -658,24 +658,29 @@ def compaction_summary_extract_enabled() -> bool:
 
 
 
-AGENT_BUILD_ARMS = ("control", "shared_clients", "shared_clients_off_loop")
+AGENT_BUILD_ARMS = ("control", "shared_clients")
 
 
 def agent_build_experiment_arm(session_id: Optional[str]) -> str:
     """Which agent-build variant this session runs (an A/B experiment, default OFF).
 
-    Two changes to the first-turn agent build, measured before either ships:
+    One change to the first-turn agent build, measured before it ships:
 
-    - ``shared_clients``: AgentCore Memory session managers share one set of
-      boto3 clients (``memory_shared_clients_enabled``).
-    - ``shared_clients_off_loop``: that, plus the synchronous build runs in a
-      worker thread (``agent_build_off_loop_enabled``).
+    - ``shared_clients``: AgentCore Memory session managers, the strategy-id
+      discovery and the Bedrock model client share one process-wide boto3
+      session (``memory_shared_clients_enabled``).
+
+    A second arm, ``shared_clients_off_loop`` (the synchronous build on a
+    worker thread), was withdrawn before the A/B ran: a thread does not make
+    a synchronous build faster, and the overlap it would have enabled is
+    reachable inside the constructor without the MCP hardening it needed
+    (docs/specs/turn-path-ttft.md, sections 4 and 5 P3).
 
     ``AGENT_BUILD_EXPERIMENT`` selects the mode:
 
     - unset / empty / anything unrecognised: ``control`` for every session.
       This is the default everywhere, so other deployments see no change.
-    - ``ab``: each session is hashed into one of the three arms. Every
+    - ``ab``: each session is hashed into one of the two arms. Every
       conversation runs in its own Runtime process, so arms never share
       process state, and they run interleaved in time, which cancels network
       drift between arms.
@@ -714,29 +719,4 @@ def memory_shared_clients_enabled(session_id: Optional[str]) -> bool:
     Arm of ``agent_build_experiment_arm``; off by default. Nothing reaches
     the prompt.
     """
-    return agent_build_experiment_arm(session_id) in ("shared_clients", "shared_clients_off_loop")
-
-
-def agent_build_off_loop_enabled(session_id: Optional[str]) -> bool:
-    """Whether ``get_agent`` runs this session's synchronous build in a worker thread.
-
-    ``create_agent`` is synchronous: prompt assembly, tool catalog lookups,
-    external MCP ``tools/list``, session manager construction and the
-    AgentCore Memory restore all run on the calling thread. Called from
-    ``get_agent`` on the event loop, a first-turn build (1.0-1.2s on dev)
-    freezes everything else in the process, including the concurrent
-    session-title task, whose Nova reply sits unprocessed until the build
-    ends. Off the loop, the stream can emit that title during the build.
-
-    ``asyncio.to_thread`` copies contextvars (the build-stage recorder, the
-    AgentCore request context) into the worker. The build's sync-to-async
-    bridges then take their no-loop branch and ``asyncio.run`` their
-    coroutine directly. Builds stay one at a time (``_build_agent_off_loop``),
-    because the external MCP layer relied on the frozen loop for that, and
-    ``ExternalMCPIntegration`` locks its maps and pins handed-out clients for
-    the build (see ``load_external_tools``'s ``consumer_pin``).
-
-    Arm of ``agent_build_experiment_arm``; off by default. Nothing reaches
-    the prompt.
-    """
-    return agent_build_experiment_arm(session_id) == "shared_clients_off_loop"
+    return agent_build_experiment_arm(session_id) == "shared_clients"

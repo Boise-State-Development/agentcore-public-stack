@@ -1,11 +1,12 @@
-"""Agent-build A/B: does sharing Memory clients / building off the loop help a first turn?
+"""Agent-build A/B: does sharing boto3 clients help a first turn?
 
 Drives real first turns through the deployed AgentCore Runtime and compares the
-three arms of ``agent_build_experiment_arm`` (``apis/shared/feature_flags.py``):
+two arms of ``agent_build_experiment_arm`` (``apis/shared/feature_flags.py``):
 
-    control                  today's build
-    shared_clients           AgentCore Memory session managers share boto3 clients
-    shared_clients_off_loop  that, plus the synchronous build runs in a worker thread
+    control         today's build
+    shared_clients  the session manager, strategy-id discovery and Bedrock
+                    model client share one process-wide boto3 session, built
+                    at container warm-up
 
 **Precondition:** the Runtime must have ``AGENT_BUILD_EXPERIMENT=ab``. Arms are
 assigned server-side by hashing the session id, so this script generates session
@@ -23,8 +24,10 @@ Two sources per turn, joined on session id:
   sub-stages, ``buildArm`` and ``processBuilds``.
 
 What it establishes: per-arm medians for the build and its sub-stages, time to
-first token, and whether the title beats ``prepared``. What it cannot: fleet
-magnitude, or behaviour under concurrent load. Report which claim you make.
+first token, and whether the title beats ``prepared`` (it cannot while the build
+is synchronous on the loop; the column is kept so a regression there is visible).
+What it cannot: fleet magnitude, or behaviour under concurrent load. Report which
+claim you make.
 
 Each turn is a real conversation owned by ``--user-id``: it draws on that user's
 quota and appears in their sidebar. Use ``--cleanup`` to soft-delete the
@@ -35,7 +38,7 @@ Usage (an authenticated dev-ai profile and an active headless grant for
 
     cd backend
     AWS_PROFILE=dev-ai uv run python scripts/experiment_agent_build_arms.py \\
-        --user-id <sub> --per-arm 15
+        --user-id <sub> --per-arm 15 --cleanup
 """
 
 from __future__ import annotations
@@ -60,7 +63,7 @@ logger = logging.getLogger("experiment")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
 
-ARMS = ("control", "shared_clients", "shared_clients_off_loop")
+ARMS = ("control", "shared_clients")
 
 # Frames whose first arrival is recorded, keyed by how the table names them.
 _TIMED = ("preparing", "prepared", "session_title", "first_token", "done")

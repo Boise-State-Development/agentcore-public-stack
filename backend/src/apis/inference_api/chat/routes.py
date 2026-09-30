@@ -3803,45 +3803,43 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                     }
                 )
 
-        # One-shot `session_title` SSE: once the concurrent title task
-        # (kicked off before the quota check on first turns) finishes,
-        # push the title to the client so the sidebar/header rename in
-        # parallel with the pending response instead of at stream end.
-        # Never awaited, so it adds no latency. Polled from two places:
-        # the coordinator's live status merge (every 100ms, so a title
-        # that lands during the model's time-to-first-token or a long
-        # tool call goes out right away) and between agent events below
-        # (the only route while that merge is switched off). It is also
-        # checked while a deferred build is in flight, which only a build
-        # off the event loop can reach (`agent_build_off_loop_enabled`). A
-        # stream that outruns Nova Micro simply never emits and the SPA's
-        # post-close metadata refresh covers it.
-        title_emitted = False
-
-        def _session_title_sse() -> Optional[str]:
-            nonlocal title_emitted
-            if title_emitted or title_task is None or not title_task.done():
-                return None
-            title_emitted = True
-            try:
-                generated_title = title_task.result()
-            except Exception as title_err:  # noqa: BLE001 - cancelled/failed task must not break the stream
-                logger.warning("Title task unavailable for SSE emit: %s", title_err)
-                return None
-            # Generation failures return the "New Conversation"
-            # placeholder — nothing worth pushing over the wire.
-            if not generated_title or generated_title == "New Conversation":
-                return None
-            payload = {
-                "type": "session_title",
-                "sessionId": input_data.session_id,
-                "title": generated_title,
-            }
-            return f"event: session_title\ndata: {json.dumps(payload)}\n\n"
-
         # Create stream with optional quota warning injection
         async def stream_with_quota_warning() -> AsyncGenerator[str, None]:
             """Wrap agent stream to inject quota warning at start if needed"""
+            # One-shot `session_title` SSE: once the concurrent title task
+            # (kicked off before the quota check on first turns) finishes,
+            # push the title to the client so the sidebar/header rename in
+            # parallel with the pending response instead of at stream end.
+            # Never awaited, so it adds no latency. Polled from two places:
+            # the coordinator's live status merge (every 100ms, so a title
+            # that lands during the model's time-to-first-token or a long
+            # tool call goes out right away) and between agent events below
+            # (the only route while that merge is switched off). A stream
+            # that outruns Nova Micro simply never emits and the SPA's
+            # post-close metadata refresh covers it.
+            title_emitted = False
+
+            def _session_title_sse() -> Optional[str]:
+                nonlocal title_emitted
+                if title_emitted or title_task is None or not title_task.done():
+                    return None
+                title_emitted = True
+                try:
+                    generated_title = title_task.result()
+                except Exception as title_err:  # noqa: BLE001 - cancelled/failed task must not break the stream
+                    logger.warning("Title task unavailable for SSE emit: %s", title_err)
+                    return None
+                # Generation failures return the "New Conversation"
+                # placeholder — nothing worth pushing over the wire.
+                if not generated_title or generated_title == "New Conversation":
+                    return None
+                payload = {
+                    "type": "session_title",
+                    "sessionId": input_data.session_id,
+                    "title": generated_title,
+                }
+                return f"event: session_title\ndata: {json.dumps(payload)}\n\n"
+
             # Yield quota warning event first if applicable
             if quota_warning_event:
                 yield quota_warning_event.to_sse_format()
@@ -4101,24 +4099,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                         + "\n\n"
                     )
                     try:
-                        # Raced against the title so a title that lands
-                        # mid-build goes out mid-build. With the build on the
-                        # event loop the title task cannot finish first, so
-                        # this reduces to the plain await it replaced.
-                        build = asyncio.ensure_future(_build_main_agent())
-                        try:
-                            if title_task is not None and not title_task.done():
-                                await asyncio.wait(
-                                    {build, title_task},
-                                    return_when=asyncio.FIRST_COMPLETED,
-                                )
-                                title_sse = _session_title_sse()
-                                if title_sse:
-                                    yield title_sse
-                            agent = await build
-                        finally:
-                            if not build.done():
-                                build.cancel()
+                        agent = await _build_main_agent()
                     except Exception as build_error:
                         # The handler has already returned, so the two `except`
                         # arms below cannot see this — a build that fails here
