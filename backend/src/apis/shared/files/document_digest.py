@@ -45,6 +45,8 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from pydantic import BaseModel, Field
 
+from apis.shared.aws_clients import get_client
+
 from .document_read import _open_pdf, _pdf_page_text, docx_paragraphs, document_format_for
 
 logger = logging.getLogger(__name__)
@@ -257,18 +259,24 @@ def _abstract_prompt(outline: DocumentDigest, sample: str) -> str:
     return "\n".join(lines)
 
 
+def _converse(region: str, **kwargs: Any) -> Dict[str, Any]:
+    """Run in a worker thread, so a first-use client build stays off the event loop.
+
+    The client is process-cached: one per upload paid botocore's service-model
+    load (~250ms the first time in a process) and, every time, a fresh
+    connection pool — a new TCP+TLS handshake per abstract.
+    """
+    return get_client("bedrock-runtime", region).converse(**kwargs)
+
+
 async def generate_abstract(outline: DocumentDigest, sample: str, model_id: str = DOCUMENT_DIGEST_MODEL_ID) -> Optional[str]:
     """3–5 sentences from the cheap model, or ``None`` (never raises)."""
     if not sample.strip():
         return None
     try:
-        import boto3
-    except ImportError:  # pragma: no cover
-        return None
-    try:
-        client = boto3.client("bedrock-runtime", region_name=os.environ.get("AWS_REGION", "us-west-2"))
         response = await asyncio.to_thread(
-            client.converse,
+            _converse,
+            os.environ.get("AWS_REGION", "us-west-2"),
             modelId=model_id,
             messages=[{"role": "user", "content": [{"text": _abstract_prompt(outline, sample)}]}],
             system=[{"text": _ABSTRACT_SYSTEM_PROMPT}],

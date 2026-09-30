@@ -1,26 +1,42 @@
 ---
 title: Environment Variables
-description: Key environment variables across services.
+description: Where configuration lives, and how a value reaches a running container.
 sidebar:
   order: 1
 ---
 
-:::caution[Draft]
-This page is a scaffolded placeholder — content to be written.
-:::
+Configuration reaches a running service through a fixed chain:
 
-Document feature flags such as AGENTCORE_MCP_APPS_HOST_ENABLED, CDK_MCP_SANDBOX_ENABLED, and SKIP_AUTH.
+```
+GitHub Actions variable  →  platform.yml workflow  →  scripts/common/load-env.sh  →
+cdk synth/deploy (infrastructure/lib/config.ts)  →  container env var  →  backend reader
+```
 
-## Shared Projects
+Almost every operator-facing knob is a `CDK_*` GitHub Actions variable (or the
+matching `cdk.context.json` key). `config.ts` reads it at synth time, validates
+it, and writes the plain env var (e.g. `SKILLS_ENABLED`, `CORS_ORIGINS`) onto the
+Fargate task / AgentCore Runtime.
 
-| Variable | Service | Default | Notes |
-| --- | --- | --- | --- |
-| `CDK_PROJECTS_ENABLED` | GitHub environment variable → CDK | off | Set to `true` to turn Projects on in that environment |
-| `PROJECTS_ENABLED` | app-api, inference-api | off | Set by CDK from the above; only `true` enables |
-| `DYNAMODB_PROJECTS_TABLE_NAME` | app-api, inference-api | — | `{prefix}-projects`, set by CDK |
-| `DYNAMODB_AUDIT_LOG_TABLE_NAME` | app-api | — | Required for the project Activity trail |
-| `PROJECTS_MAX_MEMBERS` | app-api | `200` | Not set by CDK |
-| `PROJECTS_EDITORS_MANAGE_MEMBERS_DEFAULT` | app-api | on | Not set by CDK |
-| `DIRECTORY_PROVIDER` | app-api | `users_table` | Not set by CDK |
+## Feature flags
 
-The SPA has a matching switch, `features.projects`, in its environment files. Both sides, and what the switch stops: [Admin › Projects](/agentcore-public-stack/admin/projects/#turning-projects-on).
+Every on/off feature flag — what it does, its default on a fresh fork, and
+whether it costs money — has its own page:
+
+**→ [Feature Flags](/agentcore-public-stack/configuration/feature-flags/)**
+
+## Other configuration
+
+- **CORS origins** — see [CORS](/agentcore-public-stack/configuration/cors/).
+- **Authentication** (Cognito, federated IdPs, `SKIP_AUTH` local-dev bypass) —
+  see [Authentication](/agentcore-public-stack/configuration/authentication/).
+- **AgentCore services** (Memory, Gateway, Code Interpreter, Browser) — see
+  [AgentCore Services](/agentcore-public-stack/configuration/agentcore-services/).
+- **Sizing, observability, and tuning knobs** — the authoritative list with
+  defaults lives in
+  [`infrastructure/lib/config.ts`](https://github.com/Boise-State-Development/agentcore-public-stack/blob/main/infrastructure/lib/config.ts).
+
+## Local development
+
+For local backend/frontend runs, values come from `backend/src/.env` (see
+`backend/src/.env.example`) and the frontend `environment.ts`, not from CDK. See
+[Local Development](/agentcore-public-stack/local-development/).

@@ -16,11 +16,20 @@ from agents.main_agent.session.compaction_summary import (
     compress_with_model,
     truncate_records_newest_first,
 )
+from apis.shared import aws_clients
 
 from .conftest import make_conversation
 
 
 BUDGET = 100  # tokens → 400 chars
+
+
+@pytest.fixture(autouse=True)
+def _fresh_bedrock_client():
+    """The Bedrock client is cached per process; each test builds its own."""
+    aws_clients.reset_cached_clients()
+    yield
+    aws_clients.reset_cached_clients()
 
 
 @pytest.fixture
@@ -104,6 +113,19 @@ class TestBoundSummary:
         assert result.outcome == "truncated_after_model"
         assert "Sorry" not in result.text and result.text.startswith("new")
         assert await compress_with_model(records, BUDGET, model_id="m") is None
+
+    @pytest.mark.asyncio
+    async def test_calls_reuse_one_bedrock_client_per_region(self, bedrock):
+        """A client per call paid botocore's model load and a fresh TLS handshake."""
+        bedrock.return_value = _model_reply("summary")
+        factory = sys.modules["boto3"].client
+
+        await compress_with_model(["r" * 900], BUDGET, model_id="m", region="us-west-2")
+        await compress_with_model(["r" * 900], BUDGET, model_id="m", region="us-west-2")
+        await compress_with_model(["r" * 900], BUDGET, model_id="m", region="us-east-1")
+
+        assert [c.kwargs["region_name"] for c in factory.call_args_list] == ["us-west-2", "us-east-1"]
+        assert bedrock.call_count == 3
 
     @pytest.mark.asyncio
     async def test_model_overshoot_is_tail_trimmed(self, bedrock):
