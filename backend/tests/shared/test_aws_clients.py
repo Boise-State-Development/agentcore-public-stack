@@ -69,6 +69,54 @@ class TestResetProtectsMoto:
         assert aws_clients._clients == {}
 
 
+class TestSharedSession:
+    """One process-wide `boto3.Session` for the SDKs that build their own
+    clients (docs/specs/turn-path-ttft.md §5 P2)."""
+
+    def test_the_same_session_every_time(self):
+        assert aws_clients.shared_boto_session() is aws_clients.shared_boto_session()
+
+    def test_reset_drops_the_shared_session_too(self):
+        """A session built under one moto backend is as stale as a client
+        built under it."""
+        before = aws_clients.shared_boto_session()
+
+        aws_clients.reset_cached_clients()
+
+        assert aws_clients._shared_session is None
+        assert aws_clients.shared_boto_session() is not before
+
+    def test_one_client_per_service_region_and_config(self):
+        session = aws_clients.ClientReusingSession()
+
+        first = session.client("sts", region_name="us-west-2")
+        again = session.client(service_name="sts", region_name="us-west-2")
+        other_region = session.client("sts", region_name="us-east-1")
+
+        assert first is again
+        assert first is not other_region
+        assert first.meta.config.max_pool_connections == aws_clients.SHARED_SESSION_MAX_POOL_CONNECTIONS
+
+    def test_a_none_keyword_is_not_an_override(self):
+        """Strands' BedrockModel passes `endpoint_url=None`; that must still
+        land on the shared client, or the arm silently builds a fresh one."""
+        session = aws_clients.ClientReusingSession()
+
+        plain = session.client("sts", region_name="us-west-2")
+        with_none = session.client("sts", region_name="us-west-2", endpoint_url=None)
+
+        assert with_none is plain
+
+    def test_a_real_override_is_never_shared(self):
+        session = aws_clients.ClientReusingSession()
+
+        plain = session.client("sts", region_name="us-west-2")
+        custom = session.client("sts", region_name="us-west-2", endpoint_url="https://sts.example")
+
+        assert custom is not plain
+        assert session.client("sts", region_name="us-west-2") is plain
+
+
 class TestMetadataUsesIt:
     @pytest.mark.asyncio
     async def test_session_reads_go_through_one_cached_resource(

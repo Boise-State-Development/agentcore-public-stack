@@ -13,6 +13,7 @@ seams the factory relies on. The session itself lives in
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, List
+from unittest.mock import MagicMock, patch
 
 import boto3
 import pytest
@@ -137,3 +138,78 @@ class TestClientReusingSession:
 
         assert a is not b
         assert session.client("sts", region_name="us-west-2", config=Config(user_agent_extra="a")) is a
+
+
+class TestWhatTheFactoryHandsTheSdk:
+    """The seam the arm rides on: the SDK's constructor takes ``boto_session``,
+    and ``MemoryClient`` takes ``boto3_session``. On the arm both get the
+    shared session; off it, nothing — the SDKs build their own, as before."""
+
+    def test_the_sdk_constructor_gets_the_shared_session_on_the_arm(self, memory_env, monkeypatch):
+        captured = {}
+        original = sdk.AgentCoreMemorySessionManager.__init__
+
+        def spy(self, *args, **kwargs):
+            captured["boto_session"] = kwargs.get("boto_session")
+            original(self, *args, **kwargs)
+
+        monkeypatch.setattr(sdk.AgentCoreMemorySessionManager, "__init__", spy)
+
+        _build("session-a")
+
+        assert captured["boto_session"] is aws_clients.shared_boto_session()
+
+    def test_the_sdk_constructor_gets_nothing_off_the_arm(self, memory_env, monkeypatch):
+        monkeypatch.delenv("AGENT_BUILD_EXPERIMENT", raising=False)
+        captured = {}
+        original = sdk.AgentCoreMemorySessionManager.__init__
+
+        def spy(self, *args, **kwargs):
+            captured["boto_session"] = kwargs.get("boto_session")
+            original(self, *args, **kwargs)
+
+        monkeypatch.setattr(sdk.AgentCoreMemorySessionManager, "__init__", spy)
+
+        _build("session-a")
+
+        assert captured["boto_session"] is None
+
+    def test_strategy_discovery_builds_its_client_on_the_shared_session_on_the_arm(self):
+        fetch = factory._discover_strategy_ids.__wrapped__
+        with patch.object(factory, "MemoryClient") as memory_client:
+            memory_client.return_value.get_memory_strategies.return_value = []
+            fetch("mem-test", "us-west-2", shared_session=True)
+
+        memory_client.assert_called_once_with(
+            region_name="us-west-2", boto3_session=aws_clients.shared_boto_session()
+        )
+
+    def test_strategy_discovery_builds_a_fresh_client_off_the_arm(self):
+        fetch = factory._discover_strategy_ids.__wrapped__
+        with patch.object(factory, "MemoryClient") as memory_client:
+            memory_client.return_value.get_memory_strategies.return_value = []
+            fetch("mem-test", "us-west-2", shared_session=False)
+
+        memory_client.assert_called_once_with(region_name="us-west-2", boto3_session=None)
+
+    def test_the_factory_asks_for_the_shared_entry_only_on_the_arm(self, memory_env, monkeypatch):
+        asked: List[bool] = []
+        monkeypatch.setattr(
+            factory,
+            "_discover_strategy_ids",
+            lambda memory_id, region, **kwargs: (asked.append(kwargs["shared_session"]), (None, None, None))[1],
+        )
+
+        _build("session-a")
+        monkeypatch.delenv("AGENT_BUILD_EXPERIMENT", raising=False)
+        _build("session-b")
+
+        assert asked == [True, False]
+
+    def test_warm_strategy_ids_primes_the_shared_entry(self, memory_env, monkeypatch):
+        """Warm-up's call and the arm's first turn must hit the same cache key,
+        or the first turn pays the call warm-up already made."""
+        with patch.object(factory, "_discover_strategy_ids", return_value=(None, None, None)) as discover:
+            factory.warm_strategy_ids()
+
+        discover.assert_called_once_with("mem-test", "us-west-2", shared_session=True)
