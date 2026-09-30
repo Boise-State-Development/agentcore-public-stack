@@ -126,81 +126,83 @@
                reachable by screen readers on rows nobody opened. The enter
                animation supplies the accordion feel without that cost. -->
           @if (isCallDetailOpen(call)) {
-          <div class="detail-panel space-y-1 border-t border-gray-200/60 bg-gray-50/60 px-2.5 py-2 dark:border-white/5 dark:bg-black/20">
+          <!-- Labels sit ABOVE their values, not in a gutter beside them: a
+               gutter column spends width on every line of a payload that is
+               usually the widest thing in the rail. Long values scroll inside
+               a bounded box rather than being cut off behind a "show more" —
+               the whole payload is always there to check the summary against,
+               and the box keeps one big result from pushing the answer off
+               screen. Each box is focusable so a keyboard user can scroll it. -->
+          <div class="detail-panel space-y-2.5 border-t border-gray-200/60 bg-gray-50/60 px-2.5 py-2 dark:border-white/5 dark:bg-black/20">
             <!-- Input -->
             @if (call.input && (call.input | keyvalue)?.length) {
-              <div class="flex items-baseline gap-1.5">
-                <span class="text-xs text-gray-400 dark:text-gray-500 shrink-0">input:</span>
-                <span class="text-xs text-gray-400 dark:text-gray-500 font-mono truncate">
-                  {{ formatInput(call.input) }}
-                </span>
+              <div class="call-input">
+                <div class="detail-label text-gray-500 dark:text-gray-400">Input</div>
+                <pre
+                  class="detail-scroll max-h-40 font-mono text-gray-500 dark:text-gray-400"
+                  tabindex="0"
+                  role="group"
+                  [attr.aria-label]="'Input for ' + call.toolName"
+                >{{ formatInput(call.input) }}</pre>
               </div>
             }
 
             <!-- Live streaming output (e.g. artifact being generated) -->
             @if (isGenerating(call)) {
-              <div class="flex items-start gap-1.5">
-                <span class="text-xs text-gray-400 dark:text-gray-500 shrink-0 mt-1">output:</span>
-                <div class="w-full">
-                  <div class="flex items-center gap-1.5 mb-1 text-xs text-gray-400 dark:text-gray-500">
-                    <span class="status-dot bg-state-warning-400 shimmer"></span>
-                    <span>Generating output…</span>
-                  </div>
-                  <pre
-                    class="max-h-56 overflow-auto whitespace-pre-wrap break-all font-mono text-xs text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-800/60 border border-gray-100 dark:border-gray-700/30 rounded-xs px-2 py-1.5"
-                    aria-label="Tool output being generated"
-                    [appPinScrollToBottom]="call.streamingContent ?? ''"
-                  >{{ call.streamingContent }}</pre>
+              <div>
+                <div class="detail-label flex items-center gap-1.5 text-gray-500 dark:text-gray-400">
+                  <span>Output</span>
+                  <span class="status-dot bg-state-warning-400 shimmer"></span>
+                  <span class="font-normal">Generating…</span>
                 </div>
+                <pre
+                  class="detail-scroll max-h-56 font-mono text-gray-500 dark:text-gray-400"
+                  tabindex="0"
+                  role="group"
+                  aria-label="Tool output being generated"
+                  [appPinScrollToBottom]="call.streamingContent ?? ''"
+                >{{ call.streamingContent }}</pre>
               </div>
             }
 
             <!-- Result -->
             @if (call.result) {
-              <div class="flex items-start gap-1.5">
-                <span class="text-xs shrink-0 mt-1"
-                  [class.text-gray-400]="call.result.status !== 'error'"
-                  [class.dark:text-gray-500]="call.result.status !== 'error'"
-                  [class.text-state-danger-500]="call.result.status === 'error'"
+              <div class="call-result">
+                <div
+                  class="detail-label"
+                  [class.text-gray-500]="call.result.status !== 'error'"
+                  [class.dark:text-gray-400]="call.result.status !== 'error'"
+                  [class.text-state-danger-600]="call.result.status === 'error'"
                   [class.dark:text-state-danger-400]="call.result.status === 'error'"
-                >result:</span>
-                <div class="result-block text-xs text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-800/60 border border-gray-100 dark:border-gray-700/30 rounded-xs px-2 py-1.5 w-full overflow-hidden">
-                  @if (isResultExpanded(call.id)) {
-                    <!-- Full result with syntax highlighting -->
+                >{{ call.result.status === 'error' ? 'Error' : 'Result' }}</div>
+                @if (hasResultBody(call)) {
+                  <div
+                    class="result-block detail-scroll max-h-80 text-gray-500 dark:text-gray-400"
+                    tabindex="0"
+                    role="group"
+                    [attr.aria-label]="'Result from ' + call.toolName"
+                  >
                     @for (item of call.result.content; track $index) {
                       @if (item.json) {
-                        <pre class="font-mono text-xs overflow-x-auto"><code [innerHTML]="formatResultContent(item) | jsonSyntaxHighlight"></code></pre>
+                        <pre class="font-mono"><code [innerHTML]="formatResultContent(item) | jsonSyntaxHighlight"></code></pre>
                       } @else if (item.text) {
-                        <div class="whitespace-pre-wrap break-all">{{ item.text }}</div>
+                        <pre class="font-mono">{{ item.text }}</pre>
                       }
                     }
-                  } @else {
-                    <!-- Truncated result -->
-                    <span class="font-mono break-all whitespace-pre-wrap text-gray-500 dark:text-gray-400">{{ truncateResult(getResultText(call)) }}</span>
-                  }
+                  </div>
+                }
 
-                  @if (getResultText(call).length > 200) {
-                    <button
-                      type="button"
-                      (click)="toggleFullResult(call.id)"
-                      class="text-primary-accessible dark:text-primary-accessible-dark hover:underline mt-1 block text-xs cursor-pointer"
-                    >
-                      {{ isResultExpanded(call.id) ? 'Show less' : 'Show full result' }}
-                    </button>
-                  }
-                </div>
+                <!-- Images (if any) -->
+                @for (item of getResultImages(call); track $index) {
+                  <div class="mt-1 rounded-xs overflow-hidden bg-gray-100 dark:bg-gray-800 p-1 border border-gray-200 dark:border-gray-700">
+                    <img
+                      [src]="getImageDataUrl(item)"
+                      alt="Tool result image"
+                      class="max-w-full h-auto rounded-xs"
+                    />
+                  </div>
+                }
               </div>
-
-              <!-- Images (if any) -->
-              @for (item of getResultImages(call); track $index) {
-                <div class="mt-1 rounded-xs overflow-hidden bg-gray-100 dark:bg-gray-800 p-1 border border-gray-200 dark:border-gray-700">
-                  <img
-                    [src]="getImageDataUrl(item)"
-                    alt="Tool result image"
-                    class="max-w-full h-auto rounded-xs"
-                  />
-                </div>
-              }
             }
           </div>
           }

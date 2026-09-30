@@ -18,38 +18,26 @@ export class JsonSyntaxHighlightPipe implements PipeTransform {
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;');
 
-    // Apply syntax highlighting
-    const highlighted = escaped
-      // Highlight keys (property names)
-      .replace(
-        /"([^"]+)"(?=\s*:)/g,
-        '<span class="json-key">"$1"</span>'
-      )
-      // Highlight string values
-      .replace(
-        /:\s*"([^"]*)"/g,
-        ': <span class="json-string">"$1"</span>'
-      )
-      // Highlight numbers
-      .replace(
-        /:\s*(\d+\.?\d*)/g,
-        ': <span class="json-number">$1</span>'
-      )
-      // Highlight booleans
-      .replace(
-        /:\s*(true|false)/g,
-        ': <span class="json-boolean">$1</span>'
-      )
-      // Highlight null
-      .replace(
-        /:\s*(null)/g,
-        ': <span class="json-null">$1</span>'
-      )
-      // Highlight brackets
-      .replace(
-        /([{}\[\]])/g,
-        '<span class="json-bracket">$1</span>'
-      );
+    // One pass over the whole document, so each token is classified exactly
+    // once. Chained per-kind replaces re-scanned text already inside a string
+    // and highlighted it again — a timestamp value like "09:30:17" came out as
+    // "09: 30: 17", because the number rule matched the `:30` inside it.
+    const highlighted = escaped.replace(
+      /("(?:\\.|[^"\\])*")(\s*:)?|\b(?:true|false)\b|\bnull\b|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|[{}[\]]/g,
+      (match: string, str?: string, colon?: string) => {
+        if (str) {
+          return colon
+            ? `<span class="json-key">${str}</span>${colon}`
+            : `<span class="json-string">${str}</span>`;
+        }
+        if (match === 'true' || match === 'false') {
+          return `<span class="json-boolean">${match}</span>`;
+        }
+        if (match === 'null') return `<span class="json-null">${match}</span>`;
+        if (/[{}[\]]/.test(match)) return `<span class="json-bracket">${match}</span>`;
+        return `<span class="json-number">${match}</span>`;
+      },
+    );
 
     return this.sanitizer.bypassSecurityTrustHtml(highlighted);
   }
