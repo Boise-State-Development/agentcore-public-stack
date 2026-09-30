@@ -248,7 +248,7 @@ to be clear about:
   measures the title only, and on plain chat turns, so the arm's real value is not on the
   scorecard.
 
-**Recommendation.**
+**Recommendation** (applied to #1377 on 2026-09-30; kept here as the record of why)**.**
 
 1. Merge the instrumentation and the `shared_clients` arm now, amended so the shared
    session, its clients and the strategy ids are built at warm-up (P2). Keep the arm behind
@@ -294,6 +294,8 @@ entry on the emitted line. `PreludeTotalMs` stays what it is; the new number is
 Cost: perf_counter calls only. V2: none.
 
 ### P2 — Warm the right things, once (F2)
+
+**Status (2026-09-30): built in PR #1377 as narrowed** — the off-loop arm was withdrawn, the shared session lives in `apis/shared/aws_clients.py`, warm-up builds its three clients and primes the strategy ids unconditionally, and the SDK session manager, `_discover_strategy_ids` and `BedrockModel` all take it on the `shared_clients` arm. The strategy-id cache is keyed by arm so control's first turn is unchanged. What remains of P2 is P0: the dev A/B decides whether the arm ships default-on.
 
 - One process-wide `boto3.Session` in `apis/shared/aws_clients.py` (it already owns the
   client cache); warm-up builds `bedrock-agentcore`, `bedrock-agentcore-control` and
