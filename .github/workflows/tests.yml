@@ -16,6 +16,11 @@ on:
         required: false
         default: false
         type: boolean
+      run_backend_contracts:
+        description: 'Run only the backend suites that read the CDK tree, scripts and workflows (supply_chain, architecture); a no-op when run_backend is also set'
+        required: false
+        default: false
+        type: boolean
       run_frontend:
         description: 'Run frontend test suite'
         required: false
@@ -81,6 +86,38 @@ jobs:
       # is pure stdlib + pytest, so it borrows the backend venv synced above;
       # --no-sync keeps uv from re-resolving that env without its extras.
       # Scoped to supply_chain/ because tests/load has its own deps and job.
+      - name: Run root supply-chain pytest
+        run: uv run --project backend --no-sync pytest tests/supply_chain/ -v
+
+  # The subset of the backend suite that reads OUTSIDE backend/: the
+  # supply-chain and architecture tests assert against the CDK tree, the
+  # scripts and the workflows side by side with the Python that consumes
+  # them, so an infrastructure-only PR still needs them — and nothing else in
+  # backend/tests/. About a hundred tests, well under a minute, against seven
+  # minutes for the full suite. Skipped whenever run_backend is set, because
+  # the full run already covers it.
+  test-backend-contracts:
+    if: ${{ inputs.run_backend_contracts && !inputs.run_backend }}
+    name: Test backend contracts (pytest)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: '0.7.12'
+          enable-cache: true
+          cache-dependency-glob: 'backend/uv.lock'
+      - name: Sync deps
+        working-directory: backend
+        run: uv sync --extra agentcore --extra dev
+      - name: Run backend contract suites
+        working-directory: backend
+        run: uv run pytest tests/supply_chain/ tests/architecture/ -v
       - name: Run root supply-chain pytest
         run: uv run --project backend --no-sync pytest tests/supply_chain/ -v
 
