@@ -4059,6 +4059,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                     has_document_tools=bool(turn_tools.document_tools),
                     assistant_id=input_data.rag_assistant_id,
                     build_stage_recorder=_mark_build_stage,
+                    build_detail_recorder=prelude.detail,
                     memory_binding=turn_tools.memory_binding_key,
                     memory_context=memory_context,
                 )

@@ -84,6 +84,42 @@ class TestFailSoft:
         build_stages.reset_stage_recorder(_Hostile())  # must not raise
 
 
+class TestRecordDetail:
+    def test_without_a_recorder_it_is_a_no_op(self):
+        build_stages.record_detail("mcpServers", [])  # must not raise
+
+    def test_routes_to_the_detail_recorder(self):
+        details = {}
+        token = build_stages.set_stage_recorder(None, details.__setitem__)
+        try:
+            build_stages.record_detail("mcpServers", [{"id": "canvas"}])
+        finally:
+            build_stages.reset_stage_recorder(token)
+
+        assert details == {"mcpServers": [{"id": "canvas"}]}
+
+    def test_a_stage_only_recorder_drops_details(self):
+        seen = []
+        token = build_stages.set_stage_recorder(seen.append)
+        try:
+            build_stages.record_detail("mcpServers", [])
+            build_stages.mark_stage("tools.mcp")
+        finally:
+            build_stages.reset_stage_recorder(token)
+
+        assert seen == ["tools.mcp"]
+
+    def test_a_failing_detail_recorder_never_raises(self):
+        def _boom(_key, _value):
+            raise RuntimeError("boom")
+
+        token = build_stages.set_stage_recorder(None, _boom)
+        try:
+            build_stages.record_detail("mcpServers", [])  # must not raise
+        finally:
+            build_stages.reset_stage_recorder(token)
+
+
 class TestPreludeIntegration:
     def test_sub_stages_group_under_agent_build(self):
         """`groups.agent_build` has to reproduce the pre-split number, or the

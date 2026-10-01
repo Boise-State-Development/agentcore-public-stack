@@ -226,6 +226,78 @@ class TestGroups:
         prelude.emit(session_id="s", stream_kind="agent")  # must not raise
 
 
+class TestNestedGroups:
+    """P1a splits `agent_build.tools` (docs/specs/turn-path-ttft.md). Every
+    proper prefix is a group, so the split keeps `agent_build.tools` as a
+    number exactly as the first split kept `agent_build`."""
+
+    def test_every_prefix_level_is_a_group(self, monkeypatch):
+        # Binary-exact steps, so the int() truncation cannot shave a ms.
+        clock = iter([0.0, 0.125, 0.25, 1.25, 1.375, 1.5, 1.625])
+        monkeypatch.setattr(
+            "apis.inference_api.chat.turn_timing.time.perf_counter",
+            lambda: next(clock),
+        )
+
+        prelude = TurnPrelude()
+        prelude.mark("agent_build.tools.filter")  # 125ms
+        prelude.mark("agent_build.tools.gateway")  # 125ms
+        prelude.mark("agent_build.tools.mcp")  # 1000ms
+        prelude.mark("agent_build.tools.extra")  # 125ms
+        prelude.mark("agent_build.hooks")  # 125ms
+
+        assert _emitted(prelude)["groups"] == {
+            "agent_build": 1500,
+            "agent_build.tools": 1375,
+        }
+
+    def test_the_pre_split_metric_survives_as_a_group(self, monkeypatch):
+        """`AgentBuildToolsMs` is the series the cold-build baseline is stated
+        in; it must keep arriving after its own decomposition."""
+        record = _emf_record(
+            monkeypatch,
+            ["agent_build.tools.filter", "agent_build.tools.mcp", "agent_build.hooks"],
+        )
+
+        assert {
+            "AgentBuildMs",
+            "AgentBuildToolsMs",
+            "AgentBuildToolsFilterMs",
+            "AgentBuildToolsMcpMs",
+            "AgentBuildHooksMs",
+        } <= set(record["metrics"])
+
+
+class TestDetails:
+    """Log-only properties: which MCP server owned `tools.mcp`."""
+
+    def test_a_detail_rides_on_the_log_line(self):
+        prelude = TurnPrelude()
+        servers = [{"id": "canvas", "outcome": "loaded", "totalMs": 812}]
+        prelude.detail("mcpServers", servers)
+
+        assert _emitted(prelude)["mcpServers"] == servers
+
+    def test_a_detail_is_never_a_metric(self, monkeypatch):
+        captured = {}
+        monkeypatch.setattr(
+            "apis.shared.observability.emf.emit_emf_metrics",
+            lambda **kw: captured.update(kw),
+        )
+        prelude = TurnPrelude()
+        prelude.detail("mcpServers", [{"id": "canvas", "totalMs": 812}])
+        prelude.emit(session_id="s", stream_kind="agent")
+
+        assert "mcpServers" not in captured["metrics"]
+        assert "mcpServers" not in captured["properties"]
+
+    def test_the_caller_s_extras_win_a_key_collision(self):
+        prelude = TurnPrelude()
+        prelude.detail("isResume", "from-a-detail")
+
+        assert _emitted(prelude, extra={"isResume": True})["isResume"] is True
+
+
 class TestMetricNames:
     """The EMF metric name is derived from the stage name, not looked up.
 
