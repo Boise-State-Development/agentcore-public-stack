@@ -7,7 +7,7 @@ voice router pattern.
 
 Protocol:
     Client → Server:
-        {"type": "config", "session_id": "...", "auth_token": "...", ...}  (first message)
+        {"type": "config", "session_id": "...", "auth_token": "...", "voice": "tiffany", ...}  (first message)
         {"type": "bidi_audio_input", "audio": "<base64>", "sample_rate": 16000}
         {"type": "bidi_text_input", "text": "..."}
         {"type": "ping"}
@@ -293,7 +293,7 @@ async def _finalize_voice_session(session_id: str, user_id: str, voice_agent: An
         cost = None
         if pricing and total_tokens > 0:
             try:
-                total_cost, breakdown = CostCalculator.calculate_message_cost(accumulated_usage, pricing)
+                total_cost, breakdown = CostCalculator.calculate_voice_cost(accumulated_usage, pricing)
                 cost = {
                     "total": total_cost,
                     "inputCost": breakdown.input_cost,
@@ -391,6 +391,7 @@ async def voice_stream(
     user_id = _get_param_from_request(websocket, "user-id", user_id)
     enabled_tools_list = _get_enabled_tools_from_request(websocket, enabled_tools)
     auth_token = _get_param_from_request(websocket, "auth-token", token) or ""
+    requested_voice: Optional[str] = None
 
     # Always read config message from client (sent on WebSocket open).
     # Required for auth_token in AgentCore mode and supplements any
@@ -404,6 +405,10 @@ async def voice_stream(
             user_id = first_msg.get("user_id") or user_id
             enabled_tools_list = first_msg.get("enabled_tools") or enabled_tools_list
             auth_token = first_msg.get("auth_token") or auth_token
+            # The user's chosen Nova 2 Sonic voice. Validated in VoiceAgent
+            # (an unknown id falls back to the default rather than 4xx-ing a
+            # WebSocket the user has already heard connect).
+            requested_voice = first_msg.get("voice")
             logger.info(f"Voice config received from client message")
     except asyncio.TimeoutError:
         logger.warning("No config message received within 10s, using query params")
@@ -450,15 +455,23 @@ async def voice_stream(
             user_id=user_id,
             auth_token=auth_token,
             enabled_tools=enabled_tools_list,
+            voice=requested_voice,
         )
+        if requested_voice and voice_agent.voice_id != str(requested_voice).strip().lower():
+            logger.warning(
+                f"Voice '{_sanitize_log(str(requested_voice))}' is not in the catalog; "
+                f"using '{voice_agent.voice_id}' for session={_sanitize_log(session_id)}"
+            )
 
         _active_sessions[session_id] = voice_agent
 
-        # Send connection confirmation
+        # Send connection confirmation. `voice` is the id actually in use, so
+        # a client whose request fell back can show the real one.
         await websocket.send_json({
             "type": "bidi_connection_start",
             "connection_id": session_id,
             "status": "connected",
+            "voice": voice_agent.voice_id,
         })
 
         # Start the voice agent

@@ -20,6 +20,7 @@ from typing import Any, AsyncGenerator, List, Optional
 
 from agents.main_agent.base_agent import BaseAgent
 from agents.main_agent.config.constants import EnvVars, Defaults
+from apis.shared.voice_catalog import NovaSonicVoice, get_voice, resolve_voice_id
 
 logger = logging.getLogger(__name__)
 
@@ -35,9 +36,68 @@ logger = logging.getLogger(__name__)
 try:
     from strands.experimental.bidi import BidiAgent
     from strands.experimental.bidi.models.bedrock import BedrockNovaSonicModel
+    from strands.experimental.bidi.types.events import BidiUsageEvent, ModalityUsage
     BIDI_AVAILABLE = True
 except ImportError:
     BIDI_AVAILABLE = False
+
+
+def usage_modality_details(usage_event: dict) -> list:
+    """Split a Nova Sonic ``usageEvent`` into Strands ``ModalityUsage`` rows.
+
+    Nova reports four buckets under ``details.total`` — speech and text, in and
+    out — and bills them on two rate cards ten-fold apart. Strands 1.55's
+    provider keeps only the grand totals, which is what made every voice
+    session price as if it were all speech (or, with no catalog row, $0).
+
+    Returns ``[]`` when the event carries no ``details`` so the caller can
+    tell "no split" from "a split of zeros". The rows are plain dicts (the
+    ``ModalityUsage`` TypedDict shape) so this stays importable without the
+    bidi extra installed.
+    """
+    total = (usage_event.get("details") or {}).get("total") or {}
+    if not total:
+        return []
+    inp = total.get("input") or {}
+    out = total.get("output") or {}
+    return [
+        {
+            "modality": "audio",
+            "input_tokens": int(inp.get("speechTokens") or 0),
+            "output_tokens": int(out.get("speechTokens") or 0),
+        },
+        {
+            "modality": "text",
+            "input_tokens": int(inp.get("textTokens") or 0),
+            "output_tokens": int(out.get("textTokens") or 0),
+        },
+    ]
+
+
+if BIDI_AVAILABLE:
+
+    class NovaSonicModelWithUsageDetails(BedrockNovaSonicModel):
+        """``BedrockNovaSonicModel`` that keeps the speech/text usage split.
+
+        Only ``usageEvent`` is intercepted; every other event goes to the
+        provider untouched. The split rides the ``modality_details`` slot the
+        SDK already reserves on ``BidiUsageEvent`` (and serialises through
+        ``as_dict``), so nothing downstream has to learn a new event shape.
+        """
+
+        def _convert_nova_event(self, nova_event: dict) -> Any:
+            usage = nova_event.get("usageEvent")
+            if not usage:
+                return super()._convert_nova_event(nova_event)
+            details = usage_modality_details(usage)
+            total_input = usage.get("totalInputTokens", 0)
+            total_output = usage.get("totalOutputTokens", 0)
+            return BidiUsageEvent(
+                input_tokens=total_input,
+                output_tokens=total_output,
+                total_tokens=usage.get("totalTokens", total_input + total_output),
+                modality_details=[ModalityUsage(**row) for row in details] or None,
+            )
     logger.info("BidiAgent not available — install strands-agents[bidi] for voice support")
 
 
@@ -71,12 +131,14 @@ class VoiceAgent(BaseAgent):
         Initialize voice agent.
 
         Args:
-            voice: Voice name override ("matthew", "tiffany", "amy").
-                   Defaults to NOVA_SONIC_VOICE env var or "tiffany".
+            voice: Nova 2 Sonic voice id (see ``apis.shared.voice_catalog``).
+                   Unknown or blank falls back to the NOVA_SONIC_VOICE env var,
+                   then "tiffany" — never an id Bedrock would refuse.
             **kwargs: All BaseAgent constructor args
         """
-        self._voice = voice or os.environ.get(
-            EnvVars.NOVA_SONIC_VOICE, Defaults.NOVA_SONIC_VOICE
+        self._voice = resolve_voice_id(
+            voice,
+            os.environ.get(EnvVars.NOVA_SONIC_VOICE, Defaults.NOVA_SONIC_VOICE),
         )
         self._bidi_agent: Any = None
         # Nova Sonic bidi_usage events report CUMULATIVE token counts (not deltas).
@@ -108,7 +170,7 @@ class VoiceAgent(BaseAgent):
             # AudioConfig TypedDict with these same five keys), and the region
             # moved from client_config["region"] to `region`. Both are
             # keyword-only now.
-            model = BedrockNovaSonicModel(
+            model = NovaSonicModelWithUsageDetails(
                 model_id=model_id,
                 audio={
                     "voice": self._voice,
@@ -161,7 +223,26 @@ class VoiceAgent(BaseAgent):
             "- Use natural speech patterns\n"
             "- Confirm understanding before taking actions\n"
         )
-        return base + voice_addendum
+        return base + voice_addendum + self._voice_presentation_line()
+
+    def _voice_presentation_line(self) -> str:
+        """One line telling the model which voice it speaks with.
+
+        Amazon's Nova 2 Sonic prompt guidance: languages that conjugate the
+        speaker's own gender (Hindi, Portuguese, French, Italian, Spanish) need
+        the system prompt to say which form matches the voice, or "I am tired"
+        comes out as the wrong one. English never conjugates it, so the line is
+        inert for the default voice and costs a few tokens — but it is part of
+        the cached prefix, so it is written once per voice, not per turn.
+        """
+        voice: Optional[NovaSonicVoice] = get_voice(getattr(self, "_voice", None))
+        if voice is None:
+            return ""
+        form = "feminine" if voice.gender == "feminine" else "masculine"
+        return (
+            f"- You speak with the voice \"{voice.name}\", which sounds {form}; "
+            f"in languages that mark the speaker's gender, use the {form} form for yourself\n"
+        )
 
     def _load_text_history(self) -> list:
         """
@@ -262,6 +343,11 @@ class VoiceAgent(BaseAgent):
         """Nova Sonic model ID used by this agent."""
         return os.environ.get(EnvVars.NOVA_SONIC_MODEL_ID, Defaults.NOVA_SONIC_MODEL_ID)
 
+    @property
+    def voice_id(self) -> str:
+        """The Nova 2 Sonic voice this agent speaks with (always a catalog id)."""
+        return self._voice
+
     async def receive_events(self) -> AsyncGenerator[dict, None]:
         """
         Receive and transform events from BidiAgent for WebSocket transmission.
@@ -311,6 +397,14 @@ class VoiceAgent(BaseAgent):
                 usage = event_dict.get("usage", event_dict)
                 for key in ("inputTokens", "outputTokens", "totalTokens"):
                     self._accumulated_usage[key] = usage.get(key, self._accumulated_usage[key])
+                # The speech/text split, when the provider kept it (see
+                # NovaSonicModelWithUsageDetails). Cumulative like the totals.
+                for row in usage.get("modality_details") or []:
+                    bucket = {"audio": "speech", "text": "text"}.get(row.get("modality"))
+                    if not bucket:
+                        continue
+                    self._accumulated_usage[f"{bucket}InputTokens"] = int(row.get("input_tokens") or 0)
+                    self._accumulated_usage[f"{bucket}OutputTokens"] = int(row.get("output_tokens") or 0)
                 logger.info(f"Voice bidi_usage snapshot: {usage}")
                 logger.info(f"Voice usage current: {self._accumulated_usage}")
 
@@ -327,7 +421,7 @@ class VoiceAgent(BaseAgent):
                 if pricing_dict and self._accumulated_usage.get("totalTokens", 0) > 0:
                     try:
                         from apis.shared.costs.calculator import CostCalculator
-                        total_cost, breakdown = CostCalculator.calculate_message_cost(
+                        total_cost, breakdown = CostCalculator.calculate_voice_cost(
                             self._accumulated_usage, pricing_dict
                         )
                         event_dict["cost"] = {

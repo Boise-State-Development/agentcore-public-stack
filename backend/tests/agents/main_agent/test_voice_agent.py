@@ -230,3 +230,185 @@ class TestPyAudioMock:
         # After importing voice_agent, pyaudio should be mocked
         import agents.main_agent.voice_agent  # noqa: F401
         assert "pyaudio" in sys.modules
+
+
+class TestVoiceSelection:
+    """The voice a session speaks with is the user's, validated, never a bad id."""
+
+    def _agent(self, voice=None, monkeypatch=None):
+        from agents.main_agent.voice_agent import VoiceAgent
+
+        agent = VoiceAgent.__new__(VoiceAgent)
+        # Only the constructor's voice resolution is under test; skip BaseAgent.
+        with patch.object(BaseAgent, "__init__", return_value=None):
+            VoiceAgent.__init__(agent, voice=voice)
+        return agent
+
+    def test_defaults_to_the_platform_voice(self, monkeypatch):
+        monkeypatch.delenv(EnvVars.NOVA_SONIC_VOICE, raising=False)
+        assert self._agent().voice_id == Defaults.NOVA_SONIC_VOICE
+
+    def test_uses_a_requested_catalog_voice(self, monkeypatch):
+        monkeypatch.delenv(EnvVars.NOVA_SONIC_VOICE, raising=False)
+        assert self._agent(voice="Carlos").voice_id == "carlos"
+
+    def test_unknown_request_falls_back_to_the_env_default(self, monkeypatch):
+        monkeypatch.setenv(EnvVars.NOVA_SONIC_VOICE, "matthew")
+        assert self._agent(voice="siri").voice_id == "matthew"
+
+    def test_bad_env_default_never_reaches_bedrock(self, monkeypatch):
+        monkeypatch.setenv(EnvVars.NOVA_SONIC_VOICE, "alexa")
+        assert self._agent(voice=None).voice_id == "tiffany"
+
+
+class TestVoicePresentationInPrompt:
+    """Amazon's guidance: tell the model the voice's gender for languages that conjugate it."""
+
+    def _prompt_for(self, voice_id):
+        from agents.main_agent.voice_agent import VoiceAgent
+
+        agent = VoiceAgent.__new__(VoiceAgent)
+        agent.system_prompt = "Base."
+        agent._voice = voice_id
+        return agent._build_voice_system_prompt()
+
+    def test_feminine_voice(self):
+        prompt = self._prompt_for("carolina")
+        assert 'voice "Carolina"' in prompt
+        assert "use the feminine form" in prompt
+
+    def test_masculine_voice(self):
+        prompt = self._prompt_for("leo")
+        assert 'voice "Leo"' in prompt
+        assert "use the masculine form" in prompt
+
+    def test_guidelines_still_precede_the_voice_line(self):
+        prompt = self._prompt_for("tiffany")
+        assert prompt.index("Voice Interaction Guidelines") < prompt.index('voice "Tiffany"')
+
+
+class TestUsageModalitySplit:
+    """Nova's usageEvent split survives the provider, and prices each bucket."""
+
+    NOVA_USAGE = {
+        "totalInputTokens": 1_300,
+        "totalOutputTokens": 2_400,
+        "totalTokens": 3_700,
+        "details": {
+            "delta": {"input": {"speechTokens": 10, "textTokens": 1}, "output": {"speechTokens": 20, "textTokens": 2}},
+            "total": {
+                "input": {"speechTokens": 1_000, "textTokens": 300},
+                "output": {"speechTokens": 2_000, "textTokens": 400},
+            },
+        },
+    }
+
+    def test_split_rows_come_from_details_total_not_delta(self):
+        from agents.main_agent.voice_agent import usage_modality_details
+
+        rows = usage_modality_details(self.NOVA_USAGE)
+        assert rows == [
+            {"modality": "audio", "input_tokens": 1_000, "output_tokens": 2_000},
+            {"modality": "text", "input_tokens": 300, "output_tokens": 400},
+        ]
+
+    def test_no_details_means_no_rows(self):
+        from agents.main_agent.voice_agent import usage_modality_details
+
+        assert usage_modality_details({"totalInputTokens": 5, "totalOutputTokens": 6}) == []
+        assert usage_modality_details({"details": {}}) == []
+
+    @pytest.mark.asyncio
+    async def test_receive_events_accumulates_the_split_and_prices_it(self, monkeypatch):
+        from agents.main_agent.voice_agent import VoiceAgent
+
+        agent = VoiceAgent.__new__(VoiceAgent)
+        agent._accumulated_usage = {"inputTokens": 0, "outputTokens": 0, "totalTokens": 0}
+        agent._per_turn_usage = []
+        agent._turn_count = 0
+        agent._response_start_count = 0
+
+        usage_event = {
+            "type": "bidi_usage",
+            "inputTokens": 1_300,
+            "outputTokens": 2_400,
+            "totalTokens": 3_700,
+            "modality_details": [
+                {"modality": "audio", "input_tokens": 1_000, "output_tokens": 2_000},
+                {"modality": "text", "input_tokens": 300, "output_tokens": 400},
+            ],
+        }
+
+        class _Ev:
+            def as_dict(self):
+                return dict(usage_event)
+
+        class _Bidi:
+            async def receive(self):
+                yield _Ev()
+
+        agent._bidi_agent = _Bidi()
+
+        pricing = {
+            "inputPricePerMtok": 0.319,
+            "outputPricePerMtok": 2.651,
+            "speechInputPricePerMtok": 3.0,
+            "speechOutputPricePerMtok": 12.0,
+        }
+
+        async def fake_pricing(_model_id):
+            return pricing
+
+        import apis.shared.costs.pricing_config as pc
+
+        monkeypatch.setattr(pc, "get_model_pricing", fake_pricing)
+        monkeypatch.setenv(EnvVars.NOVA_SONIC_MODEL_ID, "amazon.nova-2-sonic-v1:0")
+
+        events = [e async for e in agent.receive_events()]
+        assert len(events) == 1
+        usage = agent.accumulated_usage
+        assert usage["speechInputTokens"] == 1_000
+        assert usage["textInputTokens"] == 300
+        assert usage["speechOutputTokens"] == 2_000
+        assert usage["textOutputTokens"] == 400
+
+        expected_in = (1_000 * 3.0 + 300 * 0.319) / 1_000_000
+        expected_out = (2_000 * 12.0 + 400 * 2.651) / 1_000_000
+        assert events[0]["cost"]["inputCost"] == pytest.approx(expected_in)
+        assert events[0]["cost"]["outputCost"] == pytest.approx(expected_out)
+        assert events[0]["cost"]["total"] == pytest.approx(expected_in + expected_out)
+
+
+class TestProviderSubclass:
+    """The usage-detail subclass only exists with the bidi extra installed."""
+
+    def test_subclass_overrides_the_converter_the_provider_still_has(self):
+        import agents.main_agent.voice_agent as va
+
+        if not va.BIDI_AVAILABLE:
+            pytest.skip("strands-agents[bidi] not installed")
+        assert issubclass(va.NovaSonicModelWithUsageDetails, va.BedrockNovaSonicModel)
+        # The hook we override must still be the provider's name for it.
+        assert callable(getattr(va.BedrockNovaSonicModel, "_convert_nova_event", None))
+
+    def test_converter_keeps_the_split_on_the_usage_event(self):
+        import agents.main_agent.voice_agent as va
+
+        if not va.BIDI_AVAILABLE:
+            pytest.skip("strands-agents[bidi] not installed")
+        model = va.NovaSonicModelWithUsageDetails.__new__(va.NovaSonicModelWithUsageDetails)
+        event = model._convert_nova_event({"usageEvent": TestUsageModalitySplit.NOVA_USAGE})
+        d = event.as_dict()
+        assert d["inputTokens"] == 1_300 and d["outputTokens"] == 2_400
+        assert [r["modality"] for r in d["modality_details"]] == ["audio", "text"]
+        assert d["modality_details"][0]["input_tokens"] == 1_000
+
+    def test_converter_leaves_other_events_to_the_provider(self):
+        import agents.main_agent.voice_agent as va
+
+        if not va.BIDI_AVAILABLE:
+            pytest.skip("strands-agents[bidi] not installed")
+        model = va.NovaSonicModelWithUsageDetails.__new__(va.NovaSonicModelWithUsageDetails)
+        with patch.object(va.BedrockNovaSonicModel, "_convert_nova_event", return_value="delegated") as sup:
+            assert model._convert_nova_event({"completionStart": {"completionId": "c1"}}) == "delegated"
+            sup.assert_called_once()
