@@ -164,6 +164,7 @@ class ChatAgent(BaseAgent):
         turn_lease: Any = None,
         turn_started_at: Optional[float] = None,
         poll_side_frame: Optional[Callable[[], Optional[str]]] = None,
+        turn_clock: Any = None,
     ) -> AsyncGenerator[str, None]:
         """
         Stream agent responses.
@@ -201,6 +202,9 @@ class ChatAgent(BaseAgent):
             poll_side_frame: Non-blocking check for a frame produced outside the
                 agent stream (the first turn's `session_title`), polled by the
                 coordinator's live status merge. Per turn, like `turn_lease`.
+            turn_clock: The turn's latency clock, continued by the coordinator
+                to the first model output (`turn_first_token`). Per turn, like
+                `turn_lease`; None disables it.
 
         Yields:
             str: SSE formatted events
@@ -238,5 +242,6 @@ class ChatAgent(BaseAgent):
             turn_lease=turn_lease,
             turn_started_at=turn_started_at,
             poll_side_frame=poll_side_frame,
+            turn_clock=turn_clock,
         ):
             yield event

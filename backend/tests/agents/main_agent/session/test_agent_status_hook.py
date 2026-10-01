@@ -294,3 +294,34 @@ def test_status_queue_is_capped(hook):
         hook._on_before_model_call(MagicMock())
 
     assert len(hook.drain_statuses()) == _MAX_QUEUED_STATUSES
+
+
+# -- 6. first-model-call stamp (turn-path P1b) ------------------------------
+
+
+def test_first_model_call_is_stamped_once_per_turn(hook, monkeypatch):
+    clock = iter([10.0, 11.0, 12.0])
+    monkeypatch.setattr(
+        "agents.main_agent.session.hooks.agent_status.time.perf_counter",
+        lambda: next(clock),
+    )
+    hook._on_turn_start(MagicMock())
+    hook._on_before_model_call(MagicMock())
+    hook._on_before_model_call(MagicMock())  # cycle 2 must not move it
+
+    assert hook.first_model_call_at == 10.0
+
+    hook._on_turn_start(MagicMock())
+    assert hook.first_model_call_at is None
+    hook._on_before_model_call(MagicMock())
+    assert hook.first_model_call_at == 11.0
+
+
+def test_first_model_call_is_stamped_with_narration_off(hook, monkeypatch):
+    """A measurement, not narration: the kill switch silences the status line,
+    not the first-token clock."""
+    monkeypatch.setenv("AGENT_STATUS_ENABLED", "false")
+    hook._on_before_model_call(MagicMock())
+
+    assert hook.first_model_call_at is not None
+    assert hook.drain_statuses() == []
