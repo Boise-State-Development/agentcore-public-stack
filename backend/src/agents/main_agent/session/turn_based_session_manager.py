@@ -48,6 +48,8 @@ from .compaction_policy import CompactionPolicy, choose_checkpoint
 from .compaction_summary import bound_summary
 
 if TYPE_CHECKING:
+    from concurrent.futures import ThreadPoolExecutor
+
     from strands.agent.agent import Agent
 
 logger = logging.getLogger(__name__)
@@ -66,6 +68,26 @@ _MEMORY_RETRIEVAL_THROTTLE_CODES = ("ThrottlingException", "TooManyRequestsExcep
 # Serializes replacing the retrieval client: boto3 client creation on the
 # default session is not thread-safe, and the namespaces retrieve in parallel.
 _RETRIEVAL_CLIENT_LOCK = threading.Lock()
+
+
+_LTM_PREFETCH_POOL: Optional["ThreadPoolExecutor"] = None
+_LTM_PREFETCH_POOL_LOCK = threading.Lock()
+
+
+def _ltm_prefetch_pool() -> "ThreadPoolExecutor":
+    """The process-wide pool the long-term-memory prefetch runs on.
+
+    Small on purpose: one lookup per user message, and every conversation runs
+    in its own Runtime process. Created on first use, never per turn.
+    """
+    global _LTM_PREFETCH_POOL
+    if _LTM_PREFETCH_POOL is None:
+        with _LTM_PREFETCH_POOL_LOCK:
+            if _LTM_PREFETCH_POOL is None:
+                from concurrent.futures import ThreadPoolExecutor
+
+                _LTM_PREFETCH_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="ltm-prefetch")
+    return _LTM_PREFETCH_POOL
 
 
 def memory_retrieval_timeout_seconds() -> float:
@@ -312,6 +334,81 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
                 self._retrieval_client = None
             return self._get_retrieval_client()
 
+    def register_hooks(self, registry: Any, **kwargs: Any) -> None:
+        """The SDK's wiring, plus a long-term-memory prefetch ahead of it.
+
+        Registered FIRST on purpose: Strands runs a hook's callbacks one at a
+        time in registration order, so ``_prefetch_customer_context`` runs
+        before the SDK's persist callback and the lookup's round trip overlaps
+        the two writes the SDK awaits (docs/specs/turn-path-ttft.md P4a).
+        """
+        from strands.hooks import MessageAddedEvent
+
+        registry.add_callback(MessageAddedEvent, self._prefetch_customer_context)
+        super().register_hooks(registry, **kwargs)
+
+    def _retrieval_query_for(self, messages: Any) -> Optional[str]:
+        """The lookup's query for the last message, or None if it gets none.
+
+        One eligibility rule for the prefetch and the inline path: a user
+        message whose first block is text, with retrieval configured.
+        """
+        if not messages or messages[-1].get("role") != "user":
+            return None
+        content = messages[-1].get("content")
+        if not content or "text" not in content[0]:
+            return None
+        if not getattr(self.config, "retrieval_config", None):
+            return None
+        return memory_retrieval_query(messages[-1]["content"][0]["text"])
+
+    def _prefetch_customer_context(self, event: Any) -> None:
+        """Start the lookup for the message just added, and return at once.
+
+        Reads only the query string; never touches the message. The result is
+        applied later, by ``retrieve_customer_context``, at the same point in
+        the callback sequence as without the prefetch — after the SDK has
+        persisted the message — so persisted bytes cannot change.
+        """
+        self._ltm_prefetch = None
+        try:
+            from apis.shared.feature_flags import memory_retrieval_prefetch_enabled
+
+            if not memory_retrieval_prefetch_enabled() or self.cancelled:
+                return
+            messages = event.agent.messages
+            query = self._retrieval_query_for(messages)
+            if query is None:
+                return
+            future = _ltm_prefetch_pool().submit(self._fetch_customer_context, query)
+            self._ltm_prefetch = (messages[-1], future, time.perf_counter())
+        except Exception:  # noqa: BLE001 - the inline path still runs
+            logger.debug("Memory retrieval prefetch skipped", exc_info=True)
+
+    def _take_prefetched_context(self, message: Any) -> Optional[List[str]]:
+        """The prefetched items for ``message``, or None to fetch inline.
+
+        Matched by object identity: a prefetch started for any other message
+        (a turn that died between the two callbacks) is discarded, never
+        applied to this one.
+        """
+        pending, self._ltm_prefetch = getattr(self, "_ltm_prefetch", None), None
+        if pending is None or pending[0] is not message:
+            return None
+        _, future, started = pending
+        waited_from = time.perf_counter()
+        try:
+            items = future.result(timeout=2 * memory_retrieval_timeout_seconds() + 1)
+        except Exception as e:  # noqa: BLE001 - a miss, not a failed turn
+            logger.warning("memory retrieval prefetch failed: %s: %s", type(e).__name__, e)
+            items = []
+        logger.info(
+            "memory retrieval prefetch waitedMs=%d lookupMs=%d",
+            (time.perf_counter() - waited_from) * 1000,
+            (time.perf_counter() - started) * 1000,
+        )
+        return items
+
     def retrieve_customer_context(self, event: Any) -> None:
         """Retrieve long-term memory for the last user message and prepend it.
 
@@ -322,19 +419,32 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
         differs, see :meth:`_get_retrieval_client`. Registered by the SDK's
         ``register_hooks`` in both sync and async mode via
         ``self.retrieve_customer_context``, so the override is picked up.
+
+        Uses the lookup ``_prefetch_customer_context`` started for this same
+        message when there is one, and fetches inline otherwise.
         """
         messages = event.agent.messages
-        if not messages or messages[-1].get("role") != "user":
+        query = self._retrieval_query_for(messages)
+        if query is None:
             return None
-        content = messages[-1].get("content")
-        if not content or "text" not in content[0]:
-            return None
+        items = self._take_prefetched_context(messages[-1])
+        if items is None:
+            items = self._fetch_customer_context(query)
+        if items:
+            tag = getattr(self.config, "context_tag", "user_context")
+            messages[-1]["content"].insert(0, {"text": f"<{tag}>{chr(10).join(items)}</{tag}>"})
+            logger.info("Retrieved %s customer context items", len(items))
+        return None
+
+    def _fetch_customer_context(self, user_query: str) -> List[str]:
+        """Every namespace's context items for ``user_query``. Never raises.
+
+        The network half of the lookup, safe to run on any thread: it reads
+        the query and the config and returns text; it never touches a message.
+        """
         retrieval_config = getattr(self.config, "retrieval_config", None)
         if not retrieval_config:
-            return None
-
-        user_query = memory_retrieval_query(messages[-1]["content"][0]["text"])
-        client = self._get_retrieval_client()
+            return []
 
         def retrieve_for_namespace(namespace: str, cfg: Any) -> List[str]:
             from botocore.exceptions import ConnectionClosedError, SSLError
@@ -382,10 +492,11 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
                     items.append(text)
             return items
 
+        all_context: List[str] = []
         try:
             from concurrent.futures import ThreadPoolExecutor, as_completed
 
-            all_context: List[str] = []
+            client = self._get_retrieval_client()
             with ThreadPoolExecutor() as executor:
                 futures = {
                     executor.submit(retrieve_for_namespace, ns, cfg): ns
@@ -409,16 +520,9 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
                             logger.warning(
                                 "memory retrieval failed namespace=%s: %s: %s", futures[future], type(e).__name__, e
                             )
-
-            if all_context:
-                tag = getattr(self.config, "context_tag", "user_context")
-                event.agent.messages[-1]["content"].insert(
-                    0, {"text": f"<{tag}>{chr(10).join(all_context)}</{tag}>"}
-                )
-                logger.info("Retrieved %s customer context items", len(all_context))
         except Exception as e:  # noqa: BLE001 - retrieval must never break a turn
             logger.error("Failed to retrieve customer context: %s", e)
-        return None
+        return all_context
 
     def read_session(self, session_id: str, **kwargs: Any) -> Any:
         """The SDK's session read, preceded by a build-stage mark.

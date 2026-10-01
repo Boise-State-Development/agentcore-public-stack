@@ -110,6 +110,7 @@ variables. None of them costs extra against the model **except** tool summaries.
 | `COST_DIAGNOSTICS_ENABLED` | ON | none | Content-free behavioral counters for the admin session profile |
 | `CONFIG_CACHE_ENABLED` | ON | **saves** money | In-process cache of tenant-global catalogs (fewer DynamoDB reads) |
 | `AGENT_BUILD_SHARED_SESSION_ENABLED` | ON | none (**saves** ~0.5s on a cold first turn) | One process-wide boto3 session for the agent build's SDK clients (Memory session manager, strategy-id discovery, Bedrock model), built at container warm-up. Off ⇒ each SDK builds its own session, as before |
+| `MEMORY_RETRIEVAL_PREFETCH_ENABLED` | ON | none (**saves** ~200ms on every turn with long-term memory) | Starts the long-term-memory lookup as soon as the user's message is added, overlapping the two Memory writes the SDK awaits first; the result is applied at the same point as before, so persisted and live messages are unchanged. Off ⇒ the lookup runs after the writes, as before |
 | `DOCUMENT_OFFLOAD_ENABLED` | ON | none | Document-context-offload pipeline (see spec) |
 | `DOCUMENT_REHYDRATE_ENABLED` | ON | none | Re-injects offloaded document context on demand |
 | `DOCUMENT_DIGEST_ENABLED` | ON | possible side-channel | Document digest step of the offload pipeline |

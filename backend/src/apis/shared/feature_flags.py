@@ -682,3 +682,22 @@ def agent_build_shared_session_enabled() -> bool:
     is a property, never a dimension.
     """
     return os.environ.get("AGENT_BUILD_SHARED_SESSION_ENABLED", "").strip().lower() != "false"
+
+
+def memory_retrieval_prefetch_enabled() -> bool:
+    """Whether the long-term-memory lookup starts as soon as the user's message
+    is added, overlapping the two Memory writes the SDK awaits first.
+
+    On ``MessageAddedEvent`` the SDK awaits ``append_message`` and
+    ``sync_agent`` (two ``CreateEvent`` calls) and only then runs the lookup —
+    three network calls in series before the model is called, measured at
+    450ms of a 1687ms warm first token on dev (docs/specs/turn-path-ttft.md
+    P1b). With this on, ``TurnBasedSessionManager`` starts the lookup first and
+    applies its result at the same point as before, so persisted and live
+    message bytes are unchanged; only the round trip overlaps the writes.
+
+    **Default ON with a kill switch** (house style): unset or empty resolves
+    to enabled; only the literal ``"false"`` (case-insensitive) disables. Off,
+    the lookup runs inline after the writes, exactly as before.
+    """
+    return os.environ.get("MEMORY_RETRIEVAL_PREFETCH_ENABLED", "").strip().lower() != "false"
