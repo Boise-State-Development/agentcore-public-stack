@@ -118,7 +118,7 @@ class TurnPrelude:
     everything. A measurement must never be able to break the turn it measures.
     """
 
-    __slots__ = ("_t0", "_wall_t0", "_last", "_marks")
+    __slots__ = ("_t0", "_wall_t0", "_last", "_marks", "_details")
 
     def __init__(self) -> None:
         now = time.perf_counter()
@@ -131,6 +131,19 @@ class TurnPrelude:
         # domain, so the value handed to it is captured here in ITS domain.
         self._wall_t0 = time.time()
         self._marks: List[Tuple[str, float]] = []
+        self._details: Dict[str, Any] = {}
+
+    def detail(self, key: str, value: Any) -> None:
+        """Attach a log-only property describing a stage, e.g. which MCP
+        server owned the time inside ``agent_build.tools.mcp``.
+
+        Log line only, never a metric: a detail is for reading one turn, and
+        its values (a per-server list) have no percentile. Last write wins.
+        """
+        try:
+            self._details[key] = value
+        except Exception:  # noqa: BLE001 - never break a turn to measure it
+            logger.debug("Turn prelude detail skipped", exc_info=True)
 
     def mark(self, stage: str) -> None:
         """Close the stage that just finished and open the next one.
@@ -187,15 +200,20 @@ class TurnPrelude:
         the prefix keeps the coarse series comparable across the split while
         ``stages`` answers the new question.
 
+        Every proper prefix is a group, not just the first: splitting
+        ``agent_build.tools`` into ``agent_build.tools.filter`` and friends
+        must keep ``agent_build.tools`` as a number for the same reason the
+        first split kept ``agent_build``.
+
         Undotted stages are deliberately absent — a group of one is noise, and
         the reader already has that number in ``stages``.
         """
         totals: Dict[str, int] = {}
         for name, ms in self._marks:
-            prefix, dot, _ = name.partition(".")
-            if not dot:
-                continue
-            totals[prefix] = totals.get(prefix, 0) + int(ms)
+            parts = name.split(".")
+            for depth in range(1, len(parts)):
+                prefix = ".".join(parts[:depth])
+                totals[prefix] = totals.get(prefix, 0) + int(ms)
         return totals
 
     def emit(
@@ -225,6 +243,8 @@ class TurnPrelude:
             groups = self._groups()
             if groups:
                 payload["groups"] = groups
+            if self._details:
+                payload.update(self._details)
             if extra:
                 payload.update(extra)
             logger.info("turn_prelude %s", json.dumps(payload, default=str))

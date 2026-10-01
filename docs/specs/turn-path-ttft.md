@@ -4,7 +4,7 @@
 (PR #1378 merged) with PR #1377 (`feature/agent-build-latency`) open.
 **Supersedes nothing; it joins three specs that each cover one slice of this path:**
 - `docs/specs/turn-latency-preamble.md` — the preamble (455ms → 22–37ms warm) and the
-  decomposition of `agent_build`. Its PR-5 (split `agent_build.tools`) is still not started.
+  decomposition of `agent_build`. Its PR-5 (split `agent_build.tools`) is built as P1a below; not yet measured on dev.
 - `docs/specs/agent-state-feedback.md` — PR-3 deferred the agent build into the stream and
   narrates it (`preparing` / `prepared`).
 - `docs/specs/agentcore-runtime-v2.md` — the Runtime V2 migration and the prewarm-on-intent
@@ -275,6 +275,17 @@ Unchanged from the PR: `AGENT_BUILD_EXPERIMENT=ab` on the dev Runtime out of ban
 Amend the arm per §4 before the run, or the first-turn number will understate it.
 
 ### P1 — Close the two measurement gaps (F1, F6)
+
+**Status (2026-10-01): P1a built, awaiting a dev readout.** Sub-stages are
+`agent_build.tools.{filter,gateway,mcp,extra}`. `tools.catalog` and
+`tools.mcp_preflight` are not separate stages: both happen per server inside the one
+executor hop, and a mark cannot be taken there, so `tools.mcp` times the hop and the
+`mcpServers` log property carries each server's `{id, outcome, catalogMs, preflightMs,
+totalMs}` (`outcome` ∈ `cached`, `loaded`, `recovered`, `dropped`, `skipped`, `error`).
+`tools.mcp` minus the servers' `totalMs` is the hop's own thread and event-loop startup.
+`groups` now sums every dotted prefix, so `agent_build.tools` and `AgentBuildToolsMs`
+survive the split. The catalog lookups that classify external MCP ids happen earlier, in
+`agent_build.registry`.
 
 *P1a. Split `agent_build.tools`* (the preamble spec's PR-5) into `tools.filter`,
 `tools.catalog` (the per-tool reads), `tools.gateway`, `tools.mcp_preflight` and

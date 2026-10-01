@@ -53,10 +53,9 @@ class ChatAgent(BaseAgent):
     def _create_agent(self) -> None:
         """Create Strands Agent with filtered tools, hooks, and skills plugin."""
         try:
+            # Closes its own `tools.*` sub-stages, external MCP pre-flight
+            # included; `groups` sums them into `agent_build.tools`.
             tools = self._build_filtered_tools()
-            # External MCP pre-flight lives in here — the spec's standing
-            # (and unverified) hypothesis for the cold build.
-            mark_stage("tools")
             hooks = self._create_hooks()
             mark_stage("hooks")
 

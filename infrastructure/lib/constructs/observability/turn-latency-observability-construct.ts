@@ -232,6 +232,25 @@ export class TurnLatencyObservabilityConstruct extends Construct {
       }),
     );
 
+    // Row 3c — inside `tools`, the largest cold sub-stage (P1a in
+    // docs/specs/turn-path-ttft.md). `AgentBuildToolsMs` above is now their
+    // sum. Which MCP server owned `mcp` is a log property (`mcpServers` on
+    // the `turn_prelude` line), not a metric — it has no percentile.
+    this.dashboard.addWidgets(
+      new cloudwatch.GraphWidget({
+        title: 'Inside tools (p90) — filter, gateway, MCP load + pre-flight, injected tools',
+        left: [
+          stage('AgentBuildToolsFilterMs', 'p90', 'filter'),
+          stage('AgentBuildToolsGatewayMs', 'p90', 'gateway'),
+          stage('AgentBuildToolsMcpMs', 'p90', 'external MCP (catalog + pre-flight)'),
+          stage('AgentBuildToolsExtraMs', 'p90', 'injected tools'),
+        ],
+        leftYAxis: { min: 0 },
+        width: 24,
+        height: 6,
+      }),
+    );
+
     // Row 4 — the slicing that dimensions would have done, done in Logs
     // Insights instead. A resume skips most of the preamble, so mixing the two
     // populations is what would make a traffic-mix shift look like a latency

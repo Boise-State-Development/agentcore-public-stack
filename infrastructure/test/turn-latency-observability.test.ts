@@ -62,6 +62,11 @@ describe('TurnLatencyObservabilityConstruct', () => {
       'AgentBuildPluginsMs',
       'AgentBuildFinalizeMs',
       'AgentBuildRestMs',
+      // Inside `tools` (docs/specs/turn-path-ttft.md P1a).
+      'AgentBuildToolsFilterMs',
+      'AgentBuildToolsGatewayMs',
+      'AgentBuildToolsMcpMs',
+      'AgentBuildToolsExtraMs',
     ]) {
       expect(body).toContain(metric);
     }

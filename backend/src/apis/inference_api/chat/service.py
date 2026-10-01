@@ -328,6 +328,7 @@ async def get_agent(
     has_document_tools: bool = False,
     assistant_id: Optional[str] = None,
     build_stage_recorder: Optional[Callable[[str], None]] = None,
+    build_detail_recorder: Optional[Callable[[str, Any], None]] = None,
     memory_binding: Optional[Dict[str, Any]] = None,
     memory_context: Optional[str] = None,
 ) -> BaseAgent:
@@ -506,7 +507,7 @@ async def get_agent(
 
     global _process_build_count
     _process_build_count += 1
-    _stage_token = set_stage_recorder(build_stage_recorder)
+    _stage_token = set_stage_recorder(build_stage_recorder, build_detail_recorder)
     try:
         agent = create_agent(**create_kwargs)
     finally:

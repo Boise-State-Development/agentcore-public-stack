@@ -45,18 +45,30 @@ from __future__ import annotations
 
 import contextvars
 import logging
-from typing import Callable, Optional
+from typing import Any, Callable, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-_recorder: contextvars.ContextVar[Optional[Callable[[str], None]]] = contextvars.ContextVar(
+_Recorders = Tuple[Optional[Callable[[str], None]], Optional[Callable[[str, Any], None]]]
+
+# One var holding both callables, so a single token installs and restores them
+# together — a stage recorder from one turn can never pair with another turn's
+# detail recorder.
+_recorder: contextvars.ContextVar[Optional[_Recorders]] = contextvars.ContextVar(
     "agent_build_stage_recorder", default=None
 )
 
 
-def set_stage_recorder(recorder: Optional[Callable[[str], None]]) -> contextvars.Token:
-    """Install the recorder for the current context. Returns a reset token."""
-    return _recorder.set(recorder)
+def set_stage_recorder(
+    recorder: Optional[Callable[[str], None]],
+    detail_recorder: Optional[Callable[[str, Any], None]] = None,
+) -> contextvars.Token:
+    """Install the recorders for the current context. Returns a reset token.
+
+    ``detail_recorder`` receives log-only properties (``record_detail``), such
+    as the per-server timings behind ``tools.mcp``.
+    """
+    return _recorder.set((recorder, detail_recorder))
 
 
 def reset_stage_recorder(token: contextvars.Token) -> None:
@@ -76,8 +88,21 @@ def mark_stage(stage: str) -> None:
     the thing it measures is worse than no measurement.
     """
     try:
-        recorder = _recorder.get()
-        if recorder is not None:
-            recorder(stage)
+        recorders = _recorder.get()
+        if recorders is not None and recorders[0] is not None:
+            recorders[0](stage)
     except Exception:  # noqa: BLE001
         logger.debug("Build stage mark skipped", exc_info=True)
+
+
+def record_detail(key: str, value: Any) -> None:
+    """Attach a log-only property to the turn's ``turn_prelude`` line.
+
+    Same contract as ``mark_stage``: a no-op without a recorder, never raises.
+    """
+    try:
+        recorders = _recorder.get()
+        if recorders is not None and recorders[1] is not None:
+            recorders[1](key, value)
+    except Exception:  # noqa: BLE001
+        logger.debug("Build detail skipped", exc_info=True)

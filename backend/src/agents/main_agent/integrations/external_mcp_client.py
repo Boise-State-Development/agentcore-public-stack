@@ -15,6 +15,7 @@ OAuth Support:
 
 import logging
 import re
+import time
 from typing import Any, Callable, Iterator, Optional, List, Set
 from urllib.parse import urlparse
 
@@ -137,6 +138,11 @@ _AUTH_STATUS_CODES = frozenset({401, 403})
 _AUTH_TEXT_RE = re.compile(
     r"\b(?:401|403)\b|\bunauthorized\b|\bforbidden\b", re.IGNORECASE
 )
+
+
+def _elapsed_ms(started: float) -> int:
+    """Milliseconds since a ``perf_counter`` reading."""
+    return int((time.perf_counter() - started) * 1000)
 
 
 def _iter_exception_chain(exc: BaseException) -> Iterator[BaseException]:
@@ -510,6 +516,7 @@ class ExternalMCPIntegration:
         enabled_tool_ids: List[str],
         user_id: Optional[str] = None,
         auth_token: Optional[str] = None,
+        timings: Optional[List[dict]] = None,
     ) -> List[MCPClient]:
         """
         Load external MCP clients for enabled tools.
@@ -524,6 +531,11 @@ class ExternalMCPIntegration:
             enabled_tool_ids: List of enabled tool IDs
             user_id: User ID (required for OAuth-gated and OIDC-forwarded tools)
             auth_token: Raw OIDC token for forwarding
+            timings: When given, one entry per server is appended —
+                ``{id, outcome, catalogMs, preflightMs, totalMs}`` — so the
+                caller can say which server owned the load (turn-path P1a).
+                ``outcome`` is ``cached``, ``loaded``, ``recovered``,
+                ``dropped`` (pre-flight failed), ``skipped`` or ``error``.
 
         Returns:
             List of MCPClient instances to add to the agent's tools
@@ -539,8 +551,11 @@ class ExternalMCPIntegration:
         name_filters = collect_tool_name_filters(enabled_tool_ids)
 
         for tool_id, allowed_tool_names in name_filters.items():
+            started = time.perf_counter()
+            timing: dict = {"id": tool_id, "outcome": "skipped"}
             try:
                 tool = await repository.get_tool(tool_id)
+                timing["catalogMs"] = _elapsed_ms(started)
                 if not tool:
                     continue
 
@@ -573,6 +588,7 @@ class ExternalMCPIntegration:
                     cache_key in self.clients
                     and self._client_versions.get(cache_key) == tool_version
                 ):
+                    timing["outcome"] = "cached"
                     clients.append(self.clients[cache_key])
                     continue
 
@@ -685,8 +701,10 @@ class ExternalMCPIntegration:
                     # whole turn when Strands later calls load_tools().
                     # On success this also primes the client's tool cache,
                     # so Strands' subsequent load_tools() is a no-op.
+                    preflight_started = time.perf_counter()
                     try:
                         await client.load_tools()
+                        timing["outcome"] = "loaded"
                     except Exception as exc:
                         recovered = await self._recover_oauth_preflight(
                             tool_id=tool_id,
@@ -695,8 +713,11 @@ class ExternalMCPIntegration:
                             provider_id=provider_id,
                             exc=exc,
                         )
+                        timing["outcome"] = "recovered" if recovered else "dropped"
                         if not recovered:
                             continue
+                    finally:
+                        timing["preflightMs"] = _elapsed_ms(preflight_started)
 
                     self.clients[cache_key] = client
                     self._client_versions[cache_key] = tool_version
@@ -714,8 +735,13 @@ class ExternalMCPIntegration:
                     logger.info(f"✅ Loaded external MCP tool: {tool_id}{auth_label}")
 
             except Exception as e:
+                timing["outcome"] = "error"
                 logger.error(f"Error loading external MCP tool {tool_id}: {e}")
                 continue
+            finally:
+                if timings is not None:
+                    timing["totalMs"] = _elapsed_ms(started)
+                    timings.append(timing)
 
         return clients
 

@@ -902,3 +902,86 @@ class TestOAuthPreflightRecovery:
             self.PROVIDER: "https://consent.example/b"
         }
         assert integration.take_pending_consents("carol") == {}
+
+
+class TestLoadExternalToolsTimings:
+    """Per-server timings behind `agent_build.tools.mcp` (turn-path P1a): one
+    entry per server so one slow server is distinguishable from many."""
+
+    @pytest.mark.asyncio
+    async def test_one_entry_per_server_with_its_outcome(self):
+        integration = ExternalMCPIntegration()
+        when = datetime(2025, 1, 1, tzinfo=timezone.utc)
+        repo = SimpleNamespace(
+            get_tool=AsyncMock(
+                side_effect=[
+                    _fake_tool(when, tool_id="calendar"),
+                    _fake_tool(when, tool_id="gmail"),
+                    None,
+                ]
+            )
+        )
+        bad_client = SimpleNamespace(
+            load_tools=AsyncMock(side_effect=RuntimeError("connection refused"))
+        )
+        good_client = SimpleNamespace(load_tools=AsyncMock(return_value=[]))
+        timings: list = []
+
+        with patch(
+            "apis.shared.tools.repository.get_tool_catalog_repository",
+            return_value=repo,
+        ), patch(
+            "agents.main_agent.integrations.external_mcp_client.create_external_mcp_client",
+            side_effect=[bad_client, good_client],
+        ):
+            await integration.load_external_tools(
+                ["calendar", "gmail", "retired"], timings=timings
+            )
+
+        assert [(t["id"], t["outcome"]) for t in timings] == [
+            ("calendar", "dropped"),
+            ("gmail", "loaded"),
+            ("retired", "skipped"),
+        ]
+        for entry in timings[:2]:
+            assert {"catalogMs", "preflightMs", "totalMs"} <= set(entry)
+            assert entry["totalMs"] >= entry["preflightMs"]
+        # Never reached a pre-flight, so it must not claim one.
+        assert "preflightMs" not in timings[2]
+
+    @pytest.mark.asyncio
+    async def test_a_cached_client_reports_no_preflight(self):
+        integration = ExternalMCPIntegration()
+        tool = _fake_tool(datetime(2025, 1, 1, tzinfo=timezone.utc))
+        repo = SimpleNamespace(get_tool=AsyncMock(return_value=tool))
+        client = SimpleNamespace(load_tools=AsyncMock(return_value=[]))
+        timings: list = []
+
+        with patch(
+            "apis.shared.tools.repository.get_tool_catalog_repository",
+            return_value=repo,
+        ), patch(
+            "agents.main_agent.integrations.external_mcp_client.create_external_mcp_client",
+            return_value=client,
+        ):
+            await integration.load_external_tools(["gmail"])
+            await integration.load_external_tools(["gmail"], timings=timings)
+
+        assert timings[0]["outcome"] == "cached"
+        assert "preflightMs" not in timings[0]
+
+    @pytest.mark.asyncio
+    async def test_a_catalog_error_is_recorded_not_raised(self):
+        integration = ExternalMCPIntegration()
+        repo = SimpleNamespace(get_tool=AsyncMock(side_effect=RuntimeError("ddb")))
+        timings: list = []
+
+        with patch(
+            "apis.shared.tools.repository.get_tool_catalog_repository",
+            return_value=repo,
+        ):
+            result = await integration.load_external_tools(["gmail"], timings=timings)
+
+        assert result == []
+        assert timings[0]["outcome"] == "error"
+        assert "totalMs" in timings[0]
