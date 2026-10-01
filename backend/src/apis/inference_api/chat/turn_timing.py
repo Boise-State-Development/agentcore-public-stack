@@ -323,7 +323,10 @@ class TurnPrelude:
             return
         self._first_token_emitted = True
 
-        first_token_ms = self.total_ms
+        # At the LAST MARK (`model`), not now: this runs on the coordinator's
+        # next pass, so `total_ms` would also count the wait for the second
+        # event — 131ms and 182ms on the first two dev readouts.
+        first_token_ms = max(0, int((self._last - self._t0) * 1000))
         reported, prelude_total_ms, session_id, stream_kind, extra = self._emitted or (
             0,
             None,
