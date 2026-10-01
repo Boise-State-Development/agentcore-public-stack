@@ -17,6 +17,11 @@ interface ManagedModelsListResponse {
   totalCount: number;
 }
 
+/** A speech-to-speech row: voice mode's model, never a chat one. */
+export function isSpeechModel(model: { outputModalities?: string[] }): boolean {
+  return (model.outputModalities ?? []).some((m) => m.toUpperCase() === 'SPEECH');
+}
+
 @Injectable({
   providedIn: 'root'
 })
@@ -227,9 +232,11 @@ export class ModelService {
       );
 
       // Filter to enabled models a user may select. Retired rows are held apart:
-      // never offered, only followed to their successor.
+      // never offered, only followed to their successor. Speech-to-speech rows
+      // (Nova 2 Sonic) are catalogued so voice sessions price, but they answer
+      // no chat API — the backend already omits them; this is the belt.
       const enabledModels = response.models.filter(
-        model => model.enabled && model.status !== 'retired',
+        model => model.enabled && model.status !== 'retired' && !isSpeechModel(model),
       );
       this.retiredModels.set(response.models.filter(model => model.status === 'retired'));
 

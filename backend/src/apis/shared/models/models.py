@@ -261,6 +261,22 @@ class ManagedModelCreate(BaseModel):
         ge=0,
         description="Price per million tokens read from cache (Bedrock only, ~90% discount)"
     )
+    # Speech-to-speech models (Nova 2 Sonic) bill speech tokens on their own
+    # rate card, an order of magnitude above their text rates. `input`/`output`
+    # above are the TEXT rates for such a model; these two carry the speech
+    # rates. Absent on every text model.
+    speech_input_price_per_million_tokens: Optional[float] = Field(
+        None,
+        alias="speechInputPricePerMillionTokens",
+        ge=0,
+        description="Price per million SPEECH input tokens (speech-to-speech models only)"
+    )
+    speech_output_price_per_million_tokens: Optional[float] = Field(
+        None,
+        alias="speechOutputPricePerMillionTokens",
+        ge=0,
+        description="Price per million SPEECH output tokens (speech-to-speech models only)"
+    )
     knowledge_cutoff_date: Optional[str] = Field(None, alias="knowledgeCutoffDate")
     supports_caching: Optional[bool] = Field(
         None,
@@ -418,6 +434,22 @@ class ManagedModelUpdate(BaseModel):
         ge=0,
         description="Price per million tokens read from cache (Bedrock only, ~90% discount)"
     )
+    # Speech-to-speech models (Nova 2 Sonic) bill speech tokens on their own
+    # rate card, an order of magnitude above their text rates. `input`/`output`
+    # above are the TEXT rates for such a model; these two carry the speech
+    # rates. Absent on every text model.
+    speech_input_price_per_million_tokens: Optional[float] = Field(
+        None,
+        alias="speechInputPricePerMillionTokens",
+        ge=0,
+        description="Price per million SPEECH input tokens (speech-to-speech models only)"
+    )
+    speech_output_price_per_million_tokens: Optional[float] = Field(
+        None,
+        alias="speechOutputPricePerMillionTokens",
+        ge=0,
+        description="Price per million SPEECH output tokens (speech-to-speech models only)"
+    )
     knowledge_cutoff_date: Optional[str] = Field(None, alias="knowledgeCutoffDate")
     supports_caching: Optional[bool] = Field(
         None,
@@ -564,6 +596,16 @@ class ManagedModel(BaseModel):
         None,
         alias="cacheReadPricePerMillionTokens",
         description="Price per million tokens read from cache (Bedrock only, ~90% discount)"
+    )
+    speech_input_price_per_million_tokens: Optional[float] = Field(
+        None,
+        alias="speechInputPricePerMillionTokens",
+        description="Price per million SPEECH input tokens (speech-to-speech models only)"
+    )
+    speech_output_price_per_million_tokens: Optional[float] = Field(
+        None,
+        alias="speechOutputPricePerMillionTokens",
+        description="Price per million SPEECH output tokens (speech-to-speech models only)"
     )
     knowledge_cutoff_date: Optional[str] = Field(None, alias="knowledgeCutoffDate")
     supports_caching: bool = Field(

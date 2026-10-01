@@ -388,3 +388,65 @@ class TestOpenAIFamilyCostAfterUsageNormalization:
             + breakdown.cache_read_cost
             + breakdown.cache_write_cost
         )
+
+
+# Nova 2 Sonic, us-west-2, Price List API `AmazonBedrock` offer file
+# (usagetype USW2-NovaSonic2.0-*, 2026-09-30). Speech is ~10x text.
+NOVA_2_SONIC_PRICING = {
+    "inputPricePerMtok": 0.319,
+    "outputPricePerMtok": 2.651,
+    "speechInputPricePerMtok": 3.0,
+    "speechOutputPricePerMtok": 12.0,
+}
+
+
+class TestCalculateVoiceCost:
+    """Speech-to-speech sessions bill four buckets on two rate cards."""
+
+    def test_prices_each_modality_on_its_own_rate(self):
+        usage = {
+            "inputTokens": 2_000_000,
+            "outputTokens": 2_000_000,
+            "speechInputTokens": 1_000_000,
+            "textInputTokens": 1_000_000,
+            "speechOutputTokens": 1_000_000,
+            "textOutputTokens": 1_000_000,
+        }
+        total, breakdown = CostCalculator.calculate_voice_cost(usage, NOVA_2_SONIC_PRICING)
+        assert breakdown.input_cost == pytest.approx(3.0 + 0.319)
+        assert breakdown.output_cost == pytest.approx(12.0 + 2.651)
+        assert total == pytest.approx(3.319 + 14.651)
+        assert breakdown.cache_read_cost == 0.0
+        assert breakdown.cache_write_cost == 0.0
+
+    def test_no_split_prices_the_totals_at_the_speech_rates(self):
+        # The conservative direction: over-count text as speech, never the
+        # other way round.
+        usage = {"inputTokens": 1_000_000, "outputTokens": 1_000_000}
+        total, breakdown = CostCalculator.calculate_voice_cost(usage, NOVA_2_SONIC_PRICING)
+        assert breakdown.input_cost == pytest.approx(3.0)
+        assert breakdown.output_cost == pytest.approx(12.0)
+        assert total == pytest.approx(15.0)
+
+    def test_a_split_that_undercounts_the_total_bills_the_remainder_as_speech(self):
+        usage = {
+            "inputTokens": 1_000_000,
+            "outputTokens": 0,
+            "speechInputTokens": 250_000,
+            "textInputTokens": 250_000,
+        }
+        _, breakdown = CostCalculator.calculate_voice_cost(usage, NOVA_2_SONIC_PRICING)
+        # 750k at speech ($3/M) + 250k at text ($0.319/M)
+        assert breakdown.input_cost == pytest.approx(0.75 * 3.0 + 0.25 * 0.319)
+
+    def test_row_without_speech_rates_falls_back_to_its_text_rates(self):
+        # Better than $0, and UnmeteredModelCall stays quiet; the fix is the row.
+        pricing = {"inputPricePerMtok": 1.0, "outputPricePerMtok": 4.0}
+        usage = {"inputTokens": 1_000_000, "outputTokens": 1_000_000}
+        total, _ = CostCalculator.calculate_voice_cost(usage, pricing)
+        assert total == pytest.approx(5.0)
+
+    def test_none_tokens_count_as_zero(self):
+        usage = {"inputTokens": None, "outputTokens": None, "speechInputTokens": None}
+        total, _ = CostCalculator.calculate_voice_cost(usage, NOVA_2_SONIC_PRICING)
+        assert total == 0.0

@@ -482,6 +482,45 @@ describe('ModelCatalogPage', () => {
     expect(gpt54?.template.cacheWritePricePerMillionTokens).toBe(0);
   });
 
+  describe('curated Nova 2 Sonic row', () => {
+    // Voice mode's model. It is curated so voice sessions PRICE — with no
+    // catalog row for its id every voice turn was $0 against quota — and it
+    // is kept out of the chat picker by its SPEECH output modality.
+    const sonic = CURATED_BEDROCK_MODELS.find(m => m.key === 'nova-2-sonic')!;
+
+    it('names the id the voice agent connects with', () => {
+      expect(sonic.template.modelId).toBe('amazon.nova-2-sonic-v1:0');
+    });
+
+    it('declares speech in its output modalities, which is what hides it from the picker', () => {
+      expect(sonic.template.outputModalities).toContain('SPEECH');
+      expect(sonic.template.inputModalities).toContain('SPEECH');
+    });
+
+    it('carries both rate cards: text on input/output, speech on its own fields', () => {
+      // us-west-2, Price List API `AmazonBedrock`, 2026-09-30.
+      expect(sonic.template.inputPricePerMillionTokens).toBeCloseTo(0.319, 6);
+      expect(sonic.template.outputPricePerMillionTokens).toBeCloseTo(2.651, 6);
+      expect(sonic.template.speechInputPricePerMillionTokens).toBeCloseTo(3.0, 6);
+      expect(sonic.template.speechOutputPricePerMillionTokens).toBeCloseTo(12.0, 6);
+    });
+
+    it('has no prompt cache, so declares no cache rates', () => {
+      expect(sonic.template.supportsCaching).toBe(false);
+      expect(sonic.template.cacheWritePricePerMillionTokens).toBeUndefined();
+      expect(sonic.template.cacheReadPricePerMillionTokens).toBeUndefined();
+    });
+
+    it('is the only curated row with speech rates', () => {
+      const withSpeech = [
+        ...CURATED_BEDROCK_MODELS,
+        ...CURATED_MANTLE_MODELS,
+        ...CURATED_BEDROCK_RESPONSES_MODELS,
+      ].filter(m => m.template.speechInputPricePerMillionTokens != null);
+      expect(withSpeech.map(m => m.key)).toEqual(['nova-2-sonic']);
+    });
+  });
+
   describe('curated picker placement', () => {
     const ALL = [
       ...CURATED_BEDROCK_MODELS,

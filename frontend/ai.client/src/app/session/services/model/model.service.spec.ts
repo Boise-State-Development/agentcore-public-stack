@@ -22,7 +22,11 @@ describe('ModelService', () => {
 
   let sessionStore: Record<string, string> = {};
 
-  async function setup() {
+  // `beforeEach(setup)` hands setup the test context, so the response is a
+  // separate entry point rather than an optional parameter.
+  const setup = () => setupWith(mockResponse);
+
+  async function setupWith(response: { models: ManagedModel[]; totalCount: number }) {
     sessionStore = {};
     vi.stubGlobal('sessionStorage', {
       getItem: vi.fn((k: string) => sessionStore[k] ?? null),
@@ -48,7 +52,7 @@ describe('ModelService', () => {
     httpMock = TestBed.inject(HttpTestingController);
 
     await vi.waitFor(() => {
-      httpMock.expectOne('http://localhost:8000/models').flush(mockResponse);
+      httpMock.expectOne('http://localhost:8000/models').flush(response);
     });
   }
 
@@ -59,6 +63,24 @@ describe('ModelService', () => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
     TestBed.resetTestingModule();
+  });
+
+  describe('speech-to-speech rows', () => {
+    it('never reach the picker, even when enabled', async () => {
+      const sonic: ManagedModel = {
+        ...mockModels[0],
+        id: 'm-sonic',
+        modelId: 'amazon.nova-2-sonic-v1:0',
+        modelName: 'Nova 2 Sonic',
+        inputModalities: ['SPEECH', 'TEXT'],
+        outputModalities: ['SPEECH', 'TEXT'],
+        enabled: true,
+      };
+      await setupWith({ models: [...mockModels, sonic], totalCount: 3 });
+      await vi.waitFor(() => {
+        expect(service.availableModels().map((m) => m.modelId)).toEqual(['claude-haiku', 'claude-sonnet']);
+      });
+    });
   });
 
   describe('retired inference-param overrides', () => {
