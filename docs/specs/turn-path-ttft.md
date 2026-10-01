@@ -308,7 +308,7 @@ thread around each executor hop, never inside it (contextvars do not cross the p
 per-server `ms` list as a log property of the MCP stage so one slow server is
 distinguishable from many.
 
-**Status (2026-10-01): P1b built, awaiting a dev readout.** The clock is the same
+**Status (2026-10-01): P1b shipped (#1397) and read on dev** (readout below). The clock is the same
 `TurnPrelude`, passed to `ChatAgent.stream_async(turn_clock=...)` and on to the
 coordinator. Stages after `turn_prelude`: `head_of_turn.handoff` (the route's generator
 wiring, the `prepared` frame, quota warnings, the prompt build), `head_of_turn.compaction`
@@ -330,6 +330,35 @@ a Stop, an interrupt), which are the turns most worth reading. And the line and 
 record (`FirstTokenMs`, `HeadOfTurnMs`, `PreModelMs`, `ModelMs`, …) are written on the
 coordinator's next pass, **after** the first token has been yielded — a log write in
 front of the token would be the latency being measured.
+
+**Dev readout (2026-10-01, Haiku 4.5, one new conversation: cold first turn A, warm second
+turn B).** Client columns are a passive `fetch` wrapper in the in-app browser (send →
+first `content_block` frame). The server's first-token time is the sum of the stages:
+#1397 read `firstTokenMs` at emit time, one event late, and overstated it by 131ms and
+182ms here — fixed in the follow-up to read it at the `model` mark.
+
+| | A (cold) | B (warm) |
+|---|---|---|
+| prelude (`turn_prelude.totalMs`) | 1263 | 229 |
+| `head_of_turn` (handoff / compaction / history_count) | 157 (4 / 67 / 86) | 83 (4 / 5 / 74) |
+| `pre_model` | 664 | 450 |
+| `model` | 942 | 925 |
+| **server first token** | **3026** | **1687** |
+| client send → first content frame | 4264 | 2119 |
+| hop (client − server: app-api, Runtime routing, cold start) | 1238 | 432 |
+
+What `pre_model` is, from the runtime log on turn B — three network calls **in series**:
+the user message's `CreateEvent` (~110ms), a second `CreateEvent` the Memory SDK logs as
+`Created agent: default … with event` after every message (~107ms), then the two LTM
+`RetrieveMemoryRecords` (~230ms warm, ~454ms cold, the namespaces finishing ~117ms apart
+on the cold turn). LTM retrieval needs only the user's text, not either write, so the
+writes and the retrieval need not be serial. `pre_model` is the largest stage we own on a
+warm turn (450 of 1687ms), and it is paid on **every** turn, cold or warm.
+
+`history_count` is 74–86ms on a two-message conversation (one `ListEvents` page). Whether
+it grows with history is still unmeasured — the next readout should include a long
+conversation. `model` (~930ms) is Bedrock's own time to first token on a ~13k-token
+prefix and is not ours to move here.
 
 *P1b. Extend the clock to the first token.* Add `head_of_turn` (C3: compaction re-read,
 history count, offload) and `pre_model` (C4: LTM retrieval + hooks, up to the model call)

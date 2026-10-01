@@ -321,9 +321,11 @@ class TestFirstToken:
         prelude.mark("head_of_turn.history_count")  # 1.5 -> 500
         prelude.mark("pre_model")  # 2.0 -> 500
 
-        payload = _first_token(prelude)  # firstTokenMs reads 2.5
+        payload = _first_token(prelude)
 
-        assert payload["firstTokenMs"] == 2500
+        # At the last mark (2.0), not at emit: the remaining reading (2.5) is
+        # never taken, and the wait for the second event is not first-token time.
+        assert payload["firstTokenMs"] == 2000
         assert payload["preludeTotalMs"] == 750
         assert payload["stages"] == {
             "head_of_turn.handoff": 500,
@@ -334,6 +336,20 @@ class TestFirstToken:
         # The prelude's identity and extras carry over: one join key, one shape.
         assert payload["sessionId"] == "s"
         assert payload["isResume"] is False
+
+    def test_first_token_ms_is_the_model_mark_not_the_emit(self, monkeypatch):
+        """The line is written on the coordinator's next pass, after the first
+        token was yielded. The time spent waiting for that next event is not
+        first-token time, and the stages must add up to `firstTokenMs`."""
+        prelude = self._turn(monkeypatch, readings=[0.0, 0.5, 1.0, 1.75, 9.0])
+        prelude.mark("stream_setup")  # 0.5
+        _emitted(prelude)  # totalMs reads 1.0
+        prelude.mark("pre_model")  # 1.75 -> 1250 (from 0.5)
+
+        payload = _first_token(prelude)  # a now-reading of 9.0 must not be used
+
+        assert payload["firstTokenMs"] == 1750
+        assert payload["firstTokenMs"] == 500 + sum(payload["stages"].values())
 
     def test_emits_once(self, caplog):
         prelude = TurnPrelude()
@@ -361,7 +377,7 @@ class TestFirstToken:
         prelude.mark_at("pre_model", 2.0)  # stamped by a hook at 2.0 -> 1000
         prelude.mark("model")  # 3.0 -> 1000 (from 2.0, not from 1.0)
 
-        stages = _first_token(prelude)["stages"]  # reads 3.5
+        stages = _first_token(prelude)["stages"]
 
         assert stages["pre_model"] == 1000
         assert stages["model"] == 1000
