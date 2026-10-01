@@ -446,6 +446,55 @@ turn with an MCP tool enabled and a KB agent; compare `agent_build` group and
 
 ### P4 — Take the bookkeeping off the critical path (F4, F5, F7)
 
+*P4a. Overlap the long-term-memory lookup with the message writes (built 2026-10-01).*
+The P1b readout found `pre_model` — the largest stage we own on a warm turn, 450 of
+1687ms, and paid on every turn — to be three network calls in series, all on
+`MessageAddedEvent` for the user's message: the SDK's persist callback (`append_message`'s
+`CreateEvent`, ~110ms, then `sync_agent`'s `CreateEvent`, ~107ms) and then
+`retrieve_customer_context` (two `RetrieveMemoryRecords`, ~230ms warm, ~454ms cold).
+The lookup needs only the user's text, not either write.
+
+*The constraint that shapes it.* `retrieve_customer_context` prepends a `<user_context>`
+block to the **live** user message, after the persist callback has written that message.
+So the persisted message — what restore rebuilds history from on a rebuilt agent — has no
+context block, and the live one does. That split is load-bearing for the prompt-cache
+contract (restored history must be byte-stable), so running the two callbacks
+concurrently is wrong: the insert could land while `append_message` is serializing the
+same dict on its worker thread, and a context block would reach Memory on some turns and
+not others.
+
+*What it does instead.* `TurnBasedSessionManager.register_hooks` registers one sync
+`MessageAddedEvent` callback **before** delegating to the SDK. Strands runs a hook's
+callbacks one at a time in registration order (`invoke_callbacks_async`), so it runs
+first: it checks the same eligibility the lookup does (last message is a user message
+whose first block is text, retrieval configured, session not cancelled), snapshots the
+query string, submits `_fetch_customer_context(query)` to a small process-wide pool and
+returns. The SDK's persist callback then runs exactly as before. When the SDK calls
+`retrieve_customer_context` — still after the persist — it takes the prefetched future
+(only if it was started for this same message object; otherwise it fetches inline, as
+before), waits for it, and inserts the block. Only the network round trip moves; the
+insert happens at the same point in the sequence, so the persisted bytes and the live
+bytes are what they were. Expected: `pre_model` falls by about `min(writes, lookup)` —
+~200ms warm, more cold.
+
+*Kill switch:* `MEMORY_RETRIEVAL_PREFETCH_ENABLED` (default on; only `"false"`
+disables), runtime-only like `AGENT_BUILD_SHARED_SESSION_ENABLED`. Off, nothing is
+prefetched and the lookup runs inline in `retrieve_customer_context`, as before.
+
+*Tests.* Through a real Strands `HookRegistry` with the SDK's own async-mode wiring: the
+lookup starts before `append_message` returns, the message `append_message` serialized
+carries no context block while the live message does, and the result is byte-identical to
+the switch-off path. Plus: prefetch is skipped for assistant and tool-result messages; a
+prefetch for a different message is never applied; a failed or slow prefetch leaves the
+turn without context rather than failing it. *Measure:* `pre_model` on a warm and a cold
+dev turn against the P1b readout, and the `memory retrieval prefetch` line's `waitedMs`
+(0 means the lookup finished inside the writes).
+
+*Not done here:* `sync_agent` after every message is the SDK writing agent state that its
+`AfterInvocationEvent` callback writes again at the end of the turn. Skipping the
+per-message write would save ~107ms more, but it changes what the SDK persists if a turn
+dies mid-way; it needs its own look.
+
 - **`_get_initial_message_count`:** use the maintained `message_count` and drop the
   `ListEvents`. The global-index concern it cites is for mixed voice+text sessions; verify
   with `get_messages_from_cloud` whether the index still needs to be global (voice writes
