@@ -34,6 +34,29 @@ from apis.shared.errors import (
 
 from .stream_processor import process_agent_stream
 
+# Processed event types that mean the model has started answering: text, a
+# tool call's first block or input, or reasoning. The first one of a turn
+# closes the first-token clock (`turn_first_token`, docs/specs/turn-path-ttft.md
+# P1b) — a tool-first turn's "first token" is its tool call, which is what the
+# user sees appear.
+_FIRST_MODEL_OUTPUT_TYPES = frozenset(
+    {"content_block_start", "content_block_delta", "reasoning", "tool_use"}
+)
+
+
+def _turn_clock_call(turn_clock: Any, method: str, *args: Any) -> None:
+    """Call a method on the turn's clock if one was passed. Never raises.
+
+    Duck-typed: the clock is inference-api's ``TurnPrelude``, which this
+    package must not import (``tests/architecture/test_import_boundaries.py``).
+    """
+    if turn_clock is None:
+        return
+    try:
+        getattr(turn_clock, method)(*args)
+    except Exception:  # noqa: BLE001 - a measurement must not break a turn
+        logger.debug("Turn clock %s skipped", method, exc_info=True)
+
 logger = logging.getLogger(__name__)
 
 # How long the status merge waits on the agent stream before looking at the
@@ -257,6 +280,7 @@ class StreamCoordinator:
         turn_lease: Any = None,
         turn_started_at: Optional[float] = None,
         poll_side_frame: Optional[Callable[[], Optional[str]]] = None,
+        turn_clock: Any = None,
     ) -> AsyncGenerator[str, None]:
         """
         Stream agent responses with proper lifecycle management
@@ -293,10 +317,20 @@ class StreamCoordinator:
                 one poll interval of being ready instead of waiting for the agent
                 stream's next event. Must be idempotent: the caller keeps checking it
                 between events too, which is its only route while the merge is off.
+            turn_clock: The turn's ``TurnPrelude`` (duck-typed), continued here
+                past the agent build: ``head_of_turn.*`` sub-stages, then
+                ``pre_model`` (closed at the status hook's first
+                ``BeforeModelCallEvent`` stamp) and ``model`` at the first model
+                output, then ``emit_first_token`` once that output has been
+                yielded. Per turn, like ``turn_lease``; None disables it.
 
         Yields:
             str: SSE formatted events
         """
+        # Everything since the agent was ready: the route's generator wiring,
+        # the `prepared` frame, quota warnings and the prompt build.
+        _turn_clock_call(turn_clock, "mark", "head_of_turn.handoff")
+
         # Set environment variables for browser session isolation
         os.environ[EnvVars.SESSION_ID] = session_id
         os.environ[EnvVars.USER_ID] = user_id
@@ -348,6 +382,8 @@ class StreamCoordinator:
         # interrupt state makes Strands reject this turn's prompt outright.
         # See ``reset_stale_interrupt_state``.
         reset_stale_interrupt_state(agent, prompt)
+        # Compaction state re-read (#751), document offload, the resets above.
+        _turn_clock_call(turn_clock, "mark", "head_of_turn.compaction")
 
         # Track timing for latency metrics
         stream_start_time = time.time()
@@ -422,6 +458,8 @@ class StreamCoordinator:
         # and represents the number of messages that existed BEFORE this stream
         initial_message_count = self._get_initial_message_count(session_manager)
         logger.info(f"📊 Initial message count before streaming: {initial_message_count}")
+        # A ListEvents over the whole history, for len() (turn-path spec F5).
+        _turn_clock_call(turn_clock, "mark", "head_of_turn.history_count")
 
         # Arm the displayText write for this turn. The hook stores the user's
         # original message on `MessageAddedEvent` — i.e. before the model
@@ -463,6 +501,13 @@ class StreamCoordinator:
             logger.warning("MCP Apps broker subscribe failed: %s", e)
             app_event_queue = None
 
+        # First-token clock state: the first model output is marked on
+        # arrival, and the line is emitted on the NEXT pass (or in `finally`),
+        # after that output has been yielded — never in front of it.
+        first_model_output_seen = False
+        first_token_emit_pending = False
+
+        _turn_clock_call(turn_clock, "mark", "head_of_turn.rest")
         try:
             # Get raw agent stream
             agent_stream = agent.stream_async(prompt)
@@ -484,6 +529,10 @@ class StreamCoordinator:
                 )
 
             async for event in processed_stream:
+                if first_token_emit_pending:
+                    first_token_emit_pending = False
+                    _turn_clock_call(turn_clock, "emit_first_token")
+
                 # A status transition the merge picked up mid-silence. It is
                 # already a formatted SSE frame and describes nothing the rest
                 # of this body reasons about (no message index, no metadata, no
@@ -491,6 +540,15 @@ class StreamCoordinator:
                 if isinstance(event, _StatusFrame):
                     yield event.sse
                     continue
+
+                if (
+                    turn_clock is not None
+                    and not first_model_output_seen
+                    and event.get("type") in _FIRST_MODEL_OUTPUT_TYPES
+                ):
+                    first_model_output_seen = True
+                    self._mark_first_model_output(turn_clock, main_agent_wrapper)
+                    first_token_emit_pending = True
 
                 # Cooperative stop. A user Stop arms a cancel on the session's
                 # single-flight lease; the inference-api heartbeat observes it
@@ -1622,6 +1680,11 @@ class StreamCoordinator:
             except Exception as persist_error:
                 logger.error(f"Failed to persist stream error to session: {persist_error}")
         finally:
+            # The first model output was the stream's last event (or the turn
+            # ended right after it): emit now rather than never.
+            if first_token_emit_pending:
+                _turn_clock_call(turn_clock, "emit_first_token")
+
             # MCP Apps PR #5: always release the broker subscription —
             # covers normal completion, the in-loop error `return`, and
             # the except path, so a dropped stream never leaks a queue.
@@ -2813,6 +2876,27 @@ class StreamCoordinator:
         except Exception:  # noqa: BLE001 - side-channel frames are never load-bearing
             logger.warning("Side-frame poll failed", exc_info=True)
             return None
+
+    @staticmethod
+    def _mark_first_model_output(turn_clock: Any, main_agent_wrapper: Any) -> None:
+        """Close ``pre_model`` and ``model`` on the turn's clock.
+
+        ``pre_model`` ends at the status hook's ``perf_counter`` stamp of this
+        turn's first ``BeforeModelCallEvent``: the user message's append, LTM
+        retrieval and the ``BeforeInvocation`` hooks sit before it, and
+        ``ContextAttributionHook`` (registered ahead of the status hook). The
+        hooks registered after it (census, ledger, fingerprint) and the
+        model's own time to first token are ``model``. Without a stamp — a
+        wrapper with no status hook — the two cannot be told apart and the
+        whole gap is reported as ``pre_model_and_model``.
+        """
+        hook = getattr(main_agent_wrapper, "agent_status_hook", None)
+        stamp = getattr(hook, "first_model_call_at", None)
+        if stamp is None:
+            _turn_clock_call(turn_clock, "mark", "pre_model_and_model")
+            return
+        _turn_clock_call(turn_clock, "mark_at", "pre_model", stamp)
+        _turn_clock_call(turn_clock, "mark", "model")
 
     def _drain_agent_status_events(
         self, main_agent_wrapper: Any, session_id: str

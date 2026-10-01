@@ -4,7 +4,7 @@
 (PR #1378 merged) with PR #1377 (`feature/agent-build-latency`) open.
 **Supersedes nothing; it joins three specs that each cover one slice of this path:**
 - `docs/specs/turn-latency-preamble.md` — the preamble (455ms → 22–37ms warm) and the
-  decomposition of `agent_build`. Its PR-5 (split `agent_build.tools`) is built as P1a below; not yet measured on dev.
+  decomposition of `agent_build`. Its PR-5 (split `agent_build.tools`) shipped as P1a below (#1396) and was read on dev 2026-10-01.
 - `docs/specs/agent-state-feedback.md` — PR-3 deferred the agent build into the stream and
   narrates it (`preparing` / `prepared`).
 - `docs/specs/agentcore-runtime-v2.md` — the Runtime V2 migration and the prewarm-on-intent
@@ -276,7 +276,7 @@ Amend the arm per §4 before the run, or the first-turn number will understate i
 
 ### P1 — Close the two measurement gaps (F1, F6)
 
-**Status (2026-10-01): P1a built, awaiting a dev readout.** Sub-stages are
+**Status (2026-10-01): P1a shipped (#1396) and read on dev.** Sub-stages are
 `agent_build.tools.{filter,gateway,mcp,extra}`. `tools.catalog` and
 `tools.mcp_preflight` are not separate stages: both happen per server inside the one
 executor hop, and a mark cannot be taken there, so `tools.mcp` times the hop and the
@@ -287,12 +287,49 @@ totalMs}` (`outcome` ∈ `cached`, `loaded`, `recovered`, `dropped`, `skipped`, 
 survive the split. The catalog lookups that classify external MCP ids happen earlier, in
 `agent_build.registry`.
 
+**Dev readout (2026-10-01, one cold first turn, `sharedSession: true`, `processBuilds: 1`).**
+`agent_build.tools` was **62ms**, not the 2039ms §3 F1 was written against: `filter`,
+`gateway` and `extra` 0, `mcp` 62 — the one server (`hello_world`) took 4ms of catalog
+read and 54ms of pre-flight before being dropped on its standing 403, and the executor
+hop's own startup was 3ms. Acceptance met: the sub-stages sum to the group exactly and
+one owns all of it. The 2039ms most likely predates P2's shared session (a cold build
+parsed service models several times over), but it was never decomposed, so that is a
+Hypothesis. **Caveat:** dev's only MCP server fails fast, so a cold `initialize` +
+`tools/list` against a *working* server is still unmeasured; 62ms is a floor for that
+case, not a typical value. The rest of that turn, for scale: prelude 1337ms = preamble
+464 (`skills` 179, `quota` 145, `files` 77) + `rag` 67 + route `tools` 220 +
+`agent_build` 577 (`session_mgr` 219, `finalize` 102, `prompt` 87, `registry` 64, `tools`
+62, `plugins` 31).
+
 *P1a. Split `agent_build.tools`* (the preamble spec's PR-5) into `tools.filter`,
 `tools.catalog` (the per-tool reads), `tools.gateway`, `tools.mcp_preflight` and
 `tools.extra`, with `groups.agent_build` still summing. Marks are taken on the calling
 thread around each executor hop, never inside it (contextvars do not cross the pool). Add a
 per-server `ms` list as a log property of the MCP stage so one slow server is
 distinguishable from many.
+
+**Status (2026-10-01): P1b built, awaiting a dev readout.** The clock is the same
+`TurnPrelude`, passed to `ChatAgent.stream_async(turn_clock=...)` and on to the
+coordinator. Stages after `turn_prelude`: `head_of_turn.handoff` (the route's generator
+wiring, the `prepared` frame, quota warnings, the prompt build), `head_of_turn.compaction`
+(compaction re-read, document offload, the per-turn resets), `head_of_turn.history_count`
+(the `ListEvents` of F5), `head_of_turn.rest`, then `pre_model` and `model`. The boundary
+between those two is `AgentStatusHook.first_model_call_at`, a `perf_counter()` stamp at
+the turn's first `BeforeModelCallEvent` (stamped whether or not narration is on), closed
+on the clock with `mark_at`. `ContextAttributionHook` is registered before the status hook
+and so counts as `pre_model`; census, ledger and fingerprint are after it and count as
+`model`. Without a stamp the gap is reported whole, as `pre_model_and_model`. "First
+token" is the first model output of any kind — text, reasoning, or a tool call's first
+block — since a tool-first turn's first visible output is the tool call.
+
+Two departures from the text below. The numbers ride a **second line**,
+`turn_first_token` (joined to `turn_prelude` by `sessionId`, carrying `firstTokenMs`,
+`preludeTotalMs` and only the post-prelude stages), rather than the first line held
+until a token: a held line is lost on every turn that never produces a token (an error,
+a Stop, an interrupt), which are the turns most worth reading. And the line and its EMF
+record (`FirstTokenMs`, `HeadOfTurnMs`, `PreModelMs`, `ModelMs`, …) are written on the
+coordinator's next pass, **after** the first token has been yielded — a log write in
+front of the token would be the latency being measured.
 
 *P1b. Extend the clock to the first token.* Add `head_of_turn` (C3: compaction re-read,
 history count, offload) and `pre_model` (C4: LTM retrieval + hooks, up to the model call)
@@ -334,6 +371,14 @@ session (the moto trap). V2: **positive** — all of it is snapshot-friendly, ex
 connection, which is the thing to watch.
 
 ### P3 — Overlap the build's independent IO (F3) — the real cold-turn lever
+
+**Re-sized 2026-10-01 by the P1a readout: do not build P3a as written.** It was sized as
+`max(2039, 830)` instead of `2039 + 830`. Measured on dev with P2 shipped, `tools` is 62ms
+and `session_mgr` 219ms, so overlapping them saves at most ~60ms, and less once the second
+thread's startup is paid. It returns only if a dev turn against a *working* MCP server
+shows `tools.mcp` in the hundreds of milliseconds, or a deployment carries several
+servers. P3b is unaffected, and is sized by `rag` on a KB agent's first turn. The next
+decision should be made on P1b's `FirstTokenMs` breakdown, not on the build.
 
 *P3a. Inside the constructor, no async plumbing.* In `BaseAgent.__init__`, `session_mgr`
 and `tools` do not depend on each other (hooks, which take the session manager, are built

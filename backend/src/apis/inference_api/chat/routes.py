@@ -4293,6 +4293,9 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 # no-DynamoDB path, where steering is simply inert.
                 turn_lease=session_lease,
                 poll_side_frame=_session_title_sse if title_task is not None else None,
+                # The same clock as `turn_prelude`, continued to the first model
+                # output and emitted as `turn_first_token` (turn-path P1b).
+                turn_clock=prelude,
             ):
                 yield event
                 # Interleave the finished title between agent events (same

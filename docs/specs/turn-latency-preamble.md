@@ -734,7 +734,7 @@ Noted there too: contextvars do not cross into a `ThreadPoolExecutor`, and the
 MCP load path crosses one, so a future caller marking from inside it would
 silently record nothing.
 
-## PR-5 — split `agent_build.tools` (BUILT — see `turn-path-ttft.md` P1a; dev readout pending)
+## PR-5 — split `agent_build.tools` (SHIPPED #1396 — 62ms on dev with P2 in; see `turn-path-ttft.md` P1a)
 
 2039ms, 62% of the cold build, and undifferentiated. Split it into the MCP
 pre-flight, gateway integration, and local tool assembly, exactly as PR-1 split

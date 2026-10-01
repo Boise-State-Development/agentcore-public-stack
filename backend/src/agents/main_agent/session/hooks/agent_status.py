@@ -59,6 +59,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import Any, Dict, List, Optional
 
 from strands.hooks import (
@@ -169,6 +170,11 @@ class AgentStatusHook(HookProvider):
         self._cycle = 0
         # Monotonic batch counter, used to build a stable batch id.
         self._batch_seq = 0
+        # `perf_counter()` at this turn's FIRST model call — the boundary the
+        # coordinator's first-token clock needs between pre-model work (the
+        # user message's append, LTM retrieval) and the model's own time to
+        # first token. Read by the coordinator within the same turn.
+        self.first_model_call_at: Optional[float] = None
 
     def register_hooks(self, registry: HookRegistry, **kwargs: Any) -> None:
         registry.add_callback(BeforeInvocationEvent, self._on_turn_start)
@@ -204,8 +210,13 @@ class AgentStatusHook(HookProvider):
         self._open_batch = []
         self._cycle = 0
         self._batch_seq = 0
+        self.first_model_call_at = None
 
     def _on_before_model_call(self, event: BeforeModelCallEvent) -> None:
+        # A measurement, not narration: stamped whether or not the status
+        # line is on. One `perf_counter()` per model call.
+        if self.first_model_call_at is None:
+            self.first_model_call_at = time.perf_counter()
         if not self._enabled():
             return
         try:

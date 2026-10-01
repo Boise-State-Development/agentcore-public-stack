@@ -298,6 +298,113 @@ class TestDetails:
         assert _emitted(prelude, extra={"isResume": True})["isResume"] is True
 
 
+class TestFirstToken:
+    """`turn_first_token` (docs/specs/turn-path-ttft.md P1b): the same clock,
+    continued past `turn_prelude` to the first model output."""
+
+    def _turn(self, monkeypatch, *, readings):
+        clock = iter(readings)
+        monkeypatch.setattr(
+            "apis.inference_api.chat.turn_timing.time.perf_counter",
+            lambda: next(clock),
+        )
+        return TurnPrelude()
+
+    def test_reports_only_what_came_after_the_prelude(self, monkeypatch):
+        prelude = self._turn(
+            monkeypatch, readings=[0.0, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 2.5]
+        )
+        prelude.mark("agent_build.session_mgr")  # 0.25 -> 250
+        prelude.mark("stream_setup")  # 0.5 -> 250
+        _emitted(prelude, extra={"isResume": False})  # totalMs reads 0.75
+        prelude.mark("head_of_turn.handoff")  # 1.0 -> 500 (from 0.5)
+        prelude.mark("head_of_turn.history_count")  # 1.5 -> 500
+        prelude.mark("pre_model")  # 2.0 -> 500
+
+        payload = _first_token(prelude)  # firstTokenMs reads 2.5
+
+        assert payload["firstTokenMs"] == 2500
+        assert payload["preludeTotalMs"] == 750
+        assert payload["stages"] == {
+            "head_of_turn.handoff": 500,
+            "head_of_turn.history_count": 500,
+            "pre_model": 500,
+        }
+        assert payload["groups"] == {"head_of_turn": 1000}
+        # The prelude's identity and extras carry over: one join key, one shape.
+        assert payload["sessionId"] == "s"
+        assert payload["isResume"] is False
+
+    def test_emits_once(self, caplog):
+        prelude = TurnPrelude()
+        _emitted(prelude)
+        caplog.set_level(logging.INFO, logger="apis.inference_api.chat.turn_timing")
+
+        prelude.emit_first_token()
+        prelude.emit_first_token()
+
+        lines = [r for r in caplog.records if r.getMessage().startswith("turn_first_token ")]
+        assert len(lines) == 1
+
+    def test_without_a_prelude_line_it_reports_every_mark(self):
+        prelude = TurnPrelude()
+        prelude.mark("head_of_turn.handoff")
+
+        payload = _first_token(prelude)
+
+        assert list(payload["stages"]) == ["head_of_turn.handoff"]
+        assert payload["preludeTotalMs"] is None
+
+    def test_mark_at_closes_a_stage_at_an_earlier_reading(self, monkeypatch):
+        prelude = self._turn(monkeypatch, readings=[0.0, 1.0, 3.0, 3.5])
+        prelude.mark("head_of_turn.rest")  # 1.0
+        prelude.mark_at("pre_model", 2.0)  # stamped by a hook at 2.0 -> 1000
+        prelude.mark("model")  # 3.0 -> 1000 (from 2.0, not from 1.0)
+
+        stages = _first_token(prelude)["stages"]  # reads 3.5
+
+        assert stages["pre_model"] == 1000
+        assert stages["model"] == 1000
+
+    def test_mark_at_never_produces_a_negative_stage(self, monkeypatch):
+        """A stamp older than the last mark — a hook that fired before the
+        coordinator's own mark — is a zero stage, not a negative one."""
+        prelude = self._turn(monkeypatch, readings=[0.0, 2.0, 2.5])
+        prelude.mark("head_of_turn.rest")  # 2.0
+        prelude.mark_at("pre_model", 1.0)
+
+        assert _first_token(prelude)["stages"]["pre_model"] == 0
+
+    def test_metrics_carry_first_token_ms_not_prelude_total(self, monkeypatch):
+        captured = []
+        monkeypatch.setattr(
+            "apis.shared.observability.emf.emit_emf_metrics",
+            lambda **kw: captured.append(kw),
+        )
+        prelude = TurnPrelude()
+        prelude.mark("agent_build.session_mgr")
+        prelude.emit(session_id="s", stream_kind="agent", extra={"isResume": True})
+        prelude.mark("head_of_turn.handoff")
+        prelude.mark("pre_model")
+        prelude.mark("model")
+        prelude.emit_first_token()
+
+        first_token = captured[-1]
+        assert {"FirstTokenMs", "HeadOfTurnMs", "HeadOfTurnHandoffMs", "PreModelMs", "ModelMs"} == set(
+            first_token["metrics"]
+        )
+        assert first_token["properties"]["isResume"] is True
+
+    def test_a_first_token_emit_never_raises(self, monkeypatch):
+        def _boom(**_kw):
+            raise RuntimeError("emf down")
+
+        monkeypatch.setattr("apis.shared.observability.emf.emit_emf_metrics", _boom)
+        prelude = TurnPrelude()
+        prelude.mark("model")
+        prelude.emit_first_token()  # must not raise
+
+
 class TestMetricNames:
     """The EMF metric name is derived from the stage name, not looked up.
 
@@ -449,6 +556,29 @@ def _emitted(prelude, *, session_id="s", extra=None):
     logger.setLevel(logging.INFO)
     try:
         prelude.emit(session_id=session_id, stream_kind="agent", extra=extra)
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(previous)
+    return captured
+
+
+def _first_token(prelude):
+    """The JSON payload `emit_first_token` would log, parsed back."""
+    captured = {}
+
+    class _Sink(logging.Handler):
+        def emit(self, record):
+            message = record.getMessage()
+            if message.startswith("turn_first_token "):
+                captured.update(json.loads(message[len("turn_first_token ") :]))
+
+    logger = logging.getLogger("apis.inference_api.chat.turn_timing")
+    handler = _Sink()
+    logger.addHandler(handler)
+    previous = logger.level
+    logger.setLevel(logging.INFO)
+    try:
+        prelude.emit_first_token()
     finally:
         logger.removeHandler(handler)
         logger.setLevel(previous)
