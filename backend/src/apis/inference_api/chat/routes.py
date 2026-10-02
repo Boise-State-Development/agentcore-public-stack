@@ -31,6 +31,7 @@ from apis.inference_api.runtime_health import ping_payload
 from apis.shared.feature_flags import (
     agent_build_shared_session_enabled,
     agent_preparing_phase_enabled,
+    kb_search_ahead_enabled,
     agents_enabled,
     attachment_turn_guard_enabled,
     inline_attachment_persist_enabled,
@@ -2908,6 +2909,55 @@ def _validate_resume_interrupts(agent, input_data: InvocationRequest) -> None:
         )
 
 
+async def _search_and_augment(
+    *, assistant_id: str, message: str, access: Any
+) -> Tuple[Optional[list], str]:
+    """Search an assistant's knowledge base and augment ``message`` with it.
+
+    Returns ``(context_chunks, augmented_message)``. Fail-open as it always
+    was: a failed search yields ``(None, message)`` and the turn runs without
+    retrieved context. Never raises, which also means a turn that exits before
+    awaiting it (a refusal after the search started) leaves no unretrieved
+    exception behind.
+    """
+    from apis.shared.assistants.rag_service import (
+        augment_prompt_with_context,
+        resolve_context_cap,
+        search_assistant_knowledgebase_with_formatting,
+    )
+
+    try:
+        logger.info("Searching knowledge base for assistant...")
+        context_chunks = await search_assistant_knowledgebase_with_formatting(
+            assistant_id=assistant_id,
+            query=message,
+            top_k=5,
+            access=access,
+        )
+        logger.info(f"Knowledge base search returned {len(context_chunks) if context_chunks else 0} chunks")
+        if not context_chunks:
+            logger.info("No context chunks found for assistant - using original message without augmentation")
+            return context_chunks, message
+        for i, _chunk in enumerate(context_chunks):
+            logger.info(f"Chunk {i + 1} retrieved")
+            logger.info(f"Chunk {i + 1} metadata retrieved")
+        # Engine-aware cap (Requirement 3.2): managed gets 8,000 so
+        # reranking's top_k chunks actually reach the model; legacy keeps
+        # 2,000. See rag_service.resolve_context_cap / HANDOFF §5.40.
+        cap = resolve_context_cap(assistant_id)
+        augmented = augment_prompt_with_context(
+            user_message=message, context_chunks=context_chunks, max_context_length=cap
+        )
+        logger.info(f"Augmented message with {len(context_chunks)} context chunks")
+        logger.info("Augmented message preview available")
+        return context_chunks, augmented
+    except Exception as e:
+        logger.error("Error searching assistant knowledge base", exc_info=True)
+        logger.error(f"Exception type: {type(e).__name__}")
+        # Continue without RAG context rather than failing
+        return None, message
+
+
 def _build_citations(assistant, context_chunks, rag_assistant_id: Optional[str]) -> list:
     """Citations to persist and to stream ahead of the answer."""
     # #111: when the agent's ``show_citations`` flag is off, suppress citations
@@ -3272,6 +3322,10 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     assistant = None
     context_chunks = None
     augmented_message = input_data.message
+    # The knowledge-base search, started where it used to be awaited and
+    # awaited after the agent build instead (turn-path spec §5 P3b). None on a
+    # plain turn, a continuation, or once its result has been applied.
+    kb_search: Optional["asyncio.Task[Tuple[Optional[list], str]]"] = None
     system_prompt = input_data.system_prompt  # Start with provided system prompt
     # One settings read per turn: the default model and personal instructions both
     # come from it. A preview is an author testing an agent, so it gets none of theirs.
@@ -3345,11 +3399,6 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     if input_data.rag_assistant_id and not is_resume:
         # Local imports to avoid circular dependency
         from apis.shared.assistants.kb_access import granted
-        from apis.shared.assistants.rag_service import (
-            augment_prompt_with_context,
-            resolve_context_cap,
-            search_assistant_knowledgebase_with_formatting,
-        )
         from apis.shared.assistants.service import (
             get_assistant_with_access_check,
             mark_share_as_interacted,
@@ -3658,39 +3707,22 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         # knowledge-base search would spend a query on "" and augment nothing. The
         # context the original turn retrieved is already in the history being continued.
         if not is_continuation:
-            # 3. Search assistant knowledge base
+            # 3–4. Search the assistant's knowledge base and augment the message.
+            # Started here, awaited after the agent build: the build reads
+            # neither the chunks nor the augmented message — only the stream
+            # does, for the citation frames and `final_message` — so the two
+            # can overlap (turn-path spec §5 P3b). Off, it is awaited right here.
             logger.info("Starting knowledge base search for assistant...")
-            try:
-                logger.info("Searching knowledge base for assistant...")
-                context_chunks = await search_assistant_knowledgebase_with_formatting(
+            kb_search = asyncio.create_task(
+                _search_and_augment(
                     assistant_id=input_data.rag_assistant_id,
-                    query=input_data.message,
-                    top_k=5,
+                    message=input_data.message,
                     access=granted(input_data.rag_assistant_id, user_id, assistant_permission),
                 )
-                logger.info(f"Knowledge base search returned {len(context_chunks) if context_chunks else 0} chunks")
-                if context_chunks:
-                    for i, chunk in enumerate(context_chunks):
-                        logger.info(f"Chunk {i + 1} retrieved")
-                        logger.info(f"Chunk {i + 1} metadata retrieved")
-
-                # 4. Augment message with context
-                if context_chunks:
-                    # Engine-aware cap (Requirement 3.2): managed gets 8,000 so
-                    # reranking's top_k chunks actually reach the model; legacy keeps
-                    # 2,000. See rag_service.resolve_context_cap / HANDOFF §5.40.
-                    cap = resolve_context_cap(input_data.rag_assistant_id)
-                    augmented_message = augment_prompt_with_context(user_message=input_data.message, context_chunks=context_chunks, max_context_length=cap)
-                    logger.info(
-                        f"Augmented message with {len(context_chunks)} context chunks"
-                    )
-                    logger.info("Augmented message preview available")
-                else:
-                    logger.info("No context chunks found for assistant - using original message without augmentation")
-            except Exception as e:
-                logger.error("Error searching assistant knowledge base", exc_info=True)
-                logger.error(f"Exception type: {type(e).__name__}")
-                # Continue without RAG context rather than failing
+            )
+            if not kb_search_ahead_enabled():
+                context_chunks, augmented_message = await kb_search
+                kb_search = None
 
         # 5. Append assistant's instructions to the base system prompt (don't replace)
         # For preview sessions, prefer the system_prompt from the request (live form edits)
@@ -4426,7 +4458,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         # generator's finally is the release site for the happy path (the two
         # except handlers below cover pre-stream failures).
         async def _guarded_stream() -> AsyncGenerator[str, None]:
-            nonlocal agent
+            nonlocal agent, kb_search, context_chunks, augmented_message, citations_for_storage
 
             heartbeat_task = None
             try:
@@ -4520,6 +4552,20 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                         )
                         + "\n\n"
                     )
+
+                # The knowledge-base search ran alongside the build; take its
+                # result now, ahead of `stream_with_quota_warning`, which is
+                # the first reader of the chunks (citation frames) and of the
+                # augmented message (`final_message`). `rag_wait` is what was
+                # left of the search once the build was done — ~0 when the
+                # build outlasted it.
+                if kb_search is not None:
+                    context_chunks, augmented_message = await kb_search
+                    kb_search = None
+                    citations_for_storage = _build_citations(
+                        assistant, context_chunks, input_data.rag_assistant_id
+                    )
+                    prelude.mark("rag_wait")
 
                 # Emitted here rather than before the return: with the build
                 # deferred, "the window before the client can hear anything"
