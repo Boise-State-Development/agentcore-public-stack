@@ -505,6 +505,17 @@ jobs:
           aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      # uv is needed before the E2E run: e2e-test.sh seeds the E2E users and
+      # (via backend/scripts/seed_e2e_role.py) the e2e_user RBAC role, and the
+      # turn smoke below reuses the same environment.
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: '0.7.12'
+          enable-cache: true
+          cache-dependency-glob: 'backend/uv.lock'
+      - name: Sync backend deps
+        working-directory: backend
+        run: uv sync --extra agentcore --frozen
       - name: Run E2E tests
         run: bash scripts/nightly/e2e-test.sh
       - name: Upload Playwright report
@@ -521,19 +532,9 @@ jobs:
       # e2e-test.sh has by then patched CORS and the Cognito callback list for
       # the CloudFront URL, which the scripted Hosted UI login depends on.
       # Non-blocking (continue-on-error) until it has a green track record on
-      # the nightly stack; promote by removing that line. Needs the E2E user to
-      # be granted the `calculator` and `ask_user_question` tools for those
-      # rows to pass — a row that cannot run reports SKIP, never FAIL.
-      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
-        if: always()
-        with:
-          version: '0.7.12'
-          enable-cache: true
-          cache-dependency-glob: 'backend/uv.lock'
-      - name: Sync backend deps for the turn smoke
-        if: always()
-        working-directory: backend
-        run: uv sync --extra agentcore --frozen
+      # the nightly stack; promote by removing that line. The E2E user's
+      # `calculator` / `ask_user_question` grants come from the e2e_user role
+      # that e2e-test.sh seeds; a row that cannot run reports SKIP, never FAIL.
       - name: Run turn smoke matrix
         id: turn-smoke
         if: always()

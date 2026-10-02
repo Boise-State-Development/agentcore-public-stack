@@ -242,10 +242,12 @@ first look, not the whole proof.
   `e2e-test.sh` has patched CORS and the Cognito callback list for the
   CloudFront URL. The step is `continue-on-error` and uploads
   `turn-smoke-report-<label>.json`; promote it to blocking once it has a green
-  track record. It needs the E2E user granted `calculator` and
-  `ask_user_question` for those rows (otherwise they FAIL with the RBAC hint),
-  and a classic Hosted UI login page (managed login v2 exits 2, "could not
-  start").
+  track record. The E2E user's grants come from the `e2e_user` role that
+  `seed-e2e-users.sh` writes through `backend/scripts/seed_e2e_role.py`
+  (Cognito group `e2e-users` → `calculator`, `ask_user_question`, all
+  models), because the nightly stack never runs the bootstrap seeding and its
+  `default` role grants nothing. The pool must serve the classic Hosted UI
+  login page (managed login v2 exits 2, "could not start").
 - L2 is agent-run, not CI.
 
 ---
