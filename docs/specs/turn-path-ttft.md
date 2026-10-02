@@ -4,7 +4,9 @@
 (PR #1378 merged) with PR #1377 (`feature/agent-build-latency`) open.
 **Progress (2026-10-02):** P2 shipped (#1395), P1a (#1396) and P1b (#1397, #1398) shipped
 and read on dev, P4a shipped (#1400) and read on dev; P3a parked on the P1a readout. F5
-(the per-turn history count) measured on a long conversation — see §5 P4.
+(the per-turn history count) measured on a long conversation, then taken off the critical
+path (#1403) and read on dev — see §5 P4. A KB agent's cold first turn spent 21.5s loading
+two MCP servers in series — see §5 P3.
 **Supersedes nothing; it joins three specs that each cover one slice of this path:**
 - `docs/specs/turn-latency-preamble.md` — the preamble (455ms → 22–37ms warm) and the
   decomposition of `agent_build`. Its PR-5 (split `agent_build.tools`) shipped as P1a below (#1396) and was read on dev 2026-10-01.
@@ -412,6 +414,19 @@ shows `tools.mcp` in the hundreds of milliseconds, or a deployment carries sever
 servers. P3b is unaffected, and is sized by `rag` on a KB agent's first turn. The next
 decision should be made on P1b's `FirstTokenMs` breakdown, not on the build.
 
+**That condition is now met (dev, 2026-10-02).** The first turn of a KB agent carrying two
+external MCP servers (both Lambda function URLs, OIDC-forwarded) spent `turn_prelude.totalMs`
+24276ms, of which `agent_build.tools.mcp` was **21543ms**: `mcpServers` =
+`student_myboisestate` pre-flight 9462ms, then `class_search` 12058ms, `outcome: loaded`
+for both. Nearly all of each is the first `initialize` POST (9.2s and 11.8s to its 200);
+the requests after it took ~100–130ms, which reads as a Lambda cold start on an idle dev
+environment (Hypothesis — prod traffic may keep them warm). `session_mgr` was 57ms, so
+P3a *as written* (session manager ‖ tools) still buys nothing; the lever is its second
+half — **load the per-server pre-flights concurrently**, merged in catalog order. On this
+turn that is `max(9474, 12066)` instead of the sum, ~9.5s. Lambda warmth (provisioned
+concurrency or a keep-warm on the servers we own) addresses the remaining ~12s and is a
+separate, cost-bearing decision. `rag` on the same turn was 1576ms (P3b's size).
+
 *P3a. Inside the constructor, no async plumbing.* In `BaseAgent.__init__`, `session_mgr`
 and `tools` do not depend on each other (hooks, which take the session manager, are built
 after both). Run them on two threads of one `ThreadPoolExecutor` and join — the same
@@ -565,6 +580,33 @@ dies mid-way; it needs its own look.
   *Accept if:* `head_of_turn.history_count` ≈ 0 on a 100-event conversation, and the
   per-message metadata (cost, latency, citations) still lands on the right message after
   reload in a text-only and a mixed voice+text session.
+
+  **Shipped (#1403) and read on dev (2026-10-02, runtime v519, image `86e94164a788488e`).**
+  The count is the same global read, started on a worker at the head of the turn
+  (`HistoryCount`, `agents/main_agent/streaming/history_count.py`) and counting only
+  messages whose `created_at` precedes that instant; the displayText hook, the artifact
+  anchor, the end-of-turn metadata and the interruption persistence each await it where
+  they use it. The maintained per-instance `message_count` was rejected for the reason
+  above it — the voice, `@`-mention and synthetic-message writers make it stale. Kill
+  switch `HISTORY_COUNT_PREFETCH_ENABLED` (runtime-only, default on). Same recipe as the
+  measurement: 15 more turns on the same conversation, 10 on a fresh one.
+
+  | | `history_count` | `firstTokenMs` | what we own (`firstTokenMs` − `model`) | `pre_model` |
+  |---|---|---|---|---|
+  | before, 100–122 events (n=11) | 388 | 1560 | 791 | 225 |
+  | after, 122–150 events (n=14) | **0** | **1092** | **395** | 236 |
+  | after, fresh conversation (n=9) | 0 | 1043 | 403 | 229 |
+
+  A 150-event conversation now costs what a fresh one does. The read itself still runs
+  (`lookupMs` 409–635 on the long conversation, 62–109 on the fresh one — it now overlaps
+  the writes and the model call), and `waitedMs` was 0 on all 25 turns. *Correctness:*
+  every `count=` equalled the messages stored before the turn (120, 122, … 148; 0, 2, …
+  18), although each read ran long past that turn's user-message write — the cutoff is
+  doing the work. A read-only replay of the `GET /messages` join on both conversations put
+  every cost row on an assistant message, none on a user message, none past the end of the
+  history. *Augmented path:* two turns on a KB agent stored `displayText` at append time on
+  user messages 0 and 2 with `waitedMs=0`, and the reload shows it on exactly those
+  messages. Still unexercised: a mixed voice+text session.
 - **B8 writes:** `mark_share_as_interacted`, `bump_last_used_at` + `resume_inactive_policies`,
   and the binding persistence `store_session_metadata` become fire-and-forget tasks (strong
   references held, like `_pending_title_writes`) or move to the coordinator's post-stream
@@ -755,8 +797,9 @@ a comment that explains *why* stays with the code it explains, not in this docum
 
 - What is inside `agent_build.tools` (P1a answers it).
 - ~~What C3 costs on a long conversation~~ — measured 2026-10-02 (§5 P4): ~2.25ms per
-  event plus a page step, ~390ms at 100+ events. Still open: whether the global message
-  index needs a per-turn `ListEvents` for mixed voice+text sessions.
+  event plus a page step, ~390ms at 100+ events; off the critical path since #1403. The
+  global read was kept (voice and `@`-mention writers), so the voice+text question no
+  longer blocks anything.
 - The container's ratio for service-model parsing (laptop ~150ms each).
 - Whether AgentCore Runtime tolerates `/ping` being blocked for the length of a cold build
   on V2 as it evidently does on V1.
