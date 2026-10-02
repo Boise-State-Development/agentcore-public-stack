@@ -28,6 +28,7 @@ tokens truncation saves.
 Based on: https://github.com/aws-samples/sample-strands-agent-with-agentcore
 """
 
+import asyncio
 import copy
 import json
 import logging
@@ -357,11 +358,37 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
         time in registration order, so ``_prefetch_customer_context`` runs
         before the SDK's persist callback and the lookup's round trip overlaps
         the two writes the SDK awaits (docs/specs/turn-path-ttft.md P4a).
+
+        Also persists voice transcripts on ``MessageUpdatedEvent`` — see
+        ``_persist_bidi_message_update``.
         """
-        from strands.hooks import MessageAddedEvent
+        from strands.hooks import MessageAddedEvent, MessageUpdatedEvent
 
         registry.add_callback(MessageAddedEvent, self._prefetch_customer_context)
         super().register_hooks(registry, **kwargs)
+        registry.add_callback(MessageUpdatedEvent, self._persist_bidi_message_update)
+
+    async def _persist_bidi_message_update(self, event: Any) -> None:
+        """Persist a voice transcript once the BidiAgent fills it in.
+
+        Since strands-agents 1.57 a ``BidiAgent`` appends each transcript to
+        history EMPTY when it starts (``MessageAddedEvent``) and replaces it
+        with the text when it stops — or with the partial text if the response
+        is cut off — through ``MessageUpdatedEvent``, exactly once per message.
+        Through 1.55 the message was appended only when final, already
+        carrying its text. Nothing in the SDK's session wiring (or
+        bedrock-agentcore's) listens for the update, and ``append_message``
+        skips the empty shell, so without this every spoken turn and every
+        assistant reply was dropped: voice worked live and saved only typed
+        input.
+
+        Only a ``BidiAgent`` fires this event today; the guard keeps it that
+        way if text agents start to. The write is offloaded so the boto3 call
+        never blocks the voice event loop.
+        """
+        if not _is_bidi_agent(event.agent):
+            return
+        await asyncio.to_thread(self.append_message, event.message, event.agent)
 
     def _retrieval_query_for(self, messages: Any) -> Optional[str]:
         """The lookup's query for the last message, or None if it gets none.
