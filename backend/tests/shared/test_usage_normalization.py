@@ -13,8 +13,9 @@ model seam.
 The SDK-shape tests below deliberately drive the *real* ``strands`` model
 classes with *real* ``openai`` usage objects rather than hand-rolled stubs. A
 stub that merely matches the broken behavior would hide the bug, and the whole
-mapping hangs off two SDK details (the chunk-formatter method name, and the
-fact that Strands drops ``cache_write_tokens``) that a version bump can move.
+mapping hangs off two SDK details (the chunk-formatter method name, and
+whether Strands' ``inputTokens`` still includes the cache buckets) that a
+version bump can move.
 """
 
 import pytest
@@ -206,8 +207,14 @@ class TestStrandsSdkContract:
         assert hasattr(OpenAIResponsesModel, "_format_chunk")
         assert hasattr(OpenAIModel, "format_chunk")
 
-    def test_sdk_still_reports_inclusive_input_and_drops_cache_writes(self):
-        """The bug this module exists to fix, asserted against the real SDK."""
+    def test_responses_sdk_surfaces_cache_writes_but_input_stays_inclusive(self):
+        """The bug this module exists to fix, asserted against the real SDK.
+
+        strands-agents 1.57.2 (#4193) maps Responses ``cache_write_tokens``, so
+        our recovery in ``_normalize_metadata_chunk`` now writes the value the
+        SDK already set. ``inputTokens`` is still the inclusive total, so
+        disjointness remains ours to restore — exactly once.
+        """
         from openai.types.responses.response_usage import ResponseUsage
         from strands.models import OpenAIResponsesModel
 
@@ -223,8 +230,8 @@ class TestStrandsSdkContract:
         # inputTokens is the inclusive total, not the uncached remainder...
         assert usage["inputTokens"] == 30_500
         assert usage["cacheReadInputTokens"] == 30_000
-        # ...and the write bucket never makes it out of the SDK.
-        assert "cacheWriteInputTokens" not in usage
+        # ...and the write bucket is reported, but still inside inputTokens.
+        assert usage["cacheWriteInputTokens"] == 400
 
         with pytest.raises(AssertionError):
             _assert_disjoint(usage)

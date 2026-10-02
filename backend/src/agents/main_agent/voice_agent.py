@@ -34,10 +34,15 @@ logger = logging.getLogger(__name__)
 # not crash, it would silently turn voice off everywhere with one INFO line.
 # Import the name explicitly rather than leaning on the package's lazy
 # ``__getattr__``, so a future rename fails loudly here too.
+#
+# 1.57.2 graduated the API from ``strands.experimental.bidi`` to
+# ``strands.bidi``. The experimental path survives as a shim that resolves to
+# the same module objects (so ``isinstance`` holds across both) but warns on
+# import; import the stable path.
 try:
-    from strands.experimental.bidi import BidiAgent
-    from strands.experimental.bidi.models.bedrock import BedrockNovaSonicModel
-    from strands.experimental.bidi.types.events import BidiUsageEvent, ModalityUsage
+    from strands.bidi import BidiAgent
+    from strands.bidi.models.bedrock import BedrockNovaSonicModel
+    from strands.bidi.types.events import BidiUsageEvent, ModalityUsage
     BIDI_AVAILABLE = True
 except ImportError:
     BIDI_AVAILABLE = False
@@ -148,10 +153,22 @@ class VoiceWireAdapter:
     * ``bidi_connection_stop`` -> ``bidi_connection_close``.
     * Start/stop bracketing events with no 1.55 equivalent
       (``bidi_transcript_start``/``_stop``, ``bidi_audio_start``/``_stop``)
-      are dropped. Everything else passes through unchanged.
+      are dropped. So are the completed-block events 1.57.2 added
+      (``bidi_transcript_block`` and its text/reasoning siblings): each repeats
+      text the deltas already carried. Everything else passes through unchanged.
     """
 
-    _DROPPED = frozenset({"bidi_transcript_start", "bidi_transcript_stop", "bidi_audio_start", "bidi_audio_stop"})
+    _DROPPED = frozenset(
+        {
+            "bidi_transcript_start",
+            "bidi_transcript_stop",
+            "bidi_audio_start",
+            "bidi_audio_stop",
+            "bidi_transcript_block",
+            "bidi_text_block",
+            "bidi_reasoning_block",
+        }
+    )
 
     def __init__(self) -> None:
         self._response_id: Optional[str] = None
@@ -317,13 +334,20 @@ class VoiceAgent(BaseAgent):
             # Load text history for voice-text continuity
             initial_messages = self._load_text_history()
 
-            # Create BidiAgent with separate agent_id
+            # Create BidiAgent with separate agent_id.
+            #
+            # 1.57.2 removed BidiAgent's `session_manager` kwarg (#4698). All
+            # it did was register the manager as a hook provider, and BidiAgent
+            # still fires the events the manager listens on
+            # (AgentInitializedEvent, MessageAddedEvent, BidiAgentStopEvent),
+            # so passing it as a hook keeps voice transcripts persisting.
+            # Dropping it would not error — voice would just stop saving.
             self._bidi_agent = BidiAgent(
                 model=model,
                 tools=tools,
                 system_prompt=voice_prompt,
                 agent_id=Defaults.VOICE_AGENT_ID,
-                session_manager=self.session_manager,
+                hooks=[self.session_manager] if self.session_manager else None,
                 messages=initial_messages,
             )
 

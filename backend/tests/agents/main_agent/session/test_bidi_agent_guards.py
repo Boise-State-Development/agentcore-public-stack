@@ -11,7 +11,7 @@ would trigger a long-term-memory retrieval spliced into the live Bidi history.
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from strands.experimental.bidi import BidiAgent
+from strands.bidi import BidiAgent
 
 from agents.main_agent.session import turn_based_session_manager as tbsm
 

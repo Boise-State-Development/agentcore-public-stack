@@ -42,7 +42,7 @@ class TestBidiProviderContract:
         import importlib.util
         import pathlib
 
-        spec = importlib.util.find_spec("strands.experimental.bidi")
+        spec = importlib.util.find_spec("strands.bidi")
         assert spec is not None and spec.origin, "strands bidi package not found"
         provider = pathlib.Path(spec.origin).parent / "models" / "bedrock.py"
         assert provider.is_file(), (
@@ -72,7 +72,7 @@ class TestBidiProviderContract:
             for alias in node.names
         }
         assert (
-            "strands.experimental.bidi.models.bedrock.BedrockNovaSonicModel" in imported
+            "strands.bidi.models.bedrock.BedrockNovaSonicModel" in imported
         )
         assert not any("BidiNovaSonicModel" in name for name in imported), (
             f"stale 1.51 provider name still imported: {sorted(imported)}"
@@ -88,7 +88,7 @@ class TestBidiProviderContract:
 
     def test_audio_config_carries_the_per_direction_rates_we_send(self):
         """VoiceAgent sends {"input": {"sample_rate"}, "output": {"sample_rate"}}."""
-        from strands.experimental.bidi.models.configs import (
+        from strands.bidi.models.configs import (
             BedrockNovaSonicAudioConfig,
             BedrockNovaSonicAudioStreamConfig,
         )
@@ -103,17 +103,17 @@ class TestBidiProviderContract:
         import importlib.util
         import pathlib
 
-        spec = importlib.util.find_spec("strands.experimental.bidi")
+        spec = importlib.util.find_spec("strands.bidi")
         source = (pathlib.Path(spec.origin).parent / "agent" / "agent.py").read_text()
-        assert '"audio_delta" in content_data' in source
-        assert '"text" in content_data' in source
+        assert 'case {"audio_delta": audio, **rest} if not rest:' in source
+        assert 'case {"text": text, **rest} if not rest:' in source
 
     def test_output_event_names_the_wire_adapter_translates(self):
         """If upstream renames these again, VoiceWireAdapter must follow."""
         import importlib.util
         import pathlib
 
-        spec = importlib.util.find_spec("strands.experimental.bidi")
+        spec = importlib.util.find_spec("strands.bidi")
         source = (pathlib.Path(spec.origin).parent / "types" / "events.py").read_text()
         for name in (
             "bidi_response_start",
@@ -129,6 +129,30 @@ class TestBidiProviderContract:
             "bidi_connection_stop",
         ):
             assert f'"type": "{name}"' in source, name
+
+    def test_session_manager_rides_in_as_a_hook(self):
+        """1.57.2 removed BidiAgent(session_manager=); persistence now depends on `hooks=`.
+
+        A stale kwarg raises TypeError at voice start; dropping it instead would
+        silently stop saving voice transcripts. Pin both halves: the SDK still
+        fires the events the manager listens on, and VoiceAgent hands it over.
+        """
+        import importlib.util
+        import inspect
+        import pathlib
+
+        import agents.main_agent.voice_agent as va
+
+        spec = importlib.util.find_spec("strands.bidi")
+        source = (pathlib.Path(spec.origin).parent / "agent" / "agent.py").read_text()
+        init = source[source.index("def __init__") : source.index('"""', source.index("def __init__"))]
+        assert "session_manager" not in init
+        assert "hooks: list[HookProvider] | None = None" in init
+        assert "AgentInitializedEvent" in source and "MessageAddedEvent" in source
+
+        create = inspect.getsource(va.VoiceAgent._create_agent)
+        assert "hooks=[self.session_manager]" in create
+        assert "session_manager=self.session_manager" not in create
 
     def test_nova_sonic_usage_is_still_cumulative(self):
         """VoiceAgent de-cumulates bidi_usage; a switch to deltas would double-count."""
@@ -572,6 +596,18 @@ class TestVoiceWireAdapter:
         )
         assert out[1] == {"type": "bidi_interruption", "reason": "user_speech"}
         assert out[-1]["stop_reason"] == "interrupted"
+
+    def test_completed_block_events_do_not_reach_the_wire(self):
+        """1.57.2 repeats each finished transcript as a block event; the deltas already carried it."""
+        out = self._turn(
+            {"type": "bidi_response_start", "response_id": "r1"},
+            {"type": "bidi_transcript_delta", "delta": "hi", "role": "assistant", "content_id": "a"},
+            {"type": "bidi_transcript_stop", "transcript": "hi", "role": "assistant", "content_id": "a"},
+            {"type": "bidi_transcript_block", "text": "hi", "role": "assistant", "content_id": "a"},
+            {"type": "bidi_response_stop", "response_id": "r1"},
+        )
+        assert "bidi_transcript_block" not in [e["type"] for e in out]
+        assert [e["type"] for e in out].count("bidi_transcript_stream") == 1
 
     def test_a_response_with_no_assistant_output_still_opens_before_it_closes(self):
         out = self._turn(

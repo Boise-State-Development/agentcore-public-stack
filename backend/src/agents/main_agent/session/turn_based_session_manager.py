@@ -163,7 +163,7 @@ def _is_bidi_agent(agent: Any) -> bool:
     voice agents too. The text-only work in them must not run for voice.
     """
     try:
-        from strands.experimental.bidi import BidiAgent
+        from strands.bidi import BidiAgent
     except ImportError:
         return False
     return isinstance(agent, BidiAgent)
