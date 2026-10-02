@@ -6,7 +6,7 @@
 and read on dev, P4a shipped (#1400) and read on dev; P3a parked on the P1a readout. F5
 (the per-turn history count) measured on a long conversation, then taken off the critical
 path (#1403) and read on dev — see §5 P4. A KB agent's cold first turn spent 21.5s loading
-two MCP servers in series — see §5 P3.
+two MCP servers in series; they now load concurrently (#1406, read on dev) — see §5 P3.
 **Supersedes nothing; it joins three specs that each cover one slice of this path:**
 - `docs/specs/turn-latency-preamble.md` — the preamble (455ms → 22–37ms warm) and the
   decomposition of `agent_build`. Its PR-5 (split `agent_build.tools`) shipped as P1a below (#1396) and was read on dev 2026-10-01.
@@ -426,6 +426,32 @@ half — **load the per-server pre-flights concurrently**, merged in catalog ord
 turn that is `max(9474, 12066)` instead of the sum, ~9.5s. Lambda warmth (provisioned
 concurrency or a keep-warm on the servers we own) addresses the remaining ~12s and is a
 separate, cost-bearing decision. `rag` on the same turn was 1576ms (P3b's size).
+
+**Shipped (#1406) and read on dev (2026-10-02, runtime v521, image `817330dcd50b7bbd`).**
+`ExternalMCPIntegration.load_external_tools` now builds each server in its own coroutine
+(`_load_server`) and, with more than one, gathers them with each pre-flight on a worker
+thread (`_preflight(off_loop=True)` → `asyncio.to_thread(asyncio.run, client.load_tools())`).
+A plain `gather` would not have overlapped anything: Strands' `MCPClient.load_tools()` is
+a coroutine whose body calls the synchronous `start()`, which blocks on the `initialize`
+handshake. `gather` returns in input order, so clients — and the tool order in
+`toolConfig` — are in catalog order; a lone server keeps the inline call. Kill switch
+`MCP_PARALLEL_PREFLIGHT_ENABLED` (runtime-only, default on). Same agent, new conversation
+each time:
+
+| | `student_myboisestate` | `class_search` | sum | **`tools.mcp`** | `turn_prelude.totalMs` |
+|---|---|---|---|---|---|
+| before (serial), cold, 15:27 | 9474 | 12066 | 21540 | 21543 | 24276 |
+| after, cold (~50 min idle), 16:18 | 2313 | 1894 | 4207 | **2316** | 4909 |
+| after, warm, 16:21 | 384 | 464 | 848 | **473** | 2986 |
+
+`tools.mcp` now tracks the slowest server, not the sum: ~1.9s saved on the cold sample and
+~375ms warm. The servers were nowhere near as cold the second time (2.3s and 1.9s against
+9.5s and 12s), so the 21.5s → 2.3s drop is mostly that; the part this change owns is the
+sum-to-max gap, which on the first readout's numbers would have been ~9.5s. Both builds
+produced the same `toolConfigHash` (`b12c22b73956…`) and `systemPromptHash`, so tool order
+did not move. The cold turn called `search_classes` three times and answered from it.
+With MCP loading reduced to the slowest server, `rag` (1404–1485ms) is now the largest
+stage on this agent's first turn — P3b's case.
 
 *P3a. Inside the constructor, no async plumbing.* In `BaseAgent.__init__`, `session_mgr`
 and `tools` do not depend on each other (hooks, which take the session manager, are built
