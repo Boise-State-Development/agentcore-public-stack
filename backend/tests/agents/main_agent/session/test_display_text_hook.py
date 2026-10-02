@@ -224,3 +224,37 @@ class TestRegistration:
 
         registered = {call.args[0] for call in registry.add_callback.call_args_list}
         assert MessageAddedEvent in registered
+
+
+class TestLazyIndex:
+    """The coordinator arms with ``HistoryCount.resolve`` so the history read
+    behind the index runs alongside the turn; the hook awaits it at the write."""
+
+    @pytest.mark.asyncio
+    async def test_resolves_an_async_index_at_the_write(self, store):
+        resolver = AsyncMock(return_value=7)
+        hook = DisplayTextHook()
+        hook.arm(session_id="s1", user_id="u1", message_index=resolver, display_text="typed")
+
+        resolver.assert_not_awaited()
+        await hook.write_display_text(_event(_user_message()))
+
+        store.assert_awaited_once_with(
+            session_id="s1", user_id="u1", message_id=7, display_text="typed"
+        )
+        assert hook.wrote_this_turn is True
+
+    @pytest.mark.asyncio
+    async def test_a_failed_resolve_is_a_failed_write_not_a_failed_turn(self, store):
+        hook = DisplayTextHook()
+        hook.arm(
+            session_id="s1",
+            user_id="u1",
+            message_index=AsyncMock(side_effect=RuntimeError("boom")),
+            display_text="typed",
+        )
+
+        await hook.write_display_text(_event(_user_message()))
+
+        store.assert_not_awaited()
+        assert hook.wrote_this_turn is False
