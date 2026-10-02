@@ -12,6 +12,12 @@ export interface UserSettings {
    * Blank clears; the backend caps it at {@link MAX_PERSONAL_INSTRUCTIONS}.
    */
   personalInstructions?: string | null;
+  /**
+   * The Nova 2 Sonic voice heard in voice mode — an id from
+   * `session/services/voice/voice-catalog.ts`. Null means the platform
+   * default; blank clears. The backend refuses an id not in the catalog.
+   */
+  voiceId?: string | null;
 }
 
 /** `MAX_PERSONAL_INSTRUCTIONS_CHARS` in `apis/shared/user_settings/models.py`. */

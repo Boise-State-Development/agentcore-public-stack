@@ -8,7 +8,8 @@ import { FileMetadata, FileUploadService } from '../../../services/file-upload';
 import { SystemPromptsService } from '../../../services/system-prompts/system-prompts.service';
 import { ToastService } from '../../../services/toast/toast.service';
 import { ToolService } from '../../../services/tool/tool.service';
-import { VoiceChatService } from '../../services/voice';
+import { AudioRecorderService, NOVA_SONIC_VOICES, VoiceChatService, findVoice } from '../../services/voice';
+import { CdkMenu, CdkMenuItem, CdkMenuTrigger } from '@angular/cdk/menu';
 import {
   DictationService,
   DictationUnavailableError,
@@ -2231,5 +2232,184 @@ describe('ChatInputComponent — dictation', () => {
     fixture.detectChanges();
     expect(component.userInput()).toBe('long speech');
     expect(toast.info).toHaveBeenCalledWith('Dictation', 'Dictation stopped at its time limit.');
+  });
+});
+
+describe('ChatInputComponent voice mode options', () => {
+  let fixture: ComponentFixture<ChatInputComponent>;
+  let component: ChatInputComponent;
+  let status: ReturnType<typeof signal<'idle' | 'listening' | 'speaking' | 'connecting'>>;
+  let isVoiceActive: ReturnType<typeof signal<boolean>>;
+  let voiceId: ReturnType<typeof signal<string>>;
+  let setVoice: ReturnType<typeof vi.fn>;
+  let inputDeviceId: ReturnType<typeof signal<string | null>>;
+  let setInputDevice: ReturnType<typeof vi.fn>;
+  let devices: { deviceId: string; label: string }[];
+
+  beforeEach(async () => {
+    status = signal<'idle' | 'listening' | 'speaking' | 'connecting'>('idle');
+    isVoiceActive = signal(false);
+    voiceId = signal('tiffany');
+    setVoice = vi.fn(async (id: string) => voiceId.set(id));
+    inputDeviceId = signal<string | null>(null);
+    setInputDevice = vi.fn((id: string | null) => inputDeviceId.set(id));
+    devices = [];
+
+    await TestBed.configureTestingModule({
+      imports: [ChatInputComponent],
+      providers: [
+        { provide: AgentMentionService, useClass: MentionServiceStub },
+        { provide: SkillCommandService, useClass: SkillCommandServiceStub },
+        {
+          provide: FileUploadService,
+          useValue: {
+            pendingUploadsList: signal([]),
+            hasActivePendingUploads: signal(false),
+            readyUploadIds: signal([]),
+            readyUploads: signal([]),
+            clearReadyUploads: () => undefined,
+            clearPendingUpload: () => undefined,
+            listSessionFiles: async () => [],
+          },
+        },
+        { provide: ToastService, useValue: { error: () => undefined, warning: () => undefined, info: () => undefined } },
+        { provide: ToolService, useValue: {} },
+        {
+          provide: VoiceChatService,
+          useValue: {
+            status,
+            isVoiceActive,
+            agentTranscript: signal(''),
+            voiceId,
+            voice: computed(() => findVoice(voiceId())!),
+            setVoice,
+            connect: vi.fn(async () => undefined),
+            disconnect: vi.fn(async () => undefined),
+          },
+        },
+        {
+          provide: AudioRecorderService,
+          useValue: {
+            // DictationService (real, root-provided) reads these two.
+            isSupported: signal(false),
+            isRecording: signal(false),
+            inputDeviceId,
+            setInputDevice,
+            listInputDevices: vi.fn(async () => devices),
+          },
+        },
+        { provide: SystemPromptsService, useValue: { activePrompt: signal(null) } },
+        { provide: Router, useValue: { navigate: () => Promise.resolve(true) } },
+        { provide: SteeringService, useClass: SteeringServiceStub },
+      ],
+    })
+      // The CDK menu directives stay real so the options menu actually opens;
+      // every child component is stubbed out as in the other suites.
+      .overrideComponent(ChatInputComponent, {
+        set: { imports: [CdkMenu, CdkMenuItem, CdkMenuTrigger], schemas: [NO_ERRORS_SCHEMA] },
+      })
+      .compileComponents();
+
+    fixture = TestBed.createComponent(ChatInputComponent);
+    component = fixture.componentInstance;
+    fixture.componentRef.setInput('showFileControls', false);
+    fixture.componentRef.setInput('showVoiceControl', true);
+    fixture.componentRef.setInput('autoFocus', false);
+    fixture.componentRef.setInput('sessionId', 's1');
+    fixture.detectChanges();
+  });
+
+  afterEach(() => {
+    document.querySelectorAll('.cdk-overlay-container').forEach((el) => el.remove());
+  });
+
+  const control = () => fixture.nativeElement.querySelector('.voice-control') as HTMLElement;
+  const trigger = () => fixture.nativeElement.querySelector('.voice-menu-trigger') as HTMLButtonElement | null;
+  const menu = () => document.querySelector('.voice-menu') as HTMLElement | null;
+
+  async function openMenu(): Promise<void> {
+    trigger()!.click();
+    fixture.detectChanges();
+    await fixture.whenStable();
+    // The device list lands a microtask after the menu opens.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    fixture.detectChanges();
+  }
+
+  it('is a split control: the waveform and an options chevron, one bar per path so they can animate', () => {
+    expect(control()).not.toBeNull();
+    expect(control().classList).toContain('voice-control--idle');
+    expect(control().querySelectorAll('.voice-wave-bar').length).toBe(5);
+    expect(trigger()).not.toBeNull();
+    expect(trigger()!.getAttribute('aria-haspopup')).toBe('menu');
+    expect(trigger()!.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('drops the chevron while a session is live, because the options are fixed at connect', () => {
+    status.set('listening');
+    isVoiceActive.set(true);
+    fixture.detectChanges();
+    expect(control().classList).not.toContain('voice-control--idle');
+    expect(trigger()).toBeNull();
+  });
+
+  it('opens the options menu naming the current voice and microphone', async () => {
+    await openMenu();
+    expect(trigger()!.getAttribute('aria-expanded')).toBe('true');
+    const items = menu()!;
+    expect(items.querySelector('[data-testid="voice-picker-trigger"]')!.textContent).toContain('Tiffany · English (US)');
+    expect(items.querySelector('[data-testid="microphone-picker-trigger"]')!.textContent).toContain('System default');
+  });
+
+  it('lists every voice grouped by language and persists the choice through the voice service', async () => {
+    await openMenu();
+    (menu()!.querySelector('[data-testid="voice-picker-trigger"]') as HTMLButtonElement).click();
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const picker = document.querySelector('[data-testid="voice-picker"]')!;
+    const options = Array.from(picker.querySelectorAll('[data-voice-id]'));
+    expect(options.length).toBe(NOVA_SONIC_VOICES.length);
+    expect(picker.textContent).toContain('French');
+    expect(picker.querySelector('[data-voice-id="tiffany"]')!.getAttribute('aria-checked')).toBe('true');
+
+    (picker.querySelector('[data-voice-id="carlos"]') as HTMLButtonElement).click();
+    expect(setVoice).toHaveBeenCalledWith('carlos');
+  });
+
+  it('shows "No devices found" when there is no microphone, and the devices when there are', async () => {
+    await openMenu();
+    (menu()!.querySelector('[data-testid="microphone-picker-trigger"]') as HTMLButtonElement).click();
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(document.querySelector('[data-testid="microphone-picker"]')!.textContent).toContain('No devices found');
+  });
+
+  it('lets the user pick a microphone, and says when labels need a permission grant first', async () => {
+    devices = [
+      { deviceId: 'dev-1', label: '' },
+      { deviceId: 'dev-2', label: '' },
+    ];
+    await openMenu();
+    (menu()!.querySelector('[data-testid="microphone-picker-trigger"]') as HTMLButtonElement).click();
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const picker = document.querySelector('[data-testid="microphone-picker"]')!;
+    expect(picker.textContent).toContain('Allow microphone access once');
+    expect(picker.querySelector('[data-device-id="dev-2"]')!.textContent).toContain('Microphone 2');
+
+    (picker.querySelector('[data-device-id="dev-2"]') as HTMLButtonElement).click();
+    expect(setInputDevice).toHaveBeenCalledWith('dev-2');
+  });
+
+  it('can start the conversation from the menu too', async () => {
+    const voice = TestBed.inject(VoiceChatService);
+    await openMenu();
+    (menu()!.querySelector('[data-testid="voice-menu-start"]') as HTMLButtonElement).click();
+    expect(voice.connect).toHaveBeenCalledWith('s1');
   });
 });

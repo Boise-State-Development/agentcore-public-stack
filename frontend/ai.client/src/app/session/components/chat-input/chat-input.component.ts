@@ -16,11 +16,14 @@ import {
 import { FormsModule } from '@angular/forms';
 import { v4 as uuidv4 } from 'uuid';
 import { Router } from '@angular/router';
+import { CdkMenu, CdkMenuItem, CdkMenuTrigger } from '@angular/cdk/menu';
+import { ConnectedPosition } from '@angular/cdk/overlay';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroPlus,
   heroArrowTurnDownRight,
   heroCheck,
+  heroChevronRight,
   heroClock,
   heroMicrophone,
   heroXMark,
@@ -45,7 +48,14 @@ import {
 } from '../../../services/file-upload';
 import { ToastService } from '../../../services/toast/toast.service';
 import { ToolService } from '../../../services/tool/tool.service';
-import { VoiceChatService, type VoiceStatus } from '../../services/voice';
+import {
+  AudioRecorderService,
+  VoiceChatService,
+  VOICE_GROUPS,
+  voiceDescription,
+  type AudioInputDevice,
+  type VoiceStatus,
+} from '../../services/voice';
 import {
   DictationService,
   DictationUnavailableError,
@@ -247,7 +257,7 @@ function dedupeAttachments(attachments: StoredAttachment[]): StoredAttachment[] 
 
 @Component({
   selector: 'app-chat-input',
-  imports: [AgentNoticeBannerComponent, AnnouncementBannerComponent, FormsModule, ModelDropdownComponent, NgIcon, QuotaWarningBannerComponent, StorageQuotaBannerComponent, TooltipDirective, FileCardComponent, AgentMentionMenuComponent, SkillCommandMenuComponent, SpinnerComponent],
+  imports: [AgentNoticeBannerComponent, AnnouncementBannerComponent, CdkMenu, CdkMenuItem, CdkMenuTrigger, FormsModule, ModelDropdownComponent, NgIcon, QuotaWarningBannerComponent, StorageQuotaBannerComponent, TooltipDirective, FileCardComponent, AgentMentionMenuComponent, SkillCommandMenuComponent, SpinnerComponent],
   // `relative` is the anchor the announcement banner floats against — it sits
   // `bottom-full` of this host, above the quota tabs and clear of the composer.
   host: { class: 'relative block' },
@@ -256,6 +266,7 @@ function dedupeAttachments(attachments: StoredAttachment[]): StoredAttachment[] 
       heroPlus,
       heroArrowTurnDownRight,
       heroCheck,
+      heroChevronRight,
       heroClock,
       heroMicrophone,
       heroXMark,
@@ -275,6 +286,7 @@ export class ChatInputComponent {
   private readonly draftStorage = inject(ComposerDraftStorageService);
   private readonly toolService = inject(ToolService);
   private readonly voiceChatService = inject(VoiceChatService);
+  private readonly audioRecorder = inject(AudioRecorderService);
   private readonly dictation = inject(DictationService);
   protected readonly systemPromptsService = inject(SystemPromptsService);
   private readonly router = inject(Router);
@@ -775,6 +787,70 @@ export class ChatInputComponent {
       default: return 'Voice mode';
     }
   });
+
+  // ---- Voice mode options (the chevron beside the waveform) ----
+
+  /** Every catalog voice, grouped by language, in catalog order. */
+  protected readonly voiceGroups = VOICE_GROUPS;
+  protected readonly voiceDescription = voiceDescription;
+  /** The voice the next session speaks with, and its catalog entry. */
+  protected readonly selectedVoiceId = this.voiceChatService.voiceId;
+  protected readonly selectedVoice = this.voiceChatService.voice;
+
+  /** The microphone the recorder will open, or null for the browser default. */
+  protected readonly inputDeviceId = this.audioRecorder.inputDeviceId;
+  /** Microphones seen the last time the menu opened; refreshed on each open. */
+  protected readonly microphones = signal<AudioInputDevice[]>([]);
+  /** Labels stay blank until mic access has been granted once. */
+  protected readonly microphoneLabelsKnown = computed(() => this.microphones().some((m) => !!m.label));
+  protected readonly selectedMicrophoneLabel = computed(() => {
+    const id = this.inputDeviceId();
+    if (!id) return 'System default';
+    const index = this.microphones().findIndex((m) => m.deviceId === id);
+    if (index < 0) return 'Chosen device';
+    return this.microphones()[index].label || `Microphone ${index + 1}`;
+  });
+
+  protected readonly voiceMenuOpen = signal(false);
+
+  /**
+   * The options menu opens upward from the control's right edge: the composer
+   * sits at the bottom of the viewport, and the control at its right end.
+   */
+  protected readonly voiceMenuPositions: ConnectedPosition[] = [
+    { originX: 'end', originY: 'top', overlayX: 'end', overlayY: 'bottom', offsetY: -8 },
+    { originX: 'end', originY: 'bottom', overlayX: 'end', overlayY: 'top', offsetY: 8 },
+  ];
+
+  /** Submenus fly out to the left of their row (the menu hugs the right edge), flipping right when cramped. */
+  protected readonly voiceSubmenuPositions: ConnectedPosition[] = [
+    { originX: 'start', originY: 'bottom', overlayX: 'end', overlayY: 'bottom', offsetX: -4 },
+    { originX: 'end', originY: 'bottom', overlayX: 'start', overlayY: 'bottom', offsetX: 4 },
+    { originX: 'start', originY: 'top', overlayX: 'end', overlayY: 'top', offsetX: -4 },
+    { originX: 'end', originY: 'top', overlayX: 'start', overlayY: 'top', offsetX: 4 },
+  ];
+
+  protected onVoiceMenuOpened(): void {
+    this.voiceMenuOpen.set(true);
+    // Enumerate on open, not at construction: the list changes when a headset
+    // is plugged in, and enumerating is cheap. Labels appear once the user has
+    // granted mic access, so the second open after a first session names them.
+    void this.audioRecorder.listInputDevices().then((devices) => this.microphones.set(devices));
+  }
+
+  protected onVoiceMenuClosed(): void {
+    this.voiceMenuOpen.set(false);
+  }
+
+  /** Persisted on the account; applies to the next voice session. */
+  protected selectVoice(voiceId: string): void {
+    void this.voiceChatService.setVoice(voiceId);
+  }
+
+  /** Per-browser; applies to the next capture (voice mode and dictation both). */
+  protected selectMicrophone(deviceId: string | null): void {
+    this.audioRecorder.setInputDevice(deviceId);
+  }
 
   // =========================================================================
   // Dictation

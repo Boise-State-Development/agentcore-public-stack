@@ -323,6 +323,56 @@ export const CURATED_BEDROCK_MODELS: CuratedModel[] = [
       },
     },
   },
+  {
+    key: 'nova-2-sonic',
+    tagline: 'Amazon\'s speech-to-speech model — what voice mode runs on. Priced, not picked.',
+    capabilities: ['Speech-to-speech', 'Polyglot voices', 'Tool use'],
+    pricingTier: 'regional',
+    template: {
+      // No shared defaults helper fits: `claude4xDefaults()` names Anthropic
+      // and turns caching on, and both are wrong here.
+      provider: 'bedrock',
+      responseStreamingSupported: true,
+      allowedAppRoles: [],
+      availableToRoles: [],
+      enabled: true,
+      isDefault: false,
+      // In-Region only (no CRIS profile exists); us-west-2 and us-east-1 both
+      // host it. NOT a chat model: it answers only `InvokeModelWithBidirectionalStream`,
+      // so the chat picker hides any row whose output modalities include
+      // SPEECH and the user-facing /models list never returns it. This row
+      // exists so voice sessions PRICE — with no catalog row for this id,
+      // every voice turn was $0 against quota (`UnmeteredModelCall`, prod
+      // 2026-09-26). Voice reaches it by id (`NOVA_SONIC_MODEL_ID`), not by
+      // RBAC grant, so the roles picker is irrelevant here.
+      modelId: 'amazon.nova-2-sonic-v1:0',
+      modelName: 'Nova 2 Sonic',
+      shortDescription: 'Voice mode (speech-to-speech)',
+      iconSlug: 'amazon',
+      providerName: 'Amazon',
+      inputModalities: ['SPEECH', 'TEXT'],
+      outputModalities: ['SPEECH', 'TEXT'],
+      // Card: 1M context, 64K output.
+      maxInputTokens: 1_000_000,
+      maxOutputTokens: 64_000,
+      // Sonic has no prompt cache; `false` keeps the cache-rate fields empty
+      // rather than deriving a write premium for a bucket Bedrock never bills.
+      supportsCaching: false,
+      // us-west-2, Price List API `AmazonBedrock` offer file, usagetypes
+      // `USW2-NovaSonic2.0-{text,speech}-{input,output}-tokens`, 2026-09-30.
+      // The TEXT rates ride `input`/`output`, the SPEECH rates their own two
+      // fields, and `CostCalculator.calculate_voice_cost` bills each bucket on
+      // its own card. us-east-1 is a hair higher on text ($0.33 / $2.75) and
+      // identical on speech ($3.00 / $12.00). Legacy Nova Sonic v1 reached EOL
+      // 2026-09-14 and is deliberately not curated.
+      inputPricePerMillionTokens: 0.319,
+      outputPricePerMillionTokens: 2.651,
+      speechInputPricePerMillionTokens: 3.0,
+      speechOutputPricePerMillionTokens: 12.0,
+      // Inference params are fixed by the voice agent (`sessionStart`), not
+      // by the catalog row, so none are declared.
+    },
+  },
 ];
 
 /**

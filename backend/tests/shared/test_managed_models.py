@@ -363,3 +363,60 @@ async def test_a_retired_default_does_not_count(monkeypatch):
 
     monkeypatch.setattr(mm, "list_all_managed_models", catalog)
     assert await mm.get_default_managed_model() is None
+
+
+class TestSpeechPricing:
+    """Speech-to-speech rows carry a second rate card; text rows carry none."""
+
+    @pytest.fixture(autouse=True)
+    def _patch_dynamodb(self, managed_models_table, monkeypatch):
+        import apis.shared.models.managed_models as mm
+        monkeypatch.setattr(mm, "dynamodb", boto3.resource("dynamodb", region_name="us-east-1"))
+
+    @pytest.mark.asyncio
+    async def test_speech_rates_round_trip(self):
+        from apis.shared.models.managed_models import create_managed_model, get_managed_model
+        data = _make_model_data(
+            "amazon.nova-2-sonic-v1:0",
+            inputModalities=["speech", "text"], outputModalities=["speech", "text"],
+            inputPricePerMillionTokens=0.319, outputPricePerMillionTokens=2.651,
+            speechInputPricePerMillionTokens=3.0, speechOutputPricePerMillionTokens=12.0,
+        )
+        created = await create_managed_model(data)
+        stored = await get_managed_model(created.id)
+        assert stored.speech_input_price_per_million_tokens == pytest.approx(3.0)
+        assert stored.speech_output_price_per_million_tokens == pytest.approx(12.0)
+
+    @pytest.mark.asyncio
+    async def test_text_rows_store_no_speech_rates(self):
+        from apis.shared.models.managed_models import create_managed_model, get_managed_model
+        created = await create_managed_model(_make_model_data("text-only"))
+        stored = await get_managed_model(created.id)
+        assert stored.speech_input_price_per_million_tokens is None
+        assert stored.speech_output_price_per_million_tokens is None
+
+    @pytest.mark.asyncio
+    async def test_speech_rates_reach_the_pricing_dict(self):
+        from apis.shared.models.managed_models import create_managed_model
+        from apis.shared.costs.pricing_config import get_model_pricing
+        await create_managed_model(_make_model_data(
+            "amazon.nova-2-sonic-v1:0",
+            inputPricePerMillionTokens=0.319, outputPricePerMillionTokens=2.651,
+            speechInputPricePerMillionTokens=3.0, speechOutputPricePerMillionTokens=12.0,
+        ))
+        pricing = await get_model_pricing("amazon.nova-2-sonic-v1:0")
+        assert pricing["speechInputPricePerMtok"] == pytest.approx(3.0)
+        assert pricing["speechOutputPricePerMtok"] == pytest.approx(12.0)
+        assert pricing["inputPricePerMtok"] == pytest.approx(0.319)
+
+    @pytest.mark.asyncio
+    async def test_update_can_add_speech_rates_later(self):
+        from apis.shared.models.managed_models import create_managed_model, update_managed_model
+        from apis.shared.models.models import ManagedModelUpdate
+        created = await create_managed_model(_make_model_data("sonic"))
+        updated = await update_managed_model(
+            created.id,
+            ManagedModelUpdate(speechInputPricePerMillionTokens=3.0, speechOutputPricePerMillionTokens=12.0),
+        )
+        assert updated.speech_input_price_per_million_tokens == pytest.approx(3.0)
+        assert updated.speech_output_price_per_million_tokens == pytest.approx(12.0)

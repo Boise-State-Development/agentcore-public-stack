@@ -68,11 +68,11 @@ def client(repo) -> TestClient:
 def test_saved_trimmed_kept_beside_the_default_model_and_cleared_by_blank(client):
     client.put("/users/me/settings", json={"defaultModelId": "m-1"})
     saved = client.put("/users/me/settings", json={"personalInstructions": "  Answer briefly.  "}).json()
-    assert saved == {"defaultModelId": "m-1", "personalInstructions": "Answer briefly."}
+    assert saved == {"defaultModelId": "m-1", "personalInstructions": "Answer briefly.", "voiceId": None}
     assert client.get("/users/me/settings").json()["personalInstructions"] == "Answer briefly."
 
     cleared = client.put("/users/me/settings", json={"personalInstructions": "   "}).json()
-    assert cleared == {"defaultModelId": "m-1", "personalInstructions": None}
+    assert cleared == {"defaultModelId": "m-1", "personalInstructions": None, "voiceId": None}
 
 
 def test_too_long_is_refused(client):
