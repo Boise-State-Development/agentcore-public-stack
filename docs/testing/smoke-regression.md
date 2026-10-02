@@ -236,9 +236,16 @@ first look, not the whole proof.
 - The PR gate runs L0 path-scoped (`.github/workflows/`, see #1392).
 - The nightly pipeline runs the health smoke (`scripts/nightly/smoke-test.sh`)
   and, with `run-e2e`, the Playwright suite (`frontend/ai.client/e2e`) against
-  an ephemeral stack. L1 is a natural addition to that job: the E2E users have
-  permanent passwords, so `--auth cognito` works there. Wire it as a
-  non-blocking step first and promote it once it has been green for a week.
+  an ephemeral stack. The same job then runs L1 through
+  `scripts/nightly/turn-smoke.sh`: `smoke_turns.py --auth cognito
+  --with-attachments` against the stack's `/api` as the E2E user, after
+  `e2e-test.sh` has patched CORS and the Cognito callback list for the
+  CloudFront URL. The step is `continue-on-error` and uploads
+  `turn-smoke-report-<label>.json`; promote it to blocking once it has a green
+  track record. It needs the E2E user granted `calculator` and
+  `ask_user_question` for those rows (otherwise they FAIL with the RBAC hint),
+  and a classic Hosted UI login page (managed login v2 exits 2, "could not
+  start").
 - L2 is agent-run, not CI.
 
 ---

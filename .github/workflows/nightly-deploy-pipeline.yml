@@ -11,7 +11,8 @@
 #   3. deploy-*-code          — API-driven code deploys (ECS / AgentCore Runtime
 #                               / Lambda) onto the freshly-deployed stack.
 #   4. deploy-frontend        — build SPA + S3 sync + CloudFront invalidation.
-#   5. smoke-test / e2e-tests — validate the deployment.
+#   5. smoke-test / e2e-tests — validate the deployment (e2e-tests also runs
+#      the turn-path smoke matrix, scripts/nightly/turn-smoke.sh, non-blocking).
 #   6. teardown               — delete the ephemeral stack + buckets/secrets/logs.
 #
 # Ephemeral deploys run with NO custom domain (CDK_DOMAIN_NAME=""); the SPA,
@@ -513,6 +514,41 @@ jobs:
           name: playwright-report-${{ inputs.label }}
           path: frontend/ai.client/playwright-report/
           retention-days: 30
+      # ── Turn-path smoke matrix (docs/testing/smoke-regression.md §2) ──
+      # Real agent turns through the stack's app-api as the E2E user, asserting
+      # the SSE contract, interrupt/resume, 409, Stop, preview, attachments,
+      # restore and cache-hash stability. Runs after the Playwright step because
+      # e2e-test.sh has by then patched CORS and the Cognito callback list for
+      # the CloudFront URL, which the scripted Hosted UI login depends on.
+      # Non-blocking (continue-on-error) until it has a green track record on
+      # the nightly stack; promote by removing that line. Needs the E2E user to
+      # be granted the `calculator` and `ask_user_question` tools for those
+      # rows to pass — a row that cannot run reports SKIP, never FAIL.
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        if: always()
+        with:
+          version: '0.7.12'
+          enable-cache: true
+          cache-dependency-glob: 'backend/uv.lock'
+      - name: Sync backend deps for the turn smoke
+        if: always()
+        working-directory: backend
+        run: uv sync --extra agentcore --frozen
+      - name: Run turn smoke matrix
+        id: turn-smoke
+        if: always()
+        continue-on-error: true
+        env:
+          TURN_SMOKE_REPORT: ${{ github.workspace }}/turn-smoke-report.json
+        run: bash scripts/nightly/turn-smoke.sh
+      - name: Upload turn smoke report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: turn-smoke-report-${{ inputs.label }}
+          path: turn-smoke-report.json
+          retention-days: 30
+          if-no-files-found: ignore
 
   # ── Auto-teardown ──────────────────────────────────────────────────────────
   # ALWAYS runs (unless skip-teardown), even if any deploy/test job above failed
