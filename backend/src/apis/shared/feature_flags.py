@@ -684,6 +684,25 @@ def agent_build_shared_session_enabled() -> bool:
     return os.environ.get("AGENT_BUILD_SHARED_SESSION_ENABLED", "").strip().lower() != "false"
 
 
+def mcp_parallel_preflight_enabled() -> bool:
+    """Whether external MCP servers are pre-flighted concurrently at agent build.
+
+    Each external MCP server's client is started and its tools listed before
+    the agent is built, and that handshake blocks its thread. Loaded one after
+    another, two cold Lambda-URL servers cost 9.5s + 12s on a KB agent's first
+    turn on dev (docs/specs/turn-path-ttft.md §5 P3). With this on, each
+    pre-flight runs on its own worker thread and the build waits for the
+    slowest, not the sum; clients are still returned in catalog order, so the
+    tool order in ``toolConfig`` (the prompt-cache prefix) is unchanged.
+
+    **Default ON with a kill switch** (house style): unset or empty resolves
+    to enabled; only the literal ``"false"`` (case-insensitive) disables. Off,
+    servers load one at a time on the build's loop, exactly as before. A build with a
+    single external server always loads it inline.
+    """
+    return os.environ.get("MCP_PARALLEL_PREFLIGHT_ENABLED", "").strip().lower() != "false"
+
+
 def memory_retrieval_prefetch_enabled() -> bool:
     """Whether the long-term-memory lookup starts as soon as the user's message
     is added, overlapping the two Memory writes the SDK awaits first.
