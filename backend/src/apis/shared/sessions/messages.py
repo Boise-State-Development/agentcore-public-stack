@@ -569,6 +569,71 @@ async def get_messages_from_cloud(
         raise
 
 
+# The Memory SDK keeps its own records in a session's event stream beside the
+# messages: a ``SESSION`` event when the session is created and ``AGENT`` events
+# for agent state, each tagged with this metadata key. Message events carry no
+# such tag, so "is there a message?" is "is there an event without it?".
+_SDK_STATE_METADATA_KEY = "stateType"
+
+
+def _first_message_event(memory_id: str, actor_id: str, session_id: str) -> bool:
+    """Whether the session's event stream holds any message event. Blocking."""
+    from apis.shared.aws_clients import get_client
+
+    client = get_client("bedrock-agentcore", region_name=os.environ.get("AWS_REGION", "us-west-2"))
+    params: Dict[str, Any] = {
+        "memoryId": memory_id,
+        "actorId": actor_id,
+        "sessionId": session_id,
+        "maxResults": 1,
+        "includePayloads": False,
+        "filter": {
+            "eventMetadata": [
+                {"left": {"metadataKey": _SDK_STATE_METADATA_KEY}, "operator": "NOT_EXISTS"}
+            ]
+        },
+    }
+    # The filter is applied server-side, but a page may still come back empty
+    # with a continuation token; only an empty page WITHOUT one means "none".
+    while True:
+        response = client.list_events(**params)
+        if response.get("events"):
+            return True
+        token = response.get("nextToken")
+        if not token:
+            return False
+        params["nextToken"] = token
+
+
+async def session_has_messages(session_id: str, user_id: str) -> bool:
+    """True when the session has at least one persisted message, from any agent.
+
+    An existence check, and priced like one: one ``ListEvents`` with
+    ``maxResults=1``, no payloads, filtered server-side to events that are not
+    the SDK's own state records. It replaces ``get_messages(limit=1)``, which
+    read the WHOLE history plus its metadata, interrupts, UI resources and
+    tool summaries to return one message — ~540ms on a new conversation's first
+    agent turn on dev, growing with history — and, by constructing an
+    ``AgentCoreMemorySessionManager``, wrote a ``SESSION`` event into a session
+    that did not have one yet. The agent's own session manager creates that
+    event when the turn's agent is built, as it does on every plain turn.
+
+    Fails open: if the read itself fails this logs and returns False — the
+    same answer the old path gave, because the SDK swallowed a failed
+    ``ListEvents`` into an empty history.
+    """
+    import asyncio
+
+    memory_id = os.environ.get("AGENTCORE_MEMORY_ID")
+    if not memory_id:
+        raise ValueError("AGENTCORE_MEMORY_ID environment variable not set")
+    try:
+        return await asyncio.to_thread(_first_message_event, memory_id, user_id, session_id)
+    except Exception as e:  # noqa: BLE001 - an unanswerable check must not fail the turn
+        logger.warning(f"Could not check session {session_id} for messages: {type(e).__name__}: {e}")
+        return False
+
+
 async def get_messages(session_id: str, user_id: str, limit: Optional[int] = None, next_token: Optional[str] = None) -> MessagesListResponse:
     """
     Retrieve messages for a session and user with pagination support.

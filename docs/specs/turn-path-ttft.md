@@ -7,6 +7,9 @@ and read on dev, P4a shipped (#1400) and read on dev; P3a parked on the P1a read
 (the per-turn history count) measured on a long conversation, then taken off the critical
 path (#1403) and read on dev — see §5 P4. A KB agent's cold first turn spent 21.5s loading
 two MCP servers in series; they now load concurrently (#1406, read on dev) — see §5 P3.
+P3b (KB search ahead of the build) shipped (#1411) and read on dev. The agent-binding
+"does this thread have messages?" check now costs one filtered `ListEvents` instead of a
+full history read — see §5 P4.
 **Supersedes nothing; it joins three specs that each cover one slice of this path:**
 - `docs/specs/turn-latency-preamble.md` — the preamble (455ms → 22–37ms warm) and the
   decomposition of `agent_build`. Its PR-5 (split `agent_build.tools`) shipped as P1a below (#1396) and was read on dev 2026-10-01.
@@ -478,6 +481,29 @@ free"; without that arm it needs the search to be on a thread, which it can be. 
 citations and augmentation byte-identical (order of chunks, cap) — they land in the
 persisted user message, which is the cacheable prefix on every later turn.
 
+**Shipped (#1411) and read on dev (2026-10-02, runtime v524, image `7ec07e0050354291`).**
+The search is not on a thread of its own: it schedules loop-bound work (the managed
+backend's shadow read, the observation, the activity touch), so a private event loop would
+cut those off. It runs as an `asyncio` task (`_search_and_augment`) started where it used
+to be awaited, and `_guarded_stream` awaits it after the build and before `turn_prelude`
+is emitted (new stage `rag_wait`). The classic backend's `QueryVectors` used to run
+synchronously on the loop, which a cold build holds; it now goes out with the embedding
+on one worker thread, on a module-cached client (the kb-sync and rag-ingestion images do
+not ship `aws_clients`). Kill switch `KB_SEARCH_AHEAD_ENABLED`. Same agent and prompts as
+the #1406 readout, new conversations:
+
+| | `rag` | `rag_wait` | `turn_prelude.totalMs` |
+|---|---|---|---|
+| cold, before → after | 1485 → **993** | — → 128 | 4909 → **4662** |
+| warm, before → after | 1404 → **955** | — → 116 | 2986 → **2544** |
+
+About 330–360ms net. The stored augmented user message is byte-identical before and after
+for both prompts (SHA-256 match), and both turns streamed the same 5 citations. The
+residual ~120ms `rag_wait` is post-search work that runs back on the loop and so waits for
+the build: the document-status filter (`_filter_chunks_by_document_status`, a DynamoDB
+lookup per source document) and `resolve_context_cap`'s record read. Moving both into the
+worker is a small follow-up.
+
 *Tests.* P3a: a fake session factory and a fake tool loader that each sleep; assert the
 build's wall time is the max not the sum, that `tools` order is unchanged across runs
 (`test_prompt_cache_determinism.py` already pins order), and that a failure in either thread
@@ -633,6 +659,19 @@ dies mid-way; it needs its own look.
   history. *Augmented path:* two turns on a KB agent stored `displayText` at append time on
   user messages 0 and 2 with `waitedMs=0`, and the reload shows it on exactly those
   messages. Still unexercised: a mixed voice+text session.
+- **The agent-binding history check (found 2026-10-02, fixed in this change).** On an
+  agent conversation's first turn and on every `@`-mention, `_session_has_messages`
+  asks whether the thread already has messages. It called `get_messages(limit=1)`, which
+  reads the whole history plus metadata, interrupts, UI resources and tool summaries and
+  then keeps one message: ~540ms of `rag` on a new conversation on dev, growing with
+  history. Constructing the `AgentCoreMemorySessionManager` behind it also wrote a
+  `SESSION` event as a side effect. Now `session_has_messages`
+  (`apis/shared/sessions/messages.py`) is one `ListEvents` — `maxResults=1`, no payloads,
+  `filter.eventMetadata` `stateType NOT_EXISTS` (the SDK tags its SESSION/AGENT records
+  with that reserved key, and messages carry none). Read-only on dev: 91ms median, 108ms
+  p90; the same answer as the old semantics on 42 sampled conversations, and False on all
+  14 conversations that hold only a `SESSION` record. Fails open on a failed read, as the
+  old path effectively did.
 - **B8 writes:** `mark_share_as_interacted`, `bump_last_used_at` + `resume_inactive_policies`,
   and the binding persistence `store_session_metadata` become fire-and-forget tasks (strong
   references held, like `_pending_title_writes`) or move to the coordinator's post-stream
