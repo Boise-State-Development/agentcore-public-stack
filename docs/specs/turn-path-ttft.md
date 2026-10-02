@@ -2,6 +2,9 @@
 
 **Status:** assessment and plan, written 2026-09-29 against `develop` @ `e4646277`
 (PR #1378 merged) with PR #1377 (`feature/agent-build-latency`) open.
+**Progress (2026-10-02):** P2 shipped (#1395), P1a (#1396) and P1b (#1397, #1398) shipped
+and read on dev, P4a shipped (#1400) and read on dev; P3a parked on the P1a readout. F5
+(the per-turn history count) measured on a long conversation — see §5 P4.
 **Supersedes nothing; it joins three specs that each cover one slice of this path:**
 - `docs/specs/turn-latency-preamble.md` — the preamble (455ms → 22–37ms warm) and the
   decomposition of `agent_build`. Its PR-5 (split `agent_build.tools`) shipped as P1a below (#1396) and was read on dev 2026-10-01.
@@ -155,7 +158,7 @@ in full, does a conditional write for `lastUsedAt` on every turn, and marks shar
 every non-owner turn — all awaited before the stream opens, and each constructing its own
 DynamoDB resource. None of them changes what the model is told this turn.
 
-**F5. Every turn fetches the whole session history a second time to count it (Read).**
+**F5. Every turn fetches the whole session history a second time to count it (Read; cost Measured 2026-10-02, §5 P4).**
 `StreamCoordinator._get_initial_message_count` prefers `session_manager.list_messages`
 over the maintained `message_count`, "because metadata retrieval uses global indices across
 all agents' messages" (voice + text). For a `TurnBasedSessionManager` that is one
@@ -355,9 +358,9 @@ on the cold turn). LTM retrieval needs only the user's text, not either write, s
 writes and the retrieval need not be serial. `pre_model` is the largest stage we own on a
 warm turn (450 of 1687ms), and it is paid on **every** turn, cold or warm.
 
-`history_count` is 74–86ms on a two-message conversation (one `ListEvents` page). Whether
-it grows with history is still unmeasured — the next readout should include a long
-conversation. `model` (~930ms) is Bedrock's own time to first token on a ~13k-token
+`history_count` is 74–86ms on a two-message conversation (one `ListEvents` page). It grows
+with history: ~2.25ms per stored event plus a step per 100-event page, ~390ms at 100+
+events (measured 2026-10-02, §5 P4). `model` (~930ms) is Bedrock's own time to first token on a ~13k-token
 prefix and is not ours to move here.
 
 *P1b. Extend the clock to the first token.* Add `head_of_turn` (C3: compaction re-read,
@@ -446,7 +449,32 @@ turn with an MCP tool enabled and a KB agent; compare `agent_build` group and
 
 ### P4 — Take the bookkeeping off the critical path (F4, F5, F7)
 
-*P4a. Overlap the long-term-memory lookup with the message writes (built 2026-10-01).*
+*P4a. Overlap the long-term-memory lookup with the message writes (shipped #1400, read
+on dev 2026-10-01).*
+
+**Dev readout (2026-10-01, Haiku 4.5, one new conversation: cold first turn A, warm second
+turn B; same recipe as the P1b readout, with #1398 reading `firstTokenMs` at the `model`
+mark).** Before is the P1b readout corrected by #1398 (its stage sums).
+
+| | A (cold) before → after | B (warm) before → after |
+|---|---|---|
+| `pre_model` | 664 → **352** | 450 → **270** |
+| prefetch `waitedMs` / `lookupMs` | — / 338 | — / 268 |
+| `head_of_turn` (handoff / compaction / history_count) | 157 → 118 (5 / 56 / 57) | 83 → 93 (6 / 4 / 83) |
+| `model` | 942 → 810 | 925 → 867 |
+| **server first token** | **3026 → 2589** | **1687 → 1451** |
+| client send → first content frame | 4264 → 4543 | 2119 → 1898 |
+
+`pre_model` fell by about the lookup it stopped waiting for. On the warm turn the lookup
+finished inside the two writes (`waitedMs=0`), so what is left of `pre_model` is the
+SDK's two `CreateEvent`s — the user message's (~110–170ms) and `sync_agent`'s (~100ms,
+see *Not done here*). On the cold turn the lookup outlasted the writes by 141ms. The cold
+client number rose on one sample while the server number fell 437ms; the difference is
+the hop and the prelude (1263 → 1307), which this change does not touch. `firstTokenMs`
+now equals the stage sums to within 2ms. Byte check, in AgentCore Memory `ListEvents`:
+the persisted user messages carry one block and no `<user_context>`, while the cold turn
+inserted three records into the live message — the persisted/live split is unchanged.
+
 The P1b readout found `pre_model` — the largest stage we own on a warm turn, 450 of
 1687ms, and paid on every turn — to be three network calls in series, all on
 `MessageAddedEvent` for the user's message: the SDK's persist callback (`append_message`'s
@@ -499,8 +527,44 @@ dies mid-way; it needs its own look.
   `ListEvents`. The global-index concern it cites is for mixed voice+text sessions; verify
   with `get_messages_from_cloud` whether the index still needs to be global (voice writes
   under a different agent id) and, if it does, count once at `initialize` and keep the
-  count maintained rather than refetching the history every turn. **Measure C3 first
-  (P1b)** — this is a claim about a cost that has never been timed.
+  count maintained rather than refetching the history every turn.
+
+  **Measured (2026-10-02, dev, image `815293d3a627d57e`).** One disposable conversation
+  (`exp-histcount-…`, Haiku 4.5, no tools) driven headless to 60 short plain turns, three
+  seconds apart, every turn warm after the first; `head_of_turn.history_count` from each
+  turn's `turn_first_token` line, against the events stored before that turn. A plain
+  turn stores two events (user + assistant), ~0.5 KB each, so 50 turns is the first
+  two-page read.
+
+  | Events before the turn | Turns | `history_count` median (min–max) | share of `firstTokenMs` | share of what we own (`firstTokenMs` − `model`) |
+  |---|---|---|---|---|
+  | 0 (cold first turn) | 1 | 59 | 3% | 4% |
+  | 1–19 | 8 | 92 (72–112) | 8% | 17% |
+  | 20–39 | 10 | 120 (104–171) | 10% | 23% |
+  | 40–59 | 10 | 167 (151–204) | 14% | 30% |
+  | 60–79 | 10 | 219 (187–246) | 17% | 35% |
+  | 80–99 | 10 | 266 (232–323) | 19% | 40% |
+  | 100–122 (two pages) | 11 | **388** (363–450) | **26%** | **49%** |
+
+  On one page it fits ~62ms + 2.25ms per event; the second page adds a round trip
+  (~80ms above the per-event trend). It draws level with `pre_model` (~210–300ms here,
+  flat) at ~60–79 events and passes it after that, which makes it the largest stage we own
+  on any longer warm turn — and the only one that grows. **These are the cheap events.** The read pulls every payload
+  (`includePayloads=True`) and converts them all for a `len()`, so bytes count too: a
+  read-only replay of the same call from a laptop against 40 existing dev conversations
+  took 150ms at 25 events / 30 KB, 300ms at 83 events / 206 KB, and 419ms at 50 events /
+  2.6 MB (a document conversation). Tool turns store more events per turn than chat.
+
+  **Recommendation: build it next.** The fix is to stop reading the history to count it — no change
+  to anything the model sees, so the cacheable prefix is untouched. What the count feeds
+  is the message index for per-message metadata (`message_index=initial_message_count`
+  and the `+ 2*i + 1` arithmetic in the coordinator), so the open question is still the
+  one above: whether that index must be global across voice and text agents. Verify it
+  against `get_messages_from_cloud` before choosing between the maintained count and a
+  count taken once at `initialize`; either removes the read from every warm turn.
+  *Accept if:* `head_of_turn.history_count` ≈ 0 on a 100-event conversation, and the
+  per-message metadata (cost, latency, citations) still lands on the right message after
+  reload in a text-only and a mixed voice+text session.
 - **B8 writes:** `mark_share_as_interacted`, `bump_last_used_at` + `resume_inactive_policies`,
   and the binding persistence `store_session_metadata` become fire-and-forget tasks (strong
   references held, like `_pending_title_writes`) or move to the coordinator's post-stream
@@ -690,8 +754,9 @@ a comment that explains *why* stays with the code it explains, not in this docum
 ## 8. Open questions
 
 - What is inside `agent_build.tools` (P1a answers it).
-- What C3 costs on a long conversation (P1b answers it); whether the global message index
-  still needs a per-turn `ListEvents` for mixed voice+text sessions.
+- ~~What C3 costs on a long conversation~~ — measured 2026-10-02 (§5 P4): ~2.25ms per
+  event plus a page step, ~390ms at 100+ events. Still open: whether the global message
+  index needs a per-turn `ListEvents` for mixed voice+text sessions.
 - The container's ratio for service-model parsing (laptop ~150ms each).
 - Whether AgentCore Runtime tolerates `/ping` being blocked for the length of a cold build
   on V2 as it evidently does on V1.
