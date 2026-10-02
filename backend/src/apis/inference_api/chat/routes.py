@@ -8,6 +8,7 @@ These endpoints are at the root level to comply with AWS Bedrock AgentCore Runti
 """
 
 import asyncio
+import time
 import json
 import logging
 from collections import OrderedDict
@@ -32,12 +33,14 @@ from apis.shared.feature_flags import (
     agent_preparing_phase_enabled,
     agents_enabled,
     attachment_turn_guard_enabled,
+    inline_attachment_persist_enabled,
     memory_spaces_enabled,
     mid_turn_steering_enabled,
     skills_enabled,
 )
 from apis.shared.files.document_read import is_document_class
 from apis.shared.files.file_resolver import get_file_resolver
+from apis.shared.files.inline_persist import get_inline_attachment_persister
 from apis.shared.files.models import (
     INLINE_ATTACHMENTS_MAX_TOTAL_BYTES,
     MAX_FILES_PER_MESSAGE,
@@ -1531,6 +1534,7 @@ def _build_attachment_guidance(
     dropped_over_count_names: list[str] | None = None,
     dropped_over_count_total: int = 0,
     max_files: int = 0,
+    unpersisted: list | None = None,
 ) -> str:
     """Return a short markdown addendum describing how attachments will be
     handled, to append to the user's message so the agent (and the user)
@@ -1542,6 +1546,10 @@ def _build_attachment_guidance(
     follow-up message). They get separate sentences because the remedy
     differs. ``dropped_over_count_*`` describe files beyond the per-message
     count cap: names where known (direct ``files``), a count otherwise.
+    ``unpersisted`` are inline spreadsheets/decks that could not be stored as
+    session files (``PersistFailure`` entries); they are not diverted and the
+    tools cannot see them, so the note must say so instead of the usual
+    "available through the tool" line.
     """
     parts: list[str] = []
 
@@ -1604,6 +1612,14 @@ def _build_attachment_guidance(
             f"_Attached file(s) {names} were skipped because this message's "
             f"attachments together exceed the combined size limit for a "
             f"single message. Send them in a follow-up message._"
+        )
+
+    if unpersisted:
+        described = "; ".join(f"`{x.file.filename}` ({x.reason})" for x in unpersisted)
+        parts.append(
+            f"_Attached file(s) {described} could not be stored for this "
+            f"conversation and were not attached. Upload them through the "
+            f"Files panel and re-send your message._"
         )
 
     if dropped_over_count_total > 0:
@@ -2138,6 +2154,53 @@ class TurnAttachments:
     dropped_over_count_total: int = 0
     turn_has_document: bool = False
     marker_names: list = field(default_factory=list)
+    # Inline (base64 ``files``) spreadsheets/decks that could not be stored as
+    # session files — ``PersistFailure`` entries (file + user-facing reason).
+    # Dropped from the turn: not diverted, not in the marker, named in the note.
+    unpersisted_inline: list = field(default_factory=list)
+
+
+async def _persist_inline_diverted(
+    input_data: InvocationRequest,
+    user_id: str,
+    diverted_tabular: list,
+    diverted_presentations: list,
+) -> tuple[list, list, list]:
+    """Give inline bytes of a diverted class the S3 object + row an upload has.
+
+    Diverted files are dropped from the prompt on the promise that the
+    Spreadsheet Analysis / PowerPoint tools can reach them — and those tools
+    find session files only through ``FileUploadRepository.list_session_files``.
+    Uploads (``file_upload_ids``) are already there; base64 ``files`` are not,
+    so until this ran the note was a lie for every headless caller. Identity,
+    not filename, picks the inline ones: a resolved upload may share a name.
+
+    Returns the two diverted lists with the failures removed, plus the failures.
+    Never raises; a failure is reported to the user and the turn continues.
+    """
+    inline_identity = {id(f) for f in (input_data.files or [])}
+    inline_diverted = [f for f in diverted_tabular + diverted_presentations if id(f) in inline_identity]
+    if not inline_diverted or not inline_attachment_persist_enabled():
+        return diverted_tabular, diverted_presentations, []
+
+    started = time.perf_counter()
+    persisted, failures = await get_inline_attachment_persister().persist(
+        user_id=user_id, session_id=input_data.session_id, files=inline_diverted
+    )
+    logger.info(
+        "Persisted %d/%d inline diverted attachment(s) as session files in %.0fms",
+        len(persisted),
+        len(inline_diverted),
+        (time.perf_counter() - started) * 1000,
+    )
+    if not failures:
+        return diverted_tabular, diverted_presentations, []
+    failed = {id(x.file) for x in failures}
+    return (
+        [f for f in diverted_tabular if id(f) not in failed],
+        [f for f in diverted_presentations if id(f) not in failed],
+        failures,
+    )
 
 
 async def _resolve_turn_attachments(
@@ -2320,6 +2383,10 @@ async def _resolve_turn_attachments(
             f"{[(f.filename, _estimate_decoded_size(f)) for f in oversized_inline]}"
         )
 
+    diverted_tabular, diverted_presentations, unpersisted_inline = await _persist_inline_diverted(
+        input_data, user_id, diverted_tabular, diverted_presentations
+    )
+
     # Aggregate budget for the turn (spec §4E / PR-6): the inline set is one
     # persisted message, and a message over ~7.5 MB raw fails the AgentCore
     # Memory write with SessionException. Trim first-fit in attachment order;
@@ -2345,10 +2412,10 @@ async def _resolve_turn_attachments(
                 dropped_count=len(over_budget_inline),
             )
 
-    # Both classes were dropped from the turn entirely; the marker must not
-    # promise a card for either.
+    # All three classes were dropped from the turn entirely; the marker must
+    # not promise a card for any of them.
     attachment_marker_names = _attachment_marker_names(
-        all_files, oversized_inline + over_budget_inline
+        all_files, oversized_inline + over_budget_inline + [x.file for x in unpersisted_inline]
     )
 
     return TurnAttachments(
@@ -2362,6 +2429,7 @@ async def _resolve_turn_attachments(
         dropped_over_count_total=dropped_over_count_total,
         turn_has_document=turn_has_document,
         marker_names=attachment_marker_names,
+        unpersisted_inline=unpersisted_inline,
     )
 
 
@@ -4174,6 +4242,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 dropped_over_count_names=attachments.dropped_over_count_names,
                 dropped_over_count_total=attachments.dropped_over_count_total,
                 max_files=MAX_FILES_PER_MESSAGE,
+                unpersisted=attachments.unpersisted_inline,
             )
             # When multiple spreadsheets are visible, ship the full inventory
             # up front so the agent can disambiguate intentionally instead of
