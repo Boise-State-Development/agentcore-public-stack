@@ -51,6 +51,7 @@ Score direction
 client already reads. The rename stops at the seam; no caller has to change.
 """
 
+import asyncio
 import logging
 import os
 import re
@@ -112,6 +113,23 @@ def resolve_context_cap(assistant_id: str, *, record: Optional[Mapping[str, Any]
     """
     engine = resolve_engine_for(assistant_id, record=record)
     return MANAGED_MAX_CONTEXT_CHARS if engine == ENGINE_MANAGED else MAX_CONTEXT_CHARS
+
+
+async def _search_then_filter(
+    backend: Any, assistant_id: str, query: str, top_k: int
+) -> Tuple[List[Chunk], float, List[Chunk]]:
+    """``(raw chunks, search ms, chunks whose document is complete)``.
+
+    Runs on a private event loop in a worker thread (see the caller). Only the
+    backend call and the filter belong here: neither schedules anything that
+    must outlive this loop. ``search ms`` times the backend call alone — it is
+    the number the dual-read observation compares across engines.
+    """
+    started = time.perf_counter()
+    chunks = await backend.search(assistant_id, query, top_k)
+    search_ms = (time.perf_counter() - started) * 1000.0
+    complete = _filter_chunks_by_document_status(chunks, assistant_id) if chunks else []
+    return chunks, search_ms, complete
 
 
 async def search_assistant_knowledgebase_with_formatting(
@@ -210,9 +228,17 @@ async def search_assistant_knowledgebase_with_formatting(
         # ``None`` whenever there is no comparison to make.
         managed_task = start_managed_read(record, assistant_id, query, top_k)
 
-        started = time.perf_counter()
-        chunks = await backend.search(assistant_id, query, top_k)
-        legacy_ms = (time.perf_counter() - started) * 1000.0
+        # The search and the document-status filter run back to back on one
+        # worker thread, on a loop of its own. An agent turn starts this search
+        # before the agent build and awaits it after (turn-path spec §5 P3b),
+        # and a cold build holds the event loop: had the filter run here, after
+        # the search, its DynamoDB reads would have waited for the build to let
+        # go (~60ms of residual `rag_wait` on dev). Everything that schedules
+        # onto THIS loop — the observational read above, the observation and
+        # the activity touch below — stays on it.
+        chunks, legacy_ms, complete_chunks = await asyncio.to_thread(
+            asyncio.run, _search_then_filter(backend, assistant_id, query, top_k)
+        )
 
         # Detach the comparison. Legacy is what gets served either way — including
         # when it is empty, which is a finding rather than a reason to reach for
@@ -237,7 +263,7 @@ async def search_assistant_knowledgebase_with_formatting(
             return []
 
         # Filter out chunks from documents that are not in "complete" status
-        chunks = _filter_chunks_by_document_status(chunks, assistant_id)
+        chunks = complete_chunks
 
         # Format results - return document_id for on-demand download URL generation
         formatted_results = []

@@ -504,6 +504,30 @@ the build: the document-status filter (`_filter_chunks_by_document_status`, a Dy
 lookup per source document) and `resolve_context_cap`'s record read. Moving both into the
 worker is a small follow-up.
 
+**Managed engine (dev, 2026-10-02 evening, runtime v525).** The readout above is the
+classic engine. On a managed knowledge base (an agent with 5 documents,
+`retrievalEngine: managed`) the search itself is far slower — `Retrieve` took ~3.6s on a
+cold first turn and ~2.3s on a warm one — and #1411 hid all of it behind the build
+(`rag_wait` 128 / 119ms; build 3297 / 2045ms), so the overlap is worth ~2–3.5s on a managed
+agent's first turn against ~0.35s on classic. The stored augmented message was identical
+across both conversations and equal to a local recompute from a direct managed search
+(managed cap 8,000, 6,876 chars). **A follow-up turn exposes it:** with the agent cached the
+build is ~36ms, and `rag_wait` was 786ms of a 1,254ms `turn_prelude` — the largest stage on
+a managed agent's follow-up turns. Why `Retrieve` takes 1–3.6s is being investigated
+separately.
+
+**Follow-up built (2026-10-02): the post-search reads move off the loop.** The facade now
+runs the backend search and `_filter_chunks_by_document_status` together on one worker
+thread with a private event loop (`_search_then_filter`; `legacy_ms` still times the
+search alone, for the dual-read comparison). Everything that schedules onto the caller's
+loop — the dual-read observational read, the observation, the activity touch — stays on
+it. The cap is read by `asyncio.to_thread(resolve_context_cap, …)` started alongside the
+search. A side effect pinned by `test_kb_dual_read.py`: with legacy awaited on a worker,
+the observational managed read now *starts* before a failing legacy search returns, as it
+always did against a real (thread-hopping) search; it is still cancelled and never
+finishes. Expected: `rag_wait` ≈ 0 on a cold first turn (from ~120ms); on a cached-agent
+follow-up turn the filter's ~60ms overlaps nothing and remains.
+
 *Tests.* P3a: a fake session factory and a fake tool loader that each sleep; assert the
 build's wall time is the max not the sum, that `tools` order is unchanged across runs
 (`test_prompt_cache_determinism.py` already pins order), and that a failure in either thread
@@ -672,6 +696,15 @@ dies mid-way; it needs its own look.
   p90; the same answer as the old semantics on 42 sampled conversations, and False on all
   14 conversations that hold only a `SESSION` record. Fails open on a failed read, as the
   old path effectively did.
+
+  **Shipped (#1413) and read on dev (2026-10-02, runtime v525).** A new conversation's
+  first agent turn spent `rag` **571ms**, against 955–993ms after #1411 and 1,404–1,485ms
+  before either. `Created session` is now logged after the stream opened (during the
+  build), not before the assistant load. The binding rules held on real data: a second turn
+  on the same agent continued; a different agent in the same thread was refused ("Attempted
+  to change assistant mid-session", 400); an agent onto a plain thread with history was
+  refused ("Attempted to attach assistant to session with existing messages", 400) — the
+  check's *True* path.
 - **B8 writes:** `mark_share_as_interacted`, `bump_last_used_at` + `resume_inactive_policies`,
   and the binding persistence `store_session_metadata` become fire-and-forget tasks (strong
   references held, like `_pending_title_writes`) or move to the coordinator's post-stream
