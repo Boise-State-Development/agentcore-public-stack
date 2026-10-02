@@ -31,6 +31,12 @@ npx cdk synth
 npx cdk deploy {prefix}-PlatformStack
 ```
 
+### Smoke / regression pass
+```bash
+cd backend && uv run python scripts/smoke_turns.py --help   # L1 turn matrix; see docs/testing/smoke-regression.md
+```
+The `/smoke-regression` skill runs the full pass (hermetic suites → turn matrix on dev or a local stack → in-app-browser checklist). Run it after any change to the turn path or an SSE event, and once per release.
+
 ## Key Conventions
 
 - **Single CDK stack.** All AWS resources live in `PlatformStack`. There are no cross-stack dependencies to manage and no other CDK stack to deploy in a particular order. Application code is shipped out-of-band by `backend.yml` via AWS APIs (ECR push → ECS service update / Lambda code update / AgentCore Runtime update), not via CDK.

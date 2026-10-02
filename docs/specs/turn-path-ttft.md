@@ -767,29 +767,14 @@ the share row is marked interacted (non-owner). One `get-item` each.
 `AGENT_BUILD_EXPERIMENT=ab` set on the dev Runtime out of band. Pass env vars explicitly;
 zsh does not word-split `$var`.
 
-### 6D. The end-to-end matrix (run once per release on dev)
+### 6D. The end-to-end matrix
 
-For each row: send the turn, watch R2's frames, confirm the row's "expect", then reload the
-page and confirm the conversation restores with the same content.
-
-| Turn shape | Expect |
-|---|---|
-| First turn, plain chat | `preparing`/`prepared`, `session_title` before or during the answer, title persisted (R4) |
-| Second turn, same session | no `preparing` label visible (build 0–40ms), `cacheStatus=hit` |
-| Agent with KB, first turn | `citation` frames before `message_start`; answer uses the corpus; binding persisted |
-| `@`-mention of an Agent in a plain thread | that turn runs the Agent; the next plain turn sees the mention's messages (#741) |
-| Attach a PDF | inline; `[Attached files: …]` marker; `document_read` appears in tool list; card survives reload |
-| Attach a CSV | diverted; Spreadsheet Analysis auto-enabled (granted role); guidance note; card survives reload |
-| Attach a PPTX | diverted; PowerPoint tools note; card survives reload |
-| Enable a skill and `/invoke` it | `<available_skills>` present; the directive line; the `skills` tool called |
-| External MCP tool needing OAuth | `oauth_required` after `message_stop`; consent; resume finishes the same turn (I3) |
-| `ask_user_question` | `user_question_required`; answer resumes; "Skip" resumes |
-| Stop mid-answer | partial persisted; `interrupted_turn` marker; next turn carries the interruption note; no 409 on resend |
-| Steer mid-turn (a tool turn) | `steering_applied` at the tool boundary, or the follow-up sent as the next turn |
-| Continue after `max_tokens` | the answer continues, does not restart; Agent tools/skills intact |
-| Quota exceeded (test tier) | conversational message, `quota_exceeded` event, persisted, no model call |
-| Preview session (`preview-…`) | works; nothing in the sidebar; no lease |
-| Duplicate send while streaming | 409 → "already streaming" (the SPA queues instead) |
+Moved to [`docs/testing/smoke-regression.md`](../testing/smoke-regression.md), which
+now owns the per-release matrix: §2.2 is the scripted half
+(`backend/scripts/smoke_turns.py` runs the rows that need no human and asserts I1–I3 on
+the wire), §3 is the in-app-browser half for the rows that need a rendered surface. Run it
+once per release on dev, as before; the invariants above and the recipes in §6C are what
+its failures point back at.
 
 ---
 
