@@ -20,14 +20,6 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Subtracts**: no. Addition, justified because it is a correctness check on a model already curated in prod. The cookbook (bf24d45) says rewriting or compacting history on preserved-thinking models invalidates later thinking blocks and can get the next request rejected. Opus 5.5 also returns 400 on forced `tool_choice`.
 - **Status**: open. The Sonnet 5.5 curation (`d708b358`, 09-29) exists only on an unpushed local worktree branch. Check it against the 5.5 breaking changes (`between_tools`, recalibrated effort) before opening a PR.
 
-### [2026-10-02] Land #1367 now at strands 1.57.1 / agentcore 1.24.0; take strands 1.57.2 as its own PR
-- **Source**: research/2026-10-02.md
-- **Surface**: backend
-- **Effort × Impact**: M × M
-- **Subtracts**: yes. PR B deletes the `cache_write_tokens` half of `usage_normalization.py` (#4193 shipped in 1.57.2) and moves off `strands.experimental.bidi`, which is removed in 1.60. It also retires the [2026-09-25] paired-bump entry.
-- **Unlocks**: Bidi reconnect resilience (1.57.2); #4499 (no hang on a dropped MCP connection) on the release after it.
-- **Status**: open. #1367 is `CONFLICTING` with 0 reviews. ⚠️ 1.57.2 removes `BidiAgent(session_manager=)`, and #1367's own `voice_agent.py:255` passes it: a runtime `TypeError`, not an import error. #4618 did not move, so neither PR inherits the cost-convention hazard.
-
 ### [2026-10-02] Make the nightly teardown survive an AgentCore Runtime that won't delete
 - **Source**: research/2026-10-02.md
 - **Surface**: CI / scripts
@@ -221,28 +213,7 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
   - ⚠️ **Blocker B1.** `scripts/build/deploy-runtime-image-if-changed.sh` rebuilds a full-replacement `update-agent-runtime` payload from an allow-list that omits `platformVersion`. Every `backend.yml` deploy could therefore revert the runtime to V1. Fix it before the flag goes on.
   - ⚠️ **Gate 2 reframed.** V2 restores a snapshot of the running environment. The risk is less a contract change than import-time state cloned into every session. The concrete case is `runtime_health.py`, which stamps its idle clock at import (B2).
   - ⚠️ **The turn-latency EMF (#1184) can't see a Runtime cold start**, because it starts at handler entry. Measure cold starts from the client side (`tests/load`) (B3).
-
-### [2026-09-25] Treat any non-`end_turn` stop reason as a failed side-channel call
-- **Source**: research/2026-09-25.md ▸ Top 5 #2 — Claude Code 2.1.282 (refused compaction retries on fallback); verified on disk.
-- **Surface**: backend — `agents/main_agent/session/compaction_summary.py:152`, `apis/shared/tool_summaries/summarizer.py:188` (both test only `stopReason == "max_tokens"`); check the session-title generator too.
-- **Effort × Impact**: L × M
-- **Subtracts**: no — addition, justified: a refusal or guardrail stop is currently accepted as a compaction summary and persists into the cacheable history until the next cut. The fallbacks already exist.
-- **Status**: open. One predicate change per site + a stubbed `guardrail_intervened` test. Does not depend on knowing Bedrock's exact refusal stop reason.
-
-### [2026-09-25] Guard Stop against a turn that already finished
-- **Source**: research/2026-09-25.md ▸ Top 5 #3 — assistant-ui #8282 (merged 2026-09-24); verified on disk.
-- **Surface**: frontend — `session/services/chat/chat-http.service.ts:346` (`cancelChatRequest` — no completion check before `signalInterrupt` / `setLastTurnInterrupted`); loading only clears in `finalizeStream` from `onclose` (`:134`, `:283`); `stream-parser.service.ts:252` `isStreamCompleteFor()` has no external caller.
-- **Effort × Impact**: L × M
-- **Subtracts**: yes — one source of the false-"interrupted" marker (#988 lineage); gives an unused public method its caller (or delete it).
-- **Status**: open — not reproduced live; widest window is a first turn where `session_title` arrives after `done`. Needs a spec for Stop-after-`done`-before-`onclose`.
-
-### [2026-09-25] Strands 1.57 + `bedrock-agentcore` 1.23.1 + boto — one paired bump (supersedes the [2026-09-18] 1.56 entry)
-- **Source**: research/2026-09-25.md ▸ Top 5 #4 — https://github.com/strands-agents/harness-sdk/releases/tag/python%2Fv1.57.0
-- **Surface**: backend — `pyproject.toml` (strands + `[bidi]`, agentcore, boto3 ≥1.43.72), `uv.lock`; read first: `session/turn_based_session_manager.py` (Generic `SessionManager`), any `except EventLoopException` pause detection, `bedrock_responses.py:313`.
-- **Effort × Impact**: M × M
-- **Subtracts**: yes — Chat Completions cache-write gap in `usage_normalization.py:106` (reads no `prompt_tokens_details`) closes upstream via #4361; picks up #4371 (interventions honor interrupts) and #4426 (schema normalization no longer mutates caller specs); retires the [2026-09-18] 1.56 paired-pin entry.
-- **Unlocks**: `handoff_to_user` vended tool (read before building another interrupt tool); Bedrock `requestTimeout`.
-- **Status**: open. ⛔ Keep `strands-agents-tools` at 0.8.8 (0.8.9 needs mcp 2.x); `mcp` stays `<2`, target 1.30.0. ⚠️ A missed pairing presents on Runtime as "initialization time exceeded (30s)" → 502 — dev-validate a real turn. Run `probe_bedrock_cache_point_support.py --offline-only` and diff `strands/_context_manager/` per the standing watch.
+- **Status 2026-10-02**: plan merged as `docs/specs/agentcore-runtime-v2.md` (#1376, 2026-09-28). **Re-based by the [2026-10-02] entry above** on the published V2 price (memory 1.79× V1 → wins only below ~56% of V1 GB-hours) and on `aws-cdk-lib` 2.272.0's typed `platformVersion`. B1 still unstarted. Second week as the review's #1 (reviews/2026-10-02.md ▸ #1).
 
 ### [2026-09-25] Curate Claude Opus 5.5 — and measure GPT-6 Luna as a side-channel candidate
 - **Source**: research/2026-09-25.md ▸ Top 5 #5 — https://aws.amazon.com/blogs/machine-learning/claude-opus-5-5-is-now-available-on-aws/ ; https://aws.amazon.com/about-aws/whats-new/2026/09/openai-gpt-6-sol-luna-on-amazon-bedrock/
@@ -253,6 +224,7 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
   - A cheaper top-tier Claude.
   - Possibly a Nova Micro successor for titles/summaries (measure, don't swap).
 - **Status**: open. ⚠️ Rates from the AWS **model card** only; `us.*` id in dev (SCP denies `global.*`); thinking cannot be disabled — check against the effort selector (an effort switch already busts the cache); bracket the real cache minimum before any caching A/B.
+- **Status 2026-10-02**: (a) **SHIPPED** — #1358 (`f3c90799`, 2026-09-27); prod rows added 2026-09-26 with the retirement redirect verified on one retired-model agent. Opus 5.5 cache read is 0.05× input on the Price List API, not the 0.1× default. (b) Luna side-channel A/B **deferred to 2026-10-23** (reviews/2026-09-25.md ▸ #6); fold with issue #1340 (admin-selectable summarizer model) when due.
 
 ### [2026-09-21] Sweep session anatomies at fleet scale — one session already refuted a queued decision, and 1.23.0 may have moved the write:read ratio
 - **Source**: Phil-initiated, from a single prod session anatomy (`7f5f207f`, $21.84 / 48 Opus 5 calls, 2026-09-16→21). One session produced two results that no aggregate on the dashboard surfaces today, which is the argument for doing this at scale rather than one link at a time.
@@ -276,6 +248,7 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Effort × Impact**: S × H for the one-off sweep (a read-only script over `C#` rows; the projection is already content-free). M × H if it earns a standing cohort panel.
 - **Subtracts**: no on its own — but it is the thing that lets us *close* cost items on evidence instead of leaving them open, and it already closed one.
 - **Status**: open — **run the sweep before the next cost decision.** The honest framing for the review: most of `7f5f207f` was an expensive conversation, not a bug, and its two real regressions were already fixed. The value was not the verdict, it was that one anatomy overturned a queued decision. Do that across a month of sessions.
+- **Status 2026-10-02**: **question 2 ran on 2026-09-27, off-repo** (34,891 rows; see the PR-5 entry below for the result, which reversed that item's recommendation). Questions 1, 3, 4 and 5 and the `missCause` labelling did not run, and the script was not committed. reviews/2026-10-02.md ▸ #5 asks for the script in `backend/scripts/`, the remaining four answers, and says this is the last carry before `missCause` is declined.
 ### [2026-09-21] Standing watch — Strands' first-party `ContextManager` as it converges on what our compaction does
 - **Source**: conversation with Phil, 2026-09-21 — *"keep eyes on the compaction features delivered by Strands."* Prompted by research/2026-09-18 ▸ Strands, which reported the context-manager/offloading stack "fully released in 1.56.0" (#4118/#4146/#4187/#4231/#4254/#4282). **That framing is misleading and the correction is the headline here.**
 - **⚠️ It is already in our pin. Read this before planning a bump around it.** Everything below was read on disk from `backend/.venv/.../strands/_context_manager/` at **1.55.0**, our current pin — `context_manager.py`, `stash.py`, `strategies/offload/{base,drop,summarize,truncate}.py`, `methods/`, `modes/agentic/`, `retrieval_tool.py`. 1.56.0 did not *release* the stack; it finished it. The 1.56 additions are strategy presets + agent rewire (#4282) and **session-manager integration (#4254)** — the last being the one that matters, since our compaction lives inside `TurnBasedSessionManager`. **Evaluating this is not gated on the 1.56 bump**, which is separately blocked as a paired pin with `bedrock-agentcore>=1.23.1`.
@@ -302,17 +275,6 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
   - ⏳ Whether the **offload/LTM** side grows a retrieval hook that could carry AgentCore-Memory summaries (gap 3).
   - ⏳ `strands/storage/s3_storage.py` vs. our own S3 backend in `tool_result_offload.py` — if upstream's is equivalent, that is a deletion.
   - ⏳ Diff `_context_manager/` on **every** Strands bump. It is marked *"Internal implementation. Public experimental API is re-exported from `strands.experimental.context_manager`"* — an experimental surface we would be building on, so churn is expected and is itself the signal.
-
-### [2026-09-21] Build the quality-veto harness — scoped, and smaller than both specs assume
-- **Source**: `docs/kaizen/scoping/2026-09-21-quality-veto-harness.md`, written 2026-09-21. It is **trigger 1** on both waivers recorded the same day, and the only path to an answer that does not wait on user volume (the other two triggers do).
-- **The finding that changes it**: the specs and the spike describe *one* harness driving live multi-turn sessions through the deployed runtime, for both epics. That is right for offload and **substantially wrong for compaction** — `CompactionPolicy.resolve()` and `choose_checkpoint()` (`compaction_policy.py:77,199`) take a `CompactionConfig` **object** and a message list and read no environment at call time, so both arms can be built in-process and applied to the same authored transcript. The cut is deterministic; only the bounded summary (one Nova Micro call per arm) and the answers need a model. A 60-turn session does not have to be *run*, twice, k=3.
-- **⚠️ Correction to the spike's "extend `experiment_agent_cache_arms.py`, don't rebuild it"**: half right, and the wrong half matters. `run_arm()` and `attach_cost_rows()` generalize directly. **The arm definition does not** — `ARMS` is a dict of `enabled_tools` lists, chosen because that script's docstring wanted arms with *no redeploy*, and `run_agent_headless` (`harness/runner.py:136`) exposes only the `InvocationRequest` surface (`model_id`, `rag_assistant_id`, `enabled_tools`, `agent_type`, `inference_params`). There is no compaction or document knob on it. Compaction config is `from_env()` on the runtime, so **two compaction arms on one runtime is not possible through the live path** — which is what makes the offline route above the answer rather than a shortcut. Offload B-vs-C *is* per-session selectable (`offload_enabled_for` buckets on `crc32(session_id) % 100`), so that arm needs no deploy either; only A-vs-B does.
-- **The slice that needs no judge**: two of three families in *each* spec are programmatically generatable **and** scorable — constraint retention + reference lookup (spiral §4.3), lookup + citation (offload eval §2.1). Exact match against facts we planted. So slice 1 needs **no blinded judge, no scrubber, no AgentCore Evaluations, no LLM-judging spend** — and it is where the statistical power lives anyway, since ≥100 tasks is affordable only in the programmatic families (~40 paired binary tasks detects only a ~25pt regression).
-- **Surface**: new — `backend/scripts/` + a fixtures dir; reuses `compaction_policy.py`, `compaction_summary.bound_summary`, and (slice 2) `experiment_agent_cache_arms.py`'s transport.
-- **Effort × Impact**: M × H for slice 1 (was L × H as an undifferentiated epic, which is why it never started). Slices 2 and 3 are separately sized in the doc.
-- **Subtracts**: no — addition. Justified because it is the **only** instrument that can falsify a cost change on quality, and `CLAUDE.md`'s tenet ("when cost and answer quality genuinely conflict, quality wins") is unexercisable without one.
-- **Unlocks**: the counterweight the cost arc has never had — and with it, the ability to move `FLOOR_RATIO` / `CEILING_CAP_TOKENS` / the digest budget on evidence rather than taste, which both specs' tuning sections already assume exists.
-- **Status**: open, scoped, not started. ⚠️ Three open questions in §6 gate slice 1 and are cheap to answer: does an authored transcript reproduce the cut the real path takes (`choose_checkpoint` rescales to `history_tokens`, so the transcript must supply a realistic measured size, not just realistic text); is `bound_summary` reachable offline; and does `model_relative_enabled=False` reproduce pre-#1125 behaviour *exactly* rather than approximately — if not, the control is a third policy and the comparison means something narrower than the spec claims.
 
 ### [2026-09-21] The cheap quality veto does not exist — the query was already built, and the substrate is empty
 - **Source**: measured today against prod and dev. reviews/2026-09-18.md ▸ Proposal #3 recommended "**Ship the cheap version this week**… #1142/#1145 just shipped `F#` down-thumb rows, so a comparison across turn classes is available today with a **query, not a build**." Both halves of that sentence are wrong, in opposite directions.
@@ -427,6 +389,7 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
   - ⚠️ **The intuition is backwards.** "Our tool prefix is huge, so a 1h TTL must pay" is wrong — a bigger static prefix scales *both* sides of the trade, making the arm more negative. Even a hypothetical 1h TTL on the **whole** prefix (not what is built) saved only $0.68 of $20.47 (3%).
   - **Decide it for free, on data we already hold**: count `cacheStatus` starting with `miss` and `cacheGapSeconds < 3600` over rows with `cacheWriteInputTokens > 0`, per session, over a month. If that share is not north of 65% for a meaningful cohort, close this item and keep the flag off — no dev week, no flag flip. Folded into the fleet sweep item above.
   - Keep the code and the flag: it is a correct implementation of a lever that pays under a usage pattern we do not currently have.
+- **⚠️ Status 2026-10-02 — the DECLINE above was REVERSED on 2026-09-27 by a fleet pass that was never recorded here.** The 65% rule used the wrong denominator (all cache-writing calls). The 1h premium is paid only when the static prefix itself is re-written (`calculator.py:102` bills `min(cw, S − cr)`), so the test is avoided-TTL-misses over *remaining prefix writes* against 0.65. Prod fleet, 34,891 `C#` rows, 2026-09-06 → 27, load tests excluded: **0.78**, net **about +$22 over 21 days (~2% of spend)**, 476 of 1,350 sessions positive; `7f5f207f` flips to +$2.23. TTL-expired gaps: 32% at 5–10 min, 31% at 10–30 min, so most 5m misses fall inside 1h. Caveat: only 18% of rows carried `prefixTokens`; the rest were imputed at the 15.8k median. **Recommendation now: decline on SIZE (~$30/month), never on sign — or flag it on in prod for one measured week.** The thresholds spec §6 PR-5 still carries the old number (reviews/2026-10-02.md ▸ Retirement Candidates).
 
 ### [2026-09-16] The 28% "neither" cohort — content-class ordering inside the cut is the next compaction lever, if the metrics say the floor is still missed
 - **Source**: 2026-09-15 prod cost audit (content-free): of 95 September sessions over 100k, **52 (55%) had a ≥4k-token tool result in the last 3 turns** (→ #1131 intake offload), **25 (26%) an attachment there** (→ document offload, its own item below), **27 (28%) neither** — long sessions (a3b884b1 46 turns, 4cb93e6e 45 turns) whose bulk is old history plus a 23–40k summary.
@@ -489,6 +452,7 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Subtracts**: yes — a monkeypatch on a Strands internal, taken *because* the SDK offered no hook, on a class Strands is **actively changing**: this week alone an httpx2 adapter (#4183), an `mcp` floor relaxed to `<2.2` (#4151), SEP-2663 tasks (#4125), and changed `load_servers` defaults (#4177).
 - **Unlocks**: an App-frame header on a standards-blessed field rather than a private symbol, decoupled from the much larger `server/discover` migration (still gated on two unanswered questions: does AgentCore Gateway speak it, does Strands expose it).
 - **Status**: open — `ext-apps` v2.0.0's `schema.json` now documents **`io.modelcontextprotocol/serverInfo` in result `_meta`**, which is exactly what we intercept `initialize` to get. ⚠️ **Verify the servers we actually call emit it before deleting anything** — presence in `schema.json` is not evidence any of our Gateway targets or Lambda FastMCP servers populate it; keep the patch as a fallback until they do. ⚠️ **Same release changed host-facing error codes**: a handler-thrown `-32002` now reaches the View as `-32602`, invalid params on `ui/*` move `-32603` → `-32602`, and the `MCP error N:` message prefix is **gone** — grep the app-tool-error chain shipped in #1009/#1013 for code or message-text matching, since so much of it was built on message text. ✅ The MCP Apps **wire protocol is unchanged** in v2.0.0 (bidirectional interop test against 1.7.5), so nothing else in our host path needs touching. ⚠️ Related and new: `mcp` resolves at **1.28.1** in `uv.lock` while latest is **2.2.0** and Strands' floor now permits `<2.2` — the next refreshed resolve could cross a major under this patch.
+- **Status 2026-10-02**: (b)/(c) **re-gated on the mcp-2.x migration instead of a date** (reviews/2026-09-25.md ▸ Carried Over). The `_meta serverInfo` path only matters once we speak 2026-07-28. Long run, MCP SEP-3371 (consistent SDK extension points, updated 2026-10-02) is the path that retires the substitution outright. Re-surface when `mcp<2` lifts.
 
 ### [2026-09-08] AgentCore Runtime workspaces — give the agent a filesystem; start by mounting the one we already have — ⛔ **S3 BRIDGE BLOCKED** (build attempted 2026-09-11, stopped before any code)
 - **Source**: conversation with Phil, 2026-09-08 — **not** from a research scan. Verified against the pinned `botocore` 1.43.68 service model, the AgentCore devguide, and https://aws.amazon.com/blogs/machine-learning/its-safe-to-close-your-laptop-now-hosting-coding-agents-on-amazon-bedrock-agentcore/.
@@ -811,6 +775,31 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Status**: open — deferred 4 weeks in reviews/2026-05-15.md (revisit 2026-06-12). Earns its keep when an A2A construct lands.
 
 ## Resolved
+
+### [2026-09-25] Treat any non-`end_turn` stop reason as a failed side-channel call → RESOLVED — **SHIPPED**
+- **Decision**: Ship (reviews/2026-09-25.md ▸ #2).
+- **Reasoning**: #1368 (`7f1e8fd4`, 2026-09-27) accepts only `end_turn` in `compaction_summary.py` and `tool_summaries/summarizer.py`; any other stop reason returns `None` and the existing fallbacks run.
+- **Reviewed in**: reviews/2026-10-02.md (scorecard).
+
+### [2026-09-25] Guard Stop against a turn that already finished → RESOLVED — **SHIPPED**
+- **Decision**: Ship (reviews/2026-09-25.md ▸ #3).
+- **Reasoning**: #1366 (`41dd4471`) gates `cancelChatRequest` on the parser's completion state and deletes the caller-less `isStreamCompleteFor()`; #1370 (`5956eb20`) applies the same rule to the page-hide path. Both 2026-09-27.
+- **Reviewed in**: reviews/2026-10-02.md (scorecard).
+
+### [2026-09-25] Strands 1.57 + `bedrock-agentcore` 1.23.1 + boto — one paired bump → RESOLVED — **SHIPPED**
+- **Decision**: Ship (reviews/2026-09-25.md ▸ #4).
+- **Reasoning**: #1367 merged 2026-10-02 at strands **1.57.2** / bedrock-agentcore **1.24.0** / boto **1.43.103** (lock `mcp` 1.30.0, still `<2` by declared constraint). The two guard rails are tests in `tests/supply_chain/test_strands_agentcore_pairing.py`. Voice was ported to the graduated `strands.bidi` API behind an unchanged WebSocket contract and off `BidiAgent(session_manager=)`. Dev validation of a text turn and a voice turn is pending (reviews/2026-10-02.md ▸ #7).
+- **Reviewed in**: reviews/2026-10-02.md (scorecard).
+
+### [2026-10-02] Land #1367 now at strands 1.57.1 / agentcore 1.24.0; take strands 1.57.2 as its own PR → RESOLVED — **SUPERSEDED**
+- **Decision**: Superseded by events the same morning: #1367 merged at 1.57.2 with the voice change already in it.
+- **Reasoning**: research/2026-10-02.md read #1367 as `CONFLICTING` at 1.57.1; it was rebased and merged at 09:39 MT. Of this entry's PR B, the `strands.bidi` import and the `session_manager` removal are done; the `usage_normalization.py` cache-write recovery deletion carries as reviews/2026-10-02.md ▸ Proposal #7.
+- **Reviewed in**: reviews/2026-10-02.md.
+
+### [2026-09-21] Build the quality-veto harness — scoped, and smaller than both specs assume → RESOLVED — **SHIPPED (slice 1) and run**
+- **Decision**: Build slice 1 (reviews/2026-09-18.md ▸ #3 deferred the harness to 2026-10-02; it shipped before the date).
+- **Reasoning**: `56f9bc0b` (offline harness, slice 1), `291a55c8` (the veto ran: the cut passes, the compression fails), `3fdc05ae` (summarizer screening), `d28f90fc` (extract-then-compress clears the veto). The compaction waiver's trigger 1 fired and the stack passed; extract-then-compress then shipped default-on (#1355). Slices 2 and 3 (the live-path offload veto, the judged families) stay described in `scoping/2026-09-21-quality-veto-harness.md` and the document-offload waiver stands.
+- **Reviewed in**: reviews/2026-10-02.md (Carried Over).
 
 ### [2026-09-18] Merge #1147 — two fixes and the offload epic's measurement plan → RESOLVED — **SHIPPED**
 - **Decision**: Ship (reviews/2026-09-18.md ▸ #1).
