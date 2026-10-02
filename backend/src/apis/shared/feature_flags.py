@@ -719,3 +719,19 @@ def history_count_prefetch_enabled() -> bool:
     the count is read at the head of the turn, exactly as before.
     """
     return os.environ.get("HISTORY_COUNT_PREFETCH_ENABLED", "").strip().lower() != "false"
+
+
+def inline_attachment_persist_enabled() -> bool:
+    """Whether inline ``files`` bytes of a diverted class (spreadsheets, decks)
+    are written to S3 and registered as session files before the turn runs.
+
+    Covers ``apis.shared.files.inline_persist`` as called from the inference
+    API's attachment phase. The SPA uploads first and sends ``file_upload_ids``,
+    so this only ever fires for headless callers posting base64 ``files`` —
+    without it their diverted attachments are dropped while the guidance note
+    says the spreadsheet / PowerPoint tools can reach them. **Default ON with
+    a kill switch** (house style): unset or empty resolves to enabled; only the
+    literal ``"false"`` (case-insensitive) disables. Off, the pre-fix behaviour
+    returns exactly: nothing is written and the note is unchanged.
+    """
+    return os.environ.get("INLINE_ATTACHMENT_PERSIST_ENABLED", "").strip().lower() != "false"
