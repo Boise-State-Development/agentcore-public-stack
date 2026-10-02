@@ -17,8 +17,8 @@
 # members, `embeddingDataType` enum is ['FLOAT32','BINARY'], and all four
 # document operations — Ingest/Get/List/DeleteKnowledgeBaseDocuments — exist.
 # No `AWS_DATA_PATH` side-load is required, and none must be relied on.
-boto3==1.43.68
-botocore==1.43.68
+boto3==1.43.103
+botocore==1.43.103
 
 # Nothing else. The four handlers' whole import closure is 16 first-party
 # modules plus these two, which is the point of `kb_backend` being its own

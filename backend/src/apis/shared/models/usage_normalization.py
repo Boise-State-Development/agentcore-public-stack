@@ -31,12 +31,15 @@ This module fixes both halves, once, at the earliest seam we control:
    plain Converse-shaped usage dicts and need no provider awareness.
 
 The wrapper is also where ``cache_write_tokens`` re-enters the pipeline.
-Strands never reads it off the Responses usage object, so
-``cacheWriteInputTokens`` is structurally 0 for GPT-5.6 — which pins
-``wastedUsd`` at $0 and makes the 1.25x write premium invisible, the same
-blind spot that let the compaction spiral run unnoticed. An upstream patch is
-in flight; until it lands (and on any older pin) this mapping is the only
-source of the field.
+Through strands-agents 1.57.1 the SDK never read it off the Responses usage
+object, so ``cacheWriteInputTokens`` was structurally 0 for GPT-5.6 — which
+pinned ``wastedUsd`` at $0 and made the 1.25x write premium invisible, the
+same blind spot that let the compaction spiral run unnoticed. Both OpenAI
+paths now report it upstream (Chat Completions in 1.57 via #4361, Responses
+in 1.57.2 via #4193), each beside an ``inputTokens`` that is still inclusive,
+so :func:`normalize_usage` still subtracts it once like any other write
+bucket. The recovery here now writes the value the SDK already set; it is
+redundant on the current pin, and deleting it is a separate cleanup.
 
 ⚠️ :func:`normalize_usage` is **not idempotent** for the OpenAI family — it
 subtracts. Apply it exactly once per usage payload, at the model seam. Do not
@@ -165,9 +168,10 @@ def _normalize_metadata_chunk(event: Mapping[str, Any], chunk: Any) -> Any:
     if not isinstance(usage, dict):
         return chunk
 
-    # Recover the field Strands drops, before disjointness is computed — the
-    # written tokens are part of the inclusive `input_tokens` and have to come
-    # out of it too, or they are billed at input + 1.25x write.
+    # Recover the write bucket before disjointness is computed — the written
+    # tokens are part of the inclusive `input_tokens` and have to come out of
+    # it too, or they are billed at input + 1.25x write. Strands >=1.57.2 sets
+    # the same value itself; this assignment is then a same-value overwrite.
     cache_write = openai_cache_write_tokens(event.get("data"))
     if cache_write:
         usage["cacheWriteInputTokens"] = cache_write
@@ -231,7 +235,7 @@ def usage_normalized(base_cls: Any) -> Any:
                 f"{base_cls.__name__} that reports disjoint token buckets.\n\n"
                 "See apis/shared/models/usage_normalization.py — OpenAI's "
                 "inclusive `input_tokens` is double-billed by our cost paths "
-                "otherwise, and Strands drops `cache_write_tokens` entirely."
+                "otherwise."
             ),
         },
     )

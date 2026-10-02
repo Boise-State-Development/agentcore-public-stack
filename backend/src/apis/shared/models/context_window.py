@@ -48,10 +48,14 @@ def sdk_context_window(model_id: Optional[str]) -> Optional[int]:
     """Strands' built-in context-window table for ``model_id``, or ``None``.
 
     Covers Anthropic-on-Bedrock and handles the cross-region prefix strip
-    (``us.anthropic.claude-sonnet-4-6`` resolves via ``anthropic.…``). It is
-    **empty for every non-Anthropic id we curate** — Astra, the GPT-5.6
-    family, Kimi K3 and DeepSeek all return ``None`` — so this is a partial
-    safety net, not a second source of truth.
+    (``us.anthropic.claude-sonnet-4-6`` resolves via ``anthropic.…``). Since
+    strands-agents 1.56 the strip also walks nested prefixes, so the hosted
+    OpenAI ids resolve too: ``us.openai.gpt-6-astra`` and the GPT-5.6 family
+    return their full 1,050,000 window. That is the real window but **not**
+    our pricing cap — the curated rows' ``maxInputTokens: 272_000`` still wins
+    in :func:`resolve_context_window`, and a row with the field *absent* would
+    now fall through to 1,050,000. Kimi K3 and DeepSeek still return ``None``,
+    so this remains a partial safety net, not a second source of truth.
 
     ⚠️ ``strands.models._defaults`` is a private module on an experimental
     surface. Import failure is treated as "no fallback available", never as

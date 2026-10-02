@@ -12,11 +12,12 @@ https://github.com/aws-samples/sample-strands-agent-with-agentcore
 """
 
 import asyncio
+import base64
 import logging
 import os
 import sys
 import types
-from typing import Any, AsyncGenerator, List, Optional
+from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from agents.main_agent.base_agent import BaseAgent
 from agents.main_agent.config.constants import EnvVars, Defaults
@@ -33,10 +34,15 @@ logger = logging.getLogger(__name__)
 # not crash, it would silently turn voice off everywhere with one INFO line.
 # Import the name explicitly rather than leaning on the package's lazy
 # ``__getattr__``, so a future rename fails loudly here too.
+#
+# 1.57.2 graduated the API from ``strands.experimental.bidi`` to
+# ``strands.bidi``. The experimental path survives as a shim that resolves to
+# the same module objects (so ``isinstance`` holds across both) but warns on
+# import; import the stable path.
 try:
-    from strands.experimental.bidi import BidiAgent
-    from strands.experimental.bidi.models.bedrock import BedrockNovaSonicModel
-    from strands.experimental.bidi.types.events import BidiUsageEvent, ModalityUsage
+    from strands.bidi import BidiAgent
+    from strands.bidi.models.bedrock import BedrockNovaSonicModel
+    from strands.bidi.types.events import BidiUsageEvent, ModalityUsage
     BIDI_AVAILABLE = True
 except ImportError:
     BIDI_AVAILABLE = False
@@ -83,21 +89,30 @@ if BIDI_AVAILABLE:
         provider untouched. The split rides the ``modality_details`` slot the
         SDK already reserves on ``BidiUsageEvent`` (and serialises through
         ``as_dict``), so nothing downstream has to learn a new event shape.
+
+        1.57 changed this hook's contract: it now takes the provider's
+        per-response state and returns a *list* of events. The provider calls
+        it positionally, so an override with the old one-argument signature
+        raises on every Nova event — which is why the signature is asserted
+        against the provider's in the tests rather than trusted.
         """
 
-        def _convert_nova_event(self, nova_event: dict) -> Any:
+        def _convert_nova_event(self, nova_event: dict, response_state: Any) -> list:
             usage = nova_event.get("usageEvent")
             if not usage:
-                return super()._convert_nova_event(nova_event)
+                return super()._convert_nova_event(nova_event, response_state)
             details = usage_modality_details(usage)
             total_input = usage.get("totalInputTokens", 0)
             total_output = usage.get("totalOutputTokens", 0)
-            return BidiUsageEvent(
-                input_tokens=total_input,
-                output_tokens=total_output,
-                total_tokens=usage.get("totalTokens", total_input + total_output),
-                modality_details=[ModalityUsage(**row) for row in details] or None,
-            )
+            return [
+                BidiUsageEvent(
+                    input_tokens=total_input,
+                    output_tokens=total_output,
+                    total_tokens=usage.get("totalTokens", total_input + total_output),
+                    modality_details=[ModalityUsage(**row) for row in details] or None,
+                )
+            ]
+else:
     logger.info("BidiAgent not available — install strands-agents[bidi] for voice support")
 
 
@@ -106,6 +121,139 @@ if "pyaudio" not in sys.modules:
     _fake_pyaudio = types.ModuleType("pyaudio")
     _fake_pyaudio.PyAudio = type("PyAudio", (), {})
     sys.modules["pyaudio"] = _fake_pyaudio
+
+
+class VoiceWireAdapter:
+    """Translate Strands >=1.57 Bidi output events into our voice WebSocket contract.
+
+    strands-agents 1.57 renamed and re-shaped every Bidi output event (1.57.0
+    #4444 "adopt production component names", 1.57.1 #4604 "remove response
+    stop reasons"). The SPA (``voice-chat.service.ts``) and our own turn and
+    usage accounting still speak the 1.55 wire names, so the translation lives
+    here, at the one seam we own, rather than in two packages at once.
+
+    What changed, and how each is mapped:
+
+    * ``bidi_audio_delta`` -> ``bidi_audio_stream`` (same fields).
+    * ``bidi_transcript_delta`` -> ``bidi_transcript_stream``. Nova used to
+      stream an assistant transcript twice (SPECULATIVE, then FINAL) and the
+      SPA commits text only when ``is_final`` is set. 1.57 streams it once,
+      from the SPECULATIVE stage, and drops FINAL entirely, so every delta is
+      now the only pass and is forwarded with ``is_final=True``.
+    * ``bidi_response_start`` now fires at the *user's* first content, before
+      any user speech has been transcribed. The SPA flushes the user's
+      transcript into a message when it sees a response start, so forwarding
+      that event as-is would file each user message one turn late. The legacy
+      ``bidi_response_start`` is therefore emitted when the *assistant* begins
+      (its transcript or its audio), which is when 1.55 emitted it too.
+    * ``bidi_barge_in`` -> ``bidi_interruption``.
+    * ``bidi_response_stop`` -> ``bidi_response_complete``; ``stop_reason`` is
+      no longer on the event, so it is derived from whether a barge-in was
+      seen in this response.
+    * ``bidi_connection_stop`` -> ``bidi_connection_close``.
+    * Start/stop bracketing events with no 1.55 equivalent
+      (``bidi_transcript_start``/``_stop``, ``bidi_audio_start``/``_stop``)
+      are dropped. So are the completed-block events 1.57.2 added
+      (``bidi_transcript_block`` and its text/reasoning siblings): each repeats
+      text the deltas already carried. Everything else passes through unchanged.
+    """
+
+    _DROPPED = frozenset(
+        {
+            "bidi_transcript_start",
+            "bidi_transcript_stop",
+            "bidi_audio_start",
+            "bidi_audio_stop",
+            "bidi_transcript_block",
+            "bidi_text_block",
+            "bidi_reasoning_block",
+        }
+    )
+
+    def __init__(self) -> None:
+        self._response_id: Optional[str] = None
+        self._assistant_started = False
+        self._interrupted = False
+
+    def translate(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Return the wire events for one Strands Bidi event (zero or more)."""
+        event_type = event.get("type", "")
+
+        if event_type in self._DROPPED:
+            if event_type == "bidi_transcript_start" and event.get("role") == "assistant":
+                return self._start_assistant()
+            if event_type == "bidi_audio_start":
+                return self._start_assistant()
+            return []
+
+        if event_type == "bidi_response_start":
+            self._response_id = event.get("response_id")
+            self._assistant_started = False
+            self._interrupted = False
+            return []
+
+        if event_type == "bidi_transcript_delta":
+            delta = event.get("delta", "")
+            return [
+                {
+                    "type": "bidi_transcript_stream",
+                    "role": event.get("role"),
+                    "delta": {"text": delta},
+                    "text": delta,
+                    "is_final": True,
+                    "current_transcript": None,
+                }
+            ]
+
+        if event_type == "bidi_audio_delta":
+            return [
+                {
+                    "type": "bidi_audio_stream",
+                    "audio": event.get("audio"),
+                    "format": event.get("format"),
+                    "sample_rate": event.get("sample_rate"),
+                    "channels": event.get("channels"),
+                }
+            ]
+
+        if event_type == "bidi_barge_in":
+            self._interrupted = True
+            return [{"type": "bidi_interruption", "reason": event.get("reason")}]
+
+        if event_type == "bidi_response_stop":
+            # A response that ended before the assistant produced anything
+            # (tool-only, or barged in immediately) still owes the SPA a start,
+            # or the user's words stay buffered and the SPA re-files the
+            # previous turn's text as this turn's transcript entry.
+            events = self._start_assistant()
+            events.append(
+                {
+                    "type": "bidi_response_complete",
+                    "response_id": event.get("response_id") or self._response_id,
+                    "stop_reason": "interrupted" if self._interrupted else "complete",
+                }
+            )
+            self._response_id = None
+            self._assistant_started = False
+            self._interrupted = False
+            return events
+
+        if event_type == "bidi_connection_stop":
+            return [
+                {
+                    "type": "bidi_connection_close",
+                    "connection_id": event.get("connection_id"),
+                    "reason": event.get("reason"),
+                }
+            ]
+
+        return [event]
+
+    def _start_assistant(self) -> List[Dict[str, Any]]:
+        if self._assistant_started:
+            return []
+        self._assistant_started = True
+        return [{"type": "bidi_response_start", "response_id": self._response_id}]
 
 
 class VoiceAgent(BaseAgent):
@@ -122,8 +270,8 @@ class VoiceAgent(BaseAgent):
         agent = VoiceAgent(session_id="sess-123", enabled_tools=[...])
         await agent.start()
         await agent.send_audio(audio_base64, sample_rate=16000)
-        async for event in agent.stream_async(""):
-            # BidiOutputEvent, BidiAudioStreamEvent, etc.
+        async for event in agent.receive_events():
+            # wire-contract dicts: bidi_audio_stream, bidi_transcript_stream, etc.
     """
 
     def __init__(self, voice: Optional[str] = None, **kwargs):
@@ -147,6 +295,7 @@ class VoiceAgent(BaseAgent):
         self._per_turn_usage: List[dict] = []  # Snapshot of usage per completed turn
         self._turn_count: int = 0  # Completed turns (bidi_response_complete)
         self._response_start_count: int = 0  # Started turns (bidi_response_start)
+        self._wire = VoiceWireAdapter()
         super().__init__(**kwargs)
 
     def _create_agent(self) -> None:
@@ -165,19 +314,16 @@ class VoiceAgent(BaseAgent):
                 EnvVars.NOVA_SONIC_MODEL_ID, Defaults.NOVA_SONIC_MODEL_ID
             )
 
-            # 1.55.0 flattened the provider's constructor: the audio settings
-            # moved from provider_config["audio"] to the `audio` kwarg (an
-            # AudioConfig TypedDict with these same five keys), and the region
-            # moved from client_config["region"] to `region`. Both are
-            # keyword-only now.
+            # 1.57 split the provider's audio config: the voice is its own
+            # `voice` kwarg, and `audio` carries per-direction sample rates
+            # only (channels and format are fixed at mono PCM). Unknown keys
+            # are rejected, so the 1.55 five-key dict no longer fits.
             model = NovaSonicModelWithUsageDetails(
                 model_id=model_id,
+                voice=self._voice,
                 audio={
-                    "voice": self._voice,
-                    "input_rate": Defaults.NOVA_SONIC_INPUT_RATE,
-                    "output_rate": Defaults.NOVA_SONIC_OUTPUT_RATE,
-                    "channels": 1,
-                    "format": "pcm",
+                    "input": {"sample_rate": Defaults.NOVA_SONIC_INPUT_RATE},
+                    "output": {"sample_rate": Defaults.NOVA_SONIC_OUTPUT_RATE},
                 },
                 region=os.environ.get(EnvVars.AWS_REGION, Defaults.AWS_REGION),
             )
@@ -188,13 +334,20 @@ class VoiceAgent(BaseAgent):
             # Load text history for voice-text continuity
             initial_messages = self._load_text_history()
 
-            # Create BidiAgent with separate agent_id
+            # Create BidiAgent with separate agent_id.
+            #
+            # 1.57.2 removed BidiAgent's `session_manager` kwarg (#4698). All
+            # it did was register the manager as a hook provider, and BidiAgent
+            # still fires the events the manager listens on
+            # (AgentInitializedEvent, MessageAddedEvent, BidiAgentStopEvent),
+            # so passing it as a hook keeps voice transcripts persisting.
+            # Dropping it would not error — voice would just stop saving.
             self._bidi_agent = BidiAgent(
                 model=model,
                 tools=tools,
                 system_prompt=voice_prompt,
                 agent_id=Defaults.VOICE_AGENT_ID,
-                session_manager=self.session_manager,
+                hooks=[self.session_manager] if self.session_manager else None,
                 messages=initial_messages,
             )
 
@@ -294,12 +447,16 @@ class VoiceAgent(BaseAgent):
         if not self._bidi_agent:
             raise RuntimeError("Voice agent not started")
 
+        # 1.57 takes raw bytes in an `audio_delta` block; the sample rate is
+        # fixed by the model's audio config rather than sent per chunk.
+        if sample_rate != Defaults.NOVA_SONIC_INPUT_RATE:
+            logger.debug(
+                "Voice audio sample_rate=%s differs from the configured input rate %s",
+                sample_rate,
+                Defaults.NOVA_SONIC_INPUT_RATE,
+            )
         await self._bidi_agent.send({
-            "type": "bidi_audio_input",
-            "audio": audio_base64,
-            "format": "pcm",
-            "sample_rate": sample_rate,
-            "channels": 1,
+            "audio_delta": {"format": "pcm", "source": {"bytes": base64.b64decode(audio_base64)}},
         })
 
     async def send_text(self, text: str) -> None:
@@ -312,11 +469,7 @@ class VoiceAgent(BaseAgent):
         if not self._bidi_agent:
             raise RuntimeError("Voice agent not started")
 
-        await self._bidi_agent.send({
-            "type": "bidi_text_input",
-            "text": text,
-            "role": "user",
-        })
+        await self._bidi_agent.send({"text": text})
 
     @property
     def accumulated_usage(self) -> dict:
@@ -366,81 +519,91 @@ class VoiceAgent(BaseAgent):
         if not self._bidi_agent:
             raise RuntimeError("Voice agent not started")
 
-        # Lazy-loaded pricing for real-time cost calculation
-        pricing_dict: Optional[dict] = None
-        pricing_loaded = False
+        # Lazy-loaded pricing for real-time cost calculation, fetched once
+        # and cached for the session lifetime.
+        pricing_state: dict = {"loaded": False, "pricing": None}
 
         async for event in self._bidi_agent.receive():
             if hasattr(event, "as_dict"):
-                event_dict = event.as_dict()
+                raw_dict = event.as_dict()
             else:
-                event_dict = {"type": "unknown", "data": str(event)}
+                raw_dict = {"type": "unknown", "data": str(event)}
 
-            event_type = event_dict.get("type", "")
+            for event_dict in self._wire.translate(raw_dict):
+                yield await self._account_and_enrich(event_dict, pricing_state)
 
-            # Log non-audio event types for debugging (skip audio to avoid noise)
-            if event_type not in ("bidi_audio_stream",):
-                if any(k in event_dict for k in ("usage", "inputTokens", "outputTokens", "totalTokens")):
-                    logger.info(f"Voice event: type={event_type}, keys={list(event_dict.keys())}")
-                else:
-                    logger.info(f"Voice event: type={event_type}")
+    async def _account_and_enrich(self, event_dict: dict, pricing_state: dict) -> dict:
+        """Apply turn and usage accounting to one wire event and return it."""
+        event_type = event_dict.get("type", "")
 
-            # Track started turns (bidi_response_start)
-            if event_type == "bidi_response_start":
-                self._response_start_count += 1
-                logger.info(f"Voice response started (count={self._response_start_count})")
+        # Log non-audio event types for debugging (skip audio to avoid noise)
+        if event_type not in ("bidi_audio_stream",):
+            if any(k in event_dict for k in ("usage", "inputTokens", "outputTokens", "totalTokens")):
+                logger.info(f"Voice event: type={event_type}, keys={list(event_dict.keys())}")
+            else:
+                logger.info(f"Voice event: type={event_type}")
 
-            # Update cumulative token usage from bidi_usage events.
-            # Nova Sonic reports CUMULATIVE totals in each event (not deltas),
-            # so we replace rather than sum.
-            if event_type == "bidi_usage":
-                usage = event_dict.get("usage", event_dict)
-                for key in ("inputTokens", "outputTokens", "totalTokens"):
-                    self._accumulated_usage[key] = usage.get(key, self._accumulated_usage[key])
-                # The speech/text split, when the provider kept it (see
-                # NovaSonicModelWithUsageDetails). Cumulative like the totals.
-                for row in usage.get("modality_details") or []:
-                    bucket = {"audio": "speech", "text": "text"}.get(row.get("modality"))
-                    if not bucket:
-                        continue
-                    self._accumulated_usage[f"{bucket}InputTokens"] = int(row.get("input_tokens") or 0)
-                    self._accumulated_usage[f"{bucket}OutputTokens"] = int(row.get("output_tokens") or 0)
-                logger.info(f"Voice bidi_usage snapshot: {usage}")
-                logger.info(f"Voice usage current: {self._accumulated_usage}")
+        # Track started turns (bidi_response_start)
+        if event_type == "bidi_response_start":
+            self._response_start_count += 1
+            logger.info(f"Voice response started (count={self._response_start_count})")
 
-                # Calculate real-time cost and enrich the event for the client.
-                # Pricing is fetched once and cached for the session lifetime.
-                if not pricing_loaded:
-                    pricing_loaded = True
-                    try:
-                        from apis.shared.costs.pricing_config import get_model_pricing
-                        pricing_dict = await get_model_pricing(self.voice_model_id)
-                    except Exception as e:
-                        logger.debug(f"Voice pricing unavailable: {e}")
+        if event_type == "bidi_usage":
+            usage = event_dict.get("usage", event_dict)
+            self._apply_usage_snapshot(usage)
+            logger.info(f"Voice bidi_usage snapshot: {usage}")
+            logger.info(f"Voice usage current: {self._accumulated_usage}")
 
-                if pricing_dict and self._accumulated_usage.get("totalTokens", 0) > 0:
-                    try:
-                        from apis.shared.costs.calculator import CostCalculator
-                        total_cost, breakdown = CostCalculator.calculate_voice_cost(
-                            self._accumulated_usage, pricing_dict
-                        )
-                        event_dict["cost"] = {
-                            "total": total_cost,
-                            "inputCost": breakdown.input_cost,
-                            "outputCost": breakdown.output_cost,
-                            "cacheReadCost": breakdown.cache_read_cost,
-                            "cacheWriteCost": breakdown.cache_write_cost,
-                        }
-                    except Exception as e:
-                        logger.debug(f"Voice cost calculation error: {e}")
+            # Calculate real-time cost and enrich the event for the client.
+            if not pricing_state["loaded"]:
+                pricing_state["loaded"] = True
+                try:
+                    from apis.shared.costs.pricing_config import get_model_pricing
+                    pricing_state["pricing"] = await get_model_pricing(self.voice_model_id)
+                except Exception as e:
+                    logger.debug(f"Voice pricing unavailable: {e}")
 
-            # Track completed assistant turns and snapshot cumulative usage at turn boundary
-            if event_type == "bidi_response_complete":
-                self._per_turn_usage.append(self._accumulated_usage.copy())
-                self._turn_count += 1
-                logger.info(f"Voice turn {self._turn_count} complete, cumulative usage: {self._accumulated_usage}")
+            pricing_dict = pricing_state["pricing"]
+            if pricing_dict and self._accumulated_usage.get("totalTokens", 0) > 0:
+                try:
+                    from apis.shared.costs.calculator import CostCalculator
+                    total_cost, breakdown = CostCalculator.calculate_voice_cost(
+                        self._accumulated_usage, pricing_dict
+                    )
+                    event_dict["cost"] = {
+                        "total": total_cost,
+                        "inputCost": breakdown.input_cost,
+                        "outputCost": breakdown.output_cost,
+                        "cacheReadCost": breakdown.cache_read_cost,
+                        "cacheWriteCost": breakdown.cache_write_cost,
+                    }
+                except Exception as e:
+                    logger.debug(f"Voice cost calculation error: {e}")
 
-            yield event_dict
+        # Track completed assistant turns and snapshot cumulative usage at turn boundary
+        if event_type == "bidi_response_complete":
+            self._per_turn_usage.append(self._accumulated_usage.copy())
+            self._turn_count += 1
+            logger.info(f"Voice turn {self._turn_count} complete, cumulative usage: {self._accumulated_usage}")
+
+        return event_dict
+
+    def _apply_usage_snapshot(self, usage: dict) -> None:
+        """Fold one ``bidi_usage`` payload into ``_accumulated_usage``.
+
+        Nova Sonic reports CUMULATIVE totals in each event (not deltas), so we
+        replace rather than sum — the speech/text split too, when the provider
+        kept it (see NovaSonicModelWithUsageDetails). Shared by the live stream
+        and the post-stop drain so the two can never price a session differently.
+        """
+        for key in ("inputTokens", "outputTokens", "totalTokens"):
+            self._accumulated_usage[key] = usage.get(key, self._accumulated_usage[key])
+        for row in usage.get("modality_details") or []:
+            bucket = {"audio": "speech", "text": "text"}.get(row.get("modality"))
+            if not bucket:
+                continue
+            self._accumulated_usage[f"{bucket}InputTokens"] = int(row.get("input_tokens") or 0)
+            self._accumulated_usage[f"{bucket}OutputTokens"] = int(row.get("output_tokens") or 0)
 
     async def stream_async(
         self,
@@ -480,20 +643,18 @@ class VoiceAgent(BaseAgent):
         try:
             async with asyncio.timeout(timeout):
                 async for event in self._bidi_agent.receive():
-                    if hasattr(event, "as_dict"):
-                        event_dict = event.as_dict()
-                    else:
+                    if not hasattr(event, "as_dict"):
                         continue
-                    event_type = event_dict.get("type", "")
-                    if event_type == "bidi_usage":
-                        usage = event_dict.get("usage", event_dict)
-                        for key in ("inputTokens", "outputTokens", "totalTokens"):
-                            self._accumulated_usage[key] = usage.get(key, self._accumulated_usage[key])
-                        logger.info(f"Drained bidi_usage: {usage}, current: {self._accumulated_usage}")
-                    elif event_type == "bidi_response_complete":
-                        self._per_turn_usage.append(self._accumulated_usage.copy())
-                        self._turn_count += 1
-                        logger.info(f"Drained turn {self._turn_count} complete")
+                    for event_dict in self._wire.translate(event.as_dict()):
+                        event_type = event_dict.get("type", "")
+                        if event_type == "bidi_usage":
+                            usage = event_dict.get("usage", event_dict)
+                            self._apply_usage_snapshot(usage)
+                            logger.info(f"Drained bidi_usage: {usage}, current: {self._accumulated_usage}")
+                        elif event_type == "bidi_response_complete":
+                            self._per_turn_usage.append(self._accumulated_usage.copy())
+                            self._turn_count += 1
+                            logger.info(f"Drained turn {self._turn_count} complete")
         except (TimeoutError, asyncio.CancelledError, StopAsyncIteration):
             pass
         except Exception as e:

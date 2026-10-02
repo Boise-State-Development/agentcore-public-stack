@@ -153,6 +153,22 @@ def _approx_tokens(text: Any) -> int:
         return 0
 
 
+def _is_bidi_agent(agent: Any) -> bool:
+    """True for the voice path's ``BidiAgent``.
+
+    Since strands-agents 1.56 a ``BidiAgent`` drives the *ordinary* session
+    hooks (``AgentInitializedEvent`` -> ``initialize``, ``MessageAddedEvent``
+    -> ``append_message`` / ``retrieve_customer_context``) instead of the
+    dedicated Bidi callbacks it used before, so every override here now sees
+    voice agents too. The text-only work in them must not run for voice.
+    """
+    try:
+        from strands.bidi import BidiAgent
+    except ImportError:
+        return False
+    return isinstance(agent, BidiAgent)
+
+
 class TurnBasedSessionManager(AgentCoreMemorySessionManager):
     """
     Session manager with token-based context compaction.
@@ -376,6 +392,11 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
 
             if not memory_retrieval_prefetch_enabled() or self.cancelled:
                 return
+            # retrieve_customer_context never consumes a lookup for the voice
+            # BidiAgent, so starting one would pay for a retrieval per
+            # transcript and throw it away.
+            if _is_bidi_agent(event.agent):
+                return
             messages = event.agent.messages
             query = self._retrieval_query_for(messages)
             if query is None:
@@ -423,6 +444,11 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
         Uses the lookup ``_prefetch_customer_context`` started for this same
         message when there is one, and fetches inline otherwise.
         """
+        # Mirrors bedrock-agentcore 1.23.1's own guard: voice transcripts are
+        # not queries, and LTM context spliced into a live Bidi history would
+        # be persisted into the voice agent's messages.
+        if _is_bidi_agent(event.agent):
+            return None
         messages = event.agent.messages
         query = self._retrieval_query_for(messages)
         if query is None:
@@ -549,6 +575,16 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
         # `load_tools`); everything after is the session restore.
         mark_stage("strands_agent")
         logger.info(f"TurnBasedSessionManager.initialize() called for agent_id={agent.agent_id}")
+
+        # A voice BidiAgent reaches here since strands-agents 1.56 (it used to
+        # take the SDK's separate initialize_bidi_agent path). Restore it the
+        # same way that path did and stop: everything below is text-chat
+        # history processing, and the compaction state it reads is keyed on the
+        # session, so applying the text agent's checkpoint to the voice
+        # agent's own message list would slice the wrong history.
+        if _is_bidi_agent(agent):
+            super().initialize(agent, **kwargs)
+            return
 
         # Let the SDK handle all session restore logic:
         # - read/create agent in session repository
