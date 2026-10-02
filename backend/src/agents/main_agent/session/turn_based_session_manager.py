@@ -392,6 +392,11 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
 
             if not memory_retrieval_prefetch_enabled() or self.cancelled:
                 return
+            # retrieve_customer_context never consumes a lookup for the voice
+            # BidiAgent, so starting one would pay for a retrieval per
+            # transcript and throw it away.
+            if _is_bidi_agent(event.agent):
+                return
             messages = event.agent.messages
             query = self._retrieval_query_for(messages)
             if query is None:

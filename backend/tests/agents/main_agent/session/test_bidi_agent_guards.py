@@ -41,6 +41,27 @@ def test_retrieve_customer_context_skips_a_bidi_agent(make_session_manager):
     assert message == {"role": "user", "content": [{"text": "what's my name?"}]}
 
 
+def test_prefetch_skips_a_bidi_agent(make_session_manager, monkeypatch):
+    """The prefetch (#1400) rides the same MessageAddedEvent the voice agent fires.
+
+    retrieve_customer_context never consumes a lookup for a BidiAgent, so a
+    prefetch started for one is a paid Memory retrieval per transcript, discarded.
+    """
+    monkeypatch.delenv("MEMORY_RETRIEVAL_PREFETCH_ENABLED", raising=False)
+    pool = MagicMock()
+    monkeypatch.setattr(tbsm, "_ltm_prefetch_pool", lambda: pool)
+    mgr = make_session_manager()
+    mgr.config.retrieval_config = {"/ns": SimpleNamespace(top_k=5, relevance_score=0.1, strategy_id=None)}
+    message = {"role": "user", "content": [{"text": "what's my name?"}]}
+
+    mgr._prefetch_customer_context(SimpleNamespace(agent=_bidi_agent([message]), message=message))
+    pool.submit.assert_not_called()
+
+    # The same message from a text agent is prefetched, so the guard is what stopped it.
+    mgr._prefetch_customer_context(SimpleNamespace(agent=SimpleNamespace(messages=[message]), message=message))
+    pool.submit.assert_called_once()
+
+
 def test_initialize_restores_a_bidi_agent_without_text_processing(make_session_manager):
     mgr = make_session_manager()
     mgr.read_agent = MagicMock(return_value=SimpleNamespace())
