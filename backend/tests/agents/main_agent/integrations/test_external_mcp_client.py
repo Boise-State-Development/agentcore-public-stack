@@ -985,3 +985,152 @@ class TestLoadExternalToolsTimings:
         assert result == []
         assert timings[0]["outcome"] == "error"
         assert "totalMs" in timings[0]
+
+
+class TestLoadExternalToolsConcurrentPreflight:
+    """Several servers pre-flight together (turn-path spec §5 P3).
+
+    Strands' `load_tools` blocks its thread for the whole `initialize`
+    handshake, so the fakes here block synchronously too — an `await
+    asyncio.sleep` fake would overlap under `gather` and prove nothing. On dev
+    two cold Lambda-URL servers cost 9.5s + 12s in series. What must hold:
+    the pre-flights overlap, the client list (and so the tool order in the
+    cacheable `toolConfig`) stays in catalog order, a lone server keeps the
+    inline call, and `MCP_PARALLEL_PREFLIGHT_ENABLED=false` is the old loop.
+    """
+
+    @staticmethod
+    def _repo(*tool_ids):
+        tools = {
+            tid: _fake_tool(datetime(2025, 1, 1, tzinfo=timezone.utc), tool_id=tid)
+            for tid in tool_ids
+        }
+        return SimpleNamespace(get_tool=AsyncMock(side_effect=lambda tid: tools[tid]))
+
+    @staticmethod
+    def _blocking_client(on_load):
+        async def _load_tools():
+            on_load()
+            return []
+
+        return SimpleNamespace(load_tools=_load_tools)
+
+    async def _load(self, integration, tool_ids, clients_by_id, **kwargs):
+        with patch(
+            "apis.shared.tools.repository.get_tool_catalog_repository",
+            return_value=self._repo(*tool_ids),
+        ), patch(
+            "agents.main_agent.integrations.external_mcp_client.create_external_mcp_client",
+            side_effect=lambda config, tool_definition, **kw: clients_by_id[tool_definition.tool_id],
+        ):
+            return await integration.load_external_tools(tool_ids, **kwargs)
+
+    @pytest.mark.asyncio
+    async def test_preflights_overlap(self, monkeypatch):
+        import threading
+
+        monkeypatch.delenv("MCP_PARALLEL_PREFLIGHT_ENABLED", raising=False)
+        # Each pre-flight blocks until BOTH are in flight: serial loading
+        # would break the barrier instead of passing it.
+        barrier = threading.Barrier(2, timeout=5)
+        clients = {
+            "canvas": self._blocking_client(barrier.wait),
+            "class_search": self._blocking_client(barrier.wait),
+        }
+
+        result = await self._load(ExternalMCPIntegration(), ["canvas", "class_search"], clients)
+
+        assert result == [clients["canvas"], clients["class_search"]]
+
+    @pytest.mark.asyncio
+    async def test_catalog_order_survives_a_slower_first_server(self, monkeypatch):
+        import threading
+        import time as _time
+
+        monkeypatch.delenv("MCP_PARALLEL_PREFLIGHT_ENABLED", raising=False)
+        finished = []
+        lock = threading.Lock()
+
+        def _after(name, delay):
+            def _run():
+                _time.sleep(delay)
+                with lock:
+                    finished.append(name)
+            return _run
+
+        clients = {
+            "slow": self._blocking_client(_after("slow", 0.2)),
+            "fast": self._blocking_client(_after("fast", 0.0)),
+        }
+        timings: list = []
+
+        result = await self._load(
+            ExternalMCPIntegration(), ["slow", "fast"], clients, timings=timings
+        )
+
+        assert finished == ["fast", "slow"]
+        assert result == [clients["slow"], clients["fast"]]
+        assert [t["id"] for t in timings] == ["slow", "fast"]
+        assert all(t["outcome"] == "loaded" for t in timings)
+
+    @pytest.mark.asyncio
+    async def test_a_lone_server_preflights_on_the_calling_thread(self, monkeypatch):
+        import threading
+
+        monkeypatch.delenv("MCP_PARALLEL_PREFLIGHT_ENABLED", raising=False)
+        seen = []
+        clients = {"canvas": self._blocking_client(lambda: seen.append(threading.current_thread()))}
+
+        await self._load(ExternalMCPIntegration(), ["canvas"], clients)
+
+        assert seen == [threading.current_thread()]
+
+    @pytest.mark.asyncio
+    async def test_context_reaches_the_preflight_thread(self, monkeypatch):
+        """`BedrockAgentCoreContext` (workload token, OAuth callback URL) is
+        contextvar-backed; the pre-flight must see what the build set."""
+        import contextvars
+
+        monkeypatch.delenv("MCP_PARALLEL_PREFLIGHT_ENABLED", raising=False)
+        marker = contextvars.ContextVar("marker", default=None)
+        seen = []
+        clients = {
+            "a": self._blocking_client(lambda: seen.append(marker.get())),
+            "b": self._blocking_client(lambda: seen.append(marker.get())),
+        }
+
+        marker.set("from-the-build")
+        await self._load(ExternalMCPIntegration(), ["a", "b"], clients)
+
+        assert seen == ["from-the-build", "from-the-build"]
+
+    @pytest.mark.asyncio
+    async def test_kill_switch_loads_one_at_a_time(self, monkeypatch):
+        import threading
+
+        monkeypatch.setenv("MCP_PARALLEL_PREFLIGHT_ENABLED", "false")
+        active = 0
+        peak = 0
+        lock = threading.Lock()
+
+        def _track():
+            nonlocal active, peak
+            with lock:
+                active += 1
+                peak = max(peak, active)
+            with lock:
+                active -= 1
+
+        seen_threads = []
+        clients = {
+            tid: self._blocking_client(
+                lambda: (_track(), seen_threads.append(threading.current_thread()))
+            )
+            for tid in ("a", "b", "c")
+        }
+
+        result = await self._load(ExternalMCPIntegration(), ["a", "b", "c"], clients)
+
+        assert result == [clients["a"], clients["b"], clients["c"]]
+        assert peak == 1
+        assert set(seen_threads) == {threading.current_thread()}
