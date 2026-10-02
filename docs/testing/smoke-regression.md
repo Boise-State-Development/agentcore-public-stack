@@ -75,6 +75,7 @@ table, exit 1 on any FAIL.
 |---|---|---|---|
 | **Local stack** | `uv run python scripts/smoke_turns.py --base-url http://127.0.0.1:8000` | everything incl. 409 / Stop / steer | app-api on :8000 with `SKIP_AUTH=true` in `backend/src/.env`, inference-api on :8001. `SKIP_AUTH_ROLES=system_admin` to read cache rows. Local code, **dev data**. |
 | **Deployed, through app-api** | `SMOKE_USERNAME=… SMOKE_PASSWORD=… uv run python scripts/smoke_turns.py --base-url https://<host>/api --auth cognito` | everything | a Cognito user with a permanent password on a Hosted UI pool (the nightly pipeline's E2E users qualify; managed login v2 cannot be scripted) |
+| **Local inference-api with a dev bearer** | `AWS_PROFILE=dev-ai uv run python scripts/smoke_turns.py --auth headless-grant --user-id <sub> --prefix dev-boisestateai-v2 --invocations-url http://127.0.0.1:8001` | the Runtime rows, against the **branch's** inference-api code (dev data, dev model calls) | inference-api running locally from the branch checkout; same grant as below. The fastest way to prove a turn-path change before it is deployed |
 | **Deployed, straight at the Runtime** | `AWS_PROFILE=dev-ai uv run python scripts/smoke_turns.py --auth headless-grant --user-id <sub> --prefix dev-boisestateai-v2` | frame contract, resume, restore, cache rows | an **active headless grant** for `--user-id` (enable headless runs / "Run now" once while signed in; lapses 30 days after that login) and an AWS profile for the account. Skips the app-api-only rows; reads and deletes in-process through the shared services. |
 
 Run from `backend/` so `apis.shared` imports. The script refuses a target that
@@ -108,7 +109,7 @@ new-event-name notes that do not change the status.
 | `preview_session` | `preview-…` session id | completes; `GET /messages` empty or 404; absent from `GET /sessions` | — |
 | `steer_mid_turn` | three-tool prompt, `POST /sessions/{id}/steer` on the first `tool_use` | OBSERVED: whether `steering_applied` landed or the steer lost the race (then #916's end-of-turn flush sends it as a normal turn). FAIL only if the endpoint errors; SKIP on 404 (flag off) | app-api target, `MID_TURN_STEERING_ENABLED` |
 | `attach_pdf` | inline PDF generated in-script | completes; the restored user message carries a document block or the attachment marker; warns if the token was not read back | `--with-attachments` |
-| `attach_csv` | inline CSV | completes; restored user text carries `[Attached files: …]` (diverted, not inlined) | `--with-attachments` |
+| `attach_csv` | inline CSV | completes; restored user text carries `[Attached files: …]` (diverted, not inlined); the model used `list_spreadsheets`/`analyze_spreadsheet` and a `tool_result` names the file, proving the diverted inline file was persisted as a session file | `--with-attachments` |
 | `skill_invoke` | `enabled_skills` + `invoked_skills` | the `skills` tool is called | `--skill-id` of a granted skill |
 | `kb_agent_first_turn` | `rag_assistant_id` | any `citation` frames precede `message_start`; warns if none | `--agent-id` of an agent with a KB |
 | `quota_exceeded` | plain prompt as an exhausted user | `stopReason=quota_exceeded`, zero call rows | `--expect-quota-exceeded`, a test tier at its limit |

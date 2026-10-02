@@ -452,14 +452,16 @@ class RuntimeTransport:
 
     via_app_api = False
 
-    def __init__(self, user_id: str, prefix: str, region: str) -> None:
+    def __init__(self, user_id: str, prefix: str, region: str, invocations_base_url: Optional[str] = None) -> None:
         from apis.shared.harness.auth import CognitoRefreshBearerAuth
         from apis.shared.harness.runner import apply_runtime_session_header, build_invocations_url
 
         self.label = f"runtime:{prefix}"
         self.user_id = user_id
         self._apply_header = apply_runtime_session_header
-        self._url = build_invocations_url(os.environ["INFERENCE_API_URL"])
+        self._url = build_invocations_url(invocations_base_url or os.environ["INFERENCE_API_URL"])
+        if invocations_base_url:
+            self.label = f"runtime:{prefix} via {invocations_base_url}"
         self._auth = CognitoRefreshBearerAuth()
         self._client = httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=30.0))
         self._bearer: Optional[str] = None
@@ -1144,7 +1146,16 @@ async def row_attach_csv(ctx: Context) -> RowResult:
     marker = any("[Attached files:" in u or "smoke.csv" in u for u in _message_texts(body, "user"))
     if not marker:
         raise RowFailure("restored user message lacks the [Attached files: …] marker for the diverted CSV")
-    return RowResult("attach_csv", "PASS", f"CSV diverted, marker persisted; tools={_tools_used(turn)}", warnings)
+    # The guidance note tells the model the file is reachable through the
+    # spreadsheet tools; hold it to that. A diverted file the tools cannot
+    # see is the inline-attachment hole this row exists to catch.
+    tools = _tools_used(turn)
+    if not {"list_spreadsheets", "analyze_spreadsheet"} & set(tools):
+        raise RowFailure(f"model did not use the spreadsheet tools on the diverted CSV; tools={tools}")
+    seen = any("smoke.csv" in json.dumps(f.data) for f in turn.all("tool_result"))
+    if not seen:
+        raise RowFailure("spreadsheet tools ran but no tool_result mentions smoke.csv — the diverted file is not visible to them")
+    return RowResult("attach_csv", "PASS", f"CSV diverted, visible to the tools, marker persisted; tools={tools}", warnings)
 
 
 async def row_skill_invoke(ctx: Context) -> RowResult:
@@ -1270,7 +1281,7 @@ async def build_transport(args: argparse.Namespace) -> Transport:
         if not args.user_id or not args.prefix:
             raise SystemExit("--auth headless-grant needs --user-id and --prefix")
         resolve_runtime_env(args.prefix, args.region)
-        return RuntimeTransport(args.user_id, args.prefix, args.region)
+        return RuntimeTransport(args.user_id, args.prefix, args.region, args.invocations_url)
     if not args.base_url:
         raise SystemExit("--base-url is required unless --auth headless-grant")
     t = AppApiTransport(args.base_url, label=args.base_url)
@@ -1382,6 +1393,11 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p.add_argument("--user-id", help="Cognito sub owning the headless grant (for --auth headless-grant)")
     p.add_argument("--prefix", help="CDK project prefix, e.g. dev-boisestateai-v2 (for --auth headless-grant)")
     p.add_argument("--region", default=os.environ.get("AWS_REGION", "us-west-2"))
+    p.add_argument(
+        "--invocations-url",
+        help="headless-grant mode only: send turns to this inference-api base instead of the Runtime "
+        "(e.g. http://127.0.0.1:8001 to test a local branch with a real dev bearer)",
+    )
     p.add_argument("--model-id", help="model for every turn; default = the user's default model")
     p.add_argument("--tool", default="calculator", help="a granted, deterministic tool for the tool rows")
     p.add_argument("--approval-tool", help="tool id flagged needsApproval (enables tool_approval_resume)")
