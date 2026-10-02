@@ -5,6 +5,43 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 ## Open
 <!-- Newest at top. -->
 
+### [2026-10-02] Re-base the V2 Runtime plan on the published price, land B1, and use CDK's typed `platformVersion`
+- **Source**: research/2026-10-02.md
+- **Surface**: infrastructure (+ `scripts/build/deploy-runtime-image-if-changed.sh`, `docs/specs/agentcore-runtime-v2.md`)
+- **Effort × Impact**: L × H
+- **Subtracts**: yes. The plan's untyped `addPropertyOverride` (`aws-cdk-lib` 2.272.0 types `CfnRuntime.platformVersion`), and the separate [2026-09-04] W5 instance-SKU arithmetic entry (the committed-baseline rate of $0.0132/GB-hour is now published).
+- **Unlocks**: a go/no-go threshold written down before the dev A/B. V2 memory is $0.0169/GB-hour against V1's $0.00945 (1.79×), so V2 wins only if billed GB-hours fall below ~56% of V1's. Idle memory is reclaimed after 120 s.
+- **Status**: open. Plan step 1 (B1 allow-list) is still not started; it is harmless on V1.
+
+### [2026-10-02] Verify compaction and offload on preserved-thinking models (Opus 5.5), then push the stranded Sonnet 5.5 curation
+- **Source**: research/2026-10-02.md
+- **Surface**: backend + frontend
+- **Effort × Impact**: L × H
+- **Subtracts**: no. Addition, justified because it is a correctness check on a model already curated in prod. The cookbook (bf24d45) says rewriting or compacting history on preserved-thinking models invalidates later thinking blocks and can get the next request rejected. Opus 5.5 also returns 400 on forced `tool_choice`.
+- **Status**: open. The Sonnet 5.5 curation (`d708b358`, 09-29) exists only on an unpushed local worktree branch. Check it against the 5.5 breaking changes (`between_tools`, recalibrated effort) before opening a PR.
+
+### [2026-10-02] Land #1367 now at strands 1.57.1 / agentcore 1.24.0; take strands 1.57.2 as its own PR
+- **Source**: research/2026-10-02.md
+- **Surface**: backend
+- **Effort × Impact**: M × M
+- **Subtracts**: yes. PR B deletes the `cache_write_tokens` half of `usage_normalization.py` (#4193 shipped in 1.57.2) and moves off `strands.experimental.bidi`, which is removed in 1.60. It also retires the [2026-09-25] paired-bump entry.
+- **Unlocks**: Bidi reconnect resilience (1.57.2); #4499 (no hang on a dropped MCP connection) on the release after it.
+- **Status**: open. #1367 is `CONFLICTING` with 0 reviews. ⚠️ 1.57.2 removes `BidiAgent(session_manager=)`, and #1367's own `voice_agent.py:255` passes it: a runtime `TypeError`, not an import error. #4618 did not move, so neither PR inherits the cost-convention hazard.
+
+### [2026-10-02] Make the nightly teardown survive an AgentCore Runtime that won't delete
+- **Source**: research/2026-10-02.md
+- **Surface**: CI / scripts
+- **Effort × Impact**: L × M
+- **Subtracts**: no. Addition, justified because the nightly is the only E2E signal and it has been red since 10-01. The Runtime delete hit `NotStabilized`, and the stack has stayed in `DELETE_FAILED` since.
+- **Status**: open. (a) One-off unstick of `nightly-develop-PlatformStack` (ops, no review needed). (b) Delete the Runtime out of band before `delete-stack`, retry and then retain on a Runtime-only `DELETE_FAILED`, and have the deploy step clear a `DELETE_FAILED` predecessor.
+
+### [2026-10-02] Headless runs never pause for a human: withhold interactive tools or classify the pause
+- **Source**: research/2026-10-02.md
+- **Surface**: backend
+- **Effort × Impact**: L × M
+- **Subtracts**: yes. `ask_user_question` and `request_user_login` leave the headless `toolConfig`.
+- **Status**: open. Verified: `RunStatus` (`apis/shared/harness/models.py:20`) has no paused state, and `runner.py:266-272` marks any `done` as `completed`. Unverified: whether any scheduled run's `enabled_tools` includes `ask_user_question` today.
+
 ### [2026-09-30] Backend test suite: shard across runners (#1390) and fix fixture scope (#1391)
 - **Source**: Phil-initiated. The PR gate ran every suite on every pull request: a two-file docs PR paid the same 7–8 minutes as a backend change, and the backend pytest job alone was 7:02 with every other job under 2 minutes. Two things landed together in the path-filter PR: the `changes` job in `ci.yml` now runs only the suites a PR's paths can reach (`scripts/ci/classify-changes.sh`, fail-open, pinned by `test_ci_path_filter.py`), and the backend job runs `-n logical` — `-n auto` counts physical cores when psutil is installed, so the 4-vCPU runner started 2 workers.
   - **What the profile showed.** Of the time measured across the suite (every phase ≥50 ms), fixture setup was 1,846 s against 399 s of test body. 77 files enter `mock_aws()` and create tables per test function; 5 files use any broader scope. One file alone: 21.8 s setup, 0.9 s test code. The top 25 files are ~950 s of ~2,245 s and are listed in #1391.
