@@ -230,13 +230,14 @@ async def _session_has_messages(*, session_id: str, user_id: str) -> bool:
     has no history, because history produced under other instructions, tools and
     skills is exactly what a binding would misrepresent.
 
-    Deliberately `limit=1` — the question is existence, not count, and this runs on
-    the invocation path.
+    An existence check, priced like one (`session_has_messages`: one filtered
+    `ListEvents`, no payloads). It used to be `get_messages(limit=1)`, which read the
+    whole history and its metadata to return one message — this runs on the
+    invocation path, before the stream opens.
     """
-    from apis.shared.sessions.messages import get_messages
+    from apis.shared.sessions.messages import session_has_messages
 
-    response = await get_messages(session_id=session_id, user_id=user_id, limit=1)
-    return bool(response.messages)
+    return await session_has_messages(session_id, user_id)
 
 
 def is_preview_session(session_id: str) -> bool:
