@@ -703,6 +703,24 @@ def mcp_parallel_preflight_enabled() -> bool:
     return os.environ.get("MCP_PARALLEL_PREFLIGHT_ENABLED", "").strip().lower() != "false"
 
 
+def kb_search_ahead_enabled() -> bool:
+    """Whether an agent turn's knowledge-base search overlaps the agent build.
+
+    The search used to be awaited in the route, before the stream opened, and
+    the (deferred) agent build only started after it. The build reads neither
+    the retrieved chunks nor the augmented message — only the stream does — so
+    with this on the search starts where it always did and is awaited after
+    the build, ahead of the citation frames. The augmented message and the
+    citations are byte-identical either way; only when the round trip happens
+    moves (docs/specs/turn-path-ttft.md §5 P3b).
+
+    **Default ON with a kill switch** (house style): unset or empty resolves
+    to enabled; only the literal ``"false"`` (case-insensitive) disables. Off,
+    the search is awaited in the route, exactly as before.
+    """
+    return os.environ.get("KB_SEARCH_AHEAD_ENABLED", "").strip().lower() != "false"
+
+
 def memory_retrieval_prefetch_enabled() -> bool:
     """Whether the long-term-memory lookup starts as soon as the user's message
     is added, overlapping the two Memory writes the SDK awaits first.

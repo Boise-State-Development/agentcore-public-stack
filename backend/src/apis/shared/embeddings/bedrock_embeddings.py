@@ -56,6 +56,21 @@ def _get_bedrock_runtime_client() -> Any:
     return _bedrock_runtime_client
 
 
+# The same, for the knowledge-base search's `QueryVectors`: one client per
+# process instead of a fresh one (and its service-model parse) per search.
+_s3vectors_client: Any = None
+_s3vectors_client_lock = threading.Lock()
+
+
+def _get_s3vectors_client() -> Any:
+    global _s3vectors_client
+    if _s3vectors_client is None:
+        with _s3vectors_client_lock:
+            if _s3vectors_client is None:
+                _s3vectors_client = boto3.client("s3vectors", region_name=AWS_REGION)
+    return _s3vectors_client
+
+
 def _get_vector_store_bucket() -> str:
     """Get vector store bucket name, validating if not set"""
     if not _VECTOR_STORE_BUCKET_NAME:
@@ -169,25 +184,40 @@ async def store_embeddings_in_s3(
 
 
 async def search_assistant_knowledgebase(assistant_id: str, query: str):
-    """Search the S3 vector store for chunks relevant to the query."""
-    client = boto3.client("s3vectors", region_name=AWS_REGION)
+    """Search the S3 vector store for chunks relevant to the query.
 
+    Both round trips — the query embedding and ``QueryVectors`` — run on ONE
+    worker thread, back to back. The turn path starts this search before the
+    agent build and awaits it after (docs/specs/turn-path-ttft.md §5 P3b), and
+    a cold build holds the event loop while it runs: had the embedding been
+    awaited on the loop, ``QueryVectors`` could not be sent until the build
+    let go, and only the first hop would overlap. The ``s3vectors`` client is
+    cached per process, so its service-model parse is paid once.
+    """
+    return await asyncio.to_thread(_search_assistant_knowledgebase_sync, assistant_id, query)
+
+
+def _search_assistant_knowledgebase_sync(assistant_id: str, query: str) -> Dict[str, Any]:
     # Generate vector for the query. Length is already capped upstream by the
     # facade's query clamp (10,000 chars, the Managed KB Retrieve limit).
-    query_embedding = await generate_embeddings([query])
+    response = _get_bedrock_runtime_client().invoke_model(
+        modelId=BEDROCK_EMBEDDING_CONFIG["model_id"],
+        contentType="application/json",
+        accept="application/json",
+        body=json.dumps({"inputText": query}),
+    )
+    query_embedding = json.loads(response["body"].read()).get("embedding")
 
     # Query the Global Index with a STRICT Filter
-    response = client.query_vectors(
+    return _get_s3vectors_client().query_vectors(
         vectorBucketName=_get_vector_store_bucket(),
         indexName=_get_vector_store_index(),
-        queryVector={"float32": query_embedding[0]},
+        queryVector={"float32": query_embedding},
         filter={"assistant_id": assistant_id},
         topK=5,
         returnMetadata=True,
         returnDistance=True,
     )
-
-    return response
 
 
 #: The S3 Vectors ``GetVectors`` limit on ``keys`` per call.
