@@ -58,7 +58,7 @@ import uuid
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Protocol, Tuple
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 import httpx
 
@@ -162,7 +162,10 @@ PLACEHOLDER_TITLE = "New Conversation"
 PREVIEW_PREFIX = "preview-"
 SESSION_PREFIX = "smoke-"
 
-PROD_MARKERS = ("prod", "production", "boisestate.ai/api")
+# Hosts that are production. The dev site is a subdomain of the prod apex, so
+# this is an exact-host check, never a substring one.
+PROD_HOSTS = frozenset({"boisestate.ai", "www.boisestate.ai"})
+PROD_PREFIX_MARKERS = ("prod", "production")
 
 
 # ============================================================
@@ -352,8 +355,15 @@ class AppApiTransport:
                 "Cognito re-rendered the login form: bad credentials, unconfirmed user, or a "
                 "forced password change (FORCE_CHANGE_PASSWORD blocks scripted login)."
             )
-        if post.status_code != 302 or "code=" not in post.headers.get("location", ""):
-            raise RuntimeError(f"Cognito login POST -> {post.status_code} without an authorization code")
+        location = post.headers.get("location", "")
+        if post.status_code == 302 and "code=" not in location:
+            # Cognito bounces a rejected login back to its own /login page.
+            raise RuntimeError(
+                "Cognito redirected without an authorization code: wrong credentials, an unconfirmed "
+                f"user, or a forced password change (-> {location[:100]})"
+            )
+        if post.status_code != 302:
+            raise RuntimeError(f"Cognito login POST -> {post.status_code}, expected a 302 with ?code=")
         callback = post.headers["location"]
         cb = await self._client.get(callback)
         if cb.status_code not in (302, 303):
@@ -1232,9 +1242,14 @@ ROWS: List[Tuple[str, Callable[[Context], Awaitable[Any]]]] = [
 # ============================================================
 
 
-def _looks_like_prod(*values: Optional[str]) -> bool:
-    joined = " ".join(v for v in values if v).lower()
-    return any(marker in joined for marker in PROD_MARKERS)
+def _looks_like_prod(base_url: Optional[str], prefix: Optional[str]) -> bool:
+    if base_url:
+        host = urlsplit(base_url if "://" in base_url else f"https://{base_url}").hostname or ""
+        if host.lower() in PROD_HOSTS:
+            return True
+    if prefix and any(marker in prefix.lower() for marker in PROD_PREFIX_MARKERS):
+        return True
+    return False
 
 
 def resolve_runtime_env(prefix: str, region: str) -> None:
