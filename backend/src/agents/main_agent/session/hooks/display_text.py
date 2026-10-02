@@ -45,7 +45,7 @@ previous turn would fire against the wrong one.
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any, Awaitable, Callable, Optional, Union
 
 from strands.hooks import HookProvider, HookRegistry, MessageAddedEvent
 
@@ -82,7 +82,7 @@ class DisplayTextHook(HookProvider):
         *,
         session_id: str,
         user_id: str,
-        message_index: int,
+        message_index: Union[int, Callable[[], Awaitable[int]]],
         display_text: Optional[str],
     ) -> None:
         """Prime the hook for one turn, or clear it when there's nothing to write.
@@ -91,6 +91,11 @@ class DisplayTextHook(HookProvider):
         prompt was modified before reaching the model. A turn that sends the
         user's text verbatim (and a resume / continuation, which sends no new
         user turn at all) passes ``None`` and disarms.
+
+        ``message_index`` may be an async callable — the stream coordinator
+        passes its ``HistoryCount.resolve`` so the history read behind the
+        index runs concurrently with the turn and is awaited only here, at
+        the write.
         """
         self._written = False
         if not display_text:
@@ -130,18 +135,21 @@ class DisplayTextHook(HookProvider):
         # the same turn can never re-enter this.
         self._armed = None
 
+        message_id: Any = armed["message_id"]
         try:
             from apis.shared.sessions.metadata import store_user_display_text
 
-            await store_user_display_text(**armed)
+            if callable(message_id):
+                message_id = await message_id()
+            await store_user_display_text(**{**armed, "message_id": message_id})
             self._written = True
             logger.info(
                 "💾 Stored displayText for user message %s at append time",
-                armed["message_id"],
+                message_id,
             )
         except Exception:  # noqa: BLE001 - a UI nicety must never break a turn
             logger.error(
                 "Failed to store displayText for user message %s",
-                armed["message_id"],
+                message_id,
                 exc_info=True,
             )

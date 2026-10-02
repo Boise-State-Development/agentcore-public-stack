@@ -701,3 +701,21 @@ def memory_retrieval_prefetch_enabled() -> bool:
     the lookup runs inline after the writes, exactly as before.
     """
     return os.environ.get("MEMORY_RETRIEVAL_PREFETCH_ENABLED", "").strip().lower() != "false"
+
+
+def history_count_prefetch_enabled() -> bool:
+    """Whether the per-turn history count runs off the critical path.
+
+    Every turn counts the session's stored messages (a paginated
+    ``ListEvents`` with payloads) to key its per-message metadata. Read at the
+    head of the turn it cost ~62ms + 2.25ms per stored event before the model
+    was called, ~390ms at 100+ events (docs/specs/turn-path-ttft.md §5 P4).
+    With this on, the stream coordinator starts the read at the head of the
+    turn and awaits it only where the index is used, counting messages created
+    before the turn began so the number is the one the serial read gave.
+
+    **Default ON with a kill switch** (house style): unset or empty resolves
+    to enabled; only the literal ``"false"`` (case-insensitive) disables. Off,
+    the count is read at the head of the turn, exactly as before.
+    """
+    return os.environ.get("HISTORY_COUNT_PREFETCH_ENABLED", "").strip().lower() != "false"

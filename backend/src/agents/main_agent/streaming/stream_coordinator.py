@@ -24,6 +24,7 @@ from apis.shared.observability.prefix_tokens import prompt_tokens_from_usage
 from apis.shared.feature_flags import (
     agent_status_live_drain_enabled,
     cost_diagnostics_enabled,
+    history_count_prefetch_enabled,
 )
 from apis.shared.errors import (
     ConversationalErrorEvent,
@@ -32,6 +33,7 @@ from apis.shared.errors import (
     build_conversational_error_event,
 )
 
+from .history_count import HistoryCount, count_created_before
 from .stream_processor import process_agent_stream
 
 # Processed event types that mean the model has started answering: text, a
@@ -452,13 +454,12 @@ class StreamCoordinator:
         # See the CancelledError/GeneratorExit handler below.
         assistant_text_acc: List[str] = []
 
-        # OPTIMIZATION: Capture initial message count BEFORE streaming starts
-        # This allows us to calculate message indices without post-stream AgentCore Memory queries
-        # The TurnBasedSessionManager.message_count is initialized from AgentCore Memory at session start
-        # and represents the number of messages that existed BEFORE this stream
-        initial_message_count = self._get_initial_message_count(session_manager)
-        logger.info(f"📊 Initial message count before streaming: {initial_message_count}")
-        # A ListEvents over the whole history, for len() (turn-path spec F5).
+        # The number of messages stored before this turn: the base every
+        # per-message index below is computed from. Started here, read on a
+        # worker, and awaited only where an index is used, so the ListEvents
+        # behind it (~2ms per stored event, turn-path spec F5) no longer sits
+        # in front of the model call. See `history_count.py`.
+        history_count = self._start_history_count(session_manager)
         _turn_clock_call(turn_clock, "mark", "head_of_turn.history_count")
 
         # Arm the displayText write for this turn. The hook stores the user's
@@ -473,7 +474,7 @@ class StreamCoordinator:
             main_agent_wrapper,
             session_id=session_id,
             user_id=user_id,
-            message_index=initial_message_count,
+            message_index=history_count.resolve,
             display_text=original_message,
         )
 
@@ -1018,6 +1019,7 @@ class StreamCoordinator:
                     # post-loop block uses for per-message metadata
                     # (assistant_message_ids[-1]), which the messages
                     # endpoint re-derives as `idx` on reload.
+                    initial_message_count = await history_count.resolve()
                     produced_by_message_index = (
                         initial_message_count
                         + 2 * current_assistant_message_index
@@ -1349,6 +1351,7 @@ class StreamCoordinator:
             #
             # This eliminates the need for post-stream AgentCore Memory queries!
             num_assistant_messages = current_assistant_message_index + 1 if current_assistant_message_index >= 0 else 0
+            initial_message_count = await history_count.resolve()
 
             # Calculate assistant message absolute indices using the turn structure pattern
             # Assistant messages are at odd positions: initial_count + 1, initial_count + 3, ...
@@ -1587,7 +1590,7 @@ class StreamCoordinator:
                 partial_text="".join(assistant_text_acc),
                 main_agent_wrapper=main_agent_wrapper,
                 accumulated_metadata=accumulated_metadata,
-                initial_message_count=initial_message_count,
+                history_count=history_count,
                 current_assistant_message_index=current_assistant_message_index,
                 stream_start_time=stream_start_time,
                 first_token_time=first_token_time,
@@ -1623,7 +1626,7 @@ class StreamCoordinator:
                 partial_text="".join(assistant_text_acc),
                 main_agent_wrapper=main_agent_wrapper,
                 accumulated_metadata=accumulated_metadata,
-                initial_message_count=initial_message_count,
+                history_count=history_count,
                 current_assistant_message_index=current_assistant_message_index,
                 stream_start_time=stream_start_time,
                 first_token_time=first_token_time,
@@ -1735,6 +1738,7 @@ class StreamCoordinator:
         accumulated_metadata: Optional[Dict[str, Any]] = None,
         initial_message_count: int = 0,
         current_assistant_message_index: int = -1,
+        history_count: Optional[HistoryCount] = None,
         stream_start_time: Optional[float] = None,
         first_token_time: Optional[float] = None,
         reason: str = "connection_lost",
@@ -1775,8 +1779,15 @@ class StreamCoordinator:
         Whenever nothing is persisted, only the marker is set. The write itself
         also passes ``last_persisted_role`` to ``persist_synthetic_messages`` so
         the centralized alternation guard is the single enforcement point.
+
+        ``history_count``, when passed, supersedes ``initial_message_count``
+        and is resolved inside the shielded task, so the teardown cannot
+        cancel the wait for it.
         """
         async def _do() -> None:
+            base_index = initial_message_count
+            if history_count is not None:
+                base_index = await history_count.resolve()
             text = partial_text.strip()
             last_role = None
             try:
@@ -1854,9 +1865,9 @@ class StreamCoordinator:
                         if projected:
                             metadata_for_message = {**metadata_for_message, "usage": projected}
                     message_id = (
-                        initial_message_count + 2 * current_assistant_message_index + 1
+                        base_index + 2 * current_assistant_message_index + 1
                         if current_assistant_message_index >= 0
-                        else initial_message_count + 1
+                        else base_index + 1
                     )
                     await self._store_message_metadata(
                         session_id=session_id,
@@ -3224,21 +3235,53 @@ class StreamCoordinator:
         Returns:
             int: Number of messages that existed before this stream started (0 if unknown)
         """
+        try:
+            count = self._count_stored_messages(session_manager, before=None)
+        except Exception as e:
+            logger.warning(f"Failed to get global message count: {e}")
+            count = None
+        if count is not None:
+            logger.info(f"Using global list_messages count: {count}")
+            return count
+        return self._maintained_message_count(session_manager)
+
+    def _start_history_count(self, session_manager: Any) -> HistoryCount:
+        """This turn's message-index base, read off the critical path.
+
+        Starts the same global ``list_messages`` count on a worker thread,
+        restricted to messages created before now, and returns a handle each
+        consumer awaits where it uses the index (see ``history_count.py``).
+        With ``HISTORY_COUNT_PREFETCH_ENABLED=false`` the count is read here,
+        inline, as before.
+        """
+        if not history_count_prefetch_enabled():
+            return HistoryCount.resolved(self._get_initial_message_count(session_manager))
+        # Captured before this turn appends anything: read on the worker it
+        # could already include this turn's user message.
+        fallback = self._maintained_message_count(session_manager)
+        if self._resolve_session_id(session_manager) is None or self._resolve_list_messages(session_manager) is None:
+            return HistoryCount.resolved(fallback)
+
+        def _count(before: datetime) -> int:
+            count = self._count_stored_messages(session_manager, before=before)
+            return fallback if count is None else count
+
+        return HistoryCount.start(_count, fallback=fallback)
+
+    def _count_stored_messages(self, session_manager: Any, *, before: Optional[datetime]) -> Optional[int]:
+        """The session's stored messages across every agent, created before
+        ``before`` (all of them when None). None if the manager can't list."""
         # Prefer list_messages() for global count — it returns ALL messages
         # regardless of agent_id, matching how get_messages_from_cloud() retrieves them.
         session_id = self._resolve_session_id(session_manager)
-        if session_id:
-            lister = self._resolve_list_messages(session_manager)
-            if lister:
-                try:
-                    messages = lister(session_id, "default")
-                    count = len(messages) if messages else 0
-                    logger.info(f"Using global list_messages count: {count}")
-                    return count
-                except Exception as e:
-                    logger.warning(f"Failed to get global message count: {e}")
+        lister = self._resolve_list_messages(session_manager) if session_id else None
+        if not lister:
+            return None
+        return count_created_before(lister(session_id, "default"), before)
 
-        # Fallback to agent-specific message_count (may undercount in mixed sessions)
+    @staticmethod
+    def _maintained_message_count(session_manager: Any) -> int:
+        """The session manager's own running count (may undercount in mixed sessions)."""
         if hasattr(session_manager, "message_count"):
             count = session_manager.message_count
             logger.debug(f"Fallback to TurnBasedSessionManager.message_count: {count}")
