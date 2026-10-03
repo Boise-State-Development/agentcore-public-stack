@@ -1198,6 +1198,36 @@ class TestManagedSearch:
 
         assert runtime.calls[0]["knowledgeBaseId"] == AWS_KB_ID
 
+    @pytest.mark.asyncio
+    async def test_a_record_the_caller_already_read_is_not_read_again(self):
+        """The facade read this row to choose the backend; a second read of the
+        same row cost ~50ms on a turn's critical path."""
+        looked_up: List[str] = []
+
+        def _locate(kb_ref: str) -> Tuple[str, str]:
+            looked_up.append(kb_ref)
+            return "KB-FROM-LOCATOR", AWS_DS_ID
+
+        runtime = FakeBedrockAgentRuntime([])
+        backend = mb.ManagedKbBackend(runtime_client=runtime, locator=_locate)
+
+        await backend.search(APP_KB_ID, "query", record={"awsKbId": "KB-FROM-RECORD"})
+
+        assert runtime.calls[0]["knowledgeBaseId"] == "KB-FROM-RECORD"
+        assert looked_up == []
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("record", [{}, {"awsKbId": None}, {"retrievalEngine": "managed"}])
+    async def test_a_record_without_an_aws_kb_id_falls_back_to_the_lookup(self, record):
+        """A record that cannot answer is not trusted to: the backend resolves the
+        id itself, and an unprovisioned knowledge base still raises from there."""
+        runtime = FakeBedrockAgentRuntime([])
+        backend = mb.ManagedKbBackend(runtime_client=runtime, locator=_locator("KB-RESOLVED"))
+
+        await backend.search(APP_KB_ID, "query", record=record)
+
+        assert runtime.calls[0]["knowledgeBaseId"] == "KB-RESOLVED"
+
 
 # ===========================================================================
 # 8.4 — direct ingestion and deletion

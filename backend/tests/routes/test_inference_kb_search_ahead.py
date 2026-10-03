@@ -113,7 +113,7 @@ class _Turn:
                 raise
         if self.search_fails:
             raise RuntimeError("s3vectors throttled")
-        return list(CHUNKS)
+        return list(CHUNKS), CAP
 
     def post(self, client: TestClient, session_id: str = "preview-kb-1"):
         assistant = _assistant()
@@ -134,10 +134,8 @@ class _Turn:
         ), patch(
             "apis.shared.sessions.metadata.store_session_metadata", AsyncMock()
         ), patch(
-            "apis.shared.assistants.rag_service.search_assistant_knowledgebase_with_formatting",
+            "apis.shared.assistants.rag_service.search_assistant_knowledgebase_with_cap",
             side_effect=self.search,
-        ), patch(
-            "apis.shared.assistants.rag_service.resolve_context_cap", return_value=CAP
         ):
             return client.post(
                 "/invocations",

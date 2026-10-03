@@ -10,8 +10,9 @@ so they waited for the build to let go — ~120ms of residual `rag_wait` on dev:
 - `resolve_context_cap`'s knowledge-base record read.
 
 The filter now runs on the same worker thread as the backend search, right
-after it; the cap is fetched on a worker alongside the search. Neither changes
-what reaches the model.
+after it. The cap needs no read of its own: it is decided from the record the
+search already read, and comes back with the results. Neither changes what
+reaches the model.
 """
 
 import asyncio
@@ -39,7 +40,9 @@ class _Backend:
         self.chunks = chunks
         self.thread = None
 
-    async def search(self, kb_ref: str, query: str, top_k: int = DEFAULT_TOP_K) -> List[Chunk]:
+    async def search(
+        self, kb_ref: str, query: str, top_k: int = DEFAULT_TOP_K, *, record=None
+    ) -> List[Chunk]:
         self.thread = threading.current_thread()
         return list(self.chunks)
 
@@ -53,7 +56,7 @@ async def test_the_status_filter_runs_on_the_search_thread_not_the_loop():
         filter_threads.append(threading.current_thread())
         return [c for c in chunks if c.metadata["document_id"] != "doc-gone"]
 
-    with patch.object(rag_service, "load_record", return_value=None), patch.object(
+    with patch.object(rag_service, "load_record", return_value={}), patch.object(
         rag_service, "resolve_backend", return_value=backend
     ), patch.object(rag_service, "_filter_chunks_by_document_status", side_effect=_filter), patch.object(
         rag_service, "emit_count"
@@ -70,7 +73,7 @@ async def test_the_status_filter_runs_on_the_search_thread_not_the_loop():
 @pytest.mark.asyncio
 async def test_no_chunks_means_no_filter_read():
     backend = _Backend([])
-    with patch.object(rag_service, "load_record", return_value=None), patch.object(
+    with patch.object(rag_service, "load_record", return_value={}), patch.object(
         rag_service, "resolve_backend", return_value=backend
     ), patch.object(
         rag_service, "_filter_chunks_by_document_status", side_effect=AssertionError("filtered nothing")
@@ -84,24 +87,18 @@ CHUNKS = [{"text": "Use a four-level scale.", "distance": 0.1, "metadata": {"doc
 
 
 @pytest.mark.asyncio
-async def test_the_cap_is_read_on_a_worker_while_the_search_runs():
-    cap_started = threading.Event()
-    cap_threads: List[Any] = []
+async def test_the_cap_comes_back_with_the_search_and_is_not_read_again():
+    """The route takes the cap the search decided from its one record read.
 
-    def _cap(assistant_id):
-        cap_threads.append(threading.current_thread())
-        cap_started.set()
-        return 8000
-
+    A second read here — on the loop or on a worker — is the record read three
+    times again (~50ms apiece on dev before this).
+    """
     async def _search(**kwargs):
-        # Cannot finish until the cap read has begun: read after the search,
-        # as before, it never would.
-        assert await asyncio.to_thread(cap_started.wait, 2)
-        return list(CHUNKS)
+        return list(CHUNKS), 8000
 
-    with patch.object(rag_service, "resolve_context_cap", side_effect=_cap), patch.object(
-        rag_service, "search_assistant_knowledgebase_with_formatting", side_effect=_search
-    ):
+    with patch.object(
+        rag_service, "resolve_context_cap", side_effect=AssertionError("the cap was read again")
+    ), patch.object(rag_service, "search_assistant_knowledgebase_with_cap", side_effect=_search):
         chunks, augmented = await routes._search_and_augment(
             assistant_id=ASSISTANT_ID, message="How many levels?", access=ACCESS
         )
@@ -110,17 +107,14 @@ async def test_the_cap_is_read_on_a_worker_while_the_search_runs():
     assert augmented == rag_service.augment_prompt_with_context(
         user_message="How many levels?", context_chunks=CHUNKS, max_context_length=8000
     )
-    assert cap_threads and cap_threads[0] is not threading.current_thread()
 
 
 @pytest.mark.asyncio
-async def test_a_failed_cap_read_fails_open_like_before():
+async def test_a_failed_search_fails_open_like_before():
     async def _search(**kwargs):
-        return list(CHUNKS)
+        raise RuntimeError("ddb down")
 
-    with patch.object(rag_service, "resolve_context_cap", side_effect=RuntimeError("ddb down")), patch.object(
-        rag_service, "search_assistant_knowledgebase_with_formatting", side_effect=_search
-    ):
+    with patch.object(rag_service, "search_assistant_knowledgebase_with_cap", side_effect=_search):
         assert await routes._search_and_augment(
             assistant_id=ASSISTANT_ID, message="m", access=ACCESS
         ) == (None, "m")

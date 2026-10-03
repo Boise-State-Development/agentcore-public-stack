@@ -211,7 +211,7 @@ async def test_the_facade_actually_clamps_before_dispatch():
     seen = {}
 
     class _RecordingBackend:
-        async def search(self, kb_ref, query, top_k=5):
+        async def search(self, kb_ref, query, top_k=5, *, record=None):
             seen["query"] = query
             return []
 

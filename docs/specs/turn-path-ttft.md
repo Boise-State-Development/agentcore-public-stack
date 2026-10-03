@@ -528,6 +528,43 @@ always did against a real (thread-hopping) search; it is still cancelled and nev
 finishes. Expected: `rag_wait` ≈ 0 on a cold first turn (from ~120ms); on a cached-agent
 follow-up turn the filter's ~60ms overlaps nothing and remains.
 
+*P3c. The managed KB search, decomposed (dev, 2026-10-02, runtime v525).* On a managed
+agent's **follow-up** turn the build is ~36ms, so the search is no longer hidden:
+`rag_wait` 786ms of a 1254ms `turn_prelude`. The Runtime's botocore spans (log group
+`aws/spans`, exact in-region durations) split the ~896ms search as:
+
+| step | runs on | ms |
+|---|---|---|
+| `load_record` — KB_Record `GetItem`, fresh `boto3.resource` | loop | 51 |
+| `ManagedKbBackend._locate` — **the same row again**, fresh resource | thread | 56 (+11 construct) |
+| `Retrieve` | thread | **660** |
+| status filter — first `GetItem` on a fresh resource, then 3 at ~3ms | loop | 56 (+9) |
+| `resolve_context_cap` — **the same row a third time**, fresh resource | loop | 42 (+8) |
+
+`Retrieve` is the managed engine's own cost (in-region 627/660/946ms; from a laptop p50
+~500ms over a ~106ms round-trip floor; the `MANAGED` reranker is ~50–130ms of it, and is
+kept — it is what separates the scores the 8,000-character cap relies on;
+`numberOfResults`, idle gaps and repeated queries change nothing). The other ~230ms is
+ours: one row read three times, every read on a new resource, each paying ~45–55ms for its
+first request against ~4ms on a reused one. Classic turns show the same three reads
+(~55/54/46ms). **The 2.3–3.6s first-turn figures above were not `Retrieve`:** the spans put
+it at 627ms (cold) and 946ms (warm), ending in under a second; the coroutine then waited for
+a lone MCP server's pre-flight, which runs inline on the loop (1.5–2.8s), and the log line
+measured that wait.
+
+**Fix (built on top of the off-loop follow-up).** The facade reads the KB_Record once and
+hands it across the seam (`search(..., record=)`, so the managed backend takes `awsKbId`
+from it; `_search_then_filter` passes it through on its worker) and returns the cap with
+the results (`search_assistant_knowledgebase_with_cap`), so the separate cap-read worker
+is gone. The record read and the status lookups go through the process-cached
+`aws_clients` table, on one shared connection pool. The augmented message is unchanged —
+the cap comes from the same record. Expected on a follow-up turn, where the off-loop move
+overlaps nothing: ~215ms off `rag_wait` (one record read instead of three, and warm
+connections for the read and the filter; classic loses ~150ms). On a cold first turn the
+off-loop move already took the tail to ≈0. Next lever on follow-ups: start the search right
+after the access check (~170ms; today it waits on `bump_last_used_at`, model/role
+resolution and the session-metadata writes that hold the loop).
+
 *Tests.* P3a: a fake session factory and a fake tool loader that each sleep; assert the
 build's wall time is the max not the sum, that `tools` order is unchanged across runs
 (`test_prompt_cache_determinism.py` already pins order), and that a failure in either thread

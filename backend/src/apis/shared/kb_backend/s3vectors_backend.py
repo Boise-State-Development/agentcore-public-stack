@@ -46,7 +46,7 @@ size-constrained Lambda image costs nothing. See
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Mapping, Optional
 
 from apis.shared.kb_backend.protocol import (
     DEFAULT_TOP_K,
@@ -68,7 +68,14 @@ class S3VectorsBackend:
     Stateless, so a shared instance is safe and no client is held across calls.
     """
 
-    async def search(self, kb_ref: str, query: str, top_k: int = DEFAULT_TOP_K) -> List[Chunk]:
+    async def search(
+        self,
+        kb_ref: str,
+        query: str,
+        top_k: int = DEFAULT_TOP_K,
+        *,
+        record: Optional[Mapping[str, Any]] = None,
+    ) -> List[Chunk]:
         """Query the index and return chunks scored by relevance, best first.
 
         ``top_k`` is accepted to satisfy the protocol but the underlying query
@@ -78,6 +85,9 @@ class S3VectorsBackend:
         incomplete document from silently shrinking a five-chunk answer to four.
         Slicing here instead would change that, so this returns what the index
         returned.
+
+        ``record`` is accepted to satisfy the protocol and ignored: the global index
+        is addressed by ``kb_ref`` alone.
         """
         from apis.shared.embeddings.bedrock_embeddings import search_assistant_knowledgebase
 

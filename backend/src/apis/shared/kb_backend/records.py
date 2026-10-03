@@ -162,9 +162,20 @@ def work_pk(state: str) -> str:
 
 
 def _table():
-    import boto3
+    """The assistants table, on the process-cached DynamoDB resource.
 
-    return boto3.resource("dynamodb").Table(os.environ["DYNAMODB_ASSISTANTS_TABLE_NAME"])
+    A fresh ``boto3.resource`` per call cost ~45–55ms on its first request in the
+    Runtime (a new connection pool), against ~4ms on a reused one — and a turn's
+    knowledge base search reads this table on its critical path. ``AWS_REGION`` is
+    passed explicitly (it is what boto3 would resolve anyway) so this shares its
+    cache entry, and its warm connection, with the facade's document-status
+    lookups on the same table.
+    """
+    from apis.shared.aws_clients import get_dynamodb_table
+
+    return get_dynamodb_table(
+        os.environ["DYNAMODB_ASSISTANTS_TABLE_NAME"], os.environ.get("AWS_REGION")
+    )
 
 
 # ── Model ────────────────────────────────────────────────────────────────────

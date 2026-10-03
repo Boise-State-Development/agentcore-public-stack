@@ -42,7 +42,7 @@ bundled into size-constrained Lambda images and must not drag in
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
+from typing import Any, Dict, List, Mapping, Optional, Protocol, runtime_checkable
 
 #: Parity contract, Requirement 3.1: both backends are asked for five chunks.
 #: Named here, above the seam, so neither adapter can drift from the other.
@@ -136,13 +136,24 @@ class KnowledgeBaseBackend(Protocol):
     guard against a missing method, not a substitute for reading the protocol.
     """
 
-    async def search(self, kb_ref: str, query: str, top_k: int = DEFAULT_TOP_K) -> List[Chunk]:
+    async def search(
+        self,
+        kb_ref: str,
+        query: str,
+        top_k: int = DEFAULT_TOP_K,
+        *,
+        record: Optional[Mapping[str, Any]] = None,
+    ) -> List[Chunk]:
         """Return up to ``top_k`` chunks, best first, scored by relevance.
 
         Ordering is the backend's: both underlying APIs return results ranked
         best-first, and an adapter re-sorting them would be inventing a ranking
         rather than reporting one. What an adapter *must* guarantee is that its
         ``relevance`` values agree with the order it returns.
+
+        ``record`` is the KB_Record the caller has already read for this search,
+        if any. An adapter that needs it may use it instead of reading it again;
+        one that does not ignores it.
         """
         ...
 

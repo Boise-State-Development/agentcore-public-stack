@@ -76,7 +76,9 @@ class RecordingBackend:
         self._chunks = chunks or []
         self.calls: List[Dict[str, Any]] = []
 
-    async def search(self, kb_ref: str, query: str, top_k: int = DEFAULT_TOP_K) -> List[Chunk]:
+    async def search(
+        self, kb_ref: str, query: str, top_k: int = DEFAULT_TOP_K, *, record=None
+    ) -> List[Chunk]:
         self.calls.append({"kb_ref": kb_ref, "query": query, "top_k": top_k})
         return list(self._chunks)
 
@@ -114,7 +116,7 @@ async def _search(access, backend: RecordingBackend, top_k: int = 5):
     with patch.dict("os.environ", {"DYNAMODB_ASSISTANTS_TABLE_NAME": TABLE_NAME}, clear=False), patch(
         "apis.shared.assistants.rag_service.resolve_backend", return_value=backend
     ), patch(
-        "apis.shared.assistants.rag_service.boto3.resource",
+        "boto3.resource",
         return_value=_complete_document_table(),
     ), patch(
         "apis.shared.assistants.rag_service.emit_count"

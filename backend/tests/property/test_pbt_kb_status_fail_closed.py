@@ -37,6 +37,17 @@ from hypothesis import HealthCheck, given, settings, strategies as st
 # because CI is cold and local re-runs are warm.
 from apis.shared.assistants.rag_service import _filter_vectors_by_document_status
 
+
+def _no_cached_tables():
+    """Isolate one example from the process-cached DynamoDB handles.
+
+    The status lookup reads its table through ``apis.shared.aws_clients``. Hypothesis
+    runs every example inside one test call, so the per-test reset in the root
+    conftest does not separate them: without this, the first example's mocked
+    resource would answer every later example's lookup.
+    """
+    return patch.dict("apis.shared.aws_clients._resources", clear=True)
+
 ASSISTANT_ID = "ast-failclosed"
 
 # ---------------------------------------------------------------------------
@@ -85,7 +96,7 @@ def test_a_table_level_failure_never_leaks_a_chunk(vectors, failure):
         "apis.shared.assistants.rag_service.emit_count"
     ), patch("boto3.resource") as resource, patch.dict(
         "os.environ", {"DYNAMODB_ASSISTANTS_TABLE_NAME": "t", "AWS_REGION": "us-west-2"}
-    ):
+    ), _no_cached_tables():
         dynamo = MagicMock()
         dynamo.Table.side_effect = failure
         resource.return_value = dynamo
@@ -99,7 +110,7 @@ def test_a_missing_table_name_never_leaks_a_chunk(vectors):
     """The other former fail-open path: no table configured → zero chunks."""
     with patch("apis.shared.kb_backend.metrics.emit_count"), patch(
         "apis.shared.assistants.rag_service.emit_count"
-    ), patch("boto3.resource") as resource, patch.dict("os.environ", {}, clear=True):
+    ), patch("boto3.resource") as resource, patch.dict("os.environ", {}, clear=True), _no_cached_tables():
         assert _filter_vectors_by_document_status(vectors, ASSISTANT_ID) == []
         # Never contacted, so this is a guard rather than a failed call.
         resource.assert_not_called()
@@ -117,7 +128,7 @@ def test_the_degradation_is_always_reported(vectors, failure):
         "boto3.resource"
     ) as resource, patch.dict(
         "os.environ", {"DYNAMODB_ASSISTANTS_TABLE_NAME": "t", "AWS_REGION": "us-west-2"}
-    ):
+    ), _no_cached_tables():
         dynamo = MagicMock()
         dynamo.Table.side_effect = failure
         resource.return_value = dynamo
@@ -143,7 +154,7 @@ def test_a_per_document_failure_still_only_drops_that_document(vectors):
         "boto3.resource"
     ) as resource, patch.dict(
         "os.environ", {"DYNAMODB_ASSISTANTS_TABLE_NAME": "t", "AWS_REGION": "us-west-2"}
-    ):
+    ), _no_cached_tables():
         table = MagicMock()
         table.get_item.side_effect = Exception("per-item failure")
         dynamo = MagicMock()
@@ -162,7 +173,7 @@ def test_complete_documents_are_still_returned(vectors):
         "boto3.resource"
     ) as resource, patch.dict(
         "os.environ", {"DYNAMODB_ASSISTANTS_TABLE_NAME": "t", "AWS_REGION": "us-west-2"}
-    ):
+    ), _no_cached_tables():
         table = MagicMock()
         table.get_item.return_value = {"Item": {"status": "complete"}}
         dynamo = MagicMock()
@@ -183,7 +194,7 @@ def test_a_non_complete_status_is_excluded(status):
         "boto3.resource"
     ) as resource, patch.dict(
         "os.environ", {"DYNAMODB_ASSISTANTS_TABLE_NAME": "t", "AWS_REGION": "us-west-2"}
-    ):
+    ), _no_cached_tables():
         table = MagicMock()
         table.get_item.return_value = {"Item": {"status": status}}
         dynamo = MagicMock()
