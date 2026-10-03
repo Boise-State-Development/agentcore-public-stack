@@ -449,10 +449,11 @@ class VoiceAgent(BaseAgent):
 
         # 1.57 takes raw bytes in an `audio_delta` block; the sample rate is
         # fixed by the model's audio config rather than sent per chunk.
+        # The client's value is not logged: it arrives unvalidated off the
+        # WebSocket, so it could carry a forged log line.
         if sample_rate != Defaults.NOVA_SONIC_INPUT_RATE:
             logger.debug(
-                "Voice audio sample_rate=%s differs from the configured input rate %s",
-                sample_rate,
+                "Voice audio sample rate differs from the configured input rate %s; using the configured rate",
                 Defaults.NOVA_SONIC_INPUT_RATE,
             )
         await self._bidi_agent.send({
