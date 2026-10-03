@@ -5,6 +5,17 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 ## Open
 <!-- Newest at top. -->
 
+### [2026-10-03] Standing: rollout-switch retirement review, once per release cycle
+- **Source**: Phil-initiated. Tracked in #1422, which has the per-switch checklist; tick it off there. The retirement rule is in #1420 (`CLAUDE.MD`, Feature Flags, *Feature switches stay; rollout switches retire*). We had added about six default-on switches per release and never retired one.
+- **Surface**: backend (`apis/shared/feature_flags.py` and each switch's call sites), the docs-site flag reference's **Kind** column, CHANGELOG
+- **Effort × Impact**: S per switch × M
+- **Subtracts**: yes, by construction. Each retirement deletes a reader, an off path and its tests from code that is mostly on the turn path.
+- **How to run it**: read the Kind column. For each *Rollout* row, check its condition: it shipped in a `main` release, has run at least two weeks in prod since then, the switch is unset in prod and dev (an out-of-band `=false` on the Runtime counts as a flip), and its readout is recorded. Cross-check against #1422's checklist. Recommend **Ship** for each one that passes, batched into a single cleanup PR with one CHANGELOG `Removed` entry per variable. Recommend **Defer** with the reason for the rest. A switch someone has turned off is a bug to fix, not a reason to keep the switch. Never remove a *Feature* row this way.
+- **Status**: open, recurring. **First pass (any review after #1420 merges):**
+  - **Eligible now** (shipped in 1.24.0 or earlier): `AGENT_STATUS_LIVE_DRAIN_ENABLED`, `AGENT_PREPARING_PHASE_ENABLED`, `ATTACHMENT_TURN_GUARD_ENABLED`, `CONFIG_CACHE_ENABLED`. ⚠️ Confirm none of them is set in prod's task definition or Runtime environment before recommending Ship.
+  - **Eligible two weeks after the next release reaches prod**: `MCP_PARALLEL_PREFLIGHT_ENABLED`, `KB_SEARCH_AHEAD_ENABLED`, `MEMORY_RETRIEVAL_PREFETCH_ENABLED`, `HISTORY_COUNT_PREFETCH_ENABLED`, `INLINE_ATTACHMENT_PERSIST_ENABLED`.
+  - **Gated on something else**: `AGENT_BUILD_SHARED_SESSION_ENABLED` (Runtime V2 plus a clean snapshot restore, see the V2 entries below), `COMPACTION_SUMMARY_EXTRACT_ENABLED` (prod quality readout), `DOCUMENT_OFFLOAD_ENABLED` / `_REHYDRATE_` / `_DIGEST_` (the quality check waived in `docs/specs/document-offload-evaluation.md`, see [2026-09-21] *The cheap quality veto does not exist*).
+
 ### [2026-10-02] Re-base the V2 Runtime plan on the published price, land B1, and use CDK's typed `platformVersion`
 - **Source**: research/2026-10-02.md
 - **Surface**: infrastructure (+ `scripts/build/deploy-runtime-image-if-changed.sh`, `docs/specs/agentcore-runtime-v2.md`)

@@ -152,6 +152,8 @@ Every default-on flag is one of two kinds:
 A rollout switch normally retires after it has shipped in a production release
 and run there for at least two weeks with no one needing to flip it. Some
 switches wait for a stricter condition, which the Kind column states.
+Switches waiting to be retired are tracked in
+[issue #1422](https://github.com/Boise-State-Development/agentcore-public-stack/issues/1422).
 Retirements are batched into one cleanup per release cycle, and each removed
 variable is listed under **Removed** in the
 [CHANGELOG](https://github.com/Boise-State-Development/agentcore-public-stack/blob/main/CHANGELOG.md).
