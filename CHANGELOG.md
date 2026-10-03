@@ -47,6 +47,10 @@ The first token arrives sooner. Every stage between the request and the first mo
 - The model picker's chevron never rotated when the menu opened (#1393)
 - Voice sessions' `message_count` was inflated about fourfold (#1367)
 
+### 🔒 Security
+
+- The voice agent no longer writes the client-supplied `sample_rate` into its logs, where a crafted value could forge a log line (CodeQL `py/log-injection`) (#1425)
+
 ### ⚠️ Changed
 
 - Imports, crawls and syncs on a managed knowledge base now count against the per-owner and per-KB byte caps like uploads: one that would breach a cap fails with the cap message instead of slipping past (#1361)

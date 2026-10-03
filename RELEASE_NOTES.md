@@ -146,6 +146,10 @@ The nightly pipeline now runs the matrix after its E2E step and uploads the repo
 - **The model picker's chevron** never rotated, because the handlers were bound to an output `cdkMenu` doesn't have (#1393).
 - **Voice sessions' `message_count`** is no longer inflated about fourfold (#1367).
 
+## 🔒 Security
+
+- **Voice log injection.** `VoiceAgent.send_audio` logged the `sample_rate` the voice WebSocket passes through without validation, so a client could forge a log line. It now logs only the configured rate. The line is debug-level and came in with the Strands 1.57 adaptation. CodeQL `py/log-injection` found it on the release PR (#1425).
+
 ## ⚠️ Changed
 
 - **Imports now count against the managed-KB byte caps.** A Google Drive import, web crawl or sync that would breach the per-owner or per-KB cap now fails with the same cap message an upload gets, instead of slipping past it (#1361). Owners near their cap may see an import refused that would have gone through on 1.25.x.
