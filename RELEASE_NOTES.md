@@ -1,3 +1,237 @@
+# Release Notes — v1.26.0
+
+**Release Date:** October 3, 2026
+**Previous Release:** v1.25.1 (September 26, 2026)
+
+---
+
+> 🏗️ **A CDK deploy is required.** The deploy order is unchanged: `platform.yml` → `backend.yml` → `frontend-deploy.yml`. The only infrastructure change is new widgets on the turn-latency dashboard. There are **no new tables, no GSI changes and no `backfill_*.py` step**.
+>
+> 🎙️ **Voice stays unmetered until an admin adds the Nova 2 Sonic catalog row.** Nothing seeds it. Add it from **Admin → Models → catalog** in each environment after the deploy. See Deployment notes.
+>
+> 📦 **Strands moves from 1.55.0 to 1.57.2**, paired with bedrock-agentcore 1.24.0. Voice mode was adapted to the new Bidi API. The voice WebSocket contract the SPA uses is unchanged.
+
+---
+
+## Highlights
+
+**The first token arrives sooner.** This release maps every stage between a request arriving and the model's first output, puts a timer on each one, and then takes the largest stages we own off the critical path. On dev:
+- a cold agent build drops from **869ms to 372ms** (median);
+- a long conversation no longer spends **~390ms** counting its stored messages before every turn, and its first token went from **1560ms to 1092ms**;
+- the long-term-memory lookup overlaps the message writes, cutting `pre_model` from **450ms to 270ms** on a warm turn;
+- an agent's external MCP servers load concurrently, so a first turn waits for the slowest server instead of all of them in a row;
+- an agent's knowledge-base search runs alongside the build instead of before it.
+
+**Voice is priced, and users can choose the voice.** Voice sessions had been counting $0 against quota. They are now billed per modality, at separate text and speech rates. The voice button opens a menu with all 16 Nova 2 Sonic voices and a microphone picker.
+
+The catalog adds **Claude Opus 5.5, GPT-6 Sol, GPT-6 Luna and GPT-5.5**. Managed knowledge bases stop mis-counting imports and stop serving stale synced files. A new **smoke and regression pass** drives real turns against a deployed stack and runs every night.
+
+**Action required:** a CDK deploy, the Nova 2 Sonic catalog row, and one optional knowledge-base repair, all under Deployment notes.
+
+---
+
+## Faster to the first token
+
+A turn is the most complicated process in the app, and until this release nobody had one map of it. `docs/specs/turn-path-ttft.md` now covers every stage from the SPA's send to the first token: what runs, what is network, what blocks the event loop, which timer measures it, and what it costs. The chat route was refactored into named phases that match the map (#1388). Every change below was measured on dev before and after, and each readout is recorded in the spec.
+
+### Measurement
+
+- **`agent_build.tools` is split into four sub-stages** (`filter`, `gateway`, `mcp`, `extra`), with a timing line per external MCP server (#1396).
+- **The turn clock now runs to the first model output.** `head_of_turn`, `pre_model` and `model` stages follow the existing `turn_prelude`, and a `FirstTokenMs` metric is published (#1397). `firstTokenMs` is read at the model mark, so the stages add up to it exactly (#1398).
+- **The turn-latency dashboard** gains first-token and after-prelude (p90) widgets.
+
+### What got faster
+
+| Change | Before → after (dev) | Kill switch |
+|---|---|---|
+| One process-wide boto3 session for the agent build, built at container warm-up (#1377, #1395) | cold `agent_build` 869 → 372ms; client first token 4211 → 3564ms (median, 15-turn A/B per arm) | `AGENT_BUILD_SHARED_SESSION_ENABLED` |
+| Per-turn history count read on a worker thread from the head of the turn (#1403) | `history_count` 388 → 0ms at 100+ events; first token 1560 → 1092ms | `HISTORY_COUNT_PREFETCH_ENABLED` |
+| Long-term-memory lookup overlapped with the two message writes (#1400) | `pre_model` 450 → 270ms warm, 664 → 352ms cold | `MEMORY_RETRIEVAL_PREFETCH_ENABLED` |
+| External MCP servers pre-flighted concurrently (#1406) | tool loading tracks the slowest server, not the sum | `MCP_PARALLEL_PREFLIGHT_ENABLED` |
+| Knowledge-base search started before the agent build (#1411) | first-agent-turn `rag` 1404 → 955ms | `KB_SEARCH_AHEAD_ENABLED` |
+| Binding history check reduced to a one-event existence read (#1413) | first-agent-turn `rag` 955 → 571ms | — |
+| KB search's follow-up reads moved off the event loop (#1415) | residual `rag_wait` ~130 → ~10ms | — |
+| KB record read once per search, on a cached table (#1416) | DynamoDB time around `Retrieve` ~180 → ~20ms | — |
+| One Bedrock client reused across side-channel calls (#1375) | ~6ms of event-loop work per call in the Runtime; ~250ms on app-api's first document digest | — |
+
+What reaches the model is unchanged in every case. Tool order, the system prompt, the augmented message and the citations are byte-identical, so none of this rewrites the prompt-cache prefix. The MCP change keeps clients registered in catalog order. The history-count read counts only messages created before the turn began, so it returns the same index the inline read did.
+
+**Session titles also arrive sooner (#1374).** The finished title is checked every 100ms during the stream instead of only between agent events. The DynamoDB write runs in the background, and it is now a single keyed `update_item`.
+
+### Kill switches
+
+The five switches in the table are **rollout switches**: they exist so a bad deploy can be undone without a revert, and they are on by default. Under the rule added in this release (#1420), each one will be removed once it has run cleanly in production for two weeks. Track them in #1422. Don't build on their off position.
+
+---
+
+## Voice: priced, and your choice of voice
+
+Voice sessions had been running **unmetered**. With no catalog row for `amazon.nova-2-sonic-v1:0`, every session priced to `None` and counted $0 against the user's quota. A plain catalog row would still have mispriced it, because Nova 2 Sonic bills speech tokens at about ten times its text tokens, and Strands 1.55 discarded the speech/text split Nova reports (#1399).
+
+### Backend
+
+- **Catalog rows** gain optional `speechInputPricePerMillionTokens` and `speechOutputPricePerMillionTokens`. On a speech model, `input` and `output` are the **text** rates.
+- **`CostCalculator.calculate_voice_cost`** bills the four buckets separately. When the split is missing, all tokens are priced at the speech rate, so an error can only over-count.
+- **`NovaSonicModelWithUsageDetails`** keeps Nova's `usageEvent.details.total` split. A test pins the provider method it overrides, including its 1.57 signature, so an SDK change fails loudly.
+- **A curated Nova 2 Sonic row** on the Bedrock tab carries us-west-2 rates from the Price List API: text $0.319 / $2.651 and speech $3.00 / $12.00 per million tokens.
+- **Speech models are hidden from the chat picker**, because Sonic answers no chat API.
+- **The voice choice** is stored as a new `voiceId` user setting. An unknown id returns 422, and a blank one clears the setting. It rides the voice WebSocket's `config` frame. For languages that inflect for gender, the voice prompt gains one line naming the voice's form.
+
+### Frontend
+
+- **The composer's voice button** is now a split control. A chevron opens a menu with **Voice**, **Microphone** and **Start voice conversation**. Choices are fixed at connect, so the chevron hides while a session is live.
+- **Voices:** all 16 Nova 2 Sonic voices, grouped by language. Tiffany stays the default, because only Tiffany and Matthew speak every language.
+- **Microphone:** the device is stored per browser and shared with dictation. A device that has disappeared falls back to the system default.
+- **The admin model form** shows the speech rates under "Speech pricing".
+
+**Voice stays unmetered until the catalog row exists in each environment.** See Deployment notes.
+
+---
+
+## New models
+
+Four newly released Bedrock models join the curated catalog (#1358).
+
+| Model | Model ID | Input / output ($/MTok) | Cache write / read | Featured |
+|---|---|---|---|---|
+| Claude Opus 5.5 | `us.anthropic.claude-opus-5-5` | 4.40 / 22.00 | 5.50 / 0.22 (0.05×) | yes |
+| GPT-6 Sol | `us.openai.gpt-6-sol` | 2.20 / 11.00 | 2.75 / 0.22 | yes |
+| GPT-6 Luna | `us.openai.gpt-6-luna` | 0.11 / 0.55 | 0.1375 / 0.011 | yes |
+| GPT-5.5 | `us.openai.gpt-5.5` | 5.50 / 33.00 | 0 / 0.55 | no |
+
+Claude Opus 4.7, GPT-5.6 Sol and GPT-5.6 Terra move to the picker's **More models** submenu. They are still available and are not retired. The curated rows use Regional (`us.*`) ids. A deployment that prefers Global CRIS should edit the id when it adds a row.
+
+---
+
+## Smoke and regression pass
+
+`backend/scripts/smoke_turns.py` drives real agent turns through the same `POST /chat/stream` the SPA uses and asserts the response contract on the wire (#1405). It targets:
+- a local `SKIP_AUTH` stack;
+- a deployed environment, as a Cognito user;
+- the AgentCore Runtime directly, through a headless grant.
+
+The matrix covers:
+- SSE head and tail frame order;
+- second-turn prompt-cache hash stability;
+- restore from `GET /messages`;
+- a tool turn;
+- `ask_user_question` pause and resume, and tool-approval resume;
+- the single-flight 409;
+- Stop and lease recovery;
+- preview sessions and mid-turn steering;
+- inline PDF and diverted CSV attachments;
+- skills, knowledge-base citations and quota refusal.
+
+The runbook is `docs/testing/smoke-regression.md`, and the `/smoke-regression` skill runs the full pass.
+
+The nightly pipeline now runs the matrix after its E2E step and uploads the report (#1412, #1414). It is non-blocking for now. The first run against dev found the inline-attachment bug fixed below.
+
+---
+
+## 🐛 Bug fixes
+
+**Managed knowledge bases**
+- **Imports didn't count against the storage cap.** Every Google Drive import, web crawl or sync on a managed KB committed bytes it had never reserved. `totalBytes` didn't move, and `reservedBytes` could go negative. Imports now reserve their real size at ingestion, so they are capped like uploads (#1361). See Changed.
+- **Changed synced files were never re-ingested.** When a sync found a changed Drive file or crawled page on a managed KB, the ingestion consumer mistook the overwrite for a duplicate event. The KB kept serving the version from import time, and a later delete refunded the old size. The sync now records the version it staged, and the consumer re-ingests whenever that differs from what it last ingested (#1365).
+- **A failed sync could block a file for good.** When the S3 stage failed, the sync had already advanced the file's change markers, so every later run treated the file as unchanged. A failed stage now rolls those markers back, conditionally, so a newer run's write is left alone (#1373).
+
+**Conversations**
+- **Finished turns marked as interrupted.** On a first turn the loading state can outlast the server's `done`. Pressing Stop in that gap marked a finished turn interrupted, and the next prompt carried a false interruption note (#1366). A refresh or tab close in the same window had the same effect (#1370). Both now check whether `done` has already arrived.
+- **Side-channel results accepted on a refusal.** The compaction summary and extraction, tool-batch summaries, document abstracts and titles accepted a guardrail stop, content-filter refusal or unknown stop reason as a valid result. A refused compaction summary would have become the checkpoint in the cacheable history. Each now accepts only a positive completion, and otherwise uses the fallback it already had (#1368).
+- **Inline spreadsheets and decks dropped.** A headless caller (the harness, scheduled runs, API clients) that sent a CSV, XLSX or PPTX as inline base64 got a note saying the tools could reach the file, but the file was never stored. It is now written to S3 and registered as a session file, the same way an upload is. The SPA, which uploads first, was not affected (#1409).
+
+**Interface**
+- **The context-meter panel** drew under the announcement pill (#1369).
+- **Acknowledging an announcement on a flaky mobile connection** showed a global error toast and lost the acknowledgement. Both announcement requests are now silent on failure, and a network drop or gateway error is retried once (#1383).
+- **The model picker's chevron** never rotated, because the handlers were bound to an output `cdkMenu` doesn't have (#1393).
+- **Voice sessions' `message_count`** is no longer inflated about fourfold (#1367).
+
+## 🔒 Security
+
+- **Voice log injection.** `VoiceAgent.send_audio` logged the `sample_rate` the voice WebSocket passes through without validation, so a client could forge a log line. It now logs only the configured rate. The line is debug-level and came in with the Strands 1.57 adaptation. CodeQL `py/log-injection` found it on the release PR (#1425).
+
+## ⚠️ Changed
+
+- **Imports now count against the managed-KB byte caps.** A Google Drive import, web crawl or sync that would breach the per-owner or per-KB cap now fails with the same cap message an upload gets, instead of slipping past it (#1361). Owners near their cap may see an import refused that would have gone through on 1.25.x.
+
+## ✨ Also improved
+
+- **Tool rail (#1394):**
+  - a tool's full result now shows in a bounded scroll box, instead of being cut at 200 characters behind a toggle;
+  - labels sit above their values;
+  - input renders one `key: value` per line;
+  - scroll boxes are keyboard-focusable, and the labels now meet WCAG AA in both themes.
+- **Dark mode (#1378):** sidebar date headers are brighter, and bold text and headings in responses are white instead of only heavier.
+- **Mobile (#1382):** conversation text now lines up with the composer at the 16px inset, instead of sitting about 48px from the edge.
+
+## 🏗️ Infrastructure
+
+- **Turn-latency dashboard:** new widgets for first token (handler entry to first model output), the after-prelude stages at p90, and the `agent_build.tools` sub-stages (#1396, #1397). No new resources, tables or IAM changes.
+
+## 🔧 CI/CD
+
+- **Path-scoped PR gate (#1392).** A `changes` job maps a PR's paths to the suites they can reach, so a docs-only PR no longer runs the full 7–8 minute matrix. The backend pytest job runs on 4 xdist workers.
+- **Nightly turn-smoke matrix**, non-blocking, with its report uploaded (#1412, #1414).
+
+## 📚 Docs
+
+- **`docs/specs/turn-path-ttft.md`:** the turn-path map, its regression plan, and every dev readout (#1388, #1402, #1404, #1408, #1418).
+- **Feature flags for fork operators.** A complete flag reference with fork defaults and cost (#1384). It now has a **Kind** column, plus the rule that feature switches are permanent while rollout switches retire (#1420).
+- **New specs:**
+  - the AgentCore Runtime V2 migration plan (#1376);
+  - background handoffs with in-place review (#1371);
+  - conversation rewind and fork (#1419).
+
+## 📦 Dependencies
+
+| Package | From | To |
+|---|---|---|
+| `strands-agents` / `strands-agents[bidi]` | 1.55.0 | 1.57.2 |
+| `bedrock-agentcore` | 1.21.0 | 1.24.0 |
+| `boto3` / `botocore` (locked) | 1.43.68 | 1.43.103 |
+| `mcp` (transitive, locked) | 1.28.1 | 1.30.0 (still held below 2 by a declared constraint) |
+| `awscrt` (transitive, `[bidi]`) | 0.32.0 | 0.32.2 |
+
+Strands 1.56–1.57 rewrote the Bidi API that voice uses (#1367, #1410):
+- **Events.** The provider constructor, the input shape and every output event changed. A `VoiceWireAdapter` translates the new events back to the existing WebSocket contract, so the SPA and `voice_routes.py` are unchanged.
+- **Session manager.** A `BidiAgent` now drives the ordinary session hooks. Guards keep the text agent's compaction checkpoint and long-term-memory retrieval away from voice history.
+- **Transcripts.** They now arrive through `MessageUpdatedEvent` and are persisted from there.
+- **Pins.** A test enforces the strands ↔ agentcore pairing and the `mcp<2` constraint across `pyproject.toml`, `uv.lock` and the Lambda requirements files.
+
+## 🚀 Deployment notes
+
+**1. Deploy in the usual order.** `platform.yml` → `backend.yml` → `frontend-deploy.yml`. The GSI check passes, because no index changes, and there is no backfill.
+
+**2. Add the Nova 2 Sonic catalog row (required for voice billing).** In each environment, after the backend deploy: **Admin → Models → catalog → Nova 2 Sonic**, and save it with:
+- text $0.319 / $2.651;
+- speech $3.00 / $12.00 per million tokens.
+
+It doesn't need to be enabled for chat, because speech models are filtered out of the picker. Until the row exists, voice keeps counting $0 and the `unmetered-model-call` alarm keeps firing for it.
+
+An environment that already has a hand-made row from the 1.25.0 notes should check it. A row with $3 / $12 in the **text** fields and no speech rates over-counts voice about twofold.
+
+**3. Settle a managed KB the 1.25.0 repair left for review (if you have one).** The 1.25.0 byte-counter repair could not explain KBs that had imports after promotion. Deploy first, because the old import path would break the counters again. Then report, and apply per agent:
+
+```bash
+AWS_PROFILE=<env> backend/.venv/bin/python backend/scripts/repair_managed_kb_byte_counters.py \
+    --project-prefix <prefix> --region <region>
+AWS_PROFILE=<env> backend/.venv/bin/python backend/scripts/repair_managed_kb_byte_counters.py \
+    --project-prefix <prefix> --region <region> --settle-unexplained --agent <agentId>
+AWS_PROFILE=<env> backend/.venv/bin/python backend/scripts/repair_managed_kb_byte_counters.py \
+    --project-prefix <prefix> --region <region> --settle-unexplained --agent <agentId> --apply
+```
+
+Only settle a KB the report notes as *explained exactly by … document(s) committed without a request-time reservation*. The settle refuses a KB with anything in flight. A re-run of the report should then list no notes for it.
+
+**4. New kill switches (all on by default, runtime-only).** `AGENT_BUILD_SHARED_SESSION_ENABLED`, `HISTORY_COUNT_PREFETCH_ENABLED`, `MEMORY_RETRIEVAL_PREFETCH_ENABLED`, `MCP_PARALLEL_PREFLIGHT_ENABLED`, `KB_SEARCH_AHEAD_ENABLED` and `INLINE_ATTACHMENT_PERSIST_ENABLED`. Set one to `false` on the Runtime out of band only to undo a problem, and please open an issue if you need to. These are rollout switches and will be removed (#1422).
+
+**5. Expected on the first turns after deploy.**
+- **No prompt-cache rewrites.** Nothing in this release changes what reaches the model, so cache hashes should stay flat across the deploy.
+- **Fewer `SESSION` events.** The agent-binding check no longer creates a `SESSION` event in an empty thread.
+- **One extra warning per process** on environments with GPT-6 Astra or GPT-5.6 rows. The Strands context-window table now resolves those ids to 1.05M, while their curated `maxInputTokens: 272000` cap still wins. Make sure no OpenAI-family row lacks `maxInputTokens`, or compaction would cut past the 272K price tier.
+
+---
+
 # Release Notes — v1.25.1
 
 **Release Date:** September 26, 2026

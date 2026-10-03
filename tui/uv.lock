@@ -8,7 +8,7 @@ resolution-markers = [
 
 [[package]]
 name = "agentcore-tui"
-version = "1.25.1"
+version = "1.26.0"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
