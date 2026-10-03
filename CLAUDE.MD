@@ -68,6 +68,21 @@ A feature has up to two switches, one per side, set per environment:
 - **Keep the two in step per environment.** If they drift, the damage is cosmetic: the UI offers a feature whose API 404s, or hides a working one.
 - **Adding a flag:** add a field to `FeatureFlags` and all three environment files (in-development: `false` locally and in prod, `true` in dev only if the dev environment has turned the backend on), plus the backend flag, CDK config and test, and the `platform.yml` variable.
 
+### Feature switches stay; rollout switches retire
+
+A default-on flag is one of two kinds, and only one is permanent. The docs-site page (`docs-site/src/content/docs/configuration/feature-flags.md`) records which kind each flag is in its **Kind** column.
+
+| Kind | What it turns off | Lifetime |
+|---|---|---|
+| **Feature switch** | A capability a deployment may reasonably not want: it costs money, widens what users can do, or is a product choice (`TOOL_SUMMARIES_ENABLED`, `BROWSER_TAKEOVER_ENABLED`, `DICTATION_ENABLED`) | Permanent. It is configuration |
+| **Rollout switch** | A change meant to be invisible (a reorder on the turn path, a fix, a cache), kept only so a bad deploy can be undone without a revert (`KB_SEARCH_AHEAD_ENABLED`, `CONFIG_CACHE_ENABLED`) | Retires once the change is proven |
+
+Rollout switches retire because the off path costs something every day it exists. It doubles a code path, often on the turn path, and its tests have to cover both sides. Nobody runs it, so it breaks without anyone noticing. A kill switch that has not been flipped in months gives false confidence.
+
+- **When adding a rollout switch**, write its retirement condition in the reader's docstring and in the docs-site row. The default condition is: shipped in a production release, then at least two weeks there with the switch never flipped and the change's readout recorded. Use a stricter condition when the risk only shows up in a situation prod hasn't reached yet (for example, `AGENT_BUILD_SHARED_SESSION_ENABLED` waits for Runtime V2, because its known risk is a V2 snapshot).
+- **Retiring one** is a cleanup PR, batched once per release cycle. Delete the reader, the off path and its tests, any env or CDK wiring, and the docs row. Add a CHANGELOG `Removed` entry naming the variable, because a deployment that set it `=false` loses that opt-out.
+- **Promoting an in-development flag to default-on** also means picking its kind. A finished feature usually stays a feature switch. Any rollout switch that guarded its internals can retire on the usual condition.
+
 Current in-development flags: **Shared Projects** (`PROJECTS_ENABLED` / `CDK_PROJECTS_ENABLED`, `features.projects`). It's on in the `development` GitHub environment and in `environment.development.ts`, and off in production.
 
 ## SSE Event Types

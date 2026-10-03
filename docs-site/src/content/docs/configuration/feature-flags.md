@@ -18,6 +18,10 @@ paying for by default, and what can I turn off?", this page is the answer.
   enrichment).
 - **Almost nothing costs extra just by being on.** The cost-bearing flags are
   called out explicitly in [Flags that cost money](#flags-that-cost-money).
+- **Some runtime-only flags are temporary.** A flag marked *Rollout* exists
+  only to undo a recent change quickly, and it will be removed. Don't build on
+  its off position. See
+  [Feature switches and rollout switches](#feature-switches-and-rollout-switches).
 :::
 
 ## How flags work
@@ -88,35 +92,40 @@ what you get if you set nothing.
 These have **no CDK variable**. They are **all ON** and can only be turned off by
 adding the env var directly to the container task definition. They are grouped
 here because a fork operator will never find them by looking at `CDK_*`
-variables. None of them costs extra against the model **except** tool summaries.
+variables. Two of them cost extra against the model: tool summaries, and the
+extra call compaction makes to pin facts. The **Kind** column says whether a flag
+is permanent (*Feature*) or will be removed (*Rollout*, with the condition for
+removing it).
 
-| Env var | Default | Cost | What it gates |
-|---|:---:|:---:|---|
-| `TOOL_SUMMARIES_ENABLED` | **ON** | **small — Nova Micro** | Model-generated one-line summary per tool batch. Off ⇒ falls back to free client-side formatters |
-| `AGENT_STATUS_ENABLED` | ON | none | Live "what the agent is doing" status line + per-tool durations |
-| `AGENT_STATUS_LIVE_DRAIN_ENABLED` | ON | none | Drains status during tool-execution silence (fixes bundled-late narration) |
-| `AGENT_PREPARING_PHASE_ENABLED` | ON | none | Builds the agent inside the stream so a cold start is narrated, not dead air |
-| `MID_TURN_STEERING_ENABLED` | ON | none | Inject a follow-up into a running turn at tool boundaries |
-| `ANNOUNCEMENTS_ENABLED` | ON | none | Feature-announcement authoring + user-facing surfaces |
-| `RESPONSE_FEEDBACK_ENABLED` | ON | none | Thumbs up/down on assistant messages |
-| `ASK_USER_QUESTION_ENABLED` | ON | none | `ask_user_question` built-in tool (pauses a turn for structured input) |
-| `BROWSER_TAKEOVER_ENABLED` | ON | none | `request_user_login` — hand the browser to the user to sign in |
-| `BROWSER_TOOL_ENABLED` | ON | usage-based | The `browse_web` tool itself (AgentCore Browser sessions bill while active) |
-| `WORKSPACE_TOOLS_ENABLED` | ON | none | `workspace_list` / `read` / `write` file tools |
-| `DOCUMENT_READ_ENABLED` | ON | none | `document_read` tool for sessions carrying a readable attachment |
-| `ATTACHMENT_TOOL_AUTOENABLE_ENABLED` | ON | none | Auto-injects spreadsheet-analysis tools when a spreadsheet is attached |
-| `ATTACHMENT_TURN_GUARD_ENABLED` | ON | none | Enforces per-message file count + inline-byte budget |
-| `ADMIN_ALWAYS_ON_TOOLS_ENABLED` | ON | none | Unions admin-flagged `alwaysOn` tools into every turn (inert with no data) |
-| `COST_DIAGNOSTICS_ENABLED` | ON | none | Content-free behavioral counters for the admin session profile |
-| `CONFIG_CACHE_ENABLED` | ON | **saves** money | In-process cache of tenant-global catalogs (fewer DynamoDB reads) |
-| `AGENT_BUILD_SHARED_SESSION_ENABLED` | ON | none (**saves** ~0.5s on a cold first turn) | One process-wide boto3 session for the agent build's SDK clients (Memory session manager, strategy-id discovery, Bedrock model), built at container warm-up. Off ⇒ each SDK builds its own session, as before |
-| `MCP_PARALLEL_PREFLIGHT_ENABLED` | ON | none (**saves** all but the slowest server's startup on a first turn with several external MCP servers — ~9.5s measured on dev with two cold servers) | Pre-flights an agent's external MCP servers concurrently when the agent is built, instead of one after another; clients are still registered in catalog order, so tool order (and the prompt-cache prefix) is unchanged. Off ⇒ servers load one at a time, as before |
-| `KB_SEARCH_AHEAD_ENABLED` | ON | none (**saves** up to the knowledge-base search's round trips — ~0.4s measured on dev — on an agent turn with a knowledge base) | Starts an agent turn's knowledge-base search where it always ran but awaits it after the agent build, ahead of the citation frames; the augmented message and citations are byte-identical. Off ⇒ the search is awaited before the build, as before |
-| `MEMORY_RETRIEVAL_PREFETCH_ENABLED` | ON | none (**saves** ~200ms on every turn with long-term memory) | Starts the long-term-memory lookup as soon as the user's message is added, overlapping the two Memory writes the SDK awaits first; the result is applied at the same point as before, so persisted and live messages are unchanged. Off ⇒ the lookup runs after the writes, as before |
-| `HISTORY_COUNT_PREFETCH_ENABLED` | ON | none (**saves** ~100–400ms on every warm turn, growing with conversation length) | Reads the per-turn count of stored messages (the base every per-message metadata index is computed from) on a worker thread started at the head of the turn, instead of before the model call; counts only messages created before the turn began, so the index is the one the inline read gave. Off ⇒ the count is read at the head of the turn, as before |
-| `DOCUMENT_OFFLOAD_ENABLED` | ON | none | Document-context-offload pipeline (see spec) |
-| `DOCUMENT_REHYDRATE_ENABLED` | ON | none | Re-injects offloaded document context on demand |
-| `DOCUMENT_DIGEST_ENABLED` | ON | possible side-channel | Document digest step of the offload pipeline |
+| Env var | Default | Kind | Cost | What it gates |
+|---|:---:|---|:---:|---|
+| `TOOL_SUMMARIES_ENABLED` | **ON** | Feature | **small — Nova Micro** | Model-generated one-line summary per tool batch. Off ⇒ falls back to free client-side formatters |
+| `AGENT_STATUS_ENABLED` | ON | Feature | none | Live "what the agent is doing" status line + per-tool durations |
+| `AGENT_STATUS_LIVE_DRAIN_ENABLED` | ON | Rollout — eligible now (shipped ≤ 1.24.0) | none | Drains status during tool-execution silence (fixes bundled-late narration) |
+| `AGENT_PREPARING_PHASE_ENABLED` | ON | Rollout — eligible now (shipped ≤ 1.24.0) | none | Builds the agent inside the stream so a cold start is narrated, not dead air |
+| `MID_TURN_STEERING_ENABLED` | ON | Feature | none | Inject a follow-up into a running turn at tool boundaries |
+| `ANNOUNCEMENTS_ENABLED` | ON | Feature | none | Feature-announcement authoring + user-facing surfaces |
+| `RESPONSE_FEEDBACK_ENABLED` | ON | Feature | none | Thumbs up/down on assistant messages |
+| `ASK_USER_QUESTION_ENABLED` | ON | Feature | none | `ask_user_question` built-in tool (pauses a turn for structured input) |
+| `BROWSER_TAKEOVER_ENABLED` | ON | Feature | none | `request_user_login` — hand the browser to the user to sign in |
+| `BROWSER_TOOL_ENABLED` | ON | Feature | usage-based | The `browse_web` tool itself (AgentCore Browser sessions bill while active) |
+| `WORKSPACE_TOOLS_ENABLED` | ON | Feature | none | `workspace_list` / `read` / `write` file tools |
+| `DOCUMENT_READ_ENABLED` | ON | Feature | none | `document_read` tool for sessions carrying a readable attachment |
+| `ATTACHMENT_TOOL_AUTOENABLE_ENABLED` | ON | Feature | none | Auto-injects spreadsheet-analysis tools when a spreadsheet is attached |
+| `ATTACHMENT_TURN_GUARD_ENABLED` | ON | Rollout — eligible now (shipped ≤ 1.24.0) | none | Enforces per-message file count + inline-byte budget |
+| `ADMIN_ALWAYS_ON_TOOLS_ENABLED` | ON | Feature | none | Unions admin-flagged `alwaysOn` tools into every turn (inert with no data) |
+| `COST_DIAGNOSTICS_ENABLED` | ON | Feature | none | Content-free behavioral counters for the admin session profile |
+| `CONFIG_CACHE_ENABLED` | ON | Rollout — eligible now (shipped ≤ 1.24.0) | **saves** money | In-process cache of tenant-global catalogs (fewer DynamoDB reads) |
+| `AGENT_BUILD_SHARED_SESSION_ENABLED` | ON | Rollout — retires after the Runtime V2 migration, once a V2 snapshot restore is clean | none (**saves** ~0.5s on a cold first turn) | One process-wide boto3 session for the agent build's SDK clients (Memory session manager, strategy-id discovery, Bedrock model), built at container warm-up. Off ⇒ each SDK builds its own session, as before |
+| `MCP_PARALLEL_PREFLIGHT_ENABLED` | ON | Rollout — retires after one prod release + 2 weeks clean | none (**saves** all but the slowest server's startup on a first turn with several external MCP servers — ~9.5s measured on dev with two cold servers) | Pre-flights an agent's external MCP servers concurrently when the agent is built, instead of one after another; clients are still registered in catalog order, so tool order (and the prompt-cache prefix) is unchanged. Off ⇒ servers load one at a time, as before |
+| `KB_SEARCH_AHEAD_ENABLED` | ON | Rollout — retires after one prod release + 2 weeks clean | none (**saves** up to the knowledge-base search's round trips — ~0.4s measured on dev — on an agent turn with a knowledge base) | Starts an agent turn's knowledge-base search where it always ran but awaits it after the agent build, ahead of the citation frames; the augmented message and citations are byte-identical. Off ⇒ the search is awaited before the build, as before |
+| `MEMORY_RETRIEVAL_PREFETCH_ENABLED` | ON | Rollout — retires after one prod release + 2 weeks clean | none (**saves** ~200ms on every turn with long-term memory) | Starts the long-term-memory lookup as soon as the user's message is added, overlapping the two Memory writes the SDK awaits first; the result is applied at the same point as before, so persisted and live messages are unchanged. Off ⇒ the lookup runs after the writes, as before |
+| `HISTORY_COUNT_PREFETCH_ENABLED` | ON | Rollout — retires after one prod release + 2 weeks clean | none (**saves** ~100–400ms on every warm turn, growing with conversation length) | Reads the per-turn count of stored messages (the base every per-message metadata index is computed from) on a worker thread started at the head of the turn, instead of before the model call; counts only messages created before the turn began, so the index is the one the inline read gave. Off ⇒ the count is read at the head of the turn, as before |
+| `INLINE_ATTACHMENT_PERSIST_ENABLED` | ON | Rollout — retires after one prod release + 2 weeks clean | none | Writes a headless caller's inline spreadsheet or deck bytes to S3 as session files before the turn runs, so the tools the guidance note names can reach them. The SPA uploads first, so it never takes this path. Off ⇒ diverted inline attachments are dropped, as before |
+| `COMPACTION_SUMMARY_EXTRACT_ENABLED` | ON | Rollout — retires after a production quality readout of extract-then-compress | one extra side-channel call per compaction cut | Pins standing instructions, decisions, identifiers and latest values verbatim ahead of the compaction summary (two concurrent calls). Off ⇒ the single plain compression call |
+| `DOCUMENT_OFFLOAD_ENABLED` | ON | Rollout — retires once the quality check waived in `docs/specs/document-offload-evaluation.md` has run | none | Document-context-offload pipeline (see spec) |
+| `DOCUMENT_REHYDRATE_ENABLED` | ON | Rollout — retires with `DOCUMENT_OFFLOAD_ENABLED` | none | Re-injects offloaded document context on demand |
+| `DOCUMENT_DIGEST_ENABLED` | ON | Rollout — retires with `DOCUMENT_OFFLOAD_ENABLED` | possible side-channel | Document digest step of the offload pipeline |
 
 :::note
 `SCHEDULED_RUNS_ENABLED`, `KB_SYNC_ENABLED`, `MEMORY_SPACES_ENABLED`,
@@ -125,6 +134,31 @@ background Lambdas/dispatchers — but you configure them through their `CDK_*`
 variable in the table above, not by hand. The Lambda-side readers default to
 *off* when unset, which is why CDK always sets them explicitly.
 :::
+
+## Feature switches and rollout switches
+
+Every default-on flag is one of two kinds:
+
+- **Feature switch**: turns off a capability you may reasonably not want,
+  because it costs money, widens what users can do, or is a product choice.
+  These are configuration and are permanent. Every CDK-exposed flag is a
+  feature switch or an opt-in.
+- **Rollout switch**: guards a change that is meant to be invisible to users,
+  such as a reordering on the chat path, a fix or a cache. It exists so the
+  maintainers can undo a bad deploy without reverting code. Nobody needs the off
+  position once the change is proven, and an off path that nobody runs stops
+  working without anyone noticing. So rollout switches **are removed**.
+
+A rollout switch normally retires after it has shipped in a production release
+and run there for at least two weeks with no one needing to flip it. Some
+switches wait for a stricter condition, which the Kind column states.
+Retirements are batched into one cleanup per release cycle, and each removed
+variable is listed under **Removed** in the
+[CHANGELOG](https://github.com/Boise-State-Development/agentcore-public-stack/blob/main/CHANGELOG.md).
+
+**If you've set a rollout switch to `false`**, treat it as temporary and tell
+the maintainers why, through an issue. A rollout switch someone actually needs
+turned off is a bug report, and it stays until that bug is fixed.
 
 ## Flags that cost money
 
@@ -143,10 +177,14 @@ If you care about the bill, these are the only flags that move it:
 - **`CDK_KB_SYNC_ENABLED`** — default **ON**. Runs a scheduled Lambda that
   re-embeds assistant KB sources; cost is the embedding calls + Lambda time on
   the schedule. Turn off if you do not use assistant knowledge bases.
-- **`TOOL_SUMMARIES_ENABLED`** — default **ON**, and the one default-on flag with
-  a recurring model cost: one bounded **Nova Micro** call per tool batch (a
-  side-channel that never touches the cacheable prompt prefix). Cheap, but real.
-  Set to `false` to fall back to free client-side tool formatters.
+- **`TOOL_SUMMARIES_ENABLED`** — default **ON**, with a recurring model cost:
+  one bounded **Nova Micro** call per tool batch (a side-channel that never
+  touches the cacheable prompt prefix). Cheap, but real. Set to `false` to fall
+  back to free client-side tool formatters.
+- **`COMPACTION_SUMMARY_EXTRACT_ENABLED`** — default **ON**. Each compaction cut
+  makes one extra summary-model call to pin facts verbatim. Cuts are infrequent,
+  so the extra cost is small. This is a rollout switch, so plan on it going
+  away rather than turning it off to save money.
 - **`CDK_FINE_TUNING_ENABLED`** — default **ON**, but the routes are free; only a
   SageMaker training job actually launched by a user bills, and
   `CDK_FINE_TUNING_DEFAULT_QUOTA_HOURS=0` keeps it admin-whitelist-only.
@@ -192,4 +230,5 @@ for the authoritative list and defaults:
   `infrastructure/lib/constructs/*/*-environment.ts` maps.
 
 If you add a flag, update this page in the same PR — that is the whole point of
-having one canonical list.
+having one canonical list. Give a rollout switch its retirement condition in the
+Kind column when you add it.
