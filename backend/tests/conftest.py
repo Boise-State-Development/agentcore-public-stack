@@ -134,6 +134,26 @@ def _clear_config_cache():
 
 
 @pytest.fixture(autouse=True)
+def _reset_cached_aws_clients():
+    """Drop every process-cached boto3 client and resource between tests.
+
+    The knowledge base's KB_Record reads and document-status lookups use
+    ``apis.shared.aws_clients`` handles, and they are reached from tests all over
+    the tree — many with their own ``mock_aws()`` or a ``patch("boto3.resource")``
+    rather than the per-directory ``aws`` fixtures that already reset this cache.
+    A handle cached under one test's mock (or one test's MagicMock) must never
+    answer the next test's call.
+    """
+    from apis.shared.aws_clients import reset_cached_clients
+
+    reset_cached_clients()
+    try:
+        yield
+    finally:
+        reset_cached_clients()
+
+
+@pytest.fixture(autouse=True)
 def _clear_env_config_bleed():
     saved = {
         k: os.environ.pop(k)

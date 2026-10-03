@@ -34,6 +34,9 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 COPY backend/src/apis/shared/__init__.py ${LAMBDA_TASK_ROOT}/apis/shared/__init__.py
 COPY backend/src/apis/shared/timestamps.py ${LAMBDA_TASK_ROOT}/apis/shared/timestamps.py
 COPY backend/src/apis/shared/dynamo_errors.py ${LAMBDA_TASK_ROOT}/apis/shared/dynamo_errors.py
+# aws_clients.py — kb_backend/records.py and assistants/rag_service.py read the
+# assistants table through its process-cached DynamoDB resource.
+COPY backend/src/apis/shared/aws_clients.py ${LAMBDA_TASK_ROOT}/apis/shared/aws_clients.py
 # feature_flags.py + caching/ — oauth/provider_repository.py memoizes its
 # provider list in the process-wide config cache, which reads the
 # CONFIG_CACHE_ENABLED kill switch. Both are module-level imports, so a miss

@@ -76,7 +76,9 @@ class FakeManagedBackend:
         # which is the order Bedrock's Retrieve returns.
         self._results = results
 
-    async def search(self, kb_ref: str, query: str, top_k: int = DEFAULT_TOP_K) -> List[Chunk]:
+    async def search(
+        self, kb_ref: str, query: str, top_k: int = DEFAULT_TOP_K, *, record=None
+    ) -> List[Chunk]:
         return [
             Chunk(
                 text=result["text"],

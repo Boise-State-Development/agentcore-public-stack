@@ -58,7 +58,9 @@ class StubBackend:
         self._error = error
         self.calls: List[Dict[str, Any]] = []
 
-    async def search(self, kb_ref: str, query: str, top_k: int = DEFAULT_TOP_K) -> List[Chunk]:
+    async def search(
+        self, kb_ref: str, query: str, top_k: int = DEFAULT_TOP_K, *, record=None
+    ) -> List[Chunk]:
         self.calls.append({"kb_ref": kb_ref, "query": query, "top_k": top_k})
         if self._delay:
             await asyncio.sleep(self._delay)
@@ -128,7 +130,7 @@ async def _search(legacy: StubBackend, record: Dict[str, Any], top_k: int = 5):
     ), patch(
         "apis.shared.assistants.rag_service.resolve_backend", return_value=legacy
     ), patch(
-        "apis.shared.assistants.rag_service.boto3.resource",
+        "boto3.resource",
         return_value=_all_documents_complete(),
     ), patch(
         "apis.shared.assistants.rag_service.emit_count"
@@ -328,7 +330,7 @@ class TestThePilotAddsNoLatency:
         ), patch(
             "apis.shared.assistants.rag_service.resolve_backend", return_value=legacy
         ), patch(
-            "apis.shared.assistants.rag_service.boto3.resource",
+            "boto3.resource",
             return_value=_all_documents_complete(),
         ), patch(
             "apis.shared.assistants.rag_service.emit_count"
@@ -355,14 +357,14 @@ class TestThePilotAddsNoLatency:
         order: List[str] = []
 
         class OrderedLegacy(StubBackend):
-            async def search(self, kb_ref, query, top_k=DEFAULT_TOP_K):
+            async def search(self, kb_ref, query, top_k=DEFAULT_TOP_K, *, record=None):
                 order.append("legacy-start")
                 await asyncio.sleep(0.05)
                 order.append("legacy-end")
                 return [_chunk("doc-legacy-1")]
 
         class OrderedManaged(StubBackend):
-            async def search(self, kb_ref, query, top_k=DEFAULT_TOP_K):
+            async def search(self, kb_ref, query, top_k=DEFAULT_TOP_K, *, record=None):
                 order.append("managed-start")
                 return [_chunk("doc-managed-1")]
 

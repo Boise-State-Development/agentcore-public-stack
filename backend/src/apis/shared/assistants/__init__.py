@@ -39,6 +39,7 @@ from .service import (
 from .rag_service import (
     augment_prompt_with_context,
     resolve_context_cap,
+    search_assistant_knowledgebase_with_cap,
     search_assistant_knowledgebase_with_formatting,
 )
 
@@ -76,5 +77,6 @@ __all__ = [
     # RAG service functions
     "augment_prompt_with_context",
     "resolve_context_cap",
+    "search_assistant_knowledgebase_with_cap",
     "search_assistant_knowledgebase_with_formatting",
 ]

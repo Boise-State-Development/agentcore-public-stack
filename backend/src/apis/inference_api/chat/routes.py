@@ -2923,13 +2923,14 @@ async def _search_and_augment(
     """
     from apis.shared.assistants.rag_service import (
         augment_prompt_with_context,
-        resolve_context_cap,
-        search_assistant_knowledgebase_with_formatting,
+        search_assistant_knowledgebase_with_cap,
     )
 
     try:
         logger.info("Searching knowledge base for assistant...")
-        context_chunks = await search_assistant_knowledgebase_with_formatting(
+        # The cap comes back with the results: both are decided from the one
+        # KB_Record read the search makes, rather than reading it again here.
+        context_chunks, cap = await search_assistant_knowledgebase_with_cap(
             assistant_id=assistant_id,
             query=message,
             top_k=5,
@@ -2945,7 +2946,6 @@ async def _search_and_augment(
         # Engine-aware cap (Requirement 3.2): managed gets 8,000 so
         # reranking's top_k chunks actually reach the model; legacy keeps
         # 2,000. See rag_service.resolve_context_cap / HANDOFF §5.40.
-        cap = resolve_context_cap(assistant_id)
         augmented = augment_prompt_with_context(
             user_message=message, context_chunks=context_chunks, max_context_length=cap
         )

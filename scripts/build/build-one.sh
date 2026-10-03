@@ -103,6 +103,7 @@ case "$SERVICE" in
         MANIFESTS=(
             "backend/src/apis/shared/__init__.py"
             "backend/src/apis/shared/timestamps.py"
+            "backend/src/apis/shared/aws_clients.py"
         )
         # The RAG ingestion Lambda is arm64 (see the rag-ingestion CDK
         # construct), and the Dockerfile installs arm64 torch wheels.
@@ -178,6 +179,7 @@ case "$SERVICE" in
         MANIFESTS=(
             "backend/src/apis/shared/__init__.py"
             "backend/src/apis/shared/timestamps.py"
+            "backend/src/apis/shared/aws_clients.py"
         )
         # All four kb-migration Lambdas are arm64 (see the managed-kb
         # CDK construct).
