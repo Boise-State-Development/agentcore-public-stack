@@ -51,13 +51,12 @@ Score direction
 client already reads. The rename stops at the seam; no caller has to change.
 """
 
+import asyncio
 import logging
 import os
 import re
 import time
 from typing import Any, Dict, List, Mapping, Optional, Set, Tuple
-
-import boto3
 
 from apis.shared.assistants.kb_access import KbAccess
 from apis.shared.kb_backend.dual_read import schedule_observation, start_managed_read
@@ -114,6 +113,27 @@ def resolve_context_cap(assistant_id: str, *, record: Optional[Mapping[str, Any]
     return MANAGED_MAX_CONTEXT_CHARS if engine == ENGINE_MANAGED else MAX_CONTEXT_CHARS
 
 
+async def _search_then_filter(
+    backend: Any,
+    assistant_id: str,
+    query: str,
+    top_k: int,
+    record: Optional[Mapping[str, Any]] = None,
+) -> Tuple[List[Chunk], float, List[Chunk]]:
+    """``(raw chunks, search ms, chunks whose document is complete)``.
+
+    Runs on a private event loop in a worker thread (see the caller). Only the
+    backend call and the filter belong here: neither schedules anything that
+    must outlive this loop. ``search ms`` times the backend call alone — it is
+    the number the dual-read observation compares across engines.
+    """
+    started = time.perf_counter()
+    chunks = await backend.search(assistant_id, query, top_k, record=record)
+    search_ms = (time.perf_counter() - started) * 1000.0
+    complete = _filter_chunks_by_document_status(chunks, assistant_id) if chunks else []
+    return chunks, search_ms, complete
+
+
 async def search_assistant_knowledgebase_with_formatting(
     assistant_id: str,
     query: str,
@@ -121,8 +141,30 @@ async def search_assistant_knowledgebase_with_formatting(
     *,
     access: Optional[KbAccess],
 ) -> List[Dict[str, Any]]:
+    """Search an assistant's knowledge base; see :func:`search_assistant_knowledgebase_with_cap`.
+
+    For callers that do not augment a prompt and so have no use for the cap.
     """
-    Search assistant knowledge base and return formatted results
+    results, _ = await search_assistant_knowledgebase_with_cap(
+        assistant_id, query, top_k, access=access
+    )
+    return results
+
+
+async def search_assistant_knowledgebase_with_cap(
+    assistant_id: str,
+    query: str,
+    top_k: int = DEFAULT_TOP_K,
+    *,
+    access: Optional[KbAccess],
+) -> Tuple[List[Dict[str, Any]], int]:
+    """
+    Search assistant knowledge base and return formatted results, with the context cap
+
+    The cap is :func:`resolve_context_cap` decided from the same KB_Record that
+    chose the backend. Returning it here is what lets a turn read that record
+    once: the backend's own lookup of ``awsKbId`` and the cap each used to read it
+    again, on a fresh client, on the turn's critical path (~50ms apiece on dev).
 
     Resolves the knowledge base's backend, delegates the search across the seam,
     then applies the parity rules that must hold on every backend: the document
@@ -140,13 +182,14 @@ async def search_assistant_knowledgebase_with_formatting(
             ``kb_access.resolve_kb_access`` if it is not.
 
     Returns:
-        List of dictionaries containing:
+        ``(results, cap)``. ``results`` is a list of dictionaries containing:
         - text: Chunk text content
         - distance: Similarity distance (lower = more similar)
         - metadata: Original metadata from vector store
         - key: Vector key/ID
 
-        Empty when the caller has no grant — no backend is contacted at all.
+        Empty when the caller has no grant — no backend is contacted at all, and
+        ``cap`` is the legacy :data:`MAX_CONTEXT_CHARS` (nothing to cap).
     """
     # Authorization first, before the backend resolution, the query clamp, and
     # any AWS call (Requirement 25.1). Ordering is the requirement: a check that
@@ -158,7 +201,7 @@ async def search_assistant_knowledgebase_with_formatting(
             f"no resolved access grant"
         )
         emit_count(METRIC_ACCESS_DENIED, dimensions={"reason": "no_grant"})
-        return []
+        return [], MAX_CONTEXT_CHARS
 
     if access.assistant_id != assistant_id:
         # A grant for a different assistant is not a grant for this one. This is
@@ -170,14 +213,15 @@ async def search_assistant_knowledgebase_with_formatting(
             f"{access.assistant_id}, not {assistant_id}"
         )
         emit_count(METRIC_ACCESS_DENIED, dimensions={"reason": "grant_mismatch"})
-        return []
+        return [], MAX_CONTEXT_CHARS
 
     managed_task = None
+    cap = MAX_CONTEXT_CHARS
     try:
-        # One record read serves both questions: which backend to use, and whether
-        # this knowledge base is in the dual-read pilot. Reading it here rather
-        # than letting the resolver read it internally is what keeps the pilot
-        # from costing an extra DynamoDB round trip on every turn.
+        # One record read serves every question this search asks of it: which
+        # backend to use, whether this knowledge base is in the dual-read pilot,
+        # the managed backend's ``awsKbId``, and the context cap. Each of those
+        # used to be its own DynamoDB round trip on the turn's critical path.
         record = load_record(assistant_id)
         backend = resolve_backend(assistant_id, record=record)
 
@@ -189,6 +233,7 @@ async def search_assistant_knowledgebase_with_formatting(
         # the SAME record ``resolve_backend`` just used (no extra DynamoDB round
         # trip), so the logged engine can never disagree with the one that ran.
         engine = resolve_engine_for(assistant_id, record=record)
+        cap = resolve_context_cap(assistant_id, record=record)
         logger.info(
             "knowledge base retrieval for assistant %s served by engine=%s (%s)",
             assistant_id,
@@ -210,9 +255,17 @@ async def search_assistant_knowledgebase_with_formatting(
         # ``None`` whenever there is no comparison to make.
         managed_task = start_managed_read(record, assistant_id, query, top_k)
 
-        started = time.perf_counter()
-        chunks = await backend.search(assistant_id, query, top_k)
-        legacy_ms = (time.perf_counter() - started) * 1000.0
+        # The search and the document-status filter run back to back on one
+        # worker thread, on a loop of its own. An agent turn starts this search
+        # before the agent build and awaits it after (turn-path spec §5 P3b),
+        # and a cold build holds the event loop: had the filter run here, after
+        # the search, its DynamoDB reads would have waited for the build to let
+        # go (~60ms of residual `rag_wait` on dev). Everything that schedules
+        # onto THIS loop — the observational read above, the observation and
+        # the activity touch below — stays on it.
+        chunks, legacy_ms, complete_chunks = await asyncio.to_thread(
+            asyncio.run, _search_then_filter(backend, assistant_id, query, top_k, record)
+        )
 
         # Detach the comparison. Legacy is what gets served either way — including
         # when it is empty, which is a finding rather than a reason to reach for
@@ -234,10 +287,10 @@ async def search_assistant_knowledgebase_with_formatting(
 
         if not chunks:
             logger.info(f"No vectors found for assistant {assistant_id} with query: {query[:50]}...")
-            return []
+            return [], cap
 
         # Filter out chunks from documents that are not in "complete" status
-        chunks = _filter_chunks_by_document_status(chunks, assistant_id)
+        chunks = complete_chunks
 
         # Format results - return document_id for on-demand download URL generation
         formatted_results = []
@@ -266,7 +319,7 @@ async def search_assistant_knowledgebase_with_formatting(
             )
 
         logger.info(f"Found {len(deduped_results)} relevant chunks for assistant {assistant_id}")
-        return deduped_results
+        return deduped_results, cap
 
     except Exception as e:
         logger.error(f"Error searching knowledge base for assistant {assistant_id}: {e}", exc_info=True)
@@ -277,7 +330,19 @@ async def search_assistant_knowledgebase_with_formatting(
             # exception was never retrieved.
             managed_task.cancel()
         # Return empty list on error (graceful degradation)
-        return []
+        return [], cap
+
+
+def _documents_table(table_name: str, region: str) -> Any:
+    """The assistants table for the status lookups, on the process-cached resource.
+
+    A fresh ``boto3.resource`` per search paid ~45–55ms for its first ``GetItem`` in
+    the Runtime (a new connection pool) against ~3ms on a reused one, and this
+    lookup sits between the retrieval and the model's first token.
+    """
+    from apis.shared.aws_clients import get_dynamodb_table
+
+    return get_dynamodb_table(table_name, region)
 
 
 def _filter_chunks_by_document_status(chunks: List[Chunk], assistant_id: str) -> List[Chunk]:
@@ -359,8 +424,7 @@ def _filter_vectors_by_document_status(vectors: List[Dict[str, Any]], assistant_
         table_name = os.environ.get("DYNAMODB_ASSISTANTS_TABLE_NAME")
         if table_name:
             region = os.environ.get("AWS_REGION", "us-west-2")
-            dynamodb = boto3.resource("dynamodb", region_name=region)
-            table = dynamodb.Table(table_name)
+            table = _documents_table(table_name, region)
             for doc_id in doc_ids:
                 try:
                     response = table.get_item(

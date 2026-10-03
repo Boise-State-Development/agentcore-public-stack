@@ -356,43 +356,253 @@
           }
 
           @if (showVoiceSlot()) {
-            <!-- Voice Toggle Button -->
-            <button
-              type="button"
-              (click)="toggleVoice()"
-              [disabled]="isDictating()"
-              [class]="voiceButtonClass() + ' disabled:cursor-not-allowed disabled:opacity-40'"
-              [attr.aria-label]="voiceAriaLabel()"
-              [appTooltip]="voiceTooltip()"
-              appTooltipPosition="top"
+            <!--
+              Voice mode: a split control. The waveform starts (or ends) a
+              conversation; the chevron beside it opens the options — which
+              voice answers, which microphone listens. The chevron leaves while
+              a session is live, because both options are fixed at connect
+              (the voice at Bedrock's promptStart, the mic at getUserMedia).
+              Hovering anywhere on the control sets the waveform moving, so the
+              icon reads as "sound both ways" before it is pressed.
+            -->
+            <div
+              class="voice-control flex items-center"
+              [class.voice-control--idle]="!isVoiceActive()"
+              role="group"
+              aria-label="Voice mode"
             >
-              @if (voiceStatus() === 'listening') {
-                <!-- Pulsing dot indicator for listening -->
-                <span class="relative flex size-3">
-                  <span class="absolute inline-flex size-full animate-ping rounded-full bg-state-danger-400 opacity-75"></span>
-                  <span class="relative inline-flex size-3 rounded-full bg-state-danger-500"></span>
-                </span>
-              } @else if (voiceStatus() === 'speaking') {
-                <!-- Wave bars for speaking -->
-                <span class="flex items-center gap-0.5" aria-hidden="true">
-                  <span class="h-3 w-0.5 animate-bounce rounded-full bg-state-success-500" style="animation-delay: 0ms;"></span>
-                  <span class="h-4 w-0.5 animate-bounce rounded-full bg-state-success-500" style="animation-delay: 150ms;"></span>
-                  <span class="h-3 w-0.5 animate-bounce rounded-full bg-state-success-500" style="animation-delay: 300ms;"></span>
-                </span>
-              } @else if (voiceStatus() === 'connecting') {
-                <!-- Spinner for connecting -->
-                <app-spinner size="md" label="Connecting" />
-              } @else {
+              <button
+                type="button"
+                (click)="toggleVoice()"
+                [disabled]="isDictating()"
+                [class]="voiceButtonClass() + ' disabled:cursor-not-allowed disabled:opacity-40'"
+                [attr.aria-label]="voiceAriaLabel()"
+                [appTooltip]="voiceTooltip()"
+                appTooltipPosition="top"
+              >
+                @if (voiceStatus() === 'listening') {
+                  <!-- Pulsing dot indicator for listening -->
+                  <span class="relative flex size-3">
+                    <span class="absolute inline-flex size-full animate-ping rounded-full bg-state-danger-400 opacity-75"></span>
+                    <span class="relative inline-flex size-3 rounded-full bg-state-danger-500"></span>
+                  </span>
+                } @else if (voiceStatus() === 'speaking') {
+                  <!-- Wave bars for speaking -->
+                  <span class="flex items-center gap-0.5" aria-hidden="true">
+                    <span class="h-3 w-0.5 animate-bounce rounded-full bg-state-success-500" style="animation-delay: 0ms;"></span>
+                    <span class="h-4 w-0.5 animate-bounce rounded-full bg-state-success-500" style="animation-delay: 150ms;"></span>
+                    <span class="h-3 w-0.5 animate-bounce rounded-full bg-state-success-500" style="animation-delay: 300ms;"></span>
+                  </span>
+                } @else if (voiceStatus() === 'connecting') {
+                  <!-- Spinner for connecting -->
+                  <app-spinner size="md" label="Connecting" />
+                } @else {
+                  <!--
+                    Waveform for idle. Voice mode used to wear the microphone; the mic now
+                    means Dictate (speech into the composer), and a conversation is sound
+                    both ways — hence the waveform. One path per bar so each can move on
+                    its own beat (see `.voice-wave-bar`).
+                  -->
+                  <svg class="voice-wave size-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
+                    <path class="voice-wave-bar" d="M3 10.5v3" />
+                    <path class="voice-wave-bar" d="M7 7.5v9" />
+                    <path class="voice-wave-bar" d="M11 4v16" />
+                    <path class="voice-wave-bar" d="M15 7.5v9" />
+                    <path class="voice-wave-bar" d="M19 10.5v3" />
+                  </svg>
+                }
+              </button>
+
+              @if (!isVoiceActive()) {
                 <!--
-                  Waveform for idle. Voice mode used to wear the microphone; the mic now
-                  means Dictate (speech into the composer), and a conversation is sound
-                  both ways — hence the waveform.
+                  The open/closed events are the TRIGGER's (`cdkMenuOpened` /
+                  `cdkMenuClosed`); `cdkMenu` itself has only `closed`. The
+                  trigger also owns `aria-haspopup` and `aria-expanded`.
                 -->
-                <svg class="size-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
-                  <path d="M3 10.5v3M7 7.5v9M11 4v16M15 7.5v9M19 10.5v3" />
-                </svg>
+                <button
+                  type="button"
+                  [cdkMenuTriggerFor]="voiceMenu"
+                  [cdkMenuPosition]="voiceMenuPositions"
+                  (cdkMenuOpened)="onVoiceMenuOpened()"
+                  (cdkMenuClosed)="onVoiceMenuClosed()"
+                  [disabled]="isDictating()"
+                  class="voice-menu-trigger flex h-10 w-5 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] disabled:cursor-not-allowed disabled:opacity-40 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-gray-300"
+                  aria-label="Voice mode options"
+                  appTooltip="Voice options"
+                  appTooltipPosition="top"
+                >
+                  <svg
+                    viewBox="0 0 20 20"
+                    fill="currentColor"
+                    aria-hidden="true"
+                    class="size-3.5 transition-transform"
+                    [class.rotate-180]="voiceMenuOpen()"
+                  >
+                    <path
+                      fill-rule="evenodd"
+                      d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z"
+                      clip-rule="evenodd"
+                    />
+                  </svg>
+                </button>
               }
-            </button>
+            </div>
+
+            <ng-template #voiceMenu>
+              <div
+                cdkMenu
+                class="voice-menu w-64 rounded-md bg-white p-1.5 shadow-lg ring-1 ring-black/5 focus:outline-hidden dark:bg-gray-800 dark:ring-white/10"
+                role="menu"
+                aria-orientation="vertical"
+                aria-label="Voice mode options"
+              >
+                <p class="px-3 pb-1 pt-1.5 text-[11px]/4 font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                  Voice mode
+                </p>
+
+                <!-- Which voice answers -->
+                <button
+                  cdkMenuItem
+                  type="button"
+                  [cdkMenuTriggerFor]="voicePickerMenu"
+                  [cdkMenuPosition]="voiceSubmenuPositions"
+                  class="flex w-full items-center justify-between gap-2 rounded-xs px-3 py-2 text-sm/5 text-gray-700 outline-hidden hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
+                  role="menuitem"
+                  data-testid="voice-picker-trigger"
+                >
+                  <span class="flex min-w-0 flex-col text-left">
+                    <span>Voice</span>
+                    <span class="truncate text-xs/4 text-gray-500 dark:text-gray-400">
+                      {{ selectedVoice().name }} · {{ selectedVoice().language }}
+                    </span>
+                  </span>
+                  <ng-icon name="heroChevronRight" class="size-4 shrink-0 text-gray-400 dark:text-gray-500" aria-hidden="true" />
+                </button>
+
+                <!-- Which microphone listens -->
+                <button
+                  cdkMenuItem
+                  type="button"
+                  [cdkMenuTriggerFor]="microphoneMenu"
+                  [cdkMenuPosition]="voiceSubmenuPositions"
+                  class="flex w-full items-center justify-between gap-2 rounded-xs px-3 py-2 text-sm/5 text-gray-700 outline-hidden hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
+                  role="menuitem"
+                  data-testid="microphone-picker-trigger"
+                >
+                  <span class="flex min-w-0 flex-col text-left">
+                    <span>Microphone</span>
+                    <span class="truncate text-xs/4 text-gray-500 dark:text-gray-400">{{ selectedMicrophoneLabel() }}</span>
+                  </span>
+                  <ng-icon name="heroChevronRight" class="size-4 shrink-0 text-gray-400 dark:text-gray-500" aria-hidden="true" />
+                </button>
+
+                <div class="my-1.5 border-t border-gray-200 dark:border-gray-700"></div>
+
+                <button
+                  cdkMenuItem
+                  type="button"
+                  (click)="toggleVoice()"
+                  [disabled]="isDictating()"
+                  class="flex w-full items-center gap-2 rounded-xs px-3 py-2 text-sm/5 text-gray-700 outline-hidden hover:bg-gray-50 focus:bg-gray-50 disabled:opacity-40 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
+                  role="menuitem"
+                  data-testid="voice-menu-start"
+                >
+                  <svg class="size-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
+                    <path d="M3 10.5v3M7 7.5v9M11 4v16M15 7.5v9M19 10.5v3" />
+                  </svg>
+                  <span>Start voice conversation</span>
+                </button>
+              </div>
+            </ng-template>
+
+            <ng-template #voicePickerMenu>
+              <div
+                cdkMenu
+                class="max-h-96 w-72 overflow-y-auto rounded-md bg-white p-1.5 shadow-lg ring-1 ring-black/5 focus:outline-hidden dark:bg-gray-800 dark:ring-white/10"
+                role="menu"
+                aria-orientation="vertical"
+                aria-label="Voice"
+                data-testid="voice-picker"
+              >
+                <p class="px-3 py-2 text-xs/4 text-gray-500 dark:text-gray-400">
+                  Tiffany and Matthew speak every language; the rest answer in their own.
+                </p>
+                @for (group of voiceGroups; track group.language) {
+                  <p class="px-3 pb-1 pt-2 text-[11px]/4 font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                    {{ group.language }}
+                  </p>
+                  @for (voice of group.voices; track voice.id) {
+                    <button
+                      cdkMenuItem
+                      type="button"
+                      (click)="selectVoice(voice.id)"
+                      class="flex w-full items-center justify-between gap-2 rounded-xs px-3 py-2 text-sm/5 text-gray-700 outline-hidden hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
+                      role="menuitemradio"
+                      [attr.aria-checked]="voice.id === selectedVoiceId()"
+                      [attr.data-voice-id]="voice.id"
+                    >
+                      <span class="flex min-w-0 flex-col text-left">
+                        <span>{{ voice.name }}</span>
+                        <span class="text-xs/4 text-gray-500 dark:text-gray-400">{{ voiceDescription(voice) }}</span>
+                      </span>
+                      @if (voice.id === selectedVoiceId()) {
+                        <ng-icon name="heroCheck" class="size-4 shrink-0 text-primary-500 dark:text-slate-400" aria-hidden="true" />
+                      }
+                    </button>
+                  }
+                }
+              </div>
+            </ng-template>
+
+            <ng-template #microphoneMenu>
+              <div
+                cdkMenu
+                class="w-72 rounded-md bg-white p-1.5 shadow-lg ring-1 ring-black/5 focus:outline-hidden dark:bg-gray-800 dark:ring-white/10"
+                role="menu"
+                aria-orientation="vertical"
+                aria-label="Microphone"
+                data-testid="microphone-picker"
+              >
+                <button
+                  cdkMenuItem
+                  type="button"
+                  (click)="selectMicrophone(null)"
+                  class="flex w-full items-center justify-between gap-2 rounded-xs px-3 py-2 text-sm/5 text-gray-700 outline-hidden hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
+                  role="menuitemradio"
+                  [attr.aria-checked]="!inputDeviceId()"
+                >
+                  <span>System default</span>
+                  @if (!inputDeviceId()) {
+                    <ng-icon name="heroCheck" class="size-4 shrink-0 text-primary-500 dark:text-slate-400" aria-hidden="true" />
+                  }
+                </button>
+                @if (microphones().length === 0) {
+                  <p class="px-3 py-2 text-sm/5 text-gray-500 dark:text-gray-400">No devices found</p>
+                } @else {
+                  @if (!microphoneLabelsKnown()) {
+                    <p class="px-3 py-1.5 text-xs/4 text-gray-500 dark:text-gray-400">
+                      Allow microphone access once to see device names.
+                    </p>
+                  }
+                  @for (mic of microphones(); track mic.deviceId; let i = $index) {
+                    <button
+                      cdkMenuItem
+                      type="button"
+                      (click)="selectMicrophone(mic.deviceId)"
+                      class="flex w-full items-center justify-between gap-2 rounded-xs px-3 py-2 text-sm/5 text-gray-700 outline-hidden hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
+                      role="menuitemradio"
+                      [attr.aria-checked]="mic.deviceId === inputDeviceId()"
+                      [attr.data-device-id]="mic.deviceId"
+                    >
+                      <span class="truncate">{{ mic.label || 'Microphone ' + (i + 1) }}</span>
+                      @if (mic.deviceId === inputDeviceId()) {
+                        <ng-icon name="heroCheck" class="size-4 shrink-0 text-primary-500 dark:text-slate-400" aria-hidden="true" />
+                      }
+                    </button>
+                  }
+                }
+              </div>
+            </ng-template>
           }
 
           @if (showStop()) {

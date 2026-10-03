@@ -7,7 +7,7 @@ This is the default agent type for standard chat interactions.
 
 import logging
 import os
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import Any, AsyncGenerator, Callable, Dict, List, Optional
 
 from agents.main_agent.base_agent import BaseAgent
 from agents.main_agent.core import AgentFactory
@@ -53,10 +53,9 @@ class ChatAgent(BaseAgent):
     def _create_agent(self) -> None:
         """Create Strands Agent with filtered tools, hooks, and skills plugin."""
         try:
+            # Closes its own `tools.*` sub-stages, external MCP pre-flight
+            # included; `groups` sums them into `agent_build.tools`.
             tools = self._build_filtered_tools()
-            # External MCP pre-flight lives in here — the spec's standing
-            # (and unverified) hypothesis for the cold build.
-            mark_stage("tools")
             hooks = self._create_hooks()
             mark_stage("hooks")
 
@@ -164,6 +163,8 @@ class ChatAgent(BaseAgent):
         turn_project_id: Optional[str] = None,
         turn_lease: Any = None,
         turn_started_at: Optional[float] = None,
+        poll_side_frame: Optional[Callable[[], Optional[str]]] = None,
+        turn_clock: Any = None,
     ) -> AsyncGenerator[str, None]:
         """
         Stream agent responses.
@@ -198,6 +199,12 @@ class ChatAgent(BaseAgent):
                 off the agent for the same reason as `turn_agent_id`: the agent
                 instance is cached across turns, so per-turn state must never
                 live on it (#741/#751).
+            poll_side_frame: Non-blocking check for a frame produced outside the
+                agent stream (the first turn's `session_title`), polled by the
+                coordinator's live status merge. Per turn, like `turn_lease`.
+            turn_clock: The turn's latency clock, continued by the coordinator
+                to the first model output (`turn_first_token`). Per turn, like
+                `turn_lease`; None disables it.
 
         Yields:
             str: SSE formatted events
@@ -234,5 +241,7 @@ class ChatAgent(BaseAgent):
             turn_project_id=turn_project_id,
             turn_lease=turn_lease,
             turn_started_at=turn_started_at,
+            poll_side_frame=poll_side_frame,
+            turn_clock=turn_clock,
         ):
             yield event

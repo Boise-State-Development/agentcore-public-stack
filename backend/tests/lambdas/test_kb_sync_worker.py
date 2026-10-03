@@ -166,6 +166,7 @@ class TestChangeDetection:
         assert staged == []
         doc = assistants_table.get_item(Key={"PK": f"AST#{assistant_id}", "SK": "DOC#doc-1"})["Item"]
         assert doc["sourceEtag"] == "42"  # gate 1 passes next run
+        assert "stagedContentHash" not in doc  # nothing staged, nothing to re-ingest
 
     async def test_changed_bytes_staged_with_stash(self, assistants_table, staged, token_ok, provider_ok, monkeypatch):
         adapter = FakeDriveAdapter(metadata={"version": "42", "trashed": False}, content=b"new bytes")
@@ -183,6 +184,8 @@ class TestChangeDetection:
         assert item["sourceEtag"] == "42"
         assert item["contentHash"] == worker._sha256(b"new bytes")
         assert item["previousChunkCount"] == 7
+        # Marks the version a managed KB's consumer still has to re-ingest.
+        assert item["stagedContentHash"] == worker._sha256(b"new bytes")
         assert "lastSyncedAt" in item
         updated_policy = await get_sync_policy(assistant_id, policy.policy_id)
         assert updated_policy.last_result == "changed"
@@ -197,6 +200,120 @@ class TestChangeDetection:
 
         assert result["result"] == "skipped"
         assert adapter.download_calls == 0
+
+
+class TestStageFailure:
+    """A failed S3 stage must not leave the change-detection gates advanced —
+    otherwise the next run matches them and the change is never staged."""
+
+    @pytest.fixture()
+    def flaky_stage(self, monkeypatch):
+        """First stage raises (S3 put failure), later ones succeed."""
+        calls = []
+
+        def stage(*args):
+            calls.append(args)
+            if len(calls) == 1:
+                raise RuntimeError("S3 PutObject failed")
+
+        monkeypatch.setattr(worker, "_stage_to_s3", stage)
+        return calls
+
+    def _doc(self, assistants_table, assistant_id):
+        return assistants_table.get_item(Key={"PK": f"AST#{assistant_id}", "SK": "DOC#doc-1"})["Item"]
+
+    async def test_failed_stage_is_restaged_next_run(
+        self, assistants_table, flaky_stage, token_ok, provider_ok, monkeypatch
+    ):
+        adapter = FakeDriveAdapter(metadata={"version": "42", "trashed": False}, content=b"new bytes")
+        _use_adapter(monkeypatch, adapter)
+        assistant_id, _, policy = await _setup(assistants_table, etag="41", chunk_count=7)
+
+        first = await worker.run_sync(_payload(assistant_id, policy))
+
+        assert first["result"] == "failed"
+        item = self._doc(assistants_table, assistant_id)
+        assert item["sourceEtag"] == "41"
+        assert "contentHash" not in item
+        assert "stagedContentHash" not in item
+        assert "lastSyncedAt" not in item
+
+        # Same Drive version, same bytes: both gates must still miss.
+        second = await worker.run_sync(_payload(assistant_id, policy))
+
+        assert second["result"] == "changed"
+        assert len(flaky_stage) == 2
+        assert flaky_stage[1][1] == b"new bytes"
+        item = self._doc(assistants_table, assistant_id)
+        assert item["sourceEtag"] == "42"
+        assert item["contentHash"] == worker._sha256(b"new bytes")
+        assert item["stagedContentHash"] == worker._sha256(b"new bytes")
+
+    async def test_failed_stage_restores_previous_sync_values(
+        self, assistants_table, flaky_stage, token_ok, provider_ok, monkeypatch
+    ):
+        adapter = FakeDriveAdapter(metadata={"version": "42", "trashed": False}, content=b"new bytes")
+        _use_adapter(monkeypatch, adapter)
+        assistant_id, _, policy = await _setup(assistants_table, etag="41", content_hash="old-hash")
+        assistants_table.update_item(
+            Key={"PK": f"AST#{assistant_id}", "SK": "DOC#doc-1"},
+            UpdateExpression="SET stagedContentHash = :h, lastSyncedAt = :t",
+            ExpressionAttributeValues={":h": "old-hash", ":t": "2026-01-01T00:00:00Z"},
+        )
+
+        await worker.run_sync(_payload(assistant_id, policy))
+
+        item = self._doc(assistants_table, assistant_id)
+        assert item["sourceEtag"] == "41"
+        assert item["contentHash"] == "old-hash"
+        assert item["stagedContentHash"] == "old-hash"
+        assert item["lastSyncedAt"] == "2026-01-01T00:00:00Z"
+
+    async def test_rollback_leaves_a_newer_write_alone(self, assistants_table):
+        from apis.app_api.kb_sync import records
+
+        assistant_id, _, _ = await _setup(assistants_table, etag="41")
+        written = {"sourceEtag": "42", "contentHash": "h2", "stagedContentHash": "h2"}
+        records.update_document_sync_fields(
+            assistant_id, "doc-1", source_etag="42", content_hash="h2", staged_content_hash="h2"
+        )
+        # A later run staged a newer version before this rollback landed.
+        records.update_document_sync_fields(
+            assistant_id, "doc-1", source_etag="43", content_hash="h3", staged_content_hash="h3"
+        )
+
+        rolled_back = records.rollback_document_sync_fields(
+            assistant_id, "doc-1", written=written, previous={"sourceEtag": "41"}
+        )
+
+        assert rolled_back is False
+        item = self._doc(assistants_table, assistant_id)
+        assert (item["sourceEtag"], item["contentHash"], item["stagedContentHash"]) == ("43", "h3", "h3")
+
+    async def test_rollback_does_not_resurrect_gates_the_consumer_cleared(self, assistants_table):
+        """The managed consumer's over-cap refusal REMOVEs the gates to force a
+        re-stage; a late rollback must not write them back."""
+        from apis.app_api.kb_sync import records
+
+        assistant_id, _, _ = await _setup(assistants_table, etag="41", content_hash="h1")
+        records.update_document_sync_fields(
+            assistant_id, "doc-1", source_etag="42", content_hash="h2", staged_content_hash="h2"
+        )
+        assistants_table.update_item(
+            Key={"PK": f"AST#{assistant_id}", "SK": "DOC#doc-1"},
+            UpdateExpression="REMOVE sourceEtag, contentHash",
+        )
+
+        rolled_back = records.rollback_document_sync_fields(
+            assistant_id,
+            "doc-1",
+            written={"sourceEtag": "42", "contentHash": "h2", "stagedContentHash": "h2"},
+            previous={"sourceEtag": "41", "contentHash": "h1"},
+        )
+
+        assert rolled_back is False
+        item = self._doc(assistants_table, assistant_id)
+        assert "sourceEtag" not in item and "contentHash" not in item
 
 
 class TestFailureModes:
@@ -465,6 +582,8 @@ class TestWebCrawlSync:
         assert item["previousChunkCount"] == 4
         assert item["sourceEtag"] == '"e2"'
         assert item["contentHash"] == "hash2"
+        # Marks the version a managed KB's consumer still has to re-ingest.
+        assert item["stagedContentHash"] == "hash2"
         # crawler invoked in refresh mode without TTL finalization
         assert fake_crawl["captured"]["finalize_with_ttl"] is False
         assert fake_crawl["captured"]["settings"].max_pages == 10
@@ -566,3 +685,141 @@ class TestWebCrawlSync:
         item = assistants_table.get_item(Key={"PK": f"AST#{assistant_id}", "SK": f"DOC#{root_doc_id}"})["Item"]
         assert item["sourceFileId"] == self.ROOT
         assert item["sourceConnectorId"] == "web"
+
+    async def test_failed_stage_rolls_back_page_gates(self, assistants_table, fake_crawl):
+        assistant_id, job, policy = await self._setup_crawl(assistants_table)
+        assistants_table.update_item(
+            Key={"PK": f"AST#{assistant_id}", "SK": "DOC#doc-web-0"},
+            UpdateExpression="SET sourceEtag = :e, contentHash = :h",
+            ExpressionAttributeValues={":e": '"e1"', ":h": "hash1"},
+        )
+        fake_crawl["seen"] = [self.ROOT]
+        fake_crawl["emit"] = [
+            (self.ROOT, "changed", '"e2"', "hash2"),
+            (self.ROOT, "stage_failed", '"e2"', "hash2"),
+        ]
+
+        result = await worker.run_sync(self._payload(assistant_id, policy, job))
+
+        # Nothing reached the knowledge base, so the run changed nothing.
+        assert result["result"] == "unchanged"
+        item = assistants_table.get_item(Key={"PK": f"AST#{assistant_id}", "SK": "DOC#doc-web-0"})["Item"]
+        assert item["sourceEtag"] == '"e1"'
+        assert item["contentHash"] == "hash1"
+        assert "stagedContentHash" not in item
+
+        # The next re-crawl still sees the old gates, so it will re-stage.
+        fake_crawl["emit"] = []
+        await worker.run_sync(self._payload(assistant_id, policy, job))
+        refresh_doc = fake_crawl["captured"]["refresh"].docs[self.ROOT]
+        assert (refresh_doc.source_etag, refresh_doc.content_hash) == ('"e1"', "hash1")
+
+
+class TestWebCrawlStageFailureEndToEnd:
+    """Worker + the REAL crawler (httpx on a MockTransport, S3 put stubbed):
+    a page whose stage fails is staged again by the next re-crawl, for both
+    a changed page and a page new to the crawl."""
+
+    ROOT = "https://example.com/"
+    NEW = "https://example.com/new"
+
+    @pytest.fixture()
+    def site(self, monkeypatch):
+        import httpx
+
+        from apis.app_api.web_sources import crawler
+
+        pages = {
+            self.ROOT: '<html><body><p>fresh root words</p><a href="/new">n</a></body></html>',
+            self.NEW: "<html><body><p>a brand new page</p></body></html>",
+        }
+
+        def handler(request):
+            url = str(request.url)
+            if url in pages:
+                return httpx.Response(200, text=pages[url], headers={"content-type": "text/html"})
+            return httpx.Response(404, text="")
+
+        monkeypatch.setattr(
+            crawler, "_default_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        )
+        puts = {"fail": True, "ok": []}
+
+        async def put_markdown(*, assistant_id, document_id, markdown, filename):
+            if puts["fail"]:
+                raise RuntimeError("S3 PutObject failed")
+            puts["ok"].append(document_id)
+            return f"assistants/{assistant_id}/documents/{document_id}/{filename}"
+
+        monkeypatch.setattr(crawler, "_put_markdown", put_markdown)
+        return puts
+
+    async def test_failed_stages_are_restaged_next_run(self, assistants_table, site):
+        from apis.app_api.web_sources.crawl_repository import create_crawl_job, finalize_crawl
+        from apis.app_api.web_sources.models import CrawlSettings
+
+        assistant = await create_assistant(
+            owner_id=USER_ID, owner_name="U", name="A", description="d",
+            instructions="i", vector_index_id="assistants-index",
+        )
+        assistant_id = assistant.assistant_id
+        job = await create_crawl_job(
+            assistant_id=assistant_id, root_url=self.ROOT,
+            settings=CrawlSettings(max_depth=1, max_pages=10, min_delay_seconds=0, max_delay_seconds=0),
+            started_by_user_id=USER_ID,
+        )
+        await finalize_crawl(assistant_id=assistant_id, crawl_id=job.crawl_id, status="complete")
+        await create_document(
+            assistant_id=assistant_id, filename="root.md", content_type="text/markdown",
+            size_bytes=1, s3_key=f"assistants/{assistant_id}/documents/doc-root/root.md",
+            document_id="doc-root",
+            provenance=DocumentProvenance(
+                source_connector_id="web", source_adapter_key="http",
+                source_file_id=self.ROOT, imported_by_user_id=USER_ID,
+            ),
+        )
+        assistants_table.update_item(
+            Key={"PK": f"AST#{assistant_id}", "SK": "DOC#doc-root"},
+            UpdateExpression="SET contentHash = :h",
+            ExpressionAttributeValues={":h": "old-root-hash"},
+        )
+        policy = await create_sync_policy(
+            assistant_id=assistant_id, source_type="web_crawl", source_ref=job.crawl_id,
+            interval="daily", created_by_user_id=USER_ID,
+        )
+        payload = {
+            "policyId": policy.policy_id, "assistantId": assistant_id,
+            "sourceType": "web_crawl", "sourceRef": job.crawl_id,
+        }
+
+        first = await worker.run_sync(payload)
+
+        assert first["result"] == "unchanged"
+        assert site["ok"] == []
+        root = assistants_table.get_item(Key={"PK": f"AST#{assistant_id}", "SK": "DOC#doc-root"})["Item"]
+        assert root["contentHash"] == "old-root-hash"
+        assert "stagedContentHash" not in root
+        new_docs = [
+            item for item in _document_items(assistants_table, assistant_id)
+            if item.get("sourceFileId") == self.NEW
+        ]
+        assert len(new_docs) == 1
+        assert "contentHash" not in new_docs[0]
+        assert new_docs[0]["status"] == "failed"
+
+        site["fail"] = False
+        second = await worker.run_sync(payload)
+
+        assert second["result"] == "changed"
+        assert sorted(site["ok"]) == sorted(["doc-root", new_docs[0]["documentId"]])
+        root = assistants_table.get_item(Key={"PK": f"AST#{assistant_id}", "SK": "DOC#doc-root"})["Item"]
+        assert root["contentHash"] != "old-root-hash"
+        assert root["stagedContentHash"] == root["contentHash"]
+
+
+def _document_items(assistants_table, assistant_id):
+    from boto3.dynamodb.conditions import Key
+
+    return assistants_table.query(
+        KeyConditionExpression=Key("PK").eq(f"AST#{assistant_id}") & Key("SK").begins_with("DOC#")
+    )["Items"]

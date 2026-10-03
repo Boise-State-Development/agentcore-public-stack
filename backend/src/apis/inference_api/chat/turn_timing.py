@@ -110,6 +110,17 @@ def _metric_name(stage: str) -> str:
     return "".join(p[:1].upper() + p[1:] for p in parts) + "Ms"
 
 
+def _group_marks(marks: List[Tuple[str, float]]) -> Dict[str, int]:
+    """Sum ``marks`` into every proper dotted prefix (see ``TurnPrelude._groups``)."""
+    totals: Dict[str, int] = {}
+    for name, ms in marks:
+        parts = name.split(".")
+        for depth in range(1, len(parts)):
+            prefix = ".".join(parts[:depth])
+            totals[prefix] = totals.get(prefix, 0) + int(ms)
+    return totals
+
+
 class TurnPrelude:
     """Records named marks across the pre-stream stages of one turn.
 
@@ -118,7 +129,15 @@ class TurnPrelude:
     everything. A measurement must never be able to break the turn it measures.
     """
 
-    __slots__ = ("_t0", "_wall_t0", "_last", "_marks")
+    __slots__ = (
+        "_t0",
+        "_wall_t0",
+        "_last",
+        "_marks",
+        "_details",
+        "_emitted",
+        "_first_token_emitted",
+    )
 
     def __init__(self) -> None:
         now = time.perf_counter()
@@ -131,6 +150,24 @@ class TurnPrelude:
         # domain, so the value handed to it is captured here in ITS domain.
         self._wall_t0 = time.time()
         self._marks: List[Tuple[str, float]] = []
+        self._details: Dict[str, Any] = {}
+        # Set by `emit`: (marks already reported, totalMs, sessionId,
+        # streamKind, extra). `emit_first_token` reports only the marks after
+        # it, under the same identity, so the coordinator needs no arguments.
+        self._emitted: Optional[Tuple[int, int, str, str, Optional[Dict[str, Any]]]] = None
+        self._first_token_emitted = False
+
+    def detail(self, key: str, value: Any) -> None:
+        """Attach a log-only property describing a stage, e.g. which MCP
+        server owned the time inside ``agent_build.tools.mcp``.
+
+        Log line only, never a metric: a detail is for reading one turn, and
+        its values (a per-server list) have no percentile. Last write wins.
+        """
+        try:
+            self._details[key] = value
+        except Exception:  # noqa: BLE001 - never break a turn to measure it
+            logger.debug("Turn prelude detail skipped", exc_info=True)
 
     def mark(self, stage: str) -> None:
         """Close the stage that just finished and open the next one.
@@ -144,6 +181,20 @@ class TurnPrelude:
             self._last = now
         except Exception:  # noqa: BLE001 - never break a turn to measure it
             logger.debug("Turn prelude mark skipped", exc_info=True)
+
+    def mark_at(self, stage: str, at: float) -> None:
+        """``mark``, but closing the stage at an earlier ``perf_counter``
+        reading taken somewhere a mark could not be (a Strands hook).
+
+        A reading older than the previous mark clamps to it — a zero stage,
+        never a negative one.
+        """
+        try:
+            end = max(float(at), self._last)
+            self._marks.append((stage, (end - self._last) * 1000.0))
+            self._last = end
+        except Exception:  # noqa: BLE001 - never break a turn to measure it
+            logger.debug("Turn prelude mark_at skipped", exc_info=True)
 
     @property
     def started_at(self) -> float:
@@ -187,16 +238,15 @@ class TurnPrelude:
         the prefix keeps the coarse series comparable across the split while
         ``stages`` answers the new question.
 
+        Every proper prefix is a group, not just the first: splitting
+        ``agent_build.tools`` into ``agent_build.tools.filter`` and friends
+        must keep ``agent_build.tools`` as a number for the same reason the
+        first split kept ``agent_build``.
+
         Undotted stages are deliberately absent — a group of one is noise, and
         the reader already has that number in ``stages``.
         """
-        totals: Dict[str, int] = {}
-        for name, ms in self._marks:
-            prefix, dot, _ = name.partition(".")
-            if not dot:
-                continue
-            totals[prefix] = totals.get(prefix, 0) + int(ms)
-        return totals
+        return _group_marks(self._marks)
 
     def emit(
         self,
@@ -215,6 +265,7 @@ class TurnPrelude:
         # disagree — by microseconds, which is worse than by a lot: nobody
         # chases a big difference for long, and everybody chases a small one.
         total_ms = self.total_ms
+        self._emitted = (len(self._marks), total_ms, session_id, stream_kind, extra)
         try:
             payload: Dict[str, Any] = {
                 "sessionId": session_id,
@@ -225,6 +276,8 @@ class TurnPrelude:
             groups = self._groups()
             if groups:
                 payload["groups"] = groups
+            if self._details:
+                payload.update(self._details)
             if extra:
                 payload.update(extra)
             logger.info("turn_prelude %s", json.dumps(payload, default=str))
@@ -244,6 +297,73 @@ class TurnPrelude:
         except Exception:  # noqa: BLE001
             logger.debug("Turn prelude metrics skipped", exc_info=True)
 
+    def emit_first_token(self) -> None:
+        """Log the turn's first model output against the same clock.
+
+        ``turn_prelude`` is emitted when the agent is ready, before the stream
+        starts, so it cannot carry what happens next: the coordinator's head of
+        turn, LTM retrieval and the hooks before the model call, and the
+        model's own time to first token. Those are marked on this object after
+        ``emit`` (``head_of_turn.*``, ``pre_model``, ``model``) and reported
+        here as a second line, ``turn_first_token``, joined to the first by
+        ``sessionId``. ``firstTokenMs`` runs from handler entry, so it is the
+        prelude plus everything after it — the server's whole share of the
+        wait the user sees.
+
+        A second line rather than a delayed first one: holding ``turn_prelude``
+        until a token arrives would lose it on every turn that never produces
+        one (an error, a Stop, an interrupt), which are the turns most worth
+        reading. Once per turn; a call before ``emit`` reports every mark and
+        no ``preludeTotalMs``.
+
+        Called by the coordinator AFTER the first token has been yielded to the
+        client, so the log write and the EMF record are never in front of it.
+        """
+        if self._first_token_emitted:
+            return
+        self._first_token_emitted = True
+
+        # At the LAST MARK (`model`), not now: this runs on the coordinator's
+        # next pass, so `total_ms` would also count the wait for the second
+        # event — 131ms and 182ms on the first two dev readouts.
+        first_token_ms = max(0, int((self._last - self._t0) * 1000))
+        reported, prelude_total_ms, session_id, stream_kind, extra = self._emitted or (
+            0,
+            None,
+            "",
+            "agent",
+            None,
+        )
+        marks = self._marks[reported:]
+        try:
+            payload: Dict[str, Any] = {
+                "sessionId": session_id,
+                "streamKind": stream_kind,
+                "firstTokenMs": first_token_ms,
+                "preludeTotalMs": prelude_total_ms,
+                "stages": {name: int(ms) for name, ms in marks},
+            }
+            groups = _group_marks(marks)
+            if groups:
+                payload["groups"] = groups
+            if extra:
+                payload.update(extra)
+            logger.info("turn_first_token %s", json.dumps(payload, default=str))
+        except Exception:  # noqa: BLE001
+            logger.debug("Turn first-token emit skipped", exc_info=True)
+
+        try:
+            self._emit_metrics(
+                stream_kind=stream_kind,
+                session_id=session_id,
+                total_ms=first_token_ms,
+                extra=extra,
+                marks=marks,
+                total_metric="FirstTokenMs",
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug("Turn first-token metrics skipped", exc_info=True)
+
     def _emit_metrics(
         self,
         *,
@@ -251,6 +371,8 @@ class TurnPrelude:
         session_id: str,
         total_ms: int,
         extra: Optional[Dict[str, Any]] = None,
+        marks: Optional[List[Tuple[str, float]]] = None,
+        total_metric: str = "PreludeTotalMs",
     ) -> None:
         """One EMF record per turn, for percentiles over the fleet.
 
@@ -269,18 +391,21 @@ class TurnPrelude:
 
         from apis.shared.observability.emf import emit_emf_metrics
 
-        metrics: Dict[str, float] = {"PreludeTotalMs": total_ms}
-        for name, ms in self._marks:
+        marks = self._marks if marks is None else marks
+        metrics: Dict[str, float] = {total_metric: total_ms}
+        for name, ms in marks:
             metrics[_metric_name(name)] = int(ms)
         # Group totals last: on a decomposed stage they are the only place the
         # coarse number exists, and no stage name can collide with one (a group
         # key is only ever produced by a dotted stage, which never renders to
         # the same metric name as its own prefix).
-        for prefix, total in self._groups().items():
+        for prefix, total in _group_marks(marks).items():
             metrics.setdefault(_metric_name(prefix), total)
 
         properties: Dict[str, Any] = {"streamKind": stream_kind, "sessionId": session_id}
-        for key in ("isResume", "deferredBuild", "hasAssistant"):
+        # Properties, never dimensions: `sharedSession` is a kill-switch state
+        # and `processBuilds` is unbounded.
+        for key in ("isResume", "deferredBuild", "hasAssistant", "sharedSession", "processBuilds"):
             if extra and key in extra:
                 properties[key] = extra[key]
 

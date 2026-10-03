@@ -16,11 +16,20 @@ from agents.main_agent.session.compaction_summary import (
     compress_with_model,
     truncate_records_newest_first,
 )
+from apis.shared import aws_clients
 
 from .conftest import make_conversation
 
 
 BUDGET = 100  # tokens → 400 chars
+
+
+@pytest.fixture(autouse=True)
+def _fresh_bedrock_client():
+    """The Bedrock client is cached per process; each test builds its own."""
+    aws_clients.reset_cached_clients()
+    yield
+    aws_clients.reset_cached_clients()
 
 
 @pytest.fixture
@@ -89,6 +98,34 @@ class TestBoundSummary:
         result = await bound_summary(["r" * 900], BUDGET, model_enabled=True, model_id="m")
         assert result.outcome == "truncated_after_model"
         assert approx_tokens(result.text) <= BUDGET
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("stop", ["guardrail_intervened", "content_filtered", "tool_use", "something_new", None])
+    async def test_a_refused_generation_falls_back_and_is_never_the_summary(self, bedrock, stop):
+        """Only a completed (or salvageable) generation becomes the checkpoint.
+
+        A refusal persisted as the summary would sit in the cacheable history
+        until the next cut.
+        """
+        bedrock.return_value = _model_reply("Sorry, the model cannot answer this.", stop=stop)
+        records = ["old " * 100, "new " * 50]
+        result = await bound_summary(records, BUDGET, model_enabled=True, model_id="m")
+        assert result.outcome == "truncated_after_model"
+        assert "Sorry" not in result.text and result.text.startswith("new")
+        assert await compress_with_model(records, BUDGET, model_id="m") is None
+
+    @pytest.mark.asyncio
+    async def test_calls_reuse_one_bedrock_client_per_region(self, bedrock):
+        """A client per call paid botocore's model load and a fresh TLS handshake."""
+        bedrock.return_value = _model_reply("summary")
+        factory = sys.modules["boto3"].client
+
+        await compress_with_model(["r" * 900], BUDGET, model_id="m", region="us-west-2")
+        await compress_with_model(["r" * 900], BUDGET, model_id="m", region="us-west-2")
+        await compress_with_model(["r" * 900], BUDGET, model_id="m", region="us-east-1")
+
+        assert [c.kwargs["region_name"] for c in factory.call_args_list] == ["us-west-2", "us-east-1"]
+        assert bedrock.call_count == 3
 
     @pytest.mark.asyncio
     async def test_model_overshoot_is_tail_trimmed(self, bedrock):
@@ -389,6 +426,27 @@ class TestExtractThenCompress:
         result = await _extract(["r" * 2000])
         assert result.outcome == "extract_then_compress"
         assert "- PRJ-4417" in result.text and "- PRJ-44\n" not in result.text
+
+    @pytest.mark.asyncio
+    async def test_refused_extraction_keeps_the_narrative_without_a_third_call(self, bedrock):
+        bedrock.side_effect = _route(
+            _model_reply("Sorry, the model cannot answer this.", stop="guardrail_intervened"),
+            _model_reply("plain compressed summary"),
+        )
+        result = await _extract(["r" * 2000])
+        assert result.outcome == "model"
+        assert result.text == "plain compressed summary"
+        assert bedrock.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_refused_narrative_keeps_the_pinned_block_and_truncates(self, bedrock):
+        bedrock.side_effect = _route(
+            _model_reply(PINNED),
+            _model_reply("Sorry, the model cannot answer this.", stop="guardrail_intervened"),
+        )
+        result = await _extract(["old " * 300, "newest record"])
+        assert result.outcome == "extract_then_truncate"
+        assert "Sorry" not in result.text and result.text.endswith("newest record")
 
     @pytest.mark.asyncio
     async def test_narrative_ceiling_hit_keeps_its_complete_lines(self, bedrock):

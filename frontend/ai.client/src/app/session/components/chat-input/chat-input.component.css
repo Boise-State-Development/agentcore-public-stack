@@ -131,3 +131,70 @@
     animation: none;
   }
 }
+
+/*
+ * Voice mode's waveform comes alive on hover.
+ *
+ * Each bar is its own <path> so it can move on its own beat: the outer bars
+ * swell the most and the centre the least, on a symmetric delay, so the icon
+ * reads as sound rather than a bar chart. `transform-box: fill-box` makes the
+ * scale run from each bar's own centre (an SVG element's default origin is the
+ * viewport's corner, which would slide the bars off the icon). The hover is on
+ * the whole split control — the chevron included — so the two halves read as
+ * one thing, and `focus-within` gives keyboard users the same cue.
+ *
+ * Idle only. A live session already animates its own state in the button.
+ */
+.voice-wave-bar {
+  transform-box: fill-box;
+  transform-origin: center;
+  --voice-amp: 1.5;
+  --voice-delay: 0ms;
+}
+
+.voice-wave-bar:nth-child(1),
+.voice-wave-bar:nth-child(5) {
+  --voice-amp: 2.2;
+}
+
+.voice-wave-bar:nth-child(2),
+.voice-wave-bar:nth-child(4) {
+  --voice-delay: 110ms;
+}
+
+.voice-wave-bar:nth-child(3) {
+  --voice-amp: 1.15;
+  --voice-delay: 220ms;
+}
+
+/*
+ * The delay rides a custom property because the `animation` shorthand below
+ * resets every longhand it does not name — a plain `animation-delay` on the
+ * nth-child rules was silently zeroed, and all five bars moved as one.
+ */
+.voice-control--idle:hover .voice-wave-bar,
+.voice-control--idle:focus-within .voice-wave-bar {
+  animation: voice-wave 900ms ease-in-out var(--voice-delay) infinite;
+}
+
+@keyframes voice-wave {
+  0%,
+  100% {
+    transform: scaleY(1);
+  }
+  50% {
+    transform: scaleY(var(--voice-amp));
+  }
+}
+
+/* The chevron sits flush against the waveform; the negative margin closes the gap without a new grid. */
+.voice-menu-trigger {
+  margin-left: -0.125rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voice-control--idle:hover .voice-wave-bar,
+  .voice-control--idle:focus-within .voice-wave-bar {
+    animation: none;
+  }
+}

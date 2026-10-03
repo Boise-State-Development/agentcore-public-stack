@@ -703,6 +703,69 @@
             </div>
           </div>
 
+          <!--
+            Speech rates. Only a speech-to-speech row (Nova 2 Sonic) has them:
+            its `input`/`output` above are the TEXT rates, and spoken tokens
+            bill ~10x higher on their own card. Left blank on a text model.
+          -->
+          <div class="space-y-4">
+            <h3 class="text-sm/6 font-semibold text-gray-900 dark:text-white">
+              Speech pricing
+            </h3>
+            <p class="text-sm/6 text-gray-600 dark:text-gray-400">
+              Speech-to-speech models only. Spoken tokens are billed separately from the text rates above;
+              voice mode prices each bucket on its own rate.
+            </p>
+            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div>
+                <label for="speechInputPricePerMillionTokens" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                  Speech Input Price (per 1M tokens)
+                </label>
+                <div class="relative mt-1">
+                  <span class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-gray-500 dark:text-gray-400">
+                    $
+                  </span>
+                  <input
+                    type="number"
+                    id="speechInputPricePerMillionTokens"
+                    formControlName="speechInputPricePerMillionTokens"
+                    step="0.01"
+                    min="0"
+                    placeholder="0.00 (optional)"
+                    class="block w-full rounded-2xl border border-gray-300 bg-white py-2 pl-7 pr-3 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                    [class.border-state-danger-500]="modelForm.controls.speechInputPricePerMillionTokens.invalid && modelForm.controls.speechInputPricePerMillionTokens.touched"
+                  />
+                </div>
+                @if (modelForm.controls.speechInputPricePerMillionTokens.invalid && modelForm.controls.speechInputPricePerMillionTokens.touched) {
+                  <p class="mt-1 text-sm/6 text-state-danger-600 dark:text-state-danger-400">Enter a valid price (0 or greater)</p>
+                }
+              </div>
+              <div>
+                <label for="speechOutputPricePerMillionTokens" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                  Speech Output Price (per 1M tokens)
+                </label>
+                <div class="relative mt-1">
+                  <span class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-gray-500 dark:text-gray-400">
+                    $
+                  </span>
+                  <input
+                    type="number"
+                    id="speechOutputPricePerMillionTokens"
+                    formControlName="speechOutputPricePerMillionTokens"
+                    step="0.01"
+                    min="0"
+                    placeholder="0.00 (optional)"
+                    class="block w-full rounded-2xl border border-gray-300 bg-white py-2 pl-7 pr-3 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                    [class.border-state-danger-500]="modelForm.controls.speechOutputPricePerMillionTokens.invalid && modelForm.controls.speechOutputPricePerMillionTokens.touched"
+                  />
+                </div>
+                @if (modelForm.controls.speechOutputPricePerMillionTokens.invalid && modelForm.controls.speechOutputPricePerMillionTokens.touched) {
+                  <p class="mt-1 text-sm/6 text-state-danger-600 dark:text-state-danger-400">Enter a valid price (0 or greater)</p>
+                }
+              </div>
+            </div>
+          </div>
+
           <!-- Prompt Caching (Bedrock Converse + bedrock-runtime Responses) -->
           @if (supportsCachingControls()) {
             <div class="space-y-4">

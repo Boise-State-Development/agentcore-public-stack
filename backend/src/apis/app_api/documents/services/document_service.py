@@ -98,8 +98,10 @@ async def release_reservation_if_managed(document: Document) -> None:
     released by whichever terminal path the document reaches first — a
     client-reported upload failure, this stale sweep, or the ingestion consumer's
     own failure path — and the guard stops two of them double-crediting the
-    allowance. A no-op for legacy knowledge bases (uncapped) and for zero-size
-    rows (nothing was reserved).
+    allowance. A no-op for legacy knowledge bases (uncapped) and for rows that
+    reserved nothing: zero-size rows, and imported, crawled or synced documents,
+    whose ``sizeBytes`` is real but was never reserved
+    (``byte_cap.reserved_at_request``).
 
     ``app_kb_id == assistant_id`` this phase. boto3 is called synchronously here,
     matching the rest of this module.
@@ -107,7 +109,7 @@ async def release_reservation_if_managed(document: Document) -> None:
     from apis.shared.kb_backend import byte_cap
     from apis.shared.kb_backend.records import ENGINE_MANAGED, get_kb_record, resolve_engine
 
-    size_bytes = int(document.size_bytes or 0)
+    size_bytes = byte_cap.reserved_at_request(document.size_bytes, document.source_adapter_key)
     if size_bytes <= 0:
         return
     assistant_id = document.assistant_id
@@ -151,10 +153,25 @@ async def settle_bytes_on_delete(document: Document, previous_status: Optional[s
 
     Refund runs first. A row can hold both markers only because a consumer settled
     it, and then it has nothing left to release.
+
+    Independently, a document deleted while a KB sync's changed source was being
+    re-ingested holds the growth reserved for that version
+    (``byte_cap.claim_reingest``). The consumer's completion is refused on a
+    ``deleting`` row, so this is the only path left to return it.
     """
     from apis.shared.kb_backend import byte_cap
 
     assistant_id = document.assistant_id
+    try:
+        reingest_reserved = byte_cap.release_reingest_once(assistant_id, document.document_id)
+        if reingest_reserved:
+            byte_cap.release(assistant_id, assistant_id, reingest_reserved)
+    except Exception as e:  # noqa: BLE001 - a bookkeeping failure must not break the delete
+        logger.error(
+            f"Failed to release re-ingest reservation for document {document.document_id}: {e}",
+            exc_info=True,
+        )
+
     try:
         refunded = byte_cap.refund_once(assistant_id, document.document_id)
         if refunded:

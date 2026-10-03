@@ -9,7 +9,7 @@ import logging
 import os
 import time
 from datetime import datetime, timezone
-from typing import Any, AsyncGenerator, Dict, List, Optional, Union
+from typing import Any, AsyncGenerator, Callable, Dict, List, Optional, Union
 
 from agents.main_agent.config.constants import EnvVars
 from agents.main_agent.session.hooks.prefix_fingerprint import (
@@ -24,6 +24,7 @@ from apis.shared.observability.prefix_tokens import prompt_tokens_from_usage
 from apis.shared.feature_flags import (
     agent_status_live_drain_enabled,
     cost_diagnostics_enabled,
+    history_count_prefetch_enabled,
 )
 from apis.shared.errors import (
     ConversationalErrorEvent,
@@ -32,7 +33,31 @@ from apis.shared.errors import (
     build_conversational_error_event,
 )
 
+from .history_count import HistoryCount, count_created_before
 from .stream_processor import process_agent_stream
+
+# Processed event types that mean the model has started answering: text, a
+# tool call's first block or input, or reasoning. The first one of a turn
+# closes the first-token clock (`turn_first_token`, docs/specs/turn-path-ttft.md
+# P1b) — a tool-first turn's "first token" is its tool call, which is what the
+# user sees appear.
+_FIRST_MODEL_OUTPUT_TYPES = frozenset(
+    {"content_block_start", "content_block_delta", "reasoning", "tool_use"}
+)
+
+
+def _turn_clock_call(turn_clock: Any, method: str, *args: Any) -> None:
+    """Call a method on the turn's clock if one was passed. Never raises.
+
+    Duck-typed: the clock is inference-api's ``TurnPrelude``, which this
+    package must not import (``tests/architecture/test_import_boundaries.py``).
+    """
+    if turn_clock is None:
+        return
+    try:
+        getattr(turn_clock, method)(*args)
+    except Exception:  # noqa: BLE001 - a measurement must not break a turn
+        logger.debug("Turn clock %s skipped", method, exc_info=True)
 
 logger = logging.getLogger(__name__)
 
@@ -256,6 +281,8 @@ class StreamCoordinator:
         turn_project_id: Optional[str] = None,
         turn_lease: Any = None,
         turn_started_at: Optional[float] = None,
+        poll_side_frame: Optional[Callable[[], Optional[str]]] = None,
+        turn_clock: Any = None,
     ) -> AsyncGenerator[str, None]:
         """
         Stream agent responses with proper lifecycle management
@@ -286,10 +313,26 @@ class StreamCoordinator:
                 stamped *unconditionally*, including to None, for the same reason
                 ``reset_cancellation_state`` exists: a lease left behind by a previous
                 turn on a cached agent would be read against a row that no longer names us.
+            poll_side_frame: Non-blocking check for one formatted SSE frame produced
+                outside the agent stream (the first turn's ``session_title``). Polled
+                on every pass of the live status merge, so the frame goes out within
+                one poll interval of being ready instead of waiting for the agent
+                stream's next event. Must be idempotent: the caller keeps checking it
+                between events too, which is its only route while the merge is off.
+            turn_clock: The turn's ``TurnPrelude`` (duck-typed), continued here
+                past the agent build: ``head_of_turn.*`` sub-stages, then
+                ``pre_model`` (closed at the status hook's first
+                ``BeforeModelCallEvent`` stamp) and ``model`` at the first model
+                output, then ``emit_first_token`` once that output has been
+                yielded. Per turn, like ``turn_lease``; None disables it.
 
         Yields:
             str: SSE formatted events
         """
+        # Everything since the agent was ready: the route's generator wiring,
+        # the `prepared` frame, quota warnings and the prompt build.
+        _turn_clock_call(turn_clock, "mark", "head_of_turn.handoff")
+
         # Set environment variables for browser session isolation
         os.environ[EnvVars.SESSION_ID] = session_id
         os.environ[EnvVars.USER_ID] = user_id
@@ -341,6 +384,8 @@ class StreamCoordinator:
         # interrupt state makes Strands reject this turn's prompt outright.
         # See ``reset_stale_interrupt_state``.
         reset_stale_interrupt_state(agent, prompt)
+        # Compaction state re-read (#751), document offload, the resets above.
+        _turn_clock_call(turn_clock, "mark", "head_of_turn.compaction")
 
         # Track timing for latency metrics
         stream_start_time = time.time()
@@ -409,12 +454,13 @@ class StreamCoordinator:
         # See the CancelledError/GeneratorExit handler below.
         assistant_text_acc: List[str] = []
 
-        # OPTIMIZATION: Capture initial message count BEFORE streaming starts
-        # This allows us to calculate message indices without post-stream AgentCore Memory queries
-        # The TurnBasedSessionManager.message_count is initialized from AgentCore Memory at session start
-        # and represents the number of messages that existed BEFORE this stream
-        initial_message_count = self._get_initial_message_count(session_manager)
-        logger.info(f"📊 Initial message count before streaming: {initial_message_count}")
+        # The number of messages stored before this turn: the base every
+        # per-message index below is computed from. Started here, read on a
+        # worker, and awaited only where an index is used, so the ListEvents
+        # behind it (~2ms per stored event, turn-path spec F5) no longer sits
+        # in front of the model call. See `history_count.py`.
+        history_count = self._start_history_count(session_manager)
+        _turn_clock_call(turn_clock, "mark", "head_of_turn.history_count")
 
         # Arm the displayText write for this turn. The hook stores the user's
         # original message on `MessageAddedEvent` — i.e. before the model
@@ -428,7 +474,7 @@ class StreamCoordinator:
             main_agent_wrapper,
             session_id=session_id,
             user_id=user_id,
-            message_index=initial_message_count,
+            message_index=history_count.resolve,
             display_text=original_message,
         )
 
@@ -456,6 +502,13 @@ class StreamCoordinator:
             logger.warning("MCP Apps broker subscribe failed: %s", e)
             app_event_queue = None
 
+        # First-token clock state: the first model output is marked on
+        # arrival, and the line is emitted on the NEXT pass (or in `finally`),
+        # after that output has been yielded — never in front of it.
+        first_model_output_seen = False
+        first_token_emit_pending = False
+
+        _turn_clock_call(turn_clock, "mark", "head_of_turn.rest")
         try:
             # Get raw agent stream
             agent_stream = agent.stream_async(prompt)
@@ -472,10 +525,15 @@ class StreamCoordinator:
             )
             if agent_status_live_drain_enabled():
                 processed_stream = self._merge_agent_status(
-                    processed_stream, main_agent_wrapper, session_id
+                    processed_stream, main_agent_wrapper, session_id,
+                    poll_side_frame=poll_side_frame,
                 )
 
             async for event in processed_stream:
+                if first_token_emit_pending:
+                    first_token_emit_pending = False
+                    _turn_clock_call(turn_clock, "emit_first_token")
+
                 # A status transition the merge picked up mid-silence. It is
                 # already a formatted SSE frame and describes nothing the rest
                 # of this body reasons about (no message index, no metadata, no
@@ -483,6 +541,15 @@ class StreamCoordinator:
                 if isinstance(event, _StatusFrame):
                     yield event.sse
                     continue
+
+                if (
+                    turn_clock is not None
+                    and not first_model_output_seen
+                    and event.get("type") in _FIRST_MODEL_OUTPUT_TYPES
+                ):
+                    first_model_output_seen = True
+                    self._mark_first_model_output(turn_clock, main_agent_wrapper)
+                    first_token_emit_pending = True
 
                 # Cooperative stop. A user Stop arms a cancel on the session's
                 # single-flight lease; the inference-api heartbeat observes it
@@ -952,6 +1019,7 @@ class StreamCoordinator:
                     # post-loop block uses for per-message metadata
                     # (assistant_message_ids[-1]), which the messages
                     # endpoint re-derives as `idx` on reload.
+                    initial_message_count = await history_count.resolve()
                     produced_by_message_index = (
                         initial_message_count
                         + 2 * current_assistant_message_index
@@ -1283,6 +1351,7 @@ class StreamCoordinator:
             #
             # This eliminates the need for post-stream AgentCore Memory queries!
             num_assistant_messages = current_assistant_message_index + 1 if current_assistant_message_index >= 0 else 0
+            initial_message_count = await history_count.resolve()
 
             # Calculate assistant message absolute indices using the turn structure pattern
             # Assistant messages are at odd positions: initial_count + 1, initial_count + 3, ...
@@ -1521,7 +1590,7 @@ class StreamCoordinator:
                 partial_text="".join(assistant_text_acc),
                 main_agent_wrapper=main_agent_wrapper,
                 accumulated_metadata=accumulated_metadata,
-                initial_message_count=initial_message_count,
+                history_count=history_count,
                 current_assistant_message_index=current_assistant_message_index,
                 stream_start_time=stream_start_time,
                 first_token_time=first_token_time,
@@ -1557,7 +1626,7 @@ class StreamCoordinator:
                 partial_text="".join(assistant_text_acc),
                 main_agent_wrapper=main_agent_wrapper,
                 accumulated_metadata=accumulated_metadata,
-                initial_message_count=initial_message_count,
+                history_count=history_count,
                 current_assistant_message_index=current_assistant_message_index,
                 stream_start_time=stream_start_time,
                 first_token_time=first_token_time,
@@ -1614,6 +1683,11 @@ class StreamCoordinator:
             except Exception as persist_error:
                 logger.error(f"Failed to persist stream error to session: {persist_error}")
         finally:
+            # The first model output was the stream's last event (or the turn
+            # ended right after it): emit now rather than never.
+            if first_token_emit_pending:
+                _turn_clock_call(turn_clock, "emit_first_token")
+
             # MCP Apps PR #5: always release the broker subscription —
             # covers normal completion, the in-loop error `return`, and
             # the except path, so a dropped stream never leaks a queue.
@@ -1664,6 +1738,7 @@ class StreamCoordinator:
         accumulated_metadata: Optional[Dict[str, Any]] = None,
         initial_message_count: int = 0,
         current_assistant_message_index: int = -1,
+        history_count: Optional[HistoryCount] = None,
         stream_start_time: Optional[float] = None,
         first_token_time: Optional[float] = None,
         reason: str = "connection_lost",
@@ -1704,8 +1779,15 @@ class StreamCoordinator:
         Whenever nothing is persisted, only the marker is set. The write itself
         also passes ``last_persisted_role`` to ``persist_synthetic_messages`` so
         the centralized alternation guard is the single enforcement point.
+
+        ``history_count``, when passed, supersedes ``initial_message_count``
+        and is resolved inside the shielded task, so the teardown cannot
+        cancel the wait for it.
         """
         async def _do() -> None:
+            base_index = initial_message_count
+            if history_count is not None:
+                base_index = await history_count.resolve()
             text = partial_text.strip()
             last_role = None
             try:
@@ -1783,9 +1865,9 @@ class StreamCoordinator:
                         if projected:
                             metadata_for_message = {**metadata_for_message, "usage": projected}
                     message_id = (
-                        initial_message_count + 2 * current_assistant_message_index + 1
+                        base_index + 2 * current_assistant_message_index + 1
                         if current_assistant_message_index >= 0
-                        else initial_message_count + 1
+                        else base_index + 1
                     )
                     await self._store_message_metadata(
                         session_id=session_id,
@@ -2686,6 +2768,7 @@ class StreamCoordinator:
         events: AsyncGenerator[Dict[str, Any], None],
         main_agent_wrapper: Any,
         session_id: str,
+        poll_side_frame: Optional[Callable[[], Optional[str]]] = None,
     ) -> AsyncGenerator[Any, None]:
         """Yield the agent's events, interleaved with status transitions as they happen.
 
@@ -2758,6 +2841,9 @@ class StreamCoordinator:
                     main_agent_wrapper, session_id
                 ):
                     yield _StatusFrame(sse)
+                side_frame = self._poll_side_frame(poll_side_frame)
+                if side_frame:
+                    yield _StatusFrame(side_frame)
 
                 if not done:
                     continue
@@ -2788,6 +2874,40 @@ class StreamCoordinator:
                         "Agent stream raised while cancelling the status merge",
                         exc_info=True,
                     )
+
+    @staticmethod
+    def _poll_side_frame(
+        poll_side_frame: Optional[Callable[[], Optional[str]]],
+    ) -> Optional[str]:
+        """Best-effort: a failing poll must never break the stream it rides on."""
+        if poll_side_frame is None:
+            return None
+        try:
+            return poll_side_frame()
+        except Exception:  # noqa: BLE001 - side-channel frames are never load-bearing
+            logger.warning("Side-frame poll failed", exc_info=True)
+            return None
+
+    @staticmethod
+    def _mark_first_model_output(turn_clock: Any, main_agent_wrapper: Any) -> None:
+        """Close ``pre_model`` and ``model`` on the turn's clock.
+
+        ``pre_model`` ends at the status hook's ``perf_counter`` stamp of this
+        turn's first ``BeforeModelCallEvent``: the user message's append, LTM
+        retrieval and the ``BeforeInvocation`` hooks sit before it, and
+        ``ContextAttributionHook`` (registered ahead of the status hook). The
+        hooks registered after it (census, ledger, fingerprint) and the
+        model's own time to first token are ``model``. Without a stamp — a
+        wrapper with no status hook — the two cannot be told apart and the
+        whole gap is reported as ``pre_model_and_model``.
+        """
+        hook = getattr(main_agent_wrapper, "agent_status_hook", None)
+        stamp = getattr(hook, "first_model_call_at", None)
+        if stamp is None:
+            _turn_clock_call(turn_clock, "mark", "pre_model_and_model")
+            return
+        _turn_clock_call(turn_clock, "mark_at", "pre_model", stamp)
+        _turn_clock_call(turn_clock, "mark", "model")
 
     def _drain_agent_status_events(
         self, main_agent_wrapper: Any, session_id: str
@@ -3115,21 +3235,53 @@ class StreamCoordinator:
         Returns:
             int: Number of messages that existed before this stream started (0 if unknown)
         """
+        try:
+            count = self._count_stored_messages(session_manager, before=None)
+        except Exception as e:
+            logger.warning(f"Failed to get global message count: {e}")
+            count = None
+        if count is not None:
+            logger.info(f"Using global list_messages count: {count}")
+            return count
+        return self._maintained_message_count(session_manager)
+
+    def _start_history_count(self, session_manager: Any) -> HistoryCount:
+        """This turn's message-index base, read off the critical path.
+
+        Starts the same global ``list_messages`` count on a worker thread,
+        restricted to messages created before now, and returns a handle each
+        consumer awaits where it uses the index (see ``history_count.py``).
+        With ``HISTORY_COUNT_PREFETCH_ENABLED=false`` the count is read here,
+        inline, as before.
+        """
+        if not history_count_prefetch_enabled():
+            return HistoryCount.resolved(self._get_initial_message_count(session_manager))
+        # Captured before this turn appends anything: read on the worker it
+        # could already include this turn's user message.
+        fallback = self._maintained_message_count(session_manager)
+        if self._resolve_session_id(session_manager) is None or self._resolve_list_messages(session_manager) is None:
+            return HistoryCount.resolved(fallback)
+
+        def _count(before: datetime) -> int:
+            count = self._count_stored_messages(session_manager, before=before)
+            return fallback if count is None else count
+
+        return HistoryCount.start(_count, fallback=fallback)
+
+    def _count_stored_messages(self, session_manager: Any, *, before: Optional[datetime]) -> Optional[int]:
+        """The session's stored messages across every agent, created before
+        ``before`` (all of them when None). None if the manager can't list."""
         # Prefer list_messages() for global count — it returns ALL messages
         # regardless of agent_id, matching how get_messages_from_cloud() retrieves them.
         session_id = self._resolve_session_id(session_manager)
-        if session_id:
-            lister = self._resolve_list_messages(session_manager)
-            if lister:
-                try:
-                    messages = lister(session_id, "default")
-                    count = len(messages) if messages else 0
-                    logger.info(f"Using global list_messages count: {count}")
-                    return count
-                except Exception as e:
-                    logger.warning(f"Failed to get global message count: {e}")
+        lister = self._resolve_list_messages(session_manager) if session_id else None
+        if not lister:
+            return None
+        return count_created_before(lister(session_id, "default"), before)
 
-        # Fallback to agent-specific message_count (may undercount in mixed sessions)
+    @staticmethod
+    def _maintained_message_count(session_manager: Any) -> int:
+        """The session manager's own running count (may undercount in mixed sessions)."""
         if hasattr(session_manager, "message_count"):
             count = session_manager.message_count
             logger.debug(f"Fallback to TurnBasedSessionManager.message_count: {count}")

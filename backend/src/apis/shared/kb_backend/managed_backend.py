@@ -428,6 +428,8 @@ class ManagedKbBackend:
         query: str,
         top_k: int = DEFAULT_TOP_K,
         retrieval_filter: Optional[Mapping[str, Any]] = None,
+        *,
+        record: Optional[Mapping[str, Any]] = None,
     ) -> List[Chunk]:
         """Retrieve up to ``top_k`` chunks, best first.
 
@@ -439,8 +441,15 @@ class ManagedKbBackend:
         The synchronous ``retrieve`` call runs off the event loop (Requirement
         20.7): it was measured at 662–695 ms p50, which is long enough to matter
         to every other coroutine sharing the loop.
+
+        ``record`` is the KB_Record the facade read moments ago to choose this
+        backend. Its ``awsKbId`` is used as-is rather than read a second time (the
+        same row, ~50ms on a turn's critical path); without one, or without an
+        ``awsKbId`` on it, the record is read here as before.
         """
-        aws_kb_id, _ = await self._locate_async(kb_ref)
+        aws_kb_id = (record or {}).get("awsKbId")
+        if not aws_kb_id:
+            aws_kb_id, _ = await self._locate_async(kb_ref)
         client = self._runtime()
 
         payload = {

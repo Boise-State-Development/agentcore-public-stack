@@ -13,8 +13,9 @@ model seam.
 The SDK-shape tests below deliberately drive the *real* ``strands`` model
 classes with *real* ``openai`` usage objects rather than hand-rolled stubs. A
 stub that merely matches the broken behavior would hide the bug, and the whole
-mapping hangs off two SDK details (the chunk-formatter method name, and the
-fact that Strands drops ``cache_write_tokens``) that a version bump can move.
+mapping hangs off two SDK details (the chunk-formatter method name, and
+whether Strands' ``inputTokens`` still includes the cache buckets) that a
+version bump can move.
 """
 
 import pytest
@@ -206,8 +207,14 @@ class TestStrandsSdkContract:
         assert hasattr(OpenAIResponsesModel, "_format_chunk")
         assert hasattr(OpenAIModel, "format_chunk")
 
-    def test_sdk_still_reports_inclusive_input_and_drops_cache_writes(self):
-        """The bug this module exists to fix, asserted against the real SDK."""
+    def test_responses_sdk_surfaces_cache_writes_but_input_stays_inclusive(self):
+        """The bug this module exists to fix, asserted against the real SDK.
+
+        strands-agents 1.57.2 (#4193) maps Responses ``cache_write_tokens``, so
+        our recovery in ``_normalize_metadata_chunk`` now writes the value the
+        SDK already set. ``inputTokens`` is still the inclusive total, so
+        disjointness remains ours to restore — exactly once.
+        """
         from openai.types.responses.response_usage import ResponseUsage
         from strands.models import OpenAIResponsesModel
 
@@ -223,11 +230,60 @@ class TestStrandsSdkContract:
         # inputTokens is the inclusive total, not the uncached remainder...
         assert usage["inputTokens"] == 30_500
         assert usage["cacheReadInputTokens"] == 30_000
-        # ...and the write bucket never makes it out of the SDK.
-        assert "cacheWriteInputTokens" not in usage
+        # ...and the write bucket is reported, but still inside inputTokens.
+        assert usage["cacheWriteInputTokens"] == 400
 
         with pytest.raises(AssertionError):
             _assert_disjoint(usage)
+
+    def test_chat_completions_sdk_now_surfaces_cache_writes(self):
+        """strands-agents 1.57 (#4361) maps Chat Completions cache writes.
+
+        They arrive as ``cacheWriteInputTokens`` beside an ``inputTokens`` that
+        is still inclusive, so the shim must subtract them exactly once — which
+        is what ``normalize_usage`` already does for any write bucket present.
+        """
+        from openai.types.completion_usage import CompletionUsage
+        from strands.models.openai import OpenAIModel
+
+        wire = {
+            "prompt_tokens": 10_000,
+            "completion_tokens": 50,
+            "total_tokens": 10_050,
+            "prompt_tokens_details": {"cached_tokens": 6_000, "cache_write_tokens": 3_000},
+        }
+        usage_obj = CompletionUsage.model_validate(wire)
+
+        raw = OpenAIModel(client_args={"api_key": "test-key"}, model_id="openai.gpt-5.6").format_chunk(
+            {"chunk_type": "metadata", "data": usage_obj}
+        )["metadata"]["usage"]
+        assert raw["inputTokens"] == 10_000
+        assert raw["cacheWriteInputTokens"] == 3_000
+
+        normalized = usage_normalized(OpenAIModel)(
+            client_args={"api_key": "test-key"}, model_id="openai.gpt-5.6"
+        ).format_chunk({"chunk_type": "metadata", "data": usage_obj})["metadata"]["usage"]
+        assert normalized["inputTokens"] == 1_000
+        assert normalized["cacheReadInputTokens"] == 6_000
+        assert normalized["cacheWriteInputTokens"] == 3_000
+        _assert_disjoint(normalized)
+
+    def test_bedrock_usage_is_still_disjoint_upstream(self):
+        """Tripwire for strands-agents/harness-sdk#4618.
+
+        That proposal would make the Bedrock adapter fold cache tokens into
+        ``inputTokens``, and delete the read-time ``_total_prompt_tokens`` sum
+        that exists only because Bedrock reports disjoint buckets. When this
+        helper disappears, ``normalize_usage``'s "leave Bedrock untouched"
+        contract inverts and every cached Bedrock token is priced twice — the
+        bump that removes it must carry the matching normalization change.
+        """
+        from strands.telemetry import metrics
+
+        assert hasattr(metrics, "_total_prompt_tokens")
+        usage = {"inputTokens": 100, "outputTokens": 1, "totalTokens": 30_501, "cacheReadInputTokens": 30_000,
+                 "cacheWriteInputTokens": 400}
+        assert metrics._total_prompt_tokens(usage) == 30_500
 
     def test_usage_normalized_raises_when_the_seam_disappears(self):
         class _Seamless:

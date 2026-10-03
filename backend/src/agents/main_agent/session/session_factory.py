@@ -1,6 +1,7 @@
 """
 Session manager factory for creating AgentCore Memory session managers
 """
+import contextvars
 import os
 import logging
 from typing import Optional, Any, Dict, Tuple
@@ -68,24 +69,83 @@ def session_async_persistence_enabled() -> bool:
 try:
     from bedrock_agentcore.memory.integrations.strands.config import AgentCoreMemoryConfig, RetrievalConfig
     from bedrock_agentcore.memory import MemoryClient
+    from bedrock_agentcore.memory.integrations.strands import session_manager as _sdk_session_manager
     AGENTCORE_MEMORY_AVAILABLE = True
 except ImportError:
     AGENTCORE_MEMORY_AVAILABLE = False
 
 
-@lru_cache(maxsize=1)
-def _discover_strategy_ids(memory_id: str, region: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+# ---------------------------------------------------------------------------
+# One set of AgentCore Memory clients per process
+# ---------------------------------------------------------------------------
+#
+# The SDK's session manager builds its clients from scratch on every
+# construction, twice (see ``agent_build_shared_session_enabled``). Everything
+# below exists to hand it the process-wide session from
+# ``apis.shared.aws_clients`` instead, which warm-up builds at container
+# start (``apis/inference_api/warmup.py``).
+
+# Set by the factory for the duration of one session manager's construction.
+# The SDK builds its ``MemoryClient`` with no session and no session id, so this
+# is how the per-session decision reaches ``_SharedSessionMemoryClient``.
+_use_shared_memory_clients: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "use_shared_memory_clients", default=False
+)
+
+
+if AGENTCORE_MEMORY_AVAILABLE:
+    from apis.shared.aws_clients import shared_boto_session
+
+    class _SharedSessionMemoryClient(MemoryClient):
+        """``MemoryClient`` built from the shared session when the flag is on.
+
+        The SDK session manager constructs ``MemoryClient(region_name=...)``
+        with no session, so it cannot be handed one; its clients are then
+        replaced a few lines later, so they were pure cost. Rebinding the name
+        in the SDK module is the only seam the pinned bedrock-agentcore offers.
+        Pinned by ``test_session_factory_shared_clients.py``, which fails if an
+        SDK upgrade stops going through it.
+        """
+
+        def __init__(
+            self,
+            region_name: Optional[str] = None,
+            integration_source: Optional[str] = None,
+            boto3_session: Any = None,
+        ) -> None:
+            if boto3_session is None and _use_shared_memory_clients.get():
+                boto3_session = shared_boto_session()
+            super().__init__(
+                region_name=region_name,
+                integration_source=integration_source,
+                boto3_session=boto3_session,
+            )
+
+    _sdk_session_manager.MemoryClient = _SharedSessionMemoryClient
+
+
+@lru_cache(maxsize=2)
+def _discover_strategy_ids(
+    memory_id: str, region: str, *, shared_session: bool = False
+) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """
     Discover the actual strategy IDs from the configured memory strategies.
 
     AgentCore Memory stores memories in strategy-specific namespaces:
     /strategies/{strategyId}/actors/{actorId}
 
-    This function queries the memory to find the actual strategy IDs.
+    This function queries the memory to find the actual strategy IDs. It is
+    a control-plane read of static configuration, cached for the life of the
+    process.
 
     Args:
         memory_id: AgentCore Memory ID
         region: AWS region
+        shared_session: Build the ``MemoryClient`` on the process-wide session
+            (``agent_build_shared_session_enabled``) instead of a fresh one.
+            Part of the cache key on purpose: warm-up primes the shared entry
+            at container start, and a process with the kill switch set must
+            still do exactly what it did before.
 
     Returns:
         Tuple of (semantic_strategy_id, preference_strategy_id, summary_strategy_id)
@@ -94,7 +154,10 @@ def _discover_strategy_ids(memory_id: str, region: str) -> Tuple[Optional[str], 
         return None, None, None
 
     try:
-        client = MemoryClient(region_name=region)
+        client = MemoryClient(
+            region_name=region,
+            boto3_session=shared_boto_session() if shared_session else None,
+        )
         strategies = client.get_memory_strategies(memory_id=memory_id)
 
         semantic_id = None
@@ -120,6 +183,19 @@ def _discover_strategy_ids(memory_id: str, region: str) -> Tuple[Optional[str], 
     except Exception as e:
         logger.error(f"Failed to discover memory strategies: {e}", exc_info=True)
         return None, None, None
+
+
+def warm_strategy_ids() -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """Discover the memory's strategy ids on the shared session, once, at container start.
+
+    Called from ``apis/inference_api/warmup.py`` on the startup daemon thread
+    so the first turn finds the ids cached and its clients built. Raises when no memory is configured (``load_memory_config``); the
+    warm-up step logs that and moves on.
+    """
+    if not AGENTCORE_MEMORY_AVAILABLE:
+        return None, None, None
+    config = load_memory_config()
+    return _discover_strategy_ids(config.memory_id, config.region, shared_session=True)
 
 
 class SessionFactory:
@@ -205,8 +281,15 @@ class SessionFactory:
         logger.info(f"   • Memory ID: {memory_id}")
         logger.info(f"   • Region: {aws_region}")
 
-        # Discover actual strategy IDs from the memory configuration
-        semantic_id, preference_id, summary_id = _discover_strategy_ids(memory_id, aws_region)
+        # Discover actual strategy IDs from the memory configuration. With the
+        # shared session on this is a cache hit: warm-up discovered them at
+        # container start (`warm_strategy_ids`).
+        from apis.shared.feature_flags import agent_build_shared_session_enabled
+
+        shared_clients = agent_build_shared_session_enabled()
+        semantic_id, preference_id, summary_id = _discover_strategy_ids(
+            memory_id, aws_region, shared_session=shared_clients
+        )
 
         # Load retrieval thresholds from environment (configurable per deployment)
         relevance_score = float(os.environ.get(EnvVars.MEMORY_RELEVANCE_SCORE, str(Defaults.MEMORY_RELEVANCE_SCORE)))
@@ -282,13 +365,18 @@ class SessionFactory:
             compaction_config.token_threshold = compaction_threshold
 
         # Create session manager with compaction built-in
-        session_manager = TurnBasedSessionManager(
-            agentcore_memory_config=agentcore_memory_config,
-            region_name=aws_region,
-            compaction_config=compaction_config if compaction_config.enabled else None,
-            user_id=user_id,
-            summarization_strategy_id=summary_id,
-        )
+        token = _use_shared_memory_clients.set(shared_clients)
+        try:
+            session_manager = TurnBasedSessionManager(
+                agentcore_memory_config=agentcore_memory_config,
+                region_name=aws_region,
+                compaction_config=compaction_config if compaction_config.enabled else None,
+                user_id=user_id,
+                summarization_strategy_id=summary_id,
+                boto_session=shared_boto_session() if shared_clients else None,
+            )
+        finally:
+            _use_shared_memory_clients.reset(token)
 
         logger.info("✅ AgentCore Memory initialized")
         logger.info("   • Storage: AWS-managed DynamoDB")
@@ -299,6 +387,7 @@ class SessionFactory:
         else:
             logger.info("   • Compaction: Disabled")
         logger.info("   • Persistence: %s", "Async (off the event loop)" if async_persistence else "Sync (blocking)")
+        logger.info("   • Clients: %s", "Shared (process-wide)" if shared_clients else "Per session manager")
 
         return session_manager
 

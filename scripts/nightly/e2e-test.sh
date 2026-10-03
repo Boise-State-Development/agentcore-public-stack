@@ -15,9 +15,10 @@ set -euo pipefail
 #   USER_PASSWORD         — Cognito regular user test account password
 #
 # The script resolves the frontend URL from:
-#   1. SSM parameter /${CDK_PROJECT_PREFIX}/frontend/url (set by FrontendStack)
-#   2. CloudFormation WebsiteUrl output from FrontendStack
-#   3. CloudFormation DistributionDomainName output from FrontendStack
+#   1. SSM parameter /${CDK_PROJECT_PREFIX}/frontend/url (written by the SPA
+#      distribution construct inside PlatformStack)
+#   2. CloudFormation FrontendDnsRecordName output from PlatformStack (custom
+#      domain deployments only)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -38,7 +39,7 @@ log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 # Resolve the frontend URL of the deployed stack (CloudFront / S3)
 # ---------------------------------------------------------------------------
 get_base_url() {
-    # Try SSM parameter first (set by FrontendStack)
+    # Try SSM parameter first (set by the SPA distribution construct)
     local ssm_key="/${CDK_PROJECT_PREFIX}/frontend/url"
     local frontend_url
     frontend_url=$(aws ssm get-parameter \
@@ -57,37 +58,23 @@ get_base_url() {
         return 0
     fi
 
-    # Fallback: query CloudFormation WebsiteUrl output from FrontendStack
-    local stack_name="${CDK_PROJECT_PREFIX}-FrontendStack"
-    frontend_url=$(aws cloudformation describe-stacks \
+    # Fallback: the PlatformStack's custom-domain record name output. There is
+    # a single stack now; the former `-FrontendStack` WebsiteUrl /
+    # DistributionDomainName lookups referenced a stack that no longer exists.
+    local stack_name="${CDK_PROJECT_PREFIX}-PlatformStack"
+    local record_name
+    record_name=$(aws cloudformation describe-stacks \
         --stack-name "${stack_name}" \
-        --query "Stacks[0].Outputs[?OutputKey=='WebsiteUrl'].OutputValue" \
+        --query "Stacks[0].Outputs[?OutputKey=='FrontendDnsRecordName'].OutputValue" \
         --output text \
         --region "${CDK_AWS_REGION}" 2>/dev/null || true)
 
-    if [ -n "${frontend_url}" ] && [ "${frontend_url}" != "None" ]; then
-        if [[ "${frontend_url}" == https://* ]]; then
-            echo "${frontend_url}"
-        else
-            echo "https://${frontend_url}"
-        fi
+    if [ -n "${record_name}" ] && [ "${record_name}" != "None" ]; then
+        echo "https://${record_name}"
         return 0
     fi
 
-    # Last resort: query CloudFront distribution domain from FrontendStack
-    local cf_domain
-    cf_domain=$(aws cloudformation describe-stacks \
-        --stack-name "${stack_name}" \
-        --query "Stacks[0].Outputs[?OutputKey=='DistributionDomainName'].OutputValue" \
-        --output text \
-        --region "${CDK_AWS_REGION}" 2>/dev/null || true)
-
-    if [ -n "${cf_domain}" ] && [ "${cf_domain}" != "None" ]; then
-        echo "https://${cf_domain}"
-        return 0
-    fi
-
-    log_error "Could not resolve frontend URL from SSM (${ssm_key}) or FrontendStack outputs"
+    log_error "Could not resolve frontend URL from SSM (${ssm_key}) or ${stack_name} outputs"
     return 1
 }
 
@@ -671,7 +658,7 @@ print(params.get('redirect_uri', [''])[0])
                 # a 301 redirect to HTTPS instead of reaching the BFF directly.
                 log_warn "  CloudFront /api/auth/login returned HTTP ${cf_status_code} redirect to: ${cf_login_redirect:0:120}"
                 log_warn "  This looks like an ALB HTTP→HTTPS redirect. CloudFront may be using HTTP_ONLY protocol."
-                log_warn "  Fix: Ensure CDK_CERTIFICATE_ARN is set when deploying FrontendStack so CloudFront uses HTTPS to ALB."
+                log_warn "  Fix: Ensure CDK_CERTIFICATE_ARN is set when deploying the PlatformStack so CloudFront uses HTTPS to ALB."
             else
                 log_warn "  CloudFront /api/auth/login returned HTTP ${cf_status_code} with no redirect (attempt $((cf_retries + 1))/${cf_max_retries}) — retrying in 10s..."
             fi

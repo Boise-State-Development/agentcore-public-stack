@@ -58,6 +58,15 @@ class _RecordingHook:
     def arm(self, **kwargs) -> None:
         self.arms.append(kwargs)
 
+    async def resolved_arms(self) -> List[dict]:
+        """The arms with the index resolved: the coordinator arms with
+        ``HistoryCount.resolve`` so the history read stays off the turn path."""
+        out = []
+        for arm in self.arms:
+            index = arm["message_index"]
+            out.append({**arm, "message_index": await index() if callable(index) else index})
+        return out
+
     @property
     def wrote_this_turn(self) -> bool:
         return self._wrote
@@ -98,7 +107,7 @@ class TestArming:
 
         await _run(_Wrapper(hook), original_message="what the user typed")
 
-        assert hook.arms == [
+        assert await hook.resolved_arms() == [
             {
                 "session_id": "sess-1",
                 "user_id": "user-1",
@@ -115,7 +124,7 @@ class TestArming:
 
         await _run(_Wrapper(hook), original_message=None)
 
-        assert hook.arms == [
+        assert await hook.resolved_arms() == [
             {
                 "session_id": "sess-1",
                 "user_id": "user-1",

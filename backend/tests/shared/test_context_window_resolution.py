@@ -34,17 +34,28 @@ class TestSdkTable:
     @pytest.mark.parametrize(
         "model_id",
         [
-            "us.openai.gpt-6-astra",
-            "us.openai.gpt-5.6-sol",
             "us.moonshotai.kimi-k3",
             "us.deepseek.v3-2",
         ],
     )
     def test_non_anthropic_ids_are_absent(self, model_id):
-        # The fallback is a partial safety net. If this starts returning values,
-        # the 272K pricing cap on the OpenAI rows needs re-checking (it would
-        # begin tripping the disagreement warning).
+        # The fallback is a partial safety net. If one of these starts
+        # returning a value, check it against the catalog row the way the
+        # hosted OpenAI rows below were checked.
         assert cw.sdk_context_window(model_id) is None
+
+    @pytest.mark.parametrize("model_id", ["us.openai.gpt-6-astra", "us.openai.gpt-5.6-sol"])
+    def test_hosted_openai_ids_now_resolve_to_their_full_window(self, model_id):
+        # strands-agents 1.56+ strips nested prefixes (`us.` then `openai.`)
+        # and its table carries these at 1,050,000. The curated rows pin
+        # maxInputTokens at 272,000 on purpose (the pricing tier), so the
+        # catalog value still wins; the pair now logs one disagreement warning
+        # per process, which is expected rather than a stale row.
+        assert cw.sdk_context_window(model_id) == 1_050_000
+
+    def test_the_curated_272k_cap_still_wins_over_the_sdk_window(self):
+        window, source = cw.resolve_context_window("us.openai.gpt-6-astra", 272_000)
+        assert (window, source) == (272_000, "disagreement")
 
     def test_missing_model_id_is_not_an_error(self):
         assert cw.sdk_context_window(None) is None
@@ -77,7 +88,7 @@ class TestPrecedence:
         assert (window, source) == (1_000_000, "sdk")
 
     def test_both_absent_reports_nothing_rather_than_guessing(self):
-        assert cw.resolve_context_window("us.openai.gpt-6-astra", None) == (None, None)
+        assert cw.resolve_context_window("us.moonshotai.kimi-k3", None) == (None, None)
 
     @pytest.mark.parametrize("bad", [0, -1, "", "not-a-number", None])
     def test_unusable_catalog_values_fall_through(self, bad):

@@ -16,6 +16,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from apis.shared import aws_clients
 from apis.shared.tool_summaries.summarizer import (
     _build_prompt,
     _clean,
@@ -50,6 +51,14 @@ def summaries_enabled(monkeypatch):
     monkeypatch.setenv("TOOL_SUMMARIES_ENABLED", "true")
 
 
+@pytest.fixture(autouse=True)
+def _fresh_bedrock_client():
+    """The Bedrock client is cached per process; each test builds its own."""
+    aws_clients.reset_cached_clients()
+    yield
+    aws_clients.reset_cached_clients()
+
+
 @pytest.fixture
 def bedrock(monkeypatch):
     """Patch boto3.client so no test ever reaches Bedrock."""
@@ -58,6 +67,19 @@ def bedrock(monkeypatch):
     module.client.return_value = client
     monkeypatch.setitem(__import__("sys").modules, "boto3", module)
     return client
+
+
+@pytest.mark.asyncio
+async def test_batches_reuse_one_bedrock_client(bedrock):
+    """A client per batch paid botocore's model load and a fresh TLS handshake."""
+    bedrock.converse.return_value = _response("Found the BIO 101 course")
+    factory = __import__("sys").modules["boto3"].client
+
+    for _ in range(3):
+        assert await summarize_tool_batch(_calls()) == "Found the BIO 101 course"
+
+    assert factory.call_count == 1
+    assert bedrock.converse.call_count == 3
 
 
 # -- the truncation regression -------------------------------------------
@@ -91,6 +113,27 @@ async def test_truncation_is_judged_by_stop_reason_not_by_length(bedrock):
 
     assert await summarize_tool_batch(_calls()) == long_but_finished
 
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stop_reason", ["guardrail_intervened", "content_filtered", "tool_use", "something_new"])
+async def test_any_stop_other_than_end_turn_is_discarded(bedrock, stop_reason):
+    """A guardrail or content-filter stop can carry the refusal as its text.
+
+    Only `end_turn` says the model finished a summary; anything else must
+    leave the deterministic line in place.
+    """
+    bedrock.converse.return_value = _response("Sorry, the model cannot answer this.", stop_reason=stop_reason)
+
+    assert await summarize_tool_batch(_calls()) is None
+
+
+@pytest.mark.asyncio
+async def test_a_missing_stop_reason_is_discarded(bedrock):
+    bedrock.converse.return_value = {"output": {"message": {"content": [{"text": "Found 3 active courses"}]}}}
+
+    assert await summarize_tool_batch(_calls()) is None
 
 # -- every other failure is also a None -----------------------------------
 

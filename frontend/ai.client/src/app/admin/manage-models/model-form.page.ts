@@ -262,6 +262,8 @@ interface ModelFormGroup {
   outputPricePerMillionTokens: FormControl<number>;
   cacheWritePricePerMillionTokens: FormControl<number | null>;
   cacheReadPricePerMillionTokens: FormControl<number | null>;
+  speechInputPricePerMillionTokens: FormControl<number | null>;
+  speechOutputPricePerMillionTokens: FormControl<number | null>;
   knowledgeCutoffDate: FormControl<string | null>;
   supportsCaching: FormControl<boolean>;
   mantleApiMode: FormControl<MantleApiMode>;
@@ -400,6 +402,8 @@ export class ModelFormPage implements OnInit {
     outputPricePerMillionTokens: this.fb.control(0, { nonNullable: true, validators: [Validators.required, Validators.min(0)] }),
     cacheWritePricePerMillionTokens: this.fb.control<number | null>(null, { validators: [Validators.min(0)] }),
     cacheReadPricePerMillionTokens: this.fb.control<number | null>(null, { validators: [Validators.min(0)] }),
+    speechInputPricePerMillionTokens: this.fb.control<number | null>(null, { validators: [Validators.min(0)] }),
+    speechOutputPricePerMillionTokens: this.fb.control<number | null>(null, { validators: [Validators.min(0)] }),
     knowledgeCutoffDate: this.fb.control<string | null>(null),
     // Seeded for the form's initial provider ('bedrock') and re-derived on
     // every provider switch. A hardcoded `false` here disagreed with the
@@ -944,6 +948,8 @@ export class ModelFormPage implements OnInit {
         outputPricePerMillionTokens: model.outputPricePerMillionTokens,
         cacheWritePricePerMillionTokens: model.cacheWritePricePerMillionTokens ?? null,
         cacheReadPricePerMillionTokens: model.cacheReadPricePerMillionTokens ?? null,
+        speechInputPricePerMillionTokens: model.speechInputPricePerMillionTokens ?? null,
+        speechOutputPricePerMillionTokens: model.speechOutputPricePerMillionTokens ?? null,
         knowledgeCutoffDate: model.knowledgeCutoffDate,
         supportsCaching: model.supportsCaching ?? true,
         mantleApiMode: this.coerceMantleApiMode(model.apiMode),
@@ -990,6 +996,8 @@ export class ModelFormPage implements OnInit {
       outputPricePerMillionTokens: template.outputPricePerMillionTokens,
       cacheWritePricePerMillionTokens: template.cacheWritePricePerMillionTokens ?? null,
       cacheReadPricePerMillionTokens: template.cacheReadPricePerMillionTokens ?? null,
+      speechInputPricePerMillionTokens: template.speechInputPricePerMillionTokens ?? null,
+      speechOutputPricePerMillionTokens: template.speechOutputPricePerMillionTokens ?? null,
       knowledgeCutoffDate: template.knowledgeCutoffDate ?? null,
       supportsCaching: template.supportsCaching ?? true,
       mantleApiMode: this.coerceMantleApiMode(template.apiMode),
@@ -1247,6 +1255,8 @@ export class ModelFormPage implements OnInit {
         outputPricePerMillionTokens: v.outputPricePerMillionTokens,
         cacheWritePricePerMillionTokens: v.cacheWritePricePerMillionTokens,
         cacheReadPricePerMillionTokens: v.cacheReadPricePerMillionTokens,
+        speechInputPricePerMillionTokens: v.speechInputPricePerMillionTokens,
+        speechOutputPricePerMillionTokens: v.speechOutputPricePerMillionTokens,
         knowledgeCutoffDate: v.knowledgeCutoffDate,
         supportsCaching: supportsCachingForProvider(v.provider, v.supportsCaching),
         // Only meaningful on an OpenAI-compatible Bedrock surface; null

@@ -9,6 +9,7 @@ import logging
 
 from apis.app_api.admin.models import ManagedModelsListResponse
 from apis.shared.auth import User, get_current_user_from_session
+from apis.shared.models.modalities import is_speech_model
 from apis.shared.models.managed_models import list_all_managed_models
 from apis.app_api.admin.services.model_icons import ModelIconError, read_model_icon
 from apis.app_api.admin.services.model_access import (
@@ -62,8 +63,10 @@ async def list_models_for_user(
     )
 
     try:
-        # Get all models, then filter by access
-        all_models = await list_all_managed_models()
+        # Get all models, then filter by access. Speech-to-speech rows (Nova 2
+        # Sonic) are catalogued so voice sessions price, but they answer no
+        # chat API — offering one in the picker would fail every turn.
+        all_models = [m for m in await list_all_managed_models() if not is_speech_model(m)]
 
         # Filter models based on hybrid AppRole + JWT role access
         accessible_models = await model_access_service.filter_accessible_models(

@@ -49,3 +49,27 @@ the new context would have to be to re-open it.
 - **Decision**: **Keep both skills. Stop flagging them.**
 - **Reasoning**: age is not dormancy for a reference skill. Both encode conventions that are still correct and still load-bearing — which is exactly why neither has needed an edit. The listing was a metric finding a fact about the file system, not about the repo.
 - **Re-open only if**: a skill's *content* is contradicted by the code it describes. Do not re-flag either skill on days-since-modified.
+
+### [2026-10-03] Declined — docling #405 and Guardrails #480 as kaizen items
+- **Origin**: review-queue.md ▸ [2026-06-05] docling bump, [2026-06-19] configurable Guardrails, [2026-07-03] gateway-level Guardrails; recommended Decline in reviews/2026-09-25.md ▸ Carried Over (7th carry) and reviews/2026-10-02.md ▸ Carried Over (8th).
+- **Decision**: **Decline as kaizen items.** Issues #405 and #480 stay open as product backlog; only the queue entries close.
+- **Reasoning**: eight carries without a surface anyone picked up. #480 is a product decision (in-agent `guardrail_id` vs. a gateway-level AgentCore Policy, and who owns the alerting it implies), not an improvement a weekly review can ship. The docling bump is the opposite: small and well-specified, yet it carried anyway, because the queue is not where a backlog bug gets picked up. A kaizen item needs an entry point; neither entry had one the forum would act on.
+- **Re-open only if**: someone proposes a PR-sized slice. The docling bump alone qualifies (move `requirements.lock` off `docling==2.81.0`, verify a `.txt` upload, close #405). Guardrails returns as product work on #480, not as a queue entry.
+
+### [2026-10-03] Declined — the standing "do derived execution contexts re-evaluate RBAC" audit
+- **Origin**: carried in reviews since it first fell due on 2026-09-11 (no queue entry of its own); recommended Decline in reviews/2026-09-25.md ▸ Carried Over (3rd time due) and reviews/2026-10-02.md ▸ Carried Over.
+- **Decision**: **Decline.**
+- **Reasoning**: it never had a surface. The concern is real, but it is answered per context, not by a standing audit: Shared Projects (#1257/#1258) built a new derived execution context and gave it its own named check (`apis/shared/projects/access.py`), which is the pattern that works. Same shape as the [2026-09-21] `oauth_required` decline.
+- **Re-open only if**: a specific derived context is named together with the RBAC check it skips. That is ordinary bug or design work and welcome; the standing audit is not.
+
+### [2026-10-03] Accepted — `bedrock-agentcore` #629, last-turn telemetry under-reports
+- **Origin**: review-queue.md ▸ [2026-08-14] "Guard against `bedrock-agentcore` #564" (named there as a related upstream risk); recommended Accept in reviews/2026-09-25.md ▸ Carried Over (5th cycle) and reviews/2026-10-02.md ▸ Carried Over (6th).
+- **Decision**: **Accept** the known under-report. No local workaround.
+- **Reasoning**: the SDK never flushes its TracerProvider before the microVM freezes, so end-of-invocation spans are dropped and span-based telemetry under-reports the final turn of each session. Upstream has been silent since August, and six cycles of carrying it changed nothing. A local flush shim would be patching SDK lifecycle we do not own, for a bounded and known gap.
+- **Re-open only if**: the upstream issue moves (a fix or a flush hook ships in a version we can pin), or a cost readout is visibly short by one turn per session.
+
+### [2026-10-03] Declined as scoped — reverse the Astra 272K decision
+- **Origin**: review-queue.md ▸ [2026-09-18] "Reverse the Astra decision — register at the full 1M window and make the price tier its own catalog field"; recommended Decline in reviews/2026-09-25.md ▸ Retirement Candidates and reviews/2026-10-02.md ▸ Carried Over.
+- **Decision**: **Decline as scoped.** GPT-6 Astra stays registered at `maxInputTokens: 272_000`.
+- **Reasoning**: the cap is load-bearing pricing, and `curated-models.ts` says so in the comment above the Mantle Responses rows. AWS prices these models on two cards (above 272K input tokens, input costs 2× and output 1.5×), while `CuratedModel` holds one flat rate per bucket. Raising the cap without a tier field silently opens the second price card and under-charges every long turn. The tier-boundary field half of the entry never shipped (see the resolved [2026-09-11] Astra entry).
+- **Re-open only if**: it comes together with a per-tier rate field on `CuratedModel` that the cost calculator reads. With that in place, the 1M window is the natural follow-on.

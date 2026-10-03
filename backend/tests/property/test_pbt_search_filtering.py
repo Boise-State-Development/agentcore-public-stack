@@ -92,6 +92,8 @@ def test_search_results_only_contain_complete_documents(
     with (
         patch.dict("os.environ", {"DYNAMODB_ASSISTANTS_TABLE_NAME": "test-table"}),
         patch("boto3.resource", return_value=mock_dynamodb),
+        # One test call runs every example, so isolate each from the cached handle.
+        patch.dict("apis.shared.aws_clients._resources", clear=True),
     ):
         from apis.shared.assistants.rag_service import (
             _filter_vectors_by_document_status,

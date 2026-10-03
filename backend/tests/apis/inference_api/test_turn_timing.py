@@ -226,6 +226,201 @@ class TestGroups:
         prelude.emit(session_id="s", stream_kind="agent")  # must not raise
 
 
+class TestNestedGroups:
+    """P1a splits `agent_build.tools` (docs/specs/turn-path-ttft.md). Every
+    proper prefix is a group, so the split keeps `agent_build.tools` as a
+    number exactly as the first split kept `agent_build`."""
+
+    def test_every_prefix_level_is_a_group(self, monkeypatch):
+        # Binary-exact steps, so the int() truncation cannot shave a ms.
+        clock = iter([0.0, 0.125, 0.25, 1.25, 1.375, 1.5, 1.625])
+        monkeypatch.setattr(
+            "apis.inference_api.chat.turn_timing.time.perf_counter",
+            lambda: next(clock),
+        )
+
+        prelude = TurnPrelude()
+        prelude.mark("agent_build.tools.filter")  # 125ms
+        prelude.mark("agent_build.tools.gateway")  # 125ms
+        prelude.mark("agent_build.tools.mcp")  # 1000ms
+        prelude.mark("agent_build.tools.extra")  # 125ms
+        prelude.mark("agent_build.hooks")  # 125ms
+
+        assert _emitted(prelude)["groups"] == {
+            "agent_build": 1500,
+            "agent_build.tools": 1375,
+        }
+
+    def test_the_pre_split_metric_survives_as_a_group(self, monkeypatch):
+        """`AgentBuildToolsMs` is the series the cold-build baseline is stated
+        in; it must keep arriving after its own decomposition."""
+        record = _emf_record(
+            monkeypatch,
+            ["agent_build.tools.filter", "agent_build.tools.mcp", "agent_build.hooks"],
+        )
+
+        assert {
+            "AgentBuildMs",
+            "AgentBuildToolsMs",
+            "AgentBuildToolsFilterMs",
+            "AgentBuildToolsMcpMs",
+            "AgentBuildHooksMs",
+        } <= set(record["metrics"])
+
+
+class TestDetails:
+    """Log-only properties: which MCP server owned `tools.mcp`."""
+
+    def test_a_detail_rides_on_the_log_line(self):
+        prelude = TurnPrelude()
+        servers = [{"id": "canvas", "outcome": "loaded", "totalMs": 812}]
+        prelude.detail("mcpServers", servers)
+
+        assert _emitted(prelude)["mcpServers"] == servers
+
+    def test_a_detail_is_never_a_metric(self, monkeypatch):
+        captured = {}
+        monkeypatch.setattr(
+            "apis.shared.observability.emf.emit_emf_metrics",
+            lambda **kw: captured.update(kw),
+        )
+        prelude = TurnPrelude()
+        prelude.detail("mcpServers", [{"id": "canvas", "totalMs": 812}])
+        prelude.emit(session_id="s", stream_kind="agent")
+
+        assert "mcpServers" not in captured["metrics"]
+        assert "mcpServers" not in captured["properties"]
+
+    def test_the_caller_s_extras_win_a_key_collision(self):
+        prelude = TurnPrelude()
+        prelude.detail("isResume", "from-a-detail")
+
+        assert _emitted(prelude, extra={"isResume": True})["isResume"] is True
+
+
+class TestFirstToken:
+    """`turn_first_token` (docs/specs/turn-path-ttft.md P1b): the same clock,
+    continued past `turn_prelude` to the first model output."""
+
+    def _turn(self, monkeypatch, *, readings):
+        clock = iter(readings)
+        monkeypatch.setattr(
+            "apis.inference_api.chat.turn_timing.time.perf_counter",
+            lambda: next(clock),
+        )
+        return TurnPrelude()
+
+    def test_reports_only_what_came_after_the_prelude(self, monkeypatch):
+        prelude = self._turn(
+            monkeypatch, readings=[0.0, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 2.5]
+        )
+        prelude.mark("agent_build.session_mgr")  # 0.25 -> 250
+        prelude.mark("stream_setup")  # 0.5 -> 250
+        _emitted(prelude, extra={"isResume": False})  # totalMs reads 0.75
+        prelude.mark("head_of_turn.handoff")  # 1.0 -> 500 (from 0.5)
+        prelude.mark("head_of_turn.history_count")  # 1.5 -> 500
+        prelude.mark("pre_model")  # 2.0 -> 500
+
+        payload = _first_token(prelude)
+
+        # At the last mark (2.0), not at emit: the remaining reading (2.5) is
+        # never taken, and the wait for the second event is not first-token time.
+        assert payload["firstTokenMs"] == 2000
+        assert payload["preludeTotalMs"] == 750
+        assert payload["stages"] == {
+            "head_of_turn.handoff": 500,
+            "head_of_turn.history_count": 500,
+            "pre_model": 500,
+        }
+        assert payload["groups"] == {"head_of_turn": 1000}
+        # The prelude's identity and extras carry over: one join key, one shape.
+        assert payload["sessionId"] == "s"
+        assert payload["isResume"] is False
+
+    def test_first_token_ms_is_the_model_mark_not_the_emit(self, monkeypatch):
+        """The line is written on the coordinator's next pass, after the first
+        token was yielded. The time spent waiting for that next event is not
+        first-token time, and the stages must add up to `firstTokenMs`."""
+        prelude = self._turn(monkeypatch, readings=[0.0, 0.5, 1.0, 1.75, 9.0])
+        prelude.mark("stream_setup")  # 0.5
+        _emitted(prelude)  # totalMs reads 1.0
+        prelude.mark("pre_model")  # 1.75 -> 1250 (from 0.5)
+
+        payload = _first_token(prelude)  # a now-reading of 9.0 must not be used
+
+        assert payload["firstTokenMs"] == 1750
+        assert payload["firstTokenMs"] == 500 + sum(payload["stages"].values())
+
+    def test_emits_once(self, caplog):
+        prelude = TurnPrelude()
+        _emitted(prelude)
+        caplog.set_level(logging.INFO, logger="apis.inference_api.chat.turn_timing")
+
+        prelude.emit_first_token()
+        prelude.emit_first_token()
+
+        lines = [r for r in caplog.records if r.getMessage().startswith("turn_first_token ")]
+        assert len(lines) == 1
+
+    def test_without_a_prelude_line_it_reports_every_mark(self):
+        prelude = TurnPrelude()
+        prelude.mark("head_of_turn.handoff")
+
+        payload = _first_token(prelude)
+
+        assert list(payload["stages"]) == ["head_of_turn.handoff"]
+        assert payload["preludeTotalMs"] is None
+
+    def test_mark_at_closes_a_stage_at_an_earlier_reading(self, monkeypatch):
+        prelude = self._turn(monkeypatch, readings=[0.0, 1.0, 3.0, 3.5])
+        prelude.mark("head_of_turn.rest")  # 1.0
+        prelude.mark_at("pre_model", 2.0)  # stamped by a hook at 2.0 -> 1000
+        prelude.mark("model")  # 3.0 -> 1000 (from 2.0, not from 1.0)
+
+        stages = _first_token(prelude)["stages"]
+
+        assert stages["pre_model"] == 1000
+        assert stages["model"] == 1000
+
+    def test_mark_at_never_produces_a_negative_stage(self, monkeypatch):
+        """A stamp older than the last mark — a hook that fired before the
+        coordinator's own mark — is a zero stage, not a negative one."""
+        prelude = self._turn(monkeypatch, readings=[0.0, 2.0, 2.5])
+        prelude.mark("head_of_turn.rest")  # 2.0
+        prelude.mark_at("pre_model", 1.0)
+
+        assert _first_token(prelude)["stages"]["pre_model"] == 0
+
+    def test_metrics_carry_first_token_ms_not_prelude_total(self, monkeypatch):
+        captured = []
+        monkeypatch.setattr(
+            "apis.shared.observability.emf.emit_emf_metrics",
+            lambda **kw: captured.append(kw),
+        )
+        prelude = TurnPrelude()
+        prelude.mark("agent_build.session_mgr")
+        prelude.emit(session_id="s", stream_kind="agent", extra={"isResume": True})
+        prelude.mark("head_of_turn.handoff")
+        prelude.mark("pre_model")
+        prelude.mark("model")
+        prelude.emit_first_token()
+
+        first_token = captured[-1]
+        assert {"FirstTokenMs", "HeadOfTurnMs", "HeadOfTurnHandoffMs", "PreModelMs", "ModelMs"} == set(
+            first_token["metrics"]
+        )
+        assert first_token["properties"]["isResume"] is True
+
+    def test_a_first_token_emit_never_raises(self, monkeypatch):
+        def _boom(**_kw):
+            raise RuntimeError("emf down")
+
+        monkeypatch.setattr("apis.shared.observability.emf.emit_emf_metrics", _boom)
+        prelude = TurnPrelude()
+        prelude.mark("model")
+        prelude.emit_first_token()  # must not raise
+
+
 class TestMetricNames:
     """The EMF metric name is derived from the stage name, not looked up.
 
@@ -377,6 +572,29 @@ def _emitted(prelude, *, session_id="s", extra=None):
     logger.setLevel(logging.INFO)
     try:
         prelude.emit(session_id=session_id, stream_kind="agent", extra=extra)
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(previous)
+    return captured
+
+
+def _first_token(prelude):
+    """The JSON payload `emit_first_token` would log, parsed back."""
+    captured = {}
+
+    class _Sink(logging.Handler):
+        def emit(self, record):
+            message = record.getMessage()
+            if message.startswith("turn_first_token "):
+                captured.update(json.loads(message[len("turn_first_token ") :]))
+
+    logger = logging.getLogger("apis.inference_api.chat.turn_timing")
+    handler = _Sink()
+    logger.addHandler(handler)
+    previous = logger.level
+    logger.setLevel(logging.INFO)
+    try:
+        prelude.emit_first_token()
     finally:
         logger.removeHandler(handler)
         logger.setLevel(previous)

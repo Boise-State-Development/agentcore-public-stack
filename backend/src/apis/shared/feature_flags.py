@@ -653,3 +653,122 @@ def compaction_summary_extract_enabled() -> bool:
     every planted fact on the quality harness, Nova Micro 88%.
     """
     return os.environ.get("COMPACTION_SUMMARY_EXTRACT_ENABLED", "").strip().lower() != "false"
+
+
+
+def agent_build_shared_session_enabled() -> bool:
+    """Whether the agent build's SDK clients are built on one process-wide boto3 session.
+
+    Three things on a first-turn build construct a fresh ``boto3.Session``
+    and parse service models on it: the AgentCore Memory session manager
+    (which builds a ``MemoryClient``, then a second session and clients that
+    replace the first pair), ``_discover_strategy_ids``, and Strands'
+    ``BedrockModel``. A fresh session re-parses every model it touches, and
+    the parse is the cost. With this on, all three are handed the session
+    from ``apis.shared.aws_clients.shared_boto_session``, which warm-up
+    builds at container start together with its clients and the strategy
+    ids, so the first turn finds them ready.
+
+    **Default ON with a kill switch** (house style, mirroring
+    ``agent_status_enabled``): unset or empty resolves to enabled; only the
+    literal ``"false"`` (case-insensitive) disables. Off, every SDK builds its
+    own session exactly as before, and warm-up skips the shared step.
+
+    Measured on dev, 2026-09-30, 15 first turns per arm, interleaved, every
+    turn a cold Runtime process (docs/specs/turn-latency-preamble.md PR-6):
+    ``agent_build`` median 869ms → 372ms, time to first token at the client
+    4211ms → 3564ms, and the two distributions did not overlap. Nothing
+    reaches the prompt; the stamp on ``turn_prelude`` (``sharedSession``)
+    is a property, never a dimension.
+    """
+    return os.environ.get("AGENT_BUILD_SHARED_SESSION_ENABLED", "").strip().lower() != "false"
+
+
+def mcp_parallel_preflight_enabled() -> bool:
+    """Whether external MCP servers are pre-flighted concurrently at agent build.
+
+    Each external MCP server's client is started and its tools listed before
+    the agent is built, and that handshake blocks its thread. Loaded one after
+    another, two cold Lambda-URL servers cost 9.5s + 12s on a KB agent's first
+    turn on dev (docs/specs/turn-path-ttft.md §5 P3). With this on, each
+    pre-flight runs on its own worker thread and the build waits for the
+    slowest, not the sum; clients are still returned in catalog order, so the
+    tool order in ``toolConfig`` (the prompt-cache prefix) is unchanged.
+
+    **Default ON with a kill switch** (house style): unset or empty resolves
+    to enabled; only the literal ``"false"`` (case-insensitive) disables. Off,
+    servers load one at a time on the build's loop, exactly as before. A build with a
+    single external server always loads it inline.
+    """
+    return os.environ.get("MCP_PARALLEL_PREFLIGHT_ENABLED", "").strip().lower() != "false"
+
+
+def kb_search_ahead_enabled() -> bool:
+    """Whether an agent turn's knowledge-base search overlaps the agent build.
+
+    The search used to be awaited in the route, before the stream opened, and
+    the (deferred) agent build only started after it. The build reads neither
+    the retrieved chunks nor the augmented message — only the stream does — so
+    with this on the search starts where it always did and is awaited after
+    the build, ahead of the citation frames. The augmented message and the
+    citations are byte-identical either way; only when the round trip happens
+    moves (docs/specs/turn-path-ttft.md §5 P3b).
+
+    **Default ON with a kill switch** (house style): unset or empty resolves
+    to enabled; only the literal ``"false"`` (case-insensitive) disables. Off,
+    the search is awaited in the route, exactly as before.
+    """
+    return os.environ.get("KB_SEARCH_AHEAD_ENABLED", "").strip().lower() != "false"
+
+
+def memory_retrieval_prefetch_enabled() -> bool:
+    """Whether the long-term-memory lookup starts as soon as the user's message
+    is added, overlapping the two Memory writes the SDK awaits first.
+
+    On ``MessageAddedEvent`` the SDK awaits ``append_message`` and
+    ``sync_agent`` (two ``CreateEvent`` calls) and only then runs the lookup —
+    three network calls in series before the model is called, measured at
+    450ms of a 1687ms warm first token on dev (docs/specs/turn-path-ttft.md
+    P1b). With this on, ``TurnBasedSessionManager`` starts the lookup first and
+    applies its result at the same point as before, so persisted and live
+    message bytes are unchanged; only the round trip overlaps the writes.
+
+    **Default ON with a kill switch** (house style): unset or empty resolves
+    to enabled; only the literal ``"false"`` (case-insensitive) disables. Off,
+    the lookup runs inline after the writes, exactly as before.
+    """
+    return os.environ.get("MEMORY_RETRIEVAL_PREFETCH_ENABLED", "").strip().lower() != "false"
+
+
+def history_count_prefetch_enabled() -> bool:
+    """Whether the per-turn history count runs off the critical path.
+
+    Every turn counts the session's stored messages (a paginated
+    ``ListEvents`` with payloads) to key its per-message metadata. Read at the
+    head of the turn it cost ~62ms + 2.25ms per stored event before the model
+    was called, ~390ms at 100+ events (docs/specs/turn-path-ttft.md §5 P4).
+    With this on, the stream coordinator starts the read at the head of the
+    turn and awaits it only where the index is used, counting messages created
+    before the turn began so the number is the one the serial read gave.
+
+    **Default ON with a kill switch** (house style): unset or empty resolves
+    to enabled; only the literal ``"false"`` (case-insensitive) disables. Off,
+    the count is read at the head of the turn, exactly as before.
+    """
+    return os.environ.get("HISTORY_COUNT_PREFETCH_ENABLED", "").strip().lower() != "false"
+
+
+def inline_attachment_persist_enabled() -> bool:
+    """Whether inline ``files`` bytes of a diverted class (spreadsheets, decks)
+    are written to S3 and registered as session files before the turn runs.
+
+    Covers ``apis.shared.files.inline_persist`` as called from the inference
+    API's attachment phase. The SPA uploads first and sends ``file_upload_ids``,
+    so this only ever fires for headless callers posting base64 ``files`` —
+    without it their diverted attachments are dropped while the guidance note
+    says the spreadsheet / PowerPoint tools can reach them. **Default ON with
+    a kill switch** (house style): unset or empty resolves to enabled; only the
+    literal ``"false"`` (case-insensitive) disables. Off, the pre-fix behaviour
+    returns exactly: nothing is written and the note is unchanged.
+    """
+    return os.environ.get("INLINE_ATTACHMENT_PERSIST_ENABLED", "").strip().lower() != "false"

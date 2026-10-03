@@ -192,6 +192,18 @@ boundary posture as today's ingestion Lambda).
    tail chunks — the one real gap in "reuse the pipeline as-is." Implemented
    as: worker stashes `previous_chunk_count` on the document record; the
    ingestion handler's completion step deletes the tail if present.)
+   **Managed knowledge bases** take the same S3 event to the managed
+   ingestion consumer instead, where the overwrite's event is
+   indistinguishable from a redelivery of the original upload's: the
+   document is already `complete` with its bytes settled. So the worker
+   also writes `stagedContentHash` before staging, and the consumer
+   re-ingests while it differs from the `ingestedContentHash` the last
+   re-ingest recorded — reserving the size growth against the byte cap
+   *before* submitting (a file that grew past the cap is refused and its
+   previous version keeps serving; the next sync retries), then settling
+   the difference. The same marker covers a changed page in §6.2. See
+   `kb_migration/ingestion_consumer.py` ("A changed source is not a
+   redelivery").
 6. Update `source_etag`, `content_hash`, `last_synced_at`, `last_result`.
 
 ### 6.2 Web crawl (`web_crawl`)

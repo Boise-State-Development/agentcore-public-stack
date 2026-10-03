@@ -58,7 +58,9 @@ import asyncio
 import logging
 import os
 from dataclasses import dataclass
-from typing import List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+from apis.shared.aws_clients import get_client
 
 from .compaction_policy import CHARS_PER_TOKEN
 
@@ -84,6 +86,12 @@ _MAX_OUTPUT_TOKENS_BY_MODEL: Tuple[Tuple[str, int], ...] = (
 # cap (half the budget) is 4k, so this is what binds; it is the figure the
 # harness screen ran with.
 _EXTRACTION_MAX_OUTPUT_TOKENS = 3_000
+# A generation is used only on a positive completion signal. ``max_tokens``
+# is the one exception, because it is salvaged (see the module docstring).
+# Anything else (a guardrail stop, a content-filter refusal, an unknown
+# reason) could be the refusal text itself, and a summary persists into the
+# cacheable history until the next cut, so it falls back instead.
+_ACCEPTED_STOP_REASONS = frozenset({"end_turn", "max_tokens"})
 
 _COMPRESSION_SYSTEM_PROMPT = """You maintain the running summary of a long conversation between a user and an AI assistant. You are given the existing summary notes (oldest first). Rewrite them into ONE compact summary the assistant can continue the conversation from.
 
@@ -206,6 +214,17 @@ def _salvage(text: str, budget_tokens: int) -> Optional[str]:
     return _keep_head_lines(head, budget_tokens) if head else None
 
 
+def _converse(region: Optional[str], **kwargs: Any) -> Dict[str, Any]:
+    """Run in a worker thread, so a first-use client build stays off the event loop.
+
+    The client is process-cached: one per call paid botocore's service-model
+    load (~250ms the first time in a process) and, every time, a fresh
+    connection pool — a new TCP+TLS handshake per compaction call.
+    """
+    region = region or os.environ.get("AWS_REGION", "us-west-2")
+    return get_client("bedrock-runtime", region).converse(**kwargs)
+
+
 async def _compress(
     records: Sequence[str],
     budget_tokens: int,
@@ -218,17 +237,12 @@ async def _compress(
     if not text.strip():
         return None, False
     try:
-        import boto3
-    except ImportError:  # pragma: no cover - dev without boto3
-        return None, False
-    try:
-        region = region or os.environ.get("AWS_REGION", "us-west-2")
-        client = boto3.client("bedrock-runtime", region_name=region)
         # ~0.75 words/token; aim well under the budget so the chars/4 check
         # below passes with margin.
         word_budget = max(150, int(budget_tokens * 0.55))
         response = await asyncio.to_thread(
-            client.converse,
+            _converse,
+            region,
             modelId=model_id,
             system=[{"text": _COMPRESSION_SYSTEM_PROMPT.replace("{word_budget}", f"{word_budget:,}")}],
             messages=[{"role": "user", "content": [{"text": "Summary notes, oldest first:\n\n" + text}]}],
@@ -240,8 +254,14 @@ async def _compress(
                 "maxTokens": min(_max_output_tokens(model_id), max(256, int(budget_tokens))),
             },
         )
+        stop_reason = response.get("stopReason")
+        if stop_reason not in _ACCEPTED_STOP_REASONS:
+            logger.info(
+                "compaction_summary_model_refused: stopReason=%s; falling back to truncation", stop_reason,
+            )
+            return None, False
         out = response["output"]["message"]["content"][0]["text"].strip()
-        if response.get("stopReason") == "max_tokens":
+        if stop_reason == "max_tokens":
             salvaged = _salvage(out, budget_tokens)
             logger.info(
                 "compaction_summary_model_truncated: generation hit the token ceiling; kept %d of %d chars",
@@ -292,21 +312,22 @@ async def extract_with_model(
     if not text.strip():
         return None
     try:
-        import boto3
-    except ImportError:  # pragma: no cover - dev without boto3
-        return None
-    try:
-        region = region or os.environ.get("AWS_REGION", "us-west-2")
-        client = boto3.client("bedrock-runtime", region_name=region)
         response = await asyncio.to_thread(
-            client.converse,
+            _converse,
+            region,
             modelId=model_id,
             system=[{"text": _EXTRACTION_SYSTEM_PROMPT}],
             messages=[{"role": "user", "content": [{"text": "Summary notes, oldest first:\n\n" + text}]}],
             inferenceConfig={"temperature": 0.0, "maxTokens": max(256, int(max_tokens))},
         )
+        stop_reason = response.get("stopReason")
+        if stop_reason not in _ACCEPTED_STOP_REASONS:
+            logger.info(
+                "compaction_summary_extract_refused: stopReason=%s; falling back to plain compression", stop_reason,
+            )
+            return None
         out = response["output"]["message"]["content"][0]["text"].strip()
-        if response.get("stopReason") == "max_tokens":
+        if stop_reason == "max_tokens":
             logger.info("compaction_summary_extract_truncated: keeping the complete lines")
             cut = out.rfind("\n")
             out = out[:cut].rstrip() if cut > 0 else ""

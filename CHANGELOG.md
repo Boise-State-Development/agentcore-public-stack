@@ -4,6 +4,76 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [1.26.0] - 2026-10-03
+
+The first token arrives sooner. Every stage between the request and the first model output is now mapped and timed, and the largest stages we own were taken off the critical path: a cold agent build drops from ~870ms to ~370ms, a long conversation no longer pays ~390ms to count its history, external MCP servers load concurrently, and an agent's knowledge-base search overlaps the build. Voice mode is **priced for the first time**, per modality, and users can choose which Nova 2 Sonic voice answers and which microphone listens. Claude Opus 5.5, GPT-6 Sol, GPT-6 Luna and GPT-5.5 join the catalog. Managed knowledge bases stop mis-counting imports and stop serving stale synced files. A smoke and regression pass now drives real turns and runs nightly. Strands moves to 1.57.2 with bedrock-agentcore 1.24.0. **A CDK deploy is required, and voice stays unmetered until an admin adds the Nova 2 Sonic catalog row** (see the release notes).
+
+### 🚀 Added
+
+- **Voice and microphone choice** — the composer's voice button becomes a split control with a menu: all 16 Nova 2 Sonic voices grouped by language (new `voiceId` user setting, unknown ids 422) and the input device (per browser, shared with dictation) (#1399)
+- **Voice pricing per modality** — optional `speechInputPricePerMillionTokens` / `speechOutputPricePerMillionTokens` on catalog rows, `CostCalculator.calculate_voice_cost` billing text and speech buckets separately, and a curated **Nova 2 Sonic** row; models whose output includes speech are hidden from the chat picker (#1399)
+- **New curated models** — Claude Opus 5.5 (cache read 0.05×), GPT-6 Sol, GPT-6 Luna and GPT-5.5; Claude Opus 4.7, GPT-5.6 Sol and GPT-5.6 Terra move to the picker's More models submenu (#1358)
+- **Turn-path smoke and regression pass** — `backend/scripts/smoke_turns.py` drives real turns through `POST /chat/stream` and asserts frame order, restore, interrupts and resume, the single-flight 409, Stop, steering, attachments, citations and prompt-cache stability; runbook in `docs/testing/smoke-regression.md` (#1405)
+- `repair_managed_kb_byte_counters.py --settle-unexplained` — opt-in, per-agent repair for a quiet managed KB whose counters drifted from its ledger (#1361)
+
+### ✨ Improved
+
+- **Tool rail** shows a tool's full result in a bounded scroll box instead of cutting it at 200 characters; labels sit above values, input renders one `key: value` per line, and scroll boxes are keyboard-focusable with AA-contrast labels (#1394)
+- **Conversation titles appear sooner** — polled every 100ms during the stream, persisted in the background, and written with one keyed `update_item` (#1374)
+- Dark-mode sidebar date headers, bold text and headings in responses are brighter (#1378)
+- On phones, conversation text aligns with the composer instead of sitting ~48px from the edge (#1382)
+- **Turn-latency observability** — `agent_build.tools` split into four timed sub-stages with per-server MCP timings (#1396); the turn clock runs to the first model output (`turn_first_token`, `FirstTokenMs`) (#1397, #1398)
+
+### ⚡ Performance
+
+- One process-wide boto3 session for the agent build, built at container warm-up: cold `agent_build` 869 → 372ms median on dev. Kill switch `AGENT_BUILD_SHARED_SESSION_ENABLED` (#1377, #1395)
+- The per-turn history count is read on a worker thread from the head of the turn: 388 → 0ms at 100+ stored events, first token 1560 → 1092ms on dev. Kill switch `HISTORY_COUNT_PREFETCH_ENABLED` (#1403)
+- The long-term-memory lookup overlaps the two message writes: `pre_model` 450 → 270ms warm, 664 → 352ms cold. Kill switch `MEMORY_RETRIEVAL_PREFETCH_ENABLED` (#1400)
+- An agent's external MCP servers pre-flight concurrently, so tool loading tracks the slowest server rather than the sum; tool order is unchanged. Kill switch `MCP_PARALLEL_PREFLIGHT_ENABLED` (#1406)
+- An agent turn's knowledge-base search starts before the agent build (kill switch `KB_SEARCH_AHEAD_ENABLED`) (#1411), its follow-up reads run off the event loop (#1415), and the KB record is read once per search on a cached table (#1416)
+- The agent-binding "does this thread have messages?" check is a one-event existence read and no longer writes a `SESSION` event: first-agent-turn `rag` 955 → 571ms (#1413)
+- Side-channel Bedrock callers (tool summaries, compaction, document digest, embeddings) reuse one client instead of building one per call (#1375)
+
+### 🐛 Fixed
+
+- Imports, crawls and syncs on managed knowledge bases committed bytes they never reserved, so `totalBytes` never moved and `reservedBytes` could go negative (#1361)
+- A synced Drive file or crawled page that changed was never re-ingested on a managed KB, which kept serving the import-time version (#1365)
+- A KB sync whose S3 stage failed left its change gates advanced, so the change was never retried (#1373)
+- Stop pressed after the turn's `done` marked a finished turn interrupted (#1366); a page-hide in the same window stamped it `navigated_away` (#1370)
+- Side-channel calls (compaction summary and extraction, tool summaries, document abstracts, titles) accepted guardrail, content-filter and unknown stop reasons as valid results (#1368)
+- Inline spreadsheets and decks from headless callers were dropped while the guidance note said the tools could reach them; they are now stored as session files. Kill switch `INLINE_ATTACHMENT_PERSIST_ENABLED` (#1409)
+- The context-meter panel drew under the announcement pill (#1369)
+- A failed announcement acknowledgement showed a global error toast and was lost; it is now silent and retried once on a network drop or gateway error (#1383)
+- The model picker's chevron never rotated when the menu opened (#1393)
+- Voice sessions' `message_count` was inflated about fourfold (#1367)
+
+### 🔒 Security
+
+- The voice agent no longer writes the client-supplied `sample_rate` into its logs, where a crafted value could forge a log line (CodeQL `py/log-injection`) (#1425)
+
+### ⚠️ Changed
+
+- Imports, crawls and syncs on a managed knowledge base now count against the per-owner and per-KB byte caps like uploads: one that would breach a cap fails with the cap message instead of slipping past (#1361)
+
+### 📦 Dependencies
+
+- Backend: `strands-agents` / `strands-agents[bidi]` 1.55.0 → 1.57.2, `bedrock-agentcore` 1.21.0 → 1.24.0, `boto3`/`botocore` 1.43.68 → 1.43.103, `mcp` 1.28.1 → 1.30.0 (still held below 2); voice adapted to the graduated Bidi API with the WebSocket contract unchanged (#1367, #1410)
+
+### 🏗️ Infrastructure
+
+- Turn-latency dashboard gains first-token, after-prelude and `agent_build.tools` sub-stage widgets (#1396, #1397)
+
+### 🔧 CI/CD
+
+- The PR gate runs only the suites a PR's paths can reach, with 4 xdist workers on the backend job (#1392)
+- The nightly pipeline runs the turn-path smoke matrix after E2E, non-blocking, with its report uploaded (#1412, #1414)
+
+### 📚 Docs
+
+- `docs/specs/turn-path-ttft.md` maps every stage from the SPA's send to the first token, with the regression plan and dev readouts; the chat route's phases are extracted to match (#1388, #1402, #1404, #1408, #1418)
+- Complete feature-flag reference for fork operators, and the rule that feature switches stay while rollout switches retire, with a Kind column (#1384, #1420)
+- Specs: AgentCore Runtime V2 migration plan (#1376), background handoffs (#1371), conversation rewind and fork (#1419)
+
 ## [1.25.1] - 2026-09-26
 
 A single SPA fix on top of 1.25.0, which carries this week's features. **Upgrading from 1.24.x? Follow the 1.25.0 deployment notes** (CDK deploy plus post-deploy scripts). 1.25.1 adds no steps of its own.

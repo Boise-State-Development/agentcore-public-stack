@@ -3,9 +3,22 @@ name: CI
 # Pre-merge test gate. The deploy workflows (backend.yml, platform.yml,
 # frontend-deploy.yml) only run on push to develop/main — they run the
 # test jobs as a gate *before deploying*, so unit tests never ran on the
-# PR itself. This workflow runs the full test suites on every pull request
-# into develop/main, with no deploy/build/AWS steps, so regressions are
-# caught before merge. Deploys remain push-only.
+# PR itself. This workflow runs the test suites on every pull request into
+# develop/main, with no deploy/build/AWS steps, so regressions are caught
+# before merge. Deploys remain push-only.
+#
+# Which suites run is decided per PR by the `changes` job from the PR's file
+# list (scripts/ci/classify-changes.sh): a docs-only PR runs nothing, a
+# frontend-only PR runs the two SPA jobs, an infrastructure PR runs jest plus
+# the backend suites that read the CDK tree. The mapping is fail-open — an
+# unrecognised path, a workflow_dispatch, or a failed file-list call runs
+# everything — and is pinned by backend/tests/supply_chain/test_ci_path_filter.py.
+#
+# The filtering lives on the JOBS, not on the trigger's `paths:`. A workflow
+# that does not trigger leaves a required status check "Expected" forever
+# and blocks the merge; a job that is skipped reports as skipped and does
+# not. develop has no required checks today, but this shape survives adding
+# them.
 on:
   workflow_dispatch:
   pull_request:
@@ -23,25 +36,71 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Classify the PR's changed files into the suites that can observe them.
+  # The file list comes from the REST API rather than a checkout diff: no
+  # fetch-depth games, no third-party action, and it is exact for renames
+  # (both names are fed through). Any failure to obtain the list yields an
+  # empty stdin, which the classifier treats as "run everything".
+  changes:
+    name: Classify changed paths
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      backend: ${{ steps.classify.outputs.backend }}
+      backend_contracts: ${{ steps.classify.outputs.backend_contracts }}
+      frontend: ${{ steps.classify.outputs.frontend }}
+      infra: ${{ steps.classify.outputs.infra }}
+      load: ${{ steps.classify.outputs.load }}
+      scripts: ${{ steps.classify.outputs.scripts }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/ci
+      - name: Classify
+        id: classify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          files=""
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            files=$(gh api "repos/$REPO/pulls/$PR_NUMBER/files" --paginate \
+              --jq '.[] | .filename, (.previous_filename // empty)') || files=""
+            echo "$(printf '%s\n' "$files" | grep -c .) changed path(s) on PR #$PR_NUMBER"
+          else
+            echo "$EVENT_NAME is not a pull request: running every suite"
+          fi
+          printf '%s\n' "$files" | bash scripts/ci/classify-changes.sh | tee -a "$GITHUB_OUTPUT"
+
   tests:
     name: Tests
+    needs: changes
     permissions:
       contents: read
     uses: ./.github/workflows/tests.yml
     with:
-      run_backend: true
-      run_frontend: true
+      run_backend: ${{ needs.changes.outputs.backend == 'true' }}
+      # The supply-chain/architecture subset, for PRs that touch what those
+      # tests read (CDK, scripts, workflows) without touching backend/. A
+      # no-op inside tests.yml when run_backend is also true.
+      run_backend_contracts: ${{ needs.changes.outputs.backend_contracts == 'true' }}
+      run_frontend: ${{ needs.changes.outputs.frontend == 'true' }}
       # The frontend suite again under --coverage — the nightly's invocation.
       # Coverage changes how the specs are built (see tests.yml), so specs can
       # pass here and fail there. Only the PR gate pays for it; the deploy
       # workflows keep running the plain suite.
-      run_frontend_coverage: true
-      run_infra: true
+      run_frontend_coverage: ${{ needs.changes.outputs.frontend == 'true' }}
+      run_infra: ${{ needs.changes.outputs.infra == 'true' }}
       # Pure-logic tests for tests/load. Deliberately only on the PR gate: the
       # deploy workflows run test suites to protect a deploy, and the load
       # suite has no bearing on one.
-      run_load_unit: true
+      run_load_unit: ${{ needs.changes.outputs.load == 'true' }}
       # Offline unit tests for scripts/restore-data. PR gate only, like the
       # load suite: a deploy gains nothing from them.
-      run_scripts: true
+      run_scripts: ${{ needs.changes.outputs.scripts == 'true' }}
 

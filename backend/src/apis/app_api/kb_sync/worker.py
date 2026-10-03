@@ -208,17 +208,40 @@ async def _sync_drive_file(policy: SyncPolicy) -> Dict[str, Any]:
             return await _finish(policy, "unchanged")
 
         # Changed: stash the old chunk count for the ingestion tail-delete
-        # (shrinkage cleanup) BEFORE staging, then overwrite the S3 object.
+        # (shrinkage cleanup) and mark the version being staged — what a managed
+        # KB's consumer uses to tell this overwrite from a redelivery — BEFORE
+        # staging, then overwrite the S3 object.
         previous_chunk_count = int(document.get("chunkCount") or 0)
+        synced_at = _now_timestamp()
         records.update_document_sync_fields(
             assistant_id,
             policy.source_ref,
             source_etag=new_etag,
             content_hash=content_hash,
             previous_chunk_count=previous_chunk_count,
-            last_synced_at=_now_timestamp(),
+            last_synced_at=synced_at,
+            staged_content_hash=content_hash,
         )
-        _stage_to_s3(document["s3Key"], downloaded.content, downloaded.content_type)
+        try:
+            _stage_to_s3(document["s3Key"], downloaded.content, downloaded.content_type)
+        except Exception:
+            # The gates advanced above but the bytes never reached S3; left
+            # as they are, the next run would match them and never stage
+            # this change. previousChunkCount is harmless to leave — the next
+            # changed run rewrites it before its own stage.
+            written = {
+                "sourceEtag": new_etag,
+                "contentHash": content_hash,
+                "stagedContentHash": content_hash,
+                "lastSyncedAt": synced_at,
+            }
+            records.rollback_document_sync_fields(
+                assistant_id,
+                policy.source_ref,
+                written=written,
+                previous={attribute: document.get(attribute) for attribute in written},
+            )
+            raise
         logger.info(
             f"Sync policy {policy.policy_id}: staged {len(downloaded.content)} changed bytes for "
             f"document {policy.source_ref} (prev chunks: {previous_chunk_count})"
@@ -295,11 +318,15 @@ async def _sync_web_crawl(policy: SyncPolicy) -> Dict[str, Any]:
             web_docs[url] = item
 
     now = _now_timestamp()
+    # document_id -> (values written before staging, values they replaced),
+    # so a page whose stage then fails can be rolled back.
+    pre_stage_writes: Dict[str, Any] = {}
 
     async def on_result(url: str, document_id: str, outcome: str, etag, content_hash) -> None:
         if outcome == "changed":
             # BEFORE the S3 overwrite: stash the previous chunk count for
-            # the ingestion tail-delete, alongside the new gate values.
+            # the ingestion tail-delete and the staged version for a managed
+            # KB's re-ingest, alongside the new gate values.
             records.update_document_sync_fields(
                 assistant_id,
                 document_id,
@@ -307,6 +334,14 @@ async def _sync_web_crawl(policy: SyncPolicy) -> Dict[str, Any]:
                 content_hash=content_hash,
                 previous_chunk_count=int(web_docs[url].get("chunkCount") or 0),
                 last_synced_at=now,
+                staged_content_hash=content_hash,
+            )
+            written = {"contentHash": content_hash, "stagedContentHash": content_hash, "lastSyncedAt": now}
+            if etag is not None:
+                written["sourceEtag"] = etag
+            pre_stage_writes[document_id] = (
+                written,
+                {attribute: web_docs[url].get(attribute) for attribute in written},
             )
         elif outcome == "unchanged":
             records.update_document_sync_fields(
@@ -318,6 +353,13 @@ async def _sync_web_crawl(policy: SyncPolicy) -> Dict[str, Any]:
             records.update_document_sync_fields(
                 assistant_id, document_id, content_hash=content_hash, last_synced_at=now
             )
+            pre_stage_writes[document_id] = ({"contentHash": content_hash, "lastSyncedAt": now}, {})
+        elif outcome == "stage_failed" and document_id in pre_stage_writes:
+            # The page's gates advanced above but its bytes never reached S3;
+            # roll them back so the next re-crawl stages it instead of
+            # hash-matching a version the knowledge base never received.
+            written, previous = pre_stage_writes.pop(document_id)
+            records.rollback_document_sync_fields(assistant_id, document_id, written=written, previous=previous)
 
     refresh = crawler.RefreshState(
         docs={
@@ -397,9 +439,13 @@ async def _sync_web_crawl(policy: SyncPolicy) -> Dict[str, Any]:
 
     logger.info(
         f"Sync policy {policy.policy_id}: re-crawl done — {refresh.changed} changed, "
-        f"{refresh.created} new, {refresh.unchanged} unchanged, {deleted} deleted"
+        f"{refresh.created} new, {refresh.unchanged} unchanged, {deleted} deleted, "
+        f"{refresh.stage_failed} failed to stage"
     )
-    result = "changed" if (refresh.changed or refresh.created or deleted) else "unchanged"
+    # A page that failed to stage was counted as changed/created when it was
+    # emitted, but nothing reached the knowledge base.
+    staged = refresh.changed + refresh.created - refresh.stage_failed
+    result = "changed" if (staged or deleted) else "unchanged"
     return await _finish(policy, result)
 
 

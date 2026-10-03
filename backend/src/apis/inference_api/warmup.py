@@ -53,6 +53,17 @@ WARM_BOTO_SERVICES: tuple[str, ...] = (
     "s3",
 )
 
+# The parse above is per *session*, and the two SDKs on the agent build (the
+# AgentCore Memory session manager, Strands' BedrockModel) build their clients
+# on the process-wide session from `apis.shared.aws_clients`
+# (`agent_build_shared_session_enabled`, default on). Build those clients on
+# it here, so the first turn finds them parsed.
+WARM_SHARED_SESSION_SERVICES: tuple[str, ...] = (
+    "bedrock-agentcore",
+    "bedrock-agentcore-control",
+    "bedrock-runtime",
+)
+
 
 def warmup_enabled() -> bool:
     """Whether startup warm-up runs. Empty/unset means on."""
@@ -87,12 +98,47 @@ def warm_boto_clients(services: Iterable[str] = WARM_BOTO_SERVICES) -> None:
         _timed(f"boto:{service}", lambda service=service: boto3.client(service, region_name=region))
 
 
+def warm_shared_session(services: Iterable[str] = WARM_SHARED_SESSION_SERVICES) -> None:
+    """Build the agent build's shared boto3 session, its clients, and the memory strategy ids.
+
+    Everything here is client construction — no sockets — except the last
+    step. ``warm_strategy_ids`` is a control-plane read of the memory's
+    strategy ids (static configuration, cached for the life of the process),
+    and it opens the one connection warm-up otherwise avoids. That is
+    accepted (docs/specs/turn-path-ttft.md §5 P2): the alternative is paying
+    the read on the first turn, which is the turn this exists to shorten; the
+    call is idempotent, so botocore retries a connection error; and on
+    Runtime V2, where a warmed process is snapshotted and restored, the
+    restore's first turn is the thing to watch for a pool holding a socket
+    that did not survive.
+    """
+    from apis.shared.feature_flags import agent_build_shared_session_enabled
+
+    if not agent_build_shared_session_enabled():
+        logger.info("warmup step=shared outcome=skipped error=AGENT_BUILD_SHARED_SESSION_ENABLED=false")
+        return
+    region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
+    if not region:
+        logger.info("warmup step=shared outcome=skipped error=no region configured")
+        return
+    from apis.shared.aws_clients import shared_boto_session
+
+    session = shared_boto_session()
+    for service in services:
+        _timed(f"shared:{service}", lambda service=service: session.client(service, region_name=region))
+
+    from agents.main_agent.session.session_factory import warm_strategy_ids
+
+    _timed("shared:strategy_ids", warm_strategy_ids)
+
+
 def run_warmup() -> None:
     """The whole warm-up, synchronously. Exposed for tests and for callers that
     want it inline."""
     started = time.perf_counter()
     warm_modules()
     warm_boto_clients()
+    warm_shared_session()
     logger.info("warmup complete ms=%d", int((time.perf_counter() - started) * 1000))
 
 

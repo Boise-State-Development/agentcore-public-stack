@@ -1,4 +1,4 @@
-import { Component, ChangeDetectionStrategy, computed, inject, input } from '@angular/core';
+import { Component, ChangeDetectionStrategy, computed, inject, input, signal } from '@angular/core';
 import { Router } from '@angular/router';
 import { CdkMenuTrigger, CdkMenu, CdkMenuItem } from '@angular/cdk/menu';
 import { ConnectedPosition } from '@angular/cdk/overlay';
@@ -35,6 +35,8 @@ import { ModelOptionComponent } from './components/model-option.component';
           type="button"
           [cdkMenuTriggerFor]="modelMenu"
           [cdkMenuPosition]="menuPositions()"
+          (cdkMenuOpened)="onMenuOpened()"
+          (cdkMenuClosed)="onMenuClosed()"
           [class]="triggerSizeClass()"
           class="flex items-center rounded-lg text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-gray-300"
           aria-label="Select model"
@@ -65,8 +67,6 @@ import { ModelOptionComponent } from './components/model-option.component';
       <ng-template #modelMenu>
         <div
           cdkMenu
-          (closed)="onMenuClosed()"
-          (opened)="onMenuOpened()"
           class="w-72 rounded-md bg-white p-1.5 shadow-lg ring-1 ring-black/5 focus:outline-hidden dark:bg-gray-800 dark:ring-white/10 animate-in fade-in slide-in-from-top-1 duration-200"
           role="menu"
           aria-orientation="vertical"
@@ -258,8 +258,12 @@ export class ModelDropdownComponent {
   protected sessionService = inject(SessionService);
   private router = inject(Router);
 
-  // Internal state
-  protected menuOpen = false;
+  /**
+   * Whether the model menu is open, driving the trigger's chevron. Fed by the
+   * trigger's `cdkMenuOpened` / `cdkMenuClosed` outputs — `CdkMenu` itself has
+   * no `opened` output, so an `(opened)` binding on the panel never fires.
+   */
+  private readonly menuOpen = signal(false);
 
   /** The effort control for the selected model, or null when it offers none. */
   protected readonly effortControl = this.modelService.effortControl;
@@ -335,15 +339,15 @@ export class ModelDropdownComponent {
   ];
 
   protected isMenuOpen(): boolean {
-    return this.menuOpen;
+    return this.menuOpen();
   }
 
   protected onMenuOpened(): void {
-    this.menuOpen = true;
+    this.menuOpen.set(true);
   }
 
   protected onMenuClosed(): void {
-    this.menuOpen = false;
+    this.menuOpen.set(false);
   }
 
   protected levelLabel(level: string): string {

@@ -136,8 +136,22 @@ interface ParserSessionState {
   /** Error state */
   error: WritableSignal<string | null>;
 
-  /** Stream completion state */
+  /**
+   * Parser-side completion: true once `done` was handled OR the parser gave
+   * up on the stream (`setError`). Drives rendering only — a client parse
+   * error says nothing about whether the server's turn is still running.
+   */
   isStreamComplete: WritableSignal<boolean>;
+
+  /**
+   * True once the server sent this stream's `done` frame — the turn is over
+   * server-side, whatever the parser made of it. Recorded before the state
+   * gate, so a parser already in `Error` still learns the turn ended.
+   * Read by the Stop path: a Stop after this point must not mark the
+   * finished turn interrupted. Reset with the rest of the state on every
+   * new stream.
+   */
+  doneReceived: boolean;
 
   /** Metadata (usage, metrics) from the stream */
   metadata: WritableSignal<MetadataEvent | null>;
@@ -198,7 +212,6 @@ export class StreamParserService {
   private readonly lastEventAtCache = new Map<string, Signal<number>>();
   private readonly citationsCache = new Map<string, Signal<Citation[]>>();
   private readonly errorCache = new Map<string, Signal<string | null>>();
-  private readonly isStreamCompleteCache = new Map<string, Signal<boolean>>();
 
   // =========================================================================
   // Public API
@@ -248,9 +261,16 @@ export class StreamParserService {
     return this.cachedAccessor(this.errorCache, sessionId, (state) => state.error(), null);
   }
 
-  /** Stream completion state for a session. */
-  isStreamCompleteFor(sessionId: string): Signal<boolean> {
-    return this.cachedAccessor(this.isStreamCompleteCache, sessionId, (state) => state.isStreamComplete(), false);
+  /**
+   * Whether a session's CURRENT stream has received the server's `done`.
+   *
+   * Scoped to the stream the parser was last reset for, so a new turn reads
+   * false until its own `done`. Deliberately not derived from
+   * `isStreamComplete`, which a client-side parse error also sets while the
+   * server turn keeps running — a Stop then is a real interruption.
+   */
+  hasReceivedDone(sessionId: string): boolean {
+    return this.states().get(sessionId)?.doneReceived ?? false;
   }
 
   /**
@@ -304,6 +324,12 @@ export class StreamParserService {
     // Placed after the stale-stream guard so a superseded stream can't keep
     // its replacement looking alive.
     state.lastEventAt.set(Date.now());
+
+    // Like liveness, the end of the server's turn is a transport fact the
+    // state gate below must not swallow (a parser in `Error` drops `done`).
+    if (event === 'done') {
+      state.doneReceived = true;
+    }
 
     // Validate inputs
     if (!event || typeof event !== 'string') {
@@ -429,6 +455,7 @@ export class StreamParserService {
       lastEventAt: signal<number>(Date.now()),
       error: signal<string | null>(null),
       isStreamComplete,
+      doneReceived: false,
       metadata: signal<MetadataEvent | null>(null),
       pendingCitations: signal<Citation[]>([]),
       currentMessage: computed<Message | null>(() => {
@@ -1019,6 +1046,7 @@ export class StreamParserService {
   private handleDone(state: ParserSessionState): void {
     this.finalizeCurrentMessage(state);
     state.isStreamComplete.set(true);
+    state.doneReceived = true;
     state.modelRetry.set(null);
     // "Using list_courses" on a finished turn is a lie, not a stale nicety.
     // Durations and summaries already recorded are untouched.

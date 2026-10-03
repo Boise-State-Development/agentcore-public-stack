@@ -263,6 +263,24 @@ html.dark .message-block {
     a:hover {
         color: var(--color-primary-300);
     }
+
+    /* Weight alone barely separates bold from body text on a dark surface,
+       and the assistant bubble's gray-200 body sits too close to white to
+       leave room above it. So response prose steps down to gray-300 while
+       headings and bold step up to white. Inside a link, bold keeps the
+       link's color. */
+    &.text-block {
+        color: var(--color-gray-300);
+    }
+
+    h1, h2, h3, h4, h5, h6,
+    strong {
+        color: var(--color-white);
+    }
+
+    a strong {
+        color: inherit;
+    }
 }
   
 

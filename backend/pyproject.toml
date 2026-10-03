@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agentcore-stack"
-version = "1.25.1"
+version = "1.26.0"
 requires-python = ">=3.10"
 description = "Multi-agent conversational AI system with AWS Bedrock AgentCore"
 readme = "README.md"
@@ -17,7 +17,7 @@ dependencies = [
     "uvicorn[standard]==0.46.0",
 
     # AWS and cloud services
-    "boto3==1.43.68",
+    "boto3==1.43.103",
 
     # Utilities
     "python-dotenv==1.2.2",
@@ -67,11 +67,11 @@ dependencies = [
 [project.optional-dependencies]
 # AgentCore-specific dependencies (for inference_api)
 agentcore = [
-    "strands-agents==1.55.0",
+    "strands-agents==1.57.2",
     "strands-agents-tools==0.8.8",
 
     "aws-opentelemetry-distro==0.19.0",
-    "bedrock-agentcore==1.21.0",
+    "bedrock-agentcore==1.24.0",
     # Multi-provider LLM support
     "openai==2.32.0",  # For OpenAI models
     "google-genai==1.73.1",  # For Google Gemini models
@@ -82,7 +82,7 @@ agentcore = [
 
 # Voice/BidiAgent dependencies (Nova Sonic speech-to-speech)
 bidi = [
-    "strands-agents[bidi]==1.55.0",
+    "strands-agents[bidi]==1.57.2",
 ]
 
 # Document ingestion pipeline dependencies (for Lambda deployment)
@@ -125,11 +125,11 @@ all = [
 # Guard rail on a TRANSITIVE dependency — this is not a loosened pin.
 #
 # `mcp` arrives only via `strands-agents`; we do not depend on it directly and
-# deliberately do not promote it to a direct dependency. `strands-agents==1.55.0`
-# — the version pinned above, today — already declares `mcp>=1.23.0,<2.2`, so
-# the resolver is free to cross into `mcp` 2.x whenever it gets the chance.
+# deliberately do not promote it to a direct dependency. `strands-agents==1.57.2`
+# — the version pinned above, today — declares `mcp>=1.23.0,<2.2`, so the
+# resolver is free to cross into `mcp` 2.x whenever it gets the chance.
 #
-# The ONLY thing holding us on the 1.x line right now is incidental: `mcp` 2.x
+# Without this constraint the only thing holding us on 1.x is incidental: `mcp` 2.x
 # pulls `httpx2>=2.5.0`, which needs `idna>=3.18`, and we pin `idna==3.15` for
 # an unrelated Dependabot alert. A routine security bump of `idna` would quietly
 # unblock the major crossing — nobody would be choosing it, and nothing in the
@@ -147,6 +147,7 @@ all = [
 # A constraint, not a dependency: it bounds the version IF `mcp` is in the
 # resolution graph, without adding it to our own dependency metadata. Lift it
 # deliberately, together with a test pass over that `ClientSession` patch.
+# Asserted by backend/tests/supply_chain/test_strands_agentcore_pairing.py.
 constraint-dependencies = ["mcp<2"]
 
 [tool.setuptools]

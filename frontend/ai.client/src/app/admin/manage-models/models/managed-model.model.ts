@@ -228,6 +228,14 @@ export interface ManagedModel {
   cacheWritePricePerMillionTokens?: number | null;
   /** Cache read price per million tokens (in USD) - Bedrock only */
   cacheReadPricePerMillionTokens?: number | null;
+  /**
+   * Speech input price per million tokens (in USD). Speech-to-speech models
+   * only (Nova 2 Sonic): `inputPricePerMillionTokens` is the TEXT rate on
+   * such a model; this is the rate for spoken input, ~10x higher.
+   */
+  speechInputPricePerMillionTokens?: number | null;
+  /** Speech output price per million tokens (in USD). Speech-to-speech models only. */
+  speechOutputPricePerMillionTokens?: number | null;
   /** Knowledge cutoff date for the model */
   knowledgeCutoffDate?: string | null;
   /** Whether this model supports prompt caching (Bedrock only) */
@@ -352,6 +360,14 @@ export interface ManagedModelFormData {
   cacheWritePricePerMillionTokens?: number | null;
   /** Cache read price per million tokens (in USD) - Bedrock only */
   cacheReadPricePerMillionTokens?: number | null;
+  /**
+   * Speech input price per million tokens (in USD). Speech-to-speech models
+   * only (Nova 2 Sonic): `inputPricePerMillionTokens` is the TEXT rate on
+   * such a model; this is the rate for spoken input, ~10x higher.
+   */
+  speechInputPricePerMillionTokens?: number | null;
+  /** Speech output price per million tokens (in USD). Speech-to-speech models only. */
+  speechOutputPricePerMillionTokens?: number | null;
   /** Knowledge cutoff date for the model */
   knowledgeCutoffDate?: string | null;
   /** Whether this model supports prompt caching (Bedrock only) */

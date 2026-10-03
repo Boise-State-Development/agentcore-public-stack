@@ -154,11 +154,14 @@ function formatUsd(value: number): string {
       </button>
 
       @if (open()) {
+        <!-- z-40, not z-20: the panel shares chat-input's stacking context with
+             the announcement pill (z-30), which floats over the composer, so
+             anything lower renders the pill across the panel. -->
         <div
           id="context-meter-panel"
           role="region"
           aria-label="Context and cost details"
-          class="meter-panel absolute right-0 bottom-full z-20 mb-2 w-[min(20rem,calc(100vw-2rem))] rounded-xl border border-gray-200 bg-white p-3 text-left text-xs/5 text-gray-700 shadow-lg dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
+          class="meter-panel absolute right-0 bottom-full z-40 mb-2 w-[min(20rem,calc(100vw-2rem))] rounded-xl border border-gray-200 bg-white p-3 text-left text-xs/5 text-gray-700 shadow-lg dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
         >
           @if (showContext()) {
             <div class="flex items-baseline justify-between gap-3">

@@ -11,6 +11,15 @@ import { SessionService } from '../session/session.service';
 import { ErrorService } from '../../../services/error/error.service';
 import { isPreviewSession } from '../../../shared/constants/session.constants';
 
+/**
+ * Title fallback polling. A stream that outruns title generation closes a few
+ * hundred ms before Nova Micro answers, so one early read usually sees the
+ * placeholder; short, bounded retries pick the title up as soon as it lands
+ * instead of after a single fixed wait. 5 x 400ms keeps the old ~1.5s window.
+ */
+const TITLE_REFRESH_RETRY_MS = 400;
+const TITLE_REFRESH_MAX_RETRIES = 5;
+
 class RetriableError extends Error {
   constructor(message?: string) {
     super(message);
@@ -350,9 +359,25 @@ export class ChatHttpService {
     // that will never be loaded again. Abort the transport and tear down
     // locally; that is the whole of "stop" for a session nobody persists.
     if (isPreviewSession(sessionId)) {
-      this.chatStateService.abortRequest(sessionId);
-      this.messageMapService.endStreaming(sessionId);
-      this.chatStateService.setChatLoading(sessionId, false);
+      this.stopLocally(sessionId);
+      return;
+    }
+
+    // The server already sent `done`: the turn finished, and the socket is
+    // only open because the transport's close hasn't landed yet (widest on a
+    // first turn, where `session_title` can trail `done`). The Stop button is
+    // still showing because loading clears on close, so a click here is
+    // real — but there is nothing left to interrupt. Signalling
+    // `user_stopped` would stamp a false "interrupted" marker on a complete
+    // answer (and a false interruption note on the next prompt), so just
+    // close the transport. Aborting skips `onclose`, so run its title
+    // fallback here; the aggregates re-fetch below is unneeded, because the
+    // turn's `metadata` event arrived before `done`.
+    if (this.streamParserService.hasReceivedDone(sessionId)) {
+      this.stopLocally(sessionId);
+      if (this.sessionService.isNewSession(sessionId)) {
+        void this.refreshTitleFromServer(sessionId);
+      }
       return;
     }
 
@@ -370,9 +395,7 @@ export class ChatHttpService {
     // refresh-survival source of truth.
     this.chatStateService.setLastTurnInterrupted(sessionId, true, 'user_stopped');
 
-    this.chatStateService.abortRequest(sessionId);
-    this.messageMapService.endStreaming(sessionId);
-    this.chatStateService.setChatLoading(sessionId, false);
+    this.stopLocally(sessionId);
 
     // Aborting the fetch cut the socket before the stream's terminal
     // `metadata` SSE (usage / cost / context) could arrive, so the session
@@ -383,6 +406,17 @@ export class ChatHttpService {
     // per-message token/cost badges hydrate from the same persisted row on
     // the next message reload.)
     setTimeout(() => void this.refreshAggregatesAfterStop(sessionId), 900);
+  }
+
+  /**
+   * Abort a session's transport and tear its streaming state down here.
+   * fetch-event-source calls neither `onclose` nor `onerror` on abort, so
+   * the stream's own `finalizeStream` never runs for a stopped stream.
+   */
+  private stopLocally(sessionId: string): void {
+    this.chatStateService.abortRequest(sessionId);
+    this.messageMapService.endStreaming(sessionId);
+    this.chatStateService.setChatLoading(sessionId, false);
   }
 
   /**
@@ -465,6 +499,12 @@ export class ChatHttpService {
     if (typeof window === 'undefined') return;
     const onPageHide = () => {
       for (const sessionId of this.chatStateService.streamingSessionIds()) {
+        // A session stays "streaming" until the transport closes, which can
+        // trail `done`. A departure in that window interrupts nothing, and
+        // the backend's lease gate can't be relied on to drop it — the lease
+        // is released in the stream generator's `finally`, which can itself
+        // come after `done` — so skip it here, as the Stop path does.
+        if (this.streamParserService.hasReceivedDone(sessionId)) continue;
         this.signalInterrupt(sessionId, 'navigated_away');
       }
     };
@@ -484,18 +524,22 @@ export class ChatHttpService {
    * and is normally PUSHED mid-stream as a `session_title` SSE event; this
    * fetch only runs when the stream closed while the session still looked
    * new (see onclose). On a "New Conversation" placeholder — generation
-   * still in flight or failed — we retry once after a short delay before
-   * giving up.
+   * still in flight or failed — we poll a few more times at a short interval
+   * before giving up, stopping early if the title arrived another way.
    */
-  private async refreshTitleFromServer(sessionId: string, retried = false): Promise<void> {
+  private async refreshTitleFromServer(sessionId: string, attempt = 0): Promise<void> {
     try {
       const metadata = await this.sessionService.getSessionMetadata(sessionId);
       if (metadata.title && metadata.title !== 'New Conversation') {
         this.sessionService.applyServerTitle(sessionId, metadata.title);
         return;
       }
-      if (!retried) {
-        setTimeout(() => this.refreshTitleFromServer(sessionId, true), 1500);
+      if (attempt < TITLE_REFRESH_MAX_RETRIES) {
+        setTimeout(() => {
+          if (this.sessionService.isNewSession(sessionId)) {
+            void this.refreshTitleFromServer(sessionId, attempt + 1);
+          }
+        }, TITLE_REFRESH_RETRY_MS);
       }
     } catch (error) {
       console.error('Failed to refresh session title:', error);

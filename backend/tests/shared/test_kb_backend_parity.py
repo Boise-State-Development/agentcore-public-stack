@@ -31,6 +31,7 @@ from apis.shared.assistants.rag_service import (
     MAX_CONTEXT_CHARS,
     augment_prompt_with_context,
     resolve_context_cap,
+    search_assistant_knowledgebase_with_cap,
     search_assistant_knowledgebase_with_formatting,
 )
 from apis.shared.kb_backend.protocol import (
@@ -86,8 +87,10 @@ class FakeManagedBackend:
         self._chunks = chunks
         self.calls: List[Dict[str, Any]] = []
 
-    async def search(self, kb_ref: str, query: str, top_k: int = DEFAULT_TOP_K) -> List[Chunk]:
-        self.calls.append({"kb_ref": kb_ref, "query": query, "top_k": top_k})
+    async def search(
+        self, kb_ref: str, query: str, top_k: int = DEFAULT_TOP_K, *, record=None
+    ) -> List[Chunk]:
+        self.calls.append({"kb_ref": kb_ref, "query": query, "top_k": top_k, "record": record})
         return list(self._chunks)
 
     async def ingest(self, kb_ref: str, source) -> None:  # pragma: no cover - unused
@@ -239,6 +242,64 @@ def test_context_cap_keys_on_the_same_kb_record_read_as_the_backend():
     with patch.dict("os.environ", {"DYNAMODB_ASSISTANTS_TABLE_NAME": TABLE_NAME}), boto_patch:
         assert resolve_context_cap(ASSISTANT_ID) == 8000
     assert DEFAULT_TOP_K == 5, "the parity contract pins top_k at 5"
+
+
+def _kb_record_reads(table: MagicMock) -> int:
+    return sum(
+        1 for call in table.get_item.call_args_list if call.kwargs["Key"]["SK"].startswith("KB#")
+    )
+
+
+def test_a_managed_search_reads_the_kb_record_once(managed_kb):
+    """One KB_Record read answers the engine, the backend's ``awsKbId`` and the cap.
+
+    Each of those used to read the same row again on the turn's critical path
+    (~50ms apiece on dev, 2026-10-02). The record the backend receives is the one
+    the facade read, and the cap returned with the results is the managed one.
+    """
+    backend = managed_kb([_managed_chunk("doc-a", 0)])
+    boto_patch, table = _patch_record_and_statuses({"doc-a": "complete"})
+
+    with patch.dict("os.environ", {"DYNAMODB_ASSISTANTS_TABLE_NAME": TABLE_NAME}), boto_patch:
+        results, cap = asyncio.run(
+            search_assistant_knowledgebase_with_cap(ASSISTANT_ID, "q", access=OWNER_ACCESS)
+        )
+
+    assert len(results) == 1
+    assert cap == 8000
+    assert backend.calls[0]["record"] == {"retrievalEngine": ENGINE_MANAGED}
+    assert _kb_record_reads(table) == 1
+
+
+def test_a_legacy_search_reads_the_kb_record_once_and_returns_the_legacy_cap():
+    boto_patch, table = _patch_legacy_record_and_statuses({"doc-a": "complete"})
+    vectors = {
+        "vectors": [
+            {"key": "doc-a#0", "distance": 0.1, "metadata": {"document_id": "doc-a", "text": "t"}}
+        ]
+    }
+    with patch.dict("os.environ", {"DYNAMODB_ASSISTANTS_TABLE_NAME": TABLE_NAME}), boto_patch, patch(
+        "apis.shared.embeddings.bedrock_embeddings.search_assistant_knowledgebase",
+        return_value=vectors,
+    ):
+        results, cap = asyncio.run(
+            search_assistant_knowledgebase_with_cap(ASSISTANT_ID, "q", access=OWNER_ACCESS)
+        )
+
+    assert len(results) == 1
+    assert cap == 2000
+    assert _kb_record_reads(table) == 1
+
+
+def test_a_refused_search_reads_nothing_and_returns_the_legacy_cap():
+    boto_patch, table = _patch_record_and_statuses({})
+    with patch.dict("os.environ", {"DYNAMODB_ASSISTANTS_TABLE_NAME": TABLE_NAME}), boto_patch:
+        results, cap = asyncio.run(
+            search_assistant_knowledgebase_with_cap(ASSISTANT_ID, "q", access=None)
+        )
+
+    assert (results, cap) == ([], 2000)
+    table.get_item.assert_not_called()
 
 
 def test_managed_path_narrows_results_to_top_k(managed_kb):

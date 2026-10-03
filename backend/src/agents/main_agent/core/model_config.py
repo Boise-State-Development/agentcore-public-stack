@@ -415,8 +415,25 @@ class ModelConfig:
         )
 
     def to_bedrock_config(self) -> Dict[str, Any]:
-        """Convert to BedrockModel kwargs, translating canonical inference params."""
+        """Convert to BedrockModel kwargs, translating canonical inference params.
+
+        With ``agent_build_shared_session_enabled`` (default on) the model is
+        built on the process-wide boto3 session instead of the fresh
+        ``boto3.Session()`` Strands would otherwise construct (and re-parse
+        the bedrock-runtime model on). Nothing here reaches the prompt.
+        """
         config: Dict[str, Any] = {"model_id": self.model_id}
+
+        from apis.shared.feature_flags import agent_build_shared_session_enabled
+
+        if agent_build_shared_session_enabled():
+            from apis.shared.aws_clients import shared_boto_session
+
+            # Never alongside `region_name`: BedrockModel.__init__ raises when
+            # both are given (strands-agents 1.55.0). This config sets no
+            # region either way; the session resolves it from the
+            # environment exactly as Strands' own fresh session would.
+            config["boto_session"] = shared_boto_session()
         _apply_canonical_params(
             config, self.inference_params, _BEDROCK_PARAM_MAP, "bedrock", self.model_id
         )

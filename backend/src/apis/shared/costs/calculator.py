@@ -119,6 +119,78 @@ class CostCalculator:
         return total_cost, breakdown
 
     @staticmethod
+    def calculate_voice_cost(
+        usage: Dict[str, int],
+        pricing: Dict[str, float],
+    ) -> Tuple[float, CostBreakdown]:
+        """Price a speech-to-speech (Nova Sonic) session.
+
+        Sonic bills four buckets — speech in/out and text in/out — and the
+        speech rates are roughly 10x the text ones ($3.00 / $12.00 against
+        $0.32 / $2.65 per MTok in us-west-2, Price List API 2026-09-30). The
+        model's ``usageEvent`` carries the split under ``details.total``;
+        ``VoiceAgent`` surfaces it here as ``speechInputTokens`` /
+        ``textInputTokens`` / ``speechOutputTokens`` / ``textOutputTokens``.
+
+        When the split is missing (an older Strands that only forwards
+        the totals, or a session that ended before the first usage event), the
+        totals are priced **at the speech rates**. That over-counts text
+        tokens rather than under-counting speech ones — a session that was
+        mostly listening and talking is priced about right, and one that was
+        mostly text history is priced high, which is the safe direction for a
+        quota. Never falls back to the text rates: that would be the $0-ish
+        bill this method exists to replace.
+
+        ``pricing`` is the ``get_model_pricing`` dict: ``inputPricePerMtok`` /
+        ``outputPricePerMtok`` are the TEXT rates on a speech model, and
+        ``speechInputPricePerMtok`` / ``speechOutputPricePerMtok`` the speech
+        ones. A catalog row without the speech rates prices speech tokens at
+        the text rates — better than nothing, and ``UnmeteredModelCall`` no
+        longer fires, so the fix is to fill the row in, not to guess here.
+        """
+        text_in_price = pricing.get("inputPricePerMtok") or 0.0
+        text_out_price = pricing.get("outputPricePerMtok") or 0.0
+        speech_in_price = pricing.get("speechInputPricePerMtok")
+        speech_out_price = pricing.get("speechOutputPricePerMtok")
+        if speech_in_price is None:
+            speech_in_price = text_in_price
+        if speech_out_price is None:
+            speech_out_price = text_out_price
+
+        total_in = usage.get("inputTokens") or 0
+        total_out = usage.get("outputTokens") or 0
+        has_split = any(
+            usage.get(k) is not None
+            for k in ("speechInputTokens", "textInputTokens", "speechOutputTokens", "textOutputTokens")
+        )
+        if has_split:
+            speech_in = usage.get("speechInputTokens") or 0
+            text_in = usage.get("textInputTokens") or 0
+            speech_out = usage.get("speechOutputTokens") or 0
+            text_out = usage.get("textOutputTokens") or 0
+            # The totals are authoritative; a split that does not add up to
+            # them (a usage event missing one bucket) puts the remainder in
+            # the speech bucket, for the same reason as the no-split case.
+            speech_in += max(0, total_in - speech_in - text_in)
+            speech_out += max(0, total_out - speech_out - text_out)
+        else:
+            speech_in, text_in = total_in, 0
+            speech_out, text_out = total_out, 0
+
+        input_cost = (speech_in / 1_000_000) * speech_in_price + (text_in / 1_000_000) * text_in_price
+        output_cost = (speech_out / 1_000_000) * speech_out_price + (text_out / 1_000_000) * text_out_price
+        total_cost = input_cost + output_cost
+
+        breakdown = CostBreakdown(
+            inputCost=input_cost,
+            outputCost=output_cost,
+            cacheReadCost=0.0,
+            cacheWriteCost=0.0,
+            totalCost=total_cost,
+        )
+        return total_cost, breakdown
+
+    @staticmethod
     def calculate_cache_savings(
         cache_read_tokens: int,
         input_price: float,

@@ -58,7 +58,9 @@ class StubBackend:
         self._error = error
         self.calls: List[Dict[str, Any]] = []
 
-    async def search(self, kb_ref: str, query: str, top_k: int = DEFAULT_TOP_K) -> List[Chunk]:
+    async def search(
+        self, kb_ref: str, query: str, top_k: int = DEFAULT_TOP_K, *, record=None
+    ) -> List[Chunk]:
         self.calls.append({"kb_ref": kb_ref, "query": query, "top_k": top_k})
         if self._delay:
             await asyncio.sleep(self._delay)
@@ -128,7 +130,7 @@ async def _search(legacy: StubBackend, record: Dict[str, Any], top_k: int = 5):
     ), patch(
         "apis.shared.assistants.rag_service.resolve_backend", return_value=legacy
     ), patch(
-        "apis.shared.assistants.rag_service.boto3.resource",
+        "boto3.resource",
         return_value=_all_documents_complete(),
     ), patch(
         "apis.shared.assistants.rag_service.emit_count"
@@ -290,19 +292,32 @@ class TestLegacyIsAlwaysServed:
         """And does not leave the managed task orphaned with an unretrieved
         exception.
 
-        ``managed.calls`` is empty because the facade cancels the task it started
-        when legacy raised before the comparison was detached. Without that
-        cancel the task runs to completion — paying for a Retrieve nobody will
-        ever read — and Python reports a task whose exception was never
-        retrieved.
+        The facade cancels the task it started when legacy raised before the
+        comparison was detached. Without that cancel the task runs to
+        completion — paying for a Retrieve nobody will ever read — and Python
+        reports a task whose exception was never retrieved.
+
+        The managed read does *start*: the facade awaits the legacy search on a
+        worker thread (turn-path spec §5 P3b), which yields to the loop, as a
+        real legacy search always has — its S3 Vectors call was already off the
+        loop. What must hold is that it never finishes.
         """
-        managed = managed_registered(StubBackend([_chunk("doc-managed-1")]))
+        finished: List[bool] = []
+
+        class _Tracked(StubBackend):
+            async def search(self, kb_ref, query, top_k=DEFAULT_TOP_K, *, record=None):
+                result = await super().search(kb_ref, query, top_k)
+                finished.append(True)
+                return result
+
+        managed = managed_registered(_Tracked([_chunk("doc-managed-1")], delay=0.2))
         legacy = StubBackend(error=RuntimeError("s3 vectors threw"))
 
         results, _, _ = await _search(legacy, {DUAL_READ_ATTR: True})
+        await asyncio.sleep(0.4)
 
         assert results == []
-        assert managed.calls == [], (
+        assert finished == [], (
             "the orphaned managed read was left running after legacy failed"
         )
 
@@ -328,7 +343,7 @@ class TestThePilotAddsNoLatency:
         ), patch(
             "apis.shared.assistants.rag_service.resolve_backend", return_value=legacy
         ), patch(
-            "apis.shared.assistants.rag_service.boto3.resource",
+            "boto3.resource",
             return_value=_all_documents_complete(),
         ), patch(
             "apis.shared.assistants.rag_service.emit_count"
@@ -355,14 +370,14 @@ class TestThePilotAddsNoLatency:
         order: List[str] = []
 
         class OrderedLegacy(StubBackend):
-            async def search(self, kb_ref, query, top_k=DEFAULT_TOP_K):
+            async def search(self, kb_ref, query, top_k=DEFAULT_TOP_K, *, record=None):
                 order.append("legacy-start")
                 await asyncio.sleep(0.05)
                 order.append("legacy-end")
                 return [_chunk("doc-legacy-1")]
 
         class OrderedManaged(StubBackend):
-            async def search(self, kb_ref, query, top_k=DEFAULT_TOP_K):
+            async def search(self, kb_ref, query, top_k=DEFAULT_TOP_K, *, record=None):
                 order.append("managed-start")
                 return [_chunk("doc-managed-1")]
 

@@ -41,6 +41,10 @@ async def update_settings(
     update_data = body.model_dump(by_alias=True, exclude_unset=True)
     if "personalInstructions" in update_data:
         update_data["personalInstructions"] = (update_data["personalInstructions"] or "").strip() or None
+    if "voiceId" in update_data:
+        # '' is the wire value for "back to the default"; the repository
+        # removes a None attribute rather than storing an empty string.
+        update_data["voiceId"] = update_data["voiceId"] or None
 
     # Validate defaultModelId if provided and not null
     if "defaultModelId" in update_data and update_data["defaultModelId"] is not None:

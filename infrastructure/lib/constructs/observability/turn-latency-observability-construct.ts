@@ -156,6 +156,34 @@ export class TurnLatencyObservabilityConstruct extends Construct {
       }),
     );
 
+    // Row 1b — past the prelude to the first model output (`turn_first_token`,
+    // docs/specs/turn-path-ttft.md P1b). `FirstTokenMs` runs from handler
+    // entry, so it is the prelude plus the head of turn, the pre-model work
+    // (LTM retrieval, the user message's append) and the model's own time to
+    // first token — the server's whole share of the wait. It rides its own EMF
+    // record, so nothing here changes `PreludeTotalMs` or the unaccounted query.
+    this.dashboard.addWidgets(
+      new cloudwatch.GraphWidget({
+        title: 'First token (handler entry → first model output)',
+        left: percentiles('FirstTokenMs'),
+        leftYAxis: { min: 0 },
+        width: 12,
+        height: 6,
+      }),
+      new cloudwatch.GraphWidget({
+        title: 'After the prelude (p90) — head of turn, pre-model, model',
+        left: [
+          stage('HeadOfTurnMs', 'p90', 'head of turn'),
+          stage('HeadOfTurnHistoryCountMs', 'p90', 'history count (ListEvents)'),
+          stage('PreModelMs', 'p90', 'pre-model (append + LTM)'),
+          stage('ModelMs', 'p90', 'model to first token'),
+        ],
+        leftYAxis: { min: 0 },
+        width: 12,
+        height: 6,
+      }),
+    );
+
     // Row 2 — which sub-stage owns the preamble. Split by statistic rather than
     // stacking fifteen lines on one axis, which is a picture nobody reads.
     this.dashboard.addWidgets(
@@ -228,6 +256,25 @@ export class TurnLatencyObservabilityConstruct extends Construct {
         ],
         leftYAxis: { min: 0 },
         width: 12,
+        height: 6,
+      }),
+    );
+
+    // Row 3c — inside `tools`, the largest cold sub-stage (P1a in
+    // docs/specs/turn-path-ttft.md). `AgentBuildToolsMs` above is now their
+    // sum. Which MCP server owned `mcp` is a log property (`mcpServers` on
+    // the `turn_prelude` line), not a metric — it has no percentile.
+    this.dashboard.addWidgets(
+      new cloudwatch.GraphWidget({
+        title: 'Inside tools (p90) — filter, gateway, MCP load + pre-flight, injected tools',
+        left: [
+          stage('AgentBuildToolsFilterMs', 'p90', 'filter'),
+          stage('AgentBuildToolsGatewayMs', 'p90', 'gateway'),
+          stage('AgentBuildToolsMcpMs', 'p90', 'external MCP (catalog + pre-flight)'),
+          stage('AgentBuildToolsExtraMs', 'p90', 'injected tools'),
+        ],
+        leftYAxis: { min: 0 },
+        width: 24,
         height: 6,
       }),
     );

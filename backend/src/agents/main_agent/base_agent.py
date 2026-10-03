@@ -33,7 +33,7 @@ from agents.main_agent.multimodal import PromptBuilder
 from agents.main_agent.streaming import StreamCoordinator
 from apis.shared.tools.scoped_ids import base_tool_id
 
-from apis.shared.observability.build_stages import mark_stage
+from apis.shared.observability.build_stages import mark_stage, record_detail
 
 logger = logging.getLogger(__name__)
 
@@ -504,11 +504,17 @@ class BaseAgent(ABC):
 
         Returns:
             list: Combined list of local tools + MCP clients
+
+        Each phase closes a ``tools.*`` build sub-stage (P1a in
+        docs/specs/turn-path-ttft.md); ``groups`` sums them back into
+        ``agent_build.tools``. Every mark is taken on this thread, after the
+        executor hop returns — contextvars do not cross into the pool.
         """
         filter_result = self.tool_filter.filter_tools_extended(self.enabled_tools)
         local_tools = filter_result.local_tools
         gateway_tool_ids = filter_result.gateway_tool_ids
         external_mcp_tool_ids = filter_result.external_mcp_tool_ids
+        mark_stage("tools.filter")
 
         # Get gateway client and add to tools if available
         if gateway_tool_ids:
@@ -524,6 +530,7 @@ class BaseAgent(ABC):
             )
             if gateway_client:
                 local_tools = self.gateway_integration.add_to_tool_list(local_tools)
+        mark_stage("tools.gateway")
 
         # Load external MCP tools
         if external_mcp_tool_ids:
@@ -540,6 +547,9 @@ class BaseAgent(ABC):
             workload_access_token = BedrockAgentCoreContext.get_workload_access_token()
 
             external_integration = get_external_mcp_integration()
+            # Filled inside the executor's loop — a plain list crosses the
+            # thread boundary where a contextvar recorder would not.
+            server_timings: List[dict] = []
 
             async def _load_with_context():
                 if oauth2_callback_url:
@@ -550,6 +560,7 @@ class BaseAgent(ABC):
                     external_mcp_tool_ids,
                     user_id=self.user_id,
                     auth_token=self.auth_token,
+                    timings=server_timings,
                 )
 
             # Probe with ``get_running_loop`` rather than ``get_event_loop``:
@@ -577,11 +588,17 @@ class BaseAgent(ABC):
                     local_tools.append(client)
 
             logger.info(f"Added {len(external_clients)} external MCP clients to tools")
+            # Which server owned `tools.mcp`. The hop's thread and event-loop
+            # startup are in the stage but in no server's numbers; the gap
+            # between the two is that overhead.
+            record_detail("mcpServers", server_timings)
+        mark_stage("tools.mcp")
 
         # Append context-bound tools (e.g., spreadsheet analysis) created per-request
         if self.extra_tools:
             local_tools.extend(self.extra_tools)
             logger.info(f"Added {len(self.extra_tools)} extra context-bound tools")
+        mark_stage("tools.extra")
 
         return local_tools
 
