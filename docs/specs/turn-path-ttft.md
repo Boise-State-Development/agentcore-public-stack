@@ -2,14 +2,15 @@
 
 **Status:** assessment and plan, written 2026-09-29 against `develop` @ `e4646277`
 (PR #1378 merged) with PR #1377 (`feature/agent-build-latency`) open.
-**Progress (2026-10-02):** P2 shipped (#1395), P1a (#1396) and P1b (#1397, #1398) shipped
+**Progress (2026-10-03):** P2 shipped (#1395), P1a (#1396) and P1b (#1397, #1398) shipped
 and read on dev, P4a shipped (#1400) and read on dev; P3a parked on the P1a readout. F5
 (the per-turn history count) measured on a long conversation, then taken off the critical
 path (#1403) and read on dev — see §5 P4. A KB agent's cold first turn spent 21.5s loading
 two MCP servers in series; they now load concurrently (#1406, read on dev) — see §5 P3.
 P3b (KB search ahead of the build) shipped (#1411) and read on dev. The agent-binding
 "does this thread have messages?" check now costs one filtered `ListEvents` instead of a
-full history read — see §5 P4.
+full history read — see §5 P4. The managed KB search reads its record once (#1416, read on
+dev): a managed follow-up's `rag_wait` is now the managed `Retrieve` itself — see §5 P3c.
 **Supersedes nothing; it joins three specs that each cover one slice of this path:**
 - `docs/specs/turn-latency-preamble.md` — the preamble (455ms → 22–37ms warm) and the
   decomposition of `agent_build`. Its PR-5 (split `agent_build.tools`) shipped as P1a below (#1396) and was read on dev 2026-10-01.
@@ -564,6 +565,32 @@ connections for the read and the filter; classic loses ~150ms). On a cold first 
 off-loop move already took the tail to ≈0. Next lever on follow-ups: start the search right
 after the access check (~170ms; today it waits on `bump_last_used_at`, model/role
 resolution and the session-metadata writes that hold the loop).
+
+**Shipped (#1416) and read on dev (2026-10-03, runtime v528, image `cfc37a32688c`).** Same
+managed agent, two new conversations of three turns each (the first-turn prompt, then two
+follow-ups with the agent cached). The spans show the mechanism exactly as built, on every
+follow-up: **one** KB_Record `GetItem` per search at 3.7–4.7ms, `Retrieve` starting ~6ms
+after it (no `_locate` read), the status filter at 3.3–4.4ms per document, and no cap read.
+Our DynamoDB time around `Retrieve` went from ~180ms to ~20ms. Raw `rag_wait` did not fall,
+because `Retrieve` ran slower in this sample than in the single #1415 sample; normalised by
+`Retrieve`, the follow-up `rag_wait` lost ~100ms against #1415 and ~135ms against v525:
+
+| follow-up turn | `Retrieve` | `rag_wait` | `rag_wait` − `Retrieve` |
+|---|---|---|---|
+| v525 (before #1415), n=1 | 660 | 786 | +126 |
+| v526 (#1415), n=1 | 445 | 535 | +90 |
+| v528 (#1416), n=4 | 539 / 585 / 539 / 645 | 626 / 568 / 532 / 633 | −7 / −17 / −7 / −12 |
+
+The estimate of ~215ms was against v525 and counted savings #1415 had already taken, plus
+reads that overlapped the tools and build stages anyway. A managed follow-up's `rag_wait`
+is now `Retrieve` itself, minus the little of it that overlaps the cached build: what is
+left is the managed engine's own cost, which varies by ±100ms call to call (445–660ms
+across these samples). First turns: `rag_wait` 4 / 4ms (≈0 since #1415). The stored
+augmented user messages are byte-identical to the pre-change conversations: first turn
+`adf20dfe881a…` (6,876 chars) and the holistic-rubric follow-up `042ecda2411c…` (6,728)
+match the v525 and v526 conversations exactly, and the third turn matches across both new
+conversations; every turn streamed 5 citations. The kb-migration dispatcher ran on the new
+image with no import errors; the other KB Lambdas had not been invoked at readout time.
 
 *Tests.* P3a: a fake session factory and a fake tool loader that each sleep; assert the
 build's wall time is the max not the sum, that `tools` order is unchanged across runs
