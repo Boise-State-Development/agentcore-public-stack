@@ -1,6 +1,7 @@
 # Conversation rewind and fork
 
 **Status:** DRAFT spec, written 2026-10-03 against `develop` @ `ac4212a7`. Nothing built yet.
+**Tracking issue:** #1421
 **Flags (in development, default OFF):** `SESSION_REWIND_ENABLED` / `CDK_SESSION_REWIND_ENABLED` /
 `features.sessionRewind`, and `SESSION_FORK_ENABLED` / `CDK_SESSION_FORK_ENABLED` / `features.sessionFork`.
 Two flags because the two halves ship separately (§8).
