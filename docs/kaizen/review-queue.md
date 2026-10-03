@@ -339,17 +339,6 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
   - **✅ DIAGNOSED + GUARDED 2026-09-18 (`e196a00e`)** — not an off-by-one. `toolTokens` is a **residual** between two independently sourced counts, `full` (Strands' projection) minus `no_tools` (our own CountTokens call), so any disagreement about how a content block is counted lands wholly in it. The arithmetic is conclusive: 106,756 − 12,516 = **94,240**, against a document measured at ~94,485 — the entire document attributed to tools, because Bedrock counts a PDF page as an image *and* a text layer and the two sources did not agree. The counting disagreement is Bedrock/Strands behaviour we do not control, so the split is simply **not computed while inline document or image bytes are in context** and is taken on a later clean turn; absent reads "not tracked", which a wrong number does not. A digest is text, so attachment sessions still get the field from turn 2. **Residual question for the prod readout:** whether `full` and `no_tools` disagree on *images* too — if `prefixTokens` goes missing on image-only sessions for more than the attach turn, that is the tell.
   - **`compaction_policy._block_tokens` has the same PDF blind spot** #1147 fixed elsewhere, and was deliberately left alone: it rescales to measured history and drives cut thresholds, so changing it moves when compaction fires. Its own decision.
 
-### [2026-09-18] Reverse the Astra decision — register at the full 1M window and make the price tier its own catalog field
-- **Source**: research/2026-09-18.md ▸ Idea #1 — https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-astra.html. ⚠️ **Directly supersedes the open `[2026-09-11] Add GPT-6 Astra at the 272K tier` entry**, whose blocking question this answers in the *opposite* direction: the model card's own headings ("short context (272K input tokens or fewer)" / "long context (more than 272K input tokens)") show the tier is selected by **actual input tokens per request**, not by the declared window. Merge the two at review.
-- **Surface**: frontend (`admin/manage-models/models/curated-models.ts`, model picker) + backend (Mantle Responses path, `admin/services/model_access.py`)
-- **Effort × Impact**: L × H
-- **Subtracts**: yes — a queued recommendation (`maxInputTokens: 272000`) that would have shipped a capability regression; the `long = short × 2` assumption (output is **1.5×**: $55.00 → $82.50, not $110.00); and the ambiguity about which API surface reaches Astra
-- **Unlocks**:
-  - A genuine **1M-token frontier tier** — the first catalog model where a whole corpus fits in one turn — with no artificial cap
-  - A **tier-aware catalog**: the admin page can show the boundary, cost projections can respect it, and Astra's 10× output-token quota burn can be accounted for against the known campus TPM ceiling. The 272K cap survives as an optional *policy* lever
-- **Notes**: ⚠️ Take the **Mantle Responses** path, not Converse — the card lists prompt caching only under `bedrock-mantle`/Responses, so `bedrock-runtime` Converse would re-pay a 30k–150k prefix at $11/MTok every turn. ⚠️ Astra is **not** a third `cacheRead × 0.1` counterexample (it is exactly 0.100× in both tiers); Fable 5.1 and Grok 4.6 remain the only two. ⚠️ The ref repo's `rejectsTemperature: true` is **still not on the model card** — verify, don't copy. ⚠️ Astra's cache-write SKU is a **30-minute** TTL — do not fold into `cache_ttl_seconds_for()`'s 5m/1h assumptions.
-- **Status**: open
-
 ### [2026-09-18] Sweep the cacheable prefix for derived and relative values — and close the last daily boundary
 - **Source**: research/2026-09-18.md ▸ Idea #3 — Claude Code 2.1.275 (*"a restored memory file's age note changing between requests after a compaction or resume, which caused prompt cache misses"*), 2.1.269, 2.1.273 — https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md — plus our own `9f246cb7`
 - **Surface**: backend — `agents/main_agent/utils/` (`get_current_date_pacific()` + the `SystemPromptBuilder` tail), `session/turn_based_session_manager.py` (truncation anchor), `session/document_rehydration.py`, `apis/shared/sessions/messages.py`, and the resume path in `inference_api/chat/routes.py`
@@ -685,22 +674,6 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Unlocks**: closes the known "approval hook can't see through the tool-fold" hole (pairs with the Strands hook-ordering bump); "data sources used" provenance on `tool_result` cards (we already carry `serverName`/`icon` on `ui_resource`) — a top NN/g trust driver
 - **Status**: open — auto-resume once all approvals in a turn resolve (the multi-tool piece worth stealing from the AI SDK).
 
-### [2026-07-03] Evaluate gateway-level Guardrails (AgentCore Policy) vs. in-agent #480
-- **Source**: research/2026-07-03.md ▸ Top 5 #5 — https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/gateway-guardrails.html; relates to queued issue #480.
-- **Surface**: infrastructure + backend (PlatformStack Gateway construct + AgentCore Policy; `apis/shared` tool routing)
-- **Effort × Impact**: M × M
-- **Subtracts**: potential — one gateway-level policy vs. per-tool control complexity
-- **Unlocks**: model-independent FERPA/injection enforcement across all Gateway MCP targets (the agent can't reason around it)
-- **Status**: open — **fold into the #480 decision** rather than run a separate track: assess whether one gateway policy is preferable to or complements the in-agent `guardrail_id` approach.
-
-### [2026-06-19] Wire configurable Bedrock Guardrails (issue #480)
-- **Source**: research/2026-06-19.md ▸ Top 5 #1 — internal issue #480 (June 15) + AWS Summit NYC Guardrails cluster (`InvokeGuardrailChecks` API + AgentCore policy Guardrails GA, June 16). Strands `BedrockModel` already supports `guardrail_id`/`version`/`stream_processing_mode`/`trace`.
-- **Surface**: backend (`inference_api` `BedrockModel` construction) + infrastructure (optional `CDK_GUARDRAIL_ID` / `CDK_GUARDRAIL_VERSION` env vars threaded to inference-api runtime env)
-- **Effort × Impact**: L-M × H
-- **Subtracts**: addition only — config wiring of a capability Strands already exposes; zero-cost when unset; mirrors `CDK_ARTIFACTS_ENABLED`/`CDK_MCP_SANDBOX_ENABLED` optional-feature pattern
-- **Unlocks**: deployers attach content-safety filtering + staff-alerting monitoring to all model invocations without modifying inference-api source (FERPA duty-of-care for higher-ed: proactive self-harm/crisis-language monitoring Claude's reactive layer doesn't surface)
-- **Status**: open — strongest fit (filed issue + library-native path). **Decide in-agent vs. gateway-level in one pass** — the [2026-07-03] "gateway-level Guardrails (AgentCore Policy)" item folds into this #480 decision (one gateway policy blankets every MCP target, model-independent). Verify guardrail *resource* region availability + SSE streaming-mode compatibility. Reviewed reviews/2026-07-03.md ▸ Proposal #4.
-
 ### [2026-06-19] Ship the interactive context-breakdown badge (Cursor + LibreChat convergence)
 - **Source**: research/2026-06-19.md ▸ Top 5 #5 — LibreChat v0.8.7-rc1 real-time context gauge + Cursor Context Usage Report (2026-06-05) + internal PR #433. **Reinforces** the [2026-06-05] "make the context-breakdown badge interactive" item with a second independent product datapoint.
 - **Surface**: frontend (context-breakdown badge component in `frontend/ai.client/src/app/session/`)
@@ -708,13 +681,6 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Subtracts**: no — addition; lands on a surface we shipped and reuses `contextBreakdown` already on the final `metadata` event
 - **Unlocks**: user-facing context-cost transparency + an actionable "what's eating context / how to trim it" follow-up
 - **Status**: open — presentation-layer only (no backend change). Consolidated the superseded [2026-06-05] Cursor-only entry into this item. Lower priority than the [2026-07-03] reliability/model cluster. Reviewed reviews/2026-07-03.md ▸ below-cap (defer 1 week).
-
-### [2026-06-05] Bump `docling` past the 2.81.0 content-sniffing defect → close #405 (`.txt` uploads fail)
-- **Source**: research/2026-06-05.md ▸ Top 5 #4 — docling 2.97.0 (June 3) + internal issue #405
-- **Surface**: backend (document-ingestion docling dep pin)
-- **Effort × Impact**: L × M
-- **Subtracts**: yes — library-native bump closes an open user-facing bug; no custom workaround needed
-- **Status**: open — **#405 still open ~5 weeks; `requirements.lock` still pins `docling==2.81.0` (latest 2.109.0).** Cleanest subtraction; bump off 2.81.x, verify `.txt` upload, close #405. Reviewed reviews/2026-07-03.md ▸ Proposal #6.
 
 ### [2026-06-05] De-risk #419 (admin-managed Gateway target registration) against the new AWS auth-code-flow + BYO-secrets references
 - **Source**: research/2026-06-05.md ▸ Top 5 #5 — AWS "secure OAuth auth-code flow with Gateway + MCP clients" + AgentCore Identity BYO Secrets Manager (both June 1) + internal issue #419
@@ -775,6 +741,26 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Status**: open — deferred 4 weeks in reviews/2026-05-15.md (revisit 2026-06-12). Earns its keep when an A2A construct lands.
 
 ## Resolved
+
+### [2026-09-18] Reverse the Astra decision — register at the full 1M window and make the price tier its own catalog field → RESOLVED — **DECLINED as scoped**
+- **Decision**: declined and logged (`decisions.md` [2026-10-03]).
+- **Reasoning**: `maxInputTokens: 272_000` is load-bearing pricing while `CuratedModel` holds one rate per bucket; lifting it opens AWS's second price card (2× input, 1.5× output) and under-charges every long turn. Re-open only alongside a per-tier rate field.
+- **Reviewed in**: reviews/2026-09-25.md ▸ Retirement Candidates; reviews/2026-10-02.md ▸ Carried Over
+
+### [2026-07-03] Evaluate gateway-level Guardrails (AgentCore Policy) vs. in-agent #480 → RESOLVED — **DECLINED as a kaizen item**
+- **Decision**: declined and logged (`decisions.md` [2026-10-03]), together with the [2026-06-19] entry it folded into. Issue #480 stays open as product backlog.
+- **Reasoning**: in-agent vs. gateway-level is a product decision on #480, not a weekly improvement; eight carries without a surface.
+- **Reviewed in**: reviews/2026-09-25.md and reviews/2026-10-02.md ▸ Carried Over
+
+### [2026-06-19] Wire configurable Bedrock Guardrails (issue #480) → RESOLVED — **DECLINED as a kaizen item**
+- **Decision**: declined and logged (`decisions.md` [2026-10-03]). Issue #480 stays open as product backlog.
+- **Reasoning**: eight carries without a surface anyone picked up. Guardrails returns as product work on #480, not as a queue entry.
+- **Reviewed in**: reviews/2026-09-25.md and reviews/2026-10-02.md ▸ Carried Over
+
+### [2026-06-05] Bump `docling` past the 2.81.0 content-sniffing defect → close #405 (`.txt` uploads fail) → RESOLVED — **DECLINED as a kaizen item**
+- **Decision**: declined and logged (`decisions.md` [2026-10-03]). Issue #405 stays open as product backlog.
+- **Reasoning**: the queue is not where a backlog bug gets picked up; eight carries proved it. The bump itself is still welcome as a PR-sized slice (`requirements.lock` still pins `docling==2.81.0`), and the decision says so.
+- **Reviewed in**: reviews/2026-09-25.md and reviews/2026-10-02.md ▸ Carried Over
 
 ### [2026-09-25] Treat any non-`end_turn` stop reason as a failed side-channel call → RESOLVED — **SHIPPED**
 - **Decision**: Ship (reviews/2026-09-25.md ▸ #2).
