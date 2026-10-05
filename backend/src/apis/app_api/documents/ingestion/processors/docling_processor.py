@@ -230,6 +230,20 @@ async def process_with_docling(
         logger.info("Plain text input detected; handing to Docling as Markdown so it resolves to a supported format")
         ext = ".md"
 
+    # Docling reads Word paragraphs through python-docx, which only sees runs that
+    # are direct children of the paragraph. Tracked changes sit one level down,
+    # inside w:ins / w:del, so both sides of every change would vanish. Writing
+    # them out as "[deleted: ...]" / "[inserted: ...]" text first keeps the redline
+    # readable. Documents without tracked changes come back as None and convert
+    # from their original bytes.
+    if ext == ".docx":
+        from apis.shared.kb_backend.docx_revisions import annotate_tracked_changes
+
+        annotated = annotate_tracked_changes(file_bytes)
+        if annotated is not None:
+            logger.info("Word document has tracked changes; converting an annotated copy")
+            file_bytes = annotated
+
     # Create a temp file
     with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp_file:
         try:
