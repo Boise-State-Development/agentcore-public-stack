@@ -1645,6 +1645,49 @@ def _build_attachment_guidance(
     return "\n\n".join(parts)
 
 
+_PROJECT_ROLE_PHRASES = {
+    "owner": "the owner of this project",
+    "editor": "an editor in this project",
+    "viewer": "a viewer in this project, who can read but not change its files or shared memory",
+}
+
+
+def _plain_attr(value: Optional[str]) -> str:
+    """A claim's value on one line, unable to open or close a tag."""
+    return " ".join(str(value or "").split()).replace("<", "").replace(">", "")[:200]
+
+
+def _build_project_member_note(user: User, role: Optional[str]) -> str:
+    """Who is speaking, prepended to every message of a project harness turn.
+
+    All of a project's members share one harness, and its system prompt and tools
+    must render identically for each of them: a per-member system prompt would make
+    every member pay a cache write for the same project (the prompt-cache contract).
+    So the speaker rides the user message, like the interruption note: persisted in
+    history, which only appends, so no cached prefix moves, and kept out of the UI
+    by the displayText split. It is sent every turn rather than once, because a
+    forked or shared task's history names a different member. About 100 tokens, read
+    from cache on every later call. Without it the harness told a member to "send
+    this to" her own name (the 2026-10 team simulation, G18); the second sentence is
+    there because, told only who was speaking, Haiku 4.5 then answered in that
+    member's voice ("send it to me") when the instructions named them.
+    """
+    name, email = _plain_attr(user.name), _plain_attr(user.email)
+    if name and email and name.casefold() != email.casefold():
+        who = f"{name} ({email})"
+    else:
+        who = email or name
+    role_phrase = _PROJECT_ROLE_PHRASES.get(role or "", "a member of this project")
+    return (
+        "<project_member>\n"
+        f"The person writing to you is {who}, {role_phrase}. They are not you: you are the "
+        "project's assistant. Where the instructions, memory or files name this person (as "
+        "someone to send or escalate something to, say), that step is theirs: tell them so, "
+        "in the second person, instead of asking them to send it to themselves.\n"
+        "</project_member>"
+    )
+
+
 def _build_interruption_note(reason: str) -> str:
     """Reason-driven note prepended to the next turn's prompt when the prior
     turn was interrupted (see `clear_interrupted_turn`, whose popped reason
@@ -3354,6 +3397,9 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # dropped (§9.6) and is streamed before ``message_start``; it never reaches the prompt.
     turn_project_id: Optional[str] = None
     agent_notice_event: Optional[AgentNoticeEvent] = None
+    # Who is speaking in a harness turn, prepended to the message (never the system
+    # prompt, which every member shares); see `_build_project_member_note`.
+    project_member_note: Optional[str] = None
     # Shared Projects 2.4b: a harness turn's memory load (started once the project is
     # known) and its result, which supplies `memory_context`, the scope-addressed
     # memory tools and their cache-key element.
@@ -3670,6 +3716,8 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             if refusal:
                 return _forbidden_turn(input_data, user_id, refusal)
             turn_project_id = assistant.project_id
+            # The role the access check above resolved from the project: no extra read.
+            project_member_note = _build_project_member_note(current_user, assistant_permission)
             # Shared Projects 2.4b: the project's memory spaces, read now and awaited at
             # prompt assembly (5b), so the reads overlap binding resolution and the
             # knowledge-base search instead of adding to the time to first token.
@@ -4324,6 +4372,9 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                     final_message = (
                         f"{_build_attachment_recovery_note(attachments.marker_names)}\n\n{final_message}"
                     )
+
+                if project_member_note:
+                    final_message = f"{project_member_note}\n\n{final_message}"
 
                 if interrupted_turn_reason:
                     final_message = (
