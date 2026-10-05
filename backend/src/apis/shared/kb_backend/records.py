@@ -822,6 +822,33 @@ def acquire_lease(
     )
 
 
+def release_lease(assistant_id: str, app_kb_id: str, lease_until: str) -> None:
+    """Give the worker lease back the moment a step is done with it.
+
+    Raises :class:`TransitionLost` when there is nothing of ours to release.
+
+    Expiry alone is not enough. The lease runs as long as the dispatcher's
+    interval, and it is taken about a second after the tick that dispatched it, so
+    a step that re-queues itself is still "held" when the next tick arrives. That
+    worker then loses the lease to a predecessor that finished minutes earlier,
+    and every re-queue costs two intervals instead of one.
+
+    Guarded on ``migrationLeaseUntil`` still being the value this worker wrote.
+    That value identifies the holder, because :func:`acquire_lease` only admits
+    a write when no live lease exists, so no two live leases can share it. The
+    guard means a worker that overran its lease cannot release the one its
+    successor has since taken. Because it is a condition on an attribute, it also
+    fails on a record a teardown has removed, and never recreates it.
+    """
+    _conditional(
+        _table().update_item,
+        Key={"PK": kb_pk(assistant_id), "SK": kb_sk(app_kb_id)},
+        UpdateExpression="REMOVE migrationLeaseUntil",
+        ConditionExpression="migrationLeaseUntil = :until",
+        ExpressionAttributeValues={":until": lease_until},
+    )
+
+
 def retry_from_failed(
     assistant_id: str,
     app_kb_id: str,

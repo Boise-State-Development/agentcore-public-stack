@@ -73,6 +73,12 @@ RETAIN_DAYS = 30
 #: How long a worker holds a knowledge base. Long enough to cover the slowest
 #: single step observed (a PDF-heavy shadow pass), short enough that a crashed
 #: worker's knowledge base is picked up again the same hour. Requirement 15.13.
+#:
+#: Expiry only matters after a crash. A step that finishes gives the lease back
+#: (:func:`release_lease`), because this matches the dispatcher's 15-minute
+#: interval and is taken about a second after the tick. Left to expire, it
+#: outlived the next tick by that second, and every re-queued step waited two
+#: intervals instead of one.
 LEASE_MINUTES = 15
 
 #: How long to wait before re-asking whether the managed corpus is queryable.
@@ -316,6 +322,33 @@ async def take_lease(assistant_id: str, app_kb_id: str) -> str:
             f"another worker holds the lease on kb {app_kb_id}; leaving it alone: {exc}"
         ) from exc
     return lease_until
+
+
+async def release_lease(assistant_id: str, app_kb_id: str, lease_until: str) -> None:
+    """Hand the knowledge base back as soon as a step is done with it.
+
+    Every step that re-queues itself (``born_managed`` with more to do, ``shadow``
+    → ``verify`` → ``promote``, a deferred ``verify`` or ``teardown``) is due
+    again at or before the next tick. Without this, that tick's worker found the
+    lease still live and stepped aside, so each step cost 30 minutes instead of
+    15.
+
+    Never raises. A refused release means there was nothing of ours left to give
+    back: a teardown removed the record, or the lease ran out and a successor
+    took it. Any other error leaves the lease to expire, which is slower but
+    still correct.
+    """
+    from apis.shared.kb_backend import records as r
+
+    try:
+        await asyncio.to_thread(r.release_lease, assistant_id, app_kb_id, lease_until)
+    except r.TransitionLost:
+        logger.info(f"kb {app_kb_id}: no lease of ours left to release")
+    except Exception as exc:  # noqa: BLE001 — expiry is the fallback
+        logger.warning(
+            f"kb {app_kb_id}: could not release the lease; it will expire at "
+            f"{lease_until}: {exc}"
+        )
 
 
 # ── ingestion of one snapshot ────────────────────────────────────────────────
@@ -970,6 +1003,7 @@ async def run_step(
         )
 
     generation = int(record.get("migrationGeneration") or 0)
+    lease_until: Optional[str] = None
 
     try:
         # Inside the try, deliberately. A ``LeaseLost`` must reach the caller as
@@ -977,7 +1011,7 @@ async def run_step(
         # migration — and the ``except LeaseLost: raise`` below is what guarantees
         # that even once a step starts taking sub-leases of its own. Outside the try
         # the clause would be unreachable, which is how a guard becomes decoration.
-        await take_lease(assistant_id, app_kb_id)
+        lease_until = await take_lease(assistant_id, app_kb_id)
 
         if state == r.TEARDOWN:
             # The agent was deleted. Not a migration step either, and it never
@@ -1018,6 +1052,11 @@ async def run_step(
         return StepResult(
             assistant_id, app_kb_id, state, r.MIGRATION_FAILED, detail=str(exc)
         )
+    finally:
+        # After the step's last write, on every path that took the lease, so the
+        # next tick can pick up whatever this step re-queued.
+        if lease_until is not None:
+            await release_lease(assistant_id, app_kb_id, lease_until)
 
     logger.info(f"migration step: {result.as_log_fields()}")
     return result

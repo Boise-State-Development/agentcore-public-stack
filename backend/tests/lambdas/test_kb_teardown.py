@@ -368,13 +368,9 @@ class TestRunTeardown:
         # The tombstone is the durable work item, and it survives.
         assert r.kb_tombstone_sk(ASSISTANT_ID) in _partition(table)
 
-        # Next tick, once AWS lets go, it finishes.
+        # Next tick, once AWS lets go, it finishes. No lease to wait out: the step
+        # that re-queued itself gave it back.
         client.kb_delete_error = None
-        table.update_item(
-            Key={"PK": r.kb_pk(ASSISTANT_ID), "SK": r.kb_sk(ASSISTANT_ID)},
-            UpdateExpression="SET migrationLeaseUntil = :past",
-            ExpressionAttributeValues={":past": _past()},
-        )
         assert _run(client).converged
         assert _partition(table) == []
 

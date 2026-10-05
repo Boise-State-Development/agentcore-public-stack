@@ -542,6 +542,16 @@ describe('KbMigrationConstruct — flags reach every function', () => {
     expect(env(p).MANAGED_KB_WORKER_FUNCTION_NAME).toBeUndefined();
   });
 
+  it('gives the worker the ingestion consumer it hands born-managed documents to', () => {
+    // provisioner.py reads KB_MIGRATION_INGESTION_CONSUMER_FUNCTION_NAME.
+    // Without it the worker falls back to ingesting one waiting document per
+    // 15-minute tick, which is the B5 slowdown this wiring exists to remove.
+    const t = synth();
+    const p = lambdaFor(t, HANDLERS.worker);
+    const name = JSON.stringify(env(p).KB_MIGRATION_INGESTION_CONSUMER_FUNCTION_NAME);
+    expect(name).toContain('KbIngestionConsumerLambda');
+  });
+
   it('gives the worker the retention window under the name it reads', () => {
     // worker._retain_days() reads KB_MIGRATION_RETAIN_DAYS. Published as
     // MANAGED_KB_RETENTION_WINDOW_DAYS, the configured window was silently
@@ -1027,6 +1037,18 @@ describe('KbMigrationConstruct — IAM', () => {
         ]),
       }),
     });
+  });
+
+  it('lets the worker invoke the ingestion consumer, and only it', () => {
+    // The born-managed handoff. Scoped to the consumer's ARN: the worker
+    // has no business invoking anything else in the account.
+    const invokes = statementsForRole(t, /KbMigrationWorkerLambdaServiceRole/).filter((s) =>
+      (Array.isArray(s.Action) ? s.Action : [s.Action]).includes('lambda:InvokeFunction'),
+    );
+    expect(invokes).toHaveLength(1);
+    const resources = JSON.stringify(invokes[0].Resource);
+    expect(resources).toContain('KbIngestionConsumerLambda');
+    expect(resources).not.toContain('"*"');
   });
 
   it('gives the worker and consumer READ-only access to the documents bucket', () => {

@@ -16,10 +16,25 @@ dead-letter failure that leaves a document permanently invisible, and designing 
 new feature that walks into it on its very first document would be a choice.
 
 So the managed ingestion consumer **defers** while a record is born-managed and
-unprovisioned (a benign no-op, no dead-letter), and this job ingests the pending
-documents itself once the knowledge base exists. Correctness then rests on the
+unprovisioned (a benign no-op, no dead-letter), and this job re-triggers it for the
+pending documents once the knowledge base exists. Correctness then rests on the
 dispatcher's work-key queue and the worker lease — retried until terminal, leased
 so two workers cannot both provision — rather than on a two-try event window.
+
+Every waiting document goes at once
+-----------------------------------
+Once the knowledge base exists, a waiting document is an ordinary managed upload
+whose S3 event came too early. So the job sends each one to the ingestion consumer
+Lambda, one asynchronous invocation per document, carrying the same bucket and key
+the deferred event carried. Each gets its own 15-minute budget, its own async
+retries and dead-letter queue, and a row the document reconciler can recover:
+everything a normal upload gets.
+
+It used to ingest one document per invocation here and re-queue the rest. A Shared
+Project seeds several files at once, and on dev four files uploaded together became
+ready at +2.5 min, +31 min, and roughly +60 and +90 min. A file uploaded after the
+knowledge base existed took 3 minutes. That in-process path remains as the fallback
+for a document the consumer could not be sent to (:func:`_hand_to_consumer`).
 
 Failure means legacy, never limbo
 ---------------------------------
@@ -42,7 +57,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -50,18 +65,27 @@ METRIC_BORN_MANAGED_PROVISIONED = "KbBornManagedProvisioned"
 METRIC_BORN_MANAGED_FAILED = "KbBornManagedFailed"
 METRIC_BORN_MANAGED_DOCUMENTS = "KbBornManagedDocuments"
 
-#: Documents ingested per invocation. **One**, deliberately.
+#: Documents the **fallback** path ingests in-process per invocation. One,
+#: deliberately.
 #:
-#: The worker's Lambda timeout is 15 minutes and one document's ingestion budget is
-#: already 10.5 (``INDEXED_POLL_TIMEOUT_SECONDS`` + the retrievable poll), because
-#: image-heavy PDFs run the vision model per page. Two documents in one invocation
-#: could not both finish, and being killed mid-wait is the one outcome worth
-#: engineering away: it costs a whole dispatcher interval and teaches nothing.
-#:
-#: More than one pending document only happens when the author uploaded again
-#: during the provisioning window, so the common case is exactly one. Anything left
-#: over re-arms the work key and is picked up on the next tick.
+#: Normally every waiting document is handed to the ingestion consumer instead
+#: (:func:`_hand_to_consumer`), so this limit applies only to documents that could
+#: not be sent there: the consumer's function name is not configured yet (the
+#: image shipped ahead of the infrastructure change that sets it), or the
+#: invocation was refused. The worker's Lambda timeout is 15 minutes and one
+#: document's ingestion budget is already 10.5 (``INDEXED_POLL_TIMEOUT_SECONDS`` +
+#: the retrievable poll), because image-heavy PDFs run the vision model per page.
+#: Two documents in one invocation could not both finish, and being killed mid-wait
+#: costs a whole dispatcher interval. Anything left over re-arms the work key and
+#: is picked up on the next tick.
 MAX_DOCUMENTS_PER_INVOCATION = 1
+
+#: The ingestion consumer's function name, set by ``kb-migration-construct.ts``.
+ENV_INGESTION_CONSUMER = "KB_MIGRATION_INGESTION_CONSUMER_FUNCTION_NAME"
+
+#: ``source`` on the event this job sends the consumer. The consumer routes on the
+#: object key alone (``extract_records``), so this is only for whoever reads a log.
+HANDOFF_EVENT_SOURCE = "kb-migration.born-managed"
 
 #: The user-facing copy for a document orphaned by a failed provision. Written for
 #: the person looking at the upload, not for an operator reading a log.
@@ -200,7 +224,7 @@ async def run_born_managed(
 
 
 async def _hand_off(assistant_id: str, app_kb_id: str, generation: int):
-    """Ingest the documents that were deferred while the knowledge base was built."""
+    """Send the documents deferred while the knowledge base was built to ingestion."""
     from apis.shared.kb_backend import records as r
     from apis.shared.kb_backend.metrics import emit_count
     from apis.app_api.kb_migration.worker import StepResult
@@ -215,25 +239,151 @@ async def _hand_off(assistant_id: str, app_kb_id: str, generation: int):
             converged=True, detail="knowledge base ready; no documents waiting",
         )
 
-    ingested = await _ingest_waiting(assistant_id, waiting[:MAX_DOCUMENTS_PER_INVOCATION])
-    remaining = len(waiting) - MAX_DOCUMENTS_PER_INVOCATION
+    handed, leftover = await _hand_to_consumer(assistant_id, waiting)
+    ingested = 0
+    if leftover:
+        ingested = await _ingest_waiting(
+            assistant_id, leftover[:MAX_DOCUMENTS_PER_INVOCATION]
+        )
+    remaining = len(leftover) - MAX_DOCUMENTS_PER_INVOCATION
 
     if remaining > 0:
         await _rearm(assistant_id, app_kb_id, generation)
         return StepResult(
             assistant_id, app_kb_id, r.BORN_MANAGED, r.BORN_MANAGED,
-            documents_migrated=ingested,
+            documents_migrated=handed + ingested,
             detail=f"{remaining} document(s) still waiting; re-queued",
         )
 
     await _finish(assistant_id, app_kb_id, generation, r.RETAIN)
-    if ingested:
-        emit_count(METRIC_BORN_MANAGED_DOCUMENTS, ingested)
+    if handed + ingested:
+        emit_count(METRIC_BORN_MANAGED_DOCUMENTS, handed + ingested)
     return StepResult(
         assistant_id, app_kb_id, r.BORN_MANAGED, r.RETAIN,
-        documents_migrated=ingested, converged=True,
-        detail="knowledge base ready and the first document ingested",
+        documents_migrated=handed + ingested, converged=True,
+        detail=(
+            f"knowledge base ready; {handed} document(s) handed to the ingestion "
+            f"consumer, {ingested} ingested in-process"
+        ),
     )
+
+
+async def _hand_to_consumer(
+    assistant_id: str, waiting: List[Dict[str, Any]]
+) -> Tuple[int, List[Dict[str, Any]]]:
+    """Send every waiting document to the ingestion consumer. ``(handed, leftover)``.
+
+    ``leftover`` is the documents that could not be sent, for the in-process
+    fallback. A malformed row is in neither: no path can ingest it.
+
+    **Invoke first, then mark the row.** A crash between the two leaves the row
+    at ``provisioning``, so the re-armed job sends it again, and the consumer is
+    built to take a document twice (it asks Bedrock before ingesting, so a second
+    delivery waits on the first rather than re-submitting). The other order has
+    no such recovery: a row marked ``uploading`` whose invocation never happened
+    has nothing left to finish it.
+
+    The mark is guarded on the row still being ``provisioning``. The consumer can
+    reach a terminal state before this write lands (an ingest refused outright
+    fails in under a second), and this must not drag it back to ``uploading``.
+    """
+    function_name = os.environ.get(ENV_INGESTION_CONSUMER)
+    if not function_name:
+        logger.warning(
+            f"{ENV_INGESTION_CONSUMER} is not set; ingesting waiting documents "
+            f"in-process, {MAX_DOCUMENTS_PER_INVOCATION} per invocation"
+        )
+        return 0, list(waiting)
+
+    bucket = _documents_bucket()
+    handed = 0
+    leftover: List[Dict[str, Any]] = []
+
+    for document in waiting:
+        document_id = str(document.get("documentId") or "")
+        s3_key = str(document.get("s3Key") or "")
+        if not document_id or not s3_key:
+            logger.warning(
+                f"skipping malformed waiting DOC# row {document.get('SK')!r}: "
+                f"documentId or s3Key is missing"
+            )
+            continue
+
+        try:
+            await _to_thread(_invoke_consumer, function_name, bucket, s3_key)
+        except Exception as exc:  # noqa: BLE001 — the fallback takes it
+            logger.warning(
+                f"could not hand document {document_id} to the ingestion consumer; "
+                f"falling back to in-process ingestion: {exc}"
+            )
+            leftover.append(document)
+            continue
+        handed += 1
+
+        try:
+            await _to_thread(_mark_handed_off, assistant_id, document_id)
+        except Exception as exc:  # noqa: BLE001
+            # The consumer has it and will write its terminal state either way.
+            # Only the interim status shown to the author is stale.
+            logger.warning(
+                f"document {document_id} was handed to the ingestion consumer but "
+                f"its row could not be moved to uploading: {exc}"
+            )
+
+    return handed, leftover
+
+
+def _invoke_consumer(function_name: str, bucket: str, s3_key: str) -> None:
+    """Async-invoke the ingestion consumer for one object.
+
+    The event is the EventBridge ``Object Created`` shape the consumer already
+    reads, carrying the row's stored ``s3Key`` exactly as the in-process fallback
+    passes it to ``handle_object``.
+    """
+    import json
+
+    import boto3
+
+    event = {
+        "source": HANDOFF_EVENT_SOURCE,
+        "detail-type": "Object Created",
+        "detail": {"bucket": {"name": bucket}, "object": {"key": s3_key}},
+    }
+    boto3.client("lambda").invoke(
+        FunctionName=function_name,
+        InvocationType="Event",
+        Payload=json.dumps(event).encode("utf-8"),
+    )
+
+
+def _mark_handed_off(assistant_id: str, document_id: str) -> bool:
+    """``provisioning → uploading``, only if the row is still ``provisioning``.
+
+    Returns ``False`` when it is not: deleted, or already moved on by the consumer.
+    The guard also keeps the write from recreating a deleted row.
+    """
+    from botocore.exceptions import ClientError
+
+    from apis.app_api.kb_migration import ingestion_consumer as ic
+
+    try:
+        ic._table().update_item(
+            Key={"PK": f"AST#{assistant_id}", "SK": f"DOC#{document_id}"},
+            UpdateExpression="SET #status = :uploading, updatedAt = :now",
+            ConditionExpression="#status = :provisioning",
+            # `status` is a DynamoDB reserved keyword.
+            ExpressionAttributeNames={"#status": "status"},
+            ExpressionAttributeValues={
+                ":uploading": "uploading",
+                ":provisioning": ic.STATUS_PROVISIONING,
+                ":now": _now_iso(),
+            },
+        )
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            return False
+        raise
+    return True
 
 
 async def _provision(assistant_id: str, app_kb_id: str, record: Dict[str, Any]):
@@ -269,7 +419,12 @@ async def _provision(assistant_id: str, app_kb_id: str, record: Dict[str, Any]):
 
 
 async def _ingest_waiting(assistant_id: str, waiting: List[Dict[str, Any]]) -> int:
-    """Ingest documents whose S3 event was deferred. Returns how many finished.
+    """Ingest documents whose S3 event was deferred, in-process. Returns how many
+    finished.
+
+    The fallback for documents :func:`_hand_to_consumer` could not send to the
+    ingestion consumer; the caller passes at most
+    :data:`MAX_DOCUMENTS_PER_INVOCATION` of them.
 
     Reuses the managed ingestion consumer's ``handle_object`` outright rather than
     reimplementing ingest → wait-indexed → wait-retrievable → terminal. That
