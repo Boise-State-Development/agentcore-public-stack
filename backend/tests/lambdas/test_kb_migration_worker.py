@@ -80,6 +80,15 @@ def _no_corpus_adoption():
         yield
 
 
+@pytest.fixture(autouse=True)
+def lease_release():
+    """``run_step`` releases its lease through the real table once a step ends.
+    Tests that stub ``take_lease`` have no table, so unpatched the release would
+    reach for AWS. Yielded so the lease tests can assert on it."""
+    with patch("apis.shared.kb_backend.records.release_lease") as release:
+        yield release
+
+
 async def _async_noop(*args, **kwargs):
     """An awaitable that does nothing.
 
@@ -353,6 +362,83 @@ class TestTheRecordDecidesTheStep:
             with pytest.raises(worker.LeaseLost):
                 await worker.run_step(ASSISTANT_ID)
 
+        fail.assert_not_called()
+
+
+# ── Worker: the lease is given back ──────────────────────────────────────────
+class TestTheLeaseIsReleased:
+    """B11 (2026-10-05, dev). The lease matches the dispatcher's 15-minute
+    interval and is taken a second after the tick, so a step that re-queued
+    itself was still "held" when the next tick came. That tick's worker stepped
+    aside, and every re-queue cost 30 minutes instead of 15."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("state, step", [
+        (r.BORN_MANAGED, "apis.app_api.kb_migration.provisioner.run_born_managed"),
+        (r.SHADOW, "apis.app_api.kb_migration.worker.run_shadow"),
+        (r.VERIFY, "apis.app_api.kb_migration.worker.run_verify"),
+        (r.PROMOTE, "apis.app_api.kb_migration.worker.run_promote"),
+        (r.TEARDOWN, "apis.app_api.kb_migration.teardown.run_teardown"),
+    ])
+    async def test_every_step_gives_back_the_lease_it_took(self, lease_release, state, step):
+        """MUTATION GUARD: drop the ``finally`` in run_step and this fails for
+        every state, including the shadow→verify→promote path."""
+        with patch.dict("os.environ", BASE_ENV, clear=True), patch(
+            "apis.shared.kb_backend.records.get_kb_record", return_value=_kb_record(state)
+        ), patch.object(worker, "take_lease", return_value="lease-mine"), patch(
+            step, return_value=worker.StepResult(ASSISTANT_ID, ASSISTANT_ID, state, state)
+        ):
+            await worker.run_step(ASSISTANT_ID)
+
+        lease_release.assert_called_once_with(ASSISTANT_ID, ASSISTANT_ID, "lease-mine")
+
+    @pytest.mark.asyncio
+    async def test_a_failed_step_gives_it_back_too(self, lease_release):
+        """`failed` is terminal, but a retry from `failed` re-queues the record, and
+        it should not then wait out a lease nobody holds."""
+        with patch.dict("os.environ", BASE_ENV, clear=True), patch(
+            "apis.shared.kb_backend.records.get_kb_record", return_value=_kb_record(r.SHADOW)
+        ), patch.object(worker, "take_lease", return_value="lease-mine"), patch.object(
+            worker, "run_shadow", side_effect=RuntimeError("boom")
+        ), patch("apis.shared.kb_backend.metrics.emit_count"), patch.object(worker, "_fail"):
+            result = await worker.run_step(ASSISTANT_ID)
+
+        assert result.to_state == r.MIGRATION_FAILED
+        lease_release.assert_called_once_with(ASSISTANT_ID, ASSISTANT_ID, "lease-mine")
+
+    @pytest.mark.asyncio
+    async def test_a_lost_lease_releases_nothing(self, lease_release):
+        """The lease belongs to the other worker. Releasing it would let a third in."""
+        with patch.dict("os.environ", BASE_ENV, clear=True), patch(
+            "apis.shared.kb_backend.records.get_kb_record", return_value=_kb_record(r.SHADOW)
+        ), patch(
+            "apis.shared.kb_backend.records.acquire_lease",
+            side_effect=RuntimeError("conditional check failed"),
+        ), patch("apis.shared.kb_backend.metrics.emit_count"):
+            with pytest.raises(worker.LeaseLost):
+                await worker.run_step(ASSISTANT_ID)
+
+        lease_release.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("error", [
+        r.TransitionLost("record torn down"),
+        RuntimeError("DynamoDB unavailable"),
+    ])
+    async def test_a_refused_release_does_not_fail_the_step(self, lease_release, error):
+        """The step's own state write already landed. A release that cannot happen
+        leaves the lease to expire, which is slower but still correct."""
+        lease_release.side_effect = error
+        done = worker.StepResult(ASSISTANT_ID, ASSISTANT_ID, r.SHADOW, r.VERIFY, converged=True)
+
+        with patch.dict("os.environ", BASE_ENV, clear=True), patch(
+            "apis.shared.kb_backend.records.get_kb_record", return_value=_kb_record(r.SHADOW)
+        ), patch.object(worker, "take_lease", return_value="lease-mine"), patch.object(
+            worker, "run_shadow", return_value=done
+        ), patch.object(worker, "_fail") as fail:
+            result = await worker.run_step(ASSISTANT_ID)
+
+        assert result is done
         fail.assert_not_called()
 
 

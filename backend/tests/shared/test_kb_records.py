@@ -373,6 +373,44 @@ class TestAcquireLease:
         assert _raw(table)["migrationLeaseUntil"] == "2026-08-24T14:00:00Z"
 
 
+# ── release_lease ────────────────────────────────────────────────────────────
+class TestReleaseLease:
+    def test_a_released_lease_can_be_taken_before_it_would_have_expired(self, table):
+        """The B11 shape. The lease runs to 13:00 and the next tick lands at 12:59.
+        Before release existed that tick lost the lease to a worker that had
+        already finished, and the re-queued step waited another whole interval."""
+        _seed(table)
+        r.acquire_lease(ASSISTANT_ID, APP_KB_ID, LATER, NOW)
+
+        r.release_lease(ASSISTANT_ID, APP_KB_ID, LATER)
+
+        assert "migrationLeaseUntil" not in _raw(table)
+        r.acquire_lease(ASSISTANT_ID, APP_KB_ID, "2026-08-24T13:59:00Z", "2026-08-24T12:59:00Z")
+        assert _raw(table)["migrationLeaseUntil"] == "2026-08-24T13:59:00Z"
+
+    def test_cannot_release_a_successors_lease(self, table):
+        """A worker that overran its lease must not free the one its successor
+        took over, or a third worker could run alongside the second."""
+        _seed(table)
+        r.acquire_lease(ASSISTANT_ID, APP_KB_ID, "2026-08-24T12:30:00Z", NOW)
+        r.acquire_lease(ASSISTANT_ID, APP_KB_ID, "2026-08-24T14:00:00Z", LATER)
+
+        with pytest.raises(r.TransitionLost):
+            r.release_lease(ASSISTANT_ID, APP_KB_ID, "2026-08-24T12:30:00Z")
+
+        assert _raw(table)["migrationLeaseUntil"] == "2026-08-24T14:00:00Z"
+
+    def test_does_not_recreate_a_record_a_teardown_removed(self, table):
+        """The teardown step's last write deletes the record. Releasing after it
+        must not leave a ghost ``KB#`` item behind."""
+        with pytest.raises(r.TransitionLost):
+            r.release_lease(ASSISTANT_ID, APP_KB_ID, LATER)
+
+        assert "Item" not in table.get_item(
+            Key={"PK": r.kb_pk(ASSISTANT_ID), "SK": r.kb_sk(APP_KB_ID)}
+        )
+
+
 # ── tombstones ───────────────────────────────────────────────────────────────
 class TestTombstoneKeys:
     def test_the_two_tombstone_shapes_are_distinct(self):
