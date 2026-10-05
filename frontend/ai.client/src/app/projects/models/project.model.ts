@@ -3,7 +3,8 @@
  *
  * Mirrors `backend/src/apis/app_api/projects/models.py`. User ids never cross the
  * wire: people are identified by email, and `hasSignedIn` says whether one has
- * signed in yet (ownership transfer needs it).
+ * signed in yet (ownership transfer needs it). Beside each email is the person's
+ * display name, or null when the directory has none; show it with `personLabel`.
  */
 
 import type { Document, KbUsage, UploadUrlResponse } from '../../assistants/models/document.model';
@@ -18,6 +19,7 @@ export interface Project {
   name: string;
   description: string;
   ownerEmail: string;
+  ownerName: string | null;
   /** The caller's role on this project. */
   role: ProjectRole;
   status: ProjectStatus;
@@ -47,7 +49,12 @@ export interface UpdateProjectRequest {
 
 export interface ProjectMember {
   email: string;
+  name: string | null;
   role: ProjectRole;
+  /**
+   * Signed in to the platform, so they can be made owner. Not whether they have
+   * opened this project.
+   */
   hasSignedIn: boolean;
   createdAt?: string;
 }
@@ -115,6 +122,7 @@ export interface SettingsVersionSummary {
   createdAt: string | null;
   /** Null for the state the project was created with. */
   createdByEmail: string | null;
+  createdByName: string | null;
   /** Fields changed from the previous version (`instructions`, `bindings`, `modelConfig`, …). */
   changes: string[];
 }
@@ -154,6 +162,7 @@ export interface SharedTask {
   shareId: string;
   title: string;
   sharedByEmail: string;
+  sharedByName: string | null;
   sharedAt: string;
   /** The existing `/shared/{shareId}` view. */
   shareUrl: string;
@@ -171,6 +180,7 @@ export interface SharedTasksResponse {
 export interface ProjectDocument extends Document {
   /** Null when unknown: added before this was recorded, or by a former member. */
   addedByEmail: string | null;
+  addedByName: string | null;
 }
 
 export interface ProjectDocumentsResponse {
@@ -204,5 +214,7 @@ export interface ProjectAuditRecord {
 export interface ProjectAuditResponse {
   /** Newest first. */
   records: ProjectAuditRecord[];
+  /** Display names by email for the people the page mentions (actors and members). */
+  people?: Record<string, string>;
   nextCursor?: string | null;
 }

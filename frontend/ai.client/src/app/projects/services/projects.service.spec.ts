@@ -11,6 +11,7 @@ const project = (id: string, extra: Partial<Project> = {}): Project => ({
   name: `Project ${id}`,
   description: '',
   ownerEmail: 'o@x.edu',
+  ownerName: null,
   role: 'owner',
   status: 'active',
   editorsManageMembers: true,

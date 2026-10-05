@@ -12,12 +12,14 @@ over the document and web-crawl routes, authorized by the project instead:
     whose viewers should see its files, so reads call the document service
     directly, with the harness's owner id the service keys on.
 
-Every document says who added it (``addedByEmail``), resolved from the member
-list, so a former member's files show no name rather than a stale one.
+Every document says who added it (``addedByEmail``, and ``addedByName`` from
+the directory), resolved from the member list, so a former member's files show
+no name rather than a stale one.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Dict, List, Optional, Tuple
 
@@ -39,6 +41,7 @@ from apis.app_api.web_sources.models import ActiveCrawlsResponse, CrawlJob, Star
 from apis.shared.assistants.models import Assistant
 from apis.shared.audit import AuditAction
 from apis.shared.auth.models import User
+from apis.shared.directory import display_names
 from apis.shared.oauth.provider_repository import OAuthProviderRepository, get_provider_repository
 from apis.shared.projects.models import Project, ProjectRole
 from apis.shared.projects.service import ProjectError
@@ -89,10 +92,17 @@ async def _editor(project_id: str, user: User, *, writable: bool = True) -> Tupl
     return project, harness
 
 
-def _document(doc, emails: Dict[str, str]) -> ProjectDocumentResponse:
+def _document(doc, emails: Dict[str, str], names: Dict[str, str]) -> ProjectDocumentResponse:
     response = DocumentResponse.model_validate(doc.model_dump(by_alias=True))
     added_by = doc.added_by_user_id or doc.imported_by_user_id
-    return ProjectDocumentResponse(**response.model_dump(), added_by_email=emails.get(added_by) if added_by else None)
+    email = emails.get(added_by) if added_by else None
+    return ProjectDocumentResponse(
+        **response.model_dump(), added_by_email=email, added_by_name=names.get(email) if email else None
+    )
+
+
+async def _names(emails: Dict[str, str]) -> Dict[str, str]:
+    return await asyncio.to_thread(display_names, set(emails.values()))
 
 
 async def _get_document(harness: Assistant, document_id: str):
@@ -158,8 +168,9 @@ async def list_files(
     docs, token = await list_assistant_documents(
         assistant_id=harness.assistant_id, owner_id=harness.owner_id, limit=limit, next_token=next_token
     )
+    names = await _names(emails)
     return ProjectDocumentsResponse(
-        documents=[_document(d, emails) for d in docs],
+        documents=[_document(d, emails, names) for d in docs],
         next_token=token,
         kb_usage=await document_routes._resolve_kb_usage(harness.assistant_id),
         can_edit=role in ("owner", "editor") and project.status == "active",
@@ -172,7 +183,7 @@ async def get_file(
 ) -> ProjectDocumentResponse:
     """One file's details and processing status."""
     _, _, harness, emails = await _viewer(project_id, user)
-    return _document(await _get_document(harness, document_id), emails)
+    return _document(await _get_document(harness, document_id), emails, await _names(emails))
 
 
 @router.get("/{document_id}/download", response_model=DownloadUrlResponse, response_model_by_alias=True)

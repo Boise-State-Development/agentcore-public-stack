@@ -17,6 +17,7 @@ from botocore.exceptions import ClientError
 from moto import mock_aws
 
 from apis.shared.auth.models import User
+from apis.shared.directory import DirectoryPerson
 from apis.shared.projects.access import resolve_project_role
 from apis.shared.projects.models import ProjectMember
 from apis.shared.projects.repository import ProjectRepository, ProjectWriteConflict
@@ -78,6 +79,27 @@ class FakeHarness:
         self.renamed.append((agent_id, name, description))
 
 
+class FakeDirectory:
+    """People who have signed in, by email; knows nobody until a test says so."""
+
+    def __init__(self) -> None:
+        self.people: dict = {}
+        self.fail = False
+
+    def sign_in(self, user: User) -> None:
+        email = user.email.lower()
+        self.people[email] = DirectoryPerson(email=email, name=user.name, user_id=user.user_id)
+
+    def find_by_emails(self, emails):
+        if self.fail:
+            raise RuntimeError("users table unavailable")
+        return {e: self.people[e] for e in emails if e in self.people}
+
+    def find_by_user_ids(self, user_ids):
+        by_id = {p.user_id: p for p in self.people.values()}
+        return {u: by_id[u] for u in user_ids if u in by_id}
+
+
 @pytest.fixture()
 def repo(monkeypatch):
     for k, v in {
@@ -98,8 +120,13 @@ def harness() -> FakeHarness:
 
 
 @pytest.fixture()
-def service(repo, harness) -> ProjectService:
-    return ProjectService(repository=repo, harness=harness)
+def directory() -> FakeDirectory:
+    return FakeDirectory()
+
+
+@pytest.fixture()
+def service(repo, harness, directory) -> ProjectService:
+    return ProjectService(repository=repo, harness=harness, directory=directory)
 
 
 def create(service: ProjectService, user: User = OWNER, name: str = "Enrollment Sync"):
@@ -397,7 +424,7 @@ def test_transfer_swaps_owner_and_editor(service, repo):
 
 def test_transfer_only_to_a_signed_in_editor(service):
     project = with_members(service)
-    with pytest.raises(ProjectConflictError, match="haven't opened"):
+    with pytest.raises(ProjectConflictError, match="haven't signed in"):
         service.transfer_ownership(project.project_id, OWNER, EDITOR.email)
 
     service.get_project(project.project_id, VIEWER)
@@ -407,6 +434,37 @@ def test_transfer_only_to_a_signed_in_editor(service):
         service.transfer_ownership(project.project_id, OWNER, STRANGER.email)
     with pytest.raises(ProjectPermissionError):
         service.transfer_ownership(project.project_id, EDITOR, EDITOR.email)
+
+
+def test_transfer_binds_an_editor_who_has_signed_in_but_not_opened_the_project(service, repo, directory):
+    """G9: an active platform user can be made owner before they open the project."""
+    project = with_members(service)
+    directory.sign_in(EDITOR)
+    assert repo.get_member(project.project_id, EDITOR.email).user_id is None
+
+    transferred = service.transfer_ownership(project.project_id, OWNER, EDITOR.email)
+
+    assert (transferred.owner_id, transferred.owner_email) == (EDITOR.user_id, EDITOR.email)
+    assert service.get_project(project.project_id, EDITOR)[1] == "owner"
+    assert service.get_project(project.project_id, OWNER)[1] == "editor"
+
+
+def test_transfer_keeps_the_account_the_member_opened_the_project_with(service, directory):
+    project = with_members(service)
+    service.get_project(project.project_id, EDITOR)  # bound to u-editor
+    directory.people[EDITOR.email] = DirectoryPerson(email=EDITOR.email, user_id="u-another-account")
+
+    transferred = service.transfer_ownership(project.project_id, OWNER, EDITOR.email)
+    assert transferred.owner_id == EDITOR.user_id
+
+
+def test_a_failed_directory_lookup_only_withholds_the_transfer(service, directory):
+    project = with_members(service)
+    directory.sign_in(EDITOR)
+    directory.fail = True
+    with pytest.raises(ProjectConflictError, match="haven't signed in"):
+        service.transfer_ownership(project.project_id, OWNER, EDITOR.email)
+    assert service.known_people([EDITOR.email]) == {}
 
 
 # ── isolation ───────────────────────────────────────────────────────────

@@ -6,6 +6,7 @@ import { heroArrowUp, heroDocumentText, heroUsers } from '@ng-icons/heroicons/ou
 import { ChatRequestService } from '../../session/services/chat/chat-request.service';
 import { Project } from '../models/project.model';
 import { ProjectApiService } from '../services/project-api.service';
+import { personLabel } from '../../shared/utils/person';
 
 /**
  * A project's Overview: start a task, and see what the assistant works from.
@@ -83,7 +84,10 @@ import { ProjectApiService } from '../services/project-api.service';
             People
           </h2>
           <p class="mt-2 text-sm/6 text-gray-700 dark:text-gray-300">{{ peopleLabel() }}</p>
-          <p class="text-xs/5 text-gray-600 dark:text-gray-400">Owner: {{ project().ownerEmail }}</p>
+          <p class="text-xs/5 text-gray-600 dark:text-gray-400">Owner: {{ ownerLabel() }}</p>
+          @if (project().ownerName) {
+            <p class="truncate text-xs/5 text-gray-600 dark:text-gray-400">{{ project().ownerEmail }}</p>
+          }
           <a [routerLink]="['/projects', project().projectId, 'members']" class="mt-3 inline-block rounded-sm text-sm/6 font-medium text-primary-accessible hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-50">
             See members
           </a>
@@ -107,6 +111,7 @@ export class ProjectOverviewComponent {
   protected readonly archived = computed(() => this.project().status === 'archived');
   protected readonly canEdit = computed(() => this.project().role !== 'viewer' && !this.archived());
   protected readonly canSend = computed(() => !this.archived() && !this.sending() && this.draft().trim().length > 0);
+  protected readonly ownerLabel = computed(() => personLabel(this.project().ownerName, this.project().ownerEmail));
   protected readonly peopleLabel = computed(() => {
     const n = this.project().memberCount + 1;
     return n === 1 ? 'Just you so far' : `${n} people`;

@@ -15,8 +15,9 @@ documents. ``DELETE`` on an active project is a 409 naming the first step.
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterable, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 
@@ -25,9 +26,9 @@ from apis.shared.assistants.models import AgentBinding, VersionFieldChange
 from apis.shared.assistants.version_diff import wire_field_name, wire_value
 from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.models import User
-from apis.shared.directory import get_directory
+from apis.shared.directory import display_names, get_directory
 from apis.shared.feature_flags import projects_enabled
-from apis.shared.projects.models import normalize_email
+from apis.shared.projects.models import Project, ProjectRole, normalize_email
 from apis.shared.projects.service import (
     ProjectConflictError,
     ProjectError,
@@ -114,6 +115,19 @@ def _translate(e: ProjectError) -> HTTPException:
     return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
+def _project_response(project: Project, role: ProjectRole) -> ProjectResponse:
+    """Blocking (a directory lookup for the owner's name): from async code, run it in a thread."""
+    return ProjectResponse.from_project(project, role, display_names([project.owner_email]))
+
+
+def _emails_in(value: Any) -> Iterable[str]:
+    """Every ``email``/``ownerEmail`` value in an audit record's detail."""
+    if isinstance(value, dict):
+        for key in ("email", "ownerEmail"):
+            if isinstance(value.get(key), str):
+                yield value[key]
+
+
 # ---- projects ----------------------------------------------------------
 
 
@@ -124,7 +138,8 @@ def list_projects(
 ) -> ProjectListResponse:
     """Projects the caller owns or is a member of, most recently updated first."""
     listed = _svc().list_projects(user, include_archived=include_archived)
-    return ProjectListResponse(projects=[ProjectResponse.from_project(p, role) for p, role in listed])
+    names = display_names({p.owner_email for p, _ in listed})
+    return ProjectListResponse(projects=[ProjectResponse.from_project(p, role, names) for p, role in listed])
 
 
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=ProjectResponse, response_model_by_alias=True)
@@ -136,7 +151,7 @@ async def create_project(
         project = await _svc().create_project(user, body.name, body.description)
     except ProjectError as e:
         raise _translate(e)
-    return ProjectResponse.from_project(project, "owner")
+    return await asyncio.to_thread(_project_response, project, "owner")
 
 
 @router.get("/{project_id}", response_model=ProjectResponse, response_model_by_alias=True)
@@ -145,7 +160,7 @@ def get_project(project_id: str, user: User = Depends(require_projects_user)) ->
         project, role = _svc().get_project(project_id, user)
     except ProjectError as e:
         raise _translate(e)
-    return ProjectResponse.from_project(project, role)
+    return _project_response(project, role)
 
 
 @router.patch("/{project_id}", response_model=ProjectResponse, response_model_by_alias=True)
@@ -164,7 +179,7 @@ async def update_project(
         )
     except ProjectError as e:
         raise _translate(e)
-    return ProjectResponse.from_project(project, role)
+    return await asyncio.to_thread(_project_response, project, role)
 
 
 @router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -185,7 +200,7 @@ def transfer_project(
         project = _svc().transfer_ownership(project_id, user, body.email)
     except ProjectError as e:
         raise _translate(e)
-    return ProjectResponse.from_project(project, "editor")
+    return _project_response(project, "editor")
 
 
 # ---- settings (instructions, model, tools, skills) ---------------------
@@ -291,11 +306,13 @@ async def list_settings_versions(
         versions = await _settings().list_versions(project_id, user, limit)
     except ProjectError as e:
         raise _translate(e)
+    names = await asyncio.to_thread(display_names, filter(None, (created_by_email(v) for v, _ in versions)))
     return SettingsVersionsResponse(versions=[
         SettingsVersionSummary(
             version=v.version,
             created_at=v.created_at,
             created_by_email=created_by_email(v),
+            created_by_name=names.get(created_by_email(v) or ""),
             changes=[wire_field_name(f) for f in fields],
         )
         for v, fields in versions
@@ -317,10 +334,13 @@ async def get_settings_version(
         raise _translate(e)
     v = detail.version
     changes = settings_changes(detail.previous, v)
+    author = created_by_email(v)
+    names = await asyncio.to_thread(display_names, [author] if author else [])
     return SettingsVersionResponse(
         version=v.version,
         created_at=v.created_at,
-        created_by_email=created_by_email(v),
+        created_by_email=author,
+        created_by_name=names.get(author or ""),
         changes=[wire_field_name(f) for f, _, _ in changes],
         instructions=v.instructions or "",
         model_settings=v.model_settings,
@@ -342,7 +362,8 @@ async def get_settings_version(
 # ---- audit -------------------------------------------------------------
 
 # What a project's editors see of its trail: who did what, by email. Admins get
-# the full record (``/admin/projects/{id}/audit``), user ids included.
+# the full record (``/admin/projects/{id}/audit``), user ids included. ``people``
+# names the emails the page mentions (actors, and the members a record is about).
 _MEMBER_AUDIT_FIELDS = ("auditId", "timestamp", "action", "actorEmail", "changes", "before", "after", "reason")
 
 
@@ -361,12 +382,14 @@ def project_audit(
     except Exception:
         logger.exception("Failed to read the audit trail for project %s", scrub_log(project_id))
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Audit log is unavailable.")
-    return {
-        "records": [
-            {k: v for k, v in r.to_response().items() if k in _MEMBER_AUDIT_FIELDS} for r in records
-        ],
-        "nextCursor": next_cursor,
-    }
+    page = [{k: v for k, v in r.to_response().items() if k in _MEMBER_AUDIT_FIELDS} for r in records]
+    emails = set()
+    for record in page:
+        if isinstance(record.get("actorEmail"), str):
+            emails.add(record["actorEmail"])
+        for detail in (record.get("before"), record.get("after")):
+            emails.update(_emails_in(detail))
+    return {"records": page, "people": display_names({normalize_email(e) for e in emails}), "nextCursor": next_cursor}
 
 
 # ---- tasks -------------------------------------------------------------
@@ -402,7 +425,8 @@ def list_shared_tasks(project_id: str, user: User = Depends(require_projects_use
         pointers = _svc().list_shared_tasks(project_id, user)
     except ProjectError as e:
         raise _translate(e)
-    return SharedTasksResponse(tasks=[SharedTaskResponse.from_pointer(p, user.user_id) for p in pointers])
+    names = display_names({p.owner_email for p in pointers})
+    return SharedTasksResponse(tasks=[SharedTaskResponse.from_pointer(p, user.user_id, names) for p in pointers])
 
 
 # ---- memory (Phase 2.4) ------------------------------------------------
@@ -441,7 +465,8 @@ def list_members(project_id: str, user: User = Depends(require_projects_user)) -
         project, role, members = _svc().list_members(project_id, user)
     except ProjectError as e:
         raise _translate(e)
-    return MembersResponse.build(project, role, members)
+    people = _svc().known_people([project.owner_email, *(m.email for m in members)])
+    return MembersResponse.build(project, role, members, people)
 
 
 @router.post("/{project_id}/members", response_model=AddMembersResponse, response_model_by_alias=True)
@@ -453,7 +478,7 @@ def add_members(
         result = _svc().add_members(project_id, user, body.emails, body.role)
     except ProjectError as e:
         raise _translate(e)
-    return AddMembersResponse.from_result(result)
+    return AddMembersResponse.from_result(result, _svc().known_people([m.email for m in result.added]))
 
 
 @router.get("/{project_id}/directory", response_model=DirectoryResponse, response_model_by_alias=True)
@@ -507,7 +532,7 @@ def update_member(
         member = _svc().update_member_role(project_id, user, email, body.role)
     except ProjectError as e:
         raise _translate(e)
-    return MemberResponse.from_member(member)
+    return MemberResponse.from_member(member, _svc().known_people([member.email]))
 
 
 @router.delete("/{project_id}/members/{email}", status_code=status.HTTP_204_NO_CONTENT)

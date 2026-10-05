@@ -12,6 +12,7 @@ import {
 } from '../../components/confirmation-dialog/confirmation-dialog.component';
 import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
 import { parseIso } from '../../utils/date';
+import { personLabel } from '../../shared/utils/person';
 import { Project, ProjectDocument } from '../models/project.model';
 import { ProjectApiService } from '../services/project-api.service';
 import { projectErrorMessage } from '../services/projects.service';
@@ -138,7 +139,7 @@ export function formatBytes(bytes: number): string {
                 <div class="min-w-0 flex-1">
                   <p class="truncate text-sm/6 font-medium text-gray-900 dark:text-white">{{ doc.filename }}</p>
                   <p class="text-xs/5 text-gray-600 dark:text-gray-400">
-                    Added by {{ doc.addedByEmail || 'Unknown' }} · {{ created(doc) | date: 'mediumDate' }} · {{ size(doc) }}
+                    Added by <span [attr.title]="doc.addedByName ? doc.addedByEmail : null">{{ personLabel(doc.addedByName, doc.addedByEmail) || 'Unknown' }}</span> · {{ created(doc) | date: 'mediumDate' }} · {{ size(doc) }}
                   </p>
                   @if (doc.status === 'failed' && doc.errorMessage) {
                     <p class="text-xs/5 text-state-danger-600 dark:text-state-danger-400">{{ doc.errorMessage }}</p>
@@ -195,6 +196,8 @@ export class ProjectFilesComponent {
   private api = inject(ProjectApiService);
   private documentService = inject(DocumentService);
   private dialog = inject(Dialog);
+
+  protected readonly personLabel = personLabel;
 
   readonly project = input.required<Project>();
 

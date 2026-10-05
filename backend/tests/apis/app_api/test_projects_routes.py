@@ -72,27 +72,41 @@ def task_queries(monkeypatch) -> list:
 
 
 class FakeDirectory:
-    """Knows the owner, the editor and one person outside the project."""
+    """Knows the owner, the editor, the viewer (who has no name) and one person outside the project.
+
+    Not THIRD: they were invited but have never signed in.
+    """
 
     def __init__(self) -> None:
-        self.queries: list = []
-
-    async def search(self, query, limit):
         from apis.shared.directory import DirectoryPerson
 
-        self.queries.append((query, limit))
-        people = [
-            DirectoryPerson(email=OWNER.email, name="O"),
-            DirectoryPerson(email=EDITOR.email, name="E"),
-            DirectoryPerson(email="outsider@example.edu", name="Out Sider"),
+        self.queries: list = []
+        self.people = [
+            DirectoryPerson(email=OWNER.email, name="Olive Owner", user_id=OWNER.user_id),
+            DirectoryPerson(email=EDITOR.email, name="Ed Editor", user_id=EDITOR.user_id),
+            DirectoryPerson(email=VIEWER.email, name="", user_id=VIEWER.user_id),
+            DirectoryPerson(email="outsider@example.edu", name="Out Sider", user_id="u-outsider"),
         ]
-        return [p for p in people if query.lower() in p.email or query.lower() in p.name.lower()][:limit]
+
+    async def search(self, query, limit):
+        self.queries.append((query, limit))
+        q = query.lower()
+        return [p for p in self.people if q in p.email or q in p.name.lower()][:limit]
+
+    def find_by_emails(self, emails):
+        wanted = {e.lower() for e in emails}
+        return {p.email: p for p in self.people if p.email in wanted}
+
+    def find_by_user_ids(self, user_ids):
+        return {p.user_id: p for p in self.people if p.user_id in set(user_ids)}
 
 
 @pytest.fixture()
 def directory(monkeypatch) -> FakeDirectory:
+    from apis.shared.directory import adapter
+
     fake = FakeDirectory()
-    monkeypatch.setattr(project_routes, "get_directory", lambda: fake)
+    monkeypatch.setattr(adapter, "_directory", fake)
     return fake
 
 
@@ -152,8 +166,8 @@ MATRIX = [
      {"owner": 200, "editor": 403, "viewer": 403, "stranger": 404, "other_project_member": 404}),
     ("DELETE", "", None,  # active project: archive first
      {"owner": 409, "editor": 403, "viewer": 403, "stranger": 404, "other_project_member": 404}),
-    ("POST", "/transfer", {"email": EDITOR.email},  # editor has not signed in yet
-     {"owner": 409, "editor": 403, "viewer": 403, "stranger": 404, "other_project_member": 404}),
+    ("POST", "/transfer", {"email": EDITOR.email},  # signed in, though they haven't opened it
+     {"owner": 200, "editor": 403, "viewer": 403, "stranger": 404, "other_project_member": 404}),
     ("GET", "/members", None,
      {"owner": 200, "editor": 200, "viewer": 200, "stranger": 404, "other_project_member": 404}),
     ("POST", "/members", {"emails": ["new@example.edu"], "role": "viewer"},
@@ -192,23 +206,68 @@ def test_create_returns_the_owner_view(service):
         "owner", OWNER.email, "active", 0,
     )
     assert body["harnessAgentId"].startswith("ast-")
+    assert body["ownerName"] == "Olive Owner"
     assert "ownerId" not in body
 
 
 def test_list_shows_each_project_once_with_the_callers_role(project_id):
-    names = {p["name"]: p["role"] for p in client_for(EDITOR).get("/projects").json()["projects"]}
-    assert names == {"Project A": "editor"}
-    assert client_for(OTHER).get("/projects").json()["projects"][0]["name"] == "Project B"
+    projects = client_for(EDITOR).get("/projects").json()["projects"]
+    assert {p["name"]: (p["role"], p["ownerName"]) for p in projects} == {"Project A": ("editor", "Olive Owner")}
+    other = client_for(OTHER).get("/projects").json()["projects"][0]
+    assert (other["name"], other["ownerEmail"], other["ownerName"]) == ("Project B", STRANGER.email, None)
 
 
 def test_members_lists_owner_first_and_reports_manage_rights(project_id):
     body = client_for(VIEWER).get(f"/projects/{project_id}/members").json()
     assert body["members"][0] == {
-        "email": OWNER.email, "role": "owner", "hasSignedIn": True, "createdAt": body["members"][0]["createdAt"],
+        "email": OWNER.email, "name": "Olive Owner", "role": "owner", "hasSignedIn": True,
+        "createdAt": body["members"][0]["createdAt"],
     }
     assert [m["email"] for m in body["members"][1:]] == sorted([EDITOR.email, VIEWER.email, THIRD])
     assert body["canManage"] is False
     assert client_for(EDITOR).get(f"/projects/{project_id}/members").json()["canManage"] is True
+
+
+def test_members_are_named_and_signed_in_by_the_directory_not_by_opening_the_project(project_id):
+    """G8 + G9: nobody but the owner has opened the project, and the directory still knows who has signed in."""
+    members = {m["email"]: m for m in client_for(OWNER).get(f"/projects/{project_id}/members").json()["members"]}
+    assert {e: (m["name"], m["hasSignedIn"]) for e, m in members.items()} == {
+        OWNER.email: ("Olive Owner", True),
+        EDITOR.email: ("Ed Editor", True),
+        VIEWER.email: (None, True),   # signed in, no name on record: clients show the email
+        THIRD: (None, False),         # invited, never signed in
+    }
+    assert not any("userId" in m for m in members.values())
+
+
+def test_people_responses_carry_names_beside_emails(project_id):
+    owner = client_for(OWNER)
+    added = owner.post(f"/projects/{project_id}/members", json={"emails": ["outsider@example.edu"]}).json()["added"]
+    assert [(m["email"], m["name"], m["hasSignedIn"]) for m in added] == [("outsider@example.edu", "Out Sider", True)]
+
+    changed = owner.patch(f"/projects/{project_id}/members/{EDITOR.email}", json={"role": "viewer"}).json()
+    assert (changed["name"], changed["hasSignedIn"]) == ("Ed Editor", True)
+
+    assert owner.get(f"/projects/{project_id}").json()["ownerName"] == "Olive Owner"
+
+
+def test_a_directory_failure_shows_emails_without_names(project_id, directory, monkeypatch):
+    def broken(emails):
+        raise RuntimeError("users table unavailable")
+
+    monkeypatch.setattr(directory, "find_by_emails", broken)
+    members = client_for(OWNER).get(f"/projects/{project_id}/members").json()["members"]
+    assert [m["name"] for m in members] == [None] * 4
+    assert [m["hasSignedIn"] for m in members] == [True, False, False, False]
+    assert client_for(OWNER).get(f"/projects/{project_id}").json()["ownerName"] is None
+
+
+def test_transfer_to_an_editor_who_has_never_signed_in_explains_why(project_id):
+    owner = client_for(OWNER)
+    owner.patch(f"/projects/{project_id}/members/{THIRD}", json={"role": "editor"})
+    response = owner.post(f"/projects/{project_id}/transfer", json={"email": THIRD})
+    assert response.status_code == 409
+    assert "haven't signed in" in response.json()["detail"]
 
 
 def test_bulk_add_reports_each_bucket(project_id):
@@ -264,9 +323,9 @@ def test_shared_tasks_hide_user_ids_and_mark_the_callers_own(project_id, service
             owner_email=email, title=f"Task {sid}", shared_at=at,
         ))
     tasks = client_for(VIEWER).get(f"/projects/{project_id}/shared-tasks").json()["tasks"]
-    assert [(t["shareId"], t["sharedByEmail"], t["isMine"], t["shareUrl"]) for t in tasks] == [
-        ("sh-s2", VIEWER.email, True, "/shared/sh-s2"),
-        ("sh-s1", EDITOR.email, False, "/shared/sh-s1"),
+    assert [(t["shareId"], t["sharedByEmail"], t["sharedByName"], t["isMine"], t["shareUrl"]) for t in tasks] == [
+        ("sh-s2", VIEWER.email, None, True, "/shared/sh-s2"),
+        ("sh-s1", EDITOR.email, "Ed Editor", False, "/shared/sh-s1"),
     ]
     assert not any("ownerId" in t or "sessionId" in t for t in tasks)
 
@@ -276,6 +335,7 @@ def test_directory_marks_people_already_in_the_project(project_id):
     assert [(p["email"], p["memberRole"], p["hasSignedIn"]) for p in people] == [
         (OWNER.email, "owner", True),
         (EDITOR.email, "editor", True),
+        (VIEWER.email, "viewer", True),
         ("outsider@example.edu", None, True),
     ]
     assert not any("userId" in p for p in people)
@@ -293,7 +353,7 @@ def test_directory_offers_an_unknown_email_so_it_can_be_invited(project_id, dire
 def test_directory_fallback_respects_the_limit_and_only_takes_real_emails(project_id):
     people = client_for(OWNER).get(f"/projects/{project_id}/directory?q=not-an-email").json()["people"]
     assert people == []
-    # "r@example.edu" is a substring of all three known emails and a valid address itself.
+    # "r@example.edu" is a substring of the known members' emails and a valid address itself.
     people = client_for(OWNER).get(f"/projects/{project_id}/directory?q=r@example.edu&limit=2").json()["people"]
     assert [p["email"] for p in people] == [OWNER.email, "r@example.edu"]
 

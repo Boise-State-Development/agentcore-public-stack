@@ -9,6 +9,7 @@ import { NotificationsService } from '../../services/notifications/notifications
 import { AppNotification } from '../../services/notifications/notification.model';
 import { SidenavService } from '../../services/sidenav/sidenav.service';
 import { parseIso } from '../../utils/date';
+import { personLabel } from '../../shared/utils/person';
 
 /** Re-read on returning to the tab at most this often. */
 const REFRESH_ON_FOCUS_MS = 60_000;
@@ -17,7 +18,7 @@ const ROLE_PHRASES: Record<string, string> = { editor: 'an editor', viewer: 'a v
 
 /** The sentence a notification reads as. Actor and project fall back to neutral words. */
 export function describeNotification(n: AppNotification): string {
-  const who = n.actorEmail || 'Someone';
+  const who = personLabel(n.actorName, n.actorEmail) || 'Someone';
   const project = n.projectName || 'a project';
   const role = ROLE_PHRASES[n.payload?.role ?? ''] ?? (n.payload?.role ? `a ${n.payload.role}` : null);
   switch (n.kind) {

@@ -11,7 +11,7 @@ import { AgentService } from '../../agents/services/agent.service';
 import { Project, ProjectAuditRecord } from '../models/project.model';
 
 const PROJECT: Project = {
-  projectId: 'prj_1', name: 'Enrollment Sync', description: '', ownerEmail: 'o@x.edu', role: 'editor',
+  projectId: 'prj_1', name: 'Enrollment Sync', description: '', ownerEmail: 'o@x.edu', ownerName: null, role: 'editor',
   status: 'active', editorsManageMembers: true, memberCount: 2, harnessAgentId: 'ast-1',
   createdAt: '2026-09-24T00:00:00Z', updatedAt: '2026-09-24T00:00:00Z',
 };
@@ -118,6 +118,29 @@ describe('ProjectActivityComponent', () => {
     expect(rows[0]).toContain('You updated the instructions. Version 2');
     expect(rows[1]).toContain('ann@x.edu added bo@x.edu as an editor.');
     expect(el.querySelector('a')?.getAttribute('href')).toBe('/projects/prj_1/settings');
+  });
+
+  it('names people from the page’s directory names, with the email on hover', async () => {
+    api.audit.mockReturnValueOnce(of({
+      records: [
+        rec('project.member_added', { after: { email: 'bo@x.edu', role: 'editor' } }),
+        rec('project.transferred', { actorEmail: 'Cy@x.edu', after: { ownerEmail: 'dee@x.edu' } }),
+      ],
+      people: { 'ann@x.edu': 'Ann Lee', 'bo@x.edu': 'Bo Diaz', 'cy@x.edu': 'Cy Ng' },
+      nextCursor: 'c1',
+    }));
+    const { fixture, el } = await render();
+    const rows = () => Array.from(el.querySelectorAll('li')).map(li => li.textContent?.replace(/\s+/g, ' ').trim());
+    expect(rows()[0]).toContain('Ann Lee added Bo Diaz as an editor.');
+    expect(rows()[1]).toContain('Cy Ng made dee@x.edu the owner.'); // no name for dee: the email
+    expect(el.querySelector('li span[title]')?.getAttribute('title')).toBe('ann@x.edu');
+
+    // Names from earlier pages still apply to later ones.
+    api.audit.mockReturnValueOnce(of({ records: [rec('project.created')], nextCursor: null }));
+    Array.from(el.querySelectorAll('button')).find(b => b.textContent?.includes('Show older'))!.click();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(rows()[2]).toContain('Ann Lee created the project.');
   });
 
   it('shows display names from the bindable palettes Settings loads', async () => {

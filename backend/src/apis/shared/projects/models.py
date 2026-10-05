@@ -70,9 +70,10 @@ class ProjectMember(BaseModel):
     project_id: str = Field(..., alias="projectId")
     email: str
     role: MemberRole
-    # Unknown until the invitee first resolves a permission on the project
-    # (membership is email-keyed, so people who have never signed in can be
-    # added). Back-filled then; required for transfer and cost attribution.
+    # The account the email signs in as. Unknown until the invitee first resolves
+    # a permission on the project (membership is email-keyed, so people who have
+    # never signed in can be added), and back-filled then, or bound from the
+    # directory when ownership is transferred to them. Required for transfer.
     user_id: Optional[str] = Field(None, alias="userId")
     invited_by: str = Field(..., alias="invitedBy")
     created_at: str = Field(..., alias="createdAt")

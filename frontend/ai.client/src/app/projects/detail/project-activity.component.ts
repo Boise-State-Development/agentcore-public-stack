@@ -6,6 +6,7 @@ import { UserService } from '../../auth/user.service';
 import { BindableKind } from '../../agents/models/agent.model';
 import { AgentService } from '../../agents/services/agent.service';
 import { parseIso } from '../../utils/date';
+import { personLabel } from '../../shared/utils/person';
 import { Project, ProjectAuditRecord } from '../models/project.model';
 import { ProjectApiService } from '../services/project-api.service';
 import { projectErrorMessage } from '../services/projects.service';
@@ -24,6 +25,11 @@ export interface ActivityLine {
 export type ActivityLabel = (kind: BindableKind, ref: string) => string;
 
 const idsOnly: ActivityLabel = (_kind, ref) => ref;
+
+/** What to call the person behind an email: their name, or the email itself when unknown. */
+export type ActivityPerson = (email: string) => string;
+
+const emailsOnly: ActivityPerson = email => email;
 
 function str(value: unknown): string {
   return typeof value === 'string' ? value : '';
@@ -57,9 +63,14 @@ function bindingChange(before: string[], after: string[], kind: 'tool' | 'skill'
  * One audit record as a sentence (without its actor, which the row shows).
  * The trail keeps no instruction text, only the version a save cut, so settings
  * entries point at the version whose diff is in Settings › History. The trail
- * stores model, tool and skill ids; `label` turns them into display names.
+ * stores model, tool and skill ids; `label` turns them into display names, and
+ * members by email; `person` turns those into names.
  */
-export function describeActivity(record: ProjectAuditRecord, label: ActivityLabel = idsOnly): ActivityLine {
+export function describeActivity(
+  record: ProjectAuditRecord,
+  label: ActivityLabel = idsOnly,
+  person: ActivityPerson = emailsOnly,
+): ActivityLine {
   const before = record.before ?? {};
   const after = record.after ?? {};
   // The audit log stores detail values as strings ("2"), so accept either.
@@ -88,13 +99,13 @@ export function describeActivity(record: ProjectAuditRecord, label: ActivityLabe
     case 'project.deleted':
       return line('deleted the project');
     case 'project.transferred':
-      return line(`made ${str(after['ownerEmail'])} the owner`);
+      return line(`made ${person(str(after['ownerEmail']))} the owner`);
     case 'project.member_added':
-      return line(`added ${str(after['email'])} as ${role(after['role'])}`);
+      return line(`added ${person(str(after['email']))} as ${role(after['role'])}`);
     case 'project.member_role_changed':
-      return line(`made ${str(after['email'])} ${role(after['role'])} (was ${role(before['role'])})`);
+      return line(`made ${person(str(after['email']))} ${role(after['role'])} (was ${role(before['role'])})`);
     case 'project.member_removed':
-      return line(record.reason === 'left' ? 'left the project' : `removed ${str(before['email'])}`);
+      return line(record.reason === 'left' ? 'left the project' : `removed ${person(str(before['email']))}`);
     case 'project.instructions_updated':
       return line('updated the instructions');
     case 'project.model_updated':
@@ -151,7 +162,7 @@ export function describeActivity(record: ProjectAuditRecord, label: ActivityLabe
           @for (entry of entries(); track entry.record.auditId) {
             <li class="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 px-4 py-3">
               <p class="min-w-0 flex-1 text-sm/6 text-gray-700 dark:text-gray-300">
-                <span class="font-medium text-gray-900 dark:text-white">{{ entry.actor }}</span>
+                <span class="font-medium text-gray-900 dark:text-white" [attr.title]="entry.actorEmail">{{ entry.actor }}</span>
                 {{ entry.line.text }}.
                 @if (entry.line.version !== null) {
                   <a
@@ -204,14 +215,23 @@ export class ProjectActivityComponent {
     return (kind, ref) => names.get(`${kind}:${ref}`) || ref;
   });
 
+  /** Display names by email, merged across the pages loaded so far. */
+  private readonly people = signal<Readonly<Record<string, string>>>({});
+  private readonly person = computed<ActivityPerson>(() => {
+    const names = this.people();
+    return email => personLabel(names[email.toLowerCase()], email);
+  });
+
   private readonly me = computed(() => (this.user.currentUser()?.email ?? '').toLowerCase());
   protected readonly entries = computed(() =>
     this.records().map(record => ({
       record,
-      line: describeActivity(record, this.label()),
+      line: describeActivity(record, this.label(), this.person()),
       actor: record.actorEmail
-        ? record.actorEmail.toLowerCase() === this.me() ? 'You' : record.actorEmail
+        ? record.actorEmail.toLowerCase() === this.me() ? 'You' : this.person()(record.actorEmail)
         : 'Someone',
+      // The email behind a name, on hover; nothing when the name already is the email.
+      actorEmail: record.actorEmail && this.person()(record.actorEmail) !== record.actorEmail ? record.actorEmail : null,
       at: parseIso(record.timestamp),
     })),
   );
@@ -249,6 +269,7 @@ export class ProjectActivityComponent {
       const page = await firstValueFrom(this.api.audit(projectId, PAGE_SIZE, cursor));
       if (projectId !== this.projectId()) return;
       this.records.update(list => (cursor ? [...list, ...page.records] : page.records));
+      this.people.update(known => (cursor ? { ...known, ...page.people } : { ...page.people }));
       this.nextCursor.set(page.nextCursor ?? null);
     } catch (err) {
       this.error.set(projectErrorMessage(err, 'The activity could not be loaded.'));

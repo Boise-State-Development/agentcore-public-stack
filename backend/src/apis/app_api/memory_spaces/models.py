@@ -3,14 +3,20 @@
 The SPA consumes camelCase; FastAPI serializes by alias, so responses declare
 camelCase aliases with ``populate_by_name`` for snake_case construction —
 matching the assistants/schedules API models.
+
+Who last changed a file is stored as a user id, and answered as an email
+(``updatedBy``) and a display name (``updatedByName``), the way the Projects
+API identifies people: internal user ids do not leave the API. A space that
+belongs to a project has no ``ownerId`` either; its owner is the project's.
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from apis.shared.directory import DirectoryPerson
 from apis.shared.memory.models import (
     EntryType,
     FileFormat,
@@ -81,6 +87,17 @@ class TemplateResponse(BaseModel):
         return cls(template_id=t.template_id, name=t.name, description=t.description)
 
 
+def visible_owner_id(space: MemorySpace) -> Optional[str]:
+    """A project's space is shown without its owner's user id: project members see people by email."""
+    return None if space.project_id else space.owner_id
+
+
+def _updated_by(user_id: str, people: Mapping[str, DirectoryPerson]) -> Dict[str, Any]:
+    """``updated_by``/``updated_by_name`` for a stored user id: an email and a name, or blank if unknown."""
+    person = people.get(user_id) if user_id else None
+    return {"updated_by": person.email if person else "", "updated_by_name": (person.name or None) if person else None}
+
+
 class SpaceSummaryResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -88,7 +105,7 @@ class SpaceSummaryResponse(BaseModel):
     name: str
     template: str
     role: Role
-    owner_id: str = Field(..., alias="ownerId")
+    owner_id: Optional[str] = Field(None, alias="ownerId", description="Null for a project's space")
     created_at: str = Field("", alias="createdAt")
     updated_at: str = Field("", alias="updatedAt")
     file_format: FileFormat = Field("freeform", alias="fileFormat")
@@ -102,7 +119,7 @@ class SpaceSummaryResponse(BaseModel):
             name=space.name,
             template=space.template,
             role=role,
-            owner_id=space.owner_id,
+            owner_id=visible_owner_id(space),
             created_at=space.created_at,
             updated_at=space.updated_at,
             file_format=space.file_format,
@@ -124,7 +141,8 @@ class EntryRefResponse(BaseModel):
     description: str = ""
     size: int = 0
     updated: str = ""
-    updated_by: str = Field("", alias="updatedBy")
+    updated_by: str = Field("", alias="updatedBy", description="Email of who last saved it; empty if unknown")
+    updated_by_name: Optional[str] = Field(None, alias="updatedByName")
     indexed: Dict[str, Any] = Field(default_factory=dict)
     aliases: List[str] = Field(default_factory=list)
     tokens: Optional[int] = None
@@ -134,14 +152,15 @@ class EntryRefResponse(BaseModel):
     version: int = 0
 
     @classmethod
-    def from_ref(cls, r: MemoryEntryRef) -> "EntryRefResponse":
+    def from_ref(cls, r: MemoryEntryRef, people: Mapping[str, DirectoryPerson]) -> "EntryRefResponse":
+        """``people``: who the stored user ids are, by user id (the routes' ``_people``)."""
         return cls(
             slug=r.slug,
             entry_type=r.entry_type,
             description=r.description,
             size=r.size,
             updated=r.updated,
-            updated_by=r.updated_by,
+            **_updated_by(r.updated_by, people),
             indexed=r.indexed,
             aliases=list(r.aliases),
             tokens=r.tokens,
@@ -162,8 +181,8 @@ class SaveEntryResponse(EntryRefResponse):
     over_soft_threshold: bool = Field(False, alias="overSoftThreshold")
 
     @classmethod
-    def from_result(cls, result: SaveResult) -> "SaveEntryResponse":
-        base = EntryRefResponse.from_ref(result.ref).model_dump()
+    def from_result(cls, result: SaveResult, people: Mapping[str, DirectoryPerson]) -> "SaveEntryResponse":
+        base = EntryRefResponse.from_ref(result.ref, people).model_dump()
         return cls(
             **base,
             warnings=result.warnings,
@@ -182,19 +201,20 @@ class FileVersionResponse(BaseModel):
     size: int = 0
     tokens: Optional[int] = None
     tokens_method: Optional[str] = Field(None, alias="tokensMethod")
-    updated_by: str = Field("", alias="updatedBy")
+    updated_by: str = Field("", alias="updatedBy", description="Email of who saved it; empty if unknown")
+    updated_by_name: Optional[str] = Field(None, alias="updatedByName")
     updated_at: str = Field("", alias="updatedAt")
     reason: str = "edit"
 
     @classmethod
-    def from_version(cls, v: FileVersion) -> "FileVersionResponse":
+    def from_version(cls, v: FileVersion, people: Mapping[str, DirectoryPerson]) -> "FileVersionResponse":
         return cls(
             version=v.version,
             content_hash=v.content_hash,
             size=v.size,
             tokens=v.tokens,
             tokens_method=v.tokens_method,
-            updated_by=v.updated_by,
+            **_updated_by(v.updated_by, people),
             updated_at=v.updated_at,
             reason=v.reason,
         )
@@ -217,7 +237,7 @@ class SpaceDetailResponse(BaseModel):
     name: str
     template: str
     role: Role
-    owner_id: str = Field(..., alias="ownerId")
+    owner_id: Optional[str] = Field(None, alias="ownerId", description="Null for a project's space")
     created_at: str = Field("", alias="createdAt")
     updated_at: str = Field("", alias="updatedAt")
     file_format: FileFormat = Field("freeform", alias="fileFormat")

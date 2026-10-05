@@ -11,6 +11,7 @@ import {
 } from '../../components/confirmation-dialog/confirmation-dialog.component';
 import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
 import { ToastService } from '../../services/toast/toast.service';
+import { personLabel } from '../../shared/utils/person';
 import { MemberRole, Project, ProjectMember, ProjectRole } from '../models/project.model';
 import { PeoplePickerComponent, PeoplePickerSubmit } from '../components/people-picker.component';
 import { ProjectApiService } from '../services/project-api.service';
@@ -23,8 +24,11 @@ const ROLE_LABELS: Record<ProjectRole, string> = { owner: 'Owner', editor: 'Edit
  *
  * The server decides who may manage people (`canManage`), so this page never
  * re-derives the editors-manage-members rule. Nobody can change or remove the owner;
- * ownership moves only to an editor who has signed in, and the old owner becomes an
- * editor.
+ * ownership moves only to an editor who has signed in (to the platform; they need not
+ * have opened the project), and the old owner becomes an editor.
+ *
+ * People show by name with their email beneath, or by email alone when the directory
+ * has no name for them. The email stays the key for every action.
  */
 @Component({
   selector: 'app-project-members',
@@ -71,19 +75,24 @@ const ROLE_LABELS: Record<ProjectRole, string> = { owner: 'Owner', editor: 'Edit
               <li class="flex flex-wrap items-center gap-3 px-4 py-3">
                 <div class="min-w-0 flex-1">
                   <p class="truncate text-sm/6 font-medium text-gray-900 dark:text-white">
-                    {{ member.email }}
+                    {{ label(member) }}
                     @if (member.email === me()) {
                       <span class="font-normal text-gray-600 dark:text-gray-400">(you)</span>
                     }
                   </p>
+                  @if (member.name) {
+                    <p class="truncate text-xs/5 text-gray-600 dark:text-gray-400">{{ member.email }}</p>
+                  }
                   @if (!member.hasSignedIn) {
-                    <p class="text-xs/5 text-gray-600 dark:text-gray-400">Hasn’t opened the project yet</p>
+                    <p class="text-xs/5 text-gray-600 dark:text-gray-400">
+                      {{ awaitingOwnership(member) ? 'Can become owner once they’ve signed in' : 'Hasn’t signed in yet' }}
+                    </p>
                   }
                 </div>
 
                 @if (canChange(member)) {
                   <div class="relative inline-flex">
-                    <label [for]="'role-' + member.email" class="sr-only">Role for {{ member.email }}</label>
+                    <label [for]="'role-' + member.email" class="sr-only">Role for {{ label(member) }}</label>
                     <select
                       [id]="'role-' + member.email"
                       (change)="changeRole(member, $any($event.target).value)"
@@ -97,9 +106,9 @@ const ROLE_LABELS: Record<ProjectRole, string> = { owner: 'Owner', editor: 'Edit
                   <button
                     type="button"
                     (click)="remove(member)"
-                    [appTooltip]="'Remove ' + member.email"
+                    [appTooltip]="'Remove ' + label(member)"
                     appTooltipPosition="top"
-                    [attr.aria-label]="'Remove ' + member.email"
+                    [attr.aria-label]="'Remove ' + label(member)"
                     class="flex size-8 items-center justify-center rounded-2xl text-gray-500 hover:bg-state-danger-50 hover:text-state-danger-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-600 dark:text-gray-400 dark:hover:bg-state-danger-900/20 dark:hover:text-state-danger-400"
                   >
                     <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
@@ -122,7 +131,7 @@ const ROLE_LABELS: Record<ProjectRole, string> = { owner: 'Owner', editor: 'Edit
           </ul>
           @if (isOwner() && !hasTransferTarget()) {
             <p class="mt-2 text-xs/5 text-gray-600 dark:text-gray-400">
-              To hand this project to someone else, make them an editor. Once they’ve opened the project, you can make them the owner.
+              To hand this project to someone else, make them an editor. Once they’ve signed in, you can make them the owner.
             </p>
           }
         }
@@ -190,6 +199,15 @@ export class ProjectMembersComponent {
     return this.isOwner() && this.active() && member.role === 'editor' && member.hasSignedIn;
   }
 
+  /** An editor the owner could hand the project to, but for not having signed in. */
+  protected awaitingOwnership(member: ProjectMember): boolean {
+    return this.isOwner() && this.active() && member.role === 'editor' && !member.hasSignedIn;
+  }
+
+  protected label(member: ProjectMember): string {
+    return personLabel(member.name, member.email);
+  }
+
   protected async add(request: PeoplePickerSubmit): Promise<void> {
     this.adding.set(true);
     try {
@@ -225,7 +243,7 @@ export class ProjectMembersComponent {
 
   protected async remove(member: ProjectMember): Promise<void> {
     const ok = await this.confirm({
-      title: `Remove ${member.email}?`,
+      title: `Remove ${this.label(member)}?`,
       message: 'They lose access to this project and everything shared in it. Their own tasks stay theirs.',
       confirmText: 'Remove',
       destructive: true,
@@ -258,7 +276,7 @@ export class ProjectMembersComponent {
 
   protected async transfer(member: ProjectMember): Promise<void> {
     const ok = await this.confirm({
-      title: `Make ${member.email} the owner?`,
+      title: `Make ${this.label(member)} the owner?`,
       message: 'They take over settings, archiving and deletion. You stay on as an editor.',
       confirmText: 'Make owner',
     });

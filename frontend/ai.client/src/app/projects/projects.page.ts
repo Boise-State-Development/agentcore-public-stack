@@ -7,6 +7,7 @@ import { heroArchiveBox, heroEye, heroFolder, heroLockClosed, heroPencilSquare, 
 import { CreateProjectDialogComponent, CreateProjectDialogResult } from './components/create-project-dialog.component';
 import { Project, ProjectRole } from './models/project.model';
 import { ProjectsService } from './services/projects.service';
+import { personLabel } from '../shared/utils/person';
 
 type ListFilter = 'all' | 'mine' | 'shared' | 'archived';
 
@@ -67,6 +68,8 @@ export class ProjectsPage implements OnInit {
   protected setFilter(value: ListFilter): void {
     this.filter.set(value);
   }
+
+  protected readonly personLabel = personLabel;
 
   protected people(project: Project): string {
     const n = project.memberCount + 1;
