@@ -281,13 +281,17 @@ def _visibility_block(assistant: Assistant, *, consented: bool) -> None:
         raise ListingError(reason, status_code=400)
 
 
-async def _exposed_skills(assistant: Assistant) -> List[SkillExposure]:
-    """Skills the author wrote that publication makes readable (D7.1).
+async def exposed_skills(assistant: Assistant) -> List[SkillExposure]:
+    """Skills the author wrote that reaching this Agent makes readable (D7.1).
 
     Matches the invoke-through rule exactly: a ``skill`` binding resolves when
     ``skill.owner_id == agent.owner_id``, so those — and only those — are the skills whose
-    contents publication exposes. Skills the author merely has access to belong to someone
-    else and are not the author's to disclose.
+    contents anyone who can run the Agent can read. Skills the author merely has access to
+    belong to someone else and are not the author's to disclose.
+
+    Two disclosures read this, and both must: the marketplace submit dialog (publication)
+    and the share dialog (``share_disclosure``). They are one rule asked at two widths, so a
+    second copy would be a second answer to "what does widening this Agent give away?".
     """
     refs = [b.ref for b in effective_bindings(assistant) if b.kind == "skill"]
     if not refs or not skills_enabled():
@@ -379,7 +383,7 @@ async def preflight_listing(
     # skill-exposure confirmation.
     if block_reason:
         return [], block_reason, reachability, requires_public
-    return await _exposed_skills(assistant), None, reachability, requires_public
+    return await exposed_skills(assistant), None, reachability, requires_public
 
 
 async def submit_listing(
@@ -410,7 +414,7 @@ async def submit_listing(
     # at all should not first be walked through a skill-exposure confirmation.
     await _memory_space_block(assistant, user)
     _visibility_block(assistant, consented=request.make_public)
-    exposed = await _exposed_skills(assistant)
+    exposed = await exposed_skills(assistant)
     publisher_id = await _resolve_proposed_publisher(
         user,
         request.publisher_id,
