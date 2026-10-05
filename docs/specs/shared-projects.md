@@ -112,10 +112,10 @@ Tasks    = ordinary sessions with preferences.projectId; private to their creato
 | Member | `PROJECT#{id}` | `MEMBER#{email}` | `email, userId?, role: editor\|viewer, invitedBy, createdAt, updatedAt` | `MemberIndex GSI2PK=MEMBER#{email} GSI2SK=PROJECT#{id}` |
 | Personal space pointer | `PROJECT#{id}` | `PERSONAL_SPACE#{userId}` | `spaceId, createdAt` | — |
 | Schedule pointer | `PROJECT#{id}` | `SCHEDULE#{scheduleId}` | `ownerId, runAsUserId, label, state, createdAt` | — |
-| Shared task pointer | `PROJECT#{id}` | `SHARED_TASK#{sessionId}` | `shareId, ownerId, title, sharedAt` | — |
+| Shared task pointer | `PROJECT#{id}` | `SHARED_TASK#{sessionId}` | `shareId, ownerId, title, sharedAt`, `note?` (2.5b) | — |
 | Output item | `PROJECT#{id}` | `OUTPUT#{publishedAt}#{itemId}` | `kind: artifact\|file, ref{artifactId, version \| fileKey}, authorId, sourceSessionId?, sourceShareId?, title, mimeType, byteSize` | — |
 | Cost rollup | `PROJECT#{id}` | `COST#{YYYY-MM}` | `totalCost, inputTokens, outputTokens, calls, byUser{userId: cost}` (bounded map, top-N) | — |
-| Notification | `USER#{userId}` | `NOTIF#{ts}#{id}` | `kind: project_invited\|role_changed\|removed\|proposal_decided\|schedule_paused, projectId, actorId, payload, readAt?, ttl (90 d)` | — |
+| Notification | `USER#{userId}` | `NOTIF#{ts}#{id}` | `kind: project_invited\|role_changed\|removed\|task_shared (2.5b)\|proposal_pending (2.5a)\|proposal_decided\|schedule_paused, projectId, actorId, payload, readAt?, ttl (90 d)` | — |
 
 Role resolution: owner from `META.ownerId`; otherwise `MEMBER#{email}`; membership is by **email** exactly as agents, memory spaces and artifacts do today, so an invitee who has never logged in can be added and gains access on first login. `userId` is back-filled on the member row the first time that user resolves (needed for `PERSONAL_SPACE#` and cost attribution).
 
@@ -288,7 +288,7 @@ Every handler resolves `ProjectService.resolve_permission(project_id, user)` fir
 | GET/PUT | `/projects/{id}/tools`, `/skills`, `/model` | viewer / editor | writes go to the harness Agent's bindings via existing `binding_validation` |
 | GET | `/projects/{id}/tasks` | viewer | the caller's own sessions in the project (ProjectSessionIndex) |
 | GET | `/projects/{id}/shared-tasks` | viewer | `SHARED_TASK#` pointers |
-| POST | `/conversations/{sid}/share` | task owner | existing route; `access_level: "project"` requires the session's `projectId` and the caller's membership |
+| POST | `/conversations/{sid}/share` | task owner | existing route; `access_level: "project"` requires the session's `projectId` and the caller's membership. 2.5b adds optional `notify` (`{all}` or `{emails}`, members only) and `note` (≤ 280 chars) |
 | GET/PUT/DELETE | `/projects/{id}/memory/files[/{slug}]` | viewer / editor | structured items; `?scope=project\|mine` |
 | GET | `/projects/{id}/memory/files/{slug}/versions[/{n}]`, `POST …/restore` | viewer / editor | |
 | GET/POST | `/projects/{id}/memory/proposals`, `POST …/{pid}/approve\|reject` | viewer (own) / editor | |
@@ -303,7 +303,7 @@ Every handler resolves `ProjectService.resolve_permission(project_id, user)` fir
 | GET/POST | `/notifications`, `POST /notifications/{id}/read` | — | per-user inbox |
 | Admin | `/admin/projects…` | `admin.projects` scope (new, delegable) | list, export (config + memory + provenance + audit), regulated-data designation, force-archive |
 
-**Agent tools** (server-side authorized through the same `resolve_permission`; the tool closure carries the invoking user, never the owner): `memory_list`, `memory_read`, `memory_query`, `memory_save`, `memory_propose`. `memory_save` is bound only when the invoker is editor+; `memory_propose` for everyone. Scheduled runs bind `memory_propose` only.
+**Agent tools** (server-side authorized through the same `resolve_permission`; the tool closure carries the invoking user, never the owner): `memory_list`, `memory_read`, `memory_query`, `memory_save`, `memory_propose`. `memory_save` is bound only when the invoker is editor+; `memory_propose` for everyone. Scheduled runs bind `memory_propose` only. 2.5c adds `shared_tasks_list` and `shared_task_read` for every member (viewer+), harness only.
 
 ---
 
@@ -668,7 +668,31 @@ Each PR targets `develop`, lands behind `PROJECTS_ENABLED` (opt-in while in deve
     - **Prompt cache:** on the turn the blocks first appeared, `toolConfigHash` stayed the same and `systemPromptHash` changed. The static prefix (tools and system) was read from cache, and everything from the memory block on was re-written: 1,733 tokens, covering the block, the skills block and the history. The next turn was a hit with a 109-token write. The session showed `wastedUsd` 0 and no avoidable or partial misses.
     - **Viewer:** a save to `project` returned "Only project editors can save to project memory. Save it to "mine" instead, or ask an editor to add it." There is no second test identity, so the viewer role came from a temporary DynamoDB edit, which was reverted and diffed against a capture taken first.
     - **Archived:** `_project_turn_gate` refuses the turn before any tool runs. So the tool's own "archived" message can only appear when a project is archived mid-turn. Unit tests cover it; it can't be triggered on dev.
-- **2.5** Proposals + review queue, pins, archive + restore, provenance on items (source session/message, proposer, approver).
+- **2.5** is split in three. 2.5b and 2.5c come from the dev team simulation of 2026-10-05 (`docs/testing/projects-team-simulation-2026-10.md`, gaps G5, G6 and G15). There, counsel asked the assistant for every open escalation and got 2 of 7. The other five lived in shared tasks the assistant could not read, and nobody had been told those tasks existed.
+  - **2.5a Memory governance:** proposals + review queue, pins, archive + restore, provenance on items (source session/message, proposer, approver). A pending proposal notifies the project's editors through the 2.5b fan-out (`project_proposal_pending`).
+  - **2.5b Share notifications.** Sharing a task can tell people about it, with an optional note. This is the platform's first way for one member to hand work to another.
+    - **API.** `POST /conversations/{sid}/share` with `accessLevel: "project"` accepts an optional `notify` (`{"all": true}` or `{"emails": [...]}`) and an optional `note` (≤ 280 characters, plain text). The emails must be current members; anyone else is a 400 that names them. With no `notify`, nobody is notified, exactly as today. A 200-person project should not get a bell for every share by default. The sharer is never notified.
+    - **Inbox rows.** New kind `project_task_shared` on the existing `INBOX#{email}` rows, payload `{shareId, title, note?}`, 90-day `ttl`. Fan-out is `BatchWriteItem` in groups of 25. It runs after the share is created (FastAPI background task), so it never delays the response, and a failed write is logged and skipped. The share itself has already succeeded. The fan-out is capped at `PROJECTS_MAX_MEMBERS`.
+    - **Pointer and audit.** `note` is also stored on the `SHARED_TASK#` pointer, so the Tasks tab shows it under the entry. Re-sharing replaces the note along with the pointer. The `project.task_shared` audit record gains `notified` (a count, not the list) and `hasNote`.
+    - **Revocation.** Revoking a share leaves its notifications in place. Opening one lands on `/shared/{shareId}`'s existing not-found state. That page should say "This task is no longer shared" rather than a generic error.
+    - **SPA.** The Share dialog's Project members option gains a "Let people know" section: an Everyone toggle, a member picker (the existing `app-people-picker`, limited to members) and the note field. The bell renders the new kind as "<name> shared "<title>" with you" plus the note, and opens `/shared/{shareId}`. Fix the dialog's copy at the same time, since a project re-share replaces the listed snapshot rather than adding one (G21).
+    - **Not in 2.5b.** Notifications for file uploads, instruction edits, archive and leave (G20) wait for a per-member notification preference, so a busy project doesn't drown its members. Comments on shared tasks are not planned; a note on a re-share covers the hand-off case.
+    - **Gating.** Rides `PROJECTS_ENABLED`; no new flag while Projects is in development.
+  - **2.5c The assistant reads shared tasks.** Two harness-only tools give a project task the same view of the team's shared work that members have on the Tasks tab.
+    - **`shared_tasks_list()`** returns the project's `SHARED_TASK#` pointers, newest first: `shareId`, title, who shared it, when, and its note (2.5b).
+    - **`shared_task_read(share_id, part?)`** returns one snapshot as a transcript:
+      - Text is the user's `displayText` and the assistant's final text.
+      - Tool calls collapse to one line each (name and status). Tool results, documents and images are left out.
+      - It reads the snapshot body the same way `/shared/{shareId}` does (`ShareService._load_snapshot_body`: the S3 object, or the inline body on older shares). So the assistant sees what the sharer chose to share, never the live session, and the tools need no new storage or GSI.
+    - **Placement.** The tools run in the AgentCore Runtime (inference-api), which must not import `app_api`. Move the snapshot loader, and the share-row read it needs, into `apis/shared/shares/`, and have `ShareService` call it from there (the import-boundary test enforces this).
+      - The Runtime currently has neither `SHARED_CONVERSATIONS_TABLE_NAME` nor `SHARED_CONVERSATIONS_BUCKET_NAME`, and its environment is at 49 of AWS's 50 variables. Derive both names from `PROJECT_PREFIX`, following the `{prefix}-shared-conversations` naming, rather than adding two variables. If that's impossible, read them from SSM once per process.
+      - Grant the Runtime role read-only access (`dynamodb:GetItem`/`Query` on the table and its GSIs, `s3:GetObject` on the bucket) in the inference-api construct. Pin the grant in a CDK test.
+    - **Access.** The tool closure carries the invoking member (as the memory tools do). It checks the project role at call time: viewer or above, with read allowed while archived. It checks that the share is a project share of this project; any other share id is refused.
+    - **Bounded payload** (token cost-effectiveness tenet). A transcript is capped at `PROJECTS_SHARED_TASK_READ_MAX_TOKENS` (default 6,000, measured with chars/4 like `MEMORY_INJECTION_MAX_TOKENS`). Longer snapshots page with `part` (2, 3, …), and the result says how many parts exist. The list is capped at the newest 50 entries.
+    - **Prompt cache and TTFT.** The two specs are constants in the harness `toolConfig`, memoized like `project_tools.py`. Ordinary agents' tool specs stay byte-identical (pin them in a test as 2.4b did). Nothing is injected into the system prompt or the memory blocks, so a new share never rewrites the cached prefix and nothing is added before the first token. Measure the spec's token cost with CountTokens and state it in the PR.
+    - **Trust.** Snapshot text is other members' input. It enters as a tagged data block (`<shared_task share_id=… shared_by=…>`), never as instructions, under the same §9.3 structural rule as project memory.
+    - **Guidance.** The harness tool descriptions say when to reach for them ("before summarizing the team's status, list shared tasks"). The member-facing guide then drops its "the assistant can't read shared tasks" limit.
+    - **Tests.** A member, a non-member and a revoked share; another project's share id; paging at the cap; the archived read; and the byte-identity pin for non-harness agents.
 - **2.6** Manual maintenance: worker Lambda (lean image, import-boundary guard test like `TestScheduledRunsLeanImageIsImportable`), snapshot, plan (merge/supersede/prune), verifier, proposal for project scope, auto-apply + undo for personal, link maintenance, rollback.
 - **2.7** Content lint (`memoryLintMode`, §9.3) and the export `provenance.json`.
 - **2.8** SPA Memory tab: browser, file view, block editor, link picker, history, review queue, archive, size meters, "My memory in this project".
@@ -697,6 +721,7 @@ Each PR targets `develop`, lands behind `PROJECTS_ENABLED` (opt-in while in deve
 | `PROJECTS_EDITORS_MANAGE_MEMBERS_DEFAULT` | env; per-project `settings.editorsManageMembers` overrides | true |
 | `PROJECTS_MAX_MEMBERS` | env | 200 |
 | `PROJECTS_MAX_KNOWLEDGE_ITEMS` | env | 1,000 |
+| `PROJECTS_SHARED_TASK_READ_MAX_TOKENS` (2.5c) | env, read by the harness tool | 6,000 |
 | `DIRECTORY_PROVIDER` (`users_table` \| `entra_graph`), `DIRECTORY_GRAPH_TENANT_ID`, `DIRECTORY_GRAPH_CLIENT_ID`, `DIRECTORY_GRAPH_SECRET_ARN` | env / Secrets Manager | `users_table` |
 | Memory thresholds and cadence (table in §4.6) | env + per-project overrides + admin | as listed |
 | `MEMORY_INDEX_BUDGET_TOKENS_PROJECT` / `…_PERSONAL` | env | 2,000 / 1,000 |
