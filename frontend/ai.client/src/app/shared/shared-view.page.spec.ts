@@ -157,6 +157,37 @@ describe('SharedViewPage', () => {
     expect((component as any).isLoading()).toBe(false);
   });
 
+  it('should fold tool results into their tool uses so finished steps read as complete', async () => {
+    const { component } = await createComponent();
+    mockShareService.getSharedConversation.mockResolvedValue({
+      ...mockConversation,
+      messages: [
+        {
+          id: 'msg-001',
+          role: 'assistant',
+          content: [
+            { type: 'toolUse', toolUse: { toolUseId: 'tu-1', name: 'memory_read', input: {} } },
+            { type: 'toolUse', toolUse: { toolUseId: 'tu-2', name: 'memory_save', input: {} } },
+          ],
+        } as any,
+        {
+          id: 'msg-002',
+          role: 'user',
+          content: [
+            { type: 'toolResult', toolResult: { toolUseId: 'tu-1', status: 'success', content: [{ text: 'ok' }] } },
+            { type: 'toolResult', toolResult: { toolUseId: 'tu-2', status: 'error', content: [{ text: 'no' }] } },
+          ],
+        } as any,
+      ],
+    });
+
+    await component.ngOnInit();
+
+    const toolUses = (component as any).messages()[0].content.map((b: any) => b.toolUse);
+    expect(toolUses.map((t: any) => t.status)).toEqual(['complete', 'error']);
+    expect(toolUses[0].result.content).toEqual([{ text: 'ok' }]);
+  });
+
   it('should set conversation title from response', async () => {
     const { component } = await createComponent();
     mockShareService.getSharedConversation.mockResolvedValue(mockConversation);
