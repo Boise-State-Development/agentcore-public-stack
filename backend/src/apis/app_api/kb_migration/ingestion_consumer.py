@@ -1090,11 +1090,11 @@ def handle_object(bucket: str, key: str) -> Dict[str, Any]:
             # before the knowledge base exists.
             #
             # So this defers instead: a benign no-op that ingests nothing, writes
-            # nothing, and does NOT fail. The provisioning job owns the handoff and
-            # ingests this document itself once the knowledge base is ACTIVE
-            # (kb_migration/provisioner.py), which is why correctness here does not
-            # depend on the redelivery window at all. The DOC# row is left in
-            # `provisioning`, which is what the user sees.
+            # nothing, and does NOT fail. The provisioning job owns the handoff:
+            # once the knowledge base is ACTIVE it invokes this function again for
+            # every waiting document (kb_migration/provisioner.py), which is why
+            # correctness here does not depend on the redelivery window at all. The
+            # DOC# row is left in `provisioning`, which is what the user sees.
             logger.info(
                 f"document {document_id} belongs to a knowledge base still being "
                 f"provisioned (born-managed); deferring to the provisioning job, "

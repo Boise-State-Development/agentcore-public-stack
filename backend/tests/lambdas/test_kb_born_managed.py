@@ -442,9 +442,10 @@ class TestProvisioningJob:
 
     @pytest.mark.asyncio
     async def test_more_documents_than_one_invocation_can_finish_are_requeued(self, table):
-        """One document per invocation: the worker's timeout is 15 minutes and one
-        document's indexing budget is already 10.5, so a second could not finish and
-        being killed mid-wait costs a whole dispatcher interval."""
+        """The in-process FALLBACK (no consumer configured) does one document per
+        invocation: the worker's timeout is 15 minutes and one document's indexing
+        budget is already 10.5, so a second could not finish and being killed
+        mid-wait costs a whole dispatcher interval."""
         table.put_item(
             Item={
                 "PK": r.kb_pk(ASSISTANT_ID),
@@ -570,6 +571,33 @@ class TestProvisioningJob:
         assert after["retrievalEngine"] == r.ENGINE_MANAGED
         assert after["GSI7_PK"] == r.work_pk(r.BORN_MANAGED)
 
+    @pytest.mark.asyncio
+    async def test_a_requeued_job_is_picked_up_by_the_very_next_tick(self, table):
+        """B11 (dev, 2026-10-05), through the real lease. The lease is 15 minutes,
+        the same as the dispatcher interval, and was never released, so the tick
+        after a re-arm found it live and the job waited a second interval.
+
+        Both invocations run back to back here, well inside the first lease's
+        window. MUTATION GUARD: drop the release in run_step and the second one
+        raises LeaseLost."""
+        from apis.app_api.kb_migration import worker
+
+        table.put_item(Item=_born_managed_record())
+        _seed_doc(table, document_id="DOC-a", createdAt="2026-09-10T00:00:00Z")
+        _seed_doc(table, document_id="DOC-b", createdAt="2026-09-10T00:00:01Z")
+
+        with patch.object(pv, "_provision", new=AsyncMock(return_value=True)), patch.object(
+            ic, "handle_object", return_value={}
+        ) as handled:
+            first = await worker.run_step(ASSISTANT_ID, ASSISTANT_ID)
+            assert first.to_state == r.BORN_MANAGED
+            assert "migrationLeaseUntil" not in _kb(table)
+
+            second = await worker.run_step(ASSISTANT_ID, ASSISTANT_ID)
+
+        assert second.to_state == r.RETAIN
+        assert handled.call_count == 2
+
     def test_pending_documents_only_sees_the_waiting_ones(self, table):
         _seed_doc(table, document_id="DOC-waiting")
         _seed_doc(table, document_id="DOC-done", status="complete")
@@ -577,6 +605,166 @@ class TestProvisioningJob:
 
         found = [d["documentId"] for d in pv.pending_documents(ASSISTANT_ID)]
         assert found == ["DOC-waiting"]
+
+
+# ── 5b. Every waiting document goes to the ingestion consumer at once ──────
+CONSUMER = "kb-ingestion-consumer-fn"
+
+
+def _born_managed_record(**extra):
+    item = {
+        "PK": r.kb_pk(ASSISTANT_ID),
+        "SK": r.kb_sk(ASSISTANT_ID),
+        "appKbId": ASSISTANT_ID,
+        "ownerUserId": OWNER,
+        "retrievalEngine": r.ENGINE_MANAGED,
+        "provisioningState": r.PROVISIONING,
+        "migrationState": r.BORN_MANAGED,
+        "migrationGeneration": 0,
+        "GSI7_PK": r.work_pk(r.BORN_MANAGED),
+        "GSI7_SK": "2026-09-10T00:00:00Z",
+    }
+    item.update(extra)
+    return item
+
+
+def _seed_waiting(table, count):
+    ids = [f"DOC-{i}" for i in range(count)]
+    for i, document_id in enumerate(ids):
+        _seed_doc(
+            table,
+            document_id=document_id,
+            s3Key=f"assistants/{ASSISTANT_ID}/documents/{document_id}/f{i}.pdf",
+            createdAt=f"2026-09-10T00:00:0{i}Z",
+        )
+    return ids
+
+
+class TestBacklogHandoff:
+    """B5 (dev, 2026-10-05). A Shared Project seeds several files at once. One
+    document per 15-minute tick made four files ready at +2.5, +31, ~+60 and
+    ~+90 minutes, while a file uploaded after the knowledge base existed took 3
+    minutes through the ingestion consumer. Once the knowledge base exists, a
+    waiting document is just an ordinary upload whose event came too early."""
+
+    @pytest.fixture()
+    def consumer(self, monkeypatch):
+        monkeypatch.setenv(pv.ENV_INGESTION_CONSUMER, CONSUMER)
+        sent = []
+        with patch.object(
+            pv, "_invoke_consumer", side_effect=lambda fn, bucket, key: sent.append((fn, bucket, key))
+        ):
+            yield sent
+
+    @pytest.mark.asyncio
+    async def test_every_waiting_document_is_handed_off_in_one_invocation(self, table, consumer):
+        """MUTATION GUARD: go back to one document per invocation and this fails:
+        three are left waiting and the job re-arms instead of finishing."""
+        table.put_item(Item=_born_managed_record())
+        ids = _seed_waiting(table, 4)
+
+        with patch.object(pv, "_provision", new=AsyncMock(return_value=True)), patch.object(
+            ic, "handle_object"
+        ) as handled:
+            result = await pv.run_born_managed(ASSISTANT_ID, ASSISTANT_ID, _kb(table))
+
+        assert consumer == [
+            (CONSUMER, BUCKET, f"assistants/{ASSISTANT_ID}/documents/{d}/f{i}.pdf")
+            for i, d in enumerate(ids)
+        ]
+        # Nothing is ingested in-process: no 10-minute wait inside the worker.
+        handled.assert_not_called()
+        assert result.to_state == r.RETAIN
+        assert result.documents_migrated == 4
+        assert "GSI7_PK" not in _kb(table)
+        assert [_doc(table, d)["status"] for d in ids] == ["uploading"] * 4
+
+    def test_the_event_is_one_the_consumer_routes(self):
+        """The handoff is only as good as the consumer's reading of it. Sent through
+        the real invoke and parsed by the real ``extract_records``."""
+        import json
+        from unittest.mock import MagicMock
+
+        client = MagicMock()
+        with patch("boto3.client", return_value=client):
+            pv._invoke_consumer(CONSUMER, BUCKET, KEY)
+
+        kwargs = client.invoke.call_args.kwargs
+        assert kwargs["FunctionName"] == CONSUMER
+        # Asynchronous, so the consumer's own retries and DLQ apply.
+        assert kwargs["InvocationType"] == "Event"
+        assert ic.extract_records(json.loads(kwargs["Payload"])) == [
+            {"bucket": BUCKET, "key": KEY}
+        ]
+
+    @pytest.mark.asyncio
+    async def test_a_refused_invocation_falls_back_to_in_process_ingestion(self, table, monkeypatch):
+        """A document the consumer could not be sent is not dropped and not
+        stranded at ``uploading``: it stays ``provisioning`` and takes the old path."""
+        monkeypatch.setenv(pv.ENV_INGESTION_CONSUMER, CONSUMER)
+        table.put_item(Item=_born_managed_record())
+        ids = _seed_waiting(table, 3)
+        refused_key = f"assistants/{ASSISTANT_ID}/documents/{ids[1]}/f1.pdf"
+
+        def _invoke(fn, bucket, key):
+            if key == refused_key:
+                raise RuntimeError("TooManyRequestsException")
+
+        with patch.object(pv, "_provision", new=AsyncMock(return_value=True)), patch.object(
+            pv, "_invoke_consumer", side_effect=_invoke
+        ), patch.object(ic, "handle_object", return_value={}) as handled:
+            result = await pv.run_born_managed(ASSISTANT_ID, ASSISTANT_ID, _kb(table))
+
+        handled.assert_called_once_with(BUCKET, refused_key)
+        assert result.documents_migrated == 3
+        assert result.to_state == r.RETAIN
+
+    @pytest.mark.asyncio
+    async def test_unsent_documents_past_the_fallback_limit_are_requeued(self, table, monkeypatch):
+        monkeypatch.setenv(pv.ENV_INGESTION_CONSUMER, CONSUMER)
+        table.put_item(Item=_born_managed_record())
+        _seed_waiting(table, 3)
+
+        with patch.object(pv, "_provision", new=AsyncMock(return_value=True)), patch.object(
+            pv, "_invoke_consumer", side_effect=RuntimeError("AccessDenied")
+        ), patch.object(ic, "handle_object", return_value={}) as handled:
+            result = await pv.run_born_managed(ASSISTANT_ID, ASSISTANT_ID, _kb(table))
+
+        assert handled.call_count == 1
+        assert result.to_state == r.BORN_MANAGED
+        assert _kb(table)["GSI7_PK"] == r.work_pk(r.BORN_MANAGED)
+        # The two left are still waiting, so the next tick finds them.
+        assert len(pv.pending_documents(ASSISTANT_ID)) == 2
+
+    @pytest.mark.asyncio
+    async def test_a_document_whose_row_could_not_be_marked_is_still_handed_off(
+        self, table, consumer
+    ):
+        """The consumer has it and writes the terminal state either way. Re-arming
+        would only send it a second time."""
+        table.put_item(Item=_born_managed_record())
+        _seed_waiting(table, 2)
+
+        with patch.object(pv, "_provision", new=AsyncMock(return_value=True)), patch.object(
+            pv, "_mark_handed_off", side_effect=RuntimeError("ProvisionedThroughputExceeded")
+        ):
+            result = await pv.run_born_managed(ASSISTANT_ID, ASSISTANT_ID, _kb(table))
+
+        assert len(consumer) == 2
+        assert result.to_state == r.RETAIN
+
+    @pytest.mark.parametrize("status", ["complete", "failed", "deleting"])
+    def test_the_mark_never_drags_a_finished_row_back(self, table, status):
+        """The consumer can fail a document in under a second, before this write
+        lands. Overwriting that with ``uploading`` would leave it spinning forever."""
+        _seed_doc(table, status=status)
+
+        assert pv._mark_handed_off(ASSISTANT_ID, DOCUMENT_ID) is False
+        assert _doc(table)["status"] == status
+
+    def test_the_mark_does_not_recreate_a_deleted_row(self, table):
+        assert pv._mark_handed_off(ASSISTANT_ID, DOCUMENT_ID) is False
+        assert _doc(table) is None
 
 
 # ── 6. The rollout ladder's rungs stay independent ───────────────────────────
