@@ -2069,10 +2069,25 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
         sanitized: List[Dict] = []
         dropped_blocks = 0
         dropped_messages = 0
+        replaced_media = 0
         for msg in messages:
             if not isinstance(msg, dict):
                 continue
             original = msg.get("content", [])
+            if isinstance(original, list):
+                repaired = None
+                for i, block in enumerate(original):
+                    if not isinstance(block, dict) or not (
+                        "document" in block or "image" in block or "toolResult" in block
+                    ):
+                        continue
+                    fixed = self._replace_sourceless_media(block)
+                    if fixed is not block:
+                        repaired = repaired or list(original)
+                        repaired[i] = fixed
+                        replaced_media += 1
+                if repaired is not None:
+                    msg = {**msg, "content": repaired}
             cleaned = self._filter_empty_text(msg)
             content = cleaned.get("content", [])
             if isinstance(original, list) and isinstance(content, list):
@@ -2088,7 +2103,57 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
                 "empty message(s) from restored history for session %s",
                 dropped_blocks, dropped_messages, self.config.session_id,
             )
+        if replaced_media:
+            logger.warning(
+                "Restore sanitize: replaced %d image/document block(s) with no "
+                "source in restored history for session %s",
+                replaced_media, self.config.session_id,
+            )
         return sanitized
+
+    @staticmethod
+    def _media_unavailable_text(key: str, media: Any) -> str:
+        name = media.get("name") if isinstance(media, dict) else None
+        label = f'{key} "{name}"' if name else key
+        return f"[{label.capitalize()} is not available in this conversation]"
+
+    @classmethod
+    def _replace_sourceless_media(cls, block: Any) -> Any:
+        """Turn an image/document block with no ``source`` into a text placeholder.
+
+        Bedrock requires ``source`` on both ("Missing required parameter in
+        messages[0].content[1].document: \"source\""), so one such block in
+        restored history fails every turn. Shared-conversation forks wrote them
+        before the export learned to drop them: the snapshot carries the
+        display shape (``format``/``name``/``data``), not the Converse one.
+        Checks top-level blocks and those nested in a ``toolResult``.
+
+        Returns ``block`` itself when nothing changed, so a healthy history is
+        not copied — and, being a pure function of the stored block, the
+        replacement is identical on every restore (prompt-cache contract).
+        """
+        if not isinstance(block, dict):
+            return block
+        for key in ("document", "image"):
+            if key in block:
+                source = block[key].get("source") if isinstance(block[key], dict) else None
+                if isinstance(source, dict) and source:
+                    return block
+                return {"text": cls._media_unavailable_text(key, block[key])}
+        tool_result = block.get("toolResult")
+        items = tool_result.get("content") if isinstance(tool_result, dict) else None
+        if not isinstance(items, list):
+            return block
+        repaired = None
+        for i, item in enumerate(items):
+            if isinstance(item, dict) and ("document" in item or "image" in item):
+                fixed = cls._replace_sourceless_media(item)
+                if fixed is not item:
+                    repaired = repaired or list(items)
+                    repaired[i] = fixed
+        if repaired is None:
+            return block
+        return {**block, "toolResult": {**tool_result, "content": repaired}}
 
     def _strip_document_bytes(self, messages: List[Dict]) -> List[Dict]:
         """Replace document content blocks' inline bytes with their digest — or,

@@ -46,6 +46,50 @@ _SNAPSHOT_SCHEMA_VERSION = 1
 
 logger = logging.getLogger(__name__)
 
+# The ``[Attached files: …]`` marker ``PromptBuilder.build_prompt`` appends to
+# a user message that carried attachments. Same shape the SPA's
+# ``ATTACHED_FILES_PATTERN`` matches (end-anchored).
+_ATTACHED_FILES_MARKER = re.compile(r"\n*\[Attached files: ([^\]]+)\]\s*$")
+
+# Strands' default agent id — the runtime never passes one, so every session's
+# messages and its AGENT record live under it.
+_FORK_AGENT_ID = "default"
+
+
+def _attachments_not_copied_note(names: List[str]) -> str:
+    """Text that stands in for a fork's attachments.
+
+    A fork carries no session files. They are the owner's uploads, and copying
+    them would put another person's files in the forker's storage and quota —
+    more than sharing a conversation should do. Both the forker and the model
+    read this line, so neither expects to re-open them.
+    """
+    return f"[Attachments from the original conversation were not copied: {', '.join(names)}]"
+
+
+def _media_not_copied_text(key: str, media: Any) -> str:
+    """Placeholder for an image/document nested in a copied tool result."""
+    name = media.get("name") if isinstance(media, dict) else None
+    label = f'{key} "{name}"' if name else key
+    return f"[{label.capitalize()} from the original conversation was not copied]"
+
+
+def _strip_media_from_tool_result(tool_result: Any) -> Any:
+    """Replace images/documents inside a tool result with text placeholders.
+
+    A snapshot carries them in the display shape (``format``/``data``, no
+    ``source``), which Bedrock rejects as a Converse block.
+    """
+    if not isinstance(tool_result, dict) or not isinstance(tool_result.get("content"), list):
+        return tool_result
+    content = []
+    for item in tool_result["content"]:
+        if isinstance(item, dict) and ("image" in item or "document" in item):
+            key = "image" if "image" in item else "document"
+            content.append({"text": _media_not_copied_text(key, item[key])})
+        else:
+            content.append(item)
+    return {**tool_result, "content": content}
 
 
 def _skip_long_term_extraction(mgr: Any) -> None:
@@ -459,13 +503,19 @@ class ShareService:
         """Write snapshot messages into AgentCore Memory for a new session.
 
         Converts each MessageResponse dict to SessionMessage format and
-        persists via create_message to the "default" namespace.
+        persists each via create_message under the default agent id.
 
         The messages were written by someone else (the share's owner), but
         they land under the forking user's actor. Every event is therefore
         written with ``extractionMode="SKIP"``: it stays in short-term memory,
         so the fork's history loads, but it never feeds long-term extraction,
         so another person's content does not become the forker's "memories".
+
+        The session's AGENT record is written first. Strands'
+        ``RepositorySessionManager.initialize`` loads a session's messages only
+        when it finds that record; without it the fork's first turn took the
+        new-agent branch and ran on an empty history ("Restore @init: 0
+        messages") even though the copied conversation was on screen.
 
         Returns:
             Number of messages successfully written.
@@ -482,7 +532,8 @@ class ShareService:
             from bedrock_agentcore.memory.integrations.strands.session_manager import (
                 AgentCoreMemorySessionManager,
             )
-            from strands.types.session import SessionMessage
+            from strands.agent.conversation_manager import SlidingWindowConversationManager
+            from strands.types.session import SessionAgent, SessionMessage
         except ImportError:
             logger.error("AgentCore Memory SDK not available — cannot copy messages")
             return 0
@@ -504,6 +555,18 @@ class ShareService:
         )
         _skip_long_term_extraction(mgr)
 
+        # What ``SessionAgent.from_agent`` records for a fresh agent. The
+        # conversation-manager state must name the class the runtime builds
+        # (``AgentFactory.build_conversation_manager``): restore raises on a
+        # mismatch. ``test_fork_agent_record_restores_into_the_runtime_manager``
+        # pins the two together.
+        session_agent = SessionAgent(
+            agent_id=_FORK_AGENT_ID,
+            state={},
+            conversation_manager_state=SlidingWindowConversationManager().get_state(),
+        )
+        await asyncio.to_thread(mgr.create_agent, session_id, session_agent)
+
         count = 0
         for idx, msg_dict in enumerate(snapshot_messages):
             converse_msg = self._snapshot_msg_to_converse(msg_dict)
@@ -512,8 +575,7 @@ class ShareService:
             try:
                 # Create SessionMessage with proper index for ordering
                 session_msg = SessionMessage.from_message(converse_msg, index=idx)
-                # Use create_message with "default" namespace (same as list_messages uses)
-                await asyncio.to_thread(mgr.create_message, session_id, "default", session_msg)
+                await asyncio.to_thread(mgr.create_message, session_id, _FORK_AGENT_ID, session_msg)
                 count += 1
             except Exception as e:
                 logger.warning(f"Failed to copy message {idx}: {e}")
@@ -526,33 +588,89 @@ class ShareService:
         """Convert a snapshot MessageResponse dict to Bedrock Converse format.
 
         Snapshot format (MessageResponse):
-            {"id": "...", "role": "user", "content": [{"type": "text", "text": "hi"}, ...], ...}
+            {"id": "...", "role": "user", "content": [{"type": "text", "text": "hi"}, ...],
+             "metadata": {"displayText": "hi"}, ...}
 
         Converse format (Strands/Bedrock):
             {"role": "user", "content": [{"text": "hi"}, ...]}
+
+        The snapshot is the *display* shape of a conversation, not the model's,
+        so three things are rewritten rather than copied:
+
+        - A user message's text is its ``displayText`` when it has one — what
+          the author typed, not the prompt the model saw (RAG context, notes,
+          the attachments marker). The fork shows exactly what the share showed,
+          and the owner's retrieved knowledge-base excerpts stay behind.
+        - Attachments (document/image blocks and the ``[Attached files: …]``
+          marker) become one line saying they were not copied. The snapshot's
+          blocks have no ``source`` — Bedrock rejects them, which failed every
+          turn of a fork once its agent was rebuilt — and the fork has no
+          session files for the model to re-read.
+        - Images/documents inside tool results become text placeholders, for
+          the same reason.
         """
         role = msg.get("role")
         if role not in ("user", "assistant"):
             return None
 
-        raw_content = msg.get("content", [])
-        converse_content = []
+        metadata = msg.get("metadata")
+        display_text = metadata.get("displayText") if isinstance(metadata, dict) else None
+        use_display_text = role == "user" and isinstance(display_text, str) and bool(display_text.strip())
 
-        for block in raw_content:
+        converse_content: List[dict] = []
+        # Index of the message's first text block: where displayText and the
+        # attachments note go. Block order is otherwise kept — Claude requires a
+        # user message's toolResult blocks to come before its text.
+        text_at: Optional[int] = None
+        marker_names: List[str] = []
+        block_names: List[str] = []
+        unnamed_attachments = 0
+
+        for block in msg.get("content", []):
             block_type = block.get("type") if isinstance(block, dict) else None
             if block_type == "text" and block.get("text"):
-                converse_content.append({"text": block["text"]})
+                text = block["text"]
+                marker = _ATTACHED_FILES_MARKER.search(text)
+                if marker:
+                    marker_names.extend(n.strip() for n in marker.group(1).split(",") if n.strip())
+                    text = text[: marker.start()]
+                if use_display_text:
+                    if text_at is None:
+                        text_at = len(converse_content)
+                        converse_content.append({"text": display_text})
+                    continue
+                if text.strip():
+                    if text_at is None:
+                        text_at = len(converse_content)
+                    converse_content.append({"text": text})
             elif block_type == "toolUse" and block.get("toolUse"):
                 converse_content.append({"toolUse": block["toolUse"]})
             elif block_type == "toolResult" and block.get("toolResult"):
-                converse_content.append({"toolResult": block["toolResult"]})
-            elif block_type == "image" and block.get("image"):
-                converse_content.append({"image": block["image"]})
+                converse_content.append({"toolResult": _strip_media_from_tool_result(block["toolResult"])})
             elif block_type == "document" and block.get("document"):
-                converse_content.append({"document": block["document"]})
+                name = block["document"].get("name") if isinstance(block["document"], dict) else None
+                if name:
+                    block_names.append(str(name))
+                else:
+                    unnamed_attachments += 1
+            elif block_type == "image" and block.get("image"):
+                unnamed_attachments += 1
             elif block_type == "reasoningContent" and block.get("reasoningContent"):
                 converse_content.append({"reasoningContent": block["reasoningContent"]})
             # Skip unknown/empty blocks
+
+        if use_display_text and text_at is None:
+            text_at = 0
+            converse_content.insert(0, {"text": display_text})
+
+        # The marker names every attachment (inline and diverted, unsanitized),
+        # so the blocks' own names are only a fallback for a message without one.
+        names = list(dict.fromkeys(marker_names or block_names))
+        if not names and unnamed_attachments:
+            names = [f"{unnamed_attachments} file(s)"]
+        if names:
+            note = {"text": _attachments_not_copied_note(names)}
+            converse_content.insert(text_at + 1 if text_at is not None else len(converse_content), note)
 
         if not converse_content:
             return None

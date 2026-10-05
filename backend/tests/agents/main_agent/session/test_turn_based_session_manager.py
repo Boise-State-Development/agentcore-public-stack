@@ -1286,6 +1286,73 @@ class TestFilterEmptyText:
         assert any("Dropping unrecognized content block" in r.message for r in caplog.records)
 
 
+class TestSourcelessMediaRepair:
+    """Restore turns image/document blocks with no ``source`` into text.
+
+    Shared-conversation forks wrote the snapshot's display-shape document block
+    (``format``/``name``, no ``source``) into Converse history, and Bedrock
+    rejected every later turn: 'Missing required parameter in
+    messages[0].content[1].document: "source"'.
+    """
+
+    def test_sourceless_document_becomes_placeholder(self, make_session_manager):
+        mgr = make_session_manager()
+        messages = [{"role": "user", "content": [
+            {"text": "Summarize this"},
+            {"document": {"format": "pdf", "name": "report"}},
+        ]}]
+        result = mgr._sanitize_restored_content_blocks(messages)
+        assert result[0]["content"] == [
+            {"text": "Summarize this"},
+            {"text": '[Document "report" is not available in this conversation]'},
+        ]
+
+    def test_sourceless_image_becomes_placeholder(self, make_session_manager):
+        mgr = make_session_manager()
+        messages = [{"role": "user", "content": [{"image": {"format": "png", "data": "aGk="}}]}]
+        result = mgr._sanitize_restored_content_blocks(messages)
+        assert result[0]["content"] == [{"text": "[Image is not available in this conversation]"}]
+
+    def test_sourceless_media_nested_in_tool_result(self, make_session_manager):
+        mgr = make_session_manager()
+        messages = [{"role": "user", "content": [{"toolResult": {
+            "toolUseId": "t1",
+            "status": "success",
+            "content": [{"text": "shot"}, {"image": {"format": "png", "data": "aGk="}}],
+        }}]}]
+        result = mgr._sanitize_restored_content_blocks(messages)
+        tool_result = result[0]["content"][0]["toolResult"]
+        assert tool_result["toolUseId"] == "t1"
+        assert tool_result["content"] == [
+            {"text": "shot"},
+            {"text": "[Image is not available in this conversation]"},
+        ]
+
+    def test_healthy_history_is_untouched(self, make_session_manager):
+        """Blocks with a source pass through as the same objects: a healthy
+        session's restored prefix must not change by a byte."""
+        mgr = make_session_manager()
+        image = {"image": {"format": "png", "source": {"bytes": b"x"}}}
+        document = {"document": {"format": "pdf", "name": "f", "source": {"bytes": b"x"}}}
+        tool_result = {"toolResult": {"toolUseId": "t1", "content": [
+            {"image": {"format": "png", "source": {"bytes": b"x"}}},
+        ]}}
+        messages = [{"role": "user", "content": [{"text": "hi"}, image, document, tool_result]}]
+        result = mgr._sanitize_restored_content_blocks(messages)
+        assert result[0]["content"][1] is image
+        assert result[0]["content"][2] is document
+        assert result[0]["content"][3] is tool_result
+
+    def test_repair_is_deterministic_across_restores(self, make_session_manager):
+        mgr = make_session_manager()
+        messages = [{"role": "user", "content": [
+            {"text": "x"}, {"document": {"format": "pdf", "name": "report"}},
+        ]}]
+        first = mgr._sanitize_restored_content_blocks(copy.deepcopy(messages))
+        second = mgr._sanitize_restored_content_blocks(copy.deepcopy(messages))
+        assert json.dumps(first, sort_keys=True) == json.dumps(second, sort_keys=True)
+
+
 # ===========================================================================
 # Reasoning content (extended thinking) round-trip
 # ===========================================================================
