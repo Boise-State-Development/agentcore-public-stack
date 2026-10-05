@@ -161,9 +161,13 @@ _SCOPE_INTROS = {
         "Memory shared by everyone in this project. List its files with "
         '`memory_list(scope="project")` and read one with `memory_read`.'
     ),
+    # Names the member rather than "you": told "your memory", the model reads it as its
+    # own (the 2026-10 team simulation, G17/G18). Its lines are the member's preferences,
+    # which only help if they are followed.
     "mine": (
-        "Your own memory in this project; only you can see it. List its files with "
-        '`memory_list(scope="mine")` and read one with `memory_read`.'
+        "The memory of the member you are talking with, in this project; only they can see "
+        "it. Follow the preferences listed here, and read a file with `memory_read` when its "
+        'line may bear on the request. List its files with `memory_list(scope="mine")`.'
     ),
 }
 
