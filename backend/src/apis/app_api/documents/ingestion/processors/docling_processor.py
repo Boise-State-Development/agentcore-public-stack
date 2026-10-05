@@ -218,6 +218,18 @@ async def process_with_docling(
 
     ext = _get_file_extension(filename, mime_type)
 
+    # Plain text has no InputFormat of its own in Docling 2.x. A ".txt" suffix is
+    # listed under both MD and XML_USPTO, so Docling refuses to pick from the
+    # extension, sniffs the content, and only resolves text/plain to XML_USPTO
+    # when the bytes start with "PATN". Anything else yields format=None and
+    # DocumentConverter.convert raises "File format not allowed", which failed
+    # every ordinary .txt upload. Writing the temp file as ".md" routes it to the
+    # Markdown backend unambiguously; plain prose is valid Markdown, so the
+    # extracted text is unchanged.
+    if ext == ".txt" or mime_type == "text/plain":
+        logger.info("Plain text input detected; handing to Docling as Markdown so it resolves to a supported format")
+        ext = ".md"
+
     # Create a temp file
     with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp_file:
         try:
