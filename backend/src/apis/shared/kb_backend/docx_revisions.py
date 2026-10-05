@@ -15,9 +15,10 @@ Neither ingestion engine understands revision markup, and they fail differently:
 text: each revised span becomes a run reading ``[deleted: …]`` or
 ``[inserted: …]``, one note paragraph at the top of the body names the authors,
 and Word comments are inlined at their anchor as ``[comment by …: …]``. The rest
-of the package is untouched, so each engine still applies its own parsing —
-headings, tables, lists — to the rewritten file, rather than to a flattened text
-extraction of ours.
+of the package is untouched, so Docling still applies its own parsing — headings,
+tables, lists — to the rewritten file. The managed engine is instead given
+:func:`annotated_text`, the rewritten document as plain text, because its parser
+does not read the markers verbatim (see that function).
 
 A document with no tracked changes returns ``None`` and the caller keeps the
 original bytes, so every other upload ingests exactly as it did before this
@@ -293,4 +294,98 @@ def annotate_tracked_changes(docx_bytes: bytes) -> Optional[bytes]:
         return buffer.getvalue()
 
 
-__all__ = ["DOCX_MIME_TYPE", "annotate_tracked_changes"]
+# ── Plain text ───────────────────────────────────────────────────────────────
+_W = f"{{{_W_NS}}}"
+_MC_FALLBACK = "{http://schemas.openxmlformats.org/markup-compatibility/2006}Fallback"
+
+
+def _paragraph_text(paragraph: ElementTree.Element) -> str:
+    parts: List[str] = []
+
+    def walk(node: ElementTree.Element) -> None:
+        for child in node:
+            if child.tag == _MC_FALLBACK:
+                # The same content as the mc:Choice beside it, for older readers.
+                continue
+            if child.tag == f"{_W}t":
+                parts.append(child.text or "")
+            elif child.tag == f"{_W}tab":
+                parts.append("\t")
+            elif child.tag in (f"{_W}br", f"{_W}cr"):
+                parts.append("\n")
+            elif child.tag == f"{_W}noBreakHyphen":
+                parts.append("-")
+            else:
+                walk(child)
+
+    walk(paragraph)
+    return "".join(parts).strip()
+
+
+def _block_text(container: ElementTree.Element, out: List[str]) -> None:
+    """Paragraphs in order; a table becomes one ``cell | cell`` line per row."""
+    for child in container:
+        if child.tag == f"{_W}p":
+            text = _paragraph_text(child)
+            if text:
+                out.append(text)
+        elif child.tag == f"{_W}tbl":
+            for row in child.iter(f"{_W}tr"):
+                cells = []
+                for cell in row.findall(f"{_W}tc"):
+                    lines: List[str] = []
+                    _block_text(cell, lines)
+                    cells.append(" ".join(lines))
+                if any(cells):
+                    out.append(" | ".join(cells))
+        elif child.tag == f"{_W}sdt":
+            content = child.find(f"{_W}sdtContent")
+            if content is not None:
+                _block_text(content, out)
+
+
+def document_text(docx_bytes: bytes) -> str:
+    """The body text of a Word package, then its footnotes and endnotes.
+
+    Paragraphs are separated by a blank line. Headers and footers are left out:
+    they repeat on every page and rarely carry the terms a reader asks about.
+    """
+    lines: List[str] = []
+    with zipfile.ZipFile(io.BytesIO(docx_bytes)) as package:
+        names = set(package.namelist())
+        body = ElementTree.fromstring(package.read("word/document.xml")).find(f"{_W}body")
+        if body is not None:
+            _block_text(body, lines)
+        for part_name, tag in (("word/footnotes.xml", "footnote"), ("word/endnotes.xml", "endnote")):
+            if part_name not in names:
+                continue
+            for note in ElementTree.fromstring(package.read(part_name)).iter(f"{_W}{tag}"):
+                if note.get(f"{_W}type") in ("separator", "continuationSeparator", "continuationNotice"):
+                    continue
+                note_lines: List[str] = []
+                _block_text(note, note_lines)
+                if note_lines:
+                    lines.append(f"[{tag}: {' '.join(note_lines)}]")
+    return "\n\n".join(lines)
+
+
+def annotated_text(docx_bytes: bytes) -> Optional[str]:
+    """The document as plain text with its tracked changes written out.
+
+    ``None`` exactly when :func:`annotate_tracked_changes` returns ``None``.
+
+    Text rather than the rewritten package, for the managed engine: a knowledge
+    base provisioned with image extraction enabled — every one this platform
+    creates — parses an uploaded ``.docx`` through a model, and that model treats
+    ``[deleted: ...]`` as an instruction rather than as text. Measured on dev: it
+    dropped "Idaho" from ``[deleted: Idaho]``, cut ``[deleted: Ada County,
+    Idaho]`` to ``[deleted: Ada County, o]`` and swallowed the note's ``...]``.
+    Inline text is chunked as given and came back verbatim.
+    """
+    annotated = annotate_tracked_changes(docx_bytes)
+    if annotated is None:
+        return None
+    return document_text(annotated)
+
+
+__all__ = ["DOCX_MIME_TYPE", "annotate_tracked_changes", "annotated_text", "document_text"]
