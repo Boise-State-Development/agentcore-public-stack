@@ -44,7 +44,7 @@ Every save that changes something becomes a new **version**. See
 :::tip[Keep instructions about the project, not about people]
 Write instructions for the whole team. Things that only apply to you, like
 your role or your preferred format, belong in your
-[personal instructions](/agentcore-public-stack/user-guide/projects/work-together/#tell-the-assistant-who-you-are),
+[personal instructions](/agentcore-public-stack/user-guide/projects/work-together/#your-role-and-preferences),
 which ride along on every conversation you have.
 :::
 
@@ -85,24 +85,43 @@ Each file shows who added it and a status:
   use it yet.
 - **Ready**: the assistant can search it.
 
-:::caution[The first files take a while]
-A project's first upload also creates its search index. When you add several
-files at once to a brand-new project, they become **Ready** one at a time, and
-the last one can take an hour or more. Files added after that are usually ready
-within a few minutes. Start your team with the single most important document
-(a playbook, policy or template), then add the rest.
-:::
+A project's first upload also creates its search index, so the first files can
+take a little longer than later ones. Files added together are prepared side by
+side, and are usually **Ready** within a few minutes.
 
 What to put in Files:
 
 - **Reference material everyone needs**: playbooks, policies, templates,
   executed agreements, the statement of work.
-- **Clean, final text.** The assistant reads files as plain text. **Tracked
-  changes are flattened**: deleted and inserted wording run together with no
-  markup. Keep redlines out of Files and attach them to a task instead (see
-  [Attach a file to a task](/agentcore-public-stack/user-guide/projects/work-together/#attach-a-file-to-a-task)).
+- **Redlines the whole team works from**, such as the other side's latest
+  draft. See [Word redlines in Files](#word-redlines-in-files).
 - **One current version** of each document. Delete superseded drafts so the
   assistant doesn't quote an old one.
+
+### Word redlines in Files
+
+The assistant reads files as plain text. When a Word document has **tracked
+changes**, each change is written out with a marker before the file is
+indexed, so the assistant can tell what the author struck from what they added:
+
+```text
+…a fixed price of $184,500, [deleted: fifty percent (50%) upon execution …
+net thirty (30) days][inserted: payable in full within ninety (90) days after
+Sponsor's written acceptance …]
+```
+
+A note at the top of the indexed text names the authors of the changes and
+explains that keeping the insertions and dropping the deletions gives the
+proposed text, so you can ask for either reading. Word comments in a redline
+are kept too, as `[comment by <author>: …]` at the point they refer to.
+Formatting-only changes aren't marked.
+
+:::caution[Redlines added before October 2026]
+A redline added to Files before tracked changes were supported keeps its old,
+flattened text: deleted and inserted wording run together with nothing to tell
+them apart. If the assistant quotes a redline that way, delete the file and
+upload it again.
+:::
 
 ## 5. Invite your team
 
@@ -127,8 +146,8 @@ dates, who owns which part, decisions already made. Start a task and ask:
 
 > Please record these kickoff facts in the shared project memory so everyone on
 > the team sees them: our response is due 16 October; Marcus drafts the
-> response; Priya owns export control; Tom owns IP. **Add a line for it to the
-> project memory index.**
+> response; Priya owns export control; Tom owns IP.
 
-The last sentence matters. See
+The assistant saves them and adds a line to the project memory index, which is
+what every teammate's task starts from. See
 [Project memory](/agentcore-public-stack/user-guide/projects/work-together/#project-memory).
