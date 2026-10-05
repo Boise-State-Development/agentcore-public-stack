@@ -62,27 +62,141 @@ class TestSnapshotMsgToConverse:
         result = ShareService._snapshot_msg_to_converse(msg)
         assert result["content"][0] == {"toolResult": tool_result_payload}
 
-    def test_image_block(self):
-        image_payload = {"format": "png", "source": {"bytes": "base64data"}}
+    def test_image_block_becomes_not_copied_note(self):
+        """B1: a snapshot image has the display shape (format/data, no source),
+        which Bedrock rejects. It must not reach the fork's history."""
         msg = {
             "id": "msg-sess-3",
             "role": "user",
-            "content": [{"type": "image", "image": image_payload}],
+            "content": [{"type": "image", "image": {"format": "png", "data": "aGk="}}],
             "createdAt": "2025-06-01T00:00:00Z",
         }
         result = ShareService._snapshot_msg_to_converse(msg)
-        assert result["content"][0] == {"image": image_payload}
+        assert result["content"] == [
+            {"text": "[Attachments from the original conversation were not copied: 1 file(s)]"}
+        ]
 
-    def test_document_block(self):
-        doc_payload = {"format": "pdf", "name": "report", "source": {"bytes": "base64data"}}
+    def test_document_block_becomes_not_copied_note(self):
+        """B1 (reproduced on dev): the display-only document block was copied
+        verbatim and every later turn failed with 'Missing required parameter in
+        messages[0].content[1].document: "source"'."""
         msg = {
             "id": "msg-sess-4",
             "role": "user",
-            "content": [{"type": "document", "document": doc_payload}],
+            "content": [
+                {"type": "text", "text": "Summarize this"},
+                {"type": "document", "document": {"format": "pdf", "name": "report"}},
+            ],
             "createdAt": "2025-06-01T00:00:00Z",
         }
         result = ShareService._snapshot_msg_to_converse(msg)
-        assert result["content"][0] == {"document": doc_payload}
+        assert result["content"] == [
+            {"text": "Summarize this"},
+            {"text": "[Attachments from the original conversation were not copied: report]"},
+        ]
+        assert not any("document" in block or "image" in block for block in result["content"])
+
+    def test_attached_files_marker_names_the_attachments(self):
+        """B4: the marker carries the real filenames (inline and diverted), so
+        it wins over the sanitized document-block names, and is itself removed."""
+        msg = {
+            "id": "msg-sess-4b",
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Compare these\n\n[Attached files: report.pdf, grades.xlsx]"},
+                {"type": "document", "document": {"format": "pdf", "name": "report"}},
+            ],
+            "createdAt": "2025-06-01T00:00:00Z",
+        }
+        result = ShareService._snapshot_msg_to_converse(msg)
+        assert result["content"] == [
+            {"text": "Compare these"},
+            {"text": "[Attachments from the original conversation were not copied: report.pdf, grades.xlsx]"},
+        ]
+
+    def test_media_inside_tool_result_becomes_text(self):
+        msg = {
+            "id": "msg-sess-4c",
+            "role": "user",
+            "content": [{"type": "toolResult", "toolResult": {
+                "toolUseId": "t1",
+                "status": "success",
+                "content": [
+                    {"text": "Took a screenshot"},
+                    {"image": {"format": "png", "data": "aGk="}},
+                    {"document": {"format": "pdf", "name": "page", "data": "aGk="}},
+                ],
+            }}],
+            "createdAt": "2025-06-01T00:00:00Z",
+        }
+        result = ShareService._snapshot_msg_to_converse(msg)
+        tool_result = result["content"][0]["toolResult"]
+        assert tool_result["toolUseId"] == "t1"
+        assert tool_result["status"] == "success"
+        assert tool_result["content"] == [
+            {"text": "Took a screenshot"},
+            {"text": "[Image from the original conversation was not copied]"},
+            {"text": '[Document "page" from the original conversation was not copied]'},
+        ]
+
+    def test_user_message_uses_display_text_not_augmented_prompt(self):
+        """B3: the fork showed the RAG-augmented prompt as the author's message."""
+        augmented = (
+            "The following context is retrieved from the assistant's knowledge base...\n"
+            "[Context 1] Syllabus excerpt\n\nWhen is the midterm?"
+        )
+        msg = {
+            "id": "msg-sess-4d",
+            "role": "user",
+            "content": [{"type": "text", "text": augmented}],
+            "metadata": {"displayText": "When is the midterm?"},
+            "createdAt": "2025-06-01T00:00:00Z",
+        }
+        result = ShareService._snapshot_msg_to_converse(msg)
+        assert result["content"] == [{"text": "When is the midterm?"}]
+
+    def test_display_text_with_attachments_keeps_the_note(self):
+        msg = {
+            "id": "msg-sess-4e",
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "<interruption_note>x</interruption_note>\n\nRead it\n\n[Attached files: a.pdf]"},
+                {"type": "document", "document": {"format": "pdf", "name": "a"}},
+            ],
+            "metadata": {"displayText": "Read it"},
+            "createdAt": "2025-06-01T00:00:00Z",
+        }
+        result = ShareService._snapshot_msg_to_converse(msg)
+        assert result["content"] == [
+            {"text": "Read it"},
+            {"text": "[Attachments from the original conversation were not copied: a.pdf]"},
+        ]
+
+    def test_display_text_ignored_on_assistant_messages(self):
+        msg = {
+            "id": "msg-sess-4f",
+            "role": "assistant",
+            "content": [{"type": "text", "text": "Answer"}],
+            "metadata": {"displayText": "not mine"},
+            "createdAt": "2025-06-01T00:00:00Z",
+        }
+        assert ShareService._snapshot_msg_to_converse(msg)["content"] == [{"text": "Answer"}]
+
+    def test_tool_results_stay_ahead_of_text(self):
+        """A steer lands as text after the batch's tool results; Claude rejects
+        a user message whose text precedes its toolResult blocks."""
+        tool_result = {"toolUseId": "t1", "content": [{"text": "ok"}]}
+        msg = {
+            "id": "msg-sess-4g",
+            "role": "user",
+            "content": [
+                {"type": "toolResult", "toolResult": tool_result},
+                {"type": "text", "text": "also check BIO 102"},
+            ],
+            "createdAt": "2025-06-01T00:00:00Z",
+        }
+        result = ShareService._snapshot_msg_to_converse(msg)
+        assert result["content"] == [{"toolResult": tool_result}, {"text": "also check BIO 102"}]
 
     def test_reasoning_content_block(self):
         reasoning_payload = {"reasoningText": {"text": "thinking..."}}
@@ -197,6 +311,96 @@ class TestCopyMessagesToMemory:
         second_call = mock_mgr.create_message.call_args_list[1]
         assert second_call[0][0] == "sess-new"
         assert second_call[0][1] == "default"
+
+    @pytest.mark.asyncio
+    async def test_writes_agent_record_before_messages(self, service):
+        """B2: without the session's AGENT record, Strands' initialize() takes
+        the new-agent branch and the fork's first turn runs on an empty history."""
+        snapshot = [
+            {"id": "msg-0", "role": "user", "content": [{"type": "text", "text": "Hello"}], "createdAt": "2025-06-01T00:00:00Z"},
+        ]
+        mock_mgr = MagicMock()
+
+        with patch.dict(os.environ, {"AGENTCORE_MEMORY_ID": "mem-123", "AWS_REGION": "us-east-1"}), \
+             patch("bedrock_agentcore.memory.integrations.strands.session_manager.AgentCoreMemorySessionManager", return_value=mock_mgr), \
+             patch("bedrock_agentcore.memory.integrations.strands.config.AgentCoreMemoryConfig"), \
+             patch("strands.types.session.SessionMessage"):
+            await service._copy_messages_to_memory("sess-new", "user-1", snapshot)
+
+        assert [c[0] for c in mock_mgr.method_calls if c[0] in ("create_agent", "create_message")] == [
+            "create_agent", "create_message",
+        ]
+        session_id, session_agent = mock_mgr.create_agent.call_args[0]
+        assert session_id == "sess-new"
+        assert session_agent.agent_id == "default"
+        assert session_agent.conversation_manager_state["removed_message_count"] == 0
+        # Messages go under the same agent id the record names.
+        assert mock_mgr.create_message.call_args[0][1] == session_agent.agent_id
+
+    def test_fork_agent_record_restores_into_the_runtime_manager(self):
+        """The record's conversation-manager state must be one the runtime's
+        manager accepts: ``restore_from_session`` raises on a class mismatch,
+        which would fail the fork's first turn outright."""
+        from strands.agent.conversation_manager import SlidingWindowConversationManager
+
+        from agents.main_agent.core.agent_factory import AgentFactory
+
+        runtime_manager = AgentFactory.build_conversation_manager()
+        state = SlidingWindowConversationManager().get_state()
+        assert runtime_manager.restore_from_session(state) is None
+        assert runtime_manager.removed_message_count == 0
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("write_agent_record", [True, False])
+    async def test_runtime_restore_sees_the_copied_conversation(self, service, tmp_path, write_agent_record):
+        """B2 end to end against Strands' real ``RepositorySessionManager.initialize``.
+
+        ``FileSessionManager`` shares that base with the AgentCore Memory
+        manager, so the export writes into it and a fresh manager restores a
+        real ``Agent`` built with the runtime's conversation manager. Without
+        the AGENT record (the pre-fix export) the restore loads nothing.
+        """
+        from types import SimpleNamespace
+
+        from strands import Agent
+        from strands.models import BedrockModel
+        from strands.session.file_session_manager import FileSessionManager
+
+        from agents.main_agent.core.agent_factory import AgentFactory
+
+        snapshot = [
+            {"id": "msg-0", "role": "user", "content": [{"type": "text", "text": "augmented"}],
+             "metadata": {"displayText": "Hello"}, "createdAt": "2025-06-01T00:00:00Z"},
+            {"id": "msg-1", "role": "assistant", "content": [{"type": "text", "text": "Hi there"}],
+             "createdAt": "2025-06-01T00:00:01Z"},
+        ]
+
+        def export_manager(agentcore_memory_config, region_name):
+            mgr = FileSessionManager(session_id="sess-new", storage_dir=str(tmp_path))
+            mgr.memory_client = SimpleNamespace(gmdp_client=SimpleNamespace(create_event=lambda **_: None))
+            if not write_agent_record:
+                mgr.create_agent = lambda *a, **k: None
+            return mgr
+
+        with patch.dict(os.environ, {"AGENTCORE_MEMORY_ID": "mem-123", "AWS_REGION": "us-east-1"}), \
+             patch("bedrock_agentcore.memory.integrations.strands.session_manager.AgentCoreMemorySessionManager",
+                   side_effect=export_manager), \
+             patch("bedrock_agentcore.memory.integrations.strands.config.AgentCoreMemoryConfig"):
+            assert await service._copy_messages_to_memory("sess-new", "user-1", snapshot) == 2
+
+        agent = Agent(
+            model=BedrockModel(model_id="test-model", region_name="us-east-1"),
+            conversation_manager=AgentFactory.build_conversation_manager(),
+            session_manager=FileSessionManager(session_id="sess-new", storage_dir=str(tmp_path)),
+        )
+
+        if write_agent_record:
+            assert agent.messages == [
+                {"role": "user", "content": [{"text": "Hello"}]},
+                {"role": "assistant", "content": [{"text": "Hi there"}]},
+            ]
+        else:
+            assert agent.messages == []
 
     @pytest.mark.asyncio
     async def test_skips_unconvertible_messages(self, service):
