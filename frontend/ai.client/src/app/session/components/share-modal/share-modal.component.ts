@@ -177,8 +177,12 @@ const PROJECT_ACCESS_OPTION: AccessOption = {
         @if (existingShares().length > 0 && !shareResult()) {
           <div class="mt-4 rounded-md bg-state-info-50 p-3 dark:bg-state-info-500/10">
             <p class="text-xs text-state-info-700 dark:text-state-info-300">
-              This conversation has {{ existingShares().length }} existing share{{ existingShares().length > 1 ? 's' : '' }}.
-              Creating a new share will add another snapshot.
+              @if (replacesProjectShare()) {
+                This task is already shared with the project. Sharing again replaces the snapshot the project sees.
+              } @else {
+                This conversation has {{ existingShares().length }} existing share{{ existingShares().length > 1 ? 's' : '' }}.
+                Creating a new share will add another snapshot.
+              }
             </p>
           </div>
         }
@@ -287,6 +291,14 @@ export class ShareModalComponent implements OnInit {
   protected readonly accessOptions: AccessOption[] = this.data.projectId
     ? [PROJECT_ACCESS_OPTION, ...BASE_ACCESS_OPTIONS]
     : BASE_ACCESS_OPTIONS;
+
+  /**
+   * A project share is listed once per task, newest wins (`SHARED_TASK#` pointer), so
+   * sharing to the project again swaps what members see rather than adding a second entry.
+   */
+  protected replacesProjectShare = computed(
+    () => this.selectedAccess() === 'project' && this.existingShares().some((s) => s.accessLevel === 'project'),
+  );
 
   protected shareUrl = computed(() => {
     const result = this.shareResult();

@@ -184,6 +184,34 @@ describe('ShareModalComponent', () => {
     expect(el.textContent).toContain('2 existing shares');
   });
 
+  it('should say a project re-share replaces the project snapshot', async () => {
+    (component as any).selectedAccess.set('project');
+    mockShareService.listSharesForSession.mockResolvedValue({
+      shares: [{ ...mockShareResponse, accessLevel: 'project' }],
+    } as ShareListResponse);
+
+    await component.ngOnInit();
+    fixture.detectChanges();
+
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.textContent).toContain('Sharing again replaces the snapshot the project sees');
+    expect(el.textContent).not.toContain('add another snapshot');
+  });
+
+  it('should keep the add-another copy for a public share of a task already shared with the project', async () => {
+    (component as any).selectedAccess.set('public');
+    mockShareService.listSharesForSession.mockResolvedValue({
+      shares: [{ ...mockShareResponse, accessLevel: 'project' }],
+    } as ShareListResponse);
+
+    await component.ngOnInit();
+    fixture.detectChanges();
+
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.textContent).toContain('1 existing share');
+    expect(el.textContent).toContain('add another snapshot');
+  });
+
   it('should not show existing shares info when no shares exist', async () => {
     await component.ngOnInit();
     fixture.detectChanges();
