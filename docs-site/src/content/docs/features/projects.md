@@ -16,8 +16,11 @@ the person who started it until they choose to share it with the project.
 
 Design and as-built notes live in
 [`docs/specs/shared-projects.md`](https://github.com/Boise-State-Development/agentcore-public-stack/blob/main/docs/specs/shared-projects.md).
-This page describes what ships today (Phase 1). Project memory is Phase 2;
-schedules and outputs are Phase 3. Projects are still in development, so a
+This page is the feature reference. For a task-oriented guide written for the
+people who use projects, with an illustrated walkthrough, see
+[User Guide › Projects](/agentcore-public-stack/user-guide/projects/overview/).
+Project memory (shared and "just for me" spaces the assistant reads and writes)
+ships with Phase 2; schedules and outputs are Phase 3. Projects are still in development, so a
 deployment has to turn them on; see
 [Admin › Projects](/agentcore-public-stack/admin/projects/#turning-projects-on).
 
