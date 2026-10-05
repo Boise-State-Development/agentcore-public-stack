@@ -213,6 +213,11 @@ class TestProjectHarnessSpecs:
         assert "prose and headings are rejected" in description
         assert "editor" in description
 
+    def test_save_says_a_new_file_is_indexed_for_it(self):
+        description = " ".join(self._specs()["memory_save"]["description"].split())
+        assert "A new file is added to that scope's MEMORY.md index" in description
+        assert "`memory_read` it first" in description
+
     def test_specs_are_the_same_for_every_member_and_project(self):
         from agents.builtin_tools.memory_spaces.project_tools import (
             ProjectMemoryScopes,
