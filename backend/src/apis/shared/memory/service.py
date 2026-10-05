@@ -22,14 +22,16 @@ import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, TypeVar
 
 from .format import (
     Frontmatter,
     MemoryFormatError,
+    extract_links,
     frontmatter_from_parsed,
     parse_file,
     render_file,
+    strip_anchors,
     validate_slug,
 )
 from .models import (
@@ -54,7 +56,7 @@ from .store import (
     get_memory_space_store,
 )
 from .templates import DEFAULT_TEMPLATE_ID, get_template, is_valid_template
-from .tokens import TokenCount, count_file_tokens
+from .tokens import TokenCount, count_file_tokens, estimate_tokens
 from .validation import (
     CanonicalSave,
     CurrentFile,
@@ -132,6 +134,38 @@ def _index_cap() -> int:
         except ValueError:
             logger.warning("invalid MEMORY_SPACE_INDEX_CAP=%r; using default", raw)
     return _DEFAULT_INDEX_CAP
+
+
+IndexLinkOutcome = Literal["added", "already_linked", "over_budget"]
+
+
+def _index_line(slug: str, description: str) -> str:
+    """One canonical index line: ``- [[slug]] — description``, or just the link."""
+    summary = " ".join((description or "").split())
+    return f"- [[{slug}]] — {summary}" if summary else f"- [[{slug}]]"
+
+
+def _without_starter(index_text: str, template: str) -> str:
+    """The index with an untouched one-heading starter (the blank template's) reduced to that heading.
+
+    A starter with sections (chief of staff, research notebook) is structure
+    worth keeping, so it is left as it is.
+    """
+    if not is_valid_template(template):
+        return index_text
+    lines = get_template(template).starter_index.strip().splitlines()
+    if index_text.strip() != "\n".join(lines) or sum(line.startswith("#") for line in lines) != 1:
+        return index_text
+    return f"{lines[0]}\n"
+
+
+def _append_index_line(index_text: str, line: str) -> str:
+    """``line`` after the index's text: in its list if it ends with one, else after a blank line."""
+    body = index_text.rstrip()
+    if not body:
+        return f"{line}\n"
+    separator = "\n" if body.splitlines()[-1].lstrip().startswith("- ") else "\n\n"
+    return f"{body}{separator}{line}\n"
 
 
 class MemorySpaceError(RuntimeError):
@@ -828,6 +862,67 @@ class MemorySpaceService:
         if old_key and old_key != new_key and not self._key_in_use(space_id, old_key):
             self.store.delete(old_key)
         return space
+
+    def add_index_link(
+        self,
+        space_id: str,
+        user_id: str,
+        user_email: Optional[str],
+        ref: MemoryEntryRef,
+        *,
+        max_tokens: int,
+    ) -> IndexLinkOutcome:
+        """Append ``- [[slug]] — description`` to ``MEMORY.md`` for a file it doesn't link yet (editor+).
+
+        For a project harness's ``memory_save`` of a new file: only the index is
+        injected into a turn, and a model told to index its own saves usually
+        forgets (the 2026-10 team simulation, G2). Nothing is written when:
+
+        - the index already links the file by name or alias (``already_linked``);
+        - the line would push the index past ``max_tokens``, the budget it is
+          injected under, where it would be truncated away (``over_budget``).
+          Estimated exactly as the injection does, after anchors are stripped.
+
+        The line is appended last, the index's other text kept byte for byte.
+        A template starter with nothing written under it is replaced by its
+        heading: its placeholder prose would otherwise be injected every turn.
+        The write is conditional on the index the line was added to, so two
+        members creating files at once keep both lines; the index is not
+        versioned, so no ``FILEVER`` row is written.
+        """
+        space: Optional[MemorySpace]
+        space, _ = self._require(space_id, user_id, user_email, "editor")
+        names = {ref.slug.casefold(), *(a.casefold() for a in ref.aliases)}
+        line = _index_line(ref.slug, ref.description)
+        for attempt in range(_MAX_MANIFEST_RETRIES):
+            if attempt:
+                space = self.repository.get_space(space_id)
+            if space is None:
+                raise MemorySpaceNotFoundError(f"Memory space '{space_id}' not found")
+            previous = self.store.get(space.index_s3_key).decode("utf-8") if space.index_s3_key else ""
+            if any(name.casefold() in names for name in extract_links(previous)):
+                return "already_linked"
+            text = _append_index_line(_without_starter(previous, space.template), line)
+            if estimate_tokens(strip_anchors(text)) > max_tokens:
+                return "over_budget"
+            content = self._encode(text)
+            old_key, old_hash = space.index_s3_key, space.index_content_hash
+            new_key = self.store.put(space_id=space_id, content=content, content_type="text/markdown")
+            space.index_s3_key = new_key
+            space.index_content_hash = compute_content_hash(content)
+            space.updated_at = _now_iso()
+            try:
+                self.repository.put_space_if_index_unchanged(space, old_hash)
+            except OptimisticLockError:
+                if new_key != old_key and not self._key_in_use(space_id, new_key):
+                    self.store.delete(new_key)
+                continue
+            if old_key and old_key != new_key and not self._key_in_use(space_id, old_key):
+                self.store.delete(old_key)
+            return "added"
+        raise MemorySpaceConcurrencyError(
+            f"the index of memory space '{space_id}' is being edited concurrently; retry the write"
+        )
 
     # ---- entries -------------------------------------------------------
 

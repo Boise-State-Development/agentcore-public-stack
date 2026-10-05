@@ -824,3 +824,56 @@ class TestCanonicalSpaces:
         service.update_index(space.space_id, OWNER, OWNER_EMAIL, "# Memory\n[[nowhere]]\n")
         service.save_entry(canonical.space_id, OWNER, OWNER_EMAIL, "somewhere", "- x\n")
         service.update_index(canonical.space_id, OWNER, OWNER_EMAIL, "# Memory\n[[Somewhere]]\n")
+
+
+# ============================ automatic index lines ============================
+
+
+class TestAddIndexLink:
+    """``add_index_link``: the project harness's index line for a new file (G2)."""
+
+    def test_an_alias_already_in_the_index_counts_as_linked(self, canonical, service):
+        result = service.save_entry(
+            canonical.space_id, OWNER, OWNER_EMAIL, "vendors", "- Vendor A.\n", aliases=["suppliers"]
+        )
+        service.update_index(canonical.space_id, OWNER, OWNER_EMAIL, "# Memory\n\n- [[Suppliers]]\n")
+        outcome = service.add_index_link(canonical.space_id, OWNER, OWNER_EMAIL, result.ref, max_tokens=2000)
+        assert outcome == "already_linked"
+        assert service.read_index(canonical.space_id, OWNER, OWNER_EMAIL) == "# Memory\n\n- [[Suppliers]]\n"
+
+    def test_a_sectioned_starter_is_kept(self, service):
+        from apis.shared.memory.templates import get_template
+
+        space = service.create_space(OWNER, OWNER_EMAIL, "Oliver", template="chief-of-staff", file_format="canonical")
+        result = service.save_entry(space.space_id, OWNER, OWNER_EMAIL, "jane", "- CFO.\n", description="Jane")
+        assert service.add_index_link(space.space_id, OWNER, OWNER_EMAIL, result.ref, max_tokens=2000) == "added"
+        starter = get_template("chief-of-staff").starter_index
+        assert service.read_index(space.space_id, OWNER, OWNER_EMAIL) == starter.rstrip() + "\n\n- [[jane]] — Jane\n"
+
+    def test_editors_only(self, canonical, service):
+        result = service.save_entry(canonical.space_id, OWNER, OWNER_EMAIL, "n", "- one\n")
+        service.share(canonical.space_id, OWNER, OWNER_EMAIL, FRIEND_EMAIL, "viewer")
+        with pytest.raises(MemorySpacePermissionError):
+            service.add_index_link(canonical.space_id, FRIEND, FRIEND_EMAIL, result.ref, max_tokens=2000)
+
+    def test_a_write_that_never_converges_is_a_conflict(self, canonical, service, monkeypatch):
+        result = service.save_entry(canonical.space_id, OWNER, OWNER_EMAIL, "n", "- one\n")
+
+        def always_moved(space, expected):
+            raise OptimisticLockError("moved")
+
+        monkeypatch.setattr(service.repository, "put_space_if_index_unchanged", always_moved)
+        with pytest.raises(MemorySpaceConcurrencyError):
+            service.add_index_link(canonical.space_id, OWNER, OWNER_EMAIL, result.ref, max_tokens=2000)
+
+
+class TestPutSpaceIfIndexUnchanged:
+    def test_conditional_on_the_index_hash(self, table, space):
+        stored = table.get_space(space.space_id)
+        stored.name = "Renamed"
+        with pytest.raises(OptimisticLockError):
+            table.put_space_if_index_unchanged(stored, "not-the-hash")
+        with pytest.raises(OptimisticLockError):
+            table.put_space_if_index_unchanged(stored, None)
+        table.put_space_if_index_unchanged(stored, space.index_content_hash)
+        assert table.get_space(space.space_id).name == "Renamed"

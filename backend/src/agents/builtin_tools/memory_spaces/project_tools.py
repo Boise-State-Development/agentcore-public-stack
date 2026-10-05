@@ -16,6 +16,10 @@ these. The agent cache key carries a digest of the ids closed over here
 A member's own space is created by their first ``memory_save(scope="mine")``, not
 when the turn starts (2.4a): three writes before the first token of every member's
 first turn would cost more than they buy.
+
+A save that creates a file also adds it to that scope's ``MEMORY.md``, the only part
+of a space injected into a task. Left to the model, the index line was usually
+forgotten, so teammates' assistants never saw the file (the 2026-10 team simulation, G2).
 """
 
 from __future__ import annotations
@@ -28,6 +32,7 @@ from typing import Any, Literal, Optional
 from strands import tool
 
 from apis.shared.auth.models import User
+from apis.shared.memory.hydration import MINE_MEMORY_MAX_TOKENS, PROJECT_MEMORY_MAX_TOKENS
 from apis.shared.memory.service import (
     MemoryEntryNotFoundError,
     MemorySpaceError,
@@ -43,6 +48,8 @@ logger = logging.getLogger(__name__)
 Scope = Literal["project", "mine"]
 SCOPES = ("project", "mine")
 _LABELS = {"project": "project memory", "mine": "your memory in this project"}
+# Each scope's index is injected under its own budget; a line past it would be cut off.
+_INDEX_BUDGETS = {"project": PROJECT_MEMORY_MAX_TOKENS, "mine": MINE_MEMORY_MAX_TOKENS}
 _INDEX_SLUG = "MEMORY.md"
 _ARCHIVED = "This project is archived, so its memory is read-only."
 _NOT_A_MEMBER = "You are no longer a member of this project, so its memory is unavailable."
@@ -255,16 +262,18 @@ def make_project_memory_save_tool(scopes: ProjectMemoryScopes):
         with `[[name]]`.
 
         "mine" is always yours to write. "project" is shared with every member and needs
-        the editor role; a viewer can save to "mine" instead or ask an editor. The slug
-        "MEMORY.md" replaces that scope's index, which appears in every conversation:
-        keep it to one short line per file, such as "- [[vendor]] — vendor decisions".
+        the editor role; a viewer can save to "mine" instead or ask an editor. A new file
+        is added to that scope's MEMORY.md index, which appears in every conversation, as
+        one line built from `description`, so give a new file one. The slug "MEMORY.md"
+        replaces the index: `memory_read` it first and keep one short line per file, such
+        as "- [[vendor]] — vendor decisions".
 
         Args:
             scope: "project" or "mine".
             slug: The file name: lowercase words joined by "-", optionally grouped
                 with "/" (e.g. "decisions/vendor"), or "MEMORY.md" for the index.
             text: The file's items, one "- " line each.
-            description: Optional one-line summary shown in listings.
+            description: One-line summary, shown in listings and in a new file's index line.
         """
         if (bad := _bad_scope(scope)) is not None:
             return bad
@@ -297,9 +306,33 @@ def make_project_memory_save_tool(scopes: ProjectMemoryScopes):
             return _error(f"Could not save '{slug}': {exc}")
         except ProjectError as exc:  # the first save to "mine" creates the space
             return _error(_project_error(exc))
-        return {"content": [{"text": _saved(result, label)}], "status": "success"}
+        indexed = await _index_new_file(service, space_id, scopes, scope, result.ref)
+        return {"content": [{"text": _saved(result, label, indexed, _INDEX_BUDGETS[scope])}], "status": "success"}
 
     return memory_save
+
+
+async def _index_new_file(
+    service: MemorySpaceService, space_id: str, scopes: ProjectMemoryScopes, scope: str, ref: Any
+) -> Optional[str]:
+    """Add a just-created file to its scope's index; the outcome, or None if not tried or it failed.
+
+    An update is left alone: the file is either indexed already or was taken out
+    on purpose. A failure never fails the save, which has committed; the result
+    falls back to asking the model to add the line.
+    """
+    if ref.version != 1:
+        return None
+    user = scopes.user
+    try:
+        return await asyncio.to_thread(
+            lambda: service.add_index_link(
+                space_id, user.user_id, user.email, ref, max_tokens=_INDEX_BUDGETS[scope]
+            )
+        )
+    except Exception:
+        logger.warning("Could not index new memory file in space %s", space_id, exc_info=True)
+        return None
 
 
 async def _refusal(scopes: ProjectMemoryScopes, scope: str) -> str:
@@ -325,12 +358,23 @@ def _project_error(exc: ProjectError) -> str:
     return f"Could not set up your memory in this project: {exc}"
 
 
-def _saved(result: Any, label: str) -> str:
+def _saved(result: Any, label: str, indexed: Optional[str], budget: int) -> str:
     ref = result.ref
     text = f'Saved "{ref.slug}" to {label} (version {ref.version}'
     text += f", about {ref.tokens:,} tokens)." if ref.tokens is not None else ")."
-    if ref.version == 1:
-        text += f' To show it in every conversation, add a line like "- [[{ref.slug}]] — what it holds" to MEMORY.md.'
+    suggested = f'"- [[{ref.slug}]] — what it holds"'
+    if indexed == "added":
+        line = f"- [[{ref.slug}]] — {ref.description}" if ref.description else f"- [[{ref.slug}]]"
+        text += f' Added "{line}" to the MEMORY.md index, so it shows in every conversation.'
+        if not ref.description:
+            text += f" Replace that line with one like {suggested}."
+    elif indexed == "over_budget":
+        text += (
+            f" MEMORY.md is at its {budget:,}-token limit, so it was not indexed. Shorten the index "
+            f"(merge or drop lines), then add a line like {suggested}."
+        )
+    elif indexed is None and ref.version == 1:
+        text += f" To show it in every conversation, add a line like {suggested} to MEMORY.md."
     if result.warnings:
         text += " Notes: " + " ".join(result.warnings)
     return text

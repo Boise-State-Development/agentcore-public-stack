@@ -256,6 +256,33 @@ class MemorySpaceRepository:
     def put_space(self, space: MemorySpace) -> None:
         self._table.put_item(Item=self._space_to_item(space))
 
+    def put_space_if_index_unchanged(self, space: MemorySpace, expected_index_hash: Optional[str]) -> None:
+        """Persist META only if its ``MEMORY.md`` is still the one the caller read.
+
+        For a read-modify-write of the index (an automatic index line), where two
+        members saving at once must not drop each other's line. ``None`` expects
+        a space with no index yet. Raises :class:`OptimisticLockError` on a mismatch.
+        """
+        if expected_index_hash is None:
+            condition = "attribute_exists(PK) AND attribute_not_exists(#h)"
+            values: Optional[dict] = None
+        else:
+            condition = "#h = :expected"
+            values = {":expected": expected_index_hash}
+        kwargs: dict = {
+            "Item": self._space_to_item(space),
+            "ConditionExpression": condition,
+            "ExpressionAttributeNames": {"#h": "indexContentHash"},
+        }
+        if values is not None:
+            kwargs["ExpressionAttributeValues"] = values
+        try:
+            self._table.put_item(**kwargs)
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code", "") == "ConditionalCheckFailedException":
+                raise OptimisticLockError(f"index of space '{space.space_id}' changed concurrently") from e
+            raise
+
     def get_space(self, space_id: str) -> Optional[MemorySpace]:
         resp = self._table.get_item(
             Key={"PK": _space_pk(space_id), "SK": _META_SK}
