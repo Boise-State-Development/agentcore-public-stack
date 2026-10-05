@@ -20,6 +20,11 @@ first turn would cost more than they buy.
 A save that creates a file also adds it to that scope's ``MEMORY.md``, the only part
 of a space injected into a task. Left to the model, the index line was usually
 forgotten, so teammates' assistants never saw the file (the 2026-10 team simulation, G2).
+
+``memory_save`` also says when to save to "mine" and to make a preference's description
+the rule itself (G17): asked to "remember this just for me", Haiku 4.5 kept it in the
+conversation and never saved it, and a saved preference whose index line only named it
+("My status-check reply format") was not read in the next task.
 """
 
 from __future__ import annotations
@@ -255,14 +260,20 @@ def make_project_memory_save_tool(scopes: ProjectMemoryScopes):
     async def memory_save(scope: Scope, slug: str, text: str, description: str = "") -> dict[str, Any]:
         """Save a memory file, creating it or replacing it whole. It persists across conversations.
 
+        When the member asks you to remember something for them alone (a preference, how
+        they want answers, a standing request), save it to "mine" now: this conversation
+        alone will not carry it into their next task. Make `description` the rule itself,
+        such as "Status checks: reply 'STATUS-OK:' plus one sentence", because that line
+        is what their later tasks see.
+
         A file is a list with one fact per "- " line, such as "- The pilot starts
         March 3."; prose and headings are rejected. To change a file, `memory_read` it
         first and send back the whole list: keep each item's `<!-- e:… -->` anchor, add
         new items without one, and leave out items to remove them. Link other files
         with `[[name]]`.
 
-        "mine" is always yours to write. "project" is shared with every member and needs
-        the editor role; a viewer can save to "mine" instead or ask an editor. A new file
+        "mine" is the member's own and always writable. "project" is shared with every
+        member and needs the editor role; a viewer can save to "mine" instead or ask an editor. A new file
         is added to that scope's MEMORY.md index, which appears in every conversation, as
         one line built from `description`, so give a new file one. The slug "MEMORY.md"
         replaces the index: `memory_read` it first and keep one short line per file, such
@@ -273,7 +284,8 @@ def make_project_memory_save_tool(scopes: ProjectMemoryScopes):
             slug: The file name: lowercase words joined by "-", optionally grouped
                 with "/" (e.g. "decisions/vendor"), or "MEMORY.md" for the index.
             text: The file's items, one "- " line each.
-            description: One-line summary, shown in listings and in a new file's index line.
+            description: One line, shown in listings and in a new file's index line. For a
+                preference or rule, the rule itself.
         """
         if (bad := _bad_scope(scope)) is not None:
             return bad
