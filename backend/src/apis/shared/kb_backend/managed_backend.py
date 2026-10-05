@@ -71,7 +71,7 @@ import os
 import weakref
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
-from apis.shared.kb_backend.docx_revisions import DOCX_MIME_TYPE, annotate_tracked_changes
+from apis.shared.kb_backend.docx_revisions import annotated_text
 from apis.shared.kb_backend.protocol import DEFAULT_TOP_K, Chunk, DocumentSource
 
 logger = logging.getLogger(__name__)
@@ -90,10 +90,15 @@ RERANKING_MODEL_TYPE = "MANAGED"
 #: The connector all of this platform's managed documents arrive through.
 CONTENT_DATA_SOURCE_TYPE = "CUSTOM"
 
-#: ``ByteContentDoc.data`` is capped at 5,242,880 characters of base64, which is
-#: this many raw bytes. A tracked-changes document whose annotated copy is larger
-#: ingests from its S3 location as before, unannotated.
-MAX_INLINE_DOCUMENT_BYTES = 5_242_880 // 4 * 3
+#: ``TextContentDoc.data`` is capped at 5,242,880 characters. A tracked-changes
+#: document whose annotated text is longer ingests from its S3 location as
+#: before, unannotated.
+MAX_INLINE_TEXT_CHARS = 5_242_880
+
+#: The largest ``.docx`` read to look for tracked changes. Its text is what counts
+#: against the inline cap, and a Word file's size is mostly images, so this only
+#: bounds the memory one read can take.
+MAX_ANNOTATE_SOURCE_BYTES = 25 * 1024 * 1024
 
 #: Requirement 11.5. Isolation-critical filters are restricted to exact-match
 #: operators. ``startsWith`` and ``stringContains`` are prefix/substring matches:
@@ -306,7 +311,7 @@ def document_payload(
     source: DocumentSource,
     *,
     bucket: Optional[str] = None,
-    inline_document: Optional[bytes] = None,
+    inline_text: Optional[str] = None,
 ) -> Dict[str, Any]:
     """One entry of the ``documents`` array.
 
@@ -321,22 +326,20 @@ def document_payload(
     chunks, joining them back into a document because managed ingestion does its
     own chunking and pre-chunked input would be re-chunked anyway.
 
-    ``inline_document`` overrides both: a Word document whose tracked changes have
-    been written out as text (:mod:`~apis.shared.kb_backend.docx_revisions`) is
-    sent as inline bytes, because Bedrock reading the original from S3 would
-    flatten its deletions and insertions together.
+    ``inline_text`` overrides both: a Word document whose tracked changes have
+    been written out (:func:`~apis.shared.kb_backend.docx_revisions.annotated_text`)
+    is sent as that text. Bedrock reading the original from S3 flattens deletions
+    and insertions together, and reading an annotated ``.docx`` rewrites what is
+    inside the markers.
     """
     identifier = {"id": source.document_id}
     custom: Dict[str, Any] = {
         "customDocumentIdentifier": identifier,
     }
 
-    if inline_document is not None:
+    if inline_text is not None:
         custom["sourceType"] = "IN_LINE"
-        custom["inlineContent"] = {
-            "type": "BYTE",
-            "byteContent": {"mimeType": DOCX_MIME_TYPE, "data": inline_document},
-        }
+        custom["inlineContent"] = {"type": "TEXT", "textContent": {"data": inline_text}}
     elif source.s3_key:
         resolved = _documents_bucket(source, bucket)
         custom["sourceType"] = "S3_LOCATION"
@@ -592,7 +595,7 @@ class ManagedKbBackend:
             *(asyncio.to_thread(self._annotated_word_document, source) for source in documents)
         )
         payloads = [
-            document_payload(source, bucket=self._bucket, inline_document=inline)
+            document_payload(source, bucket=self._bucket, inline_text=inline)
             for source, inline in zip(documents, annotated)
         ]
 
@@ -609,12 +612,12 @@ class ManagedKbBackend:
             what="IngestKnowledgeBaseDocuments",
         )
 
-    def _annotated_word_document(self, source: DocumentSource) -> Optional[bytes]:
-        """The source's Word document with tracked changes written out, if it has any.
+    def _annotated_word_document(self, source: DocumentSource) -> Optional[str]:
+        """The source's Word document as text with tracked changes written out.
 
         ``None`` — ingest from S3 exactly as before — for anything that is not a
-        ``.docx`` in S3, a document with no tracked changes, an annotated copy too
-        large to send inline, and any failure along the way: losing the markers
+        ``.docx`` in S3, a document with no tracked changes, annotated text too
+        long to send inline, and any failure along the way: losing the markers
         is the pre-existing behaviour, while failing the ingestion would lose the
         document.
         """
@@ -622,14 +625,14 @@ class ManagedKbBackend:
             return None
         try:
             bucket = _documents_bucket(source, self._bucket)
-            original = self._object_reader(bucket, source.s3_key, MAX_INLINE_DOCUMENT_BYTES)
+            original = self._object_reader(bucket, source.s3_key, MAX_ANNOTATE_SOURCE_BYTES)
             if original is None:
                 logger.warning(
-                    f"document {source.document_id} is too large to annotate inline; "
-                    f"ingesting it from S3, where any tracked changes are flattened"
+                    f"document {source.document_id} is too large to check for tracked "
+                    f"changes; ingesting it from S3, where any are flattened"
                 )
                 return None
-            annotated = annotate_tracked_changes(original)
+            annotated = annotated_text(original)
         except Exception as exc:
             logger.warning(
                 f"could not check document {source.document_id} for tracked changes "
@@ -639,16 +642,16 @@ class ManagedKbBackend:
             return None
         if annotated is None:
             return None
-        if len(annotated) > MAX_INLINE_DOCUMENT_BYTES:
+        if not annotated or len(annotated) > MAX_INLINE_TEXT_CHARS:
             logger.warning(
                 f"document {source.document_id} has tracked changes but its annotated "
-                f"copy ({len(annotated)} bytes) exceeds the inline limit; ingesting it "
+                f"text ({len(annotated)} chars) cannot be sent inline; ingesting it "
                 f"from S3, where they are flattened"
             )
             return None
         logger.info(
-            f"document {source.document_id} has tracked changes; ingesting an "
-            f"annotated copy inline ({len(annotated)} bytes)"
+            f"document {source.document_id} has tracked changes; ingesting its "
+            f"annotated text inline ({len(annotated)} chars)"
         )
         return annotated
 
@@ -722,7 +725,8 @@ __all__ = [
     "ISOLATION_SAFE_FILTER_OPERATORS",
     "MAX_CONCURRENT_DOCUMENT_OPERATIONS",
     "MAX_DOCUMENTS_PER_CALL",
-    "MAX_INLINE_DOCUMENT_BYTES",
+    "MAX_ANNOTATE_SOURCE_BYTES",
+    "MAX_INLINE_TEXT_CHARS",
     "RERANKING_MODEL_TYPE",
     "ManagedKbBackend",
     "ManagedKbError",

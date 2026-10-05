@@ -17,6 +17,8 @@ from apis.shared.kb_backend.docx_revisions import (
     DOCX_MIME_TYPE,
     _rewrite_part,
     annotate_tracked_changes,
+    annotated_text,
+    document_text,
 )
 from tests.shared.docx_fixtures import (
     MEDIA_BYTES,
@@ -311,6 +313,100 @@ class TestPackageIntegrity:
 
         positions = [rewritten.index(f">{text}<") for text in ("kept ", "before nested ", "also kept")]
         assert positions == sorted(positions)
+
+
+class TestAnnotatedText:
+    """The managed engine's input: the rewritten document as plain text."""
+
+    def test_is_none_exactly_when_there_is_nothing_to_annotate(self):
+        assert annotated_text(build_docx(paragraph(run("Just text.")))) is None
+        assert annotated_text(b"not a zip") is None
+
+    def test_the_b9_redline_keeps_every_word_inside_its_markers(self):
+        """The dev failure this guards: a model-based parser turned
+        ``[deleted: Idaho]`` into ``[deleted: ]``. Text has no parser to do that."""
+        docx = build_docx(
+            paragraph(
+                run("governed by the laws of the State of "),
+                deleted("Idaho"),
+                inserted("Washington"),
+                run(", with venue in "),
+                deleted("Ada County, Idaho", rid=3),
+                inserted("King County, Washington", rid=4),
+                run("."),
+            )
+        )
+
+        text = annotated_text(docx)
+
+        note, body = text.split("\n\n")
+        assert note.startswith(NOTE_PREFIX)
+        assert "[deleted: ...] and inserted wording as [inserted: ...]" in note
+        assert body == (
+            "governed by the laws of the State of [deleted: Idaho][inserted: Washington], "
+            "with venue in [deleted: Ada County, Idaho][inserted: King County, Washington]."
+        )
+
+    def test_paragraphs_are_separated_and_empty_ones_dropped(self):
+        docx = build_docx(paragraph(run("One")), paragraph(), paragraph(run("Two")))
+
+        assert document_text(docx) == "One\n\nTwo"
+
+    def test_a_table_becomes_one_line_per_row(self):
+        cell = lambda text: f"<w:tc>{paragraph(run(text))}</w:tc>"  # noqa: E731
+        table = (
+            "<w:tbl><w:tblPr/>"
+            f"<w:tr>{cell('Article')}{cell('Change')}</w:tr>"
+            f"<w:tr>{cell('10')}<w:tc>{paragraph(deleted('mutual'), inserted('University'))}</w:tc></w:tr>"
+            "</w:tbl>"
+        )
+
+        text = annotated_text(build_docx(paragraph(run("Summary")), table))
+
+        assert text.split("\n\n")[1:] == [
+            "Summary",
+            "Article | Change",
+            "10 | [deleted: mutual][inserted: University]",
+        ]
+
+    def test_tabs_breaks_and_content_controls_are_read(self):
+        docx = build_docx(
+            "<w:sdt><w:sdtPr/><w:sdtContent>"
+            + paragraph('<w:r><w:t>a</w:t><w:tab/><w:t>b</w:t><w:br/><w:t>c</w:t></w:r>')
+            + "</w:sdtContent></w:sdt>"
+        )
+
+        assert document_text(docx) == "a\tb\nc"
+
+    def test_alternate_content_fallback_is_not_read_twice(self):
+        mc = "http://schemas.openxmlformats.org/markup-compatibility/2006"
+        docx = build_docx(
+            paragraph(
+                run("Before "),
+                f'<mc:AlternateContent xmlns:mc="{mc}"><mc:Choice Requires="wps">'
+                "<w:r><w:t>box</w:t></w:r></mc:Choice>"
+                "<mc:Fallback><w:r><w:t>box</w:t></w:r></mc:Fallback></mc:AlternateContent>",
+            )
+        )
+
+        assert document_text(docx) == "Before box"
+
+    def test_footnotes_follow_the_body_and_separators_are_skipped(self):
+        footnotes = (
+            f'<w:footnotes xmlns:w="{W_NS}">'
+            '<w:footnote w:type="separator" w:id="-1"><w:p><w:r><w:separator/></w:r></w:p></w:footnote>'
+            '<w:footnote w:id="1">'
+            + paragraph(run("Per the "), deleted("2024"), inserted("2026"), run(" rate sheet."))
+            + "</w:footnote></w:footnotes>"
+        )
+        docx = build_docx(
+            paragraph(run("Rates apply."), deleted("x")),
+            extra_parts={"word/footnotes.xml": footnotes},
+        )
+
+        assert annotated_text(docx).split("\n\n")[-1] == (
+            "[footnote: Per the [deleted: 2024][inserted: 2026] rate sheet.]"
+        )
 
 
 def test_the_mime_type_is_wordprocessingml():
