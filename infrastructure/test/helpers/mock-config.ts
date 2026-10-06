@@ -7,6 +7,7 @@
  */
 import * as cdk from 'aws-cdk-lib';
 import { AppConfig,
+  CONVERSATION_RETENTION_DAYS_DEFAULT,
   MANAGED_KB_DEFAULT_PER_OWNER_BYTES,
   MANAGED_KB_ELEVATED_PER_OWNER_BYTES,
   MANAGED_KB_PER_KB_CEILING_BYTES,
@@ -49,6 +50,7 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     vpcCidr: '10.0.0.0/16',
     corsOrigins: 'http://localhost:4200',
     appVersion: '1.0.0-test',
+    conversationRetentionDays: CONVERSATION_RETENTION_DAYS_DEFAULT,
     frontend: {
       cloudFrontPriceClass: 'PriceClass_100',
     },

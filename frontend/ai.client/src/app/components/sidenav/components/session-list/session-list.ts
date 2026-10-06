@@ -6,7 +6,7 @@ import { CdkMenuTrigger, CdkMenu, CdkMenuItem } from '@angular/cdk/menu';
 import { ConnectedPosition } from '@angular/cdk/overlay';
 import { firstValueFrom } from 'rxjs';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp, heroEnvelope, heroEnvelopeOpen, heroRectangleStack } from '@ng-icons/heroicons/outline';
+import { heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp, heroEnvelope, heroEnvelopeOpen, heroRectangleStack, heroMagnifyingGlass, heroXMark } from '@ng-icons/heroicons/outline';
 import { heroEllipsisHorizontalSolid } from '@ng-icons/heroicons/solid';
 import { SessionService } from '../../../../session/services/session/session.service';
 import { ChatStateService } from '../../../../session/services/chat/chat-state.service';
@@ -21,6 +21,7 @@ import { parseIso } from '../../../../utils/date';
 import { InViewDirective } from './in-view.directive';
 import { ProjectsService } from '../../../../projects/services/projects.service';
 import { FEATURES } from '../../../../services/features';
+import { SessionTitleFilter, UNTITLED_SESSION_TITLE, filterSessionsByTitle } from './session-title-filter';
 
 /**
  * One row of a time bucket: a plain conversation, or the tasks of one project
@@ -58,7 +59,7 @@ export function groupProjectSessions(
 @Component({
   selector: 'app-session-list',
   imports: [RouterLink, RouterLinkActive, NgIcon, NgTemplateOutlet, CdkMenuTrigger, CdkMenu, CdkMenuItem, InViewDirective],
-  providers: [provideIcons({ heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroEllipsisHorizontalSolid, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp, heroEnvelope, heroEnvelopeOpen, heroRectangleStack })],
+  providers: [provideIcons({ heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroEllipsisHorizontalSolid, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp, heroEnvelope, heroEnvelopeOpen, heroRectangleStack, heroMagnifyingGlass, heroXMark })],
   templateUrl: './session-list.html',
   styleUrl: './session-list.css',
   changeDetection: ChangeDetectionStrategy.OnPush
@@ -127,6 +128,50 @@ export class SessionList {
     const response = this.mergedSessionsResource();
     return response?.sessions;
   });
+
+  private readonly titleFilter = inject(SessionTitleFilter);
+
+  /** What the user typed into the sidebar filter. */
+  protected readonly query = this.titleFilter.query;
+
+  /** Whether a query is narrowing the list; while it is, the date grouping is hidden. */
+  readonly isFiltering = this.titleFilter.isActive;
+
+  /**
+   * The loaded conversations whose title matches the query, in recency order.
+   * Only loaded pages are searched: the sidebar pages its list, so a match on a
+   * page not yet fetched appears once scrolling (the load-more sentinel, which
+   * stays live while filtering) brings that page in.
+   */
+  readonly filteredSessions = computed(() => filterSessionsByTitle(this.sessions() ?? [], this.query()));
+
+  /** The live result count, as read aloud and shown under the box. */
+  protected readonly resultCountLabel = computed(() => {
+    const n = this.filteredSessions().length;
+    return `${n} ${n === 1 ? 'match' : 'matches'}`;
+  });
+
+  /** Show the box once there is something to filter, or while a query is held. */
+  protected readonly showFilter = computed(
+    () => this.isFiltering() || this.isLoading() || (this.sessions()?.length ?? 0) > 0,
+  );
+
+  protected onQueryInput(value: string): void {
+    this.titleFilter.setQuery(value);
+  }
+
+  /** Escape clears a held query; with nothing to clear it is left to whatever sits above. */
+  protected onQueryKeydown(event: KeyboardEvent): void {
+    if (event.key !== 'Escape' || !this.query()) return;
+    event.preventDefault();
+    event.stopPropagation();
+    this.titleFilter.clear();
+  }
+
+  protected clearQuery(input: HTMLInputElement): void {
+    this.titleFilter.clear();
+    input.focus();
+  }
 
   /**
    * Computed signal that groups sessions by time period:
@@ -385,7 +430,7 @@ export class SessionList {
    * @returns Display title
    */
   protected getSessionTitle(session: SessionMetadata): string {
-    return session.title || 'Untitled Session';
+    return session.title || UNTITLED_SESSION_TITLE;
   }
 
   /**

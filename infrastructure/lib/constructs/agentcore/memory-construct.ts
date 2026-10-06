@@ -5,7 +5,7 @@ import * as logs from 'aws-cdk-lib/aws-logs';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
 
-import { AppConfig, getResourceName } from '../../config';
+import { AGENTCORE_MEMORY_EVENT_EXPIRY_MAX_DAYS, AppConfig, getResourceName } from '../../config';
 import { logRetentionFor } from '../observability/log-retention';
 
 export interface AgentCoreMemoryConstructProps {
@@ -71,7 +71,18 @@ export class AgentCoreMemoryConstruct extends Construct {
     // ── Memory resource ──
     this.memory = new bedrock.CfnMemory(this, 'AgentCoreMemory', {
       name: getResourceName(config, 'agentcore_memory').replace(/-/g, '_'),
-      eventExpiryDuration: 90, // days; max 365, min 7
+      // Days a short-term event (the message text itself; there is no other
+      // copy yet) lives after it is written. Driven by the one conversation
+      // retention setting, CDK_CONVERSATION_RETENTION_DAYS (default 365). The
+      // clamp exists because Memory accepts 3-365 and the setting may be set
+      // higher on purpose: the conversation archive (PR-2 of
+      // docs/specs/conversation-search.md) applies the same number, unclamped,
+      // as its S3 lifecycle expiry. CloudFormation documents a change here as
+      // an update with no interruption, so the memory id is kept.
+      eventExpiryDuration: Math.min(
+        config.conversationRetentionDays,
+        AGENTCORE_MEMORY_EVENT_EXPIRY_MAX_DAYS,
+      ),
       memoryExecutionRoleArn: this.executionRole.roleArn,
       description:
         'AgentCore Memory for maintaining conversation context, user preferences, and semantic facts',
