@@ -74,6 +74,9 @@ export interface SharedConversationResponse {
    *  conversations that produced none — indistinguishable, and neither
    *  is an error. */
   artifacts: SharedConversationArtifact[];
+  /** The model's tool-batch summaries, frozen with the snapshot. Absent or
+   *  empty on shares created before they were captured. */
+  toolSummaries?: { batchId?: string; toolUseIds?: string[]; summary?: string }[];
 }
 
 export interface ExportResponse {
