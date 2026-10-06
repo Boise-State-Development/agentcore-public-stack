@@ -13,6 +13,7 @@ const PROJECT: Project = {
   name: 'Enrollment Sync',
   description: '',
   ownerEmail: 'o@x.edu',
+  ownerName: null,
   role: 'editor',
   status: 'active',
   editorsManageMembers: true,
@@ -26,7 +27,7 @@ function doc(id: string, over: Partial<ProjectDocument> = {}): ProjectDocument {
   return {
     documentId: id, assistantId: 'ast-1', filename: `${id}.pdf`, contentType: 'application/pdf',
     sizeBytes: 2048, status: 'complete', createdAt: '2026-09-23T00:00:00Z', updatedAt: '2026-09-23T00:00:00Z',
-    addedByEmail: 'ann@x.edu', ...over,
+    addedByEmail: 'ann@x.edu', addedByName: null, ...over,
   };
 }
 
@@ -78,6 +79,13 @@ describe('ProjectFilesComponent', () => {
     expect(api.files).toHaveBeenCalledWith('prj_1', 100, null);
     expect(el.textContent).toContain('Added by ann@x.edu');
     expect(el.textContent).toContain('Added by Unknown');
+  });
+
+  it('names who added a file when the directory knows them, with the email on hover', async () => {
+    api.files.mockReturnValue(of({ documents: [doc('a', { addedByName: 'Ann Lee' })], nextToken: null, canEdit: true }));
+    const { el } = await render();
+    expect(el.textContent?.replace(/\s+/g, ' ')).toContain('Added by Ann Lee');
+    expect(el.querySelector('span[title="ann@x.edu"]')?.textContent).toBe('Ann Lee');
   });
 
   it('gives a viewer download but no add or delete', async () => {

@@ -154,6 +154,24 @@ def _reset_cached_aws_clients():
 
 
 @pytest.fixture(autouse=True)
+def _reset_directory():
+    """Drop the process-wide people directory between tests.
+
+    It holds a users-table repository bound to whatever table (and mock) was
+    current when it was first built, and every list of people in a project now
+    asks it for names. A directory built under one test's ``mock_aws()`` must not
+    answer the next test, whose mock is gone, with a real AWS call.
+    """
+    from apis.shared.directory import adapter
+
+    adapter._directory = None
+    try:
+        yield
+    finally:
+        adapter._directory = None
+
+
+@pytest.fixture(autouse=True)
 def _clear_env_config_bleed():
     saved = {
         k: os.environ.pop(k)

@@ -23,13 +23,14 @@ import re
 import zipfile
 from datetime import datetime, timezone
 from tempfile import SpooledTemporaryFile
-from typing import Iterator, Optional
+from typing import Dict, Iterable, Iterator, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 
 from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.models import User
+from apis.shared.directory import DirectoryPerson, people_by_user_id
 from apis.shared.feature_flags import memory_spaces_enabled
 from apis.shared.files.content_disposition import build_content_disposition
 from apis.shared.memory.models import EntryType
@@ -61,6 +62,7 @@ from apis.app_api.memory_spaces.models import (
     ShareRequest,
     SpaceDetailResponse,
     SpaceSummaryResponse,
+    visible_owner_id,
     SpacesListResponse,
     UpdateIndexRequest,
     UpdateShareRequest,
@@ -183,6 +185,18 @@ def _stream_and_close(spool: SpooledTemporaryFile) -> Iterator[bytes]:
 # ---- spaces ------------------------------------------------------------
 
 
+def _people(user: User, user_ids: Iterable[str]) -> Dict[str, DirectoryPerson]:
+    """Who the user ids a space stores are, so responses can name them by email instead.
+
+    The caller is known from their session even before the directory's next
+    refresh, which matters because they are usually the one who just saved.
+    """
+    people = people_by_user_id(set(user_ids))
+    if user.user_id and user.email and user.user_id not in people:
+        people[user.user_id] = DirectoryPerson(email=user.email.strip().lower())
+    return people
+
+
 @router.get("", response_model=SpacesListResponse)
 def list_spaces(user: User = Depends(require_memory_spaces_user)) -> SpacesListResponse:
     svc = _svc()
@@ -228,19 +242,20 @@ def get_space(
         entries = svc.list_entries(space_id, user.user_id, user.email)
     except MemorySpaceError as e:
         raise _translate(e)
+    people = _people(user, (r.updated_by for r in entries))
     return SpaceDetailResponse(
         space_id=space.space_id,
         name=space.name,
         template=space.template,
         role=role,
-        owner_id=space.owner_id,
+        owner_id=visible_owner_id(space),
         created_at=space.created_at,
         updated_at=space.updated_at,
         file_format=space.file_format,
         scope=space.scope,
         project_id=space.project_id,
         index=index_text,
-        entries=[EntryRefResponse.from_ref(r) for r in entries],
+        entries=[EntryRefResponse.from_ref(r, people) for r in entries],
     )
 
 
@@ -444,7 +459,8 @@ def list_entries(
         )
     except MemorySpaceError as e:
         raise _translate(e)
-    return EntriesListResponse(entries=[EntryRefResponse.from_ref(r) for r in entries])
+    people = _people(user, (r.updated_by for r in entries))
+    return EntriesListResponse(entries=[EntryRefResponse.from_ref(r, people) for r in entries])
 
 
 @router.get("/{space_id}/entries/{slug:path}", response_model=EntryContentResponse)
@@ -486,7 +502,7 @@ def upsert_entry(
         )
     except MemorySpaceError as e:
         raise _translate(e)
-    return SaveEntryResponse.from_result(result)
+    return SaveEntryResponse.from_result(result, _people(user, [result.ref.updated_by]))
 
 
 @router.delete("/{space_id}/entries/{slug:path}", status_code=status.HTTP_204_NO_CONTENT)
@@ -516,7 +532,8 @@ def list_file_history(
         versions = _svc().list_file_versions(space_id, user.user_id, user.email, slug)
     except MemorySpaceError as e:
         raise _translate(e)
-    return FileHistoryResponse(slug=slug, versions=[FileVersionResponse.from_version(v) for v in versions])
+    people = _people(user, (v.updated_by for v in versions))
+    return FileHistoryResponse(slug=slug, versions=[FileVersionResponse.from_version(v, people) for v in versions])
 
 
 @router.get("/{space_id}/history/{version}", response_model=FileVersionContentResponse)
@@ -538,5 +555,7 @@ def read_file_version(
             detail="failed to read that version",
         )
     return FileVersionContentResponse(
-        **FileVersionResponse.from_version(row).model_dump(), slug=slug, content=content
+        **FileVersionResponse.from_version(row, _people(user, [row.updated_by])).model_dump(),
+        slug=slug,
+        content=content,
     )

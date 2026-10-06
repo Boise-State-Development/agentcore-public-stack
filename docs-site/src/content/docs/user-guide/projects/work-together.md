@@ -214,7 +214,7 @@ changes don't notify anyone. Check **Tasks** and **Activity**.
 | **Archive** | Owner | Settings › Owner controls | Read-only for everyone: no new tasks or messages, no file or setting changes. Files and shared tasks stay readable. Every member is notified. |
 | **Restore** | Owner | Settings | Back to normal. Every member is notified. |
 | **Delete** | Owner | Settings, archived projects only | Removes the project, its assistant, its files and its list of shared tasks. Each member keeps their own tasks as ordinary conversations. |
-| **Transfer ownership** | Owner | Members › **Make owner** | Goes to an editor who has opened the project. The old owner becomes an editor, and the new owner is notified. |
+| **Transfer ownership** | Owner | Members › **Make owner** | Goes to an editor who has signed in at least once. The old owner becomes an editor, and the new owner is notified. |
 | **Leave** | Anyone but the owner | Members › **Leave project** | You lose access, and the owner is notified. Tasks you shared stay listed for the team. |
 
 ![An archived project: a banner saying it's read-only and can be restored from Settings.](../../../../assets/user-guide/projects/archived.jpg)

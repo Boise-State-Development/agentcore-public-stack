@@ -38,6 +38,7 @@ const PROJECT: Project = {
   name: 'Enrollment Sync',
   description: 'The nightly sync.',
   ownerEmail: 'o@x.edu',
+  ownerName: null,
   role: 'editor',
   status: 'active',
   editorsManageMembers: true,

@@ -337,6 +337,15 @@ class UserRepository:
         List users by status, sorted by last login (descending).
         Uses StatusLoginIndex GSI.
         """
+        return self.query_users_by_status(status, limit, last_evaluated_key)
+
+    def query_users_by_status(
+        self,
+        status: str = "active",
+        limit: int = 25,
+        last_evaluated_key: Optional[dict] = None
+    ) -> Tuple[List[UserListItem], Optional[dict]]:
+        """:meth:`list_users_by_status` for synchronous callers (it blocks on DynamoDB either way)."""
         if not self._enabled:
             return [], None
 

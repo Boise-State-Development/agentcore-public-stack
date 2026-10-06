@@ -256,6 +256,21 @@ def test_notifications_page_newest_first(service, pid):
     assert len(seen) == 6 and seen == sorted(seen, reverse=True)
 
 
+def test_notifications_name_the_actor_from_the_directory(service, pid, monkeypatch):
+    from apis.shared.directory import adapter
+
+    from tests.shared.test_projects import FakeDirectory
+
+    directory = FakeDirectory()
+    directory.sign_in(User(user_id=OWNER.user_id, email=OWNER.email, name="Olive Owner", roles=["default"]))
+    monkeypatch.setattr(adapter, "_directory", directory)
+    service.remove_member(pid, EDITOR, VIEWER.email)  # EDITOR is not in the directory
+
+    newest, invited = inbox(VIEWER)["notifications"]
+    assert (newest["actorEmail"], newest["actorName"]) == (EDITOR.email, None)
+    assert (invited["actorEmail"], invited["actorName"]) == (OWNER.email, "Olive Owner")
+
+
 # ---- the readers ---------------------------------------------------------
 
 
@@ -264,6 +279,21 @@ def test_editors_read_the_trail_without_user_ids(pid):
     assert [r["action"] for r in body["records"]][-1] == "project.created"
     assert body["records"][-1]["actorEmail"] == OWNER.email
     assert not any("actorUserId" in r or "targetId" in r for r in body["records"])
+    assert body["people"] == {}  # nobody in the directory
+
+
+def test_the_trail_names_its_actors_and_the_members_it_is_about(service, pid, monkeypatch):
+    from apis.shared.directory import adapter
+
+    from tests.shared.test_projects import FakeDirectory
+
+    directory = FakeDirectory()
+    for user, name in ((OWNER, "Olive Owner"), (VIEWER, "Vi Viewer")):
+        directory.sign_in(User(user_id=user.user_id, email=user.email, name=name, roles=["default"]))
+    monkeypatch.setattr(adapter, "_directory", directory)
+
+    body = client(EDITOR).get(f"/projects/{pid}/audit").json()
+    assert body["people"] == {OWNER.email: "Olive Owner", VIEWER.email: "Vi Viewer"}
 
     assert client(VIEWER).get(f"/projects/{pid}/audit").status_code == 403
     assert client(STRANGER).get(f"/projects/{pid}/audit").status_code == 404

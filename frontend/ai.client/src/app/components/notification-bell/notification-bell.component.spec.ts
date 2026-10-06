@@ -25,6 +25,7 @@ describe('describeNotification', () => {
     [notif({ kind: 'project_restored', payload: {} }), 'ann@x.edu restored Enrollment Sync.'],
     [notif({ kind: 'project_member_left', payload: { role: 'viewer' } }), 'ann@x.edu left Enrollment Sync.'],
     [notif({ actorEmail: null, projectName: null, payload: {} }), 'Someone added you to a project.'],
+    [notif({ actorName: 'Ann Lee' }), 'Ann Lee added you to Enrollment Sync as an editor.'],
   ])('%#: reads as a sentence', (n, text) => {
     expect(describeNotification(n)).toBe(text);
   });

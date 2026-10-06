@@ -16,6 +16,7 @@ const PROJECT: Project = {
   name: 'Enrollment Sync',
   description: '',
   ownerEmail: 'o@x.edu',
+  ownerName: null,
   role: 'viewer',
   status: 'active',
   editorsManageMembers: true,
@@ -33,8 +34,8 @@ function session(id: string, title: string): SessionMetadata {
   };
 }
 
-const MINE: SharedTask = { shareId: 'sh_1', title: 'Roster diff', sharedByEmail: 'me@x.edu', sharedAt: '2026-09-23T00:00:00Z', shareUrl: '/shared/sh_1', isMine: true };
-const THEIRS: SharedTask = { shareId: 'sh_2', title: 'Term dates', sharedByEmail: 'ann@x.edu', sharedAt: '2026-09-22T00:00:00Z', shareUrl: '/shared/sh_2', isMine: false };
+const MINE: SharedTask = { shareId: 'sh_1', title: 'Roster diff', sharedByEmail: 'me@x.edu', sharedByName: null, sharedAt: '2026-09-23T00:00:00Z', shareUrl: '/shared/sh_1', isMine: true };
+const THEIRS: SharedTask = { shareId: 'sh_2', title: 'Term dates', sharedByEmail: 'ann@x.edu', sharedByName: 'Ann Lee', sharedAt: '2026-09-22T00:00:00Z', shareUrl: '/shared/sh_2', isMine: false };
 
 describe('ProjectTasksComponent', () => {
   const api = { tasks: vi.fn(), sharedTasks: vi.fn() };
@@ -93,7 +94,7 @@ describe('ProjectTasksComponent', () => {
     const { el } = await render();
     expect(el.querySelector('a[href="/shared/sh_1"]')?.textContent).toContain('Roster diff');
     expect(el.textContent).toContain('Shared by you');
-    expect(el.textContent).toContain('Shared by ann@x.edu');
+    expect(el.textContent?.replace(/\s+/g, ' ')).toContain('Shared by Ann Lee');
     const revokes = el.querySelectorAll('button[aria-label^="Stop sharing"]');
     expect(revokes.length).toBe(1);
     expect(revokes[0].getAttribute('aria-label')).toBe('Stop sharing Roster diff');

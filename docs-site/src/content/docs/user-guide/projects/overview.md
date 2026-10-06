@@ -58,8 +58,8 @@ when they do.
 | Archive, restore, delete, transfer ownership | | | ✓ |
 
 - **There is exactly one owner.** The owner can hand the project to an editor,
-  who must have opened the project at least once. The old owner becomes an
-  editor.
+  who must have signed in at least once (they don't need to have opened the
+  project). The old owner becomes an editor.
 - **Anyone except the owner can leave** a project from the Members tab.
 - **Picking roles:** make people who shape the work *editors* (they set the
   assistant up and curate files). Make people who mainly need answers, such as

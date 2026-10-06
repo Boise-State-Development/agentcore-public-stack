@@ -14,6 +14,7 @@ import { SessionMetadata } from '../../session/services/models/session-metadata.
 import { SessionService } from '../../session/services/session/session.service';
 import { ShareService } from '../../session/services/share/share.service';
 import { parseIso } from '../../utils/date';
+import { personLabel } from '../../shared/utils/person';
 import { Project, SharedTask } from '../models/project.model';
 import { ProjectApiService } from '../services/project-api.service';
 import { projectErrorMessage } from '../services/projects.service';
@@ -121,7 +122,7 @@ const PAGE_SIZE = 20;
                     {{ task.title || 'Untitled task' }}
                   </a>
                   <p class="text-xs/5 text-gray-600 dark:text-gray-400">
-                    Shared by {{ task.isMine ? 'you' : task.sharedByEmail }} · {{ sharedAt(task) | date: 'mediumDate' }}
+                    Shared by <span [attr.title]="!task.isMine && task.sharedByName ? task.sharedByEmail : null">{{ task.isMine ? 'you' : personLabel(task.sharedByName, task.sharedByEmail) }}</span> · {{ sharedAt(task) | date: 'mediumDate' }}
                   </p>
                 </div>
                 <div class="flex items-center gap-1">
@@ -162,6 +163,8 @@ export class ProjectTasksComponent {
   private sessions = inject(SessionService);
   private dialog = inject(Dialog);
   private router = inject(Router);
+
+  protected readonly personLabel = personLabel;
 
   readonly project = input.required<Project>();
 

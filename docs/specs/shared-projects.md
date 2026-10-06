@@ -365,7 +365,8 @@ Each PR targets `develop`, lands behind `PROJECTS_ENABLED` (opt-in while in deve
   - **UI impact (for the 1.8 mockup re-sync):**
     - Delete is two steps: an Archive action, then Delete on an archived project.
     - An archived project is read-only for everyone except the owner restoring it.
-    - Transfer can only target an editor with `hasSignedIn: true`; the member list returns that flag, so the picker can disable the rest.
+    - Transfer can only target an editor with `hasSignedIn: true`; the member list returns that flag, so the picker can disable the rest. `hasSignedIn` means signed in to the platform (the member row is bound to an account, or the directory knows the email), not "has opened this project": transfer binds an unbound editor to the directory's account for their email (G9, 2026-10).
+    - Every person in a Projects response carries a display name beside the email (`name`, `ownerName`, `sharedByName`, `addedByName`, `createdByName`; the audit page's `people` map; the inbox's `actorName`), resolved from the directory's per-process snapshot and null when it has none. The email stays the key (G8, 2026-10).
     - Bulk invite reports four buckets: `added`, `alreadyMembers`, `invalid`, `overCapacity`.
     - The members response carries `canManage`, so the UI never re-derives the editors-manage-members rule.
   - kb-sync's image now copies `apis/shared/projects/` (import closure only; the worker never takes the harness access path).

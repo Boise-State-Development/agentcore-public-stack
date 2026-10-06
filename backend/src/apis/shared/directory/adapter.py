@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import List, Optional, Protocol
+from typing import Dict, Iterable, List, Optional, Protocol
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
@@ -19,16 +19,27 @@ DEFAULT_PROVIDER = "users_table"
 
 
 class DirectoryPerson(BaseModel):
-    """One search result. ``known`` is False for an email nobody has signed in with yet."""
+    """One person. ``known`` is False for an email nobody has signed in with yet."""
 
     email: str
     name: str = ""
     known: bool = True
+    # The account this email signs in as, for binding a project member to it.
+    # Internal: excluded from every dump, so it can never reach a response.
+    user_id: Optional[str] = Field(None, exclude=True)
 
 
 class DirectoryAdapter(Protocol):
     async def search(self, query: str, limit: int) -> List[DirectoryPerson]:
         """People matching ``query`` (email prefix or name), best match first, at most ``limit``."""
+        ...
+
+    def find_by_emails(self, emails: Iterable[str]) -> Dict[str, DirectoryPerson]:
+        """The known people among ``emails``, keyed by lowercased email. Blocking: may refresh."""
+        ...
+
+    def find_by_user_ids(self, user_ids: Iterable[str]) -> Dict[str, DirectoryPerson]:
+        """The known people among ``user_ids``, keyed by user id. Blocking: may refresh."""
         ...
 
 
@@ -46,3 +57,27 @@ def get_directory() -> DirectoryAdapter:
 
         _directory = UsersTableDirectory()
     return _directory
+
+
+def display_names(emails: Iterable[str]) -> Dict[str, str]:
+    """``email → name`` for the people the directory knows by name. Best-effort: never raises.
+
+    A name is a courtesy beside the email that identifies someone, so a directory
+    failure shows emails rather than failing the request. Blocking (it may refresh
+    the snapshot): from async code, run it in a thread.
+    """
+    try:
+        found = get_directory().find_by_emails(emails)
+    except Exception:
+        logger.warning("Directory lookup failed; showing emails without names", exc_info=True)
+        return {}
+    return {email: person.name for email, person in found.items() if person.name}
+
+
+def people_by_user_id(user_ids: Iterable[str]) -> Dict[str, DirectoryPerson]:
+    """``user id → person`` for the ids the directory knows. Best-effort: never raises. Blocking."""
+    try:
+        return get_directory().find_by_user_ids(user_ids)
+    except Exception:
+        logger.warning("Directory lookup by user id failed", exc_info=True)
+        return {}
