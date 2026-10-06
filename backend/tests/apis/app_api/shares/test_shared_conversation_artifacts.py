@@ -89,6 +89,7 @@ def _patch_sources(heads: list[dict] | Exception):
             )
         ]
     )
+    messages.tool_summaries = []
 
     list_service = MagicMock()
     if isinstance(heads, Exception):

@@ -76,7 +76,7 @@ def _patch_snapshot_sources(metadata_dump: dict, message_dumps: list):
     meta.model_dump.return_value = metadata_dump
 
     messages = [MagicMock(model_dump=MagicMock(return_value=m)) for m in message_dumps]
-    messages_response = MagicMock(messages=messages)
+    messages_response = MagicMock(messages=messages, tool_summaries=[])
 
     return (
         patch(
@@ -177,6 +177,40 @@ class TestReadPaths:
         assert result.title == "Round Trip"
         assert len(result.messages) == 1
         assert result.messages[0].content[0].text == "hello"
+
+    @pytest.mark.asyncio
+    async def test_tool_summaries_are_frozen_with_the_snapshot(self, service, store):
+        summaries = [
+            {"batchId": "b1", "toolUseIds": ["tu-1", "tu-2"], "summary": "Read the project notes"},
+        ]
+        meta_patch, msgs_patch = _patch_snapshot_sources({"title": "T"}, [_message_dict("hi")])
+        with meta_patch, msgs_patch as get_messages:
+            get_messages.return_value.tool_summaries = summaries
+            await service.create_share("sess-1", _owner(), CreateShareRequest(accessLevel="public"))
+        written = service._table.put_item.call_args[1]["Item"]
+
+        with patch.object(service, "_get_share_item", return_value=written), \
+                patch.object(store, "get", wraps=store.get) as s3_get:
+            result = await service.get_shared_conversation("share-x", _owner())
+
+        assert result.model_dump(by_alias=True)["toolSummaries"] == summaries
+        assert s3_get.call_count == 1  # messages, artifacts and summaries share one read
+
+    @pytest.mark.asyncio
+    async def test_a_share_predating_summaries_reads_as_empty(self, service):
+        item = {
+            "share_id": "share-old",
+            "session_id": "sess-old",
+            "owner_id": "owner-1",
+            "access_level": "public",
+            "created_at": "2025-01-01T00:00:00Z",
+            "metadata": {"title": "Old One"},
+            "messages": [_message_dict("hi", "m0")],
+        }
+        with patch.object(service, "_get_share_item", return_value=item):
+            result = await service.get_shared_conversation("share-old", _owner())
+
+        assert result.tool_summaries == []
 
     @pytest.mark.asyncio
     async def test_legacy_inline_read_still_works(self, service):

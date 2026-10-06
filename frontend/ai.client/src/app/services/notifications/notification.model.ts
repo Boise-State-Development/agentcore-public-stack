@@ -8,7 +8,10 @@ export type NotificationKind =
   | 'project_invited'
   | 'project_role_changed'
   | 'project_removed'
-  | 'project_ownership_transferred';
+  | 'project_ownership_transferred'
+  | 'project_archived'
+  | 'project_restored'
+  | 'project_member_left';
 
 export interface AppNotification {
   notificationId: string;
@@ -20,7 +23,7 @@ export interface AppNotification {
   actorEmail?: string | null;
   /** Their display name; null when the directory has none. */
   actorName?: string | null;
-  /** `role` for invitations and role changes. */
+  /** `role` for invitations, role changes and a member leaving (the role they had). */
   payload: { role?: string } & Record<string, unknown>;
   createdAt: string;
   readAt?: string | null;

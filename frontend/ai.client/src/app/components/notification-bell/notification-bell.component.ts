@@ -30,6 +30,12 @@ export function describeNotification(n: AppNotification): string {
       return `${who} removed you from ${project}.`;
     case 'project_ownership_transferred':
       return `${who} made you the owner of ${project}.`;
+    case 'project_archived':
+      return `${who} archived ${project}. It’s read-only until it’s restored.`;
+    case 'project_restored':
+      return `${who} restored ${project}.`;
+    case 'project_member_left':
+      return `${who} left ${project}.`;
     default:
       return 'You have a new notification.';
   }
@@ -57,7 +63,7 @@ export function relativeTime(iso: string, now = Date.now()): string {
  * invitation sent while the tab sat in the background shows up.
  *
  * Opening a notification marks it read and, unless it says you were removed,
- * takes you to the project. The panel shows the newest 20; the inbox keeps 90
+ * takes you to the project (its Members tab when someone left). The panel shows the newest 20; the inbox keeps 90
  * days, and older entries are not worth a pager in a menu.
  */
 @Component({
@@ -262,7 +268,8 @@ export class NotificationBellComponent {
   protected open(n: AppNotification): void {
     void this.service.markRead(n);
     if (n.kind !== 'project_removed' && n.projectId) {
-      void this.router.navigate(['/projects', n.projectId]);
+      const path = n.kind === 'project_member_left' ? ['/projects', n.projectId, 'members'] : ['/projects', n.projectId];
+      void this.router.navigate(path);
       this.sidenav.close();
     }
   }

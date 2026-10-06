@@ -37,7 +37,8 @@
                 <app-assistant-message
                   class="min-w-0 block"
                   [messages]="segment.messages"
-                  [streamingMessageId]="streamingMessageId()"></app-assistant-message>
+                  [streamingMessageId]="streamingMessageId()"
+                  [insightSessionId]="insightSessionId()"></app-assistant-message>
             </div>
             <!-- Per-response affordances anchor to the run's LAST message:
                  that is the one a Continue resumes and the one whose cost

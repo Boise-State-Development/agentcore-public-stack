@@ -21,6 +21,9 @@ describe('describeNotification', () => {
     [notif({ kind: 'project_role_changed', payload: { role: 'viewer' } }), 'ann@x.edu made you a viewer in Enrollment Sync.'],
     [notif({ kind: 'project_removed', payload: {} }), 'ann@x.edu removed you from Enrollment Sync.'],
     [notif({ kind: 'project_ownership_transferred', payload: {} }), 'ann@x.edu made you the owner of Enrollment Sync.'],
+    [notif({ kind: 'project_archived', payload: {} }), 'ann@x.edu archived Enrollment Sync. It’s read-only until it’s restored.'],
+    [notif({ kind: 'project_restored', payload: {} }), 'ann@x.edu restored Enrollment Sync.'],
+    [notif({ kind: 'project_member_left', payload: { role: 'viewer' } }), 'ann@x.edu left Enrollment Sync.'],
     [notif({ actorEmail: null, projectName: null, payload: {} }), 'Someone added you to a project.'],
     [notif({ actorName: 'Ann Lee' }), 'Ann Lee added you to Enrollment Sync as an editor.'],
   ])('%#: reads as a sentence', (n, text) => {
@@ -165,6 +168,13 @@ describe('NotificationBellComponent', () => {
     expect(service.markRead).toHaveBeenCalledWith(n);
     expect(navigate).toHaveBeenCalledWith(['/projects', 'prj_1']);
     expect(sidenav.close).toHaveBeenCalled();
+  });
+
+  it('someone leaving opens the project on its Members tab', () => {
+    const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+    const { component } = render();
+    component.open(notif({ kind: 'project_member_left' }));
+    expect(navigate).toHaveBeenCalledWith(['/projects', 'prj_1', 'members']);
   });
 
   it('a removal is only marked read: there is no project to open', () => {

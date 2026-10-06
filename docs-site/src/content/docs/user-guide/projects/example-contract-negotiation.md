@@ -70,13 +70,17 @@ Marcus uploads the reference set to **Files**: the OSP negotiation playbook,
 the executed mutual NDA and the PI's statement of work. The PI is a viewer, so
 she sends Marcus the statement of work and he uploads it.
 
-:::tip[Lesson: keep redlines out of Files]
-In the test run Marcus also uploaded Cascadia's v2 redline to Files. The
-search index flattens tracked changes, so the indexed text read
+:::note[Lesson: tracked changes in Files (fixed since)]
+In the test run Marcus also uploaded Cascadia's v2 redline to Files. At the
+time, the search index flattened tracked changes, so the indexed text read
 "…net thirty (30) days**payable in full within ninety (90) days**…": both
-versions at once. Redlines work far better as **task attachments**, which keep
-insertions and deletions distinct. Step 3 shows what went wrong when a redline
-did end up in Files.
+versions at once. Step 3 shows what went wrong because of it.
+
+**Fixed since:** Files now writes each tracked change out as `[deleted: …]` or
+`[inserted: …]` before indexing, so a redline in Files keeps its meaning. A
+redline uploaded before the fix keeps its flattened text until it's uploaded
+again. See
+[Word redlines in Files](/agentcore-public-stack/user-guide/projects/set-up/#word-redlines-in-files).
 :::
 
 Finally Dana starts a task to seed **project memory**:
@@ -90,6 +94,11 @@ Finally Dana starts a task to seed **project memory**:
 Every teammate's task now starts out knowing the deadline and who owns
 what. In the test run, Priya's assistant routed an escalation to the right
 person with no further prompting.
+
+At the time, the last sentence of Dana's prompt was needed: a new memory
+didn't reliably reach teammates' tasks until a line for it was added to the
+memory index, and the assistant often skipped that step. *(Fixed since: the assistant adds the index
+line itself whenever it saves a new memory.)*
 
 ## Step 2: Each office reviews its clauses, in parallel
 
@@ -169,15 +178,14 @@ including students". He fixes it in Word and shares his task.
 
 The generated file belongs to Marcus's task, so teammates can't open it from
 the shared snapshot. In the test run he added **v3** to the project's Files so
-they could. Because Files flattens tracked changes, the assistant later read
-v3's Article 10 as "already matches our standard, no escalation needed", when
-Cascadia had in fact demanded university indemnification. A safer pattern
-until tracked changes are indexed properly:
+they could. Because Files flattened tracked changes at the time, the assistant
+later read v3's Article 10 as "already matches our standard, no escalation
+needed", when Cascadia had in fact demanded university indemnification.
 
-- Add a **clean copy** (all changes accepted) to Files, named so it's clearly
-  the university's proposal. The assistant can then quote it accurately.
-- Circulate the **redline itself** the way your office already shares drafts,
-  such as email or a shared drive.
+*(Fixed since: with tracked changes written out as `[deleted: …]` and
+`[inserted: …]`, v3's Article 10 now reads as the university's text inserted
+and Cascadia's indemnification demand deleted. Adding the response redline to
+Files, named as the university's proposal, is now a sound way to share it.)*
 
 ## Step 4: Escalations and a hand-off
 
@@ -201,8 +209,10 @@ articles it had and hadn't seen, which told Alex what to double-check.
 When counsel (a viewer) asked the same question earlier, the answer listed **two**
 escalations instead of seven. Priya's Article 8 position and Dr. Sokolova's thesis
 requirement lived only in shared tasks and in the PI's own "just for me"
-memory, and the assistant doesn't read shared tasks. If a decision matters, an
-editor should **record it in project memory and add it to the index**.
+memory, and the assistant doesn't read shared tasks. Some team memories saved
+in the run were also never added to the memory index, so teammates' tasks
+didn't see them *(fixed since: new memories are indexed automatically)*. If a
+decision matters, an editor should **record it in project memory**.
 :::
 
 ## Step 5: Wrapping up
@@ -221,7 +231,9 @@ editor should **record it in project memory and add it to the index**.
    to the right office without being told each time.
 3. **Private tasks, explicit sharing.** People worked in parallel and published
    finished analyses.
-4. **Attachments for redlines, Files for clean reference text.**
+4. **Redlines read as redlines.** Tom's attached redline let the assistant
+   quote each deletion and insertion. Since the fix, a redline in Files does
+   the same.
 5. **A human pass before anything is saved or sent.** The assistant drafted fast
    and well, and still made mistakes a reviewer caught.
 
@@ -232,6 +244,6 @@ editor should **record it in project memory and add it to the index**.
 | Clause review | "Review Article N of the attached redline against playbook §X. Quote the sponsor's change, classify it ACCEPT / COUNTER / ESCALATE, and give paste-ready language." |
 | Cross-clause sweep | "Which other articles in this redline touch [IP / confidentiality / export control] indirectly?" |
 | Team status | "Summarize everything recorded in project memory about this negotiation: decisions, open issues, owners." |
-| Record a decision | "Record in project memory: [decision]. Add a one-line pointer to the project memory index." |
+| Record a decision | "Record in project memory: [decision]." |
 | Response document | "Create a Word document of our response with tracked changes (author '[office]') and a note under each article citing the playbook section." |
 | Completeness check | "…and tell me what you could NOT see, so I know how complete this is." |

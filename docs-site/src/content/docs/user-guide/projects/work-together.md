@@ -25,14 +25,16 @@ conversation outside the project**, without the project's assistant. To use a
 different model for the whole team, change it in **Settings › Model**.
 :::
 
-### Tell the assistant who you are
+### Your role and preferences
 
-The project assistant doesn't automatically know which member is talking to it.
-Without help, it may tell the export-control specialist to "send this to
-Research Compliance". Fix this once in **Settings › Chat › Personal
-instructions**:
+The project assistant knows which member is talking to it: your name, email
+and project role come with every message you send, so it can tell you apart
+from the teammates named in the project's instructions.
 
-> I'm Priya Raman, export control and research security specialist in Research
+It doesn't know your job, though. To tell it what you do and how you like
+answers laid out, set **Settings › Chat › Personal instructions** once:
+
+> I'm the export control and research security specialist in Research
 > Compliance. I review ITAR/EAR, CUI and foreign-national clauses. Format
 > findings as a table: Issue | Risk | Recommended language.
 
@@ -48,12 +50,14 @@ assistants can't see them.
 
 Attach rather than upload when:
 
-- The document is a **redline with tracked changes**. The assistant reads an
-  attachment's tracked changes as real insertions and deletions, so it can
-  quote exactly what the other side struck and added. Project Files flatten
-  tracked changes.
 - It's a **one-off** (an email thread, a draft you're not ready to share).
+- Only **you** need it. Anything in Files is searched for everyone's tasks.
 - The project's files are still **Setting up** and you need an answer now.
+
+Both work for a **redline with tracked changes**: the assistant can quote what
+the other side struck and what they added, whether the redline is attached or
+in [Files](/agentcore-public-stack/user-guide/projects/set-up/#word-redlines-in-files).
+Put it in Files when the whole team is working from it.
 
 ## Share a task with the project
 
@@ -87,9 +91,13 @@ Open a shared task to read its snapshot.
 
 To build on it, choose **Continue in my own task**. You get your own copy of the
 conversation, still in the project and on the project's current assistant, and
-the original is untouched. See
-[Tips and current limits](/agentcore-public-stack/user-guide/projects/tips-and-limits/#current-limits)
-for what a copy doesn't carry over today.
+the original is untouched. The assistant sees the copied conversation from your
+first message, and the copy shows what the original author typed.
+
+**Attachments aren't copied.** They belong to the person who shared the task.
+Where the original had one, the copy says which files weren't copied. Attach
+your own copy of any you need, or ask the person who shared the task to add it
+to Files.
 
 ## Project memory
 
@@ -104,11 +112,18 @@ The assistant can remember things across tasks, at two levels:
 
 How it reaches other people's tasks: each memory has a short **index**, and the
 index is what the assistant sees at the start of every task. Detailed entries
-are only read when the assistant goes looking. So when you save something
-important, ask for both:
+are only read when the assistant goes looking. When the assistant saves a new
+memory, it adds a line for it to the index automatically, so you only need to
+say what to record:
 
-> Record our agreed Article 3 payment position in project memory, **and add a
-> one-line pointer to it in the project memory index.**
+> Record our agreed Article 3 payment position in project memory.
+
+"Just for me" memory works the same way. Ask the assistant to remember a
+preference **for you** and it's saved and applied in your next task in this
+project:
+
+> Remember this just for me, not the team: when I ask for a status check, reply
+> with one line per open article.
 
 Other useful requests:
 
@@ -150,9 +165,10 @@ each change. The generated file is saved to **your task**, not the project:
 - Download it from the task.
 - Review it. The assistant can miss a clause or misstate a rule.
 - Teammates can't open a file from your task, even after you share the task.
-  To give the *assistant* the team's position, add a **clean copy** (all
-  changes accepted) to project Files. Share the redline itself the way your
-  office usually does, because Files flattens tracked changes.
+  To give the team and the assistant your draft, download it and add it to
+  project Files. Its tracked changes stay readable there (see
+  [Word redlines in Files](/agentcore-public-stack/user-guide/projects/set-up/#word-redlines-in-files)).
+  Name it so it's clear it's your side's proposal.
 
 ## Settings history and Activity
 
@@ -179,22 +195,24 @@ The bell next to your name in the sidebar shows when someone:
 - changes your role
 - removes you
 - makes you the owner
+- archives or restores a project you're in
+- leaves a project you own
 
 ![The notifications panel: "made you the owner" and "added you … as an editor".](../../../../assets/user-guide/projects/notifications.jpg)
 
-Opening a notification marks it read and takes you to the project.
-Notifications expire after 90 days, and you're never notified about your own
-actions. Shared tasks, new files, setting changes, archiving and departures
-don't notify anyone. Check **Tasks** and **Activity**.
+Opening a notification marks it read and takes you to the project (to
+**Members** when someone left). Notifications expire after 90 days, and you're
+never notified about your own actions. Shared tasks, new files and setting
+changes don't notify anyone. Check **Tasks** and **Activity**.
 
 ## Archive, restore, delete, transfer, leave
 
 | Action | Who | Where | What happens |
 | --- | --- | --- | --- |
-| **Archive** | Owner | Settings › Owner controls | Read-only for everyone: no new tasks or messages, no file or setting changes. Files and shared tasks stay readable. |
-| **Restore** | Owner | Settings | Back to normal. |
+| **Archive** | Owner | Settings › Owner controls | Read-only for everyone: no new tasks or messages, no file or setting changes. Files and shared tasks stay readable. Every member is notified. |
+| **Restore** | Owner | Settings | Back to normal. Every member is notified. |
 | **Delete** | Owner | Settings, archived projects only | Removes the project, its assistant, its files and its list of shared tasks. Each member keeps their own tasks as ordinary conversations. |
 | **Transfer ownership** | Owner | Members › **Make owner** | Goes to an editor who has signed in at least once. The old owner becomes an editor, and the new owner is notified. |
-| **Leave** | Anyone but the owner | Members › **Leave project** | You lose access. Tasks you shared stay listed for the team. |
+| **Leave** | Anyone but the owner | Members › **Leave project** | You lose access, and the owner is notified. Tasks you shared stay listed for the team. |
 
 ![An archived project: a banner saying it's read-only and can be restored from Settings.](../../../../assets/user-guide/projects/archived.jpg)

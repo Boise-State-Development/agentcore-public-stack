@@ -211,6 +211,9 @@ export class MessageListComponent {
   sharedArtifacts = input<SharedConversationArtifact[] | null>(null);
   sharedArtifactShareId = input<string | null>(null);
 
+  /** Passed to each assistant message; see `AssistantMessageComponent.insightSessionId`. */
+  insightSessionId = input<string | null>(null);
+
   /**
    * The published marketplace agent behind this conversation, when there is one — the
    * foot-of-conversation feedback link, and nothing else. Null for plain chat, a legacy

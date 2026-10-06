@@ -4,7 +4,7 @@ import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { Dialog } from '@angular/cdk/dialog';
 import { signal } from '@angular/core';
-import { ActivatedRoute, Router, provideRouter } from '@angular/router';
+import { ActivatedRoute, Router, convertToParamMap, provideRouter } from '@angular/router';
 import { of } from 'rxjs';
 
 import { SubmissionReviewPage } from './submission-review.page';
@@ -79,7 +79,12 @@ describe('SubmissionReviewPage', () => {
         { provide: Router, useValue: { navigate } },
         {
           provide: ActivatedRoute,
-          useValue: { snapshot: { paramMap: { get: () => 'ast-001' } } },
+          // The test drive's model picker reads the conversation's bound Agent off
+          // the query string.
+          useValue: {
+            snapshot: { paramMap: { get: () => 'ast-001' } },
+            queryParamMap: of(convertToParamMap({})),
+          },
         },
       ],
     });

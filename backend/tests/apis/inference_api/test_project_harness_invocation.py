@@ -277,6 +277,8 @@ class TestRefusal:
         projects_repo.create_project(_project(status="archived"))
         refusal = asyncio.run(_project_turn_refusal("prj_1"))
         assert "Enrollment Sync" in refusal and "archived" in refusal
+        # Also said when continuing an existing task, so it can't claim only new ones are refused.
+        assert "read-only" in refusal and "new conversations" not in refusal
 
     def test_missing_project_refuses(self, projects_repo):
         assert "no longer exists" in asyncio.run(_project_turn_refusal("prj_gone"))

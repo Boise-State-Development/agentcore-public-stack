@@ -398,7 +398,7 @@ async def _project_turn_gate(project_id: Optional[str]) -> Tuple[Optional[str], 
         return "This project no longer exists.", None
     if project.status != "active":
         return (
-            f'The project "{project.name}" is archived, so it can\'t start new conversations. '
+            f'The project "{project.name}" is archived, so it\'s read-only: no new tasks or messages. '
             "Ask the project owner to restore it."
         ), project
     return None, project

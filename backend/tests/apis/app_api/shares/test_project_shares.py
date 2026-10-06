@@ -105,7 +105,7 @@ def _session(session_id: str = "s1", project_id: Optional[str] = None, title: st
 def _sources(metadata: Optional[SessionMetadata]):
     return (
         patch("apis.app_api.shares.service.get_session_metadata", new=AsyncMock(return_value=metadata)),
-        patch("apis.app_api.shares.service.get_messages", new=AsyncMock(return_value=MagicMock(messages=[]))),
+        patch("apis.app_api.shares.service.get_messages", new=AsyncMock(return_value=MagicMock(messages=[], tool_summaries=[]))),
     )
 
 

@@ -10,7 +10,7 @@ import logging
 import os
 import time
 import uuid
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from apis.shared.auth.models import User
 from apis.shared.timestamps import utc_now_iso
@@ -71,7 +71,57 @@ class NotificationService:
         recipient = _normalize(recipient_email)
         if not self.enabled or not recipient or recipient == _normalize(actor.email):
             return None
-        notification = Notification(
+        notification = self._build(recipient, kind, actor, project_id, project_name, payload)
+        try:
+            self.table.put_item(Item=self._to_item(notification))
+            return notification
+        except Exception:
+            logger.warning("Could not write %s notification for project %s", kind, project_id, exc_info=True)
+            return None
+
+    def notify_many(
+        self,
+        recipient_emails: Iterable[str],
+        *,
+        kind: NotificationKind,
+        actor: User,
+        project_id: Optional[str] = None,
+        project_name: Optional[str] = None,
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> int:
+        """Put the same notification in each inbox, in ``BatchWriteItem`` groups of 25.
+
+        Duplicates and the actor are skipped. Returns how many were written; a
+        failure is logged and the rest are skipped, never raised (see :meth:`notify`).
+        """
+        actor_email = _normalize(actor.email)
+        recipients = sorted({r for r in map(_normalize, recipient_emails) if r and r != actor_email})
+        if not self.enabled or not recipients:
+            return 0
+        written = 0
+        try:
+            with self.table.batch_writer() as batch:
+                for recipient in recipients:
+                    notification = self._build(recipient, kind, actor, project_id, project_name, payload)
+                    batch.put_item(Item=self._to_item(notification))
+                    written += 1
+        except Exception:
+            logger.warning(
+                "Could not write all %s notifications for project %s (%d of %d queued)",
+                kind, project_id, written, len(recipients), exc_info=True,
+            )
+        return written
+
+    @staticmethod
+    def _build(
+        recipient: str,
+        kind: NotificationKind,
+        actor: User,
+        project_id: Optional[str],
+        project_name: Optional[str],
+        payload: Optional[Dict[str, Any]],
+    ) -> Notification:
+        return Notification(
             notification_id=_new_id(),
             recipient_email=recipient,
             kind=kind,
@@ -81,18 +131,16 @@ class NotificationService:
             payload=payload or {},
             created_at=utc_now_iso(),
         )
+
+    @staticmethod
+    def _to_item(notification: Notification) -> Dict[str, Any]:
         item = notification.model_dump(by_alias=True, exclude_none=True)
         item.update(
-            PK=_pk(recipient),
+            PK=_pk(notification.recipient_email),
             SK=f"{NOTIF_SK_PREFIX}{notification.notification_id}",
             ttl=int(time.time()) + RETENTION_DAYS * 86400,
         )
-        try:
-            self.table.put_item(Item=item)
-            return notification
-        except Exception:
-            logger.warning("Could not write %s notification for project %s", kind, project_id, exc_info=True)
-            return None
+        return item
 
     # ── read ────────────────────────────────────────────────────────────
 

@@ -5,6 +5,7 @@ import { Component, input } from '@angular/core';
 import { ShareService, SharedConversationResponse } from '../session/services/share/share.service';
 import { SessionService } from '../session/services/session/session.service';
 import { UserService } from '../auth/user.service';
+import { ToolInsightService } from '../session/services/chat/tool-insight.service';
 
 // Create a mock MessageListComponent to avoid external template resolution
 @Component({
@@ -155,6 +156,51 @@ describe('SharedViewPage', () => {
     expect((component as any).conversation()).toEqual(mockConversation);
     expect((component as any).messages().length).toBe(2);
     expect((component as any).isLoading()).toBe(false);
+  });
+
+  it('should fold tool results into their tool uses so finished steps read as complete', async () => {
+    const { component } = await createComponent();
+    mockShareService.getSharedConversation.mockResolvedValue({
+      ...mockConversation,
+      messages: [
+        {
+          id: 'msg-001',
+          role: 'assistant',
+          content: [
+            { type: 'toolUse', toolUse: { toolUseId: 'tu-1', name: 'memory_read', input: {} } },
+            { type: 'toolUse', toolUse: { toolUseId: 'tu-2', name: 'memory_save', input: {} } },
+          ],
+        } as any,
+        {
+          id: 'msg-002',
+          role: 'user',
+          content: [
+            { type: 'toolResult', toolResult: { toolUseId: 'tu-1', status: 'success', content: [{ text: 'ok' }] } },
+            { type: 'toolResult', toolResult: { toolUseId: 'tu-2', status: 'error', content: [{ text: 'no' }] } },
+          ],
+        } as any,
+      ],
+    });
+
+    await component.ngOnInit();
+
+    const toolUses = (component as any).messages()[0].content.map((b: any) => b.toolUse);
+    expect(toolUses.map((t: any) => t.status)).toEqual(['complete', 'error']);
+    expect(toolUses[0].result.content).toEqual([{ text: 'ok' }]);
+  });
+
+  it('should seed the snapshot tool summaries under its own share key', async () => {
+    const { component } = await createComponent();
+    mockShareService.getSharedConversation.mockResolvedValue({
+      ...mockConversation,
+      toolSummaries: [{ batchId: 'b1', toolUseIds: ['tu-1'], summary: 'Read the project notes' }],
+    });
+
+    await component.ngOnInit();
+
+    const insights = TestBed.inject(ToolInsightService);
+    expect((component as any).insightKey()).toBe('share:share-001');
+    expect(insights.get('share:share-001', 'tu-1')?.summary).toBe('Read the project notes');
   });
 
   it('should set conversation title from response', async () => {

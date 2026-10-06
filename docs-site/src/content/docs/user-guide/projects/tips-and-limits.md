@@ -27,20 +27,23 @@ own. So the wording of your question decides which passages it gets to see.
 ## Keep project memory useful
 
 - **Decide who records decisions**, usually the lead editor, and have them say
-  "record in project memory … and add it to the index".
+  "record in project memory …". The assistant adds a line for each new memory
+  to the index on its own.
 - Ask "What's in project memory?" at the start of a review session to see what
   the assistant will rely on.
 - **Correct mistakes immediately.** Anything saved to project memory is
   repeated in every teammate's tasks.
-- Use **"just for me"** memory for your own preferences, and **personal
-  instructions** for who you are and how you like answers formatted.
+- Use **"just for me"** memory for preferences that apply to this project, and
+  **personal instructions** for your role and how you like answers formatted
+  everywhere.
 
 ## Keep files clean
 
 - One current version of each document. Delete superseded drafts.
-- Clean text in Files, and redlines as task attachments
-  ([why](/agentcore-public-stack/user-guide/projects/work-together/#attach-a-file-to-a-task)).
-- In a new project, upload the most important document first.
+- Name each redline so it's clear whose draft it is and which round
+  ("Sponsor v2 redline", "University response v3"). When two redlines of the
+  same contract are in Files, the name is how you and the assistant tell them
+  apart.
 
 ## Review before you rely on it
 
@@ -62,9 +65,10 @@ can tell you which have changed on your deployment.
 
 **Working together**
 
-- **No notifications for team activity.** Shared tasks, new files, changes to
-  instructions, archiving and people leaving don't notify anyone. Check
-  **Tasks** and **Activity**, and tell teammates directly when you need them.
+- **Few notifications for team activity.** Archiving and restoring a project
+  notify every member, and the owner hears when someone leaves. Shared tasks,
+  new files and changes to instructions don't notify anyone. Check **Tasks**
+  and **Activity**, and tell teammates directly when you need them.
 - **No comments or @-mentions** on shared tasks. To hand work to a specific
   person, tell them, and share the task.
 - **Activity is for editors and the owner only.** Viewers don't see it.
@@ -76,23 +80,17 @@ can tell you which have changed on your deployment.
 
 **Continuing someone's task** ("Continue in my own task")
 
-- **The copy may not see the earlier conversation.** The messages are shown on
-  screen, but the assistant may answer as if the conversation just started.
-  Paste the key points into your first message.
-- **Attachments don't come along.** Re-attach any file you need.
-- **If the original task had an attachment, the copy can stop working** with
-  "Something went wrong… document… source". Start a fresh task and paste the
-  key points instead.
-- The first message of a copy may show the assistant's internal search context
-  rather than what the original author typed.
+- **Attachments don't come along.** The copy says which files weren't copied.
+  Attach your own copy of any you need, or ask for it to be added to Files.
 
 **Files and documents**
 
-- In a new project, files added together become **Ready** one at a time, which
-  can take over an hour for a handful of files. A file showing **Ready** can
-  take a minute or two more before the assistant finds it.
-- **Tracked changes are flattened** in Files. Deleted and inserted wording run
-  together.
+- A file showing **Ready** can take a minute or two more before the assistant
+  finds it.
+- **Older redlines may still read flattened.** A redline added to Files before
+  tracked changes were supported (October 2026) keeps its old text, with deleted
+  and inserted wording run together. Delete it and upload it again (see
+  [Word redlines in Files](/agentcore-public-stack/user-guide/projects/set-up/#word-redlines-in-files)).
 - Documents the assistant creates are **saved to your task only**. There's no
   "save to project" button. Download the file and add it to Files.
 - There's no version history for files. Each upload is a separate file.
@@ -100,12 +98,8 @@ can tell you which have changed on your deployment.
 **Memory and settings**
 
 - **No memory tab yet.** Ask the assistant to list or read project memory.
-- **New memory isn't always added to the index**, so teammates' assistants may
-  not see it. Ask for "add it to the index" every time.
 - **No one-click revert** for instructions. Copy an old version from History
   and save it.
-- **The project assistant doesn't know who you are** unless you set personal
-  instructions or say so in your message.
 - **Switching models inside a task** starts a new conversation outside the
   project.
 

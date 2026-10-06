@@ -11,6 +11,22 @@ fictional.
 
 **User-facing docs written from this run:** `docs-site/src/content/docs/user-guide/projects/`.
 
+## Status
+
+Updated 2026-10-05. All fixes below are merged into `develop`.
+
+| Findings | Fixed by | What changed for users |
+| --- | --- | --- |
+| B1, B2, B3, B4 | [PR 1430](https://github.com/Boise-State-Development/agentcore-public-stack/pull/1430) | "Continue in my own task" sees the copied conversation from its first turn and shows the original author's message, not the RAG-augmented prompt. Attachments are replaced by a line naming the files that weren't copied. Session files are still not copied, by design (B4). Forks broken before the fix are repaired when their history is next restored. |
+| B11, B5 | [PR 1429](https://github.com/Boise-State-Development/agentcore-public-stack/pull/1429) | The worker releases its lease after each step, and a born-managed backlog is handed to the ingestion consumer in parallel. A new project's first files become Ready in minutes instead of up to about 90 minutes. |
+| B9 | [PR 1431](https://github.com/Boise-State-Development/agentcore-public-stack/pull/1431), [PR 1436](https://github.com/Boise-State-Development/agentcore-public-stack/pull/1436) | Word tracked changes are written out as `[deleted: …]` / `[inserted: …]` (comments as `[comment by <author>: …]`) before indexing, with a note naming the authors. Managed KBs receive the annotated text; legacy KBs receive an annotated `.docx`. Redlines ingested before the fix keep their flattened text until re-uploaded or re-ingested. |
+| G2, G18 | [PR 1432](https://github.com/Boise-State-Development/agentcore-public-stack/pull/1432) | A new memory file is added to its scope's `MEMORY.md` index automatically. The project harness is told which member is speaking (name, email, project role) on every turn. |
+| G17 | [PR 1433](https://github.com/Boise-State-Development/agentcore-public-stack/pull/1433) | "Remember this just for me" saves to the member's personal project memory, and the next task applies it. |
+
+**Still open:** B6, B7, B8, B10 (the share dialog's copy is unchanged), and every
+gap except G2, G17 and G18. The end-user guide no longer lists the fixed items
+as limits.
+
 ## How it was run
 
 - **Environment:** dev, deployed at `ea4d75be` (code identical to `develop` at

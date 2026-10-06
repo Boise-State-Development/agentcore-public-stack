@@ -1,5 +1,7 @@
 import { Component, ChangeDetectionStrategy, computed, inject, input, signal } from '@angular/core';
-import { Router } from '@angular/router';
+import { toSignal } from '@angular/core/rxjs-interop';
+import { ActivatedRoute, Router } from '@angular/router';
+import { map } from 'rxjs';
 import { CdkMenuTrigger, CdkMenu, CdkMenuItem } from '@angular/cdk/menu';
 import { ConnectedPosition } from '@angular/cdk/overlay';
 import { NgIcon, provideIcons } from '@ng-icons/core';
@@ -11,6 +13,21 @@ import {
   effortLevelLabel,
 } from '../../admin/manage-models/models/managed-model.model';
 import { ModelOptionComponent } from './components/model-option.component';
+import { FEATURES } from '../../services/features';
+import { ProjectsService } from '../../projects/services/projects.service';
+
+/**
+ * What picking a different model does to the open conversation. A model switch
+ * never changes an existing conversation in place: it starts a fresh one on the
+ * new model, bound to whatever the current one was bound to.
+ */
+type SwitchTarget = 'chat' | 'agent' | 'project';
+
+const SWITCH_HINT: Record<SwitchTarget, { pill: string; note: string }> = {
+  chat: { pill: 'New chat', note: 'Choosing another model starts a new chat.' },
+  agent: { pill: 'New session', note: 'Choosing another model starts a new session with this agent.' },
+  project: { pill: 'New task', note: 'Choosing another model starts a new task in this project.' },
+};
 
 @Component({
   selector: 'app-model-dropdown',
@@ -71,6 +88,14 @@ import { ModelOptionComponent } from './components/model-option.component';
           role="menu"
           aria-orientation="vertical"
         >
+          @if (switchHint(); as hint) {
+            <!-- Said before the choice, not after: picking a row leaves this
+                 conversation for a new one, and in a project or agent the new one
+                 stays on that project or agent. -->
+            <p class="px-3 pt-1.5 pb-2 text-xs/4 text-gray-500 dark:text-gray-400">
+              {{ hint.note }}
+            </p>
+          }
           @if (modelService.modelsLoading()) {
             <div class="px-3 py-2 text-sm/5 text-gray-500 dark:text-gray-400">
               Loading models...
@@ -109,7 +134,7 @@ import { ModelOptionComponent } from './components/model-option.component';
                 [model]="model"
                 [selected]="isSelected(model)"
                 [successorName]="modelService.modelNameFor(model.replacedBy)"
-                [showNewChatHint]="sessionService.hasCurrentSession()"
+                [switchHint]="switchHint()?.pill ?? null"
                 (cdkMenuItemTriggered)="selectModel(model)"
               />
             }
@@ -208,7 +233,7 @@ import { ModelOptionComponent } from './components/model-option.component';
                       [model]="model"
                       [selected]="isSelected(model)"
                       [successorName]="modelService.modelNameFor(model.replacedBy)"
-                      [showNewChatHint]="sessionService.hasCurrentSession()"
+                      [switchHint]="switchHint()?.pill ?? null"
                       (cdkMenuItemTriggered)="selectModel(model)"
                     />
                   }
@@ -257,6 +282,46 @@ export class ModelDropdownComponent {
   protected modelService = inject(ModelService);
   protected sessionService = inject(SessionService);
   private router = inject(Router);
+  private route = inject(ActivatedRoute);
+  private features = inject(FEATURES);
+  private projectsService = inject(ProjectsService);
+
+  /**
+   * The Agent this conversation is bound to. The URL's `assistantId` is the
+   * session page's single source of truth for that binding (its self-heal
+   * effect fills it in from the session's preferences), so it is read from
+   * there rather than from a second copy that could disagree.
+   */
+  private readonly boundAgentId = toSignal(
+    this.route.queryParamMap.pipe(map(params => params.get('assistantId'))),
+    { initialValue: null },
+  );
+
+  /**
+   * The project whose harness this conversation runs on, or null. The harness
+   * is an ordinary Agent id on the URL, so it is told apart by the project list
+   * (which the sidebar loads), falling back to the session's own preferences.
+   */
+  private readonly boundProjectId = computed<string | null>(() => {
+    if (!this.features.projects) return null;
+    const agentId = this.boundAgentId();
+    if (!agentId) return null;
+    const listed = this.projectsService.projects$().find(p => p.harnessAgentId === agentId);
+    if (listed) return listed.projectId;
+    const prefs = this.sessionService.currentSession().preferences;
+    return prefs?.assistantId === agentId ? (prefs.projectId ?? null) : null;
+  });
+
+  /** What a model switch will do here, or null when it changes nothing but the model. */
+  protected readonly switchHint = computed(() => {
+    if (!this.sessionService.hasCurrentSession()) return null;
+    const target: SwitchTarget = this.boundProjectId()
+      ? 'project'
+      : this.boundAgentId()
+        ? 'agent'
+        : 'chat';
+    return SWITCH_HINT[target];
+  });
 
   /**
    * Whether the model menu is open, driving the trigger's chevron. Fed by the
@@ -358,14 +423,20 @@ export class ModelDropdownComponent {
     this.modelService.setEffort(level);
   }
 
+  /**
+   * Choose a model. In an open conversation a different model starts a new one,
+   * and the new one keeps the conversation's Agent: a project task's harness
+   * (so the user stays in the project, with its instructions, files and
+   * memory) or an Agent session's Agent. Dropping the binding here once sent a
+   * project member to a plain chat with no warning (B8).
+   */
   protected selectModel(model: ManagedModel): void {
-    // If in an active session and selecting a different model, navigate to new chat
-    if (this.sessionService.hasCurrentSession() && !this.isSelected(model)) {
-      this.modelService.setSelectedModel(model);
-      this.router.navigate(['']);
-    } else {
-      this.modelService.setSelectedModel(model);
-    }
+    const startsNew = this.sessionService.hasCurrentSession() && !this.isSelected(model);
+    this.modelService.setSelectedModel(model);
+    if (!startsNew) return;
+
+    const assistantId = this.boundAgentId();
+    this.router.navigate(['/'], { queryParams: assistantId ? { assistantId } : {} });
   }
 
   protected isSelected(model: ManagedModel): boolean {

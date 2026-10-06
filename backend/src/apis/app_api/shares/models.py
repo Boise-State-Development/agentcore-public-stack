@@ -6,7 +6,7 @@ This module contains all share-related data models including:
 - SharedConversationResponse for full shared conversation data
 """
 
-from typing import List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 # "project" shares with every member of the Shared Project the task belongs to
 # (its session's ``preferences.projectId``); the read check is membership.
@@ -145,4 +145,12 @@ class SharedConversationResponse(BaseModel):
         "created before artifacts were captured, and for conversations "
         "that produced none — the two are indistinguishable and neither "
         "is an error.",
+    )
+    tool_summaries: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        alias="toolSummaries",
+        description="Model-written one-line summaries of tool batches, "
+        "`{batchId, toolUseIds, summary}`, as on `GET /sessions/{id}/messages`. "
+        "Frozen when the share was created; empty for shares made before "
+        "they were captured.",
     )
