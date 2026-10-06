@@ -15,6 +15,7 @@ from agents.main_agent.core.model_config import ModelConfig, ModelProvider
 from agents.main_agent.config.constants import EnvVars, Defaults
 from apis.shared.models.bedrock_responses import build_bedrock_responses_model
 from apis.shared.models.mantle import build_mantle_model
+from apis.shared.models.text_only_input import text_only_input
 from apis.shared.models.usage_normalization import usage_normalized
 
 logger = logging.getLogger(__name__)
@@ -230,6 +231,13 @@ class AgentFactory:
             model = AgentFactory._create_gemini_model(model_config)
         else:
             raise ValueError(f"Unsupported model provider: {provider}")
+
+        # A text-only model rejects the whole request over one image or
+        # document block, and history can carry them from a turn that ran on
+        # a vision model. Projected per call, never in place: the message list
+        # is shared with every other agent serving this session.
+        if model_config.text_only:
+            model = text_only_input(model)
 
         # Build SDK-level retry strategy for Bedrock provider
         # This is the second retry layer (agent event loop), retries with

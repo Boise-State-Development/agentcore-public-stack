@@ -67,3 +67,17 @@ def test_a_harness_keys_on_the_scopes_its_tools_were_built_from():
     assert "project_memory.binding_key()" in assigned["memory_binding_key"]
     assert "build_project_memory_tools(project_memory, current_user)" in assigned["memory_tools"]
     assert "project_memory.memory_context or None" in assigned["memory_context"]
+
+
+def test_every_turn_build_carries_the_text_only_flag():
+    """Dropped on any of these, a text-only model is sent the media blocks in
+    history and fails the turn. The main turn and the App dispatch share a
+    cache slot; resume replays the snapshot."""
+    calls = list(_get_agent_calls())
+    resume = [kw for kw in calls if _is_true(kw.get("is_resume"))][0]
+    main = [kw for kw in calls if _is_false(kw.get("is_resume")) and "extra_tools_key_described" in kw][0]
+    dispatch = [kw for kw in calls if _is_false(kw.get("is_resume")) and "extra_tools_key_described" not in kw]
+    assert ast.unparse(main["text_only_model"]) == "turn_model.text_only"
+    assert ast.unparse(resume["text_only_model"]) == "bool(snapshot.text_only_model)"
+    assert len(dispatch) == 1
+    assert ast.unparse(dispatch[0]["text_only_model"]) == "is_text_only_model(input_modalities)"

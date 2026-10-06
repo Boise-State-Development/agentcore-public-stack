@@ -334,6 +334,11 @@ class ModelConfig:
     # it was added. The wire/persisted field is already the transport-neutral
     # `region`, so only this Python name lags.
     mantle_region: Optional[str] = None
+    # The catalog row declares TEXT input only. The factory then shows the
+    # model its history through `text_only_input`, which replaces image,
+    # document and video blocks with text. Not a cache-key element: it is a
+    # function of `model_id`, which already is.
+    text_only: bool = False
 
     def get_provider(self) -> ModelProvider:
         """
@@ -654,6 +659,7 @@ class ModelConfig:
             "inference_params": dict(self.inference_params),
             "mantle_api_mode": self.mantle_api_mode.value,
             "mantle_region": self.mantle_region,
+            "text_only": self.text_only,
         }
 
     @classmethod
@@ -665,6 +671,7 @@ class ModelConfig:
         inference_params: Optional[Dict[str, Any]] = None,
         mantle_api_mode: Optional[str] = None,
         mantle_region: Optional[str] = None,
+        text_only: bool = False,
     ) -> "ModelConfig":
         """Create ModelConfig from optional parameters.
 
@@ -681,6 +688,7 @@ class ModelConfig:
                 back to Chat Completions.
             mantle_region: Bedrock Mantle region override. Only consulted on the
                 MANTLE provider path; ``None`` falls back to the agent's region.
+            text_only: The model's catalog row declares TEXT input only.
         """
         provider_enum = ModelProvider.BEDROCK
         if provider:
@@ -703,4 +711,5 @@ class ModelConfig:
             inference_params=dict(inference_params) if inference_params else {},
             mantle_api_mode=api_mode,
             mantle_region=mantle_region,
+            text_only=text_only,
         )
