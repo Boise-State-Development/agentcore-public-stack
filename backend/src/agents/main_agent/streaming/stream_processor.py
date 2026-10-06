@@ -301,6 +301,10 @@ def _handle_completion_events(event: RawEvent) -> Tuple[List[ProcessedEvent], bo
     # We also break because processing should stop on error
     if event.get("force_stop", False):
         reason = event.get("force_stop_reason", "unknown reason")
+        # The only record of the reason outside the persisted chat message
+        # and the OTel span; without it a support ticket can't be traced
+        # from the runtime logs.
+        logger.warning("Agent force-stopped: %s", reason)
 
         error_message, recoverable = _format_force_stop_message(reason)
 

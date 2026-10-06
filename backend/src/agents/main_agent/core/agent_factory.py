@@ -231,10 +231,10 @@ class AgentFactory:
         else:
             raise ValueError(f"Unsupported model provider: {provider}")
 
-        # Build SDK-level retry strategy for Bedrock provider
-        # This is the second retry layer (agent event loop), retries with
-        # exponential backoff. Only applies to Bedrock; other providers handle
-        # retries internally.
+        # Build SDK-level retry strategy for the Bedrock Converse and
+        # bedrock-runtime Responses providers. This is the second retry layer
+        # (agent event loop), retries with exponential backoff. Any other
+        # provider gets None, which Strands reads as retries OFF.
         #
         # Stock ModelRetryStrategy retries ModelThrottledException ONLY, which
         # leaves Bedrock's transient service faults (ServiceUnavailableException,
@@ -263,6 +263,30 @@ class AgentFactory:
                 f"sdk={model_config.retry_config.sdk_max_attempts} attempts "
                 f"({model_config.retry_config.sdk_initial_delay}s-{model_config.retry_config.sdk_max_delay}s backoff), "
                 f"strategy={strategy_cls.__name__}"
+            )
+        elif (
+            provider == ModelProvider.BEDROCK_RESPONSES
+            and model_config.retry_config
+            and model_config.retry_config.retry_transient_service_errors
+        ):
+            # The OpenAI client retries HTTP failures, but GPT-6 reports its
+            # server faults as events inside a 200 stream, which it never
+            # sees. Without a strategy here Strands turns retries off
+            # entirely (None means max_attempts=1), and those faults reached
+            # users as "Agent force-stopped". The kill switch restores that
+            # old behavior rather than the stock throttle-only strategy,
+            # which has no guard against retrying after visible output.
+            from agents.main_agent.core.retry_strategy import ResponsesTransientRetryStrategy
+
+            retry_strategy = ResponsesTransientRetryStrategy(
+                max_attempts=model_config.retry_config.sdk_max_attempts,
+                initial_delay=model_config.retry_config.sdk_initial_delay,
+                max_delay=model_config.retry_config.sdk_max_delay,
+            )
+            logger.info(
+                f"Configured retry strategy: sdk={model_config.retry_config.sdk_max_attempts} attempts "
+                f"({model_config.retry_config.sdk_initial_delay}s-{model_config.retry_config.sdk_max_delay}s backoff), "
+                f"strategy=ResponsesTransientRetryStrategy"
             )
 
         # Bedrock prompt caching: give the system prompt its own cachePoint by

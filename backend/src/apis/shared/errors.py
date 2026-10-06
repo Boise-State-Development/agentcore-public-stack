@@ -158,6 +158,12 @@ _SERVICE_UNAVAILABLE_MARKERS = (
     "modelnotready",
     "modeltimeout",
     "503",
+    # The OpenAI Responses API's own wording (GPT-6 on bedrock-runtime). Seen
+    # in prod surfacing raw as "Agent force-stopped: ..." because neither
+    # matched the Bedrock-shaped entries above. "service is temporarily
+    # unavailable" does not contain "service is unavailable".
+    "temporarily unavailable",
+    "server had an error while processing your request",
 )
 
 

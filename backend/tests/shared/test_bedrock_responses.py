@@ -253,3 +253,52 @@ class TestUsageNormalizationApplies:
             + usage["cacheReadInputTokens"]
             + usage["cacheWriteInputTokens"]
         ) == usage["totalTokens"] - usage["outputTokens"]
+
+
+class TestPartialOutputTag:
+    """The retry strategy may restart a failed call only if the user saw none
+    of it. OpenAI raises the same exception either way, so the model wrapper
+    records which case it was."""
+
+    @staticmethod
+    def _failing_stream(chunks):
+        async def _stream(self, *args, **kwargs):
+            for chunk in chunks:
+                yield chunk
+            raise RuntimeError("The server had an error while processing your request.")
+
+        return _stream
+
+    async def _drain(self, chunks):
+        from strands.models import OpenAIResponsesModel
+
+        model = build_bedrock_responses_model(model_id="global.openai.gpt-6-sol", region="us-west-2")
+        seen = []
+        with patch.object(OpenAIResponsesModel, "stream", self._failing_stream(chunks)):
+            with pytest.raises(RuntimeError) as excinfo:
+                async for chunk in model.stream([]):
+                    seen.append(chunk)
+        return seen, excinfo.value
+
+    @pytest.mark.asyncio
+    async def test_failure_before_any_content_is_not_tagged(self):
+        from apis.shared.models.stream_output import streamed_partial_output
+
+        seen, error = await self._drain([{"messageStart": {"role": "assistant"}}])
+
+        assert seen == [{"messageStart": {"role": "assistant"}}]
+        assert streamed_partial_output(error) is False
+
+    @pytest.mark.asyncio
+    async def test_failure_after_text_is_tagged(self):
+        from apis.shared.models.stream_output import streamed_partial_output
+
+        chunks = [
+            {"messageStart": {"role": "assistant"}},
+            {"contentBlockStart": {"start": {}}},
+            {"contentBlockDelta": {"delta": {"text": "Here is"}}},
+        ]
+        seen, error = await self._drain(chunks)
+
+        assert seen == chunks
+        assert streamed_partial_output(error) is True
