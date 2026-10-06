@@ -1294,7 +1294,7 @@ class StreamCoordinator:
                         # rail with no flash; the full html-bearing resource
                         # follows below and mounts the iframe.
                         for sse in self._emit_ui_app_header_for_tool(
-                            tname, tuid, ui_header_emitted
+                            tname, tuid, ui_header_emitted, user_id=user_id
                         ):
                             yield sse
                         for sse in await self._emit_ui_resource_for_tool(
@@ -2496,6 +2496,7 @@ class StreamCoordinator:
         tool_name: Optional[str],
         tool_use_id: Optional[str],
         emitted: set,
+        user_id: Optional[str] = None,
     ) -> List[str]:
         """Emit a UI tool's instant header-only `ui_resource` shell (empty html).
 
@@ -2517,7 +2518,7 @@ class StreamCoordinator:
         if not tool_use_id or not tool_name or tool_use_id in emitted:
             return []
         try:
-            payload = build_ui_app_header(tool_name, tool_use_id)
+            payload = build_ui_app_header(tool_name, tool_use_id, user_id)
             if payload is None:
                 return []
             emitted.add(tool_use_id)
@@ -2573,7 +2574,7 @@ class StreamCoordinator:
 
         try:
             payload = await asyncio.to_thread(
-                fetch_ui_resource, tool_name, tool_use_id
+                fetch_ui_resource, tool_name, tool_use_id, user_id
             )
             if payload is None:
                 return []

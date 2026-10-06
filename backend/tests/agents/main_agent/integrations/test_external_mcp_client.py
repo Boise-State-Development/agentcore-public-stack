@@ -350,6 +350,65 @@ class TestLoadExternalToolsVersioning:
         assert client_old not in integration.clients.values()
 
 
+class TestOwnerStamping:
+    """A client carrying one user's credential is stamped `owner_user_id`
+    BEFORE its preflight `tools/list` (which records MCP Apps catalog
+    entries), so the UI catalog never hands it to another user. Shared
+    clients stay unowned."""
+
+    async def _load(self, tool, **kwargs):
+        integration = ExternalMCPIntegration()
+        repo = SimpleNamespace(get_tool=AsyncMock(return_value=tool))
+        seen_owner = {}
+
+        async def _load_tools(*_a, **_k):
+            seen_owner["at_preflight"] = getattr(client, "owner_user_id", None)
+            return []
+
+        client = SimpleNamespace(owner_user_id=None, load_tools=_load_tools)
+        with patch(
+            "apis.shared.tools.repository.get_tool_catalog_repository",
+            return_value=repo,
+        ), patch(
+            "agents.main_agent.integrations.external_mcp_client.create_external_mcp_client",
+            return_value=client,
+        ):
+            loaded = await integration.load_external_tools(["gmail"], **kwargs)
+        return loaded, client, seen_owner
+
+    @pytest.mark.asyncio
+    async def test_forwarded_token_client_is_owned_by_the_user(self):
+        tool = _fake_tool(datetime(2025, 1, 1, tzinfo=timezone.utc))
+        tool.forward_auth_token = True
+
+        loaded, client, seen = await self._load(
+            tool, user_id="alice", auth_token="tok"
+        )
+
+        assert loaded == [client]
+        assert client.owner_user_id == "alice"
+        assert seen["at_preflight"] == "alice"
+
+    @pytest.mark.asyncio
+    async def test_shared_client_stays_unowned(self):
+        tool = _fake_tool(datetime(2025, 1, 1, tzinfo=timezone.utc))
+
+        loaded, client, _ = await self._load(tool, user_id="alice", auth_token="tok")
+
+        assert loaded == [client]
+        assert client.owner_user_id is None
+
+    def test_clear_user_clients_forgets_their_ui_catalog_entries(self):
+        from agents.main_agent.integrations import mcp_apps
+
+        catalog = mcp_apps.UIToolCatalog()
+        meta = SimpleNamespace()
+        catalog.record("w", meta, client=SimpleNamespace(owner_user_id="alice"))
+        with patch.object(mcp_apps, "get_ui_tool_catalog", return_value=catalog):
+            ExternalMCPIntegration().clear_user_clients("alice")
+        assert catalog.get("w", "alice") is None
+
+
 class TestLoadExternalToolsPreflight:
     """A single unreachable MCP server must not fail the whole turn —
     `load_external_tools` pre-flights each new client and silently drops

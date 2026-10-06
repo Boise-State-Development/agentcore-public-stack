@@ -686,6 +686,17 @@ class ExternalMCPIntegration:
             )
 
             if client:
+                # A client carrying one user's credential must only ever be
+                # handed back for that user by the MCP Apps UI catalog (which
+                # app-initiated tools/call and resources/read resolve from).
+                # Stamp before the preflight below, which runs tools/list and
+                # records the catalog entries. Mirrors the cache-key
+                # partitioning above: shared clients stay unowned.
+                if requires_user_auth and user_id:
+                    try:
+                        client.owner_user_id = user_id
+                    except Exception:  # noqa: BLE001
+                        pass
                 # What the context breakdown calls this server's tools.
                 # Display-only: never let it cost the server its tools.
                 try:
@@ -863,6 +874,14 @@ class ExternalMCPIntegration:
             self._client_versions.pop(key, None)
             self._provider_for_client_id.pop(id(client), None)
             self._approval_names_for_client_id.pop(id(client), None)
+
+        # Their UI catalog entries point at the clients just dropped.
+        try:
+            from agents.main_agent.integrations.mcp_apps import get_ui_tool_catalog
+
+            get_ui_tool_catalog().forget_user(user_id)
+        except Exception:  # noqa: BLE001 - cache hygiene must not fail a disconnect
+            logger.debug("Could not clear UI catalog entries for user", exc_info=True)
 
         if keys_to_remove:
             logger.info(f"Cleared {len(keys_to_remove)} cached MCP clients for user {user_id}")
