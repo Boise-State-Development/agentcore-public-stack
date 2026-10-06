@@ -111,9 +111,10 @@ saved, so it shows on the live turn only.
 ## Notifications
 
 The bell next to your name in the sidebar shows notifications about projects:
-being added, a role change, being removed, and becoming owner. Opening one marks
-it read and takes you to the project. Notifications expire after 90 days. You
-are never notified of your own actions.
+being added, a role change, being removed, becoming owner, a project being
+archived or restored (sent to every member), and, for the owner, someone
+leaving. Opening one marks it read and takes you to the project. Notifications
+expire after 90 days. You are never notified of your own actions.
 
 ## Personal instructions
 

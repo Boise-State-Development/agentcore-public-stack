@@ -162,6 +162,22 @@ class ProjectService:
             payload=payload,
         )
 
+    def _notify_members(self, kind: NotificationKind, actor: User, project: Project) -> None:
+        """Tell every member (pending invitees too) except the actor. Archive and restore
+        are rare, so they reach everyone with no preference to opt out of (G20)."""
+        try:
+            members = self.repository.list_members(project.project_id)
+        except Exception:
+            logger.warning("Could not list members of %s to send %s", project.project_id, kind, exc_info=True)
+            return
+        self.notifications.notify_many(
+            (m.email for m in members),
+            kind=kind,
+            actor=actor,
+            project_id=project.project_id,
+            project_name=project.name,
+        )
+
     def list_audit(
         self, project_id: str, user: User, *, limit: int, after: Optional[str] = None
     ) -> Tuple[List[AuditRecord], Optional[str]]:
@@ -366,6 +382,8 @@ class ProjectService:
         except ProjectWriteConflict as e:
             raise ProjectConflictError("The project changed while you were editing it. Reload and try again.") from e
         self._record_update(user, project, saved)
+        if project.status != saved.status:
+            self._notify_members("project_archived" if saved.status == "archived" else "project_restored", user, saved)
         await self._sync_harness_identity(project, saved)
         return saved, role
 
@@ -609,6 +627,7 @@ class ProjectService:
         self.record(
             AuditAction.PROJECT_MEMBER_REMOVED, user, project_id, before={"email": email, "role": role}, reason="left"
         )
+        self._notify("project_member_left", project.owner_email, user, project, role=role)
 
     def _delete_member(self, project_id: str, email: str) -> None:
         try:

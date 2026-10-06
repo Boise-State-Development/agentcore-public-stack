@@ -195,22 +195,24 @@ The bell next to your name in the sidebar shows when someone:
 - changes your role
 - removes you
 - makes you the owner
+- archives or restores a project you're in
+- leaves a project you own
 
 ![The notifications panel: "made you the owner" and "added you … as an editor".](../../../../assets/user-guide/projects/notifications.jpg)
 
-Opening a notification marks it read and takes you to the project.
-Notifications expire after 90 days, and you're never notified about your own
-actions. Shared tasks, new files, setting changes, archiving and departures
-don't notify anyone. Check **Tasks** and **Activity**.
+Opening a notification marks it read and takes you to the project (to
+**Members** when someone left). Notifications expire after 90 days, and you're
+never notified about your own actions. Shared tasks, new files and setting
+changes don't notify anyone. Check **Tasks** and **Activity**.
 
 ## Archive, restore, delete, transfer, leave
 
 | Action | Who | Where | What happens |
 | --- | --- | --- | --- |
-| **Archive** | Owner | Settings › Owner controls | Read-only for everyone: no new tasks or messages, no file or setting changes. Files and shared tasks stay readable. |
-| **Restore** | Owner | Settings | Back to normal. |
+| **Archive** | Owner | Settings › Owner controls | Read-only for everyone: no new tasks or messages, no file or setting changes. Files and shared tasks stay readable. Every member is notified. |
+| **Restore** | Owner | Settings | Back to normal. Every member is notified. |
 | **Delete** | Owner | Settings, archived projects only | Removes the project, its assistant, its files and its list of shared tasks. Each member keeps their own tasks as ordinary conversations. |
 | **Transfer ownership** | Owner | Members › **Make owner** | Goes to an editor who has opened the project. The old owner becomes an editor, and the new owner is notified. |
-| **Leave** | Anyone but the owner | Members › **Leave project** | You lose access. Tasks you shared stay listed for the team. |
+| **Leave** | Anyone but the owner | Members › **Leave project** | You lose access, and the owner is notified. Tasks you shared stay listed for the team. |
 
 ![An archived project: a banner saying it's read-only and can be restored from Settings.](../../../../assets/user-guide/projects/archived.jpg)
