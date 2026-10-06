@@ -43,6 +43,24 @@
   background-color: color-mix(in oklab, var(--color-white) 20%, transparent);
 }
 
+/*
+ * Selected-row brand accent (light mode). The orange lives on this bar, not
+ * on the title: secondary-500 text on the bg-gray-200 highlight is 3.6:1,
+ * under WCAG AA's 4.5:1 for 14px text, and any darker step of a configurable
+ * brand color is only AA for some brands. The title is gray-900 instead, and
+ * the bar needs only the 3:1 non-text minimum (secondary-500 on gray-200 is
+ * 3.6:1). An inset shadow paints inside the row's rounded corners without
+ * changing its box, so the title doesn't shift when the row becomes active.
+ * Dark mode keeps its white-text highlight, which already passes.
+ */
+.session-row--active {
+  box-shadow: inset 3px 0 0 var(--color-secondary-500);
+}
+
+:host-context(html.dark) .session-row--active {
+  box-shadow: none;
+}
+
 /* Title reveal: gentle left-to-right slide + fade, played when the generated
    title first replaces the skeleton (and on rename). Mirrors the top-nav
    reveal for consistency; the span is a flex item (blockified) so translate
