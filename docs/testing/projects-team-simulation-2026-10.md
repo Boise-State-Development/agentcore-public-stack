@@ -23,9 +23,13 @@ Updated 2026-10-06. All fixes below are merged into `develop`.
 | G2, G18 | [PR 1432](https://github.com/Boise-State-Development/agentcore-public-stack/pull/1432) | A new memory file is added to its scope's `MEMORY.md` index automatically. The project harness is told which member is speaking (name, email, project role) on every turn. |
 | G17 | [PR 1433](https://github.com/Boise-State-Development/agentcore-public-stack/pull/1433) | "Remember this just for me" saves to the member's personal project memory, and the next task applies it. |
 | B8 | [PR 1440](https://github.com/Boise-State-Development/agentcore-public-stack/pull/1440) | Switching models inside a project task starts a new task in the same project (and a new session with the same agent for an Agent session) instead of a non-project chat. The menu says what will happen before you choose. A pinned project model still locks the picker. |
+| B7 | [PR 1438](https://github.com/Boise-State-Development/agentcore-public-stack/pull/1438), [PR 1443](https://github.com/Boise-State-Development/agentcore-public-stack/pull/1443) | A shared snapshot's tool rail shows finished steps as "Ran …" / "Couldn't …" instead of "Running …". Snapshots made after #1443 also carry the model's one-line tool summaries; older snapshots keep the plain lines until re-shared. |
+| B10 | [PR 1438](https://github.com/Boise-State-Development/agentcore-public-stack/pull/1438) | Re-sharing a task to the project now says "This task is already shared with the project. Sharing again replaces the snapshot the project sees." |
+| G20 | [PR 1438](https://github.com/Boise-State-Development/agentcore-public-stack/pull/1438), [PR 1442](https://github.com/Boise-State-Development/agentcore-public-stack/pull/1442) | A turn in an archived project says the project is read-only and to ask the owner to restore it. Archive and restore notify every member, and the owner is notified when someone leaves. |
 
-**Still open:** B6, B7, B10 (the share dialog's copy is unchanged), and every
-gap except G2, G17 and G18. The end-user guide no longer lists the fixed items
+**Still open:** B6, and every gap except G2, G17, G18 and G20. G6 is partly
+addressed: archive, restore and leaving now notify, but shared tasks, new files
+and instruction changes still don't. The end-user guide no longer lists the fixed items
 as limits.
 
 ## How it was run
