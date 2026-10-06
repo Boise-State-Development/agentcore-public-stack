@@ -827,6 +827,23 @@ class SkillExposure(BaseModel):
     label: str = Field(..., description="Skill display name, for the submit dialog's enumeration")
 
 
+class ShareSkillExposureResponse(BaseModel):
+    """The owner-authored skills that come along with sharing an Agent (§6/D7).
+
+    The share dialog's half of D7.1: the same enumeration the submit dialog shows, for the
+    narrower act of adding people or leaving the Agent PUBLIC. Owner only.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    agent_id: str = Field(..., alias="agentId", description="Agent identifier")
+    exposed_skills: List[SkillExposure] = Field(
+        default_factory=list,
+        alias="exposedSkills",
+        description="Skills the owner wrote that anyone with access to the Agent can use and read",
+    )
+
+
 class ListingSubmissionResponse(BaseModel):
     """The resulting listing plus the disclosures the author was shown (D7)."""
 

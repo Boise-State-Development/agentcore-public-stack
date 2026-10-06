@@ -14,6 +14,7 @@ import {
   heroUsers,
   heroGlobeAlt,
   heroBuildingStorefront,
+  heroEye,
 } from '@ng-icons/heroicons/outline';
 import { Subject, debounceTime, distinctUntilChanged, switchMap, catchError, of, firstValueFrom } from 'rxjs';
 import {
@@ -31,7 +32,7 @@ import {
 import { AgentService } from '../services/agent.service';
 import { AgentListingService } from '../services/agent-listing.service';
 import { AgentListingBlock } from '../models/agent.model';
-import { ListingState } from '../models/store.model';
+import { ListingState, SkillExposure } from '../models/store.model';
 import { AgentIconComponent } from './agent-icon.component';
 import { ListingStatusComponent } from './listing-status.component';
 import {
@@ -101,6 +102,7 @@ export type ShareAgentDialogResult = { action: 'shared' } | undefined;
       heroUsers,
       heroGlobeAlt,
       heroBuildingStorefront,
+      heroEye,
     }),
   ],
   host: {
@@ -342,6 +344,41 @@ export type ShareAgentDialogResult = { action: 'shared' } | undefined;
             <p class="mt-2 text-xs/5 text-gray-500 dark:text-gray-400">
               Anyone with access can use this agent's skills and knowledge.
             </p>
+
+            <!--
+              D7.1, at the share boundary: name the skills the owner wrote, not just say
+              "skills". The same list the marketplace submit dialog shows, from the same
+              backend helper. It appears the moment the agent reaches anyone — including
+              when the first person is added, before Save — so the live region announces it
+              at the point the author is deciding.
+            -->
+            <div aria-live="polite">
+              @if (showSkillDisclosure()) {
+                <div class="mt-3 rounded-2xl border border-state-warning-200 bg-state-warning-50 px-4 py-3 dark:border-state-warning-900 dark:bg-state-warning-900/20">
+                  <div class="flex gap-3">
+                    <ng-icon
+                      name="heroEye"
+                      class="mt-0.5 size-5 shrink-0 text-state-warning-700 dark:text-state-warning-400"
+                      aria-hidden="true"
+                    />
+                    <div class="min-w-0">
+                      <p class="text-sm/6 font-medium text-state-warning-900 dark:text-state-warning-200">
+                        {{ exposedSkillsHeading() }}
+                      </p>
+                      <p class="mt-0.5 text-xs/5 text-state-warning-900 dark:text-state-warning-200">
+                        {{ skillAudience() }} can use them, and can get the agent to show
+                        their instructions.
+                      </p>
+                      <ul class="mt-1.5 space-y-0.5" aria-label="Your skills that come along with this agent">
+                        @for (skill of exposedSkills(); track skill.ref) {
+                          <li class="text-sm/6 text-state-warning-900 dark:text-state-warning-200">· {{ skill.label }}</li>
+                        }
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+              }
+            </div>
           </section>
 
           <!-- General access — what the reach is now, and what the link does about it -->
@@ -577,6 +614,37 @@ export class ShareAgentDialogComponent {
     );
   });
 
+  // ---- skill disclosure (§6/D7) ------------------------------------------
+  /**
+   * The skills the owner wrote and bound, which invoke-through hands to anyone with
+   * access. Owner-only on the backend, like sharing itself; empty until loaded, and on
+   * failure — the generic line above still says skills come along.
+   */
+  protected readonly exposedSkills = signal<SkillExposure[]>([]);
+
+  /**
+   * Shown once the agent reaches anyone: PUBLIC, or at least one person on the working
+   * list. The working list, not the saved one, so the warning lands as the author adds
+   * the first person — before Save, which is when it can still change their mind.
+   */
+  protected readonly showSkillDisclosure = computed(
+    () =>
+      this.canManageShares() &&
+      this.exposedSkills().length > 0 &&
+      (this.visibility() === 'PUBLIC' || this.shares().length > 0),
+  );
+
+  protected readonly exposedSkillsHeading = computed(() => {
+    const count = this.exposedSkills().length;
+    return count === 1
+      ? '1 skill you wrote comes along with this agent'
+      : `${count} skills you wrote come along with this agent`;
+  });
+
+  protected readonly skillAudience = computed(() =>
+    this.visibility() === 'PUBLIC' ? 'Everyone at Boise State who opens it' : 'Everyone on this list',
+  );
+
   // ---- general access (a read-out; the editor owns the field) -----------
   protected readonly accessIcon = computed(() => {
     switch (this.visibility()) {
@@ -759,6 +827,7 @@ export class ShareAgentDialogComponent {
   constructor() {
     void this.loadShares();
     void this.loadListing();
+    void this.loadSkillExposure();
 
     this.querySubject
       .pipe(
@@ -828,6 +897,19 @@ export class ShareAgentDialogComponent {
       // `AGENTS_API_ENABLED=false` 404s this route. Sharing still works; the marketplace
       // section simply stays closed.
       console.error('Error loading agent listing:', err);
+    }
+  }
+
+  private async loadSkillExposure(): Promise<void> {
+    if (!this.canManageShares()) return;
+    try {
+      this.exposedSkills.set(
+        await this.agentService.getShareSkillExposure(this.data.agent.assistantId),
+      );
+    } catch (err) {
+      // Advisory: sharing still works, and the generic line still names skills as coming
+      // along. A 404 here is the `AGENTS_API_ENABLED` kill switch, same as `loadListing`.
+      console.error('Error loading the skills sharing exposes:', err);
     }
   }
 
