@@ -65,9 +65,10 @@ can tell you which have changed on your deployment.
 
 **Working together**
 
-- **No notifications for team activity.** Shared tasks, new files, changes to
-  instructions, archiving and people leaving don't notify anyone. Check
-  **Tasks** and **Activity**, and tell teammates directly when you need them.
+- **Few notifications for team activity.** Archiving and restoring a project
+  notify every member, and the owner hears when someone leaves. Shared tasks,
+  new files and changes to instructions don't notify anyone. Check **Tasks**
+  and **Activity**, and tell teammates directly when you need them.
 - **No comments or @-mentions** on shared tasks. To hand work to a specific
   person, tell them, and share the task.
 - **Activity is for editors and the owner only.** Viewers don't see it.
