@@ -221,6 +221,12 @@ export class OAuthConsentPromptComponent {
   protected consentService = inject(OAuthConsentService);
   private connectorsService = inject(UserConnectorsService);
 
+  constructor() {
+    // The catalog only supplies the connector's icon and display name, which
+    // fall back to a generic glyph and the title-cased providerId meanwhile.
+    this.connectorsService.ensureLoaded();
+  }
+
   /** Connector definition for this providerId, when the catalog is loaded. */
   private connector = computed<UserConnector | null>(() => {
     const connectors = this.connectorsService.connectorsResource.value();
