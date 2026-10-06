@@ -43,7 +43,7 @@
                                             [routerLink]="['/projects', entry.projectId]"
                                             [id]="'session-group-' + gi + '-' + entry.projectId"
                                             (click)="onProjectHeadingClick()"
-                                            class="flex min-h-7 items-center gap-1.5 rounded-md px-2 py-1 text-xs/5 font-medium text-gray-600 hover:bg-gray-50 hover:text-secondary-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-white"
+                                            class="flex min-h-7 items-center gap-1.5 rounded-md px-2 py-1 text-xs/5 font-medium text-gray-600 hover:bg-gray-50 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-white"
                                         >
                                             <ng-icon name="heroRectangleStack" class="size-3.5 shrink-0" aria-hidden="true" />
                                             <span class="min-w-0 truncate">{{ entry.name }}</span>
@@ -122,9 +122,9 @@
                 <a
                     [routerLink]="['/s', getSessionId(session.sessionId)]"
                     [queryParams]="getSessionQueryParams(session)"
-                    routerLinkActive="session-row--active bg-gray-200 !font-medium !text-secondary-500 dark:bg-white/5 dark:!text-white"
+                    routerLinkActive="session-row--active bg-gray-200 !font-medium !text-gray-900 dark:bg-white/5 dark:!text-white"
                     (click)="onSessionClick(session)"
-                    class="flex min-h-8 items-center rounded-md px-2 py-1.5 pr-10 text-sm/5 font-normal text-gray-700 hover:bg-gray-50 hover:text-secondary-500 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-white"
+                    class="flex min-h-8 items-center rounded-md px-2 py-1.5 pr-10 text-sm/5 font-normal text-gray-700 hover:bg-gray-50 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-white"
                 >
                     @if (isTitlePending(session)) {
                         <!-- Title still generating (new conversation) — shimmer
