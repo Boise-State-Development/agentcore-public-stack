@@ -7,6 +7,7 @@ import { AssistantMessageComponent } from './assistant-message.component';
 import { Message, ContentBlock } from '../../../services/models/message.model';
 import { McpAppStateService } from '../../../services/mcp-apps/mcp-app-state.service';
 import { ChatStateService } from '../../../services/chat/chat-state.service';
+import { ToolInsightService } from '../../../services/chat/tool-insight.service';
 import { UiResourceEvent } from '../../../../shared/utils/stream-parser/stream-parser-types';
 
 function makeMessage(content: ContentBlock[]): Message {
@@ -169,6 +170,22 @@ describe('AssistantMessageComponent', () => {
 
       const blocks = component.displayBlocks();
       expect(blocks.length).toBe(0);
+    });
+  });
+
+  describe('tool summaries under an explicit insight key', () => {
+    it('reads summaries seeded under insightSessionId rather than the viewed session', () => {
+      const insights = TestBed.inject(ToolInsightService);
+      TestBed.inject(ChatStateService).setViewedSession(VIEWED_SESSION);
+      insights.seedFromHydration('share:abc', [{ batchId: 'b1', toolUseIds: ['tu-1'], summary: 'Read the notes' }]);
+      fixture.componentRef.setInput('messages', [makeMessage([makeToolBlock('memory_read', { toolUseId: 'tu-1' })])]);
+
+      fixture.detectChanges();
+      expect(component.displayBlocks()[0].group!.batches?.[0]?.summary).toBeUndefined();
+
+      fixture.componentRef.setInput('insightSessionId', 'share:abc');
+      fixture.detectChanges();
+      expect(component.displayBlocks()[0].group!.batches?.[0]?.summary).toBe('Read the notes');
     });
   });
 

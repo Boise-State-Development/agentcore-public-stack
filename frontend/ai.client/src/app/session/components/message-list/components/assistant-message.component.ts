@@ -326,6 +326,13 @@ export class AssistantMessageComponent {
    */
   streamingMessageId = input<string | null>(null);
 
+  /**
+   * The key tool insights are looked up under, when it isn't the viewed
+   * session: a shared snapshot seeds its frozen summaries under its own key
+   * (`share:<shareId>`), since nothing there is the viewer's session.
+   */
+  insightSessionId = input<string | null>(null);
+
   private consentService = inject(OAuthConsentService);
   private mcpAppState = inject(McpAppStateService);
   private chatState = inject(ChatStateService);
@@ -351,7 +358,7 @@ export class AssistantMessageComponent {
     // No viewed session (a preview pane, a fresh tab) means no recorded
     // insights; '' can never match a real session key, so lookups miss
     // cleanly instead of needing a null branch at every call site.
-    const sessionId = this.chatState.viewedSessionId() ?? '';
+    const sessionId = this.insightSessionId() ?? this.chatState.viewedSessionId() ?? '';
     const streamingId = this.streamingMessageId();
     const messageIds = new Set(messages.map((m) => m.id));
 

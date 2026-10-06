@@ -207,6 +207,11 @@ class ShareService:
                 "metadata": metadata_snapshot,
                 "messages": messages_snapshot,
                 "artifacts": artifacts_snapshot,
+                # The model's one-line tool-batch summaries, frozen with the
+                # messages they describe. They live in TSUM# rows, not on the
+                # messages, so without this a snapshot falls back to the
+                # client-side wording ("Ran memory read").
+                "toolSummaries": messages_response.tool_summaries,
             }
         ).encode("utf-8")
 
@@ -1053,7 +1058,7 @@ class ShareService:
 
         raise ShareNotFoundError()
 
-    def _load_snapshot_artifacts(self, item: dict) -> list[dict]:
+    def _load_snapshot_artifacts(self, item: dict, body: Optional[dict] = None) -> list[dict]:
         """The pinned artifact list from a share's snapshot body.
 
         Absent on every share created before this feature, and on any
@@ -1062,24 +1067,28 @@ class ShareService:
         production, so this MUST stay tolerant of a body with no
         `artifacts` key; there is no migration and none is needed.
         """
-        try:
-            body = self._load_snapshot_raw(item)
-        except ShareNotFoundError:
-            raise
-        except Exception:
-            logger.warning(
-                "could not read snapshot artifacts for share %s",
-                self._sanitize_id(str(item.get("share_id", ""))),
-                exc_info=True,
-            )
-            return []
+        if body is None:
+            try:
+                body = self._load_snapshot_raw(item)
+            except ShareNotFoundError:
+                raise
+            except Exception:
+                logger.warning(
+                    "could not read snapshot artifacts for share %s",
+                    self._sanitize_id(str(item.get("share_id", ""))),
+                    exc_info=True,
+                )
+                return []
         raw = body.get("artifacts")
         return raw if isinstance(raw, list) else []
 
     def _build_shared_conversation_response(self, item: dict) -> SharedConversationResponse:
         from apis.shared.sessions.models import MessageResponse
 
-        metadata, raw_messages = self._load_snapshot_body(item)
+        # One read serves the messages, the artifacts and the summaries.
+        body = self._load_snapshot_raw(item)
+        metadata = body.get("metadata", {}) or {}
+        raw_messages = body.get("messages", []) or []
 
         messages = []
         for msg_data in raw_messages:
@@ -1089,7 +1098,7 @@ class ShareService:
                 logger.warning(f"Skipping malformed message in share {item['share_id']}: {e}")
 
         artifacts = []
-        for entry in self._load_snapshot_artifacts(item):
+        for entry in self._load_snapshot_artifacts(item, body):
             try:
                 artifacts.append(
                     SharedConversationArtifact.model_validate(entry)
@@ -1110,7 +1119,24 @@ class ShareService:
             owner_id=item["owner_id"],
             messages=messages,
             artifacts=artifacts,
+            tool_summaries=self._snapshot_tool_summaries(body),
         )
+
+    @staticmethod
+    def _snapshot_tool_summaries(body: dict) -> list[dict]:
+        """The summaries frozen with the snapshot; ``[]`` on shares made before they were."""
+        raw = body.get("toolSummaries")
+        if not isinstance(raw, list):
+            return []
+        return [
+            {
+                "batchId": str(row.get("batchId") or ""),
+                "toolUseIds": [str(t) for t in row.get("toolUseIds") or []],
+                "summary": str(row["summary"]),
+            }
+            for row in raw
+            if isinstance(row, dict) and row.get("summary")
+        ]
 
 
 # ------------------------------------------------------------------
