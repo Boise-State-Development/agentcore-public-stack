@@ -100,8 +100,8 @@ can tell you which have changed on your deployment.
 - **No memory tab yet.** Ask the assistant to list or read project memory.
 - **No one-click revert** for instructions. Copy an old version from History
   and save it.
-- **Switching models inside a task** starts a new conversation outside the
-  project.
+- **Switching models inside a task** starts a new task in the project. The
+  conversation so far doesn't carry over.
 
 **Governance**
 

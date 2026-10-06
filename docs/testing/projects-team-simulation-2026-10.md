@@ -13,7 +13,7 @@ fictional.
 
 ## Status
 
-Updated 2026-10-05. All fixes below are merged into `develop`.
+Updated 2026-10-06. All fixes below are merged into `develop`.
 
 | Findings | Fixed by | What changed for users |
 | --- | --- | --- |
@@ -22,8 +22,9 @@ Updated 2026-10-05. All fixes below are merged into `develop`.
 | B9 | [PR 1431](https://github.com/Boise-State-Development/agentcore-public-stack/pull/1431), [PR 1436](https://github.com/Boise-State-Development/agentcore-public-stack/pull/1436) | Word tracked changes are written out as `[deleted: …]` / `[inserted: …]` (comments as `[comment by <author>: …]`) before indexing, with a note naming the authors. Managed KBs receive the annotated text; legacy KBs receive an annotated `.docx`. Redlines ingested before the fix keep their flattened text until re-uploaded or re-ingested. |
 | G2, G18 | [PR 1432](https://github.com/Boise-State-Development/agentcore-public-stack/pull/1432) | A new memory file is added to its scope's `MEMORY.md` index automatically. The project harness is told which member is speaking (name, email, project role) on every turn. |
 | G17 | [PR 1433](https://github.com/Boise-State-Development/agentcore-public-stack/pull/1433) | "Remember this just for me" saves to the member's personal project memory, and the next task applies it. |
+| B8 | [PR 1440](https://github.com/Boise-State-Development/agentcore-public-stack/pull/1440) | Switching models inside a project task starts a new task in the same project (and a new session with the same agent for an Agent session) instead of a non-project chat. The menu says what will happen before you choose. A pinned project model still locks the picker. |
 
-**Still open:** B6, B7, B8, B10 (the share dialog's copy is unchanged), and every
+**Still open:** B6, B7, B10 (the share dialog's copy is unchanged), and every
 gap except G2, G17 and G18. The end-user guide no longer lists the fixed items
 as limits.
 

@@ -19,10 +19,12 @@ project it belongs to.
 **Your tasks are private.** Nobody else in the project, including the owner, can
 see them until you share one.
 
-:::caution[Don't switch models mid-task]
+:::note[Switching models starts a new task]
 Picking a different model from the model menu inside a task starts a **new
-conversation outside the project**, without the project's assistant. To use a
-different model for the whole team, change it in **Settings › Model**.
+task in the same project**, on the project's assistant. The conversation so far
+stays in the old task and doesn't come along. The menu says this before you
+choose. If the project pins a model in **Settings › Model**, the menu is locked
+to it; change it there to use a different model for the whole team.
 :::
 
 ### Your role and preferences
