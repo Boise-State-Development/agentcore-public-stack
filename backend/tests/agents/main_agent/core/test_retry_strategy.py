@@ -137,40 +137,6 @@ class TestFactoryWiring:
         strategy = mock_agent_cls.call_args.kwargs["retry_strategy"]
         assert isinstance(strategy, TransientModelRetryStrategy)
 
-    @patch("agents.main_agent.core.agent_factory.Agent")
-    @patch("agents.main_agent.core.agent_factory.CountTokensBedrockModel")
-    def test_kill_switch_falls_back_to_stock_strategy(self, _model_cls, mock_agent_cls):
-        from agents.main_agent.core.agent_factory import AgentFactory
-
-        cfg = ModelConfig(
-            model_id="anthropic.claude-3-sonnet",
-            provider=ModelProvider.BEDROCK,
-            retry_config=RetryConfig(retry_transient_service_errors=False),
-            caching_enabled=False,
-        )
-        AgentFactory.create_agent(model_config=cfg, **self._COMMON)
-
-        strategy = mock_agent_cls.call_args.kwargs["retry_strategy"]
-        assert isinstance(strategy, ModelRetryStrategy)
-        assert not isinstance(strategy, TransientModelRetryStrategy)
-
-
-class TestConfigFromEnv:
-    def test_defaults_on(self, monkeypatch):
-        monkeypatch.delenv("RETRY_TRANSIENT_SERVICE_ERRORS", raising=False)
-        assert RetryConfig.from_env().retry_transient_service_errors is True
-
-    def test_empty_string_stays_on(self, monkeypatch):
-        """A workflow that injects an unset var as "" must not disable it."""
-        monkeypatch.setenv("RETRY_TRANSIENT_SERVICE_ERRORS", "")
-        assert RetryConfig.from_env().retry_transient_service_errors is True
-
-    @pytest.mark.parametrize("value", ["false", "FALSE", "False"])
-    def test_literal_false_disables(self, monkeypatch, value):
-        monkeypatch.setenv("RETRY_TRANSIENT_SERVICE_ERRORS", value)
-        assert RetryConfig.from_env().retry_transient_service_errors is False
-
-
 # ---------------------------------------------------------------------------
 # OpenAI family — GPT-6 on bedrock-runtime
 # ---------------------------------------------------------------------------
@@ -287,10 +253,6 @@ class TestResponsesFactoryWiring:
         assert isinstance(strategy, TransientModelRetryStrategy)
         assert strategy._max_attempts == 3
 
-    def test_kill_switch_restores_no_retry(self, monkeypatch):
-        strategy = self._build(RetryConfig(retry_transient_service_errors=False), monkeypatch)
-        assert strategy is None
-
     def test_no_retry_config_means_no_strategy(self, monkeypatch):
         assert self._build(None, monkeypatch) is None
 
@@ -359,53 +321,36 @@ class TestBuildRetryStrategy:
     def test_every_provider_gets_the_strategy(self, provider):
         """None means retries OFF in Strands, so no provider may be left on it."""
         cfg = ModelConfig(model_id="m", provider=provider, retry_config=RetryConfig(sdk_max_attempts=3))
-        strategy = AgentFactory._build_retry_strategy(provider, cfg, MagicMock())
+        strategy = AgentFactory._build_retry_strategy(cfg, MagicMock())
         assert isinstance(strategy, TransientModelRetryStrategy)
         assert strategy._max_attempts == 3
 
     def test_no_retry_config_means_no_strategy(self):
         cfg = ModelConfig(model_id="m", provider=ModelProvider.OPENAI, retry_config=None)
-        assert AgentFactory._build_retry_strategy(ModelProvider.OPENAI, cfg, MagicMock()) is None
-
-    @pytest.mark.parametrize(
-        "provider", [p for p in ModelProvider if p != ModelProvider.BEDROCK]
-    )
-    def test_kill_switch_restores_no_retry_off_bedrock(self, provider):
-        cfg = ModelConfig(
-            model_id="m", provider=provider, retry_config=RetryConfig(retry_transient_service_errors=False)
-        )
-        assert AgentFactory._build_retry_strategy(provider, cfg, MagicMock()) is None
+        assert AgentFactory._build_retry_strategy(cfg, MagicMock()) is None
 
     def test_strategy_tags_the_model_stream(self):
         model = _openai_model()
         original = model.stream
         cfg = ModelConfig(model_id="m", provider=ModelProvider.OPENAI, retry_config=RetryConfig())
-        AgentFactory._build_retry_strategy(ModelProvider.OPENAI, cfg, model)
+        AgentFactory._build_retry_strategy(cfg, model)
         assert model.stream is not original
 
 
 class TestRetriesDoNotStack:
-    """With the strategy on, the transport makes exactly one attempt. They used
-    to multiply: 3 botocore attempts x 4 SDK attempts = 12 Bedrock calls."""
+    """The transport makes exactly one attempt. The layers used to multiply:
+    3 botocore attempts x 4 SDK attempts = 12 Bedrock calls."""
 
     def test_bedrock_transport_makes_one_attempt(self):
-        cfg = ModelConfig(model_id="anthropic.claude-3-sonnet", retry_config=RetryConfig(boto_max_attempts=3))
+        cfg = ModelConfig(model_id="anthropic.claude-3-sonnet", retry_config=RetryConfig())
         boto = cfg.to_bedrock_config()["boto_client_config"]
         assert boto.retries["max_attempts"] == 1
-
-    def test_kill_switch_restores_bedrock_transport_retries(self):
-        cfg = ModelConfig(
-            model_id="anthropic.claude-3-sonnet",
-            retry_config=RetryConfig(boto_max_attempts=3, retry_transient_service_errors=False),
-        )
-        boto = cfg.to_bedrock_config()["boto_client_config"]
-        assert boto.retries["max_attempts"] == 3
 
     @pytest.mark.parametrize("factory", [_openai_model, _responses_model])
     def test_openai_client_makes_one_attempt(self, factory):
         model = factory()
         cfg = ModelConfig(model_id="m", provider=ModelProvider.OPENAI, retry_config=RetryConfig())
-        AgentFactory._build_retry_strategy(ModelProvider.OPENAI, cfg, model)
+        AgentFactory._build_retry_strategy(cfg, model)
         assert model.client_args["max_retries"] == 0
         assert model.client_args["api_key"] == "test-key"
 
@@ -414,23 +359,14 @@ class TestRetriesDoNotStack:
         shared = {"api_key": "test-key"}
         model = OpenAIModel(client_args=shared, model_id="gpt-4o")
         cfg = ModelConfig(model_id="m", provider=ModelProvider.OPENAI, retry_config=RetryConfig())
-        AgentFactory._build_retry_strategy(ModelProvider.OPENAI, cfg, model)
+        AgentFactory._build_retry_strategy(cfg, model)
         assert "max_retries" not in shared
-
-    def test_kill_switch_leaves_openai_client_retries_alone(self):
-        model = _openai_model()
-        cfg = ModelConfig(
-            model_id="m", provider=ModelProvider.OPENAI,
-            retry_config=RetryConfig(retry_transient_service_errors=False),
-        )
-        AgentFactory._build_retry_strategy(ModelProvider.OPENAI, cfg, model)
-        assert "max_retries" not in model.client_args
 
     def test_resolved_client_args_carry_the_setting(self):
         """Strands builds the AsyncOpenAI client from _resolve_client_args per request."""
         model = _responses_model()
         cfg = ModelConfig(model_id="m", provider=ModelProvider.BEDROCK_RESPONSES, retry_config=RetryConfig())
-        AgentFactory._build_retry_strategy(ModelProvider.BEDROCK_RESPONSES, cfg, model)
+        AgentFactory._build_retry_strategy(cfg, model)
         assert model._resolve_client_args()["max_retries"] == 0
 
     def test_bedrock_runtime_responses_model_resolves_one_attempt(self):
@@ -439,7 +375,7 @@ class TestRetriesDoNotStack:
 
         model = build_bedrock_responses_model(model_id="global.openai.gpt-6-sol", region="us-west-2")
         cfg = ModelConfig(model_id="m", provider=ModelProvider.BEDROCK_RESPONSES, retry_config=RetryConfig())
-        AgentFactory._build_retry_strategy(ModelProvider.BEDROCK_RESPONSES, cfg, model)
+        AgentFactory._build_retry_strategy(cfg, model)
 
         with patch("apis.shared.bedrock.bearer_token.generate_bedrock_bearer_token", return_value="minted"):
             args = model._resolve_client_args()

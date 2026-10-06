@@ -4,7 +4,7 @@ Factory for creating Strands Agent instances with multi-provider support
 import os
 import logging
 from typing import List, Optional, Any
-from strands import Agent, ModelRetryStrategy
+from strands import Agent
 from strands.agent.conversation_manager import SlidingWindowConversationManager
 from strands.models import BedrockModel, OpenAIResponsesModel
 from strands.models.openai import OpenAIModel
@@ -12,6 +12,7 @@ from strands.models.gemini import GeminiModel
 from strands.tools.executors import SequentialToolExecutor
 from agents.main_agent.core.bedrock_count_tokens import CountTokensBedrockModel
 from agents.main_agent.core.model_config import ModelConfig, ModelProvider
+from agents.main_agent.core.retry_strategy import TransientModelRetryStrategy
 from agents.main_agent.config.constants import EnvVars, Defaults
 from apis.shared.models.bedrock_responses import build_bedrock_responses_model
 from apis.shared.models.mantle import build_mantle_model
@@ -236,7 +237,7 @@ class AgentFactory:
         else:
             raise ValueError(f"Unsupported model provider: {provider}")
 
-        retry_strategy = AgentFactory._build_retry_strategy(provider, model_config, model)
+        retry_strategy = AgentFactory._build_retry_strategy(model_config, model)
 
         # Bedrock prompt caching: give the system prompt its own cachePoint by
         # passing it as a SystemContentBlock list with a trailing cachePoint
@@ -342,47 +343,30 @@ class AgentFactory:
 
     @staticmethod
     def _build_retry_strategy(
-        provider: ModelProvider, model_config: ModelConfig, model: Any
-    ) -> Optional[ModelRetryStrategy]:
+        model_config: ModelConfig, model: Any
+    ) -> Optional[TransientModelRetryStrategy]:
         """Return the agent's retry strategy and hold the transport to one attempt.
 
         A ``None`` return is not "use the default": Strands reads it as
-        retries OFF. Before ``TransientModelRetryStrategy`` every provider but
-        Bedrock got ``None``, and GPT-6's transient faults reached users as
-        "Agent force-stopped" on the first attempt.
+        retries OFF. Every provider but Bedrock used to get ``None``, and
+        GPT-6's transient faults reached users as "Agent force-stopped" on
+        the first attempt.
 
-        With the strategy on, it is the only retry layer. Bedrock's botocore
-        config already carries one attempt (``RetryConfig.transport_max_attempts``
-        in ``to_bedrock_config``); the OpenAI client is set to ``max_retries=0``
-        here; Gemini's client never retries unless configured to. Every model's
-        stream is tagged so a failure after visible output is never retried.
+        The strategy is the only retry layer. Bedrock's botocore config
+        already carries one attempt (``to_bedrock_config``); the OpenAI client
+        is set to ``max_retries=0`` here; Gemini's client never retries unless
+        configured to. Every model's stream is tagged so a failure after
+        visible output is never retried.
         """
         retry_config = model_config.retry_config
         if not retry_config:
             return None
 
-        if not retry_config.retry_transient_service_errors:
-            # Kill switch: the pre-2026-10 behavior, transport retries on.
-            if provider != ModelProvider.BEDROCK:
-                return None
-            logger.info(
-                f"Configured retry strategy: boto={retry_config.transport_max_attempts} attempts "
-                f"({retry_config.boto_retry_mode}), sdk={retry_config.sdk_max_attempts} attempts, "
-                f"strategy=ModelRetryStrategy"
-            )
-            return ModelRetryStrategy(
-                max_attempts=retry_config.sdk_max_attempts,
-                initial_delay=retry_config.sdk_initial_delay,
-                max_delay=retry_config.sdk_max_delay,
-            )
-
-        from agents.main_agent.core.retry_strategy import TransientModelRetryStrategy
-
         tag_partial_output(model)
         if isinstance(model, _OPENAI_FAMILY_MODELS):
             # A fresh dict, not an in-place edit: a builder's client_args must
             # not leak this setting to its other callers (api-converse).
-            model.client_args = {**model.client_args, "max_retries": retry_config.transport_max_attempts - 1}
+            model.client_args = {**model.client_args, "max_retries": 0}
 
         logger.info(
             f"Configured retry strategy: transport=1 attempt, sdk={retry_config.sdk_max_attempts} attempts "

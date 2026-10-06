@@ -22,11 +22,10 @@ faults reached users as "Agent force-stopped" on the first attempt.
 WHY THIS IS THE ONLY LAYER
 botocore and the OpenAI client each retry on their own (3 and 3 attempts by
 default), and those retries compounded with this layer's: up to 12 calls per
-model invocation on Bedrock. While this strategy is active the factory sets
-the transport layers to a single attempt (see
-``RetryConfig.transport_max_attempts``), so this strategy covers what they
-used to (throttles, 5xx, connection resets and timeouts) and the total is one
-knob: ``sdk_max_attempts``. Gemini's client never retries unless configured.
+model invocation on Bedrock. The factory now holds both to a single attempt,
+so this strategy covers what they used to (throttles, 5xx, connection resets
+and timeouts) and the total is one knob: ``sdk_max_attempts``. Gemini's
+client never retries unless configured.
 
 WHY A FAILURE AFTER VISIBLE OUTPUT IS NEVER RETRIED
 A retry restarts generation from scratch. When the failed call already
