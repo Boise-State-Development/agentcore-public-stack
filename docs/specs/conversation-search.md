@@ -1,6 +1,7 @@
 # Conversation search
 
-**Status:** DRAFT plan, written 2026-10-06 against `develop` @ `6f40bbe1`. Nothing built yet. Revised the same day after the author chose to accept new resources where they serve users better (§2 records the no-new-resources alternative).
+**Status:** DRAFT plan, written 2026-10-06 against `develop` @ `6f40bbe1`. Nothing built yet. Revised the same day after the author chose to accept new resources where they serve users better (§2 records the no-new-resources alternative), and decided: archived sessions and shared forks are indexed, and one retention variable governs Memory events, the archive and the index (§3).
+**Configuration introduced:** `CONVERSATION_RETENTION_DAYS` / `CDK_CONVERSATION_RETENTION_DAYS` (default 365), the single retention setting (§3).
 **Tracking issue:** #1380 ("Enh: Search" — a user asks for ChatGPT-style search over conversations, artifacts and agents)
 **Flags (in development, default OFF):** `CONVERSATION_INDEX_ENABLED` / `CDK_CONVERSATION_INDEX_ENABLED` (write path) and `CONVERSATION_SEARCH_ENABLED` / `CDK_CONVERSATION_SEARCH_ENABLED` / `features.conversationSearch` (read path). Two flags because indexing has to run ahead of search (§7). The SPA title filter (PR-1) ships with no flag: it costs nothing and touches no API.
 **Related:** `docs/specs/bedrock-managed-kb-evaluation.md` (Managed KB shapes, measured latency, pricing), `docs/specs/memory-baseline-decision.md` (summary records census), `docs/specs/session-metadata-static-sort-key.md` (row shape, GSIs), `docs/kaizen/review-queue.md` §"sidebar conversation search".
@@ -42,14 +43,32 @@ Pricing sources checked 2026-10-06: AgentCore Memory (aws.amazon.com/bedrock/age
 
 **Why H.** It is the only option that answers the request as asked: find by phrase or meaning, show the passage, jump to it, across all history. Its marginal cost over C is a few dollars a month at today's scale. Its engineering cost is mostly code the repo already has (ingest, isolation filter, provisioning, the EventBridge-to-consumer pattern in `kb-migration-construct.ts:637-668`). And the S3 archive it is fed from is the same durable transcript copy that closes the retention gap for good, so one write serves two needs.
 
-## 3. Retention first: stop losing conversations at 90 days
+## 3. Retention: one variable, every copy
 
-Two changes, independent of search, in their own small PR because they fix a live bug:
+Today the only retention setting is the literal `90` in `memory-construct.ts:74`, and it governs one of the places a conversation will live. Once there are three (Memory events, the S3 archive, the KB documents), three independent clocks would drift the first time one is tuned. So retention becomes **one deployment variable** that every copy follows:
 
-1. **Raise `eventExpiryDuration` from 90 to 365** in `memory-construct.ts:74`. CloudFormation lists the property as *Update requires: No interruption* for `AWS::BedrockAgentCore::Memory`; the API's range is 3–365. Short-term storage is $0.10/GB-month, so a year of prod events is on the order of $1/month. **Verify on dev before prod:** whether the new duration applies to events already written, or only to new ones. The API documentation does not say. If existing events keep their 90-day clock, the archive in step 2 is what preserves them, and the backfill in §7 PR-3 copies every event still alive on the day it runs.
-2. **Archive every turn to S3** as it completes (§4). `GET /sessions/{id}/messages` falls back to the archive when `list_events` returns nothing for a session whose row says `messageCount > 0`. This is the same shape as `shares/snapshot_store.py` (S3 body, DynamoDB pointer) and keeps conversations readable past 365 days with no further decision.
+```
+CDK_CONVERSATION_RETENTION_DAYS   (GitHub environment variable → platform.yml → config.ts via parseIntEnv)
+  default 365; unset or "" → 365
+```
 
-The 1,439 prod conversations already past the cliff cannot be recovered; their events are gone. Their rows stay, and they match by title only.
+| Copy | How the variable is applied | Mechanism |
+|---|---|---|
+| **Memory events** | `eventExpiryDuration: min(n, 365)` on `CfnMemory` | CloudFormation *Update requires: No interruption* for this property on `AWS::BedrockAgentCore::Memory`; API range 3–365. Memory cannot hold more than a year, which is why the archive exists. |
+| **S3 archive objects** | Bucket lifecycle rule, `expiration: Duration.days(n)` on the `conversations/` prefix | Per object, from its write time, so a long-running conversation loses its oldest turns first, exactly as Memory does. |
+| **KB documents** | Deleted when their archive object expires | S3 lifecycle expiry emits an EventBridge *Object Deleted* event with `reason: "Lifecycle Expiration"` (and `deletion-type: "Permanently Deleted"`, because the bucket is unversioned). The same consumer Lambda that ingests on *Object Created* calls `DeleteKnowledgeBaseDocuments` on *Object Deleted*, whatever the reason, so an expiry and a user delete take the same path. |
+| **Read path, as a belt** | A result whose `created_at` attribute is older than `n` days is dropped before it is returned | Covers the window between S3 expiry (which S3 runs asynchronously, up to about a day late) and the delete event landing. Done in code after retrieval, not as a KB filter, so `validate_isolation_filter` stays `equals`/`in` only. |
+| **Daily reconciler, as braces** | `rate(1 day)` Lambda (the `kb-migration` reconciler pattern) that lists archive objects past `n` days and KB documents without an object, and deletes both | Catches a dropped event or a DLQ'd batch. Read-only in dry-run; writes behind the same `CONVERSATION_INDEX_ENABLED` switch. |
+
+**The session row** is the one copy this variable does not touch, and the reason the cliff is visible today: the row outlives every message behind it. Proposed: the daily reconciler also runs the existing `SessionService.delete_session` on sessions whose `lastMessageAt` is older than `n` days, so a conversation past retention leaves the sidebar instead of opening empty. That path already purges summary records, files and shares, and leaves the soft-delete tombstone, so nothing new is written for it. It is **off unless `CONVERSATION_RETENTION_PRUNES_SESSIONS=true`**, because a deployment may prefer title-only shells to deletions; the docs-site flag page records the choice. Cost rows (`C#`) keep their own 365-day TTL and are not touched.
+
+What the variable means to a deployment, in one sentence for the docs: *a conversation's content is kept for this many days after each turn, wherever it is stored; nothing about a user's long-term memory records (facts, preferences) changes.*
+
+**Why 365 and not more.** Memory caps at 365, and the archive is what the messages route reads when Memory is empty, so a larger value would work for the archive and the index. But a conversation older than a year has no Memory events either, and the first setting should be one every copy can honour. Raising it later is a one-variable change plus a lifecycle-rule update; objects already past the old rule are gone.
+
+**Verify on dev before prod:** whether raising `eventExpiryDuration` applies to events already written. The API documentation does not say. If existing events keep their 90-day clock, the backfill (§7 PR-3) is the rescue for sessions between 90 and 365 days old on the day the change lands: it copies every event still alive into the archive, and the archive is what the messages route reads from then on.
+
+The 1,439 prod conversations already past the cliff cannot be recovered; their events are gone. Their rows stay (until pruning is turned on), and they match by title only.
 
 ## 4. Data flow
 
@@ -71,9 +90,13 @@ IngestKnowledgeBaseDocuments (batches of 10, ≤ 20 rps)
 
 **Tool results are not indexed.** They are the bulk of a session's bytes, they are the part most likely to contain third-party data pulled from a tool, and nobody searches for them by memory. User text and assistant text only, capped at 16 KB per document (a long assistant answer still fits; Managed KB chunks internally).
 
-**The archive object is the durable transcript** (§3). It is written once per turn, before ingestion, so the index can always be rebuilt from it, and the messages route can read it when Memory has nothing. The bucket is private, SSE-S3, no lifecycle expiry, same posture as `shared-conversations`.
+**The archive object is the durable transcript** (§3). It is written once per turn, before ingestion, so the index can always be rebuilt from it, and the messages route can read it when Memory has nothing. The bucket is private, SSE-S3, **unversioned**, with the retention lifecycle rule from §3; otherwise the same posture as `shared-conversations`.
 
-**Delete.** `SessionService.delete_session` gains two background steps beside the existing memory purge: list the session's archive prefix, `DeleteKnowledgeBaseDocuments` by the derived ids (batches of 10, ≤ 10 rps), then delete the objects. Project deletion and user deletion go through the same per-session path. A document whose session row is gone or `deleted` is also dropped at read time, so a lagging delete never shows a result.
+**Shared forks are indexed under the forker.** A fork copies the snapshot's messages into the new session's Memory directly (`shares/service.py`, `_copy_messages_to_memory`), never through a turn, so the archive put must also run there: one object per copied turn, under the forker's user id and the new session id. Those events carry `extractionMode="SKIP"` so they never become the forker's long-term records; that stays true, since the index reads the archive, not Memory's extraction. The forker can already read every one of those messages, and the conversation is theirs from the fork on.
+
+**Archived sessions are indexed and searchable.** Archiving changes a row's `status`; it does not touch Memory, the archive or the KB, and nothing in the write path consults status. The read path tags the result (§5, §6).
+
+**Delete.** `SessionService.delete_session` gains one background step beside the existing memory purge: list the session's archive prefix and delete the objects. Each deletion raises *Object Deleted* on EventBridge and the consumer removes the matching KB document (`DeleteKnowledgeBaseDocuments`, batches of 10, ≤ 10 rps), which is the same path a retention expiry takes (§3). Project deletion and user deletion go through the same per-session path. A document whose session row is gone or `deleted` is also dropped at read time, so a lagging delete never shows a result.
 
 **Provisioning.** One Managed KB per environment, created lazily on first index write through the existing `provision_managed_kb` with the reserved app KB id `conversations` (84–97 s once, then stored in SSM `/{prefix}/conversations/kb-id`). Not CDK, for the same reason the assistant KBs are not. Tag it `purpose=conversation-search` so the cost line is attributable (`managed-kb-cost-attribution.md`).
 
@@ -92,9 +115,9 @@ GET /sessions/search?q=<text>&limit=20&mode=all|lexical[&projectId=]
     "textSearchAvailable": true|false }
 ```
 
-**Lexical leg** (`apis/shared/sessions/metadata.py`, `search_user_sessions_lexical`): Query `SessionRecencyIndex` with `GSI4_PK = USER#{uid}`, `FilterExpression contains(titleLower, :q) OR contains(firstPrompt, :q)`, projection limited to the fields above, scan capped at 2,000 rows. `titleLower` and `firstPrompt` (first 300 lowercased characters of the opening prompt) are written in the same `update_item` that writes the title (`update_session_title`, `metadata.py:1320`), plus the rename route; a dry-run-default backfill script copies `title → titleLower` for existing rows (copy `backfill_session_static_sk.py`).
+**Lexical leg** (`apis/shared/sessions/metadata.py`, `search_user_sessions_lexical`): Query the base table, `PK = USER#{uid} AND begins_with(SK, "S#")`, `FilterExpression (status = active OR status = archived) AND (contains(titleLower, :q) OR contains(firstPrompt, :q))`, projection limited to the fields above, scan capped at 2,000 rows. The base table rather than `SessionRecencyIndex` because archived rows are off that index, and a user's `S#` rows are the same partition either way. `titleLower` and `firstPrompt` (first 300 lowercased characters of the opening prompt) are written in the same `update_item` that writes the title (`update_session_title`, `metadata.py:1320`), plus the rename route; a dry-run-default backfill script copies `title → titleLower` for existing rows (copy `backfill_session_static_sk.py`).
 
-**Text leg** (`apis/shared/kb_backend/managed_backend.py`, reuse `retrieve` with `retrieval_filter={"equals": {"key": "user_id", "value": uid}}`, and `andAll` with `project_id` when scoped): `numberOfResults=20`, managed reranking on. Parse `session_id` and `message_index` from the custom document identifier. `BatchGetItem` the session rows `(USER#{uid}, S#{sid})` for title, `lastMessageAt`, status; drop missing or `deleted`. Snippet is the chunk text windowed around the first query-term hit (or its first 240 chars when the match was semantic). Collapse to one result per session, keeping the best-scoring turn; the next two turns' indexes ride along as `alsoMatched` so the SPA can offer "3 matches in this conversation".
+**Text leg** (`apis/shared/kb_backend/managed_backend.py`, reuse `retrieve` with `retrieval_filter={"equals": {"key": "user_id", "value": uid}}`, and `andAll` with `project_id` when scoped): `numberOfResults=20`, managed reranking on. Parse `session_id` and `message_index` from the custom document identifier. `BatchGetItem` the session rows `(USER#{uid}, S#{sid})` for title, `lastMessageAt`, status; drop missing or `deleted`, keep `archived` and mark it (`"archived": true` on the result). Drop any hit whose `created_at` is past retention (§3). Snippet is the chunk text windowed around the first query-term hit (or its first 240 chars when the match was semantic). Collapse to one result per session, keeping the best-scoring turn; the next two turns' indexes ride along as `alsoMatched` so the SPA can offer "3 matches in this conversation".
 
 **Merge:** exact title hits first, then text hits by reranked score, then prompt hits; dedupe by session id. `limit` default 20.
 
@@ -107,7 +130,7 @@ GET /sessions/search?q=<text>&limit=20&mode=all|lexical[&projectId=]
 - **Search box** in `components/sidenav/components/session-list/`, above the grouped list; `Cmd/Ctrl+K` focuses it (the app's first shortcut; keep it to this one). Query in a signal, kept across refresh in `sessionStorage` (try/catch).
 - **Keystroke path:** filter loaded `sessions()` by `titleLower` client-side at once (PR-1), and fire `mode=lexical` through `debounceTime(250)` + `switchMap` (copy `projects/components/people-picker.component.ts:145-176`); server results supersede the client filter so unloaded pages appear.
 - **Enter / pause:** `mode=all`. Text hits render with the snippet and the match terms emphasised; a spinner only on this leg.
-- **Result row** = the existing session row template plus a snippet line, so result rows and list rows stay one component.
+- **Result row** = the existing session row template plus a snippet line, so result rows and list rows stay one component. An archived result carries a small "Archived" tag and opens read-only exactly as it does from the manage-sessions page.
 - **Jump to message:** navigate to `/s/:id?m=msg-…`; `ConversationPage` reads `m` from `queryParamMap` (it already reads `assistantId` there) and, once messages load, calls `scrollToMessage` instead of `restoreScrollPosition`. Only user messages have anchors today; a hit on a turn scrolls to that turn's user message, which is where the assistant's answer begins. Good enough; assistant anchors are not needed for v1.
 - **Empty and degraded states:** "No matching conversations" vs "No conversations yet"; when `textSearchAvailable` is false, show lexical results and one muted line ("Showing title matches only"), no retry loop.
 - **#1380 also asks for artifacts and agents.** Agents filter client-side over the loaded catalog as a second section in the same box; artifacts need a list endpoint check. Both are additive sections after PR-4.
@@ -118,8 +141,8 @@ GET /sessions/search?q=<text>&limit=20&mode=all|lexical[&projectId=]
 | PR | Scope | Flag | Size |
 |---|---|---|---|
 | **PR-1** SPA title filter | Search box, client-side filter over loaded sessions, Escape, live count, "No matching" state, `inert` on the closed off-canvas panel (the kaizen queue item verbatim) | none | ~1 day |
-| **PR-R** retention | `eventExpiryDuration: 365`; dev check of whether existing events pick it up; CHANGELOG note. Ships ahead of everything else | none | ½ day + a dev deploy |
-| **PR-2** archive + index write path | Archive bucket (CDK), after-`done` S3 put in `stream_coordinator`, EventBridge → SQS → consumer Lambda (container image, same deploy pattern as `kb-sync`), lazy KB provisioning, `CONVERSATION_INDEX_ENABLED` reader + CDK + `platform.yml` var, delete hook, moto + stubbed-bedrock tests. Messages-route fallback to the archive | index | ~4 days |
+| **PR-R** retention | `CDK_CONVERSATION_RETENTION_DAYS` → `config.ts` (`parseIntEnv`, default 365) → `eventExpiryDuration: min(n, 365)`; `platform.yml` forwarding; config test; docs-site row; dev check of whether existing events pick it up; CHANGELOG note. Ships ahead of everything else | none | ½ day + a dev deploy |
+| **PR-2** archive + index write path | Archive bucket (CDK, unversioned, lifecycle `expiration = n` days on `conversations/`), after-`done` S3 put in `stream_coordinator` and in the fork copy path, EventBridge (*Object Created* and *Object Deleted*) → SQS → consumer Lambda (container image, same deploy pattern as `kb-sync`) that ingests or deletes, lazy KB provisioning, `CONVERSATION_INDEX_ENABLED` reader + CDK + `platform.yml` var, session-delete hook, daily reconciler (dry-run default; session pruning behind `CONVERSATION_RETENTION_PRUNES_SESSIONS`), moto + stubbed-bedrock tests. Messages-route fallback to the archive | index | ~5 days |
 | **PR-3** backfill | `backend/scripts/backfill_conversation_archive.py`: for every active session with live events, `list_events` → archive objects (the consumer indexes them). Dry-run default, `--sleep`, idempotent (skip existing keys), `--user` for a single actor first. Run on dev, then prod, before PR-4 is enabled | none | ~1 day + run time |
 | **PR-4** search route + SPA | `titleLower`/`firstPrompt` writes + backfill, `GET /sessions/search` both legs, token bucket, `CONVERSATION_SEARCH_ENABLED`, SPA results panel, jump-to-message, `features.conversationSearch`, `Cmd+K` | search | ~3 days |
 | **PR-5** (optional) agent tool `search_my_conversations` | Catalog entry, `enabledByDefault: false`; same service; results bounded to 5 × 240 chars. ~150 tokens in `toolConfig`, so a feature switch never default-on silently | RBAC + flag | ~1 day |
@@ -146,7 +169,9 @@ For scale, the summary records this plan no longer leans on already cost ~$33/mo
 
 - Archive write: fires only after `done`, never blocks the stream, skipped for preview sessions, idempotent key, tool text excluded, 16 KB cap, flag off ⇒ no put.
 - Consumer: batches of 10, respects 20 rps, DLQ on failure, document id format, attributes set, replace-on-reingest.
-- Delete: session delete removes documents and objects; a result whose row is `deleted` is dropped at read time.
+- Delete and expiry: session delete removes the objects and the consumer removes the documents; a synthetic *Object Deleted* event with `reason: "Lifecycle Expiration"` takes the same path; a result whose row is `deleted` or whose `created_at` is past retention is dropped at read time; the reconciler's dry run reports and writes nothing.
+- Retention variable: `config.ts` clamps Memory at 365 while the lifecycle rule takes the raw value; unset and `""` both give 365; the memory construct test asserts the clamp.
+- Forks and archived: a fork writes one archive object per copied turn under the forker's id; an archived session's turns stay indexed and the result carries `archived: true`; the lexical leg returns archived rows and excludes `deleted`.
 - Isolation: every retrieve carries `user_id equals`; `validate_isolation_filter` rejects anything else; a test with two users' documents in one stubbed KB proves no cross-read.
 - Lexical leg: normalization round-trips, legacy rows without `titleLower` skipped, project scoping uses GSI5, 2,000-row cap.
 - Merge: dedupe keeps the best kind; one row per session; `alsoMatched` populated.
@@ -157,7 +182,7 @@ For scale, the summary records this plan no longer leans on already cost ~$33/mo
 ## 10. Open questions
 
 1. **Does raising `eventExpiryDuration` extend events already written?** Decides whether PR-3's backfill is also the rescue for sessions between 90 and 365 days old on the day PR-R lands. Test on dev with a known old session.
-2. **Archived sessions.** `status=archived` rows are off `SessionRecencyIndex`. Index them (they have text) and show them with an "archived" tag, or exclude? Proposed: index and show.
-3. **Shared forks.** A fork's turns are the sharer's text under the forker's user id. Index them under the forker (they can already read them) or skip? Proposed: index; it is their conversation now.
-4. **Retention of the archive.** No expiry is proposed. If the product wants a retention limit on transcripts, it is set on the archive bucket's lifecycle and the KB's documents together, and it is a policy decision, not a technical one.
-5. **Governance.** The index is one shared KB isolated by identity-bound filters, the same posture as the legacy assistant index and the same data class as sessions behind the same JWT + RBAC. Nothing new is exposed; stating it here so the question is not re-opened per PR.
+2. **Prune session rows past retention?** §3 proposes it behind `CONVERSATION_RETENTION_PRUNES_SESSIONS` (default off). The alternative is to leave title-only shells forever, which is the state the 1,439 prod conversations are in today. Decide before PR-2's reconciler is written.
+3. **Governance.** The index is one shared KB isolated by identity-bound filters, the same posture as the legacy assistant index and the same data class as sessions behind the same JWT + RBAC. Nothing new is exposed; stating it here so the question is not re-opened per PR.
+
+Decided 2026-10-06: archived sessions and shared forks are indexed (§4); retention is one variable across Memory, archive and index (§3).
