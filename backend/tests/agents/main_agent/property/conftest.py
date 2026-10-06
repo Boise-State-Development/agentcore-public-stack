@@ -66,8 +66,6 @@ def st_model_config(draw):
 @st.composite
 def st_retry_config(draw):
     """Generate RetryConfig instances where sdk_initial_delay <= sdk_max_delay."""
-    boto_max_attempts = draw(st.integers(min_value=1, max_value=10))
-    boto_retry_mode = draw(st.sampled_from(["legacy", "standard", "adaptive"]))
     connect_timeout = draw(st.integers(min_value=1, max_value=60))
     read_timeout = draw(st.integers(min_value=1, max_value=300))
     sdk_max_attempts = draw(st.integers(min_value=1, max_value=10))
@@ -79,8 +77,6 @@ def st_retry_config(draw):
     )
 
     return RetryConfig(
-        boto_max_attempts=boto_max_attempts,
-        boto_retry_mode=boto_retry_mode,
         connect_timeout=connect_timeout,
         read_timeout=read_timeout,
         sdk_max_attempts=sdk_max_attempts,

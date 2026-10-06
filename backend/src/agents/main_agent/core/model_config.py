@@ -224,64 +224,46 @@ def _apply_canonical_params(
 class RetryConfig:
     """Configuration for model invocation retry behavior.
 
-    Controls two independent retry layers:
-    1. Botocore layer - HTTP-level retries before the Strands SDK sees errors
-    2. Strands SDK layer - Agent event loop retries on ModelThrottledException
+    The agent's retry strategy (``TransientModelRetryStrategy``) is the only
+    retry layer, for every provider. The transport underneath makes a single
+    attempt: botocore is configured with ``max_attempts=1`` and the OpenAI
+    client with ``max_retries=0``. They used to retry on their own as well,
+    and the layers multiplied: up to 3 botocore x 4 SDK = 12 Bedrock calls
+    per invocation. Now a call is tried at most ``sdk_max_attempts`` times.
 
     When all retries are exhausted, the exception propagates to StreamCoordinator
     which streams it to the client as a conversational error message.
 
     Can be loaded from environment variables or passed directly.
     """
-    # Botocore layer (HTTP-level retries, fires first)
-    boto_max_attempts: int = 3          # Total attempts including initial call
-    boto_retry_mode: str = "standard"   # "legacy", "standard", or "adaptive"
+    # Transport timeouts (botocore). Retries happen only in the SDK layer.
     connect_timeout: int = 5            # Seconds to wait for connection
     read_timeout: int = 120             # Seconds to wait for response
 
-    # Strands SDK layer (agent event loop retries on ModelThrottledException)
+    # SDK layer (agent event loop) — the only retry layer
     # Backoff sequence with defaults: 2s, 4s, 8s (3 retries before giving up)
     # Total worst-case wait: ~14s — fast enough for conversational UX
     sdk_max_attempts: int = 4           # Total attempts including initial call
     sdk_initial_delay: float = 2.0      # Seconds before first retry, doubles each retry
     sdk_max_delay: float = 16.0         # Cap on exponential backoff
 
-    # Widen the SDK layer beyond ModelThrottledException to Bedrock's
-    # transient PRE-STREAM faults (ServiceUnavailableException,
-    # InternalServerException, ModelNotReadyException, ...). Without this,
-    # a 503 on the first attempt reaches the user as a conversational error
-    # with no retry at all — see BedrockTransientRetryStrategy. Default on;
-    # set RETRY_TRANSIENT_SERVICE_ERRORS=false for stock Strands behavior.
-    retry_transient_service_errors: bool = True
-
     @classmethod
     def from_env(cls) -> "RetryConfig":
         """Load configuration from environment variables.
 
         Environment variables (all optional, defaults shown):
-            RETRY_BOTO_MAX_ATTEMPTS=3
-            RETRY_BOTO_MODE=standard
             RETRY_CONNECT_TIMEOUT=5
             RETRY_READ_TIMEOUT=120
             RETRY_SDK_MAX_ATTEMPTS=4
             RETRY_SDK_INITIAL_DELAY=2.0
             RETRY_SDK_MAX_DELAY=16.0
-            RETRY_TRANSIENT_SERVICE_ERRORS=true
         """
         return cls(
-            boto_max_attempts=int(os.environ.get(EnvVars.RETRY_BOTO_MAX_ATTEMPTS, str(Defaults.RETRY_BOTO_MAX_ATTEMPTS))),
-            boto_retry_mode=os.environ.get(EnvVars.RETRY_BOTO_MODE, Defaults.RETRY_BOTO_MODE),
             connect_timeout=int(os.environ.get(EnvVars.RETRY_CONNECT_TIMEOUT, str(Defaults.RETRY_CONNECT_TIMEOUT))),
             read_timeout=int(os.environ.get(EnvVars.RETRY_READ_TIMEOUT, str(Defaults.RETRY_READ_TIMEOUT))),
             sdk_max_attempts=int(os.environ.get(EnvVars.RETRY_SDK_MAX_ATTEMPTS, str(Defaults.RETRY_SDK_MAX_ATTEMPTS))),
             sdk_initial_delay=float(os.environ.get(EnvVars.RETRY_SDK_INITIAL_DELAY, str(Defaults.RETRY_SDK_INITIAL_DELAY))),
             sdk_max_delay=float(os.environ.get(EnvVars.RETRY_SDK_MAX_DELAY, str(Defaults.RETRY_SDK_MAX_DELAY))),
-            # Default-on kill switch: only the literal "false" disables it, so
-            # an unset var and a workflow that injects an empty string both
-            # keep the widened retry set.
-            retry_transient_service_errors=(
-                os.environ.get(EnvVars.RETRY_TRANSIENT_SERVICE_ERRORS, "").lower() != "false"
-            ),
         )
 
 
@@ -541,10 +523,9 @@ class ModelConfig:
         if self.retry_config:
             from botocore.config import Config as BotocoreConfig
             config["boto_client_config"] = BotocoreConfig(
-                retries={
-                    "max_attempts": self.retry_config.boto_max_attempts,
-                    "mode": self.retry_config.boto_retry_mode,
-                },
+                # One attempt: TransientModelRetryStrategy is the only
+                # retry layer, so botocore retrying too would multiply them.
+                retries={"max_attempts": 1, "mode": "standard"},
                 connect_timeout=self.retry_config.connect_timeout,
                 read_timeout=self.retry_config.read_timeout,
             )
