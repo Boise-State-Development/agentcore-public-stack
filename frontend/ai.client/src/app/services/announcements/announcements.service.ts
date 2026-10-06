@@ -2,6 +2,7 @@ import { Injectable, computed, inject, resource, signal } from '@angular/core';
 import { HttpClient, HttpContext, HttpErrorResponse } from '@angular/common/http';
 import { firstValueFrom, retry, throwError, timer } from 'rxjs';
 import { SUPPRESS_ERROR_TOAST } from '../../auth/error.interceptor';
+import { SessionService } from '../../auth/session.service';
 import { ConfigService } from '../config.service';
 import {
   Announcement,
@@ -58,6 +59,7 @@ const EMPTY_FEED: AnnouncementFeed = {
 export class AnnouncementsService {
   private readonly http = inject(HttpClient);
   private readonly config = inject(ConfigService);
+  private readonly session = inject(SessionService);
 
   private readonly baseUrl = computed(
     () => `${this.config.appApiUrl()}/announcements`,
@@ -74,11 +76,15 @@ export class AnnouncementsService {
   };
 
   /**
-   * Loads on first read. The topnav only renders the user dropdown once the
-   * session bootstrap has resolved, so the loader fires post-auth with the
-   * user's roles known — which the server needs to evaluate targeting.
+   * Idle until the session bootstrap has a user. A `resource` loads the moment
+   * it is constructed, not on first read, and `AnnouncementModalService`
+   * constructs this one from an app initializer — so without the gate the feed
+   * was requested on every page load, `/auth/login` included, in parallel with
+   * `/auth/session` and before anyone knew whether there was a session. Gating
+   * also means the server evaluates targeting with the user's roles known.
    */
   readonly feedResource = resource({
+    params: () => (this.session.isAuthenticated() ? {} : undefined),
     loader: async () => this.fetchFeed(),
   });
 

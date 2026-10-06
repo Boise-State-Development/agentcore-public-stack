@@ -26,6 +26,9 @@ interface AuthProviderPublicListResponse {
   imports: [CommonModule, SpinnerComponent],
   styleUrl: './login.page.css',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  host: {
+    '(window:pageshow)': 'onPageShow($event)',
+  },
   template: `
     <div class="login-shell fixed inset-0 flex items-center justify-center overflow-y-auto">
       <!-- Decorative background: lava-lamp blobs across three depth tiers
@@ -189,6 +192,18 @@ export class LoginPage implements OnInit, OnDestroy {
 
   ngOnDestroy(): void {
     this.sidenavService.show();
+  }
+
+  /**
+   * Back from Cognito (or the IdP) restores this page from the back/forward
+   * cache with its JS state frozen mid-redirect, so the clicked button would
+   * still read "Connecting..." and stay disabled. A cache restore is the only
+   * way back to a page that already started a redirect, so reset there.
+   */
+  onPageShow(event: PageTransitionEvent): void {
+    if (!event.persisted) return;
+    this.isLoading.set(false);
+    this.activeProviderId.set(null);
   }
 
   private async checkFirstBootStatus(): Promise<void> {

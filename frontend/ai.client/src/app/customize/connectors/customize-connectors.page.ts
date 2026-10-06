@@ -213,6 +213,8 @@ export class CustomizeConnectorsPage {
   private readonly states = signal<Map<string, ConnectState>>(new Map());
 
   constructor() {
+    this.connectorsService.ensureLoaded();
+
     // Flip a provider to `connected` when the /oauth-complete landing page
     // postMessages success. This is the same signal the chat-input banner
     // listens to, so both UIs stay in sync.

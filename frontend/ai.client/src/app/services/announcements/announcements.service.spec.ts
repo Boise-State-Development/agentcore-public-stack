@@ -10,6 +10,7 @@ import { ACK_RETRY_DELAY_MS, AnnouncementsService } from './announcements.servic
 import { SUPPRESS_ERROR_TOAST } from '../../auth/error.interceptor';
 import { Announcement, AnnouncementFeed } from './announcement.model';
 import { ConfigService } from '../config.service';
+import { SessionService } from '../../auth/session.service';
 
 const API = 'http://localhost:8000';
 const FEED_URL = `${API}/announcements/`;
@@ -47,8 +48,10 @@ function makeFeed(overrides: Partial<AnnouncementFeed> = {}): AnnouncementFeed {
 describe('AnnouncementsService', () => {
   let service: AnnouncementsService;
   let httpMock: HttpTestingController;
+  let isAuthenticated: ReturnType<typeof signal<boolean>>;
 
   beforeEach(() => {
+    isAuthenticated = signal(true);
     TestBed.resetTestingModule();
     TestBed.configureTestingModule({
       providers: [
@@ -58,6 +61,7 @@ describe('AnnouncementsService', () => {
         // DI-token override rather than vi.mock, per house convention —
         // vi.mock pollutes across spec files.
         { provide: ConfigService, useValue: { appApiUrl: signal(API) } },
+        { provide: SessionService, useValue: { isAuthenticated } },
       ],
     });
     service = TestBed.inject(AnnouncementsService);
@@ -87,6 +91,29 @@ describe('AnnouncementsService', () => {
       expect(service.feedResource.isLoading()).toBe(false);
     });
   }
+
+  describe('session gate', () => {
+    it('requests nothing while there is no session', async () => {
+      isAuthenticated.set(false);
+      TestBed.tick();
+      await Promise.resolve();
+
+      httpMock.expectNone(FEED_URL);
+      expect(service.feedResource.status()).toBe('idle');
+      expect(service.panelItems()).toEqual([]);
+    });
+
+    it('fetches once the session bootstrap has a user', async () => {
+      isAuthenticated.set(false);
+      TestBed.tick();
+      httpMock.expectNone(FEED_URL);
+
+      isAuthenticated.set(true);
+      TestBed.tick();
+      await vi.waitFor(() => httpMock.expectOne(FEED_URL).flush(makeFeed()));
+      await vi.waitFor(() => expect(service.panelItems().length).toBe(1));
+    });
+  });
 
   describe('feed', () => {
     it('exposes what the server sent', async () => {
