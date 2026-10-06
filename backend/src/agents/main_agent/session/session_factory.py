@@ -380,7 +380,7 @@ class SessionFactory:
 
         logger.info("✅ AgentCore Memory initialized")
         logger.info("   • Storage: AWS-managed DynamoDB")
-        logger.info("   • Short-term memory: Conversation history (90 days retention)")
+        logger.info("   • Short-term memory: Conversation history (retention: CDK_CONVERSATION_RETENTION_DAYS, default 365 days)")
         logger.info("   • Long-term memory: %s (%d namespaces)", "Enabled" if retrieval_config else "Disabled", len(retrieval_config))
         if compaction_config.enabled:
             logger.info("   • Compaction: Enabled (threshold=%s)", f"{compaction_config.token_threshold:,}")

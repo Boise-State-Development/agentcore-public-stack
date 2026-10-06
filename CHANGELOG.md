@@ -4,6 +4,12 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [Unreleased]
+
+### ⚠️ Changed
+
+- **Conversations are kept for 365 days by default, up from 90**, and the period is now configurable with `CDK_CONVERSATION_RETENTION_DAYS` (minimum 3; AgentCore Memory stops at 365 even when it is set higher). Message text lives only in AgentCore Memory events, so before this a conversation older than 90 days stayed in the sidebar but opened with no messages. The change is an in-place update to the Memory resource; it does not replace it. Long-term memory records are unaffected (#1380, `docs/specs/conversation-search.md` §3)
+
 ## [1.26.0] - 2026-10-03
 
 The first token arrives sooner. Every stage between the request and the first model output is now mapped and timed, and the largest stages we own were taken off the critical path: a cold agent build drops from ~870ms to ~370ms, a long conversation no longer pays ~390ms to count its history, external MCP servers load concurrently, and an agent's knowledge-base search overlaps the build. Voice mode is **priced for the first time**, per modality, and users can choose which Nova 2 Sonic voice answers and which microphone listens. Claude Opus 5.5, GPT-6 Sol, GPT-6 Luna and GPT-5.5 join the catalog. Managed knowledge bases stop mis-counting imports and stop serving stale synced files. A smoke and regression pass now drives real turns and runs nightly. Strands moves to 1.57.2 with bedrock-agentcore 1.24.0. **A CDK deploy is required, and voice stays unmetered until an admin adds the Nova 2 Sonic catalog row** (see the release notes).
