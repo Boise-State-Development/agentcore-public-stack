@@ -78,6 +78,32 @@ class TestOutline:
         assert len(dd.text_sample("md", b"x" * 50_000, limit=100)) == 100
 
 
+class TestDocumentText:
+    """The text a TEXT-only model reads in place of an attached document."""
+
+    def test_a_document_that_fits_comes_back_whole(self):
+        out = dd.document_text("pdf", build_pdf(["first page", "second page"]), limit=1_000)
+        assert out.text == "first page\n\nsecond page"
+        assert out.truncated is False
+        assert (out.unit, out.count) == ("page", 2)
+
+    def test_a_long_document_comes_back_as_an_excerpt_within_the_limit(self):
+        pages = [f"page {i} alpha beta gamma delta" for i in range(1, 61)]
+        out = dd.document_text("pdf", build_pdf(pages), limit=400)
+        assert out.truncated is True
+        assert out.text.startswith("page 1 alpha")
+        assert len(out.text) <= 400
+        assert out.count == 60
+
+    def test_docx_and_text_family(self):
+        assert dd.document_text("docx", build_docx(["One", "Two"]), limit=100).text == "One\nTwo"
+        out = dd.document_text("txt", b"a\n\nb", limit=100)
+        assert (out.text, out.unit, out.truncated) == ("a\nb", "line", False)
+
+    def test_a_page_with_no_text_layer_yields_empty_text(self):
+        assert dd.document_text("pdf", build_pdf([""]), limit=100).text == ""
+
+
 class TestRender:
     def _digest(self, sections=3, abstract="An abstract."):
         return dd.DocumentDigest(

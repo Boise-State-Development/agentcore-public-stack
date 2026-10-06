@@ -191,6 +191,20 @@ INLINE_ATTACHMENTS_MAX_TOTAL_BYTES = int(
     os.environ.get("INLINE_ATTACHMENTS_MAX_TOTAL_BYTES", 7_000_000)  # 7.0MB
 )
 
+# Characters of extracted text one turn hands a model whose catalog row
+# declares TEXT input only, across every document attached to that turn
+# (``_adapt_attachments_for_model`` in ``inference_api/chat/routes.py``). Such a
+# model rejects document blocks outright, so the text layer goes in the user
+# message instead — where, unlike a document block, restore does not swap it
+# for a digest, so it stays in the prefix for the life of the session (cached
+# reads after the first turn, until compaction rolls it up). 60,000 chars is
+# ~15k tokens at chars/4: a ~20-page text PDF whole. A longer document gets an
+# excerpt (``document_digest.text_sample``), and ``document_read`` fetches the
+# exact part.
+TEXT_ONLY_DOCUMENTS_MAX_CHARS = int(
+    os.environ.get("TEXT_ONLY_DOCUMENTS_MAX_CHARS", 60_000)
+)
+
 # Files per message. The SPA enforces the same number client-side
 # (``MAX_FILES_PER_MESSAGE`` in file-upload.service.ts); this is the server
 # side of it, shared by the ``file_upload_ids`` resolver and the direct
