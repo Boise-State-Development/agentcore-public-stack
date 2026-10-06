@@ -295,7 +295,7 @@ Please try again."""
     # `5f34d2b0` it landed on the generic "I ran into a problem with the AI
     # model" text, which told the user nothing about the failure being
     # temporary. Reaching this point means the automatic retries were already
-    # spent (see BedrockTransientRetryStrategy), so the copy says so.
+    # spent (see TransientModelRetryStrategy), so the copy says so.
     if is_service_unavailable_error(error_lower):
         message = (
             "⚠️ The model service is temporarily unavailable.\n\n"

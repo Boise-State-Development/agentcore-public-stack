@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from agents.main_agent.core.model_config import ModelConfig, ModelProvider, RetryConfig
+from agents.main_agent.core.retry_strategy import TransientModelRetryStrategy
 
 
 # ---------------------------------------------------------------------------
@@ -355,8 +356,8 @@ class TestRetryStrategy:
 
     @patch("agents.main_agent.core.agent_factory.Agent")
     @patch("agents.main_agent.core.agent_factory.OpenAIModel")
-    def test_openai_retry_strategy_is_none(self, mock_openai_cls, mock_agent_cls, monkeypatch):
-        """Req 4.7 — non-Bedrock provider → retry_strategy is None even with retry_config."""
+    def test_openai_gets_the_transient_strategy(self, mock_openai_cls, mock_agent_cls, monkeypatch):
+        """Non-Bedrock providers get the same strategy: None would mean retries OFF."""
         from agents.main_agent.core.agent_factory import AgentFactory
 
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
@@ -370,12 +371,12 @@ class TestRetryStrategy:
         AgentFactory.create_agent(model_config=cfg, **_COMMON_KWARGS)
 
         agent_kwargs = mock_agent_cls.call_args.kwargs
-        assert agent_kwargs["retry_strategy"] is None
+        assert isinstance(agent_kwargs["retry_strategy"], TransientModelRetryStrategy)
 
     @patch("agents.main_agent.core.agent_factory.Agent")
     @patch("agents.main_agent.core.agent_factory.GeminiModel")
-    def test_gemini_retry_strategy_is_none(self, mock_gemini_cls, mock_agent_cls, monkeypatch):
-        """Req 4.7 — Gemini provider → retry_strategy is None."""
+    def test_gemini_gets_the_transient_strategy(self, mock_gemini_cls, mock_agent_cls, monkeypatch):
+        """Gemini too: its client never retries unless configured to."""
         from agents.main_agent.core.agent_factory import AgentFactory
 
         monkeypatch.setenv("GOOGLE_GEMINI_API_KEY", "gemini-test-key")
@@ -389,7 +390,7 @@ class TestRetryStrategy:
         AgentFactory.create_agent(model_config=cfg, **_COMMON_KWARGS)
 
         agent_kwargs = mock_agent_cls.call_args.kwargs
-        assert agent_kwargs["retry_strategy"] is None
+        assert isinstance(agent_kwargs["retry_strategy"], TransientModelRetryStrategy)
 
 
 # ---------------------------------------------------------------------------

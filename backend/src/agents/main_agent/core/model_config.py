@@ -224,35 +224,53 @@ def _apply_canonical_params(
 class RetryConfig:
     """Configuration for model invocation retry behavior.
 
-    Controls two independent retry layers:
-    1. Botocore layer - HTTP-level retries before the Strands SDK sees errors
-    2. Strands SDK layer - Agent event loop retries on ModelThrottledException
+    Two layers exist, but only one retries at a time:
+    1. Transport layer - botocore / the OpenAI client, HTTP-level retries
+    2. Strands SDK layer - the agent event loop's retry strategy
+
+    With ``retry_transient_service_errors`` on (the default), the SDK layer's
+    ``TransientModelRetryStrategy`` owns every retry for every provider and
+    the transport makes a single attempt, so a call is tried at most
+    ``sdk_max_attempts`` times. The two used to compound: up to 3 x 4 = 12
+    Bedrock calls per invocation. With it off, the old layering returns
+    (``boto_max_attempts`` on Bedrock under the stock throttle-only strategy).
 
     When all retries are exhausted, the exception propagates to StreamCoordinator
     which streams it to the client as a conversational error message.
 
     Can be loaded from environment variables or passed directly.
     """
-    # Botocore layer (HTTP-level retries, fires first)
+    # Botocore layer (HTTP-level retries). boto_max_attempts applies only
+    # with the kill switch off; see transport_max_attempts.
     boto_max_attempts: int = 3          # Total attempts including initial call
     boto_retry_mode: str = "standard"   # "legacy", "standard", or "adaptive"
     connect_timeout: int = 5            # Seconds to wait for connection
     read_timeout: int = 120             # Seconds to wait for response
 
-    # Strands SDK layer (agent event loop retries on ModelThrottledException)
+    # Strands SDK layer (agent event loop; the only retry layer by default)
     # Backoff sequence with defaults: 2s, 4s, 8s (3 retries before giving up)
     # Total worst-case wait: ~14s — fast enough for conversational UX
     sdk_max_attempts: int = 4           # Total attempts including initial call
     sdk_initial_delay: float = 2.0      # Seconds before first retry, doubles each retry
     sdk_max_delay: float = 16.0         # Cap on exponential backoff
 
-    # Widen the SDK layer beyond ModelThrottledException to Bedrock's
-    # transient PRE-STREAM faults (ServiceUnavailableException,
-    # InternalServerException, ModelNotReadyException, ...). Without this,
-    # a 503 on the first attempt reaches the user as a conversational error
-    # with no retry at all — see BedrockTransientRetryStrategy. Default on;
-    # set RETRY_TRANSIENT_SERVICE_ERRORS=false for stock Strands behavior.
+    # Hand every retry to TransientModelRetryStrategy: every provider's
+    # transient faults (Bedrock 5xx codes, OpenAI in-stream server errors,
+    # Gemini 5xx, throttles, connection failures), never after visible
+    # output, with the transport layer held to one attempt so nothing
+    # compounds. Default on; set RETRY_TRANSIENT_SERVICE_ERRORS=false for the
+    # old behavior (stock Strands strategy on Bedrock only, transport
+    # retries on, no SDK retries for any other provider).
     retry_transient_service_errors: bool = True
+
+    @property
+    def transport_max_attempts(self) -> int:
+        """HTTP-level attempts for botocore and the OpenAI client.
+
+        One while the SDK strategy owns retries, so the two layers never
+        multiply; ``boto_max_attempts`` otherwise.
+        """
+        return 1 if self.retry_transient_service_errors else self.boto_max_attempts
 
     @classmethod
     def from_env(cls) -> "RetryConfig":
@@ -542,7 +560,7 @@ class ModelConfig:
             from botocore.config import Config as BotocoreConfig
             config["boto_client_config"] = BotocoreConfig(
                 retries={
-                    "max_attempts": self.retry_config.boto_max_attempts,
+                    "max_attempts": self.retry_config.transport_max_attempts,
                     "mode": self.retry_config.boto_retry_mode,
                 },
                 connect_timeout=self.retry_config.connect_timeout,

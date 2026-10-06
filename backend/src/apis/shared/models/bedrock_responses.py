@@ -42,13 +42,12 @@ own treats as disjoint. See :mod:`apis.shared.models.usage_normalization`.
 
 import logging
 import os
-from typing import Any, AsyncGenerator, Dict, Optional
+from typing import Any, Dict, Optional
 
 # The OpenAI Responses API's native param names are a property of the *API*,
 # not of the transport, so this is the Mantle map aliased rather than copied —
 # the two surfaces can never drift apart.
 from .mantle import MANTLE_RESPONSES_PARAM_MAP as BEDROCK_RESPONSES_PARAM_MAP
-from .stream_output import is_visible_output_chunk, mark_partial_output
 from .usage_normalization import usage_normalized
 
 logger = logging.getLogger(__name__)
@@ -357,13 +356,11 @@ _model_cls: Optional[type] = None
 def _bedrock_responses_model_cls() -> type:
     """Build (once) the model class used for this transport.
 
-    Three layers over Strands' ``OpenAIResponsesModel``:
+    Two layers over Strands' ``OpenAIResponsesModel``:
 
     1. a per-request bearer-token mint, because ``client_args`` is resolved
        once at construction and our token is short-term;
-    2. a partial-output tag on stream failures, so the agent's retry strategy
-       never restarts a call whose text the user has already seen;
-    3. the OpenAI usage normalization every OpenAI-family model needs.
+    2. the OpenAI usage normalization every OpenAI-family model needs.
 
     Memoized so repeated agent builds reuse one type — keeps ``isinstance``
     stable and avoids leaking a class per turn.
@@ -424,26 +421,6 @@ def _bedrock_responses_model_cls() -> type:
             return apply_explicit_prompt_cache(
                 request, system_prompt=system_prompt, tool_specs=tool_specs
             )
-
-        async def stream(self, *args: Any, **kwargs: Any) -> AsyncGenerator[Any, None]:
-            """Stream as the SDK does, tagging a failure that follows visible output.
-
-            OpenAI reports a server fault as an event inside an HTTP 200
-            stream, so the same exception type arrives before and after text
-            has reached the user. The tag lets the retry strategy retry the
-            first case and leave the second alone. See
-            :mod:`apis.shared.models.stream_output`.
-            """
-            emitted = False
-            try:
-                async for chunk in super().stream(*args, **kwargs):
-                    if not emitted and is_visible_output_chunk(chunk):
-                        emitted = True
-                    yield chunk
-            except Exception as error:
-                if emitted:
-                    mark_partial_output(error)
-                raise
 
     _model_cls = usage_normalized(BedrockRuntimeResponsesModel)
     return _model_cls

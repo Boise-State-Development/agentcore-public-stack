@@ -4,9 +4,9 @@ Factory for creating Strands Agent instances with multi-provider support
 import os
 import logging
 from typing import List, Optional, Any
-from strands import Agent
+from strands import Agent, ModelRetryStrategy
 from strands.agent.conversation_manager import SlidingWindowConversationManager
-from strands.models import BedrockModel
+from strands.models import BedrockModel, OpenAIResponsesModel
 from strands.models.openai import OpenAIModel
 from strands.models.gemini import GeminiModel
 from strands.tools.executors import SequentialToolExecutor
@@ -15,9 +15,14 @@ from agents.main_agent.core.model_config import ModelConfig, ModelProvider
 from agents.main_agent.config.constants import EnvVars, Defaults
 from apis.shared.models.bedrock_responses import build_bedrock_responses_model
 from apis.shared.models.mantle import build_mantle_model
+from apis.shared.models.stream_output import tag_partial_output
 from apis.shared.models.usage_normalization import usage_normalized
 
 logger = logging.getLogger(__name__)
+
+# Models whose client is an AsyncOpenAI built from ``client_args`` per request,
+# so ``max_retries`` there controls the transport layer.
+_OPENAI_FAMILY_MODELS = (OpenAIModel, OpenAIResponsesModel)
 
 
 class AgentFactory:
@@ -231,63 +236,7 @@ class AgentFactory:
         else:
             raise ValueError(f"Unsupported model provider: {provider}")
 
-        # Build SDK-level retry strategy for the Bedrock Converse and
-        # bedrock-runtime Responses providers. This is the second retry layer
-        # (agent event loop), retries with exponential backoff. Any other
-        # provider gets None, which Strands reads as retries OFF.
-        #
-        # Stock ModelRetryStrategy retries ModelThrottledException ONLY, which
-        # leaves Bedrock's transient service faults (ServiceUnavailableException,
-        # InternalServerException, ...) unretried — they arrive as raw
-        # botocore ClientErrors. BedrockTransientRetryStrategy widens the
-        # predicate to cover those when they fire before the response stream
-        # opens; see its module docstring for why mid-stream faults are excluded.
-        retry_strategy = None
-        if provider == ModelProvider.BEDROCK and model_config.retry_config:
-            from strands import ModelRetryStrategy
-            from agents.main_agent.core.retry_strategy import BedrockTransientRetryStrategy
-
-            strategy_cls = (
-                BedrockTransientRetryStrategy
-                if model_config.retry_config.retry_transient_service_errors
-                else ModelRetryStrategy
-            )
-            retry_strategy = strategy_cls(
-                max_attempts=model_config.retry_config.sdk_max_attempts,
-                initial_delay=model_config.retry_config.sdk_initial_delay,
-                max_delay=model_config.retry_config.sdk_max_delay,
-            )
-            logger.info(
-                f"Configured retry strategy: boto={model_config.retry_config.boto_max_attempts} attempts "
-                f"({model_config.retry_config.boto_retry_mode}), "
-                f"sdk={model_config.retry_config.sdk_max_attempts} attempts "
-                f"({model_config.retry_config.sdk_initial_delay}s-{model_config.retry_config.sdk_max_delay}s backoff), "
-                f"strategy={strategy_cls.__name__}"
-            )
-        elif (
-            provider == ModelProvider.BEDROCK_RESPONSES
-            and model_config.retry_config
-            and model_config.retry_config.retry_transient_service_errors
-        ):
-            # The OpenAI client retries HTTP failures, but GPT-6 reports its
-            # server faults as events inside a 200 stream, which it never
-            # sees. Without a strategy here Strands turns retries off
-            # entirely (None means max_attempts=1), and those faults reached
-            # users as "Agent force-stopped". The kill switch restores that
-            # old behavior rather than the stock throttle-only strategy,
-            # which has no guard against retrying after visible output.
-            from agents.main_agent.core.retry_strategy import ResponsesTransientRetryStrategy
-
-            retry_strategy = ResponsesTransientRetryStrategy(
-                max_attempts=model_config.retry_config.sdk_max_attempts,
-                initial_delay=model_config.retry_config.sdk_initial_delay,
-                max_delay=model_config.retry_config.sdk_max_delay,
-            )
-            logger.info(
-                f"Configured retry strategy: sdk={model_config.retry_config.sdk_max_attempts} attempts "
-                f"({model_config.retry_config.sdk_initial_delay}s-{model_config.retry_config.sdk_max_delay}s backoff), "
-                f"strategy=ResponsesTransientRetryStrategy"
-            )
+        retry_strategy = AgentFactory._build_retry_strategy(provider, model_config, model)
 
         # Bedrock prompt caching: give the system prompt its own cachePoint by
         # passing it as a SystemContentBlock list with a trailing cachePoint
@@ -390,6 +339,61 @@ class AgentFactory:
         )
 
         return agent
+
+    @staticmethod
+    def _build_retry_strategy(
+        provider: ModelProvider, model_config: ModelConfig, model: Any
+    ) -> Optional[ModelRetryStrategy]:
+        """Return the agent's retry strategy and hold the transport to one attempt.
+
+        A ``None`` return is not "use the default": Strands reads it as
+        retries OFF. Before ``TransientModelRetryStrategy`` every provider but
+        Bedrock got ``None``, and GPT-6's transient faults reached users as
+        "Agent force-stopped" on the first attempt.
+
+        With the strategy on, it is the only retry layer. Bedrock's botocore
+        config already carries one attempt (``RetryConfig.transport_max_attempts``
+        in ``to_bedrock_config``); the OpenAI client is set to ``max_retries=0``
+        here; Gemini's client never retries unless configured to. Every model's
+        stream is tagged so a failure after visible output is never retried.
+        """
+        retry_config = model_config.retry_config
+        if not retry_config:
+            return None
+
+        if not retry_config.retry_transient_service_errors:
+            # Kill switch: the pre-2026-10 behavior, transport retries on.
+            if provider != ModelProvider.BEDROCK:
+                return None
+            logger.info(
+                f"Configured retry strategy: boto={retry_config.transport_max_attempts} attempts "
+                f"({retry_config.boto_retry_mode}), sdk={retry_config.sdk_max_attempts} attempts, "
+                f"strategy=ModelRetryStrategy"
+            )
+            return ModelRetryStrategy(
+                max_attempts=retry_config.sdk_max_attempts,
+                initial_delay=retry_config.sdk_initial_delay,
+                max_delay=retry_config.sdk_max_delay,
+            )
+
+        from agents.main_agent.core.retry_strategy import TransientModelRetryStrategy
+
+        tag_partial_output(model)
+        if isinstance(model, _OPENAI_FAMILY_MODELS):
+            # A fresh dict, not an in-place edit: a builder's client_args must
+            # not leak this setting to its other callers (api-converse).
+            model.client_args = {**model.client_args, "max_retries": retry_config.transport_max_attempts - 1}
+
+        logger.info(
+            f"Configured retry strategy: transport=1 attempt, sdk={retry_config.sdk_max_attempts} attempts "
+            f"({retry_config.sdk_initial_delay}s-{retry_config.sdk_max_delay}s backoff), "
+            f"strategy=TransientModelRetryStrategy"
+        )
+        return TransientModelRetryStrategy(
+            max_attempts=retry_config.sdk_max_attempts,
+            initial_delay=retry_config.sdk_initial_delay,
+            max_delay=retry_config.sdk_max_delay,
+        )
 
     @staticmethod
     def build_conversation_manager() -> SlidingWindowConversationManager:
