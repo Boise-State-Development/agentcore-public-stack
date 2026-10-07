@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { TestBed } from '@angular/core/testing';
-import { DialogRef } from '@angular/cdk/dialog';
+import { Dialog, DialogRef } from '@angular/cdk/dialog';
 import { signal } from '@angular/core';
+import { expectNamedDialog, openInCdkDialog } from '../../../../../testing/cdk-dialog';
 import { AnnouncementsService } from '../../../../services/announcements/announcements.service';
 import { Announcement } from '../../../../services/announcements/announcement.model';
 
@@ -151,6 +152,43 @@ describe('WhatsNewPanelComponent', () => {
 
     it('renders nothing rather than "Invalid Date" for junk', async () => {
       expect(await labelFor('not a date')).toBe('');
+    });
+  });
+
+  describe('opened through CDK Dialog', () => {
+    beforeEach(() => {
+      TestBed.resetTestingModule();
+      TestBed.configureTestingModule({
+        providers: [{ provide: AnnouncementsService, useValue: mockAnnouncements }],
+      });
+    });
+
+    afterEach(() => TestBed.inject(Dialog).closeAll());
+
+    it('is a dialog named by its title, with the close button as the first stop', async () => {
+      const { WhatsNewPanelComponent } = await import('./whats-new-panel.component');
+      const { container } = await openInCdkDialog(WhatsNewPanelComponent);
+
+      expectNamedDialog(container, { name: "What's New" });
+      expect(container.querySelector('[cdkFocusInitial]')).toBeNull();
+      expect(container.querySelector('button[aria-label="Close What\'s New"]')).not.toBeNull();
+    });
+
+    it('closes on Escape and from Done', async () => {
+      const { WhatsNewPanelComponent } = await import('./whats-new-panel.component');
+      const escape = await openInCdkDialog(WhatsNewPanelComponent);
+      const closed = vi.fn();
+      escape.ref.closed.subscribe(closed);
+      escape.container
+        .querySelector('app-dialog-shell')!
+        .dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      expect(closed).toHaveBeenCalledTimes(1);
+
+      const done = await openInCdkDialog(WhatsNewPanelComponent);
+      const doneClosed = vi.fn();
+      done.ref.closed.subscribe(doneClosed);
+      done.container.querySelector<HTMLButtonElement>('[dialogFooter] button')!.click();
+      expect(doneClosed).toHaveBeenCalledTimes(1);
     });
   });
 });
