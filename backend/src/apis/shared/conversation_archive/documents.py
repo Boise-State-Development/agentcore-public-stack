@@ -42,6 +42,14 @@ MAX_USER_TEXT_BYTES = MAX_TURN_TEXT_BYTES // 2
 # carried attachments. Not the user's words, so it is not indexed.
 _ATTACHED_FILES_MARKER = re.compile(r"\n*\[Attached files: [^\]]+\]\s*$")
 
+# Long-term memory the runtime splices into the turn's user message
+# (``TurnBasedSessionManager.retrieve_customer_context``): its own text block,
+# inserted first, wrapped in the session manager's ``context_tag``. It lives on
+# the in-memory ``agent.messages`` the archive reads, not in what the user
+# typed, and indexing it would make every turn match the user's stored
+# preferences rather than their words.
+_INJECTED_CONTEXT_BLOCK = re.compile(r"^\s*<user_context>.*</user_context>\s*$", re.DOTALL)
+
 
 @dataclass(frozen=True)
 class ArchivedTurn:
@@ -109,13 +117,21 @@ def _blocks(message: Mapping[str, Any]) -> List[Any]:
 
 
 def message_text(message: Mapping[str, Any]) -> str:
-    """The message's prose: its ``text`` blocks joined, everything else dropped."""
+    """The message's prose: its ``text`` blocks joined, everything else dropped.
+
+    On a user message, a block that is entirely injected long-term-memory
+    context is dropped too.
+    """
+    is_user = message.get("role") == "user"
     parts = []
     for block in _blocks(message):
         if isinstance(block, dict):
             text = block.get("text")
-            if isinstance(text, str) and text.strip():
-                parts.append(text.strip())
+            if not isinstance(text, str) or not text.strip():
+                continue
+            if is_user and _INJECTED_CONTEXT_BLOCK.match(text):
+                continue
+            parts.append(text.strip())
     return "\n\n".join(parts)
 
 
