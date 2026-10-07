@@ -14,6 +14,8 @@ Row shapes (see ``models.py``):
   - ``PK=SPACE#{id}  SK=FILEVER#{slug}#{n:06d}``  (per-file history, no index)
   - ``PK=SPACE#{id}  SK=PROPOSAL#{proposalId}``    (review queue, no index: a space's
     proposals are one ``Query``, filtered on ``state``)
+  - ``PK=SPACE#{id}  SK=PROV#{slug}``             (each item's provenance, by anchor)
+  - ``PK=SPACE#{id}  SK=ARCHIVE#{at}#{anchor}``   (items that left a file; expire on ``ttl``)
 """
 
 from __future__ import annotations
@@ -33,7 +35,16 @@ except ImportError:  # pragma: no cover - exercised only without boto3
     Key = None  # type: ignore[assignment]
     ClientError = Exception  # type: ignore[assignment, misc]
 
-from .models import FileVersion, MemoryEntryRef, MemoryIndex, MemoryProposal, MemorySpace, SpaceMember
+from .models import (
+    ArchivedItem,
+    FileVersion,
+    ItemProvenance,
+    MemoryEntryRef,
+    MemoryIndex,
+    MemoryProposal,
+    MemorySpace,
+    SpaceMember,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +72,8 @@ _INDEX_SK = "INDEX"
 _MEMBER_SK_PREFIX = "MEMBER#"
 _FILEVER_SK_PREFIX = "FILEVER#"
 _PROPOSAL_SK_PREFIX = "PROPOSAL#"
+_PROV_SK_PREFIX = "PROV#"
+_ARCHIVE_SK_PREFIX = "ARCHIVE#"
 
 MANIFEST_MAX_BYTES = 300 * 1024
 
@@ -189,6 +202,8 @@ class MemorySpaceRepository:
             entry["itemCount"] = int(r.item_count)
         if r.archived:
             entry["archived"] = True
+        if r.pinned:
+            entry["pinned"] = list(r.pinned)
         if r.version:
             entry["version"] = int(r.version)
         return entry
@@ -222,6 +237,7 @@ class MemorySpaceRepository:
                 tokens_method=r.get("tokensMethod"),
                 item_count=int(r["itemCount"]) if r.get("itemCount") is not None else None,
                 archived=bool(r.get("archived", False)),
+                pinned=list(r.get("pinned") or []),
                 version=int(r.get("version", 0)),
             )
             for r in (item.get("entries") or [])
@@ -515,6 +531,58 @@ class MemorySpaceRepository:
             MemoryProposal.model_validate(_from_dynamo({k: v for k, v in i.items() if k not in ("PK", "SK")}))
             for i in items
         ]
+
+    # ---- item provenance (PROV) and archive (ARCHIVE) -------------------
+
+    def get_provenance(self, space_id: str, slug: str) -> Dict[str, ItemProvenance]:
+        """``{anchor: provenance}`` for one file; empty for a file saved before 2.5a-2."""
+        item = self._table.get_item(Key={"PK": _space_pk(space_id), "SK": f"{_PROV_SK_PREFIX}{slug}"}).get("Item")
+        if not item:
+            return {}
+        return {a: ItemProvenance.model_validate(v) for a, v in _from_dynamo(item.get("items") or {}).items()}
+
+    def put_provenance(self, space_id: str, slug: str, provenance: Dict[str, ItemProvenance]) -> None:
+        self._table.put_item(Item={
+            "PK": _space_pk(space_id),
+            "SK": f"{_PROV_SK_PREFIX}{slug}",
+            "slug": slug,
+            "items": {a: p.model_dump(by_alias=True, exclude_none=True) for a, p in provenance.items()},
+        })
+
+    def delete_provenance(self, space_id: str, slug: str) -> None:
+        self._table.delete_item(Key={"PK": _space_pk(space_id), "SK": f"{_PROV_SK_PREFIX}{slug}"})
+
+    @staticmethod
+    def _archive_key(space_id: str, archive_id: str) -> dict:
+        return {"PK": _space_pk(space_id), "SK": f"{_ARCHIVE_SK_PREFIX}{archive_id}"}
+
+    def put_archived_items(self, space_id: str, items: List[ArchivedItem], ttl: int) -> None:
+        with self._table.batch_writer() as batch:
+            for a in items:
+                batch.put_item(Item={
+                    **self._archive_key(space_id, a.archive_id),
+                    **a.model_dump(by_alias=True, exclude_none=True),
+                    "ttl": int(ttl),
+                })
+
+    def get_archived_item(self, space_id: str, archive_id: str) -> Optional[ArchivedItem]:
+        item = self._table.get_item(Key=self._archive_key(space_id, archive_id)).get("Item")
+        if not item:
+            return None
+        return ArchivedItem.model_validate(_from_dynamo({k: v for k, v in item.items() if k not in ("PK", "SK", "ttl")}))
+
+    def list_archived_items(self, space_id: str) -> List[ArchivedItem]:
+        """Oldest first. DynamoDB deletes expired rows lazily, so callers drop those past ``restorableUntil``."""
+        items = self._query_pages(
+            KeyConditionExpression=Key("PK").eq(_space_pk(space_id)) & Key("SK").begins_with(_ARCHIVE_SK_PREFIX)
+        )
+        return [
+            ArchivedItem.model_validate(_from_dynamo({k: v for k, v in i.items() if k not in ("PK", "SK", "ttl")}))
+            for i in items
+        ]
+
+    def delete_archived_item(self, space_id: str, archive_id: str) -> None:
+        self._table.delete_item(Key=self._archive_key(space_id, archive_id))
 
     def delete_file_versions(self, space_id: str, slug: str) -> List[FileVersion]:
         """Delete every version row of one file; return what was deleted."""

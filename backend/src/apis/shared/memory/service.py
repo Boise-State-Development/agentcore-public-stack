@@ -21,24 +21,29 @@ import os
 import re
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, TypeVar
+from datetime import datetime, timedelta, timezone
+from typing import Any, Callable, Dict, List, Literal, Optional, Sequence, Tuple, TypeVar
 
 from .format import (
     Frontmatter,
     MemoryFormatError,
     extract_links,
     frontmatter_from_parsed,
+    Item,
+    new_anchor,
     parse_file,
     render_file,
+    render_items,
     strip_anchors,
     validate_slug,
 )
 from .models import (
+    ArchivedItem,
     EntryType,
     FileFormat,
     FileVersion,
     FileVersionReason,
+    ItemProvenance,
     MemoryEntryRef,
     MemoryIndex,
     MemoryProposal,
@@ -115,6 +120,34 @@ def file_hard_cap_tokens() -> int:
 def file_soft_threshold_tokens() -> int:
     pct = min(100, _env_int("MEMORY_FILE_SOFT_THRESHOLD_PCT", _DEFAULT_FILE_SOFT_THRESHOLD_PCT, minimum=1))
     return file_hard_cap_tokens() * pct // 100
+
+
+def archive_retention_days(scope: str) -> int:
+    """How long an archived item stays restorable: a project's shared memory keeps it
+    ``MEMORY_ARCHIVE_RETENTION_DAYS`` (365), anything else
+    ``MEMORY_PERSONAL_ARCHIVE_RETENTION_DAYS`` (30, an undo window)."""
+    if scope == "shared":
+        return _env_int("MEMORY_ARCHIVE_RETENTION_DAYS", 365, minimum=1)
+    return _env_int("MEMORY_PERSONAL_ARCHIVE_RETENTION_DAYS", 30, minimum=1)
+
+
+def _normalize_email(email: Optional[str]) -> str:
+    return (email or "").strip().lower()
+
+
+@dataclass
+class SaveContext:
+    """Where a save came from, for its items' provenance (Shared Projects 2.5a-2).
+
+    ``restored`` maps an anchor coming back from the archive to the provenance
+    it left with; everything else describes this save.
+    """
+
+    source_session_id: Optional[str] = None
+    proposal_id: Optional[str] = None
+    proposed_by: Optional[str] = None
+    approved_by: Optional[str] = None
+    restored: Dict[str, ItemProvenance] = field(default_factory=dict)
 
 
 def max_pending_proposals() -> int:
@@ -253,6 +286,7 @@ class PreparedSave:
     text: str
     current_ref: Optional[MemoryEntryRef]
     validated: Optional[CanonicalSave]
+    current_items: Tuple[Item, ...]
     warnings: List[str]
     count: TokenCount
     over_soft: bool
@@ -324,6 +358,18 @@ def _get_nested(data: Dict[str, Any], dotted: str) -> Any:
             return None
         cur = cur[part]
     return cur
+
+
+def _check_pins_kept(current_ref: Optional[MemoryEntryRef], validated: CanonicalSave) -> None:
+    pinned = set(current_ref.pinned) if current_ref is not None else set()
+    dropped = sorted(pinned & set(validated.removed_anchors))
+    if dropped:
+        raise MemoryValidationError(
+            f"{'An item' if len(dropped) == 1 else f'{len(dropped)} items'} this save leaves out "
+            f"{'is' if len(dropped) == 1 else 'are'} pinned ({', '.join(dropped)}). "
+            "Keep pinned items, or unpin them first.",
+            code="pinned_item_removed",
+        )
 
 
 class MemorySpaceService:
@@ -1053,6 +1099,8 @@ class MemorySpaceService:
         aliases: Optional[List[str]] = None,
         reason: FileVersionReason = "edit",
         proposal_id: Optional[str] = None,
+        context: Optional[SaveContext] = None,
+        restorable: Sequence[str] = (),
     ) -> SaveResult:
         """Create or replace an entry through the save pipeline (§4.3), editor+.
 
@@ -1073,11 +1121,16 @@ class MemorySpaceService:
         space, _ = self._require(space_id, user_id, user_email, "editor")
         canonical = space.file_format == "canonical"
         now = _now_iso()
-        prepared = self._prepare_save(space, slug, body, description=description, aliases=aliases, now=now)
-        return self._commit_save(
+        prepared = self._prepare_save(
+            space, slug, body, description=description, aliases=aliases, now=now, restorable=restorable
+        )
+        result = self._commit_save(
             space_id, user_id, prepared, canonical=canonical, entry_type=entry_type,
             description=description, indexed=indexed, now=now, reason=reason, proposal_id=proposal_id,
         )
+        if canonical:
+            self._record_items(space, prepared, result, actor=_normalize_email(user_email), now=now, context=context)
+        return result
 
     def _prepare_save(
         self,
@@ -1088,8 +1141,13 @@ class MemorySpaceService:
         description: Optional[str],
         aliases: Optional[List[str]],
         now: str,
+        restorable: Sequence[str] = (),
     ) -> PreparedSave:
-        """§4.3 steps 1–5 against the current manifest: validate, render, count. Writes nothing."""
+        """§4.3 steps 1–5 against the current manifest: validate, render, count. Writes nothing.
+
+        A save may not drop a pinned item (2.5a-2): the pin is how a member says
+        "keep this", so dropping it takes an unpin first.
+        """
         space_id = space.space_id
         canonical = space.file_format == "canonical"
         try:
@@ -1102,8 +1160,10 @@ class MemorySpaceService:
         index = self.repository.get_index(space_id)
         current_ref = next((e for e in index.entries if e.slug == slug), None)
         validated: Optional[CanonicalSave] = None
+        current_items: Tuple[Item, ...] = ()
         if canonical:
             current = self._current_file(current_ref, slug) if current_ref is not None else None
+            current_items = current.items if current else ()
             try:
                 validated = validate_canonical_save(
                     slug=slug,
@@ -1112,9 +1172,11 @@ class MemorySpaceService:
                     text=body,
                     description=description,
                     aliases=aliases,
+                    restorable=restorable,
                 )
             except MemoryFormatError as exc:
                 raise MemoryValidationError.from_format_error(exc) from exc
+            _check_pins_kept(current_ref, validated)
             version = _next_version(current_ref)
             created = (current.frontmatter.created if current else "") or now
             text = render_file(
@@ -1151,7 +1213,7 @@ class MemorySpaceService:
         elif over_soft:
             warnings.append(f"This file is about {count.tokens:,} tokens, close to the {hard_cap:,}-token limit.")
         return PreparedSave(
-            slug=slug, text=text, current_ref=current_ref, validated=validated,
+            slug=slug, text=text, current_ref=current_ref, validated=validated, current_items=current_items,
             warnings=warnings, count=count, over_soft=over_soft,
         )
 
@@ -1208,6 +1270,8 @@ class MemorySpaceService:
                     )
                 except MemoryFormatError as exc:
                     raise MemoryValidationError.from_format_error(exc) from exc
+                # Pins live on the manifest entry, which this save replaces: carry them.
+                ref.pinned = list(fresh.pinned) if fresh is not None else []
             ref.version = _next_version(fresh)
             kept = [e for e in fresh_index.entries if e.slug != slug]
             kept.append(ref)
@@ -1268,7 +1332,20 @@ class MemorySpaceService:
         the index shares it (objects are content-addressed). Archive and
         restore arrive with Shared Projects 2.5.
         """
-        self._require(space_id, user_id, user_email, "editor")
+        space, _ = self._require(space_id, user_id, user_email, "editor")
+        leaving: List[Tuple[str, str, Optional[ItemProvenance]]] = []
+        if space.file_format == "canonical":
+            # Its items go to the archive (2.5a-2) before history and objects are purged.
+            ref = self._find_ref(space_id, slug)
+            if ref is not None:
+                try:
+                    provenance = self.repository.get_provenance(space_id, slug)
+                    leaving = [
+                        (i.anchor, i.text, provenance.get(i.anchor))
+                        for i in self._current_file(ref, slug).items if i.anchor
+                    ]
+                except Exception:
+                    logger.warning("Could not read '%s' to archive it in %s", slug, space_id, exc_info=True)
 
         def apply(index: MemoryIndex) -> List[MemoryEntryRef]:
             removed = [e for e in index.entries if e.slug == slug]
@@ -1280,12 +1357,185 @@ class MemorySpaceService:
             return removed
 
         removed, final_index = self._mutate_index(space_id, apply)
+        if leaving:
+            try:
+                self._archive(space, slug, leaving, reason="deleted", actor=_normalize_email(user_email), now=_now_iso())
+                self.repository.delete_provenance(space_id, slug)
+            except Exception:
+                logger.warning("Could not archive deleted file '%s' in %s", slug, space_id, exc_info=True)
         versions = self.repository.delete_file_versions(space_id, slug)
         candidates = {prev.s3_key for prev in removed}
         candidates.update(content_key(space_id, v.content_hash) for v in versions)
         still_used = self._referenced_keys(space_id, index=final_index)
         for key in candidates - still_used:
             self.store.delete(key)
+
+    # ---- item provenance, archive and pins (Shared Projects 2.5a-2) -------
+
+    def _record_items(
+        self,
+        space: MemorySpace,
+        prepared: PreparedSave,
+        result: SaveResult,
+        *,
+        actor: str,
+        now: str,
+        context: Optional[SaveContext],
+    ) -> None:
+        """After a canonical save commits: update each item's provenance, archive what left.
+
+        Best-effort, like the ``FILEVER`` row: the save has committed, and a lost
+        provenance write costs attribution, never content (the archive row's
+        text also survives in history).
+        """
+        ctx = context or SaveContext()
+        validated = prepared.validated
+        if validated is None:
+            return
+        space_id, slug = space.space_id, prepared.slug
+        try:
+            before = self.repository.get_provenance(space_id, slug)
+            old_text = {i.anchor: i.text for i in prepared.current_items if i.anchor}
+            minted = set(validated.minted_anchors)
+            stamp = {
+                "source_session_id": ctx.source_session_id,
+                "proposal_id": ctx.proposal_id,
+                "proposed_by": ctx.proposed_by,
+                "approved_by": ctx.approved_by,
+            }
+            after: Dict[str, ItemProvenance] = {}
+            for item in validated.items:
+                anchor = item.anchor or ""
+                kept = before.get(anchor)
+                if anchor in ctx.restored:
+                    after[anchor] = ctx.restored[anchor].model_copy(update={"restored_by": actor, "restored_at": now})
+                elif anchor in minted:
+                    after[anchor] = ItemProvenance(added_by=actor, added_at=now, **stamp)
+                elif old_text.get(anchor) != item.text:
+                    base = kept or ItemProvenance()
+                    after[anchor] = base.model_copy(update={"updated_by": actor, "updated_at": now, **stamp})
+                elif kept is not None:
+                    after[anchor] = kept
+            self.repository.put_provenance(space_id, slug, after)
+            leaving = [
+                (a, old_text[a], before.get(a)) for a in validated.removed_anchors if a in old_text
+            ]
+            self._archive(space, slug, leaving, reason="removed", actor=actor, now=now)
+        except Exception:
+            logger.warning("Could not record item provenance for '%s' in space %s", slug, space_id, exc_info=True)
+
+    def _archive(
+        self,
+        space: MemorySpace,
+        slug: str,
+        leaving: List[Tuple[str, str, Optional[ItemProvenance]]],
+        *,
+        reason: str,
+        actor: str,
+        now: str,
+    ) -> None:
+        if not leaving:
+            return
+        days = archive_retention_days(space.scope)
+        moment = datetime.now(timezone.utc)
+        until = moment + timedelta(days=days)
+        stamp = f"{int(moment.timestamp() * 1000):013d}"
+        rows = [
+            ArchivedItem(
+                archive_id=f"{stamp}-{anchor}",
+                slug=slug,
+                anchor=anchor,
+                text=text,
+                reason=reason,
+                archived_by=actor,
+                archived_at=now,
+                restorable_until=until.isoformat(),
+                provenance=prov,
+            )
+            for anchor, text, prov in leaving
+        ]
+        self.repository.put_archived_items(space.space_id, rows, ttl=int(until.timestamp()))
+
+    def read_file_items(
+        self, space_id: str, user_id: str, user_email: Optional[str], slug: str
+    ) -> Tuple[MemoryEntryRef, Tuple[Item, ...], Dict[str, ItemProvenance]]:
+        """A canonical file as structured items, with its pins (on the ref) and provenance (viewer+)."""
+        space, _ = self._require(space_id, user_id, user_email, "viewer")
+        ref = self._find_ref(space_id, slug)
+        if ref is None:
+            raise MemoryEntryNotFoundError(f"entry '{slug}' not found in space '{space_id}'")
+        if space.file_format != "canonical":
+            raise MemoryValidationError("This space doesn't use the item format.", code="not_canonical")
+        current = self._current_file(ref, slug)
+        return ref, current.items, self.repository.get_provenance(space_id, slug)
+
+    def set_pinned(
+        self, space_id: str, user_id: str, user_email: Optional[str], slug: str, anchor: str, *, pinned: bool
+    ) -> List[str]:
+        """Pin or unpin one item (editor+). Returns the file's pinned anchors."""
+        space, _ = self._require(space_id, user_id, user_email, "editor")
+        if space.file_format != "canonical":
+            raise MemoryValidationError("Only item-format files have pins.", code="not_canonical")
+        anchor = (anchor or "").strip().lower()
+        ref = self._find_ref(space_id, slug)
+        if ref is None:
+            raise MemoryEntryNotFoundError(f"entry '{slug}' not found in space '{space_id}'")
+        if pinned and anchor not in {i.anchor for i in self._current_file(ref, slug).items}:
+            raise MemoryEntryNotFoundError(f"'{slug}' has no item {anchor}")
+
+        def apply(index: MemoryIndex) -> List[str]:
+            fresh = next((e for e in index.entries if e.slug == slug), None)
+            if fresh is None:
+                raise MemoryEntryNotFoundError(f"entry '{slug}' not found in space '{space_id}'")
+            if pinned and fresh.content_hash != ref.content_hash:
+                raise MemorySpaceConcurrencyError(f"'{slug}' changed while pinning. Read it again and retry.")
+            current = set(fresh.pinned)
+            current = current | {anchor} if pinned else current - {anchor}
+            fresh.pinned = sorted(current)
+            return fresh.pinned
+
+        result, _ = self._mutate_index(space_id, apply)
+        return result
+
+    def list_archived_items(self, space_id: str, user_id: str, user_email: Optional[str]) -> List[ArchivedItem]:
+        """Restorable items, newest first (viewer+). Expired rows DynamoDB hasn't removed yet are left out."""
+        self._require(space_id, user_id, user_email, "viewer")
+        now = _now_iso()
+        rows = [a for a in self.repository.list_archived_items(space_id) if a.restorable_until > now]
+        return sorted(rows, key=lambda a: a.archive_id, reverse=True)
+
+    def restore_archived_item(
+        self, space_id: str, user_id: str, user_email: Optional[str], archive_id: str
+    ) -> SaveResult:
+        """Put an archived item back at the end of its file (editor+), keeping its anchor and provenance.
+
+        A file deleted since is created again. The restore is an ordinary save
+        (``reason: restore``), so it is validated, versioned and counted like
+        any other; the archive row goes once it has committed.
+        """
+        space, _ = self._require(space_id, user_id, user_email, "editor")
+        row = self.repository.get_archived_item(space_id, archive_id)
+        if row is None or row.restorable_until <= _now_iso():
+            raise MemorySpaceNotFoundError(f"archived item '{archive_id}' not found in space '{space_id}'")
+        ref = self._find_ref(space_id, row.slug)
+        current_items = self._current_file(ref, row.slug).items if ref is not None else ()
+        # An anchor the file has since minted again comes back under a fresh one.
+        taken = {i.anchor for i in current_items}
+        anchor = row.anchor
+        while anchor in taken:
+            anchor = new_anchor()
+        body = render_items([*current_items, Item(text=row.text, anchor=anchor)])
+        result = self.save_entry(
+            space_id, user_id, user_email, row.slug, body,
+            reason="restore",
+            restorable=[anchor],
+            context=SaveContext(restored={anchor: row.provenance or ItemProvenance(added_by=row.archived_by)}),
+        )
+        try:
+            self.repository.delete_archived_item(space_id, archive_id)
+        except Exception:
+            logger.warning("Could not clear restored archive row %s in %s", archive_id, space_id, exc_info=True)
+        return result
 
     # ---- proposals (Shared Projects 2.5a) ---------------------------------
 
@@ -1300,6 +1550,7 @@ class MemorySpaceService:
         description: Optional[str] = None,
         aliases: Optional[List[str]] = None,
         proposer_kind: ProposerKind = "member",
+        source_session_id: Optional[str] = None,
     ) -> Tuple[MemoryProposal, List[str]]:
         """Queue a change to a project's shared memory for an editor (viewer+).
 
@@ -1335,6 +1586,7 @@ class MemorySpaceService:
             proposer_id=user_id,
             proposer_email=(user_email or "").strip().lower(),
             proposer_kind=proposer_kind,
+            source_session_id=source_session_id,
             created_at=now,
         )
         self.repository.put_proposal(space_id, proposal)
@@ -1415,6 +1667,12 @@ class MemorySpaceService:
                 aliases=proposal.aliases,
                 reason="proposal",
                 proposal_id=proposal.proposal_id,
+                context=SaveContext(
+                    source_session_id=proposal.source_session_id,
+                    proposal_id=proposal.proposal_id,
+                    proposed_by=proposal.proposer_email or None,
+                    approved_by=_normalize_email(user_email) or None,
+                ),
             )
         except Exception:
             self._transition(space_id, proposal, expected="approved")

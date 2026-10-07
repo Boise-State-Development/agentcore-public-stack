@@ -75,6 +75,9 @@ export class MemorySpacesConstruct extends Construct {
       pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
       removalPolicy: getRemovalPolicy(config),
       encryption: dynamodb.TableEncryption.AWS_MANAGED,
+      // Only ARCHIVE# rows carry it (Shared Projects 2.5a-2): an archived memory
+      // item stays restorable for MEMORY_ARCHIVE_RETENTION_DAYS, then expires.
+      timeToLiveAttribute: 'ttl',
     });
 
     // OwnerIndex — reverse lookup of memory spaces by owner.
