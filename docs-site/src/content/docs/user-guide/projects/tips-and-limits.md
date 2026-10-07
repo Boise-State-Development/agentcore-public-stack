@@ -29,8 +29,10 @@ own. So the wording of your question decides which passages it gets to see.
 - **Decide who records decisions**, usually the lead editor, and have them say
   "record in project memory …". The assistant adds a line for each new memory
   to the index on its own.
-- Ask "What's in project memory?" at the start of a review session to see what
-  the assistant will rely on.
+- Open **Memory** at the start of a review session to see what the assistant
+  will rely on, and who put it there.
+- **Pin** the facts everything else depends on, so no later change can drop
+  them by accident.
 - **Correct mistakes immediately.** Anything saved to project memory is
   repeated in every teammate's tasks.
 - Use **"just for me"** memory for preferences that apply to this project, and
@@ -99,7 +101,9 @@ can tell you which have changed on your deployment.
 
 **Memory and settings**
 
-- **No memory tab yet.** Ask the assistant to list or read project memory.
+- **Memory is changed through the assistant.** The Memory page shows files,
+  pins, the archive and the review queue, but to add or edit an item, ask the
+  assistant in a task.
 - **No one-click revert** for instructions. Copy an old version from History
   and save it.
 - **Switching models inside a task** starts a new task in the project. The

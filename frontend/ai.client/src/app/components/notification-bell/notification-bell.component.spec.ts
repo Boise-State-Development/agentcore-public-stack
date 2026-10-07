@@ -182,6 +182,15 @@ describe('NotificationBellComponent', () => {
     expect(navigate).toHaveBeenCalledWith(['/projects', 'prj_1', 'members']);
   });
 
+  it('a proposal opens the Memory tab: the review queue, or the file a decision was about', () => {
+    const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+    const { component } = render();
+    component.open(notif({ kind: 'project_proposal_pending', payload: { proposalId: 'p1', slug: 'sis' } }));
+    expect(navigate).toHaveBeenCalledWith(['/projects', 'prj_1', 'memory'], { queryParams: { view: 'review' } });
+    component.open(notif({ kind: 'project_proposal_decided', payload: { slug: 'sis', decision: 'approved' } }));
+    expect(navigate).toHaveBeenLastCalledWith(['/projects', 'prj_1', 'memory'], { queryParams: { file: 'sis' } });
+  });
+
   it('a shared task opens the shared view, revoked or not', () => {
     const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
     const { component } = render();

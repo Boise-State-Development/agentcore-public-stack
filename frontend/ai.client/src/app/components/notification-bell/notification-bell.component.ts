@@ -294,6 +294,18 @@ export class NotificationBellComponent {
       this.sidenav.close();
       return;
     }
+    // A pending proposal opens the Memory tab's review queue; a decision, the file it was about.
+    if (n.kind === 'project_proposal_pending' && n.projectId) {
+      void this.router.navigate(['/projects', n.projectId, 'memory'], { queryParams: { view: 'review' } });
+      this.sidenav.close();
+      return;
+    }
+    if (n.kind === 'project_proposal_decided' && n.projectId) {
+      const file = typeof n.payload?.slug === 'string' ? n.payload.slug : undefined;
+      void this.router.navigate(['/projects', n.projectId, 'memory'], { queryParams: file ? { file } : {} });
+      this.sidenav.close();
+      return;
+    }
     if (n.kind !== 'project_removed' && n.projectId) {
       const path = n.kind === 'project_member_left' ? ['/projects', n.projectId, 'members'] : ['/projects', n.projectId];
       void this.router.navigate(path);

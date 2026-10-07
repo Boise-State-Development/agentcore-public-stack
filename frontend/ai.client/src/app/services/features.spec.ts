@@ -32,7 +32,7 @@ describe('/projects routes follow the Projects switch', () => {
   }
 
   it('covers every /projects route', () => {
-    expect(projectRoutes.map(r => r.path)).toEqual(['projects/:id/:tab', 'projects']);
+    expect(projectRoutes.map(r => r.path)).toEqual(['projects/:id/memory', 'projects/:id/:tab', 'projects']);
     expect(routes.find(r => r.path === 'projects/:id')?.redirectTo).toBe('projects/:id/overview');
     for (const route of projectRoutes) expect(route.canMatch?.length).toBeGreaterThan(0);
   });

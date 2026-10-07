@@ -287,6 +287,7 @@ class ArchiveResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     items: List[ArchivedItem] = Field(..., description="Newest first; only those still restorable")
+    people: dict = Field(default_factory=dict, description="Display names for the emails in the rows")
 
 
 class RestoreResponse(BaseModel):
@@ -367,7 +368,11 @@ def list_archive(
         items = _files().archive(project_id, user, scope)
     except _ERRORS as e:
         raise _translate(e)
-    return ArchiveResponse(items=items)
+    emails = {i.archived_by for i in items if i.archived_by}
+    for i in items:
+        if i.provenance:
+            emails |= _emails({i.anchor: i.provenance})
+    return ArchiveResponse(items=items, people=display_names(emails))
 
 
 @files_router.post("/archive/{archive_id}/restore", response_model=RestoreResponse, response_model_by_alias=True)

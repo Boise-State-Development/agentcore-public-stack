@@ -28,6 +28,13 @@ import {
   MemoryProposal,
   MemoryProposalDetail,
   MemoryProposalsResponse,
+  MemoryArchiveResponse,
+  MemoryEntriesResponse,
+  MemoryFile,
+  MemoryPinsResponse,
+  MemoryRestoreResponse,
+  MemoryScope,
+  ProjectMemory,
   ProjectOutputsResponse,
   UpdateProjectRequest,
 } from '../models/project.model';
@@ -224,6 +231,63 @@ export class ProjectApiService {
     );
   }
 
+  // ---- the Memory tab (2.8) ----------------------------------------------
+
+  /** The project's shared space, the caller's own (null until they keep something) and the size limits. */
+  memory(projectId: string): Observable<ProjectMemory> {
+    return this.http.get<ProjectMemory>(this.url(projectId, '/memory'), this.options());
+  }
+
+  /** The caller's own memory in this project, created on first call. */
+  createMyMemory(projectId: string): Observable<{ spaceId: string }> {
+    return this.http.post<{ spaceId: string }>(this.url(projectId, '/memory/mine'), {}, this.options());
+  }
+
+  /** A space's files (its manifest). Project spaces take their roles from the project. */
+  memoryEntries(spaceId: string): Observable<MemoryEntriesResponse> {
+    return this.http.get<MemoryEntriesResponse>(this.spaceUrl(spaceId, '/entries'), this.options());
+  }
+
+  /** A space's MEMORY.md, the index that loads into every task. */
+  memoryIndex(spaceId: string): Observable<{ content: string }> {
+    return this.http.get<{ content: string }>(this.spaceUrl(spaceId, '/index'), this.options());
+  }
+
+  memoryFile(projectId: string, scope: MemoryScope, slug: string): Observable<MemoryFile> {
+    return this.http.get<MemoryFile>(
+      this.url(projectId, `/memory/files/${encodeSlug(slug)}`),
+      this.options(new HttpParams().set('scope', scope)),
+    );
+  }
+
+  pinMemoryItem(projectId: string, scope: MemoryScope, slug: string, anchor: string): Observable<MemoryPinsResponse> {
+    return this.http.post<MemoryPinsResponse>(this.url(projectId, '/memory/pins'), { scope, slug, anchor }, this.options());
+  }
+
+  unpinMemoryItem(projectId: string, scope: MemoryScope, slug: string, anchor: string): Observable<MemoryPinsResponse> {
+    const params = new HttpParams().set('scope', scope).set('slug', slug).set('anchor', anchor);
+    return this.http.delete<MemoryPinsResponse>(this.url(projectId, '/memory/pins'), this.options(params));
+  }
+
+  memoryArchive(projectId: string, scope: MemoryScope): Observable<MemoryArchiveResponse> {
+    return this.http.get<MemoryArchiveResponse>(
+      this.url(projectId, '/memory/archive'),
+      this.options(new HttpParams().set('scope', scope)),
+    );
+  }
+
+  restoreMemoryItem(projectId: string, scope: MemoryScope, archiveId: string): Observable<MemoryRestoreResponse> {
+    return this.http.post<MemoryRestoreResponse>(
+      this.url(projectId, `/memory/archive/${encodeURIComponent(archiveId)}/restore`),
+      {},
+      this.options(new HttpParams().set('scope', scope)),
+    );
+  }
+
+  private spaceUrl(spaceId: string, suffix: string): string {
+    return `${this.config.appApiUrl()}/memory/spaces/${encodeURIComponent(spaceId)}${suffix}`;
+  }
+
   sharedTasks(projectId: string): Observable<SharedTasksResponse> {
     return this.http.get<SharedTasksResponse>(this.url(projectId, '/shared-tasks'), this.options());
   }
@@ -265,4 +329,9 @@ export class ProjectApiService {
   private fileUrl(projectId: string, documentId: string, suffix = ''): string {
     return this.url(projectId, `/knowledge/${encodeURIComponent(documentId)}${suffix}`);
   }
+}
+
+/** A memory file name in a path: each `/`-separated part encoded, the separators kept (the route takes `{slug:path}`). */
+function encodeSlug(slug: string): string {
+  return slug.split('/').map(encodeURIComponent).join('/');
 }

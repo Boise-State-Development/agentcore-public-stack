@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { TestBed } from '@angular/core/testing';
 import { Dialog } from '@angular/cdk/dialog';
+import { provideRouter } from '@angular/router';
 import { of, throwError } from 'rxjs';
 import { ProjectRailComponent } from './project-rail.component';
 import { ProjectBindingsDialogComponent } from '../components/project-bindings-dialog.component';
@@ -37,7 +38,7 @@ const PALETTE = {
 };
 
 describe('ProjectRailComponent', () => {
-  const api = { instructions: vi.fn(), model: vi.fn(), bindings: vi.fn(), files: vi.fn() };
+  const api = { instructions: vi.fn(), model: vi.fn(), bindings: vi.fn(), files: vi.fn(), memory: vi.fn(), memoryEntries: vi.fn() };
   const agents = { loadBindable: vi.fn() };
   const dialog = { open: vi.fn() };
 
@@ -50,6 +51,8 @@ describe('ProjectRailComponent', () => {
       of({ bindings: kind === 'tools' ? [{ ref: 't1' }, { ref: 'gone' }] : [{ ref: 's1' }], version: 2, canEdit: true }),
     );
     api.files.mockReturnValue(of({ documents: [{ documentId: 'a' }, { documentId: 'b' }, { documentId: 'c' }], nextToken: null, canEdit: true }));
+    api.memory.mockReturnValue(of({ sharedSpaceId: 'spc_1', personalSpaceId: null, role: 'editor' }));
+    api.memoryEntries.mockReturnValue(of({ entries: [{ slug: 'a' }, { slug: 'b' }] }));
     agents.loadBindable.mockImplementation((kind: keyof typeof PALETTE) => Promise.resolve(PALETTE[kind]));
     dialog.open.mockReturnValue({ closed: of(undefined), close: vi.fn() });
     TestBed.configureTestingModule({
@@ -58,6 +61,7 @@ describe('ProjectRailComponent', () => {
         { provide: ProjectApiService, useValue: api },
         { provide: AgentService, useValue: agents },
         { provide: Dialog, useValue: dialog },
+        provideRouter([]),
       ],
     });
   });
@@ -93,6 +97,21 @@ describe('ProjectRailComponent', () => {
     expect(text(row('Members'))).toBe('Members 4 people Manage');
     expect(text(row('History'))).toBe('History Version 2 View');
     expect(el.textContent).toContain('Shared with 3 other people. Owned by Olive Owner. You’re an editor.');
+  });
+
+  it('links Memory to its own page, with the shared memory’s file count', async () => {
+    const { el } = await render();
+    const link = Array.from(el.querySelectorAll<HTMLAnchorElement>('nav a')).find(a => a.textContent?.includes('Memory'))!;
+    expect(text(link)).toBe('Memory 2 files Open');
+    expect(link.getAttribute('href')).toBe('/projects/prj_1/memory');
+    expect(api.memoryEntries).toHaveBeenCalledWith('spc_1');
+  });
+
+  it('leaves the Memory count blank when memory is unavailable', async () => {
+    api.memory.mockReturnValue(throwError(() => new Error('off')));
+    const { el } = await render();
+    const link = Array.from(el.querySelectorAll<HTMLAnchorElement>('nav a')).find(a => a.textContent?.includes('Memory'))!;
+    expect(text(link)).toBe('Memory Open');
   });
 
   it('reads for a viewer, and keeps Activity for editors only', async () => {
