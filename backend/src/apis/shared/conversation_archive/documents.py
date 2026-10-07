@@ -23,7 +23,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, replace
-from typing import Any, Iterable, List, Mapping, Optional, Sequence
+from typing import Any, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 #: Every archived turn lives under this prefix; the bucket's retention
 #: lifecycle rule targets it (``ConversationArchiveConstruct``).
@@ -84,6 +84,33 @@ class ArchivedTurn:
             body["assistantId"] = self.assistant_id
         return json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
+    @classmethod
+    def from_json(cls, body: bytes) -> "ArchivedTurn":
+        """Decode an object written by :meth:`to_json`.
+
+        Raises ``ValueError`` for anything this module did not write: a body that
+        is not JSON, a schema version it does not know, or a missing field.
+        """
+        data = json.loads(body.decode("utf-8"))
+        if not isinstance(data, dict) or data.get("schemaVersion") != SCHEMA_VERSION:
+            raise ValueError("not a conversation archive object of a known schema")
+        try:
+            message_index = data["messageIndex"]
+            if not isinstance(message_index, int) or isinstance(message_index, bool):
+                raise ValueError("messageIndex is not an integer")
+            return cls(
+                user_id=str(data["userId"]),
+                session_id=str(data["sessionId"]),
+                message_index=message_index,
+                user_text=str(data.get("userText") or ""),
+                assistant_text=str(data.get("assistantText") or ""),
+                created_at=str(data["createdAt"]),
+                project_id=data.get("projectId") or None,
+                assistant_id=data.get("assistantId") or None,
+            )
+        except KeyError as exc:
+            raise ValueError(f"conversation archive object is missing {exc}") from exc
+
 
 def _require_key_part(name: str, value: str) -> str:
     # A slash would let one id address another session's objects, and an empty
@@ -109,6 +136,28 @@ def archive_key(user_id: str, session_id: str, message_index: int) -> str:
     if message_index < 0:
         raise ValueError("message_index must be non-negative")
     return f"{session_prefix(user_id, session_id)}{message_index:06d}.json"
+
+
+_ARCHIVE_LEAF = re.compile(r"^(\d{6,})\.json$")
+
+
+def parse_archive_key(key: str) -> Optional[Tuple[str, str, int]]:
+    """``(user_id, session_id, message_index)`` from an archive key, or None.
+
+    The inverse of :func:`archive_key`, and strict about it: exactly three
+    segments under the prefix, none empty, and a zero-padded index leaf. The
+    search index derives a document's owner from the key, so anything looser
+    (an extra segment, a key outside the prefix) is refused rather than guessed.
+    """
+    if not key.startswith(ARCHIVE_PREFIX):
+        return None
+    parts = key[len(ARCHIVE_PREFIX) :].split("/")
+    if len(parts) != 3 or not parts[0] or not parts[1]:
+        return None
+    leaf = _ARCHIVE_LEAF.match(parts[2])
+    if not leaf:
+        return None
+    return parts[0], parts[1], int(leaf.group(1))
 
 
 def _blocks(message: Mapping[str, Any]) -> List[Any]:

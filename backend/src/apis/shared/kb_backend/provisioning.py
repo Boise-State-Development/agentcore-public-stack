@@ -611,6 +611,18 @@ async def _wait_for_knowledge_base_active(
 def _complete(item: Mapping[str, Any]) -> bool:    return bool(item.get("awsKbId")) and bool(item.get("awsDataSourceId"))
 
 
+def _with_extra_tags(
+    tags: Dict[str, str], extra: Optional[Mapping[str, str]]
+) -> Dict[str, str]:
+    """The contract tags plus ``extra``; a contract key in ``extra`` is refused."""
+    if not extra:
+        return tags
+    clash = sorted(set(extra) & set(tags))
+    if clash:
+        raise ValueError(f"extra tags may not override contract tag keys {clash}")
+    return {**tags, **{str(k): str(v) for k, v in extra.items()}}
+
+
 def _resource_name(app_kb_id: str, project_prefix: Optional[str] = None) -> str:
     """The knowledge base's AWS name.
 
@@ -684,8 +696,15 @@ async def provision_managed_kb(
     # actually override them (see _wait_for_knowledge_base_active).
     budget_seconds: Optional[float] = None,
     interval_seconds: Optional[float] = None,
+    extra_tags: Optional[Mapping[str, str]] = None,
 ) -> ProvisionedKnowledgeBase:
     """Provision, or adopt, the managed knowledge base for ``app_kb_id``.
+
+    ``extra_tags`` are written beside the contract tags (:func:`build_tags`), for
+    cost attribution (the conversation-search index tags ``purpose``). They can
+    add keys but never replace a contract key: those are what the reconciler and
+    teardown scope on, so a caller overriding one would hide its own knowledge
+    base from both.
 
     Safe to call repeatedly and concurrently. Three paths, in the order they are
     tried:
@@ -771,7 +790,10 @@ async def provision_managed_kb(
                     role_arn=role_arn,
                     client_token=kb_token,
                     description=f"Managed knowledge base for {app_kb_id}",
-                    tags=build_tags(app_kb_id, owner_user_id, project_prefix, environment),
+                    tags=_with_extra_tags(
+                        build_tags(app_kb_id, owner_user_id, project_prefix, environment),
+                        extra_tags,
+                    ),
                     region=region,
                     kms_key_arn=kms_key_arn,
                 ),

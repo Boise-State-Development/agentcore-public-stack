@@ -162,6 +162,52 @@ export function grantManagedKbProvisioning(
 }
 
 /**
+ * Create-only provisioning grant: everything `provision_managed_kb` calls to
+ * CREATE a knowledge base and its CUSTOM connector, and nothing that deletes
+ * one. For a caller that provisions lazily on first write but never tears
+ * anything down — the conversation-search index consumer
+ * (`ConversationIndexConstruct`). The full `grantManagedKbProvisioning` adds
+ * `DeleteKnowledgeBase` / `DeleteDataSource`, which only the migration worker
+ * (teardown) and the reconciler (orphans) need; a consumer driven by
+ * user-triggered S3 events has no business holding them.
+ *
+ * `ListKnowledgeBases` stays: the saga's adopt-by-name path lists knowledge
+ * bases when a retried create collides on the name. `TagResource` stays for
+ * the same reason as in the full grant — `CreateKnowledgeBase` is called with
+ * tags and AWS authorises the tagging separately.
+ */
+export function grantManagedKbCreation(
+  config: AppConfig,
+  role: iam.IRole,
+  serviceRoleArn: string,
+): void {
+  role.addToPrincipalPolicy(new iam.PolicyStatement({
+    sid: 'ManagedKbCreateList',
+    effect: iam.Effect.ALLOW,
+    actions: ['bedrock:CreateKnowledgeBase', 'bedrock:ListKnowledgeBases'],
+    resources: ['*'],
+  }));
+  role.addToPrincipalPolicy(new iam.PolicyStatement({
+    sid: 'ManagedKbCreateDataSource',
+    effect: iam.Effect.ALLOW,
+    actions: [
+      'bedrock:GetKnowledgeBase',
+      'bedrock:CreateDataSource',
+      'bedrock:TagResource',
+    ],
+    resources: [knowledgeBaseArnWildcard(config)],
+  }));
+  role.addToPrincipalPolicy(new iam.PolicyStatement({
+    sid: 'ManagedKbCreatePassServiceRole',
+    effect: iam.Effect.ALLOW,
+    actions: ['iam:PassRole'],
+    resources: [serviceRoleArn],
+    conditions: { StringEquals: { 'iam:PassedToService': 'bedrock.amazonaws.com' } },
+  }));
+  role.addToPrincipalPolicy(putMetricDataStatement(config, 'ManagedKbCreateMetrics'));
+}
+
+/**
  * Direct-ingestion grant: push document bytes straight at a Managed_KB
  * without an S3 data-source crawl (Requirement 20.6). Kept separate
  * from CRUD so an ingestion-only caller can never delete a knowledge
@@ -440,6 +486,14 @@ export class ManagedKbRoleConstruct extends Construct {
    */
   public grantProvisioning(role: iam.IRole): void {
     grantManagedKbProvisioning(this.config, role, this.serviceRoleArn);
+  }
+
+  /**
+   * Attach the create-only provisioning grant (no delete actions) to a
+   * caller role. See `grantManagedKbCreation`.
+   */
+  public grantCreation(role: iam.IRole): void {
+    grantManagedKbCreation(this.config, role, this.serviceRoleArn);
   }
 
   /**
