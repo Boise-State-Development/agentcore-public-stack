@@ -12,6 +12,7 @@ from apis.shared.conversation_archive.documents import ArchivedTurn, archive_key
 from apis.shared.conversation_archive.index_documents import (
     index_attributes,
     index_document_id,
+    is_legacy_index_document_id,
     index_text,
     parse_index_document_id,
     turn_matches_key,
@@ -78,19 +79,41 @@ def test_from_json_refuses_unknown_or_incomplete_bodies(body):
 
 
 # ── Index documents ──────────────────────────────────────────────────────────
-def test_document_id_is_session_and_unpadded_index():
-    assert index_document_id("sess-1", 6) == "conv#sess-1#6"
-    assert parse_index_document_id("conv#sess-1#6") == ("sess-1", 6)
+def test_document_id_is_user_session_and_unpadded_index():
+    assert index_document_id("user-1", "sess-1", 6) == "conv#user-1#sess-1#6"
+    ref = parse_index_document_id("conv#user-1#sess-1#6")
+    assert ref == ("user-1", "sess-1", 6)
+    assert (ref.user_id, ref.session_id, ref.message_index) == ("user-1", "sess-1", 6)
 
 
-@pytest.mark.parametrize("value", ["sess-1#6", "conv#sess-1", "conv##6", "conv#sess-1#x", "doc-123"])
+def test_two_users_with_the_same_session_id_get_different_documents():
+    """Session ids are not unique across users (dev, 2026-10-07): one user's turn
+    must never replace, or be deleted with, another user's."""
+    assert index_document_id("user-a", "shared", 0) != index_document_id("user-b", "shared", 0)
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["sess-1#6", "conv#sess-1", "conv#sess-1#6", "conv##s#6", "conv#u##6", "conv#u#s#x", "conv#u#s#1#2", "doc-123"],
+)
 def test_parse_document_id_refuses_other_ids(value):
     assert parse_index_document_id(value) is None
 
 
-def test_document_id_refuses_a_session_id_that_would_not_parse_back():
+@pytest.mark.parametrize("value", ["conv#sess-1#6", "conv#11111111-aaaa#0"])
+def test_first_format_ids_are_recognised_as_legacy(value):
+    assert is_legacy_index_document_id(value)
+
+
+@pytest.mark.parametrize("value", ["conv#u#sess-1#6", "conv#sess-1#x", "conv##6", "doc-123", "sess-1#6"])
+def test_other_ids_are_not_legacy(value):
+    assert not is_legacy_index_document_id(value)
+
+
+@pytest.mark.parametrize("user_id,session_id", [("a#b", "s"), ("", "s"), ("u", "a#b"), ("u", "")])
+def test_document_id_refuses_parts_that_would_not_parse_back(user_id, session_id):
     with pytest.raises(ValueError):
-        index_document_id("a#b", 0)
+        index_document_id(user_id, session_id, 0)
 
 
 def test_text_is_user_then_assistant_without_a_dangling_separator():

@@ -3,10 +3,16 @@
 One archive object (one turn) is one Managed KB document
 (docs/specs/conversation-search.md §4):
 
-* ``customDocumentIdentifier`` is ``conv#{session_id}#{message_index}``. Re-ingesting
-  an id replaces the document, so a re-archived turn (a paused turn resumed) or a
-  redelivered event is idempotent. The search route parses it back with
-  :func:`parse_index_document_id` to jump to the turn.
+* ``customDocumentIdentifier`` is ``conv#{user_id}#{session_id}#{message_index}``,
+  one-to-one with the archive key. Re-ingesting an id replaces the document, so a
+  re-archived turn (a paused turn resumed) or a redelivered event is idempotent.
+  The search route parses it back with :func:`parse_index_document_id` to jump to
+  the turn. The user is in the id because session ids are not unique across
+  users: under the first format, ``conv#{session_id}#{message_index}``, two users
+  with the same session id shared one document (found on dev 2026-10-07), so one
+  user's ingest replaced the other's, deleting either session deleted both, and a
+  batch holding both failed as duplicates. :func:`is_legacy_index_document_id`
+  recognises that format so the reconciler can remove what it left behind.
 * The text is the user's words, a blank line, the assistant's answer. Tool text was
   already dropped when the turn was archived.
 * The attributes are what retrieval filters on: ``user_id`` (every query carries
@@ -23,7 +29,7 @@ share one definition of the document.
 
 from __future__ import annotations
 
-from typing import Dict, Optional, Tuple
+from typing import Dict, NamedTuple, Optional
 
 from apis.shared.conversation_archive.documents import ArchivedTurn
 
@@ -32,23 +38,53 @@ from apis.shared.conversation_archive.documents import ArchivedTurn
 DOCUMENT_ID_PREFIX = "conv#"
 
 
-def index_document_id(session_id: str, message_index: int) -> str:
-    """``conv#{session_id}#{message_index}`` — unpadded, the index as an integer."""
-    if not session_id or "#" in session_id:
+class IndexDocumentRef(NamedTuple):
+    """What a conversation document id names."""
+
+    user_id: str
+    session_id: str
+    message_index: int
+
+
+def _usable_part(value: str) -> bool:
+    return bool(value) and "#" not in value
+
+
+def index_document_id(user_id: str, session_id: str, message_index: int) -> str:
+    """``conv#{user_id}#{session_id}#{message_index}``, the index unpadded."""
+    if not _usable_part(user_id):
+        raise ValueError("invalid user_id for a conversation document id")
+    if not _usable_part(session_id):
         raise ValueError("invalid session_id for a conversation document id")
     if message_index < 0:
         raise ValueError("message_index must be non-negative")
-    return f"{DOCUMENT_ID_PREFIX}{session_id}#{message_index}"
+    return f"{DOCUMENT_ID_PREFIX}{user_id}#{session_id}#{message_index}"
 
 
-def parse_index_document_id(document_id: str) -> Optional[Tuple[str, int]]:
-    """``(session_id, message_index)`` from a conversation document id, or None."""
+def parse_index_document_id(document_id: str) -> Optional[IndexDocumentRef]:
+    """The user, session and turn a conversation document id names, or None.
+
+    Strict: exactly three non-empty parts with an integer turn. A legacy
+    ``conv#{session_id}#{message_index}`` id is None here (see
+    :func:`is_legacy_index_document_id`).
+    """
     if not document_id.startswith(DOCUMENT_ID_PREFIX):
         return None
-    session_id, sep, index = document_id[len(DOCUMENT_ID_PREFIX) :].rpartition("#")
-    if not sep or not session_id or "#" in session_id or not index.isdigit():
+    parts = document_id[len(DOCUMENT_ID_PREFIX) :].split("#")
+    if len(parts) != 3 or not parts[0] or not parts[1] or not parts[2].isdigit():
         return None
-    return session_id, int(index)
+    return IndexDocumentRef(parts[0], parts[1], int(parts[2]))
+
+
+def is_legacy_index_document_id(document_id: str) -> bool:
+    """Whether this is a first-format ``conv#{session_id}#{message_index}`` id.
+
+    Nothing writes that format any more, so every such document is stale.
+    """
+    if not document_id.startswith(DOCUMENT_ID_PREFIX):
+        return False
+    parts = document_id[len(DOCUMENT_ID_PREFIX) :].split("#")
+    return len(parts) == 2 and bool(parts[0]) and parts[1].isdigit()
 
 
 def index_text(turn: ArchivedTurn) -> str:
@@ -88,9 +124,11 @@ def turn_matches_key(turn: ArchivedTurn, user_id: str, session_id: str, message_
 
 __all__ = [
     "DOCUMENT_ID_PREFIX",
+    "IndexDocumentRef",
     "index_attributes",
     "index_document_id",
     "index_text",
+    "is_legacy_index_document_id",
     "parse_index_document_id",
     "turn_matches_key",
 ]
