@@ -86,6 +86,7 @@ what you get if you set nothing.
 | MCP token enrichment | `CDK_MCP_TOKEN_ENRICHMENT_ENABLED` | **OFF** | **yes — Cognito plan** | Pre-token Lambda that copies pool attributes into access-token claims; forces Cognito **Essentials** feature plan (per-MAU cost) |
 | MCP Apps host renderer | `AGENTCORE_MCP_APPS_HOST_ENABLED` | **ON** | none | Renders third-party MCP-server UI in the sandbox iframe (needs `mcp-sandbox` deployed) |
 | Conversation index (archive writes) | `CDK_CONVERSATION_INDEX_ENABLED` | **OFF** (in development) | **yes — S3, KB storage** | Feature switch. Writes each finished turn's user and assistant text to the conversation-archive bucket that conversation search is built from, and enables the two EventBridge rules that index those turns into a shared managed knowledge base (created on the first indexed turn). Off stops new writes and indexing; deleting a conversation still removes its archived turns, but its index documents stay until the daily reconciler removes them (it runs whatever this flag says). See `docs/specs/conversation-search.md` |
+| Conversation search | `CDK_CONVERSATION_SEARCH_ENABLED` (SPA: `features.conversationSearch`) | **OFF** (in development) | **yes — KB retrievals** | Feature switch. Serves `GET /sessions/search` on app-api and, with the SPA flag, the Cmd/Ctrl+K search dialog, a search button beside New Session, and Enter in the sidebar filter. Searches the user's own conversations by title and opening prompt (DynamoDB) and, on Enter or a pause, by the full text of every turn through the conversation index ($0.001 per full-text search, at most 20 a minute per user). Off, the route 404s. Turn it on only after the index holds the environment's history; with the index off it matches titles and opening prompts only. Set the backend variable and the SPA flag together. See `docs/specs/conversation-search.md` §5–§6 |
 | Conversation retention — prune sessions | `CDK_CONVERSATION_RETENTION_PRUNES_SESSIONS` | **ON** | a few minutes of one Fargate task a day | Feature switch, permanent. Lets `CDK_CONVERSATION_RETENTION_DAYS` remove session rows too: a daily task deletes conversations whose last turn is older than the retention period, through the same cleanup as a user's delete, so they leave the sidebar instead of opening empty. Nothing is deleted until the next flag arms it. `false` keeps them as title-only rows and stops the task |
 | Conversation retention — pruner armed | `CDK_CONVERSATION_RETENTION_PRUNE_ARMED` | **OFF** | none (report-only until armed) | Pruner *deletes* sessions past retention vs only logging how many it would (with the oldest and newest last-message time). Even armed, the first run in an environment, and the first run after the retention period changes, is a dry run |
 | Token exchange (RFC 8693) | `CDK_TOKEN_EXCHANGE_URL` (+ `_CLIENT_ID`) | **absent** | none | Optional external token-service exchange. Unset ⇒ no resources created |
@@ -183,6 +184,11 @@ If you care about the bill, these are the only flags that move it:
   Writes one small S3 object per finished turn (cents a month at today's scale)
   and indexes it into a managed knowledge base billed at ~$5/GB-month, through
   an SQS queue and a container Lambda (cents). Estimated ~$4/month for ~13k sessions, ~$45 at 30k users
+  (`docs/specs/conversation-search.md` §8).
+- **`CDK_CONVERSATION_SEARCH_ENABLED`** — default **OFF** while in development.
+  Each full-text search is one knowledge-base retrieval at $0.001 (title
+  searches are DynamoDB queries, cents). Capped at 20 full-text searches a
+  minute per user; estimated ~$1/month today, ~$18 at 30k users
   (`docs/specs/conversation-search.md` §8).
 - **`CDK_KB_SYNC_ENABLED`** — default **ON**. Runs a scheduled Lambda that
   re-embeds assistant KB sources; cost is the embedding calls + Lambda time on
