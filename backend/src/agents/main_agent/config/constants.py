@@ -80,17 +80,11 @@ class EnvVars:
     DYNAMODB_QUOTA_EVENTS_TABLE = "DYNAMODB_QUOTA_EVENTS_TABLE"
 
     # --- Retry Configuration ---
-    RETRY_BOTO_MAX_ATTEMPTS = "RETRY_BOTO_MAX_ATTEMPTS"
-    RETRY_BOTO_MODE = "RETRY_BOTO_MODE"
     RETRY_CONNECT_TIMEOUT = "RETRY_CONNECT_TIMEOUT"
     RETRY_READ_TIMEOUT = "RETRY_READ_TIMEOUT"
     RETRY_SDK_MAX_ATTEMPTS = "RETRY_SDK_MAX_ATTEMPTS"
     RETRY_SDK_INITIAL_DELAY = "RETRY_SDK_INITIAL_DELAY"
     RETRY_SDK_MAX_DELAY = "RETRY_SDK_MAX_DELAY"
-    # Kill switch for retrying Bedrock's transient pre-stream faults
-    # (ServiceUnavailableException et al). Default on; set "false" to fall
-    # back to Strands' stock throttling-only retry.
-    RETRY_TRANSIENT_SERVICE_ERRORS = "RETRY_TRANSIENT_SERVICE_ERRORS"
 
     # --- API Keys ---
     OPENAI_API_KEY = "OPENAI_API_KEY"
@@ -217,14 +211,11 @@ class Defaults:
     DYNAMODB_QUOTA_EVENTS_TABLE = "QuotaEvents"
 
     # --- Retry ---
-    RETRY_BOTO_MAX_ATTEMPTS = 3
-    RETRY_BOTO_MODE = "standard"
     RETRY_CONNECT_TIMEOUT = 5
     RETRY_READ_TIMEOUT = 120
     RETRY_SDK_MAX_ATTEMPTS = 4
     RETRY_SDK_INITIAL_DELAY = 2.0
     RETRY_SDK_MAX_DELAY = 16.0
-    RETRY_TRANSIENT_SERVICE_ERRORS = True
 
     # --- Frontend ---
     FRONTEND_URL = "http://localhost:4200"

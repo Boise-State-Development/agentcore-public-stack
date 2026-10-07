@@ -97,6 +97,18 @@ export interface AppConfig {
    */
   tokenExchange?: TokenExchangeConfig;
   observability: ObservabilityConfig;
+  /**
+   * How many days a conversation's content is kept after each turn, wherever
+   * it is stored (docs/specs/conversation-search.md §3). One number for every
+   * copy so the clocks cannot drift: today it sets AgentCore Memory's
+   * `eventExpiryDuration` (clamped to Memory's 365-day maximum); the
+   * conversation archive's lifecycle rule and the search index follow it once
+   * they exist. Long-term memory records (facts, preferences) are unaffected.
+   *
+   * Integer >= 3. Values above 365 are accepted here because the archive can
+   * honour them; Memory still stops at 365.
+   */
+  conversationRetentionDays: number;
   appVersion: string;
   tags: { [key: string]: string };
 }
@@ -575,6 +587,20 @@ export interface TokenExchangeConfig {
   /** client_id this deployment authenticates as. */
   clientId: string;
 }
+
+/**
+ * Default for `conversationRetentionDays` (CDK_CONVERSATION_RETENTION_DAYS).
+ * A year, because that is the most AgentCore Memory can hold and the first
+ * setting should be one every copy of a conversation can honour.
+ */
+export const CONVERSATION_RETENTION_DAYS_DEFAULT = 365;
+
+/**
+ * AgentCore Memory's `EventExpiryDuration` range, in days, per the
+ * `AWS::BedrockAgentCore::Memory` CloudFormation reference.
+ */
+export const AGENTCORE_MEMORY_EVENT_EXPIRY_MIN_DAYS = 3;
+export const AGENTCORE_MEMORY_EVENT_EXPIRY_MAX_DAYS = 365;
 
 // Observability defaults. Tuned for cost: these are what a fork inherits when it
 // configures nothing. See .kiro/steering/observability.md.
@@ -1240,6 +1266,17 @@ export function loadConfig(scope: cdk.App): AppConfig {
           clientId: tokenExchangeClientId,
         }
       : undefined,
+    // Env > context > default, as for the sizing knobs. parseIntEnv maps the
+    // '' an unset GitHub variable arrives as to undefined, so `??` falls
+    // through to 365. It also maps junk to undefined and truncates "30.5" to
+    // 30, which would hide a typo behind a silently different retention, so
+    // requireWholeNumber rejects anything that is not digits first.
+    conversationRetentionDays:
+      parseIntEnv(requireWholeNumber(
+        'CDK_CONVERSATION_RETENTION_DAYS', process.env.CDK_CONVERSATION_RETENTION_DAYS))
+      ?? parseIntEnv(requireWholeNumber(
+        'context conversationRetentionDays', scope.node.tryGetContext('conversationRetentionDays')))
+      ?? CONVERSATION_RETENTION_DAYS_DEFAULT,
     // Same precedence as managedKb above. The flat dotted read at step 2 is
     // load-bearing: `--context observability.x=y` sets context['observability.x'],
     // it does NOT build a nested object.
@@ -1410,6 +1447,11 @@ export function loadConfig(scope: cdk.App): AppConfig {
     + ` runtimeLogRetentionSweep=${config.observability.runtimeLogRetentionSweepEnabled}`
   );
 
+  console.log(
+    `   Conversation retention: ${config.conversationRetentionDays} days`
+    + ` (Memory events: ${Math.min(config.conversationRetentionDays, AGENTCORE_MEMORY_EVENT_EXPIRY_MAX_DAYS)})`
+  );
+
   // Printed because this list is a security control supplied entirely from
   // outside the repo: a deploy that ships an empty one has to say so, or a
   // forgotten `CDK_BROWSER_URL_BLOCKLIST` variable is indistinguishable in
@@ -1498,6 +1540,28 @@ function parseIntEnv(value: string | undefined): number | undefined {
   }
   const parsed = parseInt(value, 10);
   return isNaN(parsed) ? undefined : parsed;
+}
+
+/**
+ * Pass a whole-number setting through to parseIntEnv, or fail synth.
+ *
+ * parseIntEnv is deliberately lenient (junk becomes undefined, "30.5" becomes
+ * 30) so a fallback can take over. For a setting where a typo would quietly
+ * apply a different value than the operator meant, that leniency hides the
+ * mistake, so this rejects anything other than plain digits. Unset and ''
+ * still pass through as undefined.
+ */
+function requireWholeNumber(source: string, value: unknown): string | undefined {
+  if (value === undefined || value === null || value === '') {
+    return undefined;
+  }
+  const text = String(value).trim();
+  if (!/^\d+$/.test(text)) {
+    throw new Error(
+      `Invalid ${source}: "${String(value)}". Expected a whole number of days.`
+    );
+  }
+  return text;
 }
 
 /**
@@ -1783,6 +1847,20 @@ function validateConfig(config: AppConfig): void {
   // and the respective certificate ARNs for a real deployment. Synth and
   // tests proceed without them (constructs handle the undefined case by
   // falling back to CloudFront default domains).
+
+  // ── Conversation retention ──
+  // Checked on the final value as well as the raw string (requireWholeNumber),
+  // because a config built by hand never passes through the reader. Below
+  // Memory's minimum is an error; above its maximum is not, because the
+  // archive can keep longer and Memory clamps (memory-construct.ts).
+  const retention = config.conversationRetentionDays;
+  if (!Number.isInteger(retention) || retention < AGENTCORE_MEMORY_EVENT_EXPIRY_MIN_DAYS) {
+    throw new Error(
+      `Invalid conversationRetentionDays: ${retention}. Expected a whole number of days, `
+      + `at least ${AGENTCORE_MEMORY_EVENT_EXPIRY_MIN_DAYS} (AgentCore Memory's minimum event expiry). `
+      + `Set CDK_CONVERSATION_RETENTION_DAYS, or leave it unset for ${CONVERSATION_RETENTION_DAYS_DEFAULT}.`
+    );
+  }
 
   // ── Observability ──
   // CloudWatch Logs accepts only a fixed set of retention values; an arbitrary

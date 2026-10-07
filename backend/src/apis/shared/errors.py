@@ -158,6 +158,12 @@ _SERVICE_UNAVAILABLE_MARKERS = (
     "modelnotready",
     "modeltimeout",
     "503",
+    # The OpenAI Responses API's own wording (GPT-6 on bedrock-runtime). Seen
+    # in prod surfacing raw as "Agent force-stopped: ..." because neither
+    # matched the Bedrock-shaped entries above. "service is temporarily
+    # unavailable" does not contain "service is unavailable".
+    "temporarily unavailable",
+    "server had an error while processing your request",
 )
 
 
@@ -341,7 +347,7 @@ Please try again."""
     # `5f34d2b0` it landed on the generic "I ran into a problem with the AI
     # model" text, which told the user nothing about the failure being
     # temporary. Reaching this point means the automatic retries were already
-    # spent (see BedrockTransientRetryStrategy), so the copy says so.
+    # spent (see TransientModelRetryStrategy), so the copy says so.
     if is_service_unavailable_error(error_lower):
         message = (
             "⚠️ The model service is temporarily unavailable.\n\n"

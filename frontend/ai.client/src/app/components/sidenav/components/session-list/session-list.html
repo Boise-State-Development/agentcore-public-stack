@@ -1,4 +1,42 @@
 <nav class="flex h-full flex-col">
+    @if (showFilter()) {
+        <!-- Title filter over the loaded conversations. Sticky, so it stays in
+             reach after scrolling down to pull more pages; its background
+             matches the sidebar so rows pass beneath it cleanly. -->
+        <div role="search" class="sidenav-body-enter sticky top-0 z-20 bg-gray-100 pb-2 dark:bg-gray-900" style="animation-delay: 60ms">
+            <div class="relative">
+                <ng-icon
+                    name="heroMagnifyingGlass"
+                    class="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-gray-500 dark:text-gray-400"
+                    aria-hidden="true"
+                />
+                <input
+                    #filterInput
+                    type="search"
+                    [value]="query()"
+                    (input)="onQueryInput(filterInput.value)"
+                    (keydown)="onQueryKeydown($event)"
+                    placeholder="Search conversations"
+                    aria-label="Search conversations by title"
+                    autocomplete="off"
+                    spellcheck="false"
+                    enterkeyhint="search"
+                    class="block h-8 w-full rounded-md border border-gray-300 bg-white py-1 pl-8 pr-8 text-sm/5 text-gray-900 placeholder:text-gray-500 focus:border-primary-500 focus:outline-hidden focus:ring-1 focus:ring-primary-500 dark:border-white/10 dark:bg-white/5 dark:text-white dark:placeholder:text-gray-400 dark:focus:border-primary-400 dark:focus:ring-primary-400 [&::-webkit-search-cancel-button]:appearance-none"
+                />
+                @if (query()) {
+                    <button
+                        type="button"
+                        (click)="clearQuery(filterInput)"
+                        class="absolute right-1 top-1/2 flex size-6 -translate-y-1/2 items-center justify-center rounded-sm text-gray-500 hover:bg-gray-200 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:bg-white/10 dark:hover:text-white"
+                        aria-label="Clear search"
+                    >
+                        <ng-icon name="heroXMark" class="size-4" aria-hidden="true" />
+                    </button>
+                }
+            </div>
+        </div>
+    }
+
     @if (isLoading()) {
         <!-- Loading skeleton: mirrors the real list's group + row layout -->
         <div class="flex flex-col gap-y-3" aria-hidden="true">
@@ -22,6 +60,33 @@
         <div class="flex items-center justify-center py-8">
             <span class="text-sm text-state-danger-500 dark:text-state-danger-400">Failed to load sessions</span>
         </div>
+    } @else if (isFiltering()) {
+        <!-- A query is held: one flat list of matches in recency order, no
+             date buckets or project headings. -->
+        <section aria-label="Matching conversations" class="flex flex-col gap-y-1">
+            <div class="px-2">
+                <p role="status" class="text-[11px]/5 font-medium text-gray-600 dark:text-gray-300">{{ resultCountLabel() }}</p>
+                @if (nextToken()) {
+                    <!-- The sidebar pages its list; until the last page is in, a
+                         match can still be waiting further down. -->
+                    <p class="text-[11px]/5 text-gray-600 dark:text-gray-400">Searching loaded conversations</p>
+                }
+            </div>
+            @if (filteredSessions().length > 0) {
+                <ul role="list" class="flex flex-col gap-y-0.5">
+                    @for (session of filteredSessions(); track session.sessionId) {
+                        <ng-container *ngTemplateOutlet="sessionRow; context: { $implicit: session }" />
+                    }
+                </ul>
+            } @else {
+                <div class="px-2 py-6 text-center">
+                    <ng-icon name="heroMagnifyingGlass" size="32" class="mx-auto text-gray-400 dark:text-gray-500" aria-hidden="true" />
+                    <h3 class="mt-2 text-sm font-semibold text-gray-900 dark:text-white">No matching conversations</h3>
+                    <p class="mt-1 text-sm text-gray-600 dark:text-gray-400">Try a different word from the title.</p>
+                </div>
+            }
+            <ng-container *ngTemplateOutlet="loadMoreSentinel" />
+        </section>
     } @else {
         @if (groupedSessions().length > 0) {
             <!-- Second beat of the sidebar's entry (the nav links above are the
@@ -31,7 +96,7 @@
             <div class="sidenav-body-enter flex flex-col gap-y-3" style="animation-delay: 60ms">
                 @for (group of groupedSessions(); track group.label; let gi = $index) {
                     <section>
-                        <h3 class="px-2 pb-0.5 text-[11px]/5 font-medium text-gray-400 dark:text-gray-300">{{ group.label }}</h3>
+                        <h3 class="px-2 pb-0.5 text-[11px]/5 font-medium text-gray-600 dark:text-gray-300">{{ group.label }}</h3>
                         <ul role="list" class="flex flex-col gap-y-0.5">
                             @for (entry of group.entries; track entry.kind === 'session' ? entry.session.sessionId : 'project:' + entry.projectId) {
                                 @if (entry.kind === 'session') {
@@ -43,7 +108,7 @@
                                             [routerLink]="['/projects', entry.projectId]"
                                             [id]="'session-group-' + gi + '-' + entry.projectId"
                                             (click)="onProjectHeadingClick()"
-                                            class="flex min-h-7 items-center gap-1.5 rounded-md px-2 py-1 text-xs/5 font-medium text-gray-600 hover:bg-gray-50 hover:text-secondary-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-white"
+                                            class="flex min-h-7 items-center gap-1.5 rounded-md px-2 py-1 text-xs/5 font-medium text-gray-600 hover:bg-gray-50 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-white"
                                         >
                                             <ng-icon name="heroRectangleStack" class="size-3.5 shrink-0" aria-hidden="true" />
                                             <span class="min-w-0 truncate">{{ entry.name }}</span>
@@ -64,42 +129,48 @@
                     </section>
                 }
 
-                <!-- End of what's loaded. While more exists, this row fetches the
-                     next page as it nears the bottom of the sidebar's scroll area
-                     (see loadMoreEffect), drawn as the same skeleton the first
-                     load uses so the list simply keeps going. -->
-                @if (nextToken()) {
-                    <div appInView [appInViewMargin]="240" [appInViewRemeasure]="endOfListRemeasure()" (inView)="endOfListVisible.set($event)">
-                        @if (loadMoreError()) {
-                            <div class="flex items-center justify-between gap-2 px-2 py-1.5 text-xs text-gray-500 dark:text-gray-400">
-                                <span>Couldn't load more</span>
-                                <button
-                                    type="button"
-                                    (click)="retryLoadMore()"
-                                    class="rounded-sm font-medium text-gray-700 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-secondary-500 dark:text-gray-300">
-                                    Retry
-                                </button>
-                            </div>
-                        } @else {
-                            <ul class="flex flex-col gap-y-0.5" aria-hidden="true">
-                                @for (width of ['66%', '48%']; track $index) {
-                                    <li class="px-2 py-1.5">
-                                        <div class="h-4 rounded-md bg-gray-200 animate-pulse motion-reduce:animate-none dark:bg-white/5" [style.width]="width"></div>
-                                    </li>
-                                }
-                            </ul>
-                        }
-                    </div>
-                }
+                <ng-container *ngTemplateOutlet="loadMoreSentinel" />
             </div>
         } @else {
             <div class="text-center">
                 <ng-icon name="heroChatBubbleLeftRight" size="48" class="mx-auto text-gray-400 dark:text-gray-500" />
                 <h3 class="mt-2 text-sm font-semibold text-gray-900 dark:text-white">No Chats Yet</h3>
-                <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">Get started by creating a new chat.</p>
+                <p class="mt-1 text-sm text-gray-600 dark:text-gray-400">Get started by creating a new chat.</p>
             </div>
         }
     }
+
+    <!-- End of what's loaded. While more exists, this row fetches the
+         next page as it nears the bottom of the sidebar's scroll area
+         (see loadMoreEffect), drawn as the same skeleton the first load
+         uses so the list simply keeps going. Rendered under the grouped
+         list and under filter results alike, so scrolling keeps pulling
+         pages into the filter too. -->
+    <ng-template #loadMoreSentinel>
+        @if (nextToken()) {
+            <div appInView [appInViewMargin]="240" [appInViewRemeasure]="endOfListRemeasure()" (inView)="endOfListVisible.set($event)">
+                @if (loadMoreError()) {
+                    <div class="flex items-center justify-between gap-2 px-2 py-1.5 text-xs text-gray-600 dark:text-gray-400">
+                        <span>Couldn't load more</span>
+                        <button
+                            type="button"
+                            (click)="retryLoadMore()"
+                            class="rounded-sm font-medium text-gray-700 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-secondary-500 dark:text-gray-300">
+                            Retry
+                        </button>
+                    </div>
+                } @else {
+                    <ul class="flex flex-col gap-y-0.5" aria-hidden="true">
+                        @for (width of ['66%', '48%']; track $index) {
+                            <li class="px-2 py-1.5">
+                                <div class="h-4 rounded-md bg-gray-200 animate-pulse motion-reduce:animate-none dark:bg-white/5" [style.width]="width"></div>
+                            </li>
+                        }
+                    </ul>
+                }
+            </div>
+        }
+    </ng-template>
 
     <!-- One conversation row: shared by plain rows and by rows under a project heading. -->
     <ng-template #sessionRow let-session>
@@ -122,9 +193,9 @@
                 <a
                     [routerLink]="['/s', getSessionId(session.sessionId)]"
                     [queryParams]="getSessionQueryParams(session)"
-                    routerLinkActive="session-row--active bg-gray-200 !font-medium !text-secondary-500 dark:bg-white/5 dark:!text-white"
+                    routerLinkActive="session-row--active bg-gray-200 !font-medium !text-gray-900 dark:bg-white/5 dark:!text-white"
                     (click)="onSessionClick(session)"
-                    class="flex min-h-8 items-center rounded-md px-2 py-1.5 pr-10 text-sm/5 font-normal text-gray-700 hover:bg-gray-50 hover:text-secondary-500 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-white"
+                    class="flex min-h-8 items-center rounded-md px-2 py-1.5 pr-10 text-sm/5 font-normal text-gray-700 hover:bg-gray-50 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-white"
                 >
                     @if (isTitlePending(session)) {
                         <!-- Title still generating (new conversation) — shimmer

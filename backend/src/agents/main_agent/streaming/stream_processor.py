@@ -306,6 +306,10 @@ def _handle_completion_events(event: RawEvent) -> Tuple[List[ProcessedEvent], bo
     # We also break because processing should stop on error
     if event.get("force_stop", False):
         reason = event.get("force_stop_reason", "unknown reason")
+        # The only record of the reason outside the persisted chat message
+        # and the OTel span; without it a support ticket can't be traced
+        # from the runtime logs.
+        logger.warning("Agent force-stopped: %s", reason)
 
         error_message, recoverable = _format_force_stop_message(reason)
 
@@ -330,7 +334,7 @@ def _handle_retry_events(event: RawEvent, retry_state: Dict[str, int]) -> List[P
     on every retried model call. Nothing consumed it, so a retry was
     indistinguishable from a hang: the response simply went quiet. That got
     worse when we widened the retryable set to Bedrock's transient service
-    faults (see ``BedrockTransientRetryStrategy``) — a 503 now buys several
+    faults (see ``TransientModelRetryStrategy``) — a 503 now buys several
     seconds of extra silence that the user has no way to interpret.
 
     TIMING, HONESTLY: Strands sleeps for the backoff delay INSIDE the hook and
@@ -441,7 +445,7 @@ def _format_force_stop_message(reason: Any) -> tuple[str, bool]:
         )
 
     # Bedrock's transient server-side faults. Reaching this point means the
-    # automatic retries (BedrockTransientRetryStrategy) were already spent, so
+    # automatic retries (TransientModelRetryStrategy) were already spent, so
     # the copy says so — otherwise "try again" reads as if nothing was tried.
     # Prod session `5f34d2b0` is why this branch exists: a 503 fell through to
     # the generic "I ran into a problem" text, which gave the user no signal

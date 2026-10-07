@@ -223,6 +223,12 @@ for the authoritative list and defaults:
   alarm thresholds, per-model Bedrock TPM quotas — all `CDK_OBSERVABILITY_*`.
 - **App-API sizing**: `CDK_APP_API_CPU` / `_MEMORY` / `_DESIRED_COUNT` /
   `_MAX_CAPACITY`.
+- **Conversation retention**: `CDK_CONVERSATION_RETENTION_DAYS` (365). A
+  conversation's content is kept for this many days after each turn, wherever it
+  is stored; nothing about a user's long-term memory records (facts,
+  preferences) changes. Whole days, at least 3. Today it sets AgentCore Memory's
+  event expiry, which stops at 365 even if the value is higher. Unset or empty
+  means 365.
 
 ## Source of truth
 

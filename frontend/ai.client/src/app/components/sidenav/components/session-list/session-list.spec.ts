@@ -9,6 +9,7 @@ import { SidenavService } from '../../../../services/sidenav/sidenav.service';
 import { ToastService } from '../../../../services/toast/toast.service';
 import { ProjectsService } from '../../../../projects/services/projects.service';
 import { FEATURES } from '../../../../services/features';
+import { SESSION_FILTER_STORAGE_KEY } from './session-title-filter';
 
 describe('SessionList', () => {
   let mockSessionService: any;
@@ -381,6 +382,106 @@ describe('SessionList', () => {
       expect(mockDialog.open.mock.calls.at(-1)[1].data.projectId).toBe('prj_1');
       (component as any).onShareClick(event, plain('a'));
       expect(mockDialog.open.mock.calls.at(-1)[1].data.projectId).toBeNull();
+    });
+  });
+
+  describe('title filter', () => {
+    const row = (sessionId: string, title: string) => ({ ...mockSession, sessionId, title });
+    const sessions = [
+      row('a', 'BIO 101 syllabus rewrite'),
+      row('b', 'Window functions in Postgres'),
+      row('c', 'bio lab safety quiz'),
+    ];
+
+    beforeEach(() => {
+      sessionStorage.removeItem(SESSION_FILTER_STORAGE_KEY);
+      mockSessionService.mergedSessionsResource.set({ sessions, nextToken: null });
+    });
+
+    afterEach(() => {
+      sessionStorage.removeItem(SESSION_FILTER_STORAGE_KEY);
+    });
+
+    function keydown(key: string) {
+      return { key, preventDefault: vi.fn(), stopPropagation: vi.fn() } as unknown as KeyboardEvent;
+    }
+
+    it('is off by default and lists every loaded session', async () => {
+      const component = await createComponent();
+      expect(component.isFiltering()).toBe(false);
+      expect(component.filteredSessions().map(s => s.sessionId)).toEqual(['a', 'b', 'c']);
+    });
+
+    it('narrows the list case-insensitively and counts the matches', async () => {
+      const component = await createComponent();
+      component['onQueryInput']('BIO');
+
+      expect(component.isFiltering()).toBe(true);
+      expect(component.filteredSessions().map(s => s.sessionId)).toEqual(['a', 'c']);
+      expect(component['resultCountLabel']()).toBe('2 matches');
+
+      component['onQueryInput']('postgres');
+      expect(component['resultCountLabel']()).toBe('1 match');
+
+      component['onQueryInput']('kubernetes');
+      expect(component.filteredSessions()).toEqual([]);
+      expect(component['resultCountLabel']()).toBe('0 matches');
+    });
+
+    it('leaves the date grouping intact, and an empty query restores it', async () => {
+      const component = await createComponent();
+      const grouped = component.groupedSessions();
+
+      component['onQueryInput']('bio');
+      // Filtering does not reshape the grouped list; the template swaps views.
+      expect(component.groupedSessions()).toEqual(grouped);
+
+      component['onQueryInput']('');
+      expect(component.isFiltering()).toBe(false);
+      expect(component.groupedSessions()).toEqual(grouped);
+    });
+
+    it('clears the query on Escape', async () => {
+      const component = await createComponent();
+      component['onQueryInput']('bio');
+      const event = keydown('Escape');
+
+      component['onQueryKeydown'](event);
+
+      expect(component['query']()).toBe('');
+      expect(component.isFiltering()).toBe(false);
+      expect(event.preventDefault).toHaveBeenCalled();
+    });
+
+    it('leaves Escape alone when there is nothing to clear, and ignores other keys', async () => {
+      const component = await createComponent();
+      const escape = keydown('Escape');
+      component['onQueryKeydown'](escape);
+      expect(escape.preventDefault).not.toHaveBeenCalled();
+
+      component['onQueryInput']('bio');
+      const enter = keydown('Enter');
+      component['onQueryKeydown'](enter);
+      expect(component['query']()).toBe('bio');
+      expect(enter.preventDefault).not.toHaveBeenCalled();
+    });
+
+    it('restores a stored query on load', async () => {
+      sessionStorage.setItem(SESSION_FILTER_STORAGE_KEY, 'window');
+      const component = await createComponent();
+      expect(component.isFiltering()).toBe(true);
+      expect(component.filteredSessions().map(s => s.sessionId)).toEqual(['b']);
+    });
+
+    it('keeps pulling pages while filtering, so the filter widens as pages load', async () => {
+      mockSessionService.mergedSessionsResource.set({ sessions, nextToken: 'p2' });
+      const component = await createComponent();
+      component['onQueryInput']('kubernetes');
+
+      component['endOfListVisible'].set(true);
+      TestBed.tick();
+
+      expect(mockSessionService.loadMoreSessions).toHaveBeenCalledTimes(1);
     });
   });
 });
