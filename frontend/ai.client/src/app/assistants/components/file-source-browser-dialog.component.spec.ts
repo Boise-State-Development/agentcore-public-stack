@@ -1,10 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { TestBed } from '@angular/core/testing';
 import { signal } from '@angular/core';
-import { DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
+import { DIALOG_DATA, Dialog, DialogRef } from '@angular/cdk/dialog';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
-import { FileSourceBrowserDialogComponent } from './file-source-browser-dialog.component';
+import { expectNamedDialog, openInCdkDialog } from '../../../testing/cdk-dialog';
+import {
+  FileSourceBrowserDialogComponent,
+  FileSourceBrowserDialogData,
+} from './file-source-browser-dialog.component';
 import { FileSourceService } from '../services/file-source.service';
 import { UserConnectorsService } from '../../settings/connectors/services/user-connectors.service';
 import { OAuthConsentService } from '../../services/oauth-consent/oauth-consent.service';
@@ -197,6 +201,58 @@ describe('FileSourceBrowserDialogComponent', () => {
       expect((component['canPickCurrentFolder'] as () => boolean)()).toBe(true);
       (component['pickCurrentFolder'] as () => void)();
       expect(dialogRef.close).toHaveBeenCalledWith({ folderId: 'root', folderName: 'My Drive' });
+    });
+  });
+
+  describe('opened through CDK Dialog', () => {
+    function configure() {
+      TestBed.resetTestingModule();
+      TestBed.configureTestingModule({
+        providers: [
+          provideHttpClient(),
+          provideHttpClientTesting(),
+          {
+            provide: FileSourceService,
+            useValue: {
+              listFileSources: vi.fn().mockResolvedValue([CONNECTED]),
+              listRoots: vi.fn().mockResolvedValue([
+                { id: 'root', name: 'My Drive' },
+                { id: 'shared', name: 'Shared with me' },
+              ]),
+            },
+          },
+          { provide: UserConnectorsService, useValue: { initiateConsent: vi.fn() } },
+          {
+            provide: OAuthConsentService,
+            useValue: {
+              completion: signal<unknown>(null),
+              inFlightProviders: signal(new Set<string>()),
+              acknowledgeCompletion: vi.fn(),
+            },
+          },
+          { provide: ToastService, useValue: { error: vi.fn(), success: vi.fn() } },
+        ],
+      });
+    }
+
+    afterEach(() => TestBed.inject(Dialog).closeAll());
+
+    it('names the dialog from its heading in import mode', async () => {
+      configure();
+      const { container } = await openInCdkDialog<FileSourceBrowserDialogComponent, FileSourceBrowserDialogData>(
+        FileSourceBrowserDialogComponent,
+        { data: { assistantId: 'AST-1' } },
+      );
+      expectNamedDialog(container, { name: 'Import from a connector' });
+    });
+
+    it('names the folder picker after its purpose', async () => {
+      configure();
+      const { container } = await openInCdkDialog<FileSourceBrowserDialogComponent, FileSourceBrowserDialogData>(
+        FileSourceBrowserDialogComponent,
+        { data: { connector: CONNECTED, mode: 'pick-folder' } },
+      );
+      expectNamedDialog(container, { name: 'Choose a destination folder' });
     });
   });
 });

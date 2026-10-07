@@ -1,8 +1,13 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { TestBed } from '@angular/core/testing';
-import { DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
+import { DIALOG_DATA, Dialog, DialogRef } from '@angular/cdk/dialog';
+import { expectNamedDialog, openInCdkDialog } from '../../../testing/cdk-dialog';
 
-import { SubmitListingDialogComponent } from './submit-listing-dialog.component';
+import {
+  SubmitListingDialogComponent,
+  SubmitListingDialogData,
+  SubmitListingDialogResult,
+} from './submit-listing-dialog.component';
 import { AgentListingService } from '../services/agent-listing.service';
 import { ListingPreflight, SubmitListingRequest } from '../models/store.model';
 
@@ -274,5 +279,63 @@ describe('SubmitListingDialogComponent — category preselection', () => {
     expect(select.value).toBe('Student Support');
     expect(select.options[select.selectedIndex].text.trim()).toBe('Student Support');
     expect(fixture.componentInstance.category()).toBe('Student Support');
+  });
+});
+
+/**
+ * The accessible name is the title, which changes with what the submission is — so it is
+ * checked for both wordings through a real CDK dialog, whose container is what assistive
+ * tech meets.
+ */
+describe('SubmitListingDialogComponent — opened through a real CDK dialog', () => {
+  beforeEach(() => {
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({
+      providers: [
+        {
+          provide: AgentListingService,
+          useValue: {
+            loadCategories: async () => [{ id: 'Administration', label: 'Administration' }],
+            preflight: async (): Promise<ListingPreflight> => ({
+              agentId: 'ast-001',
+              exposedSkills: [],
+              blockReason: null,
+              requiresPublic: false,
+              reachability: 'everyone',
+            }),
+            submit: async () => ({ listing: { state: 'in_review' } }),
+          },
+        },
+      ],
+    });
+  });
+
+  afterEach(() => TestBed.inject(Dialog).closeAll());
+
+  function open(data: SubmitListingDialogData) {
+    return openInCdkDialog<SubmitListingDialogComponent, SubmitListingDialogData, SubmitListingDialogResult>(
+      SubmitListingDialogComponent,
+      { data },
+    );
+  }
+
+  it('is named for a first submission and described by what review means', async () => {
+    const { container } = await open({ agentId: 'ast-001', agentName: 'Policy Lookup' });
+    expectNamedDialog(container, {
+      name: 'Submit to the marketplace',
+      description: /^An admin reviews Policy Lookup before it appears in the store/,
+    });
+  });
+
+  it('is named for an update when the listing is already in the store', async () => {
+    const { container } = await open({
+      agentId: 'ast-001',
+      agentName: 'Policy Lookup',
+      listing: { state: 'published', category: 'Administration', publishedVersion: 2 } as SubmitListingDialogData['listing'],
+    });
+    expectNamedDialog(container, {
+      name: 'Submit an update',
+      description: /stays live and unchanged until they approve/,
+    });
   });
 });

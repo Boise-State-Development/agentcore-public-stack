@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { TestBed } from '@angular/core/testing';
-import { DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
+import { DIALOG_DATA, Dialog, DialogRef } from '@angular/cdk/dialog';
+import { expectNamedDialog, openInCdkDialog } from '../../../testing/cdk-dialog';
 
 import {
   MAX_ARTIFACT_TITLE_LENGTH,
@@ -89,5 +90,37 @@ describe('RenameArtifactDialogComponent', () => {
     const { api } = create({ title: 'Old' });
     api.onEnter();
     expect(close).not.toHaveBeenCalled();
+  });
+
+  describe('opened through CDK Dialog', () => {
+    beforeEach(() => {
+      TestBed.resetTestingModule();
+      TestBed.configureTestingModule({});
+    });
+
+    afterEach(() => TestBed.inject(Dialog).closeAll());
+
+    it('names the dialog from its title and starts on the title field', async () => {
+      const { container } = await openInCdkDialog<
+        RenameArtifactDialogComponent,
+        RenameArtifactDialogData
+      >(RenameArtifactDialogComponent, { data: { title: 'Quarterly plan' } });
+      expectNamedDialog(container, { name: 'Rename artifact' });
+      expect(container.querySelector('[cdkFocusInitial]')?.id).toBe('rename-artifact-input');
+    });
+
+    it('closes undefined on Escape', async () => {
+      const { ref, container } = await openInCdkDialog<
+        RenameArtifactDialogComponent,
+        RenameArtifactDialogData,
+        string | undefined
+      >(RenameArtifactDialogComponent, { data: { title: 'Old' } });
+      let result: string | undefined = 'unset';
+      ref.closed.subscribe((r) => (result = r));
+      container
+        .querySelector('app-dialog-shell')!
+        .dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      expect(result).toBeUndefined();
+    });
   });
 });

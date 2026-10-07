@@ -1,8 +1,9 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
+import { Dialog, DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
+import { expectNamedDialog, openInCdkDialog } from '../../../testing/cdk-dialog';
 
-import { SharedArtifactDialogComponent } from './shared-artifact-dialog.component';
+import { SharedArtifactDialogComponent, SharedArtifactDialogData } from './shared-artifact-dialog.component';
 import { ShareService } from '../../session/services/share/share.service';
 
 describe('SharedArtifactDialogComponent', () => {
@@ -141,5 +142,54 @@ describe('SharedArtifactDialogComponent', () => {
 
     // The stale response must not overwrite the newer URL.
     expect(iframe()!.getAttribute('src')).toContain('t=second');
+  });
+});
+
+describe('SharedArtifactDialogComponent in a CDK dialog', () => {
+  const DATA: SharedArtifactDialogData = {
+    shareId: 'conv-share-1',
+    artifact: {
+      artifactId: 'art-1',
+      version: 2,
+      title: 'Quarterly Deck',
+      contentType: 'text/html; charset=utf-8',
+      producedByMessageIndex: 2,
+    },
+  };
+
+  beforeEach(() => {
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({
+      providers: [
+        {
+          provide: ShareService,
+          useValue: { mintConversationArtifactToken: vi.fn().mockReturnValue(new Promise(() => undefined)) },
+        },
+      ],
+    });
+  });
+
+  afterEach(() => TestBed.inject(Dialog).closeAll());
+
+  it('names the dialog from the artifact title and describes it as shared read-only', async () => {
+    const { container } = await openInCdkDialog<SharedArtifactDialogComponent, SharedArtifactDialogData>(
+      SharedArtifactDialogComponent,
+      { data: DATA },
+    );
+    expectNamedDialog(container, { name: 'Quarterly Deck', description: 'Shared read-only · v2' });
+    expect(container.hasAttribute('aria-label')).toBe(false);
+  });
+
+  it('still closes on a click outside the panel', async () => {
+    const { ref, container } = await openInCdkDialog<SharedArtifactDialogComponent, SharedArtifactDialogData>(
+      SharedArtifactDialogComponent,
+      { data: DATA },
+    );
+    let closed = false;
+    ref.closed.subscribe(() => (closed = true));
+    container.querySelector('h2')!.click();
+    expect(closed).toBe(false);
+    (container.querySelector('app-shared-artifact-dialog')!.firstElementChild as HTMLElement).click();
+    expect(closed).toBe(true);
   });
 });

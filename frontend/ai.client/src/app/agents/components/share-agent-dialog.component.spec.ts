@@ -1,10 +1,11 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
-import { DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
+import { DIALOG_DATA, Dialog, DialogRef } from '@angular/cdk/dialog';
+import { expectNamedDialog, openInCdkDialog } from '../../../testing/cdk-dialog';
 
 import { ShareAgentDialogComponent, ShareAgentDialogData } from './share-agent-dialog.component';
 import { AssistantService } from '../../assistants/services/assistant.service';
@@ -467,6 +468,36 @@ describe('ShareAgentDialogComponent', () => {
 
       expect(c.showSkillDisclosure()).toBe(false);
       expect(c.canManageShares()).toBe(true);
+    });
+  });
+
+  describe('opened through a real CDK dialog', () => {
+    afterEach(() => TestBed.inject(Dialog).closeAll());
+
+    /** `baseProviders`' stub DialogRef/DIALOG_DATA are shadowed by the ones `Dialog.open` provides. */
+    function open(userPermission: 'owner' | 'editor') {
+      TestBed.resetTestingModule();
+      TestBed.configureTestingModule({ providers: baseProviders({ visibility: 'SHARED', userPermission }) });
+      return openInCdkDialog<ShareAgentDialogComponent, ShareAgentDialogData>(ShareAgentDialogComponent, {
+        data: {
+          agent: { assistantId: 'ast-test', name: 'Policy Lookup', visibility: 'SHARED', userPermission },
+        },
+      });
+    }
+
+    it('names the dialog after the agent, describes it, and starts an owner on Add people', async () => {
+      const { container } = await open('owner');
+      expectNamedDialog(container, {
+        name: 'Share Policy Lookup',
+        description: 'Choose who can open this agent, and whether it is listed in the store.',
+      });
+      expect(container.querySelector('[cdkFocusInitial]')?.id).toBe('share-add-people');
+    });
+
+    it('leaves an editor, who cannot add anyone, on the default focus', async () => {
+      const { container } = await open('editor');
+      expectNamedDialog(container, { name: 'Share Policy Lookup' });
+      expect(container.querySelector('[cdkFocusInitial]')).toBeNull();
     });
   });
 });

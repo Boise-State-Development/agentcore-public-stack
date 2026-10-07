@@ -1,6 +1,7 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
+import { Dialog, DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
+import { expectNamedDialog, openInCdkDialog } from '../../../../../../testing/cdk-dialog';
 import {
   ArtifactShareModalComponent,
   type ArtifactShareModalData,
@@ -436,5 +437,32 @@ describe('ArtifactShareModalComponent', () => {
       expect(text()).toContain('Project members');
       expect(api()['audienceLabel']({ ...SHARE, accessLevel: 'project' })).toBe('Project members');
     });
+  });
+});
+
+describe('ArtifactShareModalComponent in a CDK dialog', () => {
+  beforeEach(() => {
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({
+      providers: [
+        {
+          provide: ArtifactShareService,
+          useValue: { shareOptions: vi.fn().mockResolvedValue({ shares: [], project: null }) },
+        },
+      ],
+    });
+  });
+
+  afterEach(() => TestBed.inject(Dialog).closeAll());
+
+  it('names the dialog from its title, describes it with the version, and starts on the chosen access level', async () => {
+    const { container } = await openInCdkDialog<ArtifactShareModalComponent, ArtifactShareModalData>(
+      ArtifactShareModalComponent,
+      { data: DATA },
+    );
+    expectNamedDialog(container, { name: 'Share artifact', description: 'Quarterly Chart · version 2' });
+    const initial = container.querySelector<HTMLInputElement>('[cdkFocusInitial]');
+    expect(initial?.type).toBe('radio');
+    expect(initial?.value).toBe('public');
   });
 });
