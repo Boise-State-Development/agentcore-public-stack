@@ -337,6 +337,42 @@ export interface MemoryRestoreResponse {
   version: number;
 }
 
+/** One item as the editor sends it: the anchor it was read with, or none for a new item. */
+export interface EditedMemoryItem {
+  anchor?: string | null;
+  text: string;
+}
+
+/** `PUT /projects/{id}/memory/files/{slug}`: a file from its items. */
+export interface SaveMemoryFileRequest {
+  items: EditedMemoryItem[];
+  /** Omit to keep the current one. */
+  description?: string;
+  aliases?: string[];
+  /** The version opened, 0 for a new file; a file that moved on since is a 409. */
+  baseVersion?: number;
+}
+
+export interface SaveMemoryFileResponse {
+  slug: string;
+  version: number;
+  tokens: number | null;
+  itemCount: number | null;
+  warnings: string[];
+  overSoftThreshold: boolean;
+  removedAnchors: string[];
+  /** A new file's index line: `added`, `already_linked` or `over_budget`; null for an existing file. */
+  indexed: string | null;
+}
+
+/** `POST /projects/{id}/memory/proposals`: a whole file, in the form a save takes. */
+export interface CreateMemoryProposalRequest {
+  slug: string;
+  text: string;
+  description?: string;
+  aliases?: string[];
+}
+
 export interface SharedTasksResponse {
   /** Most recently shared first; one entry per task. */
   tasks: SharedTask[];

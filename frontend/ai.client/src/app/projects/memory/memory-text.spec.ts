@@ -6,9 +6,14 @@ import {
   contributors,
   describeProvenance,
   estimateTokens,
+  itemProblem,
   linkParts,
   parseItems,
+  aliasProblem,
+  renderItems,
   resolveLink,
+  slugProblem,
+  splitAliases,
 } from './memory-text';
 
 describe('parseItems', () => {
@@ -133,5 +138,37 @@ describe('contributors and estimateTokens', () => {
   it('counts four characters a token, rounding up', () => {
     expect(estimateTokens('')).toBe(0);
     expect(estimateTokens('abcde')).toBe(2);
+  });
+});
+
+describe('editor checks', () => {
+  const entries = [entry('sis', { aliases: ['banner'] }), entry('rates')];
+
+  it('renders items the way the backend does, so a proposal round-trips', () => {
+    const text = renderItems([{ text: 'A.', anchor: 'aaaaaaaa' }, { text: 'Two\nlines.', anchor: null }]);
+    expect(text).toBe('- A. <!-- e:aaaaaaaa -->\n- Two\n  lines.\n');
+    expect(parseItems(text)).toEqual([{ text: 'A.', anchor: 'aaaaaaaa' }, { text: 'Two\nlines.', anchor: null }]);
+  });
+
+  it('checks a new name', () => {
+    expect(slugProblem('', entries)).toBe('Give the file a name.');
+    expect(slugProblem('MEMORY.md', entries)).toContain('is the index');
+    expect(slugProblem('Has Spaces', entries)).toContain('Use lowercase letters');
+    expect(slugProblem('BANNER'.toLowerCase(), entries)).toBe('A file already has that name or alias.');
+    expect(slugProblem('people/jane-doe', entries)).toBeNull();
+  });
+
+  it('checks aliases against other files, never the file’s own', () => {
+    expect(splitAliases(' banner , lms  sync,, ')).toEqual(['banner', 'lms sync']);
+    expect(aliasProblem(['banner'], 'sis', entries)).toBeNull();
+    expect(aliasProblem(['Banner'], 'rates', entries)).toBe('“Banner” already names “sis”.');
+    expect(aliasProblem(['[x]'], 'rates', entries)).toContain('square brackets');
+  });
+
+  it('refuses anchors typed by hand and new dead links only', () => {
+    expect(itemProblem('x <!-- e:aaaaaaaa -->', '', entries)).toContain('managed for you');
+    expect(itemProblem('See [[nowhere]].', '', entries)).toBe('[[nowhere]] doesn’t match a file name or alias.');
+    expect(itemProblem('See [[nowhere]] again.', 'See [[Nowhere]].', entries)).toBeNull();
+    expect(itemProblem('See [[banner]] and [[memory.md]].', '', entries)).toBeNull();
   });
 });

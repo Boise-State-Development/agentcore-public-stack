@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
 import { MemoryEntry, MemoryScope } from '../models/project.model';
 import { MemoryMeterComponent } from './memory-meter.component';
 import { MemoryTextComponent } from './memory-text.component';
@@ -22,7 +22,18 @@ interface IndexLine {
   host: { class: 'block' },
   template: `
     <header class="border-b border-gray-200 p-5 dark:border-gray-700">
-      <h2 class="text-lg/7 font-semibold text-gray-900 dark:text-white">Index <span class="font-mono text-sm font-normal text-gray-600 dark:text-gray-400">MEMORY.md</span></h2>
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <h2 class="text-lg/7 font-semibold text-gray-900 dark:text-white">Index <span class="font-mono text-sm font-normal text-gray-600 dark:text-gray-400">MEMORY.md</span></h2>
+        @if (canEdit()) {
+          <button
+            type="button"
+            (click)="edit.emit()"
+            class="rounded-2xl border border-gray-200 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 transition-colors hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+          >
+            Edit index
+          </button>
+        }
+      </div>
       <p class="mt-0.5 text-sm/6 text-gray-600 dark:text-gray-400">
         {{ scope() === 'project'
           ? 'Loads into every member’s tasks in this project. The assistant opens the files it links to when they bear on a request.'
@@ -58,7 +69,7 @@ interface IndexLine {
       </div>
     } @else {
       <p class="p-5 text-sm/6 text-gray-600 dark:text-gray-400">
-        The index is empty, so nothing from this memory loads into tasks yet. A file joins it when it’s saved by the assistant or approved from a proposal.
+        The index is empty, so nothing from this memory loads into tasks yet. A new file joins it when it’s created, whether here, by the assistant or from an approved proposal.
       </p>
     }
   `,
@@ -69,6 +80,8 @@ export class MemoryIndexViewComponent {
   readonly entries = input.required<readonly MemoryEntry[]>();
   /** Tokens of this index that reach a task. */
   readonly budget = input.required<number>();
+  readonly canEdit = input(false);
+  readonly edit = output<void>();
 
   protected readonly tokens = computed(() => estimateTokens(this.content()));
 

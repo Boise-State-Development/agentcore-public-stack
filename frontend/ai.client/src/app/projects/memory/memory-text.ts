@@ -172,3 +172,74 @@ export function contributors(provenances: readonly (ItemProvenance | null | unde
 function capitalize(text: string): string {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
+
+// ---- the editor (2.8b) -------------------------------------------------
+
+/** The format's limits (`apis/shared/memory/format.py`), checked as you type; the save checks them again. */
+export const MAX_SLUG_CHARS = 128;
+export const MAX_DESCRIPTION_CHARS = 160;
+export const MAX_ALIASES = 10;
+export const MAX_ALIAS_CHARS = 64;
+const SLUG = /^[a-z0-9]+(?:[-_.][a-z0-9]+)*(?:\/[a-z0-9]+(?:[-_.][a-z0-9]+)*)*$/;
+const ANY_ANCHOR = /<!--\s*e:/i;
+
+/** Roughly what the system adds to a file on save (its frontmatter), for the editor's size estimate. */
+export const FRONTMATTER_TOKEN_ESTIMATE = 40;
+
+/** Items as the file text a save or a proposal takes, the way the backend renders them. */
+export function renderItems(items: readonly ParsedItem[]): string {
+  const out: string[] = [];
+  for (const item of items) {
+    const lines = item.text.replace(/\r\n?/g, '\n').replace(/^\n+|\n+$/g, '').split('\n');
+    const rendered = [`- ${lines[0]}`, ...lines.slice(1).map(line => (line.trim() ? `  ${line}` : ''))];
+    if (item.anchor) rendered[rendered.length - 1] += ` <!-- e:${item.anchor} -->`;
+    out.push(...rendered);
+  }
+  return out.length ? `${out.join('\n')}\n` : '';
+}
+
+/** What is wrong with a new file's name, or null. */
+export function slugProblem(slug: string, entries: readonly MemoryEntry[]): string | null {
+  const name = slug.trim();
+  if (!name) return 'Give the file a name.';
+  if (name.toLowerCase() === INDEX_SLUG.toLowerCase()) return `${INDEX_SLUG} is the index; pick another name.`;
+  if (name.length > MAX_SLUG_CHARS) return `Names are limited to ${MAX_SLUG_CHARS} characters.`;
+  if (!SLUG.test(name)) return 'Use lowercase letters and digits joined by - _ or . (and / to group files, as in people/jane-doe).';
+  if (resolveLink(name, entries)) return 'A file already has that name or alias.';
+  return null;
+}
+
+/** What is wrong with a file's aliases, or null. `slug` is the file's own name. */
+export function aliasProblem(aliases: readonly string[], slug: string, entries: readonly MemoryEntry[]): string | null {
+  if (aliases.length > MAX_ALIASES) return `A file can have at most ${MAX_ALIASES} aliases.`;
+  for (const alias of aliases) {
+    if (alias.length > MAX_ALIAS_CHARS) return `“${alias.slice(0, 20)}…” is longer than ${MAX_ALIAS_CHARS} characters.`;
+    if (/[[\]]/.test(alias)) return `“${alias}” can’t contain square brackets.`;
+    const owner = resolveLink(alias, entries.filter(e => e.slug !== slug));
+    if (owner) return `“${alias}” already names ${owner === INDEX_SLUG ? 'the index' : `“${owner}”`}.`;
+  }
+  return null;
+}
+
+/** Split the aliases field: comma-separated, trimmed, blanks dropped. */
+export function splitAliases(value: string): string[] {
+  return value
+    .split(',')
+    .map(a => a.trim().replace(/\s+/g, ' '))
+    .filter(Boolean);
+}
+
+/**
+ * What is wrong with one item's text, or null. A link must resolve, unless the item already
+ * had it when the editor opened: the save refuses only new dead links, so an old one never
+ * blocks an unrelated edit.
+ */
+export function itemProblem(text: string, original: string, names: readonly MemoryEntry[]): string | null {
+  if (ANY_ANCHOR.test(text)) return 'Anchor comments (<!-- e:… -->) are managed for you; remove that part.';
+  const before = new Set(linkParts(original, names).filter(p => p.kind === 'link').map(p => (p as { name: string }).name.toLowerCase()));
+  const dead = linkParts(text, names)
+    .filter((p): p is { kind: 'link'; name: string; slug: string | null } => p.kind === 'link' && !p.slug && !before.has(p.name.toLowerCase()))
+    .map(p => `[[${p.name}]]`);
+  if (dead.length) return `${dead.join(', ')} ${dead.length === 1 ? 'doesn’t match' : 'don’t match'} a file name or alias.`;
+  return null;
+}

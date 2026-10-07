@@ -136,6 +136,16 @@ export function describeActivity(
       return line(`approved a change to the memory file “${str(after['slug'])}”${after['edited'] ? ' with edits' : ''}`);
     case 'project.memory_proposal_rejected':
       return line(`declined a change to the memory file “${str(after['slug'])}”`);
+    case 'project.memory_edited':
+      return line(
+        str(after['slug']) === 'MEMORY.md'
+          ? 'edited the memory index'
+          : after['created']
+            ? `created the memory file “${str(after['slug'])}”`
+            : `edited the memory file “${str(after['slug'])}”`,
+      );
+    case 'project.memory_deleted':
+      return line(`deleted the memory file “${str(before['slug'])}”`);
     default:
       return line(record.action.replace(/^project\./, '').replace(/_/g, ' '));
   }

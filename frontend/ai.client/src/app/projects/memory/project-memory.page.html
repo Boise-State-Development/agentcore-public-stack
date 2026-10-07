@@ -40,7 +40,7 @@
             @if (activeScope() === 'mine') {
               Only you can see these. They load into your own tasks in this project, next to project memory.
             } @else if (p.role === 'viewer') {
-              What every member’s tasks know about this project. You can read all of it; to change something, ask the assistant in a task to propose it, and an editor reviews it.
+              What every member’s tasks know about this project. You can read all of it and propose changes, which an editor reviews.
             } @else {
               What every member’s tasks know about this project. Editors and the assistant change it directly; changes members propose wait for review.
             }
@@ -112,12 +112,48 @@
                 Archive
               </a>
             </div>
+            @if (!editing() && (canEdit() || canPropose())) {
+              <button
+                type="button"
+                (click)="startEditing(canEdit() ? 'new' : 'propose-new')"
+                class="inline-flex items-center gap-1.5 rounded-2xl bg-primary-accessible px-3.5 py-1.5 text-sm/6 font-semibold text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
+              >
+                <ng-icon name="heroPlus" class="size-4" aria-hidden="true" />
+                {{ canEdit() ? 'New file' : 'Propose a file' }}
+              </button>
+            }
           </div>
 
           @if (scopeError()) {
             <p role="alert" class="mt-4 text-sm/6 text-state-danger-600 dark:text-state-danger-400">{{ scopeError() }}</p>
           }
 
+          @if (editing(); as mode) {
+            <article class="mt-4 min-w-0 overflow-hidden rounded-2xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
+              @if (mode === 'index') {
+                <app-memory-index-editor
+                  [projectId]="p.projectId"
+                  [scope]="activeScope()"
+                  [content]="index()"
+                  [entries]="entries()"
+                  [budget]="indexBudget()"
+                  (done)="onIndexSaved()"
+                  (cancelled)="editing.set(null)"
+                />
+              } @else {
+                <app-memory-editor
+                  [projectId]="p.projectId"
+                  [scope]="activeScope()"
+                  [mode]="mode"
+                  [entry]="mode === 'edit' || mode === 'propose' ? selectedEntry() : null"
+                  [entries]="entries()"
+                  [limits]="limits()"
+                  (done)="onEdited($event)"
+                  (cancelled)="editing.set(null)"
+                />
+              }
+            </article>
+          } @else {
           <div class="mt-4 grid gap-6 lg:grid-cols-[17rem_minmax(0,1fr)]">
             <nav aria-label="Memory files">
               <ul class="flex flex-col gap-1">
@@ -165,7 +201,7 @@
               </ul>
               @if (!entries().length) {
                 <p class="mt-3 px-3.5 text-xs/5 text-gray-600 dark:text-gray-400">
-                  No files yet. When a task turns up a fact worth keeping, such as a limit, a decision or an owner, ask the assistant to save it here.
+                  No files yet. When a task turns up a fact worth keeping, such as a limit, a decision or an owner, add it here or ask the assistant to save it.
                 </p>
               }
             </nav>
@@ -179,18 +215,41 @@
                   [entries]="entries()"
                   [limits]="limits()"
                   [canEdit]="canEdit()"
+                  [canPropose]="canPropose()"
+                  (edit)="startEditing('edit')"
+                  (propose)="startEditing('propose')"
+                  (remove)="deleteFile(entry)"
                 />
               } @else {
-                <app-memory-index-view [scope]="activeScope()" [content]="index()" [entries]="entries()" [budget]="indexBudget()" />
+                <app-memory-index-view
+                  [scope]="activeScope()"
+                  [content]="index()"
+                  [entries]="entries()"
+                  [budget]="indexBudget()"
+                  [canEdit]="canEdit()"
+                  (edit)="startEditing('index')"
+                />
               }
             </article>
           </div>
+          }
         } @else {
           <div class="mt-8 rounded-2xl border border-dashed border-gray-300 px-6 py-12 text-center dark:border-gray-700">
             <p class="text-sm/6 font-semibold text-gray-900 dark:text-white">Nothing of your own here yet</p>
             <p class="mx-auto mt-1 max-w-md text-sm/6 text-gray-600 dark:text-gray-400">
-              Your own memory in this project holds preferences and notes only you need, such as how you like answers. Ask the assistant in a task to remember something just for you, and it starts here.
+              Your own memory in this project holds preferences and notes only you need, such as how you like answers. Start a file here, or ask the assistant in a task to remember something just for you.
             </p>
+            @if (!archived()) {
+              <button
+                type="button"
+                (click)="startMine()"
+                [disabled]="starting()"
+                class="mt-4 inline-flex items-center gap-1.5 rounded-2xl bg-primary-accessible px-3.5 py-1.5 text-sm/6 font-semibold text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:opacity-50"
+              >
+                <ng-icon name="heroPlus" class="size-4" aria-hidden="true" />
+                {{ starting() ? 'Starting…' : 'New file' }}
+              </button>
+            }
           </div>
         }
       } @else {

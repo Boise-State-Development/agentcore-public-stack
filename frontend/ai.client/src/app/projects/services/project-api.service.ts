@@ -33,6 +33,9 @@ import {
   MemoryFile,
   MemoryPinsResponse,
   MemoryRestoreResponse,
+  CreateMemoryProposalRequest,
+  SaveMemoryFileRequest,
+  SaveMemoryFileResponse,
   MemoryScope,
   ProjectMemory,
   ProjectOutputsResponse,
@@ -282,6 +285,35 @@ export class ProjectApiService {
       {},
       this.options(new HttpParams().set('scope', scope)),
     );
+  }
+
+  saveMemoryFile(projectId: string, scope: MemoryScope, slug: string, body: SaveMemoryFileRequest): Observable<SaveMemoryFileResponse> {
+    return this.http.put<SaveMemoryFileResponse>(
+      this.url(projectId, `/memory/files/${encodeSlug(slug)}`),
+      body,
+      this.options(new HttpParams().set('scope', scope)),
+    );
+  }
+
+  /** Its items go to the archive, and its line leaves the index. */
+  deleteMemoryFile(projectId: string, scope: MemoryScope, slug: string): Observable<void> {
+    return this.http.delete<void>(
+      this.url(projectId, `/memory/files/${encodeSlug(slug)}`),
+      this.options(new HttpParams().set('scope', scope)),
+    );
+  }
+
+  saveMemoryIndex(projectId: string, scope: MemoryScope, content: string): Observable<{ content: string }> {
+    return this.http.put<{ content: string }>(
+      this.url(projectId, '/memory/index'),
+      { content },
+      this.options(new HttpParams().set('scope', scope)),
+    );
+  }
+
+  /** Propose a change to the shared memory for an editor to review (any member). */
+  proposeMemoryChange(projectId: string, body: CreateMemoryProposalRequest): Observable<MemoryProposal> {
+    return this.http.post<MemoryProposal>(this.url(projectId, '/memory/proposals'), body, this.options());
   }
 
   private spaceUrl(spaceId: string, suffix: string): string {

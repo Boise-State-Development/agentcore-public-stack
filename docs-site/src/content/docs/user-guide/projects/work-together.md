@@ -187,6 +187,27 @@ change that would take a file over the limit is refused. The index has its own
 bar: only about the first 2,000 tokens of the project index reach a task (1,000
 for yours), so keep it to one short line per file.
 
+### Edit memory yourself
+
+Editors and the owner can change project memory on the Memory page, and anyone
+can change their own (**Just me**):
+
+- **Edit** on a file opens it with one box per item. Change the wording, add an
+  item, remove one (it goes to the archive), or drag the handle to reorder. From
+  the keyboard, the arrow keys move between handles and **Alt** with an arrow
+  moves the item.
+- The link button beside an item inserts a link to another file. Pick the file
+  from the list; you can type to narrow it.
+- **New file** asks for a short lowercase name, such as `deadlines`, plus a
+  description that tells the assistant when to open it. The new file is added
+  to the index for you, and a deleted file is taken out of it.
+- **Edit index** changes the index itself.
+
+The editor points out problems as you type, such as a link to a file that
+doesn't exist or a name that's already taken. If someone else saved the same
+file while you had it open, your save is refused so their change isn't lost.
+Reload the file and make your change again.
+
 ### Pin an item
 
 Editors and the owner can **pin** an item in project memory, and anyone can pin
@@ -205,9 +226,11 @@ takes the same right as editing.
 ### Propose a change
 
 Viewers can't save to project memory directly. A viewer can **propose** a change
-instead: ask the assistant to "propose adding to project memory that…". The
+instead: on the Memory page, use **Propose a change** on a file or **Propose a
+file**, or ask the assistant to "propose adding to project memory that…". The
 proposal waits for review, and nothing changes until an editor or the owner
-approves it. Editors can propose too, when they want a second look.
+approves it. Editors can ask the assistant to propose too, when they want a
+second look.
 
 ### Review proposed changes
 
