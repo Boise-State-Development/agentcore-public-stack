@@ -841,3 +841,21 @@ class TestMemoryContextCacheKey:
             session_id="s1", user_id="u1", system_prompt="P", is_resume=True, cache_write=False,
         )
         assert stale is not first
+
+
+class TestTextOnlyModel:
+    """The flag reaches the factory only when set, and is not a key element:
+    it follows from ``model_id``, which already is one."""
+
+    @pytest.mark.asyncio
+    async def test_flag_reaches_the_agent_factory_only_when_set(self, mock_create_agent, mock_freshness_hash):
+        await service.get_agent(session_id="s", user_id="u", model_id="zai.glm-5", text_only_model=True)
+        assert mock_create_agent.call_args.kwargs["text_only_model"] is True
+        await service.get_agent(session_id="s2", user_id="u", model_id="claude")
+        assert "text_only_model" not in mock_create_agent.call_args.kwargs
+
+    @pytest.mark.asyncio
+    async def test_dispatch_without_the_flag_still_reads_the_turns_slot(self, mock_create_agent, mock_freshness_hash):
+        built = await service.get_agent(session_id="s3", user_id="u", model_id="zai.glm-5", text_only_model=True)
+        again = await service.get_agent(session_id="s3", user_id="u", model_id="zai.glm-5", cache_write=False)
+        assert again is built

@@ -538,6 +538,7 @@ class TestToDict:
             "inference_params",
             "mantle_api_mode",
             "mantle_region",
+            "text_only",
         }
 
 

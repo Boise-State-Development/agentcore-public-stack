@@ -331,6 +331,7 @@ async def get_agent(
     build_detail_recorder: Optional[Callable[[str, Any], None]] = None,
     memory_binding: Optional[Dict[str, Any]] = None,
     memory_context: Optional[str] = None,
+    text_only_model: bool = False,
 ) -> BaseAgent:
     """
     Get or create agent instance with current configuration for session
@@ -368,6 +369,10 @@ async def get_agent(
         memory_context: The rendered Memory-Space block, sent after the system
             prompt behind its own cache point. Hashed with the prompt in the
             key and snapshotted by ``BaseAgent`` for resume.
+        text_only_model: The model's catalog row declares TEXT input only
+            (``is_text_only_model``), so the agent's model sees history with
+            image, document and video blocks replaced by text. Not a key
+            element: it follows from ``model_id``, which already is one.
         cache_write: Whether this caller may *populate* the cache. Read stays
             allowed either way. Set False by callers that build a partial
             toolset for a session whose real turns build more — otherwise they
@@ -487,6 +492,8 @@ async def get_agent(
     )
     if memory_context:
         create_kwargs["memory_context"] = memory_context
+    if text_only_model:
+        create_kwargs["text_only_model"] = True
     # Skills v2: ChatAgent (now the target of both "chat" and "skill" types)
     # accepts accessible_skill_ids and conditionally adds the AgentSkills
     # plugin. Pass it through whenever resolved — VoiceAgent does not take the

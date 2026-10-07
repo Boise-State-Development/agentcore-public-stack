@@ -2172,7 +2172,7 @@ async def _agent_for_app_dispatch(
         dispatch_model_id, dispatch_provider = await _resolve_fallback_model(
             user_id, current_user, dispatch_provider
         )
-    caching_enabled, inference_params, mantle_api_mode, mantle_region, registry_provider, _ = await _resolve_model_settings(
+    caching_enabled, inference_params, mantle_api_mode, mantle_region, registry_provider, input_modalities = await _resolve_model_settings(
         model_id=dispatch_model_id,
         explicit_caching_enabled=input_data.caching_enabled,
         request_inference_params=request_inference_params,
@@ -2206,6 +2206,7 @@ async def _agent_for_app_dispatch(
         # with the real turns that do. Read the slot; never seed it.
         cache_write=False,
         assistant_id=input_data.rag_assistant_id,
+        text_only_model=is_text_only_model(input_modalities),
     )
 
 
@@ -4313,6 +4314,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 memory_binding=snapshot.memory_binding,
                 # The memory block is hashed with the system prompt in the key.
                 memory_context=snapshot.memory_context,
+                text_only_model=bool(snapshot.text_only_model),
                 # Resume never builds injected tools, so an agent built on a
                 # resume *miss* lacks them. Writing it would put a tool-less
                 # agent in the slot the next plain turn hits (same key), and
@@ -4438,6 +4440,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                     build_detail_recorder=prelude.detail,
                     memory_binding=turn_tools.memory_binding_key,
                     memory_context=memory_context,
+                    text_only_model=turn_model.text_only,
                 )
 
             # Defer the build into the stream so it can be narrated.

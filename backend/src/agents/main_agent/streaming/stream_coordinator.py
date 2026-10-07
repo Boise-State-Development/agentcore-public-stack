@@ -1983,6 +1983,7 @@ class StreamCoordinator:
                 assistant_id=snapshot_source.get("assistant_id"),
                 memory_binding=snapshot_source.get("memory_binding"),
                 memory_context=snapshot_source.get("memory_context"),
+                text_only_model=snapshot_source.get("text_only_model"),
                 captured_at=now.isoformat(),
                 expires_at=(now + timedelta(hours=1)).isoformat(),
             )
