@@ -823,6 +823,10 @@ Each PR targets `develop`, lands behind `PROJECTS_ENABLED` (opt-in while in deve
   - **Fixes from 2.8b's dev validation:** the link picker opens with `ariaLabel` and `autoFocus` on its filter (axe `aria-dialog-name`, and focus had landed on Close); a viewer's write to project memory is a 403 that says to propose instead, rather than "'editor' access required on memory space 'spc_…'".
   - No new env vars and no infrastructure change.
   - UI impact (for the 1.8 mockup re-sync): history is a full-width view with a side-by-side comparison, not a panel inside the file; Restore names the version and says it saves a new one.
+  - **Dev-validated 2026-10-07** after #1488 deployed (Frontend Deploy 21:38Z, Backend Deploy 21:46Z), in Test Project.
+    - *History:* **History** on `validation-approve` opened `?view=history` with v4 (Approved proposal, Current), v3 (Approved proposal), v2 (Edited) and v1. It opened on v3 compared with now: "Restoring it takes out 1 item", with the 2.8a review-check item marked "Not in version 3".
+    - *Restore and back:* restoring v3 wrote v5 (Restored, Current) and archived the review-check item. Picking v4 read "Restoring it brings back 1 item"; restoring it wrote v6. The item returned under its original anchor with its provenance intact (`proposalId`, `proposedBy`, `approvedBy`) plus `restoredBy`/`restoredAt`, and its archive row was gone.
+    - *2.8b fixes:* the link picker now opens with focus in its filter, and axe is clean on it in both themes. Axe was clean on the history view in light and dark.
 
 ### Phase 3 — automation and scale
 - **3.1** Skill versions: `SKILL#{id}/VERSION#{n}` snapshot on skill save (mirror `AgentVersion`), bindings accept `{ref, version}`, resolver loads the pinned snapshot, "update pin" UI. Until this lands, project skills run live and the UI says so.
