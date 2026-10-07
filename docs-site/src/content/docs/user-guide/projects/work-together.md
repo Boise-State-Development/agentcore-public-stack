@@ -95,6 +95,13 @@ outside the project, so think twice before using them for project work.
 
 Open a shared task to read its snapshot.
 
+You can also ask the assistant. In any task in the project it can list the tasks
+members have shared and read them, so "what escalations are still open?" covers
+shared work as well as Files and project memory. It reads the snapshot each
+person shared: what they asked and what the assistant answered, without tool
+results or attachments. It only sees what's shared with the project, never
+anyone's private tasks.
+
 ![A shared read-only snapshot: the assistant's clause-by-clause table for an export-control clause.](../../../../assets/user-guide/projects/shared-snapshot.jpg)
 
 To build on it, choose **Continue in my own task**. You get your own copy of the

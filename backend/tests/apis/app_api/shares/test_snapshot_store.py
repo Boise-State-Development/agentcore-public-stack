@@ -9,7 +9,7 @@ import boto3
 import pytest
 from moto import mock_aws
 
-from apis.app_api.shares.snapshot_store import (
+from apis.shared.shares.snapshot_store import (
     ShareSnapshotStore,
     ShareSnapshotStoreError,
     compute_content_hash,

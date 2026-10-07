@@ -27,7 +27,7 @@ from apis.app_api.shares.service import (
     ShareNotFoundError,
     ShareService,
 )
-from apis.app_api.shares.snapshot_store import ShareSnapshotStore
+from apis.shared.shares.snapshot_store import ShareSnapshotStore
 from apis.shared.auth.models import User
 
 AWS_REGION = "us-east-1"

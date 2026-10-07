@@ -75,8 +75,9 @@ can tell you which have changed on your deployment.
 - **People appear by email address**, not name or title.
 - **Viewers can't add files or save to project memory.** They can share a
   task, or ask an editor.
-- **The assistant can't read shared tasks.** Only Files and project memory
-  reach everyone's tasks.
+- **The assistant reads a shared task's conversation, not its attachments or
+  tool results.** If a teammate's answer depended on a file, add the file to
+  **Files** so everyone's tasks can use it.
 
 **Continuing someone's task** ("Continue in my own task")
 

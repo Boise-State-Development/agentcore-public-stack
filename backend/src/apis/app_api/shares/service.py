@@ -36,7 +36,8 @@ from .models import (
     SharedConversationResponse,
     UpdateShareRequest,
 )
-from .snapshot_store import (
+from apis.shared.shares.snapshots import SnapshotUnreadableError, convert_decimals_to_float, load_snapshot_raw
+from apis.shared.shares.snapshot_store import (
     ShareSnapshotStore,
     ShareSnapshotStoreError,
     get_share_snapshot_store,
@@ -727,20 +728,7 @@ class ShareService:
 
     @staticmethod
     def _convert_decimals_to_float(obj: Any) -> Any:
-        """Recursively convert DynamoDB ``Decimal`` values back to native types.
-
-        Legacy inline shares were written with ``_convert_floats_to_decimal``,
-        so their bodies come back off DynamoDB as ``Decimal``. Convert them
-        back — to ``int`` when integral, else ``float`` — so the legacy read
-        path yields the same plain-JSON shape as the S3-backed path.
-        """
-        if isinstance(obj, Decimal):
-            return int(obj) if obj % 1 == 0 else float(obj)
-        elif isinstance(obj, dict):
-            return {k: ShareService._convert_decimals_to_float(v) for k, v in obj.items()}
-        elif isinstance(obj, list):
-            return [ShareService._convert_decimals_to_float(item) for item in obj]
-        return obj
+        return convert_decimals_to_float(obj)
 
     @staticmethod
     def _sanitize_id(value: str, max_length: int = 128) -> str:
@@ -990,56 +978,19 @@ class ShareService:
         return body.get("metadata", {}) or {}, body.get("messages", []) or []
 
     def _load_snapshot_raw(self, item: dict) -> dict:
-        """Return the whole snapshot body for a share item.
+        """Return the whole snapshot body for a share item (``load_snapshot_raw``).
 
-        Handles three item shapes for backward compatibility:
-
-          - **New** (``body_ref`` present): fetch the JSON body from S3.
-          - **Legacy inline** (``messages`` present, no ``body_ref``): read the
-            body straight off the DynamoDB item, exactly as before the S3
-            offload. Existing shares predate the offload and stay readable
-            with no migration.
-          - **Malformed** (neither): unreadable → ``ShareNotFoundError``.
-
-        Callers must treat every key as optional. Bodies written before a
-        key existed simply do not have it, and there is no migration —
-        conversation sharing is in production.
+        An unreadable body is a ``ShareNotFoundError``: a share whose snapshot
+        is gone cannot be shown.
         """
-        body_ref = item.get("body_ref")
-        if body_ref:
-            key = body_ref.get("bucket_key")
-            try:
-                raw = self._snapshot_store.get(key)
-                body = json.loads(raw)
-            except (ShareSnapshotStoreError, ValueError) as e:
-                logger.error(
-                    f"Failed to load snapshot body for share "
-                    f"{self._sanitize_id(str(item.get('share_id', '')))} "
-                    f"key={key}: {e}"
-                )
-                raise ShareNotFoundError() from e
-            return body if isinstance(body, dict) else {}
-
-        if item.get("messages") is not None:
-            # Legacy inline share — DynamoDB stored floats as Decimal; convert
-            # back so downstream JSON/Pydantic handling matches the S3 path.
-            # Legacy inline shares predate artifacts entirely, so there
-            # is no `artifacts` key to recover here — the caller's
-            # tolerance for a missing one is what covers them.
-            return {
-                "metadata": self._convert_decimals_to_float(
-                    item.get("metadata", {}) or {}
-                ),
-                "messages": self._convert_decimals_to_float(
-                    item.get("messages", [])
-                ),
-            }
-
-        logger.warning(
-            f"Share {self._sanitize_id(str(item.get('share_id', '')))} has neither "
-            "body_ref nor inline messages — treating as unreadable"
-        )
-        raise ShareNotFoundError()
+        try:
+            return load_snapshot_raw(item, self._snapshot_store)
+        except SnapshotUnreadableError as e:
+            logger.error(
+                f"Failed to load snapshot body for share "
+                f"{self._sanitize_id(str(item.get('share_id', '')))}: {e}"
+            )
+            raise ShareNotFoundError() from e
 
     def _delete_snapshot_body(self, item: dict) -> None:
         """Best-effort delete of a share's S3 snapshot body.

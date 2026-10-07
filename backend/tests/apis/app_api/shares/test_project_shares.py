@@ -21,7 +21,7 @@ from apis.app_api.shares.service import (
     ProjectShareError,
     ShareService,
 )
-from apis.app_api.shares.snapshot_store import ShareSnapshotStore
+from apis.shared.shares.snapshot_store import ShareSnapshotStore
 from apis.shared.auth.models import User
 from apis.shared.projects.repository import ProjectRepository
 from apis.shared.projects.service import ProjectService
