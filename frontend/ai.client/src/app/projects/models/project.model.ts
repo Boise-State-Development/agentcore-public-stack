@@ -168,6 +168,8 @@ export interface SharedTask {
   shareUrl: string;
   /** The caller shared it, so the caller may revoke it. */
   isMine: boolean;
+  /** The sharer's note (2.5b), when they left one. */
+  note?: string | null;
 }
 
 export interface SharedTasksResponse {

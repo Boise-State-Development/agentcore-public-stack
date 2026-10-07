@@ -119,6 +119,9 @@ const PAGE_SIZE = 20;
                   <p class="text-xs/5 text-gray-600 dark:text-gray-400">
                     Shared by <span [attr.title]="!task.isMine && task.sharedByName ? task.sharedByEmail : null">{{ task.isMine ? 'you' : personLabel(task.sharedByName, task.sharedByEmail) }}</span> · {{ sharedAt(task) | date: 'MMM d' }}
                   </p>
+                  @if (task.note) {
+                    <p class="mt-1 border-l-2 border-gray-200 pl-2 text-sm/6 text-gray-700 dark:border-gray-700 dark:text-gray-300">{{ task.note }}</p>
+                  }
                 </div>
                 <div class="flex items-center gap-1">
                   <button

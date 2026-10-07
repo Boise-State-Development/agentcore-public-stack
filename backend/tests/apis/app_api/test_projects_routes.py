@@ -320,7 +320,7 @@ def test_shared_tasks_hide_user_ids_and_mark_the_callers_own(project_id, service
     for sid, owner, email, at in (("s1", EDITOR, EDITOR.email, "2026-09-01"), ("s2", VIEWER, VIEWER.email, "2026-09-02")):
         service.repository.put_shared_task(SharedTask(
             project_id=project_id, session_id=sid, share_id=f"sh-{sid}", owner_id=owner.user_id,
-            owner_email=email, title=f"Task {sid}", shared_at=at,
+            owner_email=email, title=f"Task {sid}", shared_at=at, note="Over to you" if sid == "s2" else None,
         ))
     tasks = client_for(VIEWER).get(f"/projects/{project_id}/shared-tasks").json()["tasks"]
     assert [(t["shareId"], t["sharedByEmail"], t["sharedByName"], t["isMine"], t["shareUrl"]) for t in tasks] == [
@@ -328,6 +328,7 @@ def test_shared_tasks_hide_user_ids_and_mark_the_callers_own(project_id, service
         ("sh-s1", EDITOR.email, "Ed Editor", False, "/shared/sh-s1"),
     ]
     assert not any("ownerId" in t or "sessionId" in t for t in tasks)
+    assert [t["note"] for t in tasks] == ["Over to you", None]
 
 
 def test_directory_marks_people_already_in_the_project(project_id):

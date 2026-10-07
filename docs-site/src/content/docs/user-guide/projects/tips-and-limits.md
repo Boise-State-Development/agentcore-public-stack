@@ -66,11 +66,11 @@ can tell you which have changed on your deployment.
 **Working together**
 
 - **Few notifications for team activity.** Archiving and restoring a project
-  notify every member, and the owner hears when someone leaves. Shared tasks,
-  new files and changes to instructions don't notify anyone. Check **Tasks**
-  and **Activity**, and tell teammates directly when you need them.
+  notify every member, the owner hears when someone leaves, and sharing a task
+  notifies the people you choose. New files and changes to instructions don't
+  notify anyone. Check **Activity**.
 - **No comments or @-mentions** on shared tasks. To hand work to a specific
-  person, tell them, and share the task.
+  person, share the task, notify them, and add a note.
 - **Activity is for editors and the owner only.** Viewers don't see it.
 - **People appear by email address**, not name or title.
 - **Viewers can't add files or save to project memory.** They can share a

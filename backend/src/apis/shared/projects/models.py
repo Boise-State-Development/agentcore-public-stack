@@ -98,3 +98,5 @@ class SharedTask(BaseModel):
     owner_email: str = Field(..., alias="ownerEmail")
     title: str = ""
     shared_at: str = Field(..., alias="sharedAt")
+    # The sharer's hand-off line (2.5b). Re-sharing replaces it with the pointer.
+    note: Optional[str] = None

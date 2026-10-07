@@ -55,8 +55,9 @@ import { SpinnerComponent } from '../components/spinner/spinner.component';
               <h2 class="mt-4 text-lg font-semibold text-gray-900 dark:text-white">Access denied</h2>
               <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">You don't have permission to view this conversation.</p>
             } @else if (errorStatus() === 404) {
-              <h2 class="mt-4 text-lg font-semibold text-gray-900 dark:text-white">Conversation not found</h2>
-              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">This share link may have been revoked.</p>
+              <!-- Also where a share notification lands once the share is revoked (2.5b). -->
+              <h2 class="mt-4 text-lg font-semibold text-gray-900 dark:text-white">This is no longer shared</h2>
+              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">The person who shared it stopped sharing it, or the link is incomplete.</p>
             } @else {
               <h2 class="mt-4 text-lg font-semibold text-gray-900 dark:text-white">Something went wrong</h2>
               <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">Failed to load the shared conversation.</p>

@@ -28,6 +28,7 @@ NotificationKind = Literal[
     "project_archived",
     "project_restored",
     "project_member_left",
+    "project_task_shared",
 ]
 
 

@@ -36,6 +36,10 @@ export function describeNotification(n: AppNotification): string {
       return `${who} restored ${project}.`;
     case 'project_member_left':
       return `${who} left ${project}.`;
+    case 'project_task_shared': {
+      const title = typeof n.payload?.title === 'string' && n.payload.title ? n.payload.title : 'a task';
+      return `${who} shared “${title}” with you in ${project}.`;
+    }
     default:
       return 'You have a new notification.';
   }
@@ -151,6 +155,9 @@ export function relativeTime(iso: string, now = Date.now()): string {
                       <span class="sr-only">(unread)</span>
                     }
                   </span>
+                  @if (noteOf(n); as note) {
+                    <span class="mt-0.5 line-clamp-2 block text-xs/5 text-gray-700 italic dark:text-gray-300">“{{ note }}”</span>
+                  }
                   <span class="block text-xs/5 text-gray-600 dark:text-gray-300">{{ when(n) }}</span>
                 </span>
               </button>
@@ -230,6 +237,11 @@ export class NotificationBellComponent {
     return describeNotification(n);
   }
 
+  /** The sharer's note on a shared task, if they left one. */
+  protected noteOf(n: AppNotification): string | null {
+    return n.kind === 'project_task_shared' && typeof n.payload?.note === 'string' ? n.payload.note : null;
+  }
+
   protected when(n: AppNotification): string {
     return relativeTime(n.createdAt);
   }
@@ -267,6 +279,12 @@ export class NotificationBellComponent {
 
   protected open(n: AppNotification): void {
     void this.service.markRead(n);
+    // A revoked share lands on /shared's "no longer shared" state, not an error.
+    if (n.kind === 'project_task_shared' && typeof n.payload?.shareId === 'string') {
+      void this.router.navigate(['/shared', n.payload.shareId]);
+      this.sidenav.close();
+      return;
+    }
     if (n.kind !== 'project_removed' && n.projectId) {
       const path = n.kind === 'project_member_left' ? ['/projects', n.projectId, 'members'] : ['/projects', n.projectId];
       void this.router.navigate(path);
