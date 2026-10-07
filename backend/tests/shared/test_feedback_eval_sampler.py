@@ -37,10 +37,12 @@ class FakeJudge:
     def __init__(self, results: List[Dict[str, Any]] | None = None, fail_for: str | None = None):
         self.results = results or []
         self.calls: List[tuple] = []
+        self.users: List[str] = []
         self.fail_for = fail_for
 
-    def judge(self, session_id: str, evaluator_ids: Sequence[str]) -> List[Dict[str, Any]]:
+    def judge(self, session_id: str, user_id: str, evaluator_ids: Sequence[str]) -> List[Dict[str, Any]]:
         self.calls.append((session_id, tuple(evaluator_ids)))
+        self.users.append(user_id)
         if session_id == self.fail_for:
             raise RuntimeError("judge exploded")
         return self.results
@@ -147,6 +149,8 @@ async def test_batch_judges_by_reason_skips_judged_and_survives_one_failure(tabl
     assert report.corroborated == 1 and report.errors == ["RuntimeError"]
     assert report.tokens == 2628
     assert sorted(judge.calls) == [("s-boom", ("Builtin.InstructionFollowing",)), ("s-wrong", ("Builtin.Correctness", "Builtin.Faithfulness"))]
+    # Spans are pinned per (user, session), so the judge needs the thumb's user.
+    assert judge.users == [OWNER, OWNER]
 
     wrong = _row("s-wrong", 1)
     assert wrong["evaluation"]["scores"]["Builtin.Correctness"]["rating"] == "Incorrect"
@@ -165,11 +169,11 @@ async def test_batch_judges_by_reason_skips_judged_and_survives_one_failure(tabl
 def test_agentcore_judge_requires_the_log_group(monkeypatch):
     monkeypatch.delenv(sampler.RUNTIME_LOG_GROUP_ENV, raising=False)
     with pytest.raises(RuntimeError):
-        sampler.AgentCoreJudge().judge("s1", ["Builtin.Helpfulness"])
+        sampler.AgentCoreJudge().judge("s1", "u1", ["Builtin.Helpfulness"])
 
 
-def test_agentcore_judge_sends_the_runtime_session_id(monkeypatch):
-    calls = {}
+def _fake_evaluation_client(monkeypatch, results_by_session):
+    calls = {"session_ids": []}
 
     class FakeClient:
         def __init__(self, region_name=None):
@@ -177,17 +181,41 @@ def test_agentcore_judge_sends_the_runtime_session_id(monkeypatch):
 
         def run(self, **kwargs):
             calls.update(kwargs)
-            return [{"evaluatorId": "Builtin.Helpfulness", "value": 1.0}]
+            calls["session_ids"].append(kwargs["session_id"])
+            return results_by_session.get(kwargs["session_id"], [])
 
     import types, sys
     fake_mod = types.ModuleType("bedrock_agentcore.evaluation")
     fake_mod.EvaluationClient = FakeClient
     monkeypatch.setitem(sys.modules, "bedrock_agentcore.evaluation", fake_mod)
+    return calls
+
+
+def test_agentcore_judge_sends_the_runtime_session_id(monkeypatch):
     from apis.shared.harness.runner import runtime_session_id_for
 
+    pinned = runtime_session_id_for("sess-1", "user-1")
+    calls = _fake_evaluation_client(
+        monkeypatch, {pinned: [{"evaluatorId": "Builtin.Helpfulness", "value": 1.0}]}
+    )
+
     judge = sampler.AgentCoreJudge(log_group_name="/aws/bedrock-agentcore/runtimes/rt-DEFAULT", region_name="us-west-2")
-    out = judge.judge("sess-1", ["Builtin.Helpfulness"])
+    out = judge.judge("sess-1", "user-1", ["Builtin.Helpfulness"])
     assert out[0]["value"] == 1.0
-    assert calls["session_id"] == runtime_session_id_for("sess-1")
+    assert calls["session_ids"] == [pinned]
     assert calls["log_group_name"] == "/aws/bedrock-agentcore/runtimes/rt-DEFAULT" and calls["region"] == "us-west-2"
     assert calls["evaluator_ids"] == ["Builtin.Helpfulness"]
+
+
+def test_agentcore_judge_falls_back_to_spans_from_before_per_user_pinning(monkeypatch):
+    from apis.shared.harness.runner import legacy_runtime_session_id_for, runtime_session_id_for
+
+    legacy = legacy_runtime_session_id_for("sess-1")
+    calls = _fake_evaluation_client(
+        monkeypatch, {legacy: [{"evaluatorId": "Builtin.Helpfulness", "value": 0.5}]}
+    )
+
+    judge = sampler.AgentCoreJudge(log_group_name="/aws/bedrock-agentcore/runtimes/rt-DEFAULT", region_name="us-west-2")
+    out = judge.judge("sess-1", "user-1", ["Builtin.Helpfulness"])
+    assert out[0]["value"] == 0.5
+    assert calls["session_ids"] == [runtime_session_id_for("sess-1", "user-1"), legacy]

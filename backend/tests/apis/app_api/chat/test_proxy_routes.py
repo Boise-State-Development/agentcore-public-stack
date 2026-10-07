@@ -158,6 +158,36 @@ def test_forwards_authorization_bearer_from_session(
     assert captured["authorization"] == "Bearer the-stored-token"
 
 
+def test_pins_the_runtime_session_per_user_not_per_session_id(
+    monkeypatch: pytest.MonkeyPatch, chat_path: str
+) -> None:
+    """Two users sending the same session id must land on different runtime
+    sessions, so they never share a container or its agent cache."""
+    from apis.shared.harness.runner import RUNTIME_SESSION_ID_HEADER, runtime_session_id_for
+
+    seen: list = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers.get(RUNTIME_SESSION_ID_HEADER))
+        return httpx.Response(
+            200, content=b"event: done\ndata: {}\n\n",
+            headers={"content-type": "text/event-stream"},
+        )
+
+    _patch_upstream(monkeypatch, handler)
+    for user_id in ("user-a", "user-b"):
+        user = _user()
+        user.user_id = user_id
+        app = _build_app(record=_record(), user_override=user)
+        TestClient(app).post(chat_path, json={"session_id": "shared-sid", "message": "hi"})
+
+    assert seen == [
+        runtime_session_id_for("shared-sid", "user-a"),
+        runtime_session_id_for("shared-sid", "user-b"),
+    ]
+    assert seen[0] != seen[1]
+
+
 def test_forwards_request_body_verbatim(
     monkeypatch: pytest.MonkeyPatch, chat_path: str
 ) -> None:

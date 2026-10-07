@@ -144,11 +144,12 @@ def _conversation_owner_key(session_id: str, user_id: Optional[str]) -> Tuple[st
 
     A session id alone does not name a conversation. AgentCore Memory scopes
     history by actor id, so two users can hold separate threads under one
-    session id, and runtime affinity (``runtime_session_id_for``) hashes the
-    session id alone, so both users' turns land in the same container. Anything
-    here that finds "this conversation's" live state must match on this pair.
-    ``_adopt_session_conversation`` once matched on the session id alone and
-    handed one user's live history to another (dev, 2026-08-31).
+    session id. Anything here that finds "this conversation's" live state must
+    match on this pair. Runtime affinity (``runtime_session_id_for``) now pins
+    per user too, so two users should never share this process. Do not rely on
+    that: the cache must be safe on its own. When affinity hashed the session
+    id alone, ``_adopt_session_conversation`` matched on it alone and handed one
+    user's live history to another (dev, 2026-08-31).
     """
     return (session_id, user_id or session_id)
 

@@ -305,8 +305,8 @@ class TestForkNeverReusesTheSessionId:
     """A fork is the requester's own conversation under a NEW session id.
 
     Reusing the original id would put two users on one session id, which is
-    the precondition for the cross-user exposure of 2026-08-31: runtime
-    affinity hashes the session id alone, so both users' turns share one
+    the precondition for the cross-user exposure of 2026-08-31, when runtime
+    affinity hashed the session id alone and both users' turns shared one
     container and its agent cache.
     """
 

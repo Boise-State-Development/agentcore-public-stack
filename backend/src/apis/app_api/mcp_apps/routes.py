@@ -98,6 +98,7 @@ async def proxy_call(
             "Authorization": f"Bearer {current_user.raw_token}",
         },
         body.session_id,
+        current_user.user_id,
     )
 
     client = proxy_routes._build_upstream_client()
@@ -217,6 +218,7 @@ async def update_context(
             "Authorization": f"Bearer {current_user.raw_token}",
         },
         body.session_id,
+        current_user.user_id,
     )
 
     client = proxy_routes._build_upstream_client()

@@ -576,8 +576,9 @@ async def test_adoption_never_crosses_users_on_one_session_id(mock_freshness_has
 
     The dev leak of 2026-08-31. User A's agent is warm with A's conversation;
     user B sends a turn on the same session id (a fork from before #906 let
-    that happen, and runtime affinity hashes the session id alone, so B lands
-    in A's container). B's key differs in its user element → cache miss → B
+    that happen, and runtime affinity then hashed the session id alone, so B
+    landed in A's container). Affinity now pins per user, but the cache must
+    stay safe without that. B's key differs in its user element → cache miss → B
     restores from B's own Memory actor, which is empty. Adoption matched on the
     session id alone, found A's live agent, and aliased A's list onto B's agent.
     The model then answered B from A's history.

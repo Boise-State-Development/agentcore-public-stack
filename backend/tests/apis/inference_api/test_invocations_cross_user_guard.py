@@ -1,12 +1,13 @@
 """The invocations route refuses a turn on another user's session id.
 
 This guard stops a session id from being forked across two users (#906). It is
-also the first line against cross-user content exposure: runtime affinity
-hashes the session id alone, so a second user's turn lands in the owner's
-container, where the agent cache used to hand them the owner's live
-conversation (dev, 2026-08-31). The cache no longer does that
-(`test_chat_service.py::test_adoption_never_crosses_users_on_one_session_id`);
-this pins the route half, so neither defence silently depends on the other.
+one of three defences against cross-user content exposure. When runtime
+affinity hashed the session id alone, a second user's turn landed in the
+owner's container, where the agent cache handed them the owner's live
+conversation (dev, 2026-08-31). Affinity now pins per (user, session)
+(`test_runtime_session_affinity.py`) and the cache matches on the same pair
+(`test_chat_service.py::test_adoption_never_crosses_users_on_one_session_id`).
+This pins the route half, so no defence silently depends on another.
 """
 
 from types import SimpleNamespace

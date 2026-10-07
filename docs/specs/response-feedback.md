@@ -119,8 +119,10 @@ query that is already fan-out shaped.
 `ACTIVE` evaluators, `EvaluationClient.run()` returning scored results with
 explanations quoting real dev conversation text, and — critically — session
 correlation that needs no new plumbing, since
-`runtime_session_id_for()` (`apis/shared/harness/runner.py:63`) is
-`sid-<sha256(session_id)>`. A feedback row carrying `sessionId` +
+`runtime_session_id_for()` (`apis/shared/harness/runner.py`) is
+deterministic. It is `sid-<sha256(user_id NUL session_id)>`; it was
+`sid-<sha256(session_id)>` until per-user pinning, and the judge falls back to
+that form for older spans. A feedback row carrying `sessionId` + `userId` +
 `messageId` is already joinable to the spans.
 
 **Built-in skill evaluators.** `Builtin.SkillSelectionAccuracy` and

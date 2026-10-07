@@ -147,8 +147,10 @@ async def chat_stream(
         "Authorization": f"Bearer {current_user.raw_token}",
     }
 
-    # Pin this conversation to one microVM so the container it lands on stays
-    # warm across turns. Measured in dev, steady-state turns:
+    # Pin this user's conversation to one microVM so the container it lands on
+    # stays warm across turns. Pinned per (user, session), never per session
+    # alone: two users on one session id must not share a container and its
+    # agent cache (see `runtime_session_id_for`). Measured in dev, steady-state turns:
     #
     #   no pinning, agent-cache miss     ~7.6s
     #   pinned, agent-cache miss         ~4.8s   ← warm container alone
@@ -177,7 +179,7 @@ async def chat_stream(
             session_id = raw if isinstance(raw, str) and raw else None
     except (ValueError, TypeError):
         logger.debug("chat proxy: body is not JSON; skipping runtime-session pinning")
-    apply_runtime_session_header(headers, session_id)
+    apply_runtime_session_header(headers, session_id, current_user.user_id)
 
     # Forward OAuth2CallbackUrl when the SPA supplies it. Inference-api's
     # AgentCoreContextMiddleware reads this header to scope the on-tool

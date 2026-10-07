@@ -3330,12 +3330,12 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # owner's session resolving non-deterministically between the two rows.
     #
     # This IS a confidentiality guard. Memory scopes history by actor id, but
-    # runtime affinity hashes the session id alone, so both users' turns land
-    # in one container. There, `_adopt_session_conversation` used to alias the
+    # runtime affinity used to hash the session id alone, so both users' turns
+    # landed in one container. There, `_adopt_session_conversation` aliased the
     # second user's new agent onto the first user's live message list, and each
-    # model saw the other's turns (dev, 2026-08-31). Adoption now matches on
-    # (session, user), so the cache is safe without this guard; this guard
-    # stops the id being forked at all. 404 rather than 403 so the
+    # model saw the other's turns (dev, 2026-08-31). Affinity now pins per
+    # (user, session) and adoption matches on the same pair, so neither depends
+    # on this guard; this guard stops the id being forked at all. 404 rather than 403 so the
     # response says nothing about whether the session exists, matching what
     # `GET /sessions/{id}/metadata` already returns for the same case.
     #
