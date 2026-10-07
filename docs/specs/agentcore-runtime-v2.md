@@ -137,7 +137,7 @@ The billing basis inverts, so conclusions from V1 don't carry over:
 
 ## 5a. Phase 2: prewarm the session when the user engages (after the dev A/B)
 
-The blog's tip is to start the session as soon as the user engages, for example when they open a chat or begin typing, instead of waiting for submit. That hides the start time behind the time they spend typing. **V2 does not do this for us.** A microVM starts only when an invocation arrives with a runtime session ID. We pin that ID per conversation (`runtime_session_id_for` in `apis/shared/harness/runner.py`, a hash of the conversation's session ID). So today **every new conversation's first turn is a cold start**, and nothing happens before the user sends.
+The blog's tip is to start the session as soon as the user engages, for example when they open a chat or begin typing, instead of waiting for submit. That hides the start time behind the time they spend typing. **V2 does not do this for us.** A microVM starts only when an invocation arrives with a runtime session ID. We pin that ID per conversation (`runtime_session_id_for` in `apis/shared/harness/runner.py`, a hash of the user and the conversation's session ID). So today **every new conversation's first turn is a cold start**, and nothing happens before the user sends.
 
 **Why it waits for V2.** A prewarm for a chat the user never sends leaves a microVM idle for `idleRuntimeSessionTimeout` (900 s).
 - On V1 that idle time bills at peak memory. Prewarming every composer focus would be a real cost.

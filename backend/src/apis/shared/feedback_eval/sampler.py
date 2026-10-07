@@ -61,15 +61,18 @@ def evaluators_for(reason: Optional[str]) -> tuple:
 class Judge(Protocol):
     """Anything that can score one conversation with a set of evaluators."""
 
-    def judge(self, session_id: str, evaluator_ids: Sequence[str]) -> List[Dict[str, Any]]:
-        """Raw ``evaluationResults`` items for the session, or ``[]``."""
+    def judge(
+        self, session_id: str, user_id: str, evaluator_ids: Sequence[str]
+    ) -> List[Dict[str, Any]]:
+        """Raw ``evaluationResults`` items for the user's session, or ``[]``."""
 
 
 class AgentCoreJudge:
     """``bedrock_agentcore.evaluation.EvaluationClient`` over the runtime log
     group. Lazy imports keep ``apis.shared`` importable in images without the
     SDK. The session id sent is the *runtime* session id
-    (``sid-<sha256(session_id)>``), which is how the chat proxy pins spans."""
+    (``runtime_session_id_for(session_id, user_id)``), which is how the chat
+    proxy pins spans."""
 
     def __init__(self, log_group_name: Optional[str] = None, region_name: Optional[str] = None,
                  look_back: timedelta = timedelta(days=7)):
@@ -78,18 +81,31 @@ class AgentCoreJudge:
         self.look_back = look_back
         self._client = None
 
-    def judge(self, session_id: str, evaluator_ids: Sequence[str]) -> List[Dict[str, Any]]:
+    def judge(
+        self, session_id: str, user_id: str, evaluator_ids: Sequence[str]
+    ) -> List[Dict[str, Any]]:
         if not self.log_group_name:
             raise RuntimeError(f"{RUNTIME_LOG_GROUP_ENV} is not configured")
         if self._client is None:
             from bedrock_agentcore.evaluation import EvaluationClient  # lazy: heavy, optional
 
             self._client = EvaluationClient(region_name=self.region_name)
-        from apis.shared.harness.runner import runtime_session_id_for
+        from apis.shared.harness.runner import (
+            legacy_runtime_session_id_for,
+            runtime_session_id_for,
+        )
 
+        results = self._run(runtime_session_id_for(session_id, user_id), evaluator_ids)
+        if results:
+            return results
+        # A turn from before per-user pinning shipped carries its spans under
+        # the session-only id. Remove with `legacy_runtime_session_id_for`.
+        return self._run(legacy_runtime_session_id_for(session_id), evaluator_ids)
+
+    def _run(self, runtime_session_id: str, evaluator_ids: Sequence[str]) -> List[Dict[str, Any]]:
         return self._client.run(
             evaluator_ids=list(evaluator_ids),
-            session_id=runtime_session_id_for(session_id),
+            session_id=runtime_session_id,
             log_group_name=self.log_group_name,
             look_back_time=self.look_back,
         )
@@ -207,7 +223,7 @@ async def run_sampling_batch(
         results: List[Dict[str, Any]] = []
         try:
             if evaluator_ids:
-                results = judge.judge(session_id, evaluator_ids)
+                results = judge.judge(session_id, user_id, evaluator_ids)
             verdict = build_verdict(reason, results, cost_row)
             store_evaluation(table, user_id, session_id, message_id, verdict)
         except Exception as e:  # noqa: BLE001 - one bad thumb must not stop the batch

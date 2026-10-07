@@ -1826,10 +1826,17 @@ async def session_owned_by_other_user(session_id: str, user_id: str) -> bool:
     the resulting duplicate META row made the original owner's session resolve
     non-deterministically afterwards (see the item-scan in `_get_session_by_gsi`).
 
-    NOT a data-disclosure fix: conversation content lives in AgentCore Memory
-    keyed by actor id, so the second user always saw an empty conversation,
-    never the owner's messages. What leaked was the id, and what broke was the
-    owner's session record.
+    It is ALSO a data-disclosure guard. An earlier version of this note said
+    the second user always saw an empty thread because Memory is keyed by
+    actor id. That was wrong. Runtime affinity then hashed the session id
+    alone, so both users' turns reached the same container, and while the owner's agent
+    was still cached there, ``_adopt_session_conversation`` matched on session
+    id alone and aliased its live message list onto the second user's agent.
+    On dev, 2026-08-31, a probe user read back the owner's content that way.
+    The prod fork described above came 34 minutes after the owner's last turn,
+    after the container had idled out, and the second user's call carried no
+    history (``prefixFingerprints.messageCount == 1``). Runtime affinity now
+    pins per ``(user, session)`` and adoption matches on the same pair.
 
     Returns True only when at least one META row exists AND none of them belong
     to `user_id` — so a session the caller legitimately owns is never blocked,
