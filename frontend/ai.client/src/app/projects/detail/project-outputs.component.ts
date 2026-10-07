@@ -50,7 +50,7 @@ import { projectErrorMessage } from '../services/projects.service';
             <li class="relative">
               <a
                 [routerLink]="['/shared-artifact', o.shareId]"
-                [attr.aria-label]="'Open ' + style(o).label + ' ' + o.title + ', shared by ' + sharer(o)"
+                [attr.aria-label]="'Open ' + style(o).label + ' ' + o.title + ', ' + sharedByPhrase(o)"
                 class="flex w-full items-center gap-3 rounded-2xl border border-gray-200 bg-white px-3 py-2.5 pr-10 text-left transition-colors hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-700 dark:bg-gray-800 dark:hover:bg-gray-700"
               >
                 <span class="grid size-9 shrink-0 place-items-center rounded-2xl" [class]="style(o).bg" aria-hidden="true">
@@ -110,6 +110,11 @@ export class ProjectOutputsComponent {
 
   protected sharer(o: ProjectOutput): string {
     return o.isMine ? 'Shared by you' : `Shared by ${personLabel(o.sharedByName, o.sharedByEmail)}`;
+  }
+
+  /** The same, mid-sentence, for the card's accessible name. */
+  protected sharedByPhrase(o: ProjectOutput): string {
+    return o.isMine ? 'shared by you' : `shared by ${personLabel(o.sharedByName, o.sharedByEmail)}`;
   }
 
   protected sharedAt(o: ProjectOutput): Date {

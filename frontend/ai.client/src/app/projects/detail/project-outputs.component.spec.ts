@@ -76,6 +76,10 @@ describe('ProjectOutputsComponent', () => {
     expect(el.querySelector('h2')?.textContent).toContain('Outputs');
     const links = Array.from(el.querySelectorAll('a'));
     expect(links.map(a => a.getAttribute('href'))).toEqual(['/shared-artifact/sh-1', '/shared-artifact/sh-2']);
+    expect(links.map(a => a.getAttribute('aria-label'))).toEqual([
+      'Open Web page Roster chart, shared by Ann Lee',
+      'Open CSV Term dates, shared by you',
+    ]);
     const text = el.textContent?.replace(/\s+/g, ' ') ?? '';
     expect(text).toContain('Roster chart');
     expect(text).toContain('Web page · v2 · Shared by Ann Lee');
