@@ -64,6 +64,7 @@ from .models import (
     MembersResponse,
     ModelResponse,
     PersonalSpaceResponse,
+    MemoryLimitsResponse,
     ProjectMemoryResponse,
     ProjectListResponse,
     ProjectResponse,
@@ -443,6 +444,19 @@ def get_project_memory(project_id: str, user: User = Depends(require_projects_us
         shared_space_id=spaces.shared_space_id,
         personal_space_id=spaces.personal_space_id,
         role=spaces.role,
+        limits=_memory_limits(),
+    )
+
+
+def _memory_limits() -> MemoryLimitsResponse:
+    from apis.shared.memory.hydration import MINE_MEMORY_MAX_TOKENS, PROJECT_MEMORY_MAX_TOKENS
+    from apis.shared.memory.service import file_hard_cap_tokens, file_soft_threshold_tokens
+
+    return MemoryLimitsResponse(
+        file_hard_cap_tokens=file_hard_cap_tokens(),
+        file_soft_threshold_tokens=file_soft_threshold_tokens(),
+        project_index_budget_tokens=PROJECT_MEMORY_MAX_TOKENS,
+        personal_index_budget_tokens=MINE_MEMORY_MAX_TOKENS,
     )
 
 

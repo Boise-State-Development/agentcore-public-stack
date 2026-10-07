@@ -229,6 +229,114 @@ export interface MemoryProposalsResponse {
   proposals: MemoryProposal[];
 }
 
+// ---- the Memory tab (2.8) ----------------------------------------------
+
+/** `project` is the shared memory every member's tasks load; `mine` is the caller's own in this project. */
+export type MemoryScope = 'project' | 'mine';
+
+/** The size limits the Memory tab's meters measure against. */
+export interface MemoryLimits {
+  /** A file over this can't be saved. */
+  fileHardCapTokens: number;
+  /** A file at this is close to the cap. */
+  fileSoftThresholdTokens: number;
+  /** How much of each scope's MEMORY.md reaches a task (estimated at four characters a token). */
+  projectIndexBudgetTokens: number;
+  personalIndexBudgetTokens: number;
+}
+
+/** `GET /projects/{id}/memory`: the project's spaces as the caller sees them. */
+export interface ProjectMemory {
+  /** Null while Memory Spaces are off, or for an archived project made before 2.4. */
+  sharedSpaceId: string | null;
+  /** Null until the caller keeps something of their own here. */
+  personalSpaceId: string | null;
+  role: ProjectRole;
+  limits?: MemoryLimits | null;
+}
+
+/** One memory file as the space's manifest lists it (`GET /memory/spaces/{id}/entries`). */
+export interface MemoryEntry {
+  slug: string;
+  description: string;
+  updated: string;
+  updatedBy: string;
+  updatedByName: string | null;
+  aliases: string[];
+  tokens: number | null;
+  tokensMethod: string | null;
+  itemCount: number | null;
+  archived: boolean;
+  version: number;
+}
+
+export interface MemoryEntriesResponse {
+  entries: MemoryEntry[];
+}
+
+/** Where one item came from. People are emails; `MemoryFile.people` names them. */
+export interface ItemProvenance {
+  addedBy: string;
+  addedAt: string;
+  updatedBy?: string | null;
+  updatedAt?: string | null;
+  /** The task the latest change came from, when a task's assistant wrote it. */
+  sourceSessionId?: string | null;
+  proposalId?: string | null;
+  proposedBy?: string | null;
+  approvedBy?: string | null;
+  restoredBy?: string | null;
+  restoredAt?: string | null;
+}
+
+export interface MemoryItem {
+  anchor: string;
+  text: string;
+  pinned: boolean;
+  /** Null for an item saved before provenance was recorded and not changed since. */
+  provenance?: ItemProvenance | null;
+}
+
+/** `GET /projects/{id}/memory/files/{slug}`: one file as items. */
+export interface MemoryFile {
+  slug: string;
+  description: string;
+  version: number;
+  tokens: number | null;
+  items: MemoryItem[];
+  /** Display names by email, for the people in `provenance`. */
+  people: Record<string, string>;
+}
+
+export interface MemoryPinsResponse {
+  slug: string;
+  pinned: string[];
+}
+
+export interface ArchivedMemoryItem {
+  archiveId: string;
+  slug: string;
+  anchor: string;
+  text: string;
+  /** `removed`: a save left it out. `deleted`: its whole file was deleted. */
+  reason: 'removed' | 'deleted';
+  archivedBy: string;
+  archivedAt: string;
+  restorableUntil: string;
+  provenance?: ItemProvenance | null;
+}
+
+export interface MemoryArchiveResponse {
+  /** Newest first; only those still restorable. */
+  items: ArchivedMemoryItem[];
+  people: Record<string, string>;
+}
+
+export interface MemoryRestoreResponse {
+  slug: string;
+  version: number;
+}
+
 export interface SharedTasksResponse {
   /** Most recently shared first; one entry per task. */
   tasks: SharedTask[];

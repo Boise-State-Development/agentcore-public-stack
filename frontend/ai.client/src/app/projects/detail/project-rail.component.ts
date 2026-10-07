@@ -1,8 +1,11 @@
+import { NgTemplateOutlet } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, effect, inject, input, output, signal, untracked } from '@angular/core';
 import { Dialog, DialogRef } from '@angular/cdk/dialog';
+import { RouterLink } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
+  heroBookOpen,
   heroClock,
   heroCpuChip,
   heroDocumentText,
@@ -56,7 +59,9 @@ import {
 export type ProjectPanel = 'instructions' | 'files' | 'model' | 'tools' | 'members' | 'activity' | 'history';
 
 interface Row {
-  panel: ProjectPanel;
+  panel: ProjectPanel | 'memory';
+  /** A row that leaves for a page of its own instead of opening a dialog. */
+  link?: string[];
   icon: string;
   label: string;
   /** The grey detail beside the label, if any. */
@@ -81,9 +86,9 @@ const FILES_PAGE = 100;
 @Component({
   selector: 'app-project-rail',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon],
+  imports: [NgIcon, NgTemplateOutlet, RouterLink],
   providers: [
-    provideIcons({ heroClock, heroCpuChip, heroDocumentText, heroFolder, heroListBullet, heroUsers, heroWrenchScrewdriver }),
+    provideIcons({ heroBookOpen, heroClock, heroCpuChip, heroDocumentText, heroFolder, heroListBullet, heroUsers, heroWrenchScrewdriver }),
   ],
   host: { class: 'block' },
   template: `
@@ -91,22 +96,19 @@ const FILES_PAGE = 100;
       <ul class="space-y-0.5">
         @for (row of rows(); track row.panel) {
           <li>
-            <button
-              type="button"
-              (click)="open(row.panel)"
-              class="group flex w-full items-center gap-3 rounded-2xl px-3 py-2.5 text-left transition-colors hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:hover:bg-white/5"
-            >
-              <ng-icon [name]="row.icon" class="size-5 shrink-0 text-gray-500 dark:text-gray-400" aria-hidden="true" />
-              <span class="flex min-w-0 flex-1 items-baseline gap-2">
-                <span class="shrink-0 text-sm/6 font-medium text-gray-900 dark:text-white">{{ row.label }}</span>
-                @if (row.meta) {
-                  <span class="truncate text-xs/5 text-gray-600 dark:text-gray-400">{{ row.meta }}</span>
-                } @else if (!loaded()) {
-                  <span class="h-3 w-16 animate-pulse rounded bg-gray-200 dark:bg-gray-700" aria-hidden="true"></span>
-                }
-              </span>
-              <span class="shrink-0 text-sm/6 text-gray-600 group-hover:text-gray-900 dark:text-gray-400 dark:group-hover:text-white">{{ row.action }}</span>
-            </button>
+            @if (row.link) {
+              <a [routerLink]="row.link" class="group flex w-full items-center gap-3 rounded-2xl px-3 py-2.5 text-left transition-colors hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:hover:bg-white/5">
+                <ng-container [ngTemplateOutlet]="rowBody" [ngTemplateOutletContext]="{ $implicit: row }" />
+              </a>
+            } @else {
+              <button
+                type="button"
+                (click)="open(row.panel)"
+                class="group flex w-full items-center gap-3 rounded-2xl px-3 py-2.5 text-left transition-colors hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:hover:bg-white/5"
+              >
+                <ng-container [ngTemplateOutlet]="rowBody" [ngTemplateOutletContext]="{ $implicit: row }" />
+              </button>
+            }
           </li>
         }
       </ul>
@@ -115,6 +117,19 @@ const FILES_PAGE = 100;
     <p class="mt-5 px-3 text-xs/5 text-gray-600 dark:text-gray-400">
       {{ footer() }}
     </p>
+
+    <ng-template #rowBody let-row>
+      <ng-icon [name]="row.icon" class="size-5 shrink-0 text-gray-500 dark:text-gray-400" aria-hidden="true" />
+      <span class="flex min-w-0 flex-1 items-baseline gap-2">
+        <span class="shrink-0 text-sm/6 font-medium text-gray-900 dark:text-white">{{ row.label }}</span>
+        @if (row.meta) {
+          <span class="truncate text-xs/5 text-gray-600 dark:text-gray-400">{{ row.meta }}</span>
+        } @else if (!loaded()) {
+          <span class="h-3 w-16 animate-pulse rounded bg-gray-200 dark:bg-gray-700" aria-hidden="true"></span>
+        }
+      </span>
+      <span class="shrink-0 text-sm/6 text-gray-600 group-hover:text-gray-900 dark:text-gray-400 dark:group-hover:text-white">{{ row.action }}</span>
+    </ng-template>
   `,
 })
 export class ProjectRailComponent {
@@ -137,6 +152,8 @@ export class ProjectRailComponent {
   private readonly skills = signal<string[]>([]);
   private readonly fileCount = signal<number | null>(null);
   private readonly moreFiles = signal(false);
+  /** Files in the project's shared memory; null when unknown (memory off, or the read failed). */
+  private readonly memoryCount = signal<number | null>(null);
 
   private open$: DialogRef<unknown> | null = null;
   /** The summary read in flight, which a dialog opened early must wait for. */
@@ -170,6 +187,14 @@ export class ProjectRailComponent {
         label: 'Files',
         meta: this.filesMeta(),
         action: edit ? 'Add' : 'View',
+      },
+      {
+        panel: 'memory',
+        link: ['/projects', this.project().projectId, 'memory'],
+        icon: 'heroBookOpen',
+        label: 'Memory',
+        meta: this.memoryMeta(),
+        action: 'Open',
       },
       {
         panel: 'model',
@@ -226,6 +251,19 @@ export class ProjectRailComponent {
     });
   }
 
+  private memoryMeta(): string | null {
+    const n = this.memoryCount();
+    if (n === null) return null;
+    return n === 0 ? 'None yet' : count(n, 'file');
+  }
+
+  /** How many files the project's shared memory holds (two reads: the space, then its manifest). */
+  private async loadMemoryCount(projectId: string): Promise<number | null> {
+    const memory = await firstValueFrom(this.api.memory(projectId));
+    if (!memory.sharedSpaceId) return null;
+    return (await firstValueFrom(this.api.memoryEntries(memory.sharedSpaceId))).entries.length;
+  }
+
   private filesMeta(): string | null {
     const n = this.fileCount();
     if (n === null) return null;
@@ -236,8 +274,9 @@ export class ProjectRailComponent {
   private async load(projectId: string): Promise<void> {
     this.loaded.set(false);
     this.fileCount.set(null);
+    this.memoryCount.set(null);
     const quiet = <T>(p: Promise<T>): Promise<T | null> => p.catch(() => null);
-    const [instructions, model, tools, skills, files, models, toolPalette, skillPalette] = await Promise.all([
+    const [instructions, model, tools, skills, files, models, toolPalette, skillPalette, memoryCount] = await Promise.all([
       quiet(firstValueFrom(this.api.instructions(projectId))),
       quiet(firstValueFrom(this.api.model(projectId))),
       quiet(firstValueFrom(this.api.bindings(projectId, 'tools'))),
@@ -246,6 +285,7 @@ export class ProjectRailComponent {
       quiet(this.agents.loadBindable('model')),
       quiet(this.agents.loadBindable('tool')),
       quiet(this.agents.loadBindable('skill')),
+      quiet(this.loadMemoryCount(projectId)),
     ]);
     if (projectId !== this.projectId()) return;
     this.instructions.set(instructions?.instructions ?? '');
@@ -257,6 +297,7 @@ export class ProjectRailComponent {
       this.fileCount.set(files.documents.length);
       this.moreFiles.set(!!files.nextToken);
     }
+    this.memoryCount.set(memoryCount);
     this.models.set(models ?? []);
     this.toolPalette.set(toolPalette ?? []);
     this.skillPalette.set(skillPalette ?? []);
@@ -267,8 +308,9 @@ export class ProjectRailComponent {
    * Open one of the rail's dialogs. Only one is open at a time: opening another
    * closes the first, which is what a Version link inside Activity relies on.
    */
-  async open(panel: ProjectPanel): Promise<void> {
-    if (panel === 'activity' && !this.isEditor()) return;
+  async open(panel: ProjectPanel | 'memory'): Promise<void> {
+    // Memory is a page, reached by its row's link.
+    if (panel === 'memory' || (panel === 'activity' && !this.isEditor())) return;
     // A link can open a dialog before the summary it starts from has arrived.
     await this.loading;
     this.open$?.close();

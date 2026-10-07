@@ -368,12 +368,23 @@ def test_memory_reports_the_shared_space_and_only_the_callers_own(project_id, se
     shared = service.repository.get_project(project_id).shared_space_id
     assert client_for(VIEWER).get(f"/projects/{project_id}/memory").json() == {
         "sharedSpaceId": shared, "personalSpaceId": None, "role": "viewer",
+        "limits": {
+            "fileHardCapTokens": 8000, "fileSoftThresholdTokens": 6000,
+            "projectIndexBudgetTokens": 2000, "personalIndexBudgetTokens": 1000,
+        },
     }
 
     mine = client_for(VIEWER).post(f"/projects/{project_id}/memory/mine").json()["spaceId"]
     assert client_for(VIEWER).post(f"/projects/{project_id}/memory/mine").json()["spaceId"] == mine
     assert client_for(VIEWER).get(f"/projects/{project_id}/memory").json()["personalSpaceId"] == mine
     assert client_for(EDITOR).get(f"/projects/{project_id}/memory").json()["personalSpaceId"] is None
+
+
+def test_memory_limits_follow_the_deployment(project_id, monkeypatch):
+    monkeypatch.setenv("MEMORY_FILE_HARD_CAP_TOKENS", "4000")
+    monkeypatch.setenv("MEMORY_FILE_SOFT_THRESHOLD_PCT", "50")
+    limits = client_for(VIEWER).get(f"/projects/{project_id}/memory").json()["limits"]
+    assert (limits["fileHardCapTokens"], limits["fileSoftThresholdTokens"]) == (4000, 2000)
 
 
 def test_no_personal_memory_in_an_archived_project(project_id):

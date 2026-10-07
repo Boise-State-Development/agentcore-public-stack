@@ -296,8 +296,10 @@ class TestRoutes:
         assert client_for(EDITOR).delete(f"{base}/pins", params={"slug": "sis", "anchor": second["anchor"]}).json()["pinned"] == []
 
         _save(memory, team, EDITOR, f"- {first['text']} <!-- e:{first['anchor']} -->\n")
-        [row] = client_for(VIEWER).get(f"{base}/archive").json()["items"]
+        archive = client_for(VIEWER).get(f"{base}/archive").json()
+        [row] = archive["items"]
         assert row["text"] == second["text"]
+        assert archive["people"][EDITOR.email] == "Editor"
         assert client_for(VIEWER).post(f"{base}/archive/{row['archiveId']}/restore").status_code == 403
         restored = client_for(EDITOR).post(f"{base}/archive/{row['archiveId']}/restore").json()
         assert restored == {"slug": "sis", "version": 3}

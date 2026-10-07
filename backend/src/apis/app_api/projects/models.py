@@ -78,6 +78,23 @@ class TransferOwnershipRequest(BaseModel):
 # ---- responses ---------------------------------------------------------
 
 
+class MemoryLimitsResponse(BaseModel):
+    """The size limits the Memory tab's meters measure against (Shared Projects 2.8).
+
+    A file over ``fileHardCapTokens`` can't be saved; one at
+    ``fileSoftThresholdTokens`` is close. The index budgets are how much of
+    each scope's ``MEMORY.md`` reaches a task, in tokens estimated at four
+    characters each, the way the harness cuts it.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    file_hard_cap_tokens: int = Field(..., alias="fileHardCapTokens")
+    file_soft_threshold_tokens: int = Field(..., alias="fileSoftThresholdTokens")
+    project_index_budget_tokens: int = Field(..., alias="projectIndexBudgetTokens")
+    personal_index_budget_tokens: int = Field(..., alias="personalIndexBudgetTokens")
+
+
 class ProjectMemoryResponse(BaseModel):
     """A project's memory spaces, as the caller sees them (Phase 2.4).
 
@@ -93,6 +110,7 @@ class ProjectMemoryResponse(BaseModel):
     shared_space_id: Optional[str] = Field(None, alias="sharedSpaceId")
     personal_space_id: Optional[str] = Field(None, alias="personalSpaceId")
     role: ProjectRole = Field(..., description="The caller's role on this project")
+    limits: Optional[MemoryLimitsResponse] = None
 
 
 class PersonalSpaceResponse(BaseModel):

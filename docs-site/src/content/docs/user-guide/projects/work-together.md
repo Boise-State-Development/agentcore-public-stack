@@ -156,8 +156,8 @@ project:
 
 Other useful requests:
 
-- "What's in project memory?" or "List the project memory files." (There's no
-  memory tab to browse yet, so ask the assistant.)
+- "What's in project memory?" or "List the project memory files." (You can
+  also browse it yourself; see below.)
 - "Update the open-issues note: the indemnification clause is resolved."
 - "In the Article 6 note, replace the 90-day review item. It's out of date."
   (The assistant edits a memory file by rewriting it. It can't delete a file
@@ -170,6 +170,38 @@ clause or a math error, and saves it, every teammate's assistant will repeat it.
 Ask the assistant to read back what it saved, and correct it straight away.
 :::
 
+### Browse memory
+
+Open **Memory** in the project's settings, beside Files. Two tabs at the top
+switch between **Project** memory and your own (**Just me**). Each lists the
+**Index** first, because it's what every task sees, and then the files.
+
+Open a file to see its items. Under each item is who added it and how: saved by
+the assistant from someone's task, proposed and approved, or edited directly.
+When it came from one of your own tasks, you can open that task from there.
+Words in double square brackets, like `[[deadlines]]`, link to other files.
+
+The bar beside each file shows its size against the limit for one file
+(8,000 tokens, roughly 6,000 words). It turns amber when a file is close, and a
+change that would take a file over the limit is refused. The index has its own
+bar: only about the first 2,000 tokens of the project index reach a task (1,000
+for yours), so keep it to one short line per file.
+
+### Pin an item
+
+Editors and the owner can **pin** an item in project memory, and anyone can pin
+items in their own. A pinned item can't be removed by any change, including one
+the assistant makes, until a person unpins it. Pin the facts the whole project
+depends on, such as a signed-off position or a hard deadline.
+
+### Bring back a removed item
+
+When an item is removed from a file, or its whole file is deleted, it goes to
+the **Archive** on the Memory page. Items stay there for a year in project
+memory and 30 days in yours. **Restore** puts an item back at the end of its
+file, with its history, and recreates the file if it was deleted. Restoring
+takes the same right as editing.
+
 ### Propose a change
 
 Viewers can't save to project memory directly. A viewer can **propose** a change
@@ -179,16 +211,17 @@ approves it. Editors can propose too, when they want a second look.
 
 ### Review proposed changes
 
-Editors and the owner are notified of each proposal. Proposals waiting for review
-appear under **Proposed memory changes** on the project page, above Recents.
-Open one to see what it adds and removes. Then **Approve** it, **Edit before
-approving**, or **Decline** it, optionally with a note for the person who proposed
-it. They're notified of your decision either way. If someone changed the file
+Editors and the owner are notified of each proposal. The project page shows
+**Proposed memory changes** above Recents when any are waiting; it, the
+notification and **Review** on the Memory page all open the review queue. Pick a
+proposal to see the file as it is and as proposed, side by side, with what it
+adds and removes highlighted. Then **Approve** it, **Edit before approving**, or
+**Decline** it, optionally with a note for the person who proposed it. They're notified of your decision either way. If someone changed the file
 after the proposal was made, you'll need to edit the proposal against the current
 file before you can approve it.
 
-If you proposed a change, you'll see it in the same place until it's decided, and
-you can **Withdraw** it.
+If you proposed a change, you'll see it under **Your proposals** on the Memory
+page until it's decided, and you can **Withdraw** it.
 
 ## Ask for a Word redline
 
