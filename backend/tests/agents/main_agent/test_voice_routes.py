@@ -46,6 +46,154 @@ class TestExtractUserFromToken:
         assert result["email"] == "jdoe"
 
 
+def _token(sub: str, **claims) -> str:
+    import jwt as pyjwt
+    return pyjwt.encode({"sub": sub, **claims}, "secret")
+
+
+class TestVoiceIdentityComesFromTheToken:
+    """A client-named user_id never becomes the voice identity.
+
+    The config frame, the query string and the ``user-id`` custom header are
+    all client-supplied, and the Runtime's ``/ws`` is reachable by anyone
+    holding a BFF-client token (forward-auth MCP servers receive them), so the
+    identity is the ``sub`` of the bearer the Runtime's authorizer checked on
+    the upgrade. Anything that disagrees closes the socket with 4001 before
+    VoiceAgent, history or metadata are touched.
+    """
+
+    @staticmethod
+    def _websocket(config: dict, *, bearer: str = "") -> MagicMock:
+        ws = MagicMock()
+        ws.headers = {"authorization": f"Bearer {bearer}"} if bearer else {}
+        ws.accept = AsyncMock()
+        ws.send_json = AsyncMock()
+        ws.close = AsyncMock()
+        ws.receive_json = AsyncMock(return_value={"type": "config", **config})
+        return ws
+
+    @staticmethod
+    async def _connect(ws: MagicMock, **params) -> MagicMock:
+        """Run voice_stream; return the VoiceAgent class mock (construction stops the run)."""
+        from apis.inference_api.chat import voice_routes
+
+        agent_class = MagicMock(side_effect=RuntimeError("stop at VoiceAgent"))
+        with patch.object(
+            voice_routes, "_get_voice_agent_class", return_value=agent_class
+        ), patch.object(
+            voice_routes, "_always_on_tool_ids_for_voice", new=AsyncMock(return_value=[])
+        ), patch.object(
+            voice_routes, "_ensure_session_metadata", new=AsyncMock()
+        ) as ensure:
+            await voice_routes.voice_stream(ws, **params)
+        ensure.assert_not_awaited()
+        return agent_class
+
+    @staticmethod
+    def _assert_refused(ws: MagicMock, agent_class: MagicMock) -> None:
+        agent_class.assert_not_called()
+        ws.close.assert_awaited_once()
+        assert ws.close.await_args.kwargs["code"] == 4001
+
+    @pytest.mark.asyncio
+    async def test_frame_user_id_for_another_user_never_reaches_voice_agent(self):
+        token = _token("attacker")
+        ws = self._websocket(
+            {"session_id": "s1", "user_id": "victim", "auth_token": token}, bearer=token
+        )
+
+        agent_class = await self._connect(ws)
+
+        self._assert_refused(ws, agent_class)
+
+    @pytest.mark.asyncio
+    async def test_forged_frame_token_for_another_user_is_refused(self):
+        """The frame token is decoded unverified, so it cannot outrank the upgrade's."""
+        ws = self._websocket(
+            {"session_id": "s1", "auth_token": _token("victim", **{"cognito:groups": ["admin"]})},
+            bearer=_token("attacker"),
+        )
+
+        agent_class = await self._connect(ws)
+
+        self._assert_refused(ws, agent_class)
+
+    @pytest.mark.asyncio
+    async def test_query_or_custom_header_user_id_for_another_user_is_refused(self):
+        token = _token("attacker")
+        ws = self._websocket({"session_id": "s1"}, bearer=token)
+        ws.headers["x-amzn-bedrock-agentcore-runtime-custom-user-id"] = "victim"
+
+        agent_class = await self._connect(ws, user_id="victim")
+
+        self._assert_refused(ws, agent_class)
+
+    @pytest.mark.asyncio
+    async def test_frame_token_without_an_upgrade_token_is_refused(self):
+        ws = self._websocket({"session_id": "s1", "user_id": "victim", "auth_token": _token("victim")})
+
+        agent_class = await self._connect(ws)
+
+        self._assert_refused(ws, agent_class)
+
+    @pytest.mark.asyncio
+    async def test_relayed_frame_matching_the_token_reaches_voice_agent_as_the_sub(self):
+        """The app-api relay's shape: same token on the upgrade and in the frame."""
+        token = _token("user-1")
+        ws = self._websocket(
+            {"session_id": "s1", "user_id": "user-1", "auth_token": token}, bearer=token
+        )
+
+        agent_class = await self._connect(ws)
+
+        agent_class.assert_called_once()
+        assert agent_class.call_args.kwargs["user_id"] == "user-1"
+        assert agent_class.call_args.kwargs["auth_token"] == token
+
+    @pytest.mark.asyncio
+    async def test_no_claimed_user_id_takes_the_sub(self):
+        token = _token("user-1")
+        ws = self._websocket({"session_id": "s1"}, bearer=token)
+
+        agent_class = await self._connect(ws)
+
+        assert agent_class.call_args.kwargs["user_id"] == "user-1"
+
+    @pytest.mark.asyncio
+    async def test_skip_auth_local_dev_accepts_the_query_user_id(self, monkeypatch):
+        monkeypatch.setenv("SKIP_AUTH", "true")
+        ws = self._websocket({"session_id": "s1"})
+
+        agent_class = await self._connect(ws, user_id="dev-user")
+
+        assert agent_class.call_args.kwargs["user_id"] == "dev-user"
+
+    @pytest.mark.asyncio
+    async def test_without_skip_auth_a_query_user_id_alone_is_refused(self, monkeypatch):
+        monkeypatch.delenv("SKIP_AUTH", raising=False)
+        ws = self._websocket({"session_id": "s1"})
+
+        agent_class = await self._connect(ws, user_id="dev-user")
+
+        self._assert_refused(ws, agent_class)
+
+
+class TestHandshakeBearerToken:
+    def test_reads_the_authorization_bearer(self):
+        from apis.inference_api.chat.voice_routes import _handshake_bearer_token
+        ws = MagicMock()
+        ws.headers = {"authorization": "Bearer abc.def.ghi"}
+        assert _handshake_bearer_token(ws) == "abc.def.ghi"
+
+    def test_ignores_the_browser_subprotocol(self):
+        from apis.inference_api.chat.voice_routes import _handshake_bearer_token
+        ws = MagicMock()
+        ws.headers = {
+            "sec-websocket-protocol": "base64UrlBearerAuthorization.YWJj, base64UrlBearerAuthorization"
+        }
+        assert _handshake_bearer_token(ws) == ""
+
+
 class TestActiveSessionsManagement:
     """Req VR-2: Active session tracking."""
 
