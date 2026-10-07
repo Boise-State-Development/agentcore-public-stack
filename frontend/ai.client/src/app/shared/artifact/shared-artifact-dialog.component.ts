@@ -10,6 +10,8 @@ import { DomSanitizer, SafeResourceUrl } from '@angular/platform-browser';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroXMark } from '@ng-icons/heroicons/outline';
 
+import { DialogDescriptionDirective } from '../../components/dialog/dialog-description.directive';
+import { DialogTitleDirective } from '../../components/dialog/dialog-title.directive';
 import { ArtifactViewerComponent } from '../../session/components/message-list/components/artifact/artifact-viewer.component';
 import {
   ShareService,
@@ -43,11 +45,16 @@ export interface SharedArtifactDialogData {
  * Minting goes through the conversation share: there is no artifact
  * share record here, so the pair (shareId, artifactId) is the whole
  * handle, and the version served is the one the snapshot pinned.
+ *
+ * Drawn by hand rather than in `<app-dialog-shell>`: the viewer needs a
+ * fixed-height frame for its iframe, where the shell sizes to content.
+ * The heading names CDK's dialog container (`appDialogTitle`), so the
+ * panel itself carries no dialog role.
  */
 @Component({
   selector: 'app-shared-artifact-dialog',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, ArtifactViewerComponent],
+  imports: [NgIcon, ArtifactViewerComponent, DialogDescriptionDirective, DialogTitleDirective],
   providers: [provideIcons({ heroXMark })],
   host: { '(keydown.escape)': 'close()' },
   template: `
@@ -56,9 +63,6 @@ export interface SharedArtifactDialogData {
       (click)="close()"
     >
       <div
-        role="dialog"
-        aria-modal="true"
-        [attr.aria-label]="'Artifact: ' + (data.artifact.title || 'Untitled')"
         class="flex h-full max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-xl dark:border-gray-700 dark:bg-gray-800"
         (click)="$event.stopPropagation()"
       >
@@ -66,10 +70,10 @@ export interface SharedArtifactDialogData {
           class="flex shrink-0 items-center gap-3 border-b border-gray-200 px-4 py-3 dark:border-gray-700"
         >
           <div class="min-w-0 flex-1">
-            <h2 class="truncate text-sm/6 font-semibold text-gray-900 dark:text-white">
+            <h2 appDialogTitle class="truncate text-sm/6 font-semibold text-gray-900 dark:text-white">
               {{ data.artifact.title || 'Untitled artifact' }}
             </h2>
-            <p class="text-xs/5 text-gray-500 dark:text-gray-400">
+            <p appDialogDescription class="text-xs/5 text-gray-500 dark:text-gray-400">
               Shared read-only
               @if (data.artifact.version > 1) {
                 <span aria-hidden="true"> · </span>v{{ data.artifact.version }}

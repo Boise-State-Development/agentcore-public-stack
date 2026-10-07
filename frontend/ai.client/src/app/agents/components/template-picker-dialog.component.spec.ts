@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { TestBed, ComponentFixture } from '@angular/core/testing';
-import { DialogRef } from '@angular/cdk/dialog';
+import { Dialog, DialogRef } from '@angular/cdk/dialog';
+import { expectNamedDialog, openInCdkDialog } from '../../../testing/cdk-dialog';
 import { Router } from '@angular/router';
 
 import { TemplatePickerDialogComponent } from './template-picker-dialog.component';
@@ -175,5 +176,27 @@ describe('TemplatePickerDialogComponent', () => {
     expect(closed).toBe(1);
     expect(navigatedTo).toEqual([]);
     expect(localStorage.getItem('agentTemplateDraft')).toBeNull();
+  });
+
+  describe('opened through a real CDK dialog', () => {
+    beforeEach(() => {
+      TestBed.resetTestingModule();
+      TestBed.configureTestingModule({
+        providers: [
+          { provide: Router, useValue: { navigate: () => Promise.resolve(true) } },
+          { provide: AgentTemplatesService, useValue: { loadTemplates: () => Promise.resolve(CATALOG) } },
+        ],
+      });
+    });
+
+    afterEach(() => TestBed.inject(Dialog).closeAll());
+
+    it('names the dialog from its title and describes it', async () => {
+      const { container } = await openInCdkDialog(TemplatePickerDialogComponent);
+      expectNamedDialog(container, {
+        name: 'Start from a template',
+        description: /^Pick a starting point/,
+      });
+    });
   });
 });

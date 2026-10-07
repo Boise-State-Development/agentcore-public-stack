@@ -6,13 +6,12 @@ import {
   OnInit,
 } from '@angular/core';
 import { DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
-import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroXMark, heroUserGroup } from '@ng-icons/heroicons/outline';
 import { AdminSkillService } from '../services/admin-skill.service';
 import { AdminSkill, SkillRoleAssignment } from '../models/admin-skill.model';
 import { AppRolesService } from '../../roles/services/app-roles.service';
 import { AppRole } from '../../roles/models/app-role.model';
-import { DialogDismissDirective } from '../../../components/dialog/dialog-dismiss.directive';
+import { DialogDescriptionDirective } from '../../../components/dialog/dialog-description.directive';
+import { DialogShellComponent } from '../../../components/dialog/dialog-shell.component';
 import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 
 /**
@@ -31,145 +30,76 @@ export type SkillRoleDialogResult = string[] | undefined;
 @Component({
   selector: 'app-skill-role-dialog',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DialogDismissDirective, NgIcon, SpinnerComponent],
-  providers: [provideIcons({ heroXMark, heroUserGroup })],
-  host: {
-    class: 'block',
-    '(keydown.escape)': 'onCancel()',
-  },
+  imports: [DialogDescriptionDirective, DialogShellComponent, SpinnerComponent],
+  host: { class: 'block' },
   template: `
-    <!-- Backdrop -->
-    <div
-      class="dialog-backdrop fixed inset-0 bg-gray-900/40 dark:bg-gray-900/70"
-      aria-hidden="true"
-    ></div>
+    <app-dialog-shell title="Manage Role Access" (closed)="onCancel()">
+      <p appDialogDescription class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">
+        Select which roles can use <span class="font-medium">{{ data.skill.displayName }}</span>.
+      </p>
 
-    <!-- Dialog Panel -->
-    <div class="fixed inset-0 z-10 flex min-h-full items-end justify-center p-4 sm:items-center sm:p-0"
-      appDialogDismiss
-      (dismissed)="onCancel()">
-      <div
-        class="dialog-panel relative w-full overflow-hidden rounded-lg border border-gray-200 bg-white text-left shadow-xl sm:my-8 sm:max-w-lg dark:border-gray-700 dark:bg-gray-800"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="skill-role-title"
-        aria-describedby="skill-role-description"
-      >
-        <!-- Header -->
-        <div class="flex items-start justify-between gap-3 px-6 pt-5">
-          <div class="min-w-0">
-            <h2 id="skill-role-title" class="text-lg/7 font-semibold text-gray-900 dark:text-white">
-              Manage Role Access
-            </h2>
-            <p id="skill-role-description" class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">
-              Select which roles can use <span class="font-medium">{{ data.skill.displayName }}</span>.
-            </p>
-          </div>
-          <button
-            type="button"
-            (click)="onCancel()"
-            aria-label="Close dialog"
-            class="flex size-8 shrink-0 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
-          >
-            <ng-icon name="heroXMark" class="size-5" aria-hidden="true" />
-          </button>
+      @if (loading()) {
+        <div class="flex items-center justify-center py-8">
+          <app-spinner size="lg" label="Loading" />
         </div>
-
-        <!-- Content -->
-        <div class="max-h-72 overflow-y-auto px-6 py-4">
-          @if (loading()) {
-            <div class="flex items-center justify-center py-8">
-              <app-spinner size="lg" label="Loading" />
-            </div>
-          } @else {
-            <div class="space-y-2">
-              @for (role of allRoles(); track role.roleId) {
-                <label
-                  class="flex cursor-pointer items-center gap-3 rounded-lg border border-gray-200 p-3 transition-colors hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-gray-700/50"
-                  [class.border-primary-500]="selectedRoleIds().has(role.roleId)"
-                  [class.bg-gray-100]="selectedRoleIds().has(role.roleId)"
-                  [class.dark:border-primary-400]="selectedRoleIds().has(role.roleId)"
-                  [class.dark:bg-gray-700]="selectedRoleIds().has(role.roleId)"
-                >
-                  <input
-                    type="checkbox"
-                    [checked]="selectedRoleIds().has(role.roleId)"
-                    (change)="toggleRole(role.roleId)"
-                    class="size-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 dark:border-gray-500 dark:bg-gray-700"
-                  />
-                  <div class="min-w-0 flex-1">
-                    <div class="text-sm/6 font-medium text-gray-900 dark:text-white">{{ role.displayName }}</div>
-                    <div class="truncate font-mono text-xs/5 text-gray-600 dark:text-gray-300">{{ role.roleId }}</div>
-                  </div>
-                  @if (currentAssignments().has(role.roleId)) {
-                    <span class="shrink-0 text-xs/5 text-gray-400 dark:text-gray-500">
-                      {{ getGrantType(role.roleId) }}
-                    </span>
-                  }
-                </label>
+      } @else {
+        <div class="space-y-2">
+          @for (role of allRoles(); track role.roleId) {
+            <label
+              class="flex cursor-pointer items-center gap-3 rounded-lg border border-gray-200 p-3 transition-colors hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-gray-700/50"
+              [class.border-primary-500]="selectedRoleIds().has(role.roleId)"
+              [class.bg-gray-100]="selectedRoleIds().has(role.roleId)"
+              [class.dark:border-primary-400]="selectedRoleIds().has(role.roleId)"
+              [class.dark:bg-gray-700]="selectedRoleIds().has(role.roleId)"
+            >
+              <input
+                type="checkbox"
+                [checked]="selectedRoleIds().has(role.roleId)"
+                (change)="toggleRole(role.roleId)"
+                class="size-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 dark:border-gray-500 dark:bg-gray-700"
+              />
+              <div class="min-w-0 flex-1">
+                <div class="text-sm/6 font-medium text-gray-900 dark:text-white">{{ role.displayName }}</div>
+                <div class="truncate font-mono text-xs/5 text-gray-600 dark:text-gray-300">{{ role.roleId }}</div>
+              </div>
+              @if (currentAssignments().has(role.roleId)) {
+                <span class="shrink-0 text-xs/5 text-gray-400 dark:text-gray-500">
+                  {{ getGrantType(role.roleId) }}
+                </span>
               }
-            </div>
-
-            @if (allRoles().length === 0) {
-              <p class="py-8 text-center text-sm/6 text-gray-500 dark:text-gray-400">
-                No roles available. Create roles first.
-              </p>
-            }
-
-            <p class="mt-4 text-xs/5 text-state-warning-600 dark:text-state-warning-400">
-              Changes take effect within 5-10 minutes.
-            </p>
+            </label>
           }
         </div>
 
-        <!-- Actions -->
-        <div class="flex items-center justify-end gap-2 border-t border-gray-200 px-6 py-3 dark:border-gray-700">
-          <button
-            type="button"
-            (click)="onCancel()"
-            class="rounded-lg px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-500 dark:text-gray-200 dark:hover:bg-gray-700"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            (click)="save()"
-            [disabled]="saving() || loading()"
-            class="inline-flex items-center gap-2 rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-60 dark:hover:brightness-110"
-          >
-            {{ saving() ? 'Saving…' : 'Save Changes' }}
-          </button>
-        </div>
+        @if (allRoles().length === 0) {
+          <p class="py-8 text-center text-sm/6 text-gray-500 dark:text-gray-400">
+            No roles available. Create roles first.
+          </p>
+        }
+
+        <p class="mt-4 text-xs/5 text-state-warning-600 dark:text-state-warning-400">
+          Changes take effect within 5-10 minutes.
+        </p>
+      }
+
+      <div dialogFooter class="flex items-center justify-end gap-2 border-t border-gray-200 px-6 py-3 dark:border-gray-700">
+        <button
+          type="button"
+          (click)="onCancel()"
+          class="rounded-lg px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-500 dark:text-gray-200 dark:hover:bg-gray-700"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          (click)="save()"
+          [disabled]="saving() || loading()"
+          class="inline-flex items-center gap-2 rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-60 dark:hover:brightness-110"
+        >
+          {{ saving() ? 'Saving…' : 'Save Changes' }}
+        </button>
       </div>
-    </div>
-  `,
-  styles: `
-    @reference "../../../../styles/theme.css";
-
-
-    .dialog-backdrop {
-      animation: backdrop-fade-in 200ms ease-out;
-    }
-
-    @keyframes backdrop-fade-in {
-      from { opacity: 0; }
-      to { opacity: 1; }
-    }
-
-    .dialog-panel {
-      animation: dialog-fade-in-up 200ms ease-out;
-    }
-
-    @keyframes dialog-fade-in-up {
-      from {
-        opacity: 0;
-        transform: translateY(1rem) scale(0.97);
-      }
-      to {
-        opacity: 1;
-        transform: translateY(0) scale(1);
-      }
-    }
+    </app-dialog-shell>
   `,
 })
 export class SkillRoleDialogComponent implements OnInit {

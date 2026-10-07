@@ -1,6 +1,7 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { Dialog, DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
+import { expectNamedDialog, openInCdkDialog } from '../../../../testing/cdk-dialog';
 import { ShareModalComponent, ShareModalData } from './share-modal.component';
 import { ShareService, ShareResponse, ShareListResponse } from '../../services/share/share.service';
 import { ProjectApiService } from '../../../projects/services/project-api.service';
@@ -494,5 +495,37 @@ describe('ShareModalComponent (a task in a project)', () => {
       expect(el().querySelector('input[name=notifyMode]')).toBeNull();
       expect(el().querySelector('#share-note')).toBeNull();
     });
+  });
+});
+
+describe('ShareModalComponent in a CDK dialog', () => {
+  beforeEach(() => {
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({
+      providers: [
+        { provide: ShareService, useValue: { listSharesForSession: vi.fn().mockResolvedValue({ shares: [] }) } },
+        { provide: ProjectApiService, useValue: { members: vi.fn() } },
+      ],
+    });
+  });
+
+  afterEach(() => TestBed.inject(Dialog).closeAll());
+
+  async function open(data: ShareModalData) {
+    return openInCdkDialog<ShareModalComponent, ShareModalData, boolean>(ShareModalComponent, { data });
+  }
+
+  it('names the dialog from its title and starts on the chosen access level', async () => {
+    const { container } = await open({ sessionId: 'sess-1', ownerEmail: 'me@x.edu' });
+    expectNamedDialog(container, { name: 'Share conversation' });
+    const initial = container.querySelector<HTMLInputElement>('[cdkFocusInitial]');
+    expect(initial?.name).toBe('accessLevel');
+    expect(initial?.value).toBe('public');
+  });
+
+  it('starts on "Project members" for a task in a project', async () => {
+    const { container } = await open({ sessionId: 'sess-1', ownerEmail: 'me@x.edu', projectId: 'prj_1' });
+    expect(container.querySelectorAll('[cdkFocusInitial]').length).toBe(1);
+    expect(container.querySelector<HTMLInputElement>('[cdkFocusInitial]')?.value).toBe('project');
   });
 });

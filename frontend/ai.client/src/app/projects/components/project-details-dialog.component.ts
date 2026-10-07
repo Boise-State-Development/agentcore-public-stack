@@ -31,6 +31,7 @@ export type ProjectDetailsDialogResult = Project | undefined;
           <input
             id="project-details-name"
             type="text"
+            cdkFocusInitial
             formControlName="name"
             [attr.maxlength]="nameMax"
             autocomplete="off"
