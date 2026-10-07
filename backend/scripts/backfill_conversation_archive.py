@@ -58,6 +58,11 @@ Safety
 * **``--apply`` needs ``--confirm-prefix``** equal to ``--project-prefix``, and
   refuses to run where the deployment has ``CONVERSATION_INDEX_ENABLED`` off:
   that flag is how a deployment opts out of a second copy of its transcripts.
+  **``--archive-without-index``** overrides that refusal, deliberately, for a
+  deployment that wants the archive as a rescue before it has search (the
+  messages route reads the archive whatever the flag says). Nothing is indexed
+  then: the bucket's index rules are disabled, so the objects' events are
+  dropped, and turning the index on later does not index them by itself.
 * **``--user``** restricts everything to one owner, for a first apply.
 * **Idempotent and resumable.** Re-run until ``toWrite`` is 0.
 * **The environment is the deployment's**: app-api's container environment is
@@ -75,6 +80,9 @@ this is also the rescue for sessions 90–365 days old.
         --apply --confirm-prefix dev-boisestateai-v2                                   # one owner
     AWS_PROFILE=dev-ai backend/.venv/bin/python backend/scripts/backfill_conversation_archive.py \\
         --project-prefix dev-boisestateai-v2 --apply --confirm-prefix dev-boisestateai-v2
+    AWS_PROFILE=<prod> backend/.venv/bin/python backend/scripts/backfill_conversation_archive.py \\
+        --project-prefix boisestateai-v2 --apply --confirm-prefix boisestateai-v2 \\
+        --archive-without-index                                                        # index off
 """
 
 from __future__ import annotations
@@ -473,6 +481,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--sleep", type=float, default=DEFAULT_SLEEP_SECONDS,
                         help="seconds after every Memory read and every put")
     parser.add_argument("--out", help="write the per-session plan (with ids) to this local JSONL file")
+    parser.add_argument("--archive-without-index", action="store_true",
+                        help="allow --apply where CONVERSATION_INDEX_ENABLED is off (archive only, nothing indexed)")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -489,7 +499,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     from apis.shared.feature_flags import conversation_index_enabled
 
     if args.apply and not conversation_index_enabled():
-        parser.error(f"{family} has CONVERSATION_INDEX_ENABLED off; this deployment does not archive conversations")
+        if not args.archive_without_index:
+            parser.error(
+                f"{family} has CONVERSATION_INDEX_ENABLED off; this deployment does not archive conversations"
+                " (--archive-without-index writes the archive anyway, without indexing it)"
+            )
+        logger.warning("CONVERSATION_INDEX_ENABLED is off: archiving only, nothing written here will be indexed")
     memory_id = os.environ.get("AGENTCORE_MEMORY_ID", "").strip()
     table_name = os.environ.get("DYNAMODB_SESSIONS_METADATA_TABLE_NAME", "").strip()
     bucket = archive_bucket_name()

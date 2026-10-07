@@ -424,10 +424,56 @@ def test_apply_requires_the_confirm_prefix():
         backfill.main(["--project-prefix", "dev-x", "--apply", "--confirm-prefix", "prod-x"])
 
 
-def test_apply_is_refused_where_the_deployment_has_indexing_off(monkeypatch):
+def _deployment(monkeypatch, index_enabled: str) -> Dict[str, Any]:
+    """A deployment whose app-api environment has the index flag set as given; ``run`` captured."""
+    import bedrock_agentcore.memory
     import prune_sessions_without_events as prune
 
-    monkeypatch.setattr(prune, "load_task_environment", lambda ecs, family: {"CONVERSATION_INDEX_ENABLED": "false"})
+    environment = {
+        "CONVERSATION_INDEX_ENABLED": index_enabled,
+        "AGENTCORE_MEMORY_ID": "mem",
+        "DYNAMODB_SESSIONS_METADATA_TABLE_NAME": TABLE,
+        "CONVERSATION_ARCHIVE_BUCKET_NAME": BUCKET,
+    }
+    for name in environment:  # restored after the test, though main() overwrites them
+        monkeypatch.setenv(name, "")
+    monkeypatch.setattr(prune, "load_task_environment", lambda ecs, family: environment)
     monkeypatch.setattr(boto3, "client", lambda *a, **k: MagicMock())
+    monkeypatch.setattr(boto3, "resource", lambda *a, **k: MagicMock())
+    monkeypatch.setattr(bedrock_agentcore.memory, "MemoryClient", MagicMock())
+    captured: Dict[str, Any] = {}
+
+    def fake_run(**kwargs: Any) -> backfill.BackfillReport:
+        captured.update(kwargs)
+        return backfill.BackfillReport(mode="apply" if kwargs["apply"] else "dry-run")
+
+    monkeypatch.setattr(backfill, "run", fake_run)
+    return captured
+
+
+def test_apply_is_refused_where_the_deployment_has_indexing_off(monkeypatch, capsys):
+    captured = _deployment(monkeypatch, "false")
     with pytest.raises(SystemExit):
         backfill.main(["--project-prefix", "dev-x", "--apply", "--confirm-prefix", "dev-x"])
+    assert "CONVERSATION_INDEX_ENABLED off" in capsys.readouterr().err
+    assert captured == {}
+
+
+def test_archive_without_index_lets_apply_run_where_indexing_is_off(monkeypatch):
+    captured = _deployment(monkeypatch, "false")
+    argv = ["--project-prefix", "dev-x", "--apply", "--confirm-prefix", "dev-x", "--archive-without-index"]
+    assert backfill.main(argv) == 0
+    assert captured["apply"] is True
+
+
+def test_archive_without_index_still_needs_the_confirm_prefix(monkeypatch):
+    captured = _deployment(monkeypatch, "false")
+    with pytest.raises(SystemExit):
+        backfill.main(["--project-prefix", "dev-x", "--apply", "--archive-without-index"])
+    assert captured == {}
+
+
+def test_a_dry_run_needs_no_override_where_indexing_is_off(monkeypatch):
+    captured = _deployment(monkeypatch, "false")
+    assert backfill.main(["--project-prefix", "dev-x"]) == 0
+    assert captured["apply"] is False
