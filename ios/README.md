@@ -15,8 +15,9 @@ Next up, in order:
 1. **Native auth path.** The SPA signs in with an httpOnly session cookie
    through the BFF and the TUI uses an API key against a tools-less endpoint.
    Neither fits a phone. The design (OIDC via `ASWebAuthenticationSession`,
-   plus whatever app-api needs to issue a token the phone can hold) gets a
-   spec under `docs/specs/` before any Swift is written.
+   plus whatever app-api needs to issue a token the phone can hold) is specified in
+   [`docs/specs/native-app-auth.md`](../docs/specs/native-app-auth.md) before
+   any Swift is written.
 2. **API client** in `AgentCoreKit`: sessions, SSE streaming, the event types
    in the root `CLAUDE.md`.
 3. **Chat surface** in the app target.
