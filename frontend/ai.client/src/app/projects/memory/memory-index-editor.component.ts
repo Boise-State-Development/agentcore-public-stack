@@ -114,6 +114,8 @@ export class MemoryIndexEditorComponent {
     const start = area?.selectionStart ?? this.text().length;
     const end = area?.selectionEnd ?? start;
     const ref = this.dialog.open<MemoryLinkPickerResult, MemoryLinkPickerData>(MemoryLinkPickerDialogComponent, {
+      ariaLabel: 'Link to a file',
+      autoFocus: '#memory-link-filter',
       data: { entries: this.entries() },
     });
     const slug = await firstValueFrom(ref.closed);

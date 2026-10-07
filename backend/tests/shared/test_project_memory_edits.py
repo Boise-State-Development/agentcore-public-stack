@@ -11,10 +11,11 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from apis.shared.memory.service import MemorySpacePermissionError, MemoryValidationError
+from apis.shared.memory.service import MemoryValidationError
 from apis.shared.projects.memory_files import (
     ALREADY_EXISTS,
     CHANGED_SINCE,
+    VIEWERS_PROPOSE,
     EditedItem,
     ProjectMemoryFiles,
     render_items_for_save,
@@ -109,8 +110,9 @@ class TestSave:
             files.save(team.project_id, EDITOR, "project", "sis", [EditedItem(text="   ")])
 
     def test_a_viewer_cannot_edit_project_memory_but_edits_their_own_unaudited(self, files, projects, memory, team, audit):
-        with pytest.raises(MemorySpacePermissionError):
+        with pytest.raises(ProposalProjectError) as refused:
             files.save(team.project_id, VIEWER, "project", "sis", [EditedItem(text="A.")])
+        assert (refused.value.status_code, str(refused.value)) == (403, VIEWERS_PROPOSE)
         mine = projects.get_or_create_personal_space(team.project_id, VIEWER)
         result, indexed = files.save(team.project_id, VIEWER, "mine", "prefs", [EditedItem(text="Short answers.")])
         assert (result.ref.version, indexed) == (1, "added")

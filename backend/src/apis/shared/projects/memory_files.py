@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 
 MemoryScope = Literal["project", "mine"]
 NO_PERSONAL_MEMORY = "You haven't kept anything of your own in this project yet."
+VIEWERS_PROPOSE = "Only the project's editors can change project memory directly. Propose the change instead."
 CHANGED_SINCE = "Someone changed this file after you opened it. Reload it and make your change again."
 ALREADY_EXISTS = "A file with that name already exists. Open it to edit it, or pick another name."
 
@@ -84,6 +85,8 @@ class ProjectMemoryFiles:
             raise ProposalProjectError(404, NOT_A_MEMBER)
         if writable and project.status != "active":
             raise ProposalProjectError(409, ARCHIVED)
+        if writable and scope == "project" and role == "viewer":
+            raise ProposalProjectError(403, VIEWERS_PROPOSE)
         if scope == "project":
             if not project.shared_space_id:
                 raise ProposalProjectError(409, NO_SHARED_MEMORY)

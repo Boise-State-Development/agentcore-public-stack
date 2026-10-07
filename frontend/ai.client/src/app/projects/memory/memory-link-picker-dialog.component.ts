@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, ElementRef, afterNextRender, computed, inject, signal, viewChild } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
 import { DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
 import { DialogShellComponent } from '../../components/dialog/dialog-shell.component';
 import { MemoryEntry } from '../models/project.model';
@@ -17,6 +17,9 @@ export type MemoryLinkPickerResult = string | undefined;
 /**
  * Pick a file to link to with `[[name]]` (shared-projects 2.8b).
  *
+ * Open it with `autoFocus: '#memory-link-filter'` and an `ariaLabel`: CDK's container is
+ * the outer dialog, and by default it focuses the first tabbable, the shell's Close button.
+ *
  * The APG combobox pattern: the filter keeps focus while ArrowUp and ArrowDown move the
  * active option (`aria-activedescendant`), Enter picks it, Escape closes. The match count
  * is announced politely as the filter narrows. A file matches on its name, its aliases
@@ -30,7 +33,6 @@ export type MemoryLinkPickerResult = string | undefined;
     <app-dialog-shell title="Link to a file" description="The link reads [[name]] and opens that file." (closed)="cancel()">
       <label for="memory-link-filter" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Find a file</label>
       <input
-        #filterInput
         id="memory-link-filter"
         type="text"
         role="combobox"
@@ -72,7 +74,6 @@ export type MemoryLinkPickerResult = string | undefined;
 export class MemoryLinkPickerDialogComponent {
   private dialogRef = inject<DialogRef<MemoryLinkPickerResult>>(DialogRef);
   private data = inject<MemoryLinkPickerData>(DIALOG_DATA);
-  private filterInput = viewChild.required<ElementRef<HTMLInputElement>>('filterInput');
 
   protected readonly query = signal('');
   protected readonly active = signal(0);
@@ -91,10 +92,6 @@ export class MemoryLinkPickerDialogComponent {
     ];
     return q ? all.filter(o => o.haystack.includes(q)) : all;
   });
-
-  constructor() {
-    afterNextRender(() => this.filterInput().nativeElement.focus());
-  }
 
   protected optionId(i: number): string {
     return `memory-link-option-${i}`;
