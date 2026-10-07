@@ -13,7 +13,7 @@
                 #searchInput
                 type="text"
                 role="combobox"
-                aria-label="Search conversations"
+                aria-label="Search"
                 aria-autocomplete="list"
                 [attr.aria-expanded]="hasRows()"
                 [attr.aria-controls]="hasRows() ? listboxId : null"
@@ -21,7 +21,7 @@
                 [value]="query()"
                 (input)="onInput(searchInput.value)"
                 (keydown)="onKeydown($event)"
-                placeholder="Search conversations"
+                [placeholder]="placeholder()"
                 autocomplete="off"
                 spellcheck="false"
                 enterkeyhint="search"
@@ -49,8 +49,41 @@
             </button>
         </div>
 
-        <!-- Body -->
-        <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain p-2">
+        <!-- Scope chips: a tablist, All selected on open (§6a). One Tab stop;
+             the arrows move between chips, as they do in any tablist. -->
+        <div
+            role="tablist"
+            aria-label="Search in"
+            (keydown)="onScopeKeydown($event)"
+            class="flex shrink-0 gap-1 overflow-x-auto border-b border-gray-200 px-2 py-2 sm:gap-1.5 sm:px-3 dark:border-gray-700"
+        >
+            @for (chip of scopes; track chip) {
+                <button
+                    #scopeTab
+                    type="button"
+                    role="tab"
+                    [id]="scopeTabId(chip)"
+                    [attr.aria-selected]="scope() === chip"
+                    [attr.aria-controls]="panelId"
+                    [attr.tabindex]="scope() === chip ? 0 : -1"
+                    (click)="onScopeClick(chip, $event)"
+                    class="shrink-0 rounded-full px-2.5 py-0.5 text-xs/5 sm:px-3 font-medium text-gray-700 ring-1 ring-gray-300 ring-inset not-aria-selected:hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 aria-selected:bg-gray-900 aria-selected:text-white aria-selected:ring-gray-900 dark:text-gray-300 dark:ring-white/15 dark:not-aria-selected:hover:bg-white/10 dark:aria-selected:bg-white dark:aria-selected:text-gray-900 dark:aria-selected:ring-white"
+                >
+                    {{ scopeLabel(chip) }}
+                </button>
+            }
+        </div>
+
+        <!-- Body. A Tab stop of its own (after the chips), as a tabpanel whose
+             rows are not focusable should be: it lets a keyboard scroll a long
+             list without the arrow keys, which belong to the input. -->
+        <div
+            [id]="panelId"
+            role="tabpanel"
+            tabindex="0"
+            [attr.aria-labelledby]="scopeTabId(scope())"
+            class="min-h-0 flex-1 overflow-y-auto overscroll-contain p-2 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary-500"
+        >
             @for (mode of bodyMode(); track mode) {
                 <div class="search-body-swap">
                     @if (hasRows()) {
@@ -69,34 +102,97 @@
                                             (mousemove)="onRowPointer(item.index)"
                                             class="flex cursor-pointer items-start gap-3 rounded-xl px-3 py-2 aria-selected:bg-gray-100 dark:aria-selected:bg-white/10"
                                         >
-                                            @if (item.row.kind === 'conversation') {
-                                                <ng-icon name="heroChatBubbleLeftRight" class="mt-1 size-4 shrink-0 text-gray-500 dark:text-gray-400" aria-hidden="true" />
-                                                <div class="min-w-0 flex-1">
-                                                    <div class="flex items-center gap-2">
+                                            @switch (item.row.kind) {
+                                                @case ('conversation') {
+                                                    <ng-icon name="heroChatBubbleLeftRight" class="mt-1 size-4 shrink-0 text-gray-500 dark:text-gray-400" aria-hidden="true" />
+                                                    <div class="min-w-0 flex-1">
+                                                        <div class="flex items-center gap-2">
+                                                            <span class="min-w-0 truncate text-sm/6 font-medium text-gray-900 dark:text-white">
+                                                                @for (seg of segments(item.row.title); track $index) {
+                                                                    @if (seg.match) {<mark class="search-mark">{{ seg.text }}</mark>} @else {<span>{{ seg.text }}</span>}
+                                                                }
+                                                            </span>
+                                                            @if (item.row.archived) {
+                                                                <span class="shrink-0 rounded-md bg-gray-100 px-1.5 text-xs/5 font-medium text-gray-700 ring-1 ring-gray-300 ring-inset dark:bg-white/5 dark:text-gray-300 dark:ring-white/15">Archived</span>
+                                                            }
+                                                            <span class="ml-auto shrink-0 pl-2 text-xs/5 text-gray-600 dark:text-gray-400">{{ lastMoved(item.row.lastMessageAt) }}</span>
+                                                        </div>
+                                                        @if (item.row.snippet) {
+                                                            <p class="line-clamp-2 text-sm/5 text-gray-600 dark:text-gray-300">
+                                                                @for (seg of segments(item.row.snippet); track $index) {
+                                                                    @if (seg.match) {<mark class="search-mark">{{ seg.text }}</mark>} @else {<span>{{ seg.text }}</span>}
+                                                                }
+                                                            </p>
+                                                        }
+                                                        @if (item.row.matchCount > 1) {
+                                                            <p class="mt-0.5 text-xs/5 text-gray-600 dark:text-gray-400">{{ item.row.matchCount }} matches in this conversation</p>
+                                                        }
+                                                    </div>
+                                                }
+                                                @case ('project') {
+                                                    <ng-icon name="heroFolder" class="mt-1 size-4 shrink-0 text-gray-500 dark:text-gray-400" aria-hidden="true" />
+                                                    <div class="min-w-0 flex-1">
+                                                        <div class="flex items-center gap-2">
+                                                            <span class="min-w-0 truncate text-sm/6 font-medium text-gray-900 dark:text-white">
+                                                                @for (seg of segments(item.row.name); track $index) {
+                                                                    @if (seg.match) {<mark class="search-mark">{{ seg.text }}</mark>} @else {<span>{{ seg.text }}</span>}
+                                                                }
+                                                            </span>
+                                                            @if (item.row.archived) {
+                                                                <span class="shrink-0 rounded-md bg-gray-100 px-1.5 text-xs/5 font-medium text-gray-700 ring-1 ring-gray-300 ring-inset dark:bg-white/5 dark:text-gray-300 dark:ring-white/15">Archived</span>
+                                                            }
+                                                        </div>
+                                                        @if (item.row.description) {
+                                                            <p class="truncate text-sm/5 text-gray-600 dark:text-gray-300">
+                                                                @for (seg of segments(item.row.description); track $index) {
+                                                                    @if (seg.match) {<mark class="search-mark">{{ seg.text }}</mark>} @else {<span>{{ seg.text }}</span>}
+                                                                }
+                                                            </p>
+                                                        }
+                                                    </div>
+                                                }
+                                                @case ('agent') {
+                                                    <ng-icon name="heroSparkles" class="mt-1 size-4 shrink-0 text-gray-500 dark:text-gray-400" aria-hidden="true" />
+                                                    <div class="min-w-0 flex-1">
+                                                        <div class="flex items-center gap-2">
+                                                            <span class="min-w-0 truncate text-sm/6 font-medium text-gray-900 dark:text-white">
+                                                                @for (seg of segments(item.row.name); track $index) {
+                                                                    @if (seg.match) {<mark class="search-mark">{{ seg.text }}</mark>} @else {<span>{{ seg.text }}</span>}
+                                                                }
+                                                            </span>
+                                                            @if (item.row.tag) {
+                                                                <span class="shrink-0 rounded-md bg-gray-100 px-1.5 text-xs/5 font-medium text-gray-700 ring-1 ring-gray-300 ring-inset dark:bg-white/5 dark:text-gray-300 dark:ring-white/15">{{ item.row.tag }}</span>
+                                                            }
+                                                        </div>
+                                                        @if (item.row.description) {
+                                                            <p class="truncate text-sm/5 text-gray-600 dark:text-gray-300">
+                                                                @for (seg of segments(item.row.description); track $index) {
+                                                                    @if (seg.match) {<mark class="search-mark">{{ seg.text }}</mark>} @else {<span>{{ seg.text }}</span>}
+                                                                }
+                                                            </p>
+                                                        }
+                                                    </div>
+                                                }
+                                                @case ('artifact') {
+                                                    <ng-icon [name]="item.row.icon" class="mt-1 size-4 shrink-0 text-gray-500 dark:text-gray-400" aria-hidden="true" />
+                                                    <div class="flex min-w-0 flex-1 items-center gap-2">
                                                         <span class="min-w-0 truncate text-sm/6 font-medium text-gray-900 dark:text-white">
                                                             @for (seg of segments(item.row.title); track $index) {
                                                                 @if (seg.match) {<mark class="search-mark">{{ seg.text }}</mark>} @else {<span>{{ seg.text }}</span>}
                                                             }
                                                         </span>
-                                                        @if (item.row.archived) {
-                                                            <span class="shrink-0 rounded-md bg-gray-100 px-1.5 text-xs/5 font-medium text-gray-700 ring-1 ring-gray-300 ring-inset dark:bg-white/5 dark:text-gray-300 dark:ring-white/15">Archived</span>
-                                                        }
-                                                        <span class="ml-auto shrink-0 pl-2 text-xs/5 text-gray-600 dark:text-gray-400">{{ lastMoved(item.row.lastMessageAt) }}</span>
+                                                        <span class="shrink-0 rounded-md bg-gray-100 px-1.5 text-xs/5 font-medium text-gray-700 ring-1 ring-gray-300 ring-inset dark:bg-white/5 dark:text-gray-300 dark:ring-white/15">{{ item.row.typeLabel }}</span>
+                                                        <span class="ml-auto shrink-0 pl-2 text-xs/5 text-gray-600 dark:text-gray-400">{{ lastMoved(item.row.updatedAt) }}</span>
                                                     </div>
-                                                    @if (item.row.snippet) {
-                                                        <p class="line-clamp-2 text-sm/5 text-gray-600 dark:text-gray-300">
-                                                            @for (seg of segments(item.row.snippet); track $index) {
-                                                                @if (seg.match) {<mark class="search-mark">{{ seg.text }}</mark>} @else {<span>{{ seg.text }}</span>}
-                                                            }
-                                                        </p>
-                                                    }
-                                                    @if (item.row.matchCount > 1) {
-                                                        <p class="mt-0.5 text-xs/5 text-gray-600 dark:text-gray-400">{{ item.row.matchCount }} matches in this conversation</p>
-                                                    }
-                                                </div>
-                                            } @else {
-                                                <ng-icon [name]="item.row.icon" class="mt-1 size-4 shrink-0 text-gray-500 dark:text-gray-400" aria-hidden="true" />
-                                                <span class="text-sm/6 font-medium text-gray-900 dark:text-white">{{ item.row.label }}</span>
+                                                }
+                                                @case ('more') {
+                                                    <ng-icon name="heroArrowRight" class="mt-1 size-4 shrink-0 text-gray-500 dark:text-gray-400" aria-hidden="true" />
+                                                    <span class="text-sm/6 font-medium text-gray-700 dark:text-gray-200">{{ item.row.label }}</span>
+                                                }
+                                                @case ('action') {
+                                                    <ng-icon [name]="item.row.icon" class="mt-1 size-4 shrink-0 text-gray-500 dark:text-gray-400" aria-hidden="true" />
+                                                    <span class="text-sm/6 font-medium text-gray-900 dark:text-white">{{ item.row.label }}</span>
+                                                }
                                             }
                                         </div>
                                     }
@@ -108,12 +204,12 @@
                     @if (titleMatchesOnly()) {
                         <p class="px-3 py-2 text-xs/5 text-gray-600 dark:text-gray-400">Showing title matches only</p>
                     }
-                    @if (error()) {
-                        <p class="px-3 py-2 text-sm/6 text-state-danger-600 dark:text-state-danger-400">Couldn't search conversations. Loaded titles are still shown.</p>
+                    @for (failure of scopeErrors(); track failure.scope) {
+                        <p class="px-3 py-2 text-sm/6 text-state-danger-600 dark:text-state-danger-400">{{ failure.message }}</p>
                     }
                     @if (showNoMatches()) {
-                        <p class="px-3 py-8 text-center text-sm/6 text-gray-600 dark:text-gray-400">No matches</p>
-                    } @else if (hasQuery() && !hasRows()) {
+                        <p class="px-3 py-8 text-center text-sm/6 text-gray-600 dark:text-gray-400">{{ noMatchesText() }}</p>
+                    } @else if (showsResults() && !hasRows()) {
                         <p class="px-3 py-8 text-center text-sm/6 text-gray-600 dark:text-gray-400">Searching…</p>
                     }
                 </div>
@@ -124,7 +220,8 @@
         <div class="hidden shrink-0 items-center gap-4 border-t border-gray-200 px-4 py-2 text-xs/5 text-gray-600 sm:flex dark:border-gray-700 dark:text-gray-400" aria-hidden="true">
             <span><kbd class="search-kbd">Esc</kbd> close</span>
             <span><kbd class="search-kbd">↑</kbd><kbd class="search-kbd">↓</kbd> move</span>
-            <span><kbd class="search-kbd">↵</kbd> {{ hasQuery() && activeIndex() < 0 ? 'search all text' : 'open' }}</span>
+            <span><kbd class="search-kbd">↵</kbd> {{ hasQuery() && conversationsVisible() && activeIndex() < 0 ? 'search all text' : 'open' }}</span>
+            <span><kbd class="search-kbd">←</kbd><kbd class="search-kbd">→</kbd> change scope</span>
         </div>
 
         <div class="sr-only" role="status" aria-live="polite">{{ liveStatus() }}</div>

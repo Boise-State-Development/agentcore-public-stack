@@ -15,6 +15,7 @@ import { SidenavService } from '../../services/sidenav/sidenav.service';
 import { TooltipDirective } from '../tooltip/tooltip.directive';
 import { BrandingService } from '../../../branding/branding.service';
 import { SearchDialogService } from '../search/search-dialog.service';
+import { searchShortcutAria, searchShortcutLabel } from '../search/search-shortcut';
 
 @Component({
   selector: 'app-sidenav',
@@ -34,8 +35,8 @@ export class Sidenav {
   private readonly searchDialog = inject(SearchDialogService);
 
   /** The search shortcut as this platform spells it, for the button's tooltip. */
-  protected readonly searchShortcutLabel = isApplePlatform() ? '⌘K' : 'Ctrl+K';
-  protected readonly searchShortcutAria = isApplePlatform() ? 'Meta+K' : 'Control+K';
+  protected readonly searchShortcutLabel = searchShortcutLabel();
+  protected readonly searchShortcutAria = searchShortcutAria();
 
   /** Whether the branding logo image failed to load (Requirement 2.8). */
   protected logoLoadFailed = signal(false);
@@ -129,9 +130,4 @@ export class Sidenav {
     await this.bffSession.logout();
     this.router.navigate(['/auth/login']);
   }
-}
-
-function isApplePlatform(): boolean {
-  if (typeof navigator === 'undefined') return false;
-  return /mac|iphone|ipad|ipod/i.test(navigator.platform || navigator.userAgent);
 }

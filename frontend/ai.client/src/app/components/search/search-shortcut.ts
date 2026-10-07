@@ -30,3 +30,18 @@ export function searchShortcutHandoff(target: EventTarget | null): string | null
   if (target instanceof HTMLInputElement && target.hasAttribute(SEARCH_HANDOFF_ATTRIBUTE)) return target.value;
   return '';
 }
+
+function isApplePlatform(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  return /mac|iphone|ipad|ipod/i.test(navigator.platform || navigator.userAgent);
+}
+
+/** The shortcut as this platform spells it, for a search button's tooltip. */
+export function searchShortcutLabel(): string {
+  return isApplePlatform() ? '⌘K' : 'Ctrl+K';
+}
+
+/** The shortcut as `aria-keyshortcuts` spells it. */
+export function searchShortcutAria(): string {
+  return isApplePlatform() ? 'Meta+K' : 'Control+K';
+}

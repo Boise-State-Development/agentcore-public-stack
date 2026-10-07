@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Component, computed, signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { RouterOutlet, provideRouter } from '@angular/router';
@@ -9,6 +9,8 @@ import { SessionService } from './auth/session.service';
 import { SessionService as SessionListService } from './session/services/session/session.service';
 import { DockedPaneService } from './session/services/docked-pane/docked-pane.service';
 import { BrandingService } from '../branding/branding.service';
+import { FEATURES } from './services/features';
+import { SearchDialogService } from './components/search/search-dialog.service';
 
 // The shell is loaded through a dynamic import, as in app.spec.ts, which
 // transforms the App graph on demand; give it the same budget.
@@ -96,5 +98,29 @@ describe('App shell: hidden sidenav panels are inert', () => {
     // Still mounted for the exit animation, but no longer reachable.
     expect(sidenav.isVisible()).toBe(true);
     expect(drawer.hasAttribute('inert')).toBe(true);
+  }, IMPORT_TIMEOUT_MS);
+
+  it('keeps search reachable while the desktop sidenav (and its header) is collapsed', async () => {
+    const open = vi.fn().mockResolvedValue(undefined);
+    TestBed.overrideProvider(FEATURES, { useValue: { projects: false, conversationSearch: true } });
+    TestBed.overrideProvider(SearchDialogService, { useValue: { open, isOpen: () => false } });
+    const fixture = await render();
+    const root = fixture.nativeElement as HTMLElement;
+    expect(root.querySelector('button[aria-label="Search"]')).toBeNull();
+
+    TestBed.inject(SidenavService).collapse();
+    fixture.detectChanges();
+    const button = root.querySelector('button[aria-label="Search"]') as HTMLButtonElement;
+    expect(button.getAttribute('aria-keyshortcuts')).toMatch(/^(Meta|Control)\+K$/);
+    button.click();
+    expect(open).toHaveBeenCalledWith();
+  }, IMPORT_TIMEOUT_MS);
+
+  it('has no collapsed search button in a build with search off', async () => {
+    TestBed.overrideProvider(FEATURES, { useValue: { projects: false, conversationSearch: false } });
+    const fixture = await render();
+    TestBed.inject(SidenavService).collapse();
+    fixture.detectChanges();
+    expect((fixture.nativeElement as HTMLElement).querySelector('button[aria-label="Search"]')).toBeNull();
   }, IMPORT_TIMEOUT_MS);
 });
