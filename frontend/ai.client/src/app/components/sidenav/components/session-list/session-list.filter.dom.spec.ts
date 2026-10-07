@@ -13,6 +13,7 @@ import { ProjectsService } from '../../../../projects/services/projects.service'
 import { FEATURES } from '../../../../services/features';
 import { SESSION_FILTER_STORAGE_KEY } from './session-title-filter';
 import { SessionList } from './session-list';
+import { SearchDialogService } from '../../../search/search-dialog.service';
 
 /**
  * The filter as rendered: the real template, driven by real input and keydown
@@ -38,8 +39,10 @@ describe('SessionList title filter (rendered)', () => {
 
   let merged: ReturnType<typeof signal<{ sessions: typeof sessions; nextToken: string | null }>>;
   let fixture: ComponentFixture<SessionList>;
+  let searchDialog: { open: ReturnType<typeof vi.fn> };
 
   beforeEach(() => {
+    searchDialog = { open: vi.fn().mockResolvedValue(undefined) };
     TestBed.resetTestingModule();
     sessionStorage.removeItem(SESSION_FILTER_STORAGE_KEY);
     merged = signal({ sessions, nextToken: null as string | null });
@@ -72,7 +75,8 @@ describe('SessionList title filter (rendered)', () => {
           provide: ProjectsService,
           useValue: { projects$: signal([]), available$: signal(null), loading$: signal(false), load: vi.fn() },
         },
-        { provide: FEATURES, useValue: { projects: false } },
+        { provide: FEATURES, useValue: { projects: false, conversationSearch: false } },
+        { provide: SearchDialogService, useValue: searchDialog },
       ],
     });
   });
@@ -173,5 +177,34 @@ describe('SessionList title filter (rendered)', () => {
     const root = await render();
     expect(input(root).value).toBe('window');
     expect(titles(root)).toEqual(['Window functions in Postgres']);
+  });
+
+  function pressEnter(root: HTMLElement): KeyboardEvent {
+    const event = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
+    input(root).dispatchEvent(event);
+    return event;
+  }
+
+  it('Enter hands the query to the search dialog when conversation search is on', async () => {
+    TestBed.overrideProvider(FEATURES, { useValue: { projects: false, conversationSearch: true } });
+    const root = await render();
+    await type(root, 'kubernetes');
+
+    const event = pressEnter(root);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(searchDialog.open).toHaveBeenCalledWith('kubernetes');
+    expect(input(root).hasAttribute('data-search-handoff')).toBe(true);
+  });
+
+  it('Enter does nothing with conversation search off', async () => {
+    const root = await render();
+    await type(root, 'bio');
+
+    const event = pressEnter(root);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(searchDialog.open).not.toHaveBeenCalled();
+    expect(input(root).hasAttribute('data-search-handoff')).toBe(false);
   });
 });

@@ -13,5 +13,7 @@ export const environment = {
     // with the development GitHub environment's CDK_*_ENABLED variables.
     features: {
         projects: true,
+        // Off until the dev archive has been backfilled (conversation-search §7, PR-3).
+        conversationSearch: false,
     } satisfies FeatureFlags,
 };

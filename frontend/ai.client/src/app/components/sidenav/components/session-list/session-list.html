@@ -16,6 +16,7 @@
                     [value]="query()"
                     (input)="onQueryInput(filterInput.value)"
                     (keydown)="onQueryKeydown($event)"
+                    [attr.data-search-handoff]="searchOn ? '' : null"
                     placeholder="Search conversations"
                     aria-label="Search conversations by title"
                     autocomplete="off"

@@ -242,6 +242,25 @@ describe('Sidenav — nav entries', () => {
     expect(el.querySelector('app-notification-bell')).toBeNull();
   });
 
+  it('offers the search button in a build with conversation search on', async () => {
+    TestBed.overrideProvider(FEATURES, { useValue: { projects: false, conversationSearch: true } });
+    const { SearchDialogService } = await import('../search/search-dialog.service');
+    const open = vi.fn().mockResolvedValue(undefined);
+    TestBed.overrideProvider(SearchDialogService, { useValue: { open } });
+    const fixture = await renderSidenav();
+    const button = (fixture.nativeElement as HTMLElement).querySelector('button[aria-label="Search conversations"]') as HTMLButtonElement;
+    expect(button).not.toBeNull();
+    expect(button.getAttribute('aria-keyshortcuts')).toMatch(/^(Meta|Control)\+K$/);
+    button.click();
+    expect(open).toHaveBeenCalledWith();
+  });
+
+  it('has no search button in a build with conversation search off', async () => {
+    TestBed.overrideProvider(FEATURES, { useValue: { projects: false, conversationSearch: false } });
+    const fixture = await renderSidenav();
+    expect((fixture.nativeElement as HTMLElement).querySelector('button[aria-label="Search conversations"]')).toBeNull();
+  });
+
   it('renders the Agents nav entry for a NON-admin', async () => {
     mockUserService.isAdmin.set(false);
     mockUserService.canAccessAdmin.set(false);

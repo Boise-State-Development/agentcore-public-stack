@@ -1,0 +1,132 @@
+<div class="search-backdrop fixed inset-0 bg-gray-900/40 dark:bg-gray-900/70" aria-hidden="true"></div>
+
+<!-- Top-anchored on sm and up, so the input stays put while results grow
+     beneath it; below sm the panel is a full-height sheet. -->
+<div class="fixed inset-0 z-10 flex justify-center sm:items-start sm:px-6 sm:pt-24" appDialogDismiss (dismissed)="close()">
+    <div
+        class="search-panel flex h-dvh w-full flex-col overflow-hidden bg-white text-left sm:h-auto sm:max-h-[70dvh] sm:max-w-2xl sm:rounded-2xl sm:border sm:border-gray-200 sm:shadow-xl dark:bg-gray-800 sm:dark:border-gray-700"
+    >
+        <!-- Input row -->
+        <div class="flex shrink-0 items-center gap-2 border-b border-gray-200 pl-4 pr-2 dark:border-gray-700">
+            <ng-icon name="heroMagnifyingGlass" class="size-5 shrink-0 text-gray-500 dark:text-gray-400" aria-hidden="true" />
+            <input
+                #searchInput
+                type="text"
+                role="combobox"
+                aria-label="Search conversations"
+                aria-autocomplete="list"
+                [attr.aria-expanded]="hasRows()"
+                [attr.aria-controls]="hasRows() ? listboxId : null"
+                [attr.aria-activedescendant]="activeOptionId()"
+                [value]="query()"
+                (input)="onInput(searchInput.value)"
+                (keydown)="onKeydown($event)"
+                placeholder="Search conversations"
+                autocomplete="off"
+                spellcheck="false"
+                enterkeyhint="search"
+                class="h-14 min-w-0 flex-1 border-0 bg-transparent px-0 text-base/6 text-gray-900 placeholder:text-gray-500 focus:outline-hidden focus:ring-0 sm:text-sm/6 dark:text-white dark:placeholder:text-gray-400"
+            />
+            @if (textPending()) {
+                <ng-icon name="heroArrowPath" class="size-4 shrink-0 animate-spin text-gray-500 motion-reduce:animate-none dark:text-gray-400" aria-hidden="true" />
+            }
+            @if (query()) {
+                <button
+                    type="button"
+                    (click)="clearQuery()"
+                    class="shrink-0 rounded-2xl px-2 py-1 text-xs/5 font-medium text-gray-600 hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white"
+                >
+                    Clear
+                </button>
+            }
+            <button
+                type="button"
+                (click)="close()"
+                aria-label="Close search"
+                class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-500 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+            >
+                <ng-icon name="heroXMark" class="size-5" aria-hidden="true" />
+            </button>
+        </div>
+
+        <!-- Body -->
+        <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain p-2">
+            @for (mode of bodyMode(); track mode) {
+                <div class="search-body-swap">
+                    @if (hasRows()) {
+                        <div #listbox [id]="listboxId" role="listbox" aria-label="Search results">
+                            @for (section of sections(); track section.id) {
+                                <div role="group" [attr.aria-labelledby]="section.id + '-label'" class="pb-1">
+                                    <div [id]="section.id + '-label'" role="presentation" class="px-3 pb-1 pt-2 text-xs/5 font-medium text-gray-600 dark:text-gray-300">
+                                        {{ section.label }}
+                                    </div>
+                                    @for (item of section.rows; track item.row.key) {
+                                        <div
+                                            role="option"
+                                            [id]="optionId(item.index)"
+                                            [attr.aria-selected]="activeIndex() === item.index"
+                                            (click)="activate(item.row)"
+                                            (mousemove)="onRowPointer(item.index)"
+                                            class="flex cursor-pointer items-start gap-3 rounded-xl px-3 py-2 aria-selected:bg-gray-100 dark:aria-selected:bg-white/10"
+                                        >
+                                            @if (item.row.kind === 'conversation') {
+                                                <ng-icon name="heroChatBubbleLeftRight" class="mt-1 size-4 shrink-0 text-gray-500 dark:text-gray-400" aria-hidden="true" />
+                                                <div class="min-w-0 flex-1">
+                                                    <div class="flex items-center gap-2">
+                                                        <span class="min-w-0 truncate text-sm/6 font-medium text-gray-900 dark:text-white">
+                                                            @for (seg of segments(item.row.title); track $index) {
+                                                                @if (seg.match) {<mark class="search-mark">{{ seg.text }}</mark>} @else {<span>{{ seg.text }}</span>}
+                                                            }
+                                                        </span>
+                                                        @if (item.row.archived) {
+                                                            <span class="shrink-0 rounded-md bg-gray-100 px-1.5 text-xs/5 font-medium text-gray-700 ring-1 ring-gray-300 ring-inset dark:bg-white/5 dark:text-gray-300 dark:ring-white/15">Archived</span>
+                                                        }
+                                                        <span class="ml-auto shrink-0 pl-2 text-xs/5 text-gray-600 dark:text-gray-400">{{ lastMoved(item.row.lastMessageAt) }}</span>
+                                                    </div>
+                                                    @if (item.row.snippet) {
+                                                        <p class="line-clamp-2 text-sm/5 text-gray-600 dark:text-gray-300">
+                                                            @for (seg of segments(item.row.snippet); track $index) {
+                                                                @if (seg.match) {<mark class="search-mark">{{ seg.text }}</mark>} @else {<span>{{ seg.text }}</span>}
+                                                            }
+                                                        </p>
+                                                    }
+                                                    @if (item.row.matchCount > 1) {
+                                                        <p class="mt-0.5 text-xs/5 text-gray-600 dark:text-gray-400">{{ item.row.matchCount }} matches in this conversation</p>
+                                                    }
+                                                </div>
+                                            } @else {
+                                                <ng-icon [name]="item.row.icon" class="mt-1 size-4 shrink-0 text-gray-500 dark:text-gray-400" aria-hidden="true" />
+                                                <span class="text-sm/6 font-medium text-gray-900 dark:text-white">{{ item.row.label }}</span>
+                                            }
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        </div>
+                    }
+
+                    @if (titleMatchesOnly()) {
+                        <p class="px-3 py-2 text-xs/5 text-gray-600 dark:text-gray-400">Showing title matches only</p>
+                    }
+                    @if (error()) {
+                        <p class="px-3 py-2 text-sm/6 text-state-danger-600 dark:text-state-danger-400">Couldn't search conversations. Loaded titles are still shown.</p>
+                    }
+                    @if (showNoMatches()) {
+                        <p class="px-3 py-8 text-center text-sm/6 text-gray-600 dark:text-gray-400">No matches</p>
+                    } @else if (hasQuery() && !hasRows()) {
+                        <p class="px-3 py-8 text-center text-sm/6 text-gray-600 dark:text-gray-400">Searching…</p>
+                    }
+                </div>
+            }
+        </div>
+
+        <!-- Key hints: what makes the keyboard path discoverable (§6a). -->
+        <div class="hidden shrink-0 items-center gap-4 border-t border-gray-200 px-4 py-2 text-xs/5 text-gray-600 sm:flex dark:border-gray-700 dark:text-gray-400" aria-hidden="true">
+            <span><kbd class="search-kbd">Esc</kbd> close</span>
+            <span><kbd class="search-kbd">↑</kbd><kbd class="search-kbd">↓</kbd> move</span>
+            <span><kbd class="search-kbd">↵</kbd> {{ hasQuery() && activeIndex() < 0 ? 'search all text' : 'open' }}</span>
+        </div>
+
+        <div class="sr-only" role="status" aria-live="polite">{{ liveStatus() }}</div>
+    </div>
+</div>

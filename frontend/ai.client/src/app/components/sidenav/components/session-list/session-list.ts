@@ -22,6 +22,7 @@ import { InViewDirective } from './in-view.directive';
 import { ProjectsService } from '../../../../projects/services/projects.service';
 import { FEATURES } from '../../../../services/features';
 import { SessionTitleFilter, UNTITLED_SESSION_TITLE, filterSessionsByTitle } from './session-title-filter';
+import { SearchDialogService } from '../../../search/search-dialog.service';
 
 /**
  * One row of a time bucket: a plain conversation, or the tasks of one project
@@ -76,6 +77,9 @@ export class SessionList {
   private projectsService = inject(ProjectsService);
   /** With Projects off in this build, project tasks list as plain rows (no heading to a dead link). */
   private readonly projectsOn = inject(FEATURES).projects;
+  /** With conversation search on, Enter in the filter box hands its query to the search dialog. */
+  protected readonly searchOn = inject(FEATURES).conversationSearch;
+  private readonly searchDialog = inject(SearchDialogService);
 
   /** Project names for the group headings; a project not in the list reads "Project". */
   private readonly projectNames = computed(
@@ -160,8 +164,18 @@ export class SessionList {
     this.titleFilter.setQuery(value);
   }
 
-  /** Escape clears a held query; with nothing to clear it is left to whatever sits above. */
+  /**
+   * Escape clears a held query; with nothing to clear it is left to whatever sits above.
+   * Enter, with conversation search on, opens the search dialog with the query, so a
+   * quick filter that found nothing becomes a full search in one keystroke.
+   */
   protected onQueryKeydown(event: KeyboardEvent): void {
+    if (event.key === 'Enter' && this.searchOn && !event.isComposing) {
+      event.preventDefault();
+      this.sidenavService.close();
+      void this.searchDialog.open(this.query());
+      return;
+    }
     if (event.key !== 'Escape' || !this.query()) return;
     event.preventDefault();
     event.stopPropagation();

@@ -364,6 +364,14 @@ export class ChatContainerComponent {
     this.messageListComponent()?.scrollToLastUserMessage(behavior);
   }
 
+  /**
+   * Anchor one message at the top of the viewport (a search result's turn).
+   * True when the message was rendered and scrolled to.
+   */
+  scrollToMessage(messageId: string, behavior: ScrollBehavior = 'smooth'): boolean {
+    return this.messageListComponent()?.scrollToMessage(messageId, behavior) ?? false;
+  }
+
   // Event handlers
   onMessageSubmitted(event: { content: string; timestamp: Date; fileUploadIds?: string[]; mentionAgentId?: string; invokedSkillIds?: string[] }) {
     this.messageSubmitted.emit(event);
