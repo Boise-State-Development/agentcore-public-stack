@@ -3,6 +3,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
 import { ShareModalComponent, ShareModalData } from './share-modal.component';
 import { ShareService, ShareResponse, ShareListResponse } from '../../services/share/share.service';
+import { ProjectApiService } from '../../../projects/services/project-api.service';
+import { of, throwError } from 'rxjs';
 
 describe('ShareModalComponent', () => {
   let component: ShareModalComponent;
@@ -43,6 +45,7 @@ describe('ShareModalComponent', () => {
       imports: [ShareModalComponent],
       providers: [
         { provide: ShareService, useValue: mockShareService },
+        { provide: ProjectApiService, useValue: { members: vi.fn() } },
         { provide: DIALOG_DATA, useValue: mockDialogData },
         { provide: DialogRef, useValue: mockDialogRef },
       ],
@@ -355,15 +358,31 @@ describe('ShareModalComponent (a task in a project)', () => {
     createShare: vi.fn(),
     listSharesForSession: vi.fn(),
   };
+  const projectApi = { members: vi.fn() };
+  const MEMBERS = [
+    { email: 'owner@x.edu', name: 'Olive Owner', role: 'owner', hasSignedIn: true },
+    { email: 'me@x.edu', name: 'Me', role: 'editor', hasSignedIn: true },
+    { email: 'ann@x.edu', name: 'Ann Lee', role: 'viewer', hasSignedIn: true },
+    { email: 'new@x.edu', name: null, role: 'viewer', hasSignedIn: false },
+  ];
+  const RESULT = {
+    shareId: 'sh_1', sessionId: 'sess-9', ownerId: 'u', accessLevel: 'project', projectId: 'prj_1',
+    createdAt: '2026-09-24T00:00:00Z', shareUrl: '/shared/sh_1',
+  } as ShareResponse;
+  const el = () => fixture.nativeElement as HTMLElement;
+  const radio = (name: string, value: string) =>
+    el().querySelector<HTMLInputElement>(`input[name=${name}][value=${value}]`)!;
 
   beforeEach(async () => {
     TestBed.resetTestingModule();
     vi.clearAllMocks();
     shareService.listSharesForSession.mockResolvedValue({ shares: [] });
+    projectApi.members.mockReturnValue(of({ members: MEMBERS, canManage: false }));
     TestBed.configureTestingModule({
       imports: [ShareModalComponent],
       providers: [
         { provide: ShareService, useValue: shareService },
+        { provide: ProjectApiService, useValue: projectApi },
         { provide: DIALOG_DATA, useValue: { sessionId: 'sess-9', ownerEmail: 'me@x.edu', projectId: 'prj_1' } as ShareModalData },
         { provide: DialogRef, useValue: { close: vi.fn() } },
       ],
@@ -404,5 +423,75 @@ describe('ShareModalComponent (a task in a project)', () => {
     await (component as any).onShare();
     fixture.detectChanges();
     expect((fixture.nativeElement as HTMLElement).textContent).toContain(detail);
+  });
+
+  describe('letting people know (2.5b)', () => {
+    it('tells nobody by default and loads no members', async () => {
+      shareService.createShare.mockResolvedValue(RESULT);
+      expect(radio('notifyMode', 'none').checked).toBe(true);
+      await (component as any).onShare();
+      expect(projectApi.members).not.toHaveBeenCalled();
+      expect(shareService.createShare.mock.calls[0][3].notify).toBeUndefined();
+    });
+
+    it('sends everyone and the trimmed note', async () => {
+      shareService.createShare.mockResolvedValue(RESULT);
+      radio('notifyMode', 'all').click();
+      const note = el().querySelector<HTMLTextAreaElement>('#share-note')!;
+      note.value = '  Can you take the vendor reply?  ';
+      note.dispatchEvent(new Event('input'));
+      fixture.detectChanges();
+      await (component as any).onShare();
+      fixture.detectChanges();
+      expect(shareService.createShare).toHaveBeenCalledWith('sess-9', 'project', undefined, {
+        suppressErrorToast: true,
+        notify: { all: true },
+        note: 'Can you take the vendor reply?',
+      });
+      expect(el().textContent).toContain('Everyone in the project will be notified.');
+    });
+
+    it('lists members other than the sharer and sends the ones chosen', async () => {
+      shareService.createShare.mockResolvedValue(RESULT);
+      radio('notifyMode', 'some').click();
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      const rows = Array.from(el().querySelectorAll('ul[aria-label="Project members to notify"] li'));
+      expect(rows.map(r => r.textContent?.replace(/\s+/g, ' ').trim())).toEqual([
+        'Olive Owner owner@x.edu', 'Ann Lee ann@x.edu', 'new@x.edu',
+      ]);
+      // Nobody chosen yet: "Choose people" with no one is a mistake, not "tell no one".
+      expect((component as any).canSubmit()).toBe(false);
+
+      rows[1].querySelector<HTMLInputElement>('input[type=checkbox]')!.click();
+      fixture.detectChanges();
+      expect(el().textContent).toContain('1 person selected');
+      await (component as any).onShare();
+      expect(shareService.createShare.mock.calls[0][3].notify).toEqual({ emails: ['ann@x.edu'] });
+    });
+
+    it('filters members by name or email', async () => {
+      radio('notifyMode', 'some').click();
+      await fixture.whenStable();
+      (component as any).memberFilter.set('LEE');
+      fixture.detectChanges();
+      expect((component as any).filteredMembers().map((m: { email: string }) => m.email)).toEqual(['ann@x.edu']);
+    });
+
+    it('says so when the members cannot be loaded', async () => {
+      projectApi.members.mockReturnValue(throwError(() => ({ status: 500 })));
+      radio('notifyMode', 'some').click();
+      await fixture.whenStable();
+      fixture.detectChanges();
+      expect(el().textContent).toContain('Couldn’t load the project’s members');
+    });
+
+    it('offers no notify section for a public link', () => {
+      radio('accessLevel', 'public').click();
+      fixture.detectChanges();
+      expect(el().querySelector('input[name=notifyMode]')).toBeNull();
+      expect(el().querySelector('#share-note')).toBeNull();
+    });
   });
 });

@@ -17,9 +17,19 @@ import type { RenderToken } from '../artifacts/artifact-http.service';
  */
 export type ShareAccessLevel = 'public' | 'specific' | 'project';
 
+/** Who a project share tells (2.5b): everyone, or the members named. Omitted, nobody is told. */
+export type ShareNotify = { all: true } | { emails: string[] };
+
+/** The longest note a project share carries (`MAX_SHARE_NOTE_CHARS`). */
+export const MAX_SHARE_NOTE_CHARS = 280;
+
 export interface CreateShareRequest {
   accessLevel: ShareAccessLevel;
   allowedEmails?: string[];
+  /** Project shares only. */
+  notify?: ShareNotify;
+  /** Project shares only: shown with the task and in the notification. */
+  note?: string;
 }
 
 export interface UpdateShareRequest {
@@ -108,11 +118,14 @@ export class ShareService {
     sessionId: string,
     accessLevel: ShareAccessLevel,
     allowedEmails?: string[],
-    options?: { suppressErrorToast?: boolean },
+    options?: { suppressErrorToast?: boolean; notify?: ShareNotify; note?: string },
   ): Promise<ShareResponse> {
+    const note = options?.note?.trim();
     const body: CreateShareRequest = {
       accessLevel,
       ...(allowedEmails?.length ? { allowedEmails } : {}),
+      ...(options?.notify ? { notify: options.notify } : {}),
+      ...(note ? { note } : {}),
     };
 
     return firstValueFrom(

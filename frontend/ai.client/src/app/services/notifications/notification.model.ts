@@ -11,7 +11,8 @@ export type NotificationKind =
   | 'project_ownership_transferred'
   | 'project_archived'
   | 'project_restored'
-  | 'project_member_left';
+  | 'project_member_left'
+  | 'project_task_shared';
 
 export interface AppNotification {
   notificationId: string;
@@ -23,8 +24,11 @@ export interface AppNotification {
   actorEmail?: string | null;
   /** Their display name; null when the directory has none. */
   actorName?: string | null;
-  /** `role` for invitations, role changes and a member leaving (the role they had). */
-  payload: { role?: string } & Record<string, unknown>;
+  /**
+   * `role` for invitations, role changes and a member leaving (the role they had);
+   * `shareId`, `title` and an optional `note` for a shared task.
+   */
+  payload: { role?: string; shareId?: string; title?: string; note?: string } & Record<string, unknown>;
   createdAt: string;
   readAt?: string | null;
 }

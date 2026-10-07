@@ -24,6 +24,8 @@ describe('describeNotification', () => {
     [notif({ kind: 'project_archived', payload: {} }), 'ann@x.edu archived Enrollment Sync. It’s read-only until it’s restored.'],
     [notif({ kind: 'project_restored', payload: {} }), 'ann@x.edu restored Enrollment Sync.'],
     [notif({ kind: 'project_member_left', payload: { role: 'viewer' } }), 'ann@x.edu left Enrollment Sync.'],
+    [notif({ kind: 'project_task_shared', payload: { shareId: 'sh-1', title: 'Vendor reply' } }), 'ann@x.edu shared “Vendor reply” with you in Enrollment Sync.'],
+    [notif({ kind: 'project_task_shared', payload: { shareId: 'sh-1' } }), 'ann@x.edu shared “a task” with you in Enrollment Sync.'],
     [notif({ actorEmail: null, projectName: null, payload: {} }), 'Someone added you to a project.'],
     [notif({ actorName: 'Ann Lee' }), 'Ann Lee added you to Enrollment Sync as an editor.'],
   ])('%#: reads as a sentence', (n, text) => {
@@ -175,6 +177,20 @@ describe('NotificationBellComponent', () => {
     const { component } = render();
     component.open(notif({ kind: 'project_member_left' }));
     expect(navigate).toHaveBeenCalledWith(['/projects', 'prj_1', 'members']);
+  });
+
+  it('a shared task opens the shared view, revoked or not', () => {
+    const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+    const { component } = render();
+    component.open(notif({ kind: 'project_task_shared', payload: { shareId: 'sh-1', title: 'T' } }));
+    expect(navigate).toHaveBeenCalledWith(['/shared', 'sh-1']);
+    expect(sidenav.close).toHaveBeenCalled();
+  });
+
+  it('shows a shared task’s note under the sentence', () => {
+    const { component } = render();
+    expect(component.noteOf(notif({ kind: 'project_task_shared', payload: { shareId: 's', note: 'Over to you' } }))).toBe('Over to you');
+    expect(component.noteOf(notif({ payload: { note: 'ignored' } }))).toBeNull();
   });
 
   it('a removal is only marked read: there is no project to open', () => {

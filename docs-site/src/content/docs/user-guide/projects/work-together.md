@@ -75,15 +75,21 @@ Open the task's menu (the chevron next to its title), choose **Share**, and pick
   project**, with who shared them and when.
 - To stop sharing, use the trash icon next to a task you shared.
 
+### Let people know
+
+Sharing tells nobody unless you ask it to. Under **Let people know**, choose
+**Everyone** to notify every member, or **Choose people** to pick members from
+a list. You can only notify people already in the project.
+
+Add a **note** (up to 280 characters) to say what you need, such as "Can you
+check the spring dates?" The note appears under the task in **Shared with the
+project** and in the notification. Sharing the task again replaces the note
+along with the snapshot.
+
 ![The Tasks tab: your private tasks on top, and tasks shared with the project below, each with Continue in my own task.](../../../../assets/user-guide/projects/tasks.jpg)
 
 **Public link** and **Limited share** are also offered. They share the task
 outside the project, so think twice before using them for project work.
-
-:::note[Sharing doesn't notify anyone]
-Teammates aren't notified when you share a task. If you need someone to look at
-it, tell them, and include the task's title.
-:::
 
 ## Pick up someone else's work
 
@@ -199,13 +205,15 @@ The bell next to your name in the sidebar shows when someone:
 - makes you the owner
 - archives or restores a project you're in
 - leaves a project you own
+- shares a task and chooses to notify you, with their note if they left one
 
 ![The notifications panel: "made you the owner" and "added you … as an editor".](../../../../assets/user-guide/projects/notifications.jpg)
 
 Opening a notification marks it read and takes you to the project (to
-**Members** when someone left). Notifications expire after 90 days, and you're
-never notified about your own actions. Shared tasks, new files and setting
-changes don't notify anyone. Check **Tasks** and **Activity**.
+**Members** when someone left, and to the task itself when someone shared one).
+If the task has since stopped being shared, the page says so. Notifications
+expire after 90 days, and you're never notified about your own actions. New
+files and setting changes don't notify anyone. Check **Activity**.
 
 ## Archive, restore, delete, transfer, leave
 

@@ -11,7 +11,7 @@ import re
 import uuid
 from decimal import Decimal
 from datetime import datetime, timezone
-from typing import Any, List, Optional, Tuple
+from typing import Any, Callable, List, Optional, Tuple
 
 import boto3
 from boto3.dynamodb.conditions import Key
@@ -20,9 +20,11 @@ from botocore.exceptions import ClientError
 from apis.shared.audit import TARGET_PROJECT, AuditAction, AuditService, get_audit_service
 from apis.shared.auth.models import User
 from apis.shared.feature_flags import projects_enabled
+from apis.shared.notifications.service import NotificationService
 from apis.shared.projects.access import resolve_project_role
-from apis.shared.projects.models import SharedTask
+from apis.shared.projects.models import Project, SharedTask, normalize_email
 from apis.shared.projects.repository import ProjectRepository
+from apis.shared.projects.service import max_members
 from apis.shared.sessions.messages import get_messages
 from apis.shared.sessions.metadata import get_session_metadata, store_session_metadata
 
@@ -112,6 +114,11 @@ def _skip_long_term_extraction(mgr: Any) -> None:
 
     gmdp.create_event = create_event
 
+
+def _run_now(fn: Callable[..., Any], *args: Any) -> None:
+    fn(*args)
+
+
 class ShareService:
     """Handles share CRUD operations against the shared-conversations DynamoDB table."""
 
@@ -120,11 +127,13 @@ class ShareService:
         snapshot_store: Optional[ShareSnapshotStore] = None,
         project_repository: Optional[ProjectRepository] = None,
         audit: Optional[AuditService] = None,
+        notifications: Optional[NotificationService] = None,
     ) -> None:
         table_name = os.environ.get("SHARED_CONVERSATIONS_TABLE_NAME", "")
         # Built on first use: most shares never touch a project.
         self._project_repository = project_repository
         self._audit = audit
+        self._notifications = notifications
         self._table_name = table_name
         self._enabled = bool(table_name)
         # S3-backed snapshot body store. Injectable for tests; otherwise the
@@ -149,10 +158,15 @@ class ShareService:
         session_id: str,
         user: User,
         request: CreateShareRequest,
+        schedule: Optional[Callable[..., Any]] = None,
     ) -> ShareResponse:
         """Create a new share snapshot for a session.
 
         Multiple shares can exist per session (e.g. after continuing a conversation).
+
+        A project share's ``notify`` fan-out is handed to ``schedule`` (the route's
+        ``BackgroundTasks.add_task``) so the inbox writes never delay the response;
+        without one it runs inline.
         """
         self._ensure_enabled()
 
@@ -161,9 +175,14 @@ class ShareService:
         if not metadata:
             raise SessionNotFoundError(session_id)
 
+        project: Optional[Project] = None
         project_id = None
+        recipients: List[str] = []
         if request.access_level == "project":
-            project_id = self._require_shareable_project(metadata, user)
+            project = self._require_shareable_project(metadata, user)
+            project_id = project.project_id
+            # Before anything is written: a bad recipient is a 400 with no share made.
+            recipients = self._notify_recipients(project, request, user)
 
         # Snapshot messages
         messages_response = await get_messages(session_id=session_id, user_id=user.user_id)
@@ -244,6 +263,8 @@ class ShareService:
             item["allowed_emails"] = allowed_emails
         if project_id:
             item["project_id"] = project_id
+        if request.note:
+            item["note"] = request.note
 
         self._table.put_item(Item=item)
         if project_id:
@@ -259,7 +280,11 @@ class ShareService:
                 self._table.delete_item(Key={"share_id": share_id})
                 self._delete_snapshot_body(item)
                 raise
-            self._record_task_share(AuditAction.PROJECT_TASK_SHARED, user, item)
+            self._record_task_share(
+                AuditAction.PROJECT_TASK_SHARED, user, item, notified=len(recipients), hasNote=bool(request.note)
+            )
+            if recipients:
+                (schedule or _run_now)(self._notify_task_shared, recipients, user, project, item)
         logger.info(f"Created share {self._sanitize_id(share_id)} for session {self._sanitize_id(session_id)}")
 
         return self._build_share_response(item)
@@ -313,9 +338,11 @@ class ShareService:
             if not metadata:
                 raise SessionNotFoundError(item["session_id"])
             update_expr_parts.append("project_id = :pid")
-            attr_values[":pid"] = self._require_shareable_project(metadata, user)
+            attr_values[":pid"] = self._require_shareable_project(metadata, user).project_id
         elif new_access != "project" and old_project_id:
             remove_parts.append("project_id")
+            if "note" in item:
+                remove_parts.append("note")
 
         # Resolve allowed_emails
         if new_access == "specific":
@@ -740,7 +767,7 @@ class ShareService:
             return None, None
         return resolve_project_role(project_id, user.user_id, user.email, repository=self._projects())
 
-    def _require_shareable_project(self, metadata: Any, user: User) -> str:
+    def _require_shareable_project(self, metadata: Any, user: User) -> Project:
         """The project a task may be shared to, or a ``ProjectShareError`` saying why not.
 
         The task must belong to a project (``preferences.projectId``), and its owner
@@ -758,16 +785,55 @@ class ShareService:
             raise ProjectShareError(403, "You are not a member of this task's project")
         if project.status != "active":
             raise ProjectShareError(409, "This project is archived. Restore it to share tasks with it.")
-        return project_id
+        return project
 
-    def _record_task_share(self, action: str, user: User, item: dict) -> None:
-        """Audit a task entering or leaving a project, on the project's trail."""
+    def _notify_recipients(self, project: Project, request: CreateShareRequest, user: User) -> List[str]:
+        """The inboxes a project share's ``notify`` reaches, never including the sharer.
+
+        Members means the owner plus every member row, pending invitees included.
+        Naming anyone else is a 400 that names them, so a typo is caught rather
+        than silently notifying nobody.
+        """
+        if request.notify is None:
+            return []
+        members = {normalize_email(m.email) for m in self._projects().list_members(project.project_id)}
+        members.add(normalize_email(project.owner_email))
+        if request.notify.all:
+            chosen = members
+        else:
+            chosen = {normalize_email(e) for e in request.notify.emails or []} - {""}
+            strangers = sorted(chosen - members)
+            if strangers:
+                raise ProjectShareError(400, f"Not members of this project: {', '.join(strangers)}")
+        chosen.discard(normalize_email(user.email))
+        return sorted(chosen)[: max_members()]
+
+    def _notify_task_shared(self, recipients: List[str], user: User, project: Project, item: dict) -> None:
+        payload = {"shareId": item["share_id"], "title": self._share_title(item)}
+        if item.get("note"):
+            payload["note"] = item["note"]
+        notifications = self._notifications or NotificationService()
+        notifications.notify_many(
+            recipients,
+            kind="project_task_shared",
+            actor=user,
+            project_id=project.project_id,
+            project_name=project.name,
+            payload=payload,
+        )
+
+    def _record_task_share(self, action: str, user: User, item: dict, **details: Any) -> None:
+        """Audit a task entering or leaving a project, on the project's trail.
+
+        ``details`` add to ``after``: a share records ``notified`` (a count, never
+        the list) and ``hasNote``.
+        """
         (self._audit or get_audit_service()).record(
             action=action,
             actor=user,
             target_type=TARGET_PROJECT,
             target_id=item["project_id"],
-            after={"shareId": item["share_id"], "title": self._share_title(item)},
+            after={"shareId": item["share_id"], "title": self._share_title(item), **details},
         )
 
     def _put_project_pointer(self, item: dict) -> None:
@@ -780,6 +846,7 @@ class ShareService:
                 owner_email=item.get("owner_email", ""),
                 title=self._share_title(item),
                 shared_at=item["created_at"],
+                note=item.get("note"),
             )
         )
 

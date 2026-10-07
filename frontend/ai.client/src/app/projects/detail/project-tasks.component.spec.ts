@@ -100,6 +100,15 @@ describe('ProjectTasksComponent', () => {
     expect(revokes[0].getAttribute('aria-label')).toBe('Stop sharing Roster diff');
   });
 
+  it('shows the sharer’s note under a shared task', async () => {
+    api.sharedTasks.mockReturnValue(of({ tasks: [{ ...THEIRS, note: 'Can you check the spring dates?' }, MINE] }));
+    const { el } = await render();
+    const rows = el.querySelectorAll('li');
+    const theirs = Array.from(rows).find(r => r.textContent?.includes('Term dates'))!;
+    expect(theirs.textContent).toContain('Can you check the spring dates?');
+    expect(Array.from(rows).find(r => r.textContent?.includes('Roster diff'))!.querySelector('p.border-l-2')).toBeNull();
+  });
+
   it('continues a shared task as a fork on the project’s agent', async () => {
     shares.exportSharedConversation.mockResolvedValue({ sessionId: 'fork_1', title: 'Term dates (shared)' });
     const router = TestBed.inject(Router);
