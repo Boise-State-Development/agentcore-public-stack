@@ -192,6 +192,8 @@ class TestArchiveFallback:
         ]
         assert result.messages[0].created_at == "2026-05-01T10:00:00+00:00"
         assert result.next_token is None
+        assert result.from_archive is True
+        assert result.model_dump(by_alias=True)["fromArchive"] is True
 
     @pytest.mark.asyncio
     async def test_a_turn_without_a_reply_is_just_the_user_message(self, archive):
@@ -210,6 +212,7 @@ class TestArchiveFallback:
         assert [m.id for m in first.messages] == ["msg-s1-0", "msg-s1-1", "msg-s1-2", "msg-s1-3"]
         assert [m.id for m in second.messages] == ["msg-s1-4", "msg-s1-5"]
         assert second.next_token is None
+        assert first.from_archive is True and second.from_archive is True
 
     @pytest.mark.asyncio
     async def test_memory_with_events_never_reads_the_archive(self, archive):
@@ -217,11 +220,13 @@ class TestArchiveFallback:
         with patch("apis.shared.conversation_archive.read_session_turns", side_effect=AssertionError("read")):
             result = await self._get([MagicMock(message={"role": "user", "content": [{"text": "live"}]})])
         assert [m.content[0].text for m in result.messages] == ["live"]
+        assert result.from_archive is False
 
     @pytest.mark.asyncio
     async def test_nothing_archived_is_the_same_empty_history(self, archive):
         result = await self._get([])
         assert result.messages == []
+        assert result.from_archive is False
 
     @pytest.mark.asyncio
     async def test_preview_sessions_never_read_the_archive(self, archive):

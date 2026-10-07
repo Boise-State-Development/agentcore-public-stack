@@ -36,6 +36,8 @@ import { VoiceOverlayComponent } from '../voice-overlay';
 import { VoiceChatService } from '../../services/voice';
 import { ChatStateService } from '../../services/chat/chat-state.service';
 import { ProjectsService } from '../../../projects/services/projects.service';
+import { MessageMapService } from '../../services/session/message-map.service';
+import { ExpiredSessionNoticeComponent } from '../expired-session-notice/expired-session-notice.component';
 
 /**
  * Configuration options for ChatContainerComponent.
@@ -80,6 +82,7 @@ export interface ChatContainerConfig {
     AgentIndicatorComponent,
     ContextMeterComponent,
     VoiceOverlayComponent,
+    ExpiredSessionNoticeComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './chat-container.component.html',
@@ -102,6 +105,7 @@ export class ChatContainerComponent {
   private readonly chatState = inject(ChatStateService);
   private readonly modelService = inject(ModelService);
   private readonly projectsService = inject(ProjectsService);
+  private readonly messageMap = inject(MessageMapService);
 
   /**
    * What the bound Agent fixes for this conversation, for the indicator.
@@ -183,6 +187,12 @@ export class ChatContainerComponent {
 
   // Configuration with defaults
   config = input<Partial<ChatContainerConfig>>({});
+
+  /**
+   * The history on screen came from the conversation archive, so the
+   * composer gives way to a read-only notice (conversation-search §10 q4).
+   */
+  protected readonly isArchiveServed = computed(() => this.messageMap.isArchiveServed(this.sessionId()));
 
   protected readonly resolvedConfig = computed<ChatContainerConfig>(() => ({
     showTopnav: false,

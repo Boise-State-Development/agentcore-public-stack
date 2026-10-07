@@ -429,6 +429,7 @@ async def _get_archived_messages(
         messages=page,
         next_token=next_page_token,
         pending_interrupts=pending_interrupts,
+        from_archive=True,
     )
 
 

@@ -887,3 +887,8 @@ class MessagesListResponse(BaseModel):
         alias="toolSummaries",
         description="Persisted model-generated tool-batch summaries for this session, each shaped like the live `tool_group_summary` SSE event ({batchId, toolUseIds, summary}). Replayed on load so a reloaded conversation keeps the prose line the user saw live instead of downgrading to the client-side deterministic formatter. Returned only on the first page.",
     )
+    from_archive: bool = Field(
+        False,
+        alias="fromArchive",
+        description="True when Memory's events for this session have expired and these messages are the conversation archive's text-only copy. The agent cannot restore from the archive, and a new turn would be numbered from 0 and overwrite the archived first turn, so the SPA offers such a session read-only. Set on every page of an archive-served session.",
+    )
