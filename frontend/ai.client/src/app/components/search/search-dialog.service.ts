@@ -16,7 +16,7 @@ export interface SearchDialogRefocus {
 }
 
 /**
- * Owns the one conversation-search dialog (`docs/specs/conversation-search.md` §6).
+ * Owns the one search dialog (`docs/specs/conversation-search.md` §6).
  *
  * `open()` while the dialog is up never stacks a second one: it refocuses the
  * input, adopting the new query when one is given. The dialog component is
@@ -60,7 +60,7 @@ export class SearchDialogService {
         const ref = this.dialog.open<unknown, SearchDialogData>(SearchDialogComponent, {
           data: { query },
           // The CDK container is the dialog element; it defaults aria-modal off.
-          ariaLabel: 'Search conversations',
+          ariaLabel: 'Search',
           ariaModal: true,
         });
         this.ref = ref;
