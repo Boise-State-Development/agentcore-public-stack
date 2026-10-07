@@ -458,7 +458,8 @@ describe('ShareModalComponent (a task in a project)', () => {
       fixture.detectChanges();
 
       const rows = Array.from(el().querySelectorAll('ul[aria-label="Project members to notify"] li'));
-      expect(rows.map(r => r.textContent?.replace(/\s+/g, ' ').trim())).toEqual([
+      const lines = (r: Element) => Array.from(r.querySelectorAll('span span')).map(x => x.textContent?.trim()).join(' ');
+      expect(rows.map(lines)).toEqual([
         'Olive Owner owner@x.edu', 'Ann Lee ann@x.edu', 'new@x.edu',
       ]);
       // Nobody chosen yet: "Choose people" with no one is a mistake, not "tell no one".
