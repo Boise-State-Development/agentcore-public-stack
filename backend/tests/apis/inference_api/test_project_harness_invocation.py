@@ -31,6 +31,7 @@ from apis.inference_api.chat.agent_binding_resolver import (
 from apis.inference_api.chat.routes import (
     _build_project_member_note,
     _project_turn_refusal,
+    PROJECT_WORKSPACE_GUIDANCE,
     compose_agent_system_prompt,
 )
 from apis.shared.auth.models import User
@@ -173,12 +174,19 @@ class TestNotice:
 class TestPrompt:
     def test_project_heading_and_unchanged_agent_heading(self):
         assert compose_agent_system_prompt("BASE", "Do X.", project_harness=True) == (
-            "BASE\n\n## Project Instructions\n\nDo X."
+            f"BASE\n\n{PROJECT_WORKSPACE_GUIDANCE}\n\n## Project Instructions\n\nDo X."
         )
         # Every existing agent's prefix is byte-for-byte what it was before projects.
         assert compose_agent_system_prompt("BASE", "Do X.", project_harness=False) == (
             "BASE\n\n## Assistant-Specific Instructions\n\nDo X."
         )
+
+    def test_a_harness_is_told_to_check_shared_tasks(self):
+        """2.5c: without this, an "every open escalation" question never listed shared tasks."""
+        prompt = compose_agent_system_prompt("BASE", "Do X.", project_harness=True)
+        assert "call `shared_tasks_list`" in prompt
+        assert prompt.index("## Project Workspace") < prompt.index("## Project Instructions")
+        assert "shared_tasks_list" not in compose_agent_system_prompt("BASE", "Do X.", project_harness=False)
 
     def test_two_members_render_the_same_prefix(self):
         """Nothing about the invoker can reach this text — the signature takes no user —
