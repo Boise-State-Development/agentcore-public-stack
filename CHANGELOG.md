@@ -8,7 +8,7 @@ For narrative release notes written for operators and product owners, see [RELEA
 
 ### 🚀 Added
 
-- **Conversation archive (in development, off by default)** — the write path conversation search is built from. With `CDK_CONVERSATION_INDEX_ENABLED=true`, each finished turn's user and assistant text (tool calls and results excluded, 16 KB cap) is written to a new private, unversioned `{prefix}-conversation-archive` bucket in the background after the response completes, so it adds nothing before the first token. Forked shared conversations are archived under the forker. Deleting a conversation removes its archived turns whether or not the flag is on, and the bucket's lifecycle rule follows `CDK_CONVERSATION_RETENTION_DAYS`. A CDK deploy creates the bucket; nothing reads it yet (#1380, `docs/specs/conversation-search.md` §4)
+- **Conversation archive (in development, off by default)** — the write path conversation search is built from. With `CDK_CONVERSATION_INDEX_ENABLED=true`, each finished turn's user and assistant text (tool calls and results excluded, 16 KB cap) is written to a new private, unversioned `{prefix}-conversation-archive` bucket in the background after the response completes, so it adds nothing before the first token. Forked shared conversations are archived under the forker. Deleting a conversation removes its archived turns whether or not the flag is on, and the bucket's lifecycle rule follows `CDK_CONVERSATION_RETENTION_DAYS`. A CDK deploy creates the bucket, and the backup and restore scripts include it; nothing else reads it yet (#1380, `docs/specs/conversation-search.md` §4)
 
 ### ⚠️ Changed
 
