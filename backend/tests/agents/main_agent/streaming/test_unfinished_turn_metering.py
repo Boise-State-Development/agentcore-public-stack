@@ -112,14 +112,32 @@ class _FakeAgent:
         return _gen()
 
 
+class _ProbeToolCensus:
+    """A tool census whose tally names the model-call index it was asked for,
+    so a test can read back which hook index each cost row used."""
+
+    def tally_for_call(self, call_index: int) -> Dict[str, Dict[str, int]]:
+        return {"probe": {"calls": call_index, "errors": 0}}
+
+
 def _wrapper() -> SimpleNamespace:
     return SimpleNamespace(
         model_config=SimpleNamespace(
             model_id=MODEL_ID,
             get_provider=lambda: SimpleNamespace(value="bedrock"),
             long_ttl_static_prefix=lambda: False,
-        )
+        ),
+        tool_census_hook=_ProbeToolCensus(),
     )
+
+
+# Strands' EventLoopThrottleEvent: one per retried model call, yielded before
+# the next attempt starts. stream_processor surfaces it as `model_retry`.
+_RETRY = {"event_loop_throttled_delay": 4}
+
+
+def _hook_indices(rows: List[Dict[str, Any]]) -> List[int]:
+    return [int(row["toolCalls"]["probe"]["calls"]) for row in rows]
 
 
 class _Recorded:
@@ -282,6 +300,7 @@ async def test_a_retried_attempt_that_reported_nothing_is_not_metered(monkeypatc
         [
             *_completed_call("one"),
             {"event": {"messageStart": {"role": "assistant"}}},  # abandoned attempt
+            _RETRY,
             *_completed_call("two, on retry"),
             *_failing_call_start(),
             _RAISE,
@@ -289,7 +308,7 @@ async def test_a_retried_attempt_that_reported_nothing_is_not_metered(monkeypatc
         monkeypatch,
     )
 
-    assert len(recorded.cost_rows) == 2
+    assert [row["messageId"] for row in recorded.cost_rows] == [5, 7]
     assert sum(recorded.summary_costs()) == pytest.approx(2 * CALL_COST)
 
 
@@ -440,3 +459,98 @@ async def test_a_disconnect_during_the_success_writes_does_not_meter_again(monke
     assert [row["messageId"] for row in result.cost_rows] == [5, 7]
     assert result.cost_summary.await_count == 1
     result.activity.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# Retried model calls. A retried attempt never becomes a message, so it must
+# not take a message position; but the per-call hooks (prefix fingerprints,
+# tool census, context ledger) count every attempt, so their index for a call
+# is its position plus the retries before it.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "abandoned_attempt",
+    [
+        # The OpenAI Responses transport yields messageStart the moment the
+        # response opens, so a server error before any content leaves one.
+        pytest.param([{"event": {"messageStart": {"role": "assistant"}}}, _RETRY], id="after-message-start"),
+        # Bedrock's 503s arrive before the stream opens: no messageStart.
+        pytest.param([_RETRY], id="before-message-start"),
+    ],
+)
+async def test_a_retry_keeps_message_ids_and_hook_indices_aligned(abandoned_attempt, monkeypatch):
+    recorded = await _run(
+        [
+            *_completed_call("one"),
+            *abandoned_attempt,
+            *_completed_call("two, on retry"),
+            *_completed_call("three"),
+        ],
+        monkeypatch,
+    )
+
+    rows = recorded.cost_rows
+    # Positions follow the messages Strands committed: 5, 7, 9.
+    assert [row["messageId"] for row in rows] == [5, 7, 9]
+    # The hooks saw four model calls; the abandoned one was their index 1.
+    assert _hook_indices(rows) == [0, 2, 3]
+    assert sum(recorded.summary_costs()) == pytest.approx(3 * CALL_COST)
+
+
+@pytest.mark.asyncio
+async def test_two_retries_of_one_call_take_one_position(monkeypatch):
+    recorded = await _run(
+        [
+            {"event": {"messageStart": {"role": "assistant"}}},
+            _RETRY,
+            {"event": {"messageStart": {"role": "assistant"}}},
+            _RETRY,
+            *_completed_call("one, third attempt"),
+            *_completed_call("two"),
+        ],
+        monkeypatch,
+    )
+
+    assert [row["messageId"] for row in recorded.cost_rows] == [5, 7]
+    assert _hook_indices(recorded.cost_rows) == [2, 3]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_turn_after_a_retry_keys_rows_to_the_committed_messages(monkeypatch):
+    recorded = await _run(
+        [
+            *_completed_call("one"),
+            {"event": {"messageStart": {"role": "assistant"}}},
+            _RETRY,
+            *_completed_call("two, on retry"),
+            *_failing_call_start(),
+            _RAISE,
+        ],
+        monkeypatch,
+    )
+
+    assert [row["messageId"] for row in recorded.cost_rows] == [5, 7]
+    assert _hook_indices(recorded.cost_rows) == [0, 2]
+
+
+@pytest.mark.asyncio
+async def test_a_stop_while_a_retry_is_pending_projects_onto_the_right_call(monkeypatch):
+    """Stopped after a retry fired but before the retried attempt streamed:
+    the call in flight is position 1, and the hooks know it as attempt 2."""
+    recorded = await _run(
+        [
+            *_completed_call("one"),
+            {"event": {"messageStart": {"role": "assistant"}}},
+            _RETRY,
+            _STOP,
+        ],
+        monkeypatch,
+        projected_input_tokens=PROJECTED_TOKENS,
+    )
+
+    rows = recorded.cost_rows
+    assert [row["messageId"] for row in rows] == [5, 7]
+    assert _hook_indices(rows) == [0, 2]
+    assert sum(recorded.summary_costs()) == pytest.approx(CALL_COST + PROJECTED_COST)
