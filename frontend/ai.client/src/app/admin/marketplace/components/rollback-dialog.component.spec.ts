@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { ApplicationRef } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
-import { DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
+import { DIALOG_DATA, Dialog, DialogRef } from '@angular/cdk/dialog';
 
-import { RollbackDialogComponent } from './rollback-dialog.component';
+import { expectNamedDialog, openInCdkDialog } from '../../../../testing/cdk-dialog';
+import { RollbackDialogComponent, RollbackDialogData, RollbackDialogResult } from './rollback-dialog.component';
 import { AdminMarketplaceService } from '../services/admin-marketplace.service';
 import { AdminListingRow, AgentVersionSummary } from '../models/marketplace.model';
 
@@ -130,5 +132,32 @@ describe('RollbackDialogComponent', () => {
 
     expect(component.error()).toBe('Agent not found.');
     expect(component.loading()).toBe(false);
+  });
+
+  describe('opened through Dialog', () => {
+    beforeEach(() => {
+      mockService = { loadVersions: vi.fn().mockResolvedValue({ versions: [version(3, true), version(2)], publishedVersion: 3 }) };
+      TestBed.resetTestingModule();
+      TestBed.configureTestingModule({
+        providers: [{ provide: AdminMarketplaceService, useValue: mockService }],
+      });
+    });
+
+    afterEach(() => TestBed.inject(Dialog).closeAll());
+
+    it('names the dialog from its title, describes it, and marks the version picker as the first field', async () => {
+      const { container } = await openInCdkDialog<RollbackDialogComponent, RollbackDialogData, RollbackDialogResult>(
+        RollbackDialogComponent,
+        { data: { listing } },
+      );
+      expectNamedDialog(container, {
+        name: 'Publish a different version',
+        description: /^The store serves the version you pick, and everyone who opens Policy Lookup/,
+      });
+
+      await new Promise(resolve => setTimeout(resolve, 0));
+      TestBed.inject(ApplicationRef).tick();
+      expect(container.querySelector('[cdkFocusInitial]')?.id).toBe('rollback-version');
+    });
   });
 });

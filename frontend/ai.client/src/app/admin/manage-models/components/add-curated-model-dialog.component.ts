@@ -6,11 +6,9 @@ import {
   computed,
 } from '@angular/core';
 import { DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
-import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroXMark } from '@ng-icons/heroicons/outline';
 import { AppRolesService } from '../../roles/services/app-roles.service';
 import { CuratedModel } from '../models/curated-models';
-import { DialogDismissDirective } from '../../../components/dialog/dialog-dismiss.directive';
+import { DialogShellComponent } from '../../../components/dialog/dialog-shell.component';
 
 /**
  * Data passed to the add-curated-model dialog.
@@ -30,160 +28,93 @@ export type AddCuratedModelDialogResult = string[] | undefined;
 @Component({
   selector: 'app-add-curated-model-dialog',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DialogDismissDirective, NgIcon],
-  providers: [provideIcons({ heroXMark })],
-  host: {
-    'class': 'block',
-    '(keydown.escape)': 'onCancel()',
-  },
+  imports: [DialogShellComponent],
+  host: { class: 'block' },
   template: `
-    <!-- Backdrop -->
-    <div
-      class="dialog-backdrop fixed inset-0 bg-gray-900/40 dark:bg-gray-900/70"
-      aria-hidden="true"
-    ></div>
-
-    <!-- Dialog Panel -->
-    <div class="fixed inset-0 z-10 flex min-h-full items-end justify-center p-4 sm:items-center sm:p-0"
-      appDialogDismiss
-      (dismissed)="onCancel()">
-      <div
-        class="dialog-panel relative w-full overflow-hidden rounded-2xl border border-gray-200 bg-white text-left shadow-xl sm:my-8 sm:max-w-lg dark:border-gray-700 dark:bg-gray-800"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="add-curated-title"
-        aria-describedby="add-curated-description"
-      >
-        <!-- Header -->
-        <div class="flex items-start justify-between gap-3 px-6 pt-5">
-          <div class="min-w-0">
-            <h2 id="add-curated-title" class="text-lg/7 font-semibold text-gray-900 dark:text-white">
-              Add {{ data.model.template.modelName }}
-            </h2>
-            <p id="add-curated-description" class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">
-              Select which roles can access this model. You can change this later from the model's edit page.
-            </p>
+    <app-dialog-shell
+      [title]="'Add ' + data.model.template.modelName"
+      description="Select which roles can access this model. You can change this later from the model's edit page."
+      (closed)="onCancel()"
+    >
+      @if (rolesResource.isLoading()) {
+        <p class="text-sm/6 text-gray-500 dark:text-gray-400">Loading roles…</p>
+      } @else if (rolesResource.error()) {
+        <p class="text-sm/6 text-state-danger-600 dark:text-state-danger-400">
+          Failed to load roles. Please refresh the page.
+        </p>
+      } @else if (availableRoles().length === 0) {
+        <p class="text-sm/6 text-state-warning-600 dark:text-state-warning-400">
+          No roles configured. Create roles in Admin &gt; Roles first.
+        </p>
+      } @else {
+        <div class="mb-2 flex items-center justify-between text-xs/5">
+          <span class="font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+            Allowed roles
+          </span>
+          <div class="flex gap-3">
+            <button
+              type="button"
+              (click)="selectAll()"
+              class="font-medium text-primary-accessible hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-accessible-dark"
+            >
+              Select all
+            </button>
+            <button
+              type="button"
+              (click)="clearAll()"
+              class="font-medium text-gray-500 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-500 dark:text-gray-400 dark:hover:text-white"
+            >
+              Clear
+            </button>
           </div>
-          <button
-            type="button"
-            (click)="onCancel()"
-            aria-label="Close dialog"
-            class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
-          >
-            <ng-icon name="heroXMark" class="size-5" aria-hidden="true" />
-          </button>
         </div>
-
-        <!-- Content -->
-        <div class="px-6 py-4">
-          @if (rolesResource.isLoading()) {
-            <p class="text-sm/6 text-gray-500 dark:text-gray-400">Loading roles…</p>
-          } @else if (rolesResource.error()) {
-            <p class="text-sm/6 text-state-danger-600 dark:text-state-danger-400">
-              Failed to load roles. Please refresh the page.
-            </p>
-          } @else if (availableRoles().length === 0) {
-            <p class="text-sm/6 text-state-warning-600 dark:text-state-warning-400">
-              No roles configured. Create roles in Admin &gt; Roles first.
-            </p>
-          } @else {
-            <div class="mb-2 flex items-center justify-between text-xs/5">
-              <span class="font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
-                Allowed roles
-              </span>
-              <div class="flex gap-3">
-                <button
-                  type="button"
-                  (click)="selectAll()"
-                  class="font-medium text-primary-accessible hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-accessible-dark"
-                >
-                  Select all
-                </button>
-                <button
-                  type="button"
-                  (click)="clearAll()"
-                  class="font-medium text-gray-500 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-500 dark:text-gray-400 dark:hover:text-white"
-                >
-                  Clear
-                </button>
-              </div>
-            </div>
-            <div class="flex flex-wrap gap-2">
-              @for (role of availableRoles(); track role.roleId) {
-                <button
-                  type="button"
-                  (click)="toggleRole(role.roleId)"
-                  [attr.aria-pressed]="isSelected(role.roleId)"
-                  [class.bg-primary-600]="isSelected(role.roleId)"
-                  [class.text-white]="isSelected(role.roleId)"
-                  [class.bg-gray-100]="!isSelected(role.roleId)"
-                  [class.text-gray-700]="!isSelected(role.roleId)"
-                  [class.dark:bg-primary-500]="isSelected(role.roleId)"
-                  [class.dark:bg-gray-700]="!isSelected(role.roleId)"
-                  [class.dark:text-gray-300]="!isSelected(role.roleId)"
-                  class="rounded-2xl px-3 py-1.5 text-sm/6 font-medium hover:opacity-80 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
-                  [title]="role.description"
-                >
-                  {{ role.displayName }}
-                </button>
-              }
-            </div>
-            @if (selectedRoleIds().size === 0) {
-              <p class="mt-3 text-xs/5 text-state-warning-600 dark:text-state-warning-400">
-                Select at least one role so users can see this model.
-              </p>
-            }
+        <!-- Focus starts on the first role: picking roles is the whole job of this dialog. -->
+        <div class="flex flex-wrap gap-2">
+          @for (role of availableRoles(); track role.roleId; let first = $first) {
+            <button
+              type="button"
+              [attr.cdkFocusInitial]="first ? '' : null"
+              (click)="toggleRole(role.roleId)"
+              [attr.aria-pressed]="isSelected(role.roleId)"
+              [class.bg-primary-600]="isSelected(role.roleId)"
+              [class.text-white]="isSelected(role.roleId)"
+              [class.bg-gray-100]="!isSelected(role.roleId)"
+              [class.text-gray-700]="!isSelected(role.roleId)"
+              [class.dark:bg-primary-500]="isSelected(role.roleId)"
+              [class.dark:bg-gray-700]="!isSelected(role.roleId)"
+              [class.dark:text-gray-300]="!isSelected(role.roleId)"
+              class="rounded-2xl px-3 py-1.5 text-sm/6 font-medium hover:opacity-80 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
+              [title]="role.description"
+            >
+              {{ role.displayName }}
+            </button>
           }
         </div>
+        @if (selectedRoleIds().size === 0) {
+          <p class="mt-3 text-xs/5 text-state-warning-600 dark:text-state-warning-400">
+            Select at least one role so users can see this model.
+          </p>
+        }
+      }
 
-        <!-- Actions -->
-        <div class="flex items-center justify-end gap-2 border-t border-gray-200 px-6 py-3 dark:border-gray-700">
-          <button
-            type="button"
-            (click)="onCancel()"
-            class="rounded-2xl px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-500 dark:text-gray-200 dark:hover:bg-gray-700"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            (click)="confirm()"
-            [disabled]="!canConfirm()"
-            class="inline-flex items-center gap-2 rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-60 dark:hover:brightness-110"
-          >
-            Add to models
-          </button>
-        </div>
+      <div dialogFooter class="flex justify-end gap-2 border-t border-gray-200 px-6 py-4 dark:border-gray-700">
+        <button
+          type="button"
+          (click)="onCancel()"
+          class="rounded-2xl px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-500 dark:text-gray-200 dark:hover:bg-gray-700"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          (click)="confirm()"
+          [disabled]="!canConfirm()"
+          class="inline-flex items-center gap-2 rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-60 dark:hover:brightness-110"
+        >
+          Add to models
+        </button>
       </div>
-    </div>
-  `,
-  styles: `
-    @reference "../../../../styles/theme.css";
-
-
-    .dialog-backdrop {
-      animation: backdrop-fade-in 200ms ease-out;
-    }
-
-    @keyframes backdrop-fade-in {
-      from { opacity: 0; }
-      to { opacity: 1; }
-    }
-
-    .dialog-panel {
-      animation: dialog-fade-in-up 200ms ease-out;
-    }
-
-    @keyframes dialog-fade-in-up {
-      from {
-        opacity: 0;
-        transform: translateY(1rem) scale(0.97);
-      }
-      to {
-        opacity: 1;
-        transform: translateY(0) scale(1);
-      }
-    }
+    </app-dialog-shell>
   `,
 })
 export class AddCuratedModelDialogComponent {

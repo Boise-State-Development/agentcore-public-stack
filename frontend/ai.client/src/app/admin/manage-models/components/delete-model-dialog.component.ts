@@ -5,8 +5,8 @@ import {
 } from '@angular/core';
 import { DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroXMark, heroExclamationTriangle } from '@ng-icons/heroicons/outline';
-import { DialogDismissDirective } from '../../../components/dialog/dialog-dismiss.directive';
+import { heroExclamationTriangle } from '@ng-icons/heroicons/outline';
+import { DialogShellComponent } from '../../../components/dialog/dialog-shell.component';
 
 /**
  * Data passed to the delete model dialog.
@@ -26,117 +26,53 @@ export type DeleteModelDialogResult = true | undefined;
 @Component({
   selector: 'app-delete-model-dialog',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DialogDismissDirective, NgIcon],
-  providers: [provideIcons({ heroXMark, heroExclamationTriangle })],
-  host: {
-    'class': 'block',
-    '(keydown.escape)': 'onCancel()',
-  },
+  imports: [DialogShellComponent, NgIcon],
+  providers: [provideIcons({ heroExclamationTriangle })],
+  host: { class: 'block' },
   template: `
-    <!-- Backdrop -->
-    <div
-      class="dialog-backdrop fixed inset-0 bg-gray-900/40 dark:bg-gray-900/70"
-      aria-hidden="true"
-    ></div>
-
-    <!-- Dialog Panel -->
-    <div class="fixed inset-0 z-10 flex min-h-full items-end justify-center p-4 sm:items-center sm:p-0"
-      appDialogDismiss
-      (dismissed)="onCancel()">
+    <!-- An alertdialog: focus starts on Cancel, so a stray Enter never deletes. -->
+    <app-dialog-shell
+      [title]="'Delete ' + data.modelName + '?'"
+      description="This removes the model from the catalog and revokes access for all users. This action cannot be undone."
+      dialogRole="alertdialog"
+      (closed)="onCancel()"
+    >
       <div
-        class="dialog-panel relative w-full overflow-hidden rounded-2xl border border-gray-200 bg-white text-left shadow-xl sm:my-8 sm:max-w-lg dark:border-gray-700 dark:bg-gray-800"
-        role="alertdialog"
-        aria-modal="true"
-        aria-labelledby="delete-model-title"
-        aria-describedby="delete-model-description"
+        dialogIcon
+        class="flex size-10 shrink-0 items-center justify-center rounded-2xl bg-state-danger-100 dark:bg-state-danger-500/10"
       >
-        <!-- Header -->
-        <div class="flex items-start justify-between gap-3 px-6 pt-5">
-          <div class="flex items-start gap-3 min-w-0">
-            <div class="flex size-10 shrink-0 items-center justify-center rounded-2xl bg-state-danger-100 dark:bg-state-danger-500/10">
-              <ng-icon
-                name="heroExclamationTriangle"
-                class="size-5 text-state-danger-600 dark:text-state-danger-400"
-                aria-hidden="true"
-              />
-            </div>
-            <div class="min-w-0">
-              <h2 id="delete-model-title" class="text-lg/7 font-semibold text-gray-900 dark:text-white">
-                Delete {{ data.modelName }}?
-              </h2>
-              <p id="delete-model-description" class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">
-                This removes the model from the catalog and revokes access for all users.
-                This action cannot be undone.
-              </p>
-            </div>
-          </div>
-          <button
-            type="button"
-            (click)="onCancel()"
-            aria-label="Close dialog"
-            class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
-          >
-            <ng-icon name="heroXMark" class="size-5" aria-hidden="true" />
-          </button>
-        </div>
-
-        <!-- Model ID detail -->
-        <div class="px-6 py-4">
-          <p class="text-xs/5 font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
-            Model ID
-          </p>
-          <p class="mt-1 truncate font-mono text-sm/6 text-gray-700 dark:text-gray-300" [title]="data.modelId">
-            {{ data.modelId }}
-          </p>
-        </div>
-
-        <!-- Actions -->
-        <div class="flex items-center justify-end gap-2 border-t border-gray-200 px-6 py-3 dark:border-gray-700">
-          <button
-            type="button"
-            (click)="onCancel()"
-            class="rounded-2xl px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-500 dark:text-gray-200 dark:hover:bg-gray-700"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            (click)="onConfirm()"
-            class="inline-flex items-center gap-2 rounded-2xl bg-state-danger-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-state-danger-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500 dark:bg-state-danger-500 dark:hover:bg-state-danger-600"
-          >
-            Delete model
-          </button>
-        </div>
+        <ng-icon
+          name="heroExclamationTriangle"
+          class="size-5 text-state-danger-600 dark:text-state-danger-400"
+          aria-hidden="true"
+        />
       </div>
-    </div>
-  `,
-  styles: `
-    @reference "../../../../styles/theme.css";
 
+      <p class="text-xs/5 font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+        Model ID
+      </p>
+      <p class="mt-1 truncate font-mono text-sm/6 text-gray-700 dark:text-gray-300" [title]="data.modelId">
+        {{ data.modelId }}
+      </p>
 
-    .dialog-backdrop {
-      animation: backdrop-fade-in 200ms ease-out;
-    }
-
-    @keyframes backdrop-fade-in {
-      from { opacity: 0; }
-      to { opacity: 1; }
-    }
-
-    .dialog-panel {
-      animation: dialog-fade-in-up 200ms ease-out;
-    }
-
-    @keyframes dialog-fade-in-up {
-      from {
-        opacity: 0;
-        transform: translateY(1rem) scale(0.97);
-      }
-      to {
-        opacity: 1;
-        transform: translateY(0) scale(1);
-      }
-    }
+      <div dialogFooter class="flex justify-end gap-2 border-t border-gray-200 px-6 py-4 dark:border-gray-700">
+        <button
+          type="button"
+          cdkFocusInitial
+          (click)="onCancel()"
+          class="rounded-2xl px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-500 dark:text-gray-200 dark:hover:bg-gray-700"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          (click)="onConfirm()"
+          class="inline-flex items-center gap-2 rounded-2xl bg-state-danger-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-state-danger-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500 dark:bg-state-danger-500 dark:hover:bg-state-danger-600"
+        >
+          Delete model
+        </button>
+      </div>
+    </app-dialog-shell>
   `,
 })
 export class DeleteModelDialogComponent {
