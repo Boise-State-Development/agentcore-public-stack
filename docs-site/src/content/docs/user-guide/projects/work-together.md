@@ -223,6 +223,16 @@ memory and 30 days in yours. **Restore** puts an item back at the end of its
 file, with its history, and recreates the file if it was deleted. Restoring
 takes the same right as editing.
 
+### See a file's history
+
+**History** on a file lists every saved version: who saved it and how (edited
+on the Memory page, saved by the assistant, approved from a proposal, or
+restored). Pick a version to compare it with the file now. If you can edit the
+file, **Restore** brings that version back as a new version, so nothing in the
+history is lost and a restore can be undone the same way. Items that come back
+keep their original history. A pinned item that the old version doesn't have
+must be unpinned first.
+
 ### Propose a change
 
 Viewers can't save to project memory directly. A viewer can **propose** a change

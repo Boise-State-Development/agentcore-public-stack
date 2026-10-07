@@ -488,6 +488,8 @@ export class MemoryEditorComponent {
 
   protected async insertLink(key: number): Promise<void> {
     const ref = this.dialog.open<MemoryLinkPickerResult, MemoryLinkPickerData>(MemoryLinkPickerDialogComponent, {
+      ariaLabel: 'Link to a file',
+      autoFocus: '#memory-link-filter',
       data: { entries: this.entries(), current: this.isNew() ? null : this.fileSlug() },
     });
     const id = `memory-item-${key}`;

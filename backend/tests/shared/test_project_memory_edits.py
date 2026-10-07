@@ -11,10 +11,11 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from apis.shared.memory.service import MemorySpacePermissionError, MemoryValidationError
+from apis.shared.memory.service import MemoryValidationError
 from apis.shared.projects.memory_files import (
     ALREADY_EXISTS,
     CHANGED_SINCE,
+    VIEWERS_PROPOSE,
     EditedItem,
     ProjectMemoryFiles,
     render_items_for_save,
@@ -109,8 +110,9 @@ class TestSave:
             files.save(team.project_id, EDITOR, "project", "sis", [EditedItem(text="   ")])
 
     def test_a_viewer_cannot_edit_project_memory_but_edits_their_own_unaudited(self, files, projects, memory, team, audit):
-        with pytest.raises(MemorySpacePermissionError):
+        with pytest.raises(ProposalProjectError) as refused:
             files.save(team.project_id, VIEWER, "project", "sis", [EditedItem(text="A.")])
+        assert (refused.value.status_code, str(refused.value)) == (403, VIEWERS_PROPOSE)
         mine = projects.get_or_create_personal_space(team.project_id, VIEWER)
         result, indexed = files.save(team.project_id, VIEWER, "mine", "prefs", [EditedItem(text="Short answers.")])
         assert (result.ref.version, indexed) == (1, "added")
@@ -196,3 +198,57 @@ class TestRoutes:
         assert client_for(VIEWER).put(f"{base}/files/prefs", params={"scope": "mine"}, json=body).status_code == 404
         projects.get_or_create_personal_space(team.project_id, VIEWER)
         assert client_for(VIEWER).put(f"{base}/files/prefs", params={"scope": "mine"}, json=body).status_code == 200
+
+
+class TestRestoreVersion:
+    def test_an_old_version_comes_back_as_a_new_one_with_its_anchors_and_provenance(self, files, memory, team, audit):
+        files.save(team.project_id, EDITOR, "project", "sis", [EditedItem(text="A."), EditedItem(text="B.")], description="v1")
+        _, (a, b), prov_v1 = _items(memory, team)
+        files.save(
+            team.project_id, OWNER, "project", "sis",
+            [EditedItem(text="A.", anchor=a.anchor), EditedItem(text="C.")], description="v2",
+        )
+        result = files.restore_version(team.project_id, OWNER, "project", "sis", 1)
+        assert result.ref.version == 3
+        ref, items, prov = _items(memory, team)
+        assert [(i.text, i.anchor) for i in items] == [("A.", a.anchor), ("B.", b.anchor)]
+        assert ref.description == "v1"
+        assert prov[b.anchor].added_by == EDITOR.email and prov[b.anchor].restored_by == OWNER.email
+        archive = memory.list_archived_items(team.shared_space_id, OWNER.user_id, OWNER.email)
+        assert [r.text for r in archive] == ["C."]  # B's row went; C, which v1 lacked, was archived
+        assert audit.records[-1]["after"] == {"slug": "sis", "version": 3, "restoredFrom": 1}
+        versions = memory.list_file_versions(team.shared_space_id, OWNER.user_id, OWNER.email, "sis")
+        assert [v.reason for v in versions] == ["restore", "edit", "edit"]
+
+    def test_the_current_version_and_pins_are_respected(self, files, memory, team):
+        files.save(team.project_id, EDITOR, "project", "sis", [EditedItem(text="A.")])
+        _, (a,), _ = _items(memory, team)
+        files.save(team.project_id, EDITOR, "project", "sis", [EditedItem(text="A.", anchor=a.anchor), EditedItem(text="Pin me.")])
+        _, (_, pinned), _ = _items(memory, team)
+        memory.set_pinned(team.shared_space_id, EDITOR.user_id, EDITOR.email, "sis", pinned.anchor, pinned=True)
+        with pytest.raises(MemoryValidationError):
+            files.restore_version(team.project_id, EDITOR, "project", "sis", 2)
+        with pytest.raises(MemoryValidationError) as blocked:
+            files.restore_version(team.project_id, EDITOR, "project", "sis", 1)
+        assert "pinned" in str(blocked.value).lower()
+
+    def test_route_and_status_codes(self, files, memory, team, projects, monkeypatch):
+        from apis.app_api.projects import memory_routes, routes as project_routes
+        from apis.shared.auth.dependencies import get_current_user_from_session
+
+        monkeypatch.setattr(project_routes, "_service", projects)
+        monkeypatch.setattr(memory_routes, "_files", lambda: files)
+
+        def client(user):
+            app = FastAPI()
+            app.include_router(memory_routes.files_router)
+            app.dependency_overrides[get_current_user_from_session] = lambda: user
+            return TestClient(app)
+
+        files.save(team.project_id, EDITOR, "project", "people/sis", [EditedItem(text="A.")])
+        files.save(team.project_id, EDITOR, "project", "people/sis", [EditedItem(text="B.")])
+        url = f"/projects/{team.project_id}/memory/history/restore"
+        assert client(VIEWER).post(url, json={"slug": "people/sis", "version": 1}).status_code == 403
+        assert client(EDITOR).post(url, json={"slug": "people/sis", "version": 1}).json() == {"slug": "people/sis", "version": 3}
+        assert client(EDITOR).post(url, json={"slug": "people/sis", "version": 9}).status_code == 404
+        assert client(EDITOR).post(url, json={"slug": "people/sis", "version": 3}).status_code == 400

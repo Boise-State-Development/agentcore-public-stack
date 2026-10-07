@@ -34,6 +34,8 @@ import {
   MemoryPinsResponse,
   MemoryRestoreResponse,
   CreateMemoryProposalRequest,
+  MemoryFileHistory,
+  MemoryFileVersionContent,
   SaveMemoryFileRequest,
   SaveMemoryFileResponse,
   MemoryScope,
@@ -314,6 +316,27 @@ export class ProjectApiService {
   /** Propose a change to the shared memory for an editor to review (any member). */
   proposeMemoryChange(projectId: string, body: CreateMemoryProposalRequest): Observable<MemoryProposal> {
     return this.http.post<MemoryProposal>(this.url(projectId, '/memory/proposals'), body, this.options());
+  }
+
+  /** A file's saved versions, newest first. */
+  memoryHistory(spaceId: string, slug: string): Observable<MemoryFileHistory> {
+    return this.http.get<MemoryFileHistory>(this.spaceUrl(spaceId, '/history'), this.options(new HttpParams().set('slug', slug)));
+  }
+
+  memoryVersion(spaceId: string, slug: string, version: number): Observable<MemoryFileVersionContent> {
+    return this.http.get<MemoryFileVersionContent>(
+      this.spaceUrl(spaceId, `/history/${version}`),
+      this.options(new HttpParams().set('slug', slug)),
+    );
+  }
+
+  /** Make an earlier version current again, as a new version. */
+  restoreMemoryVersion(projectId: string, scope: MemoryScope, slug: string, version: number): Observable<MemoryRestoreResponse> {
+    return this.http.post<MemoryRestoreResponse>(
+      this.url(projectId, '/memory/history/restore'),
+      { slug, version },
+      this.options(new HttpParams().set('scope', scope)),
+    );
   }
 
   private spaceUrl(spaceId: string, suffix: string): string {

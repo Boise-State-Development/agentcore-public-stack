@@ -101,8 +101,8 @@ can tell you which have changed on your deployment.
 
 **Memory and settings**
 
-- **No memory history yet.** The Memory page shows a file as it is now. To undo
-  a removal, restore the item from the archive.
+- **Memory history is per file.** Each file keeps every version, but the index
+  (`MEMORY.md`) has no history, so copy it somewhere before a big rewrite.
 - **No one-click revert** for instructions. Copy an old version from History
   and save it.
 - **Switching models inside a task** starts a new task in the project. The

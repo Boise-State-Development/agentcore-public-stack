@@ -114,7 +114,7 @@ describe('describeProvenance', () => {
       at: 'b',
     });
     expect(describeProvenance({ addedBy: 'dana@x.edu', addedAt: 'a', restoredBy: 'pat@x.edu', restoredAt: 'c' }, people, null)).toMatchObject({
-      text: 'Restored from the archive by Pat Editor',
+      text: 'Restored by Pat Editor',
       at: 'c',
     });
     expect(describeProvenance({ addedBy: 'nobody@x.edu', addedAt: 'a' }, people, null).text).toBe('Added by nobody@x.edu');

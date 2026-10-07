@@ -3,7 +3,7 @@ import { DatePipe } from '@angular/common';
 import { RouterLink } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroBookmark, heroPencilSquare, heroTrash } from '@ng-icons/heroicons/outline';
+import { heroBookmark, heroClock, heroPencilSquare, heroTrash } from '@ng-icons/heroicons/outline';
 import { heroBookmarkSolid } from '@ng-icons/heroicons/solid';
 import { UserService } from '../../auth/user.service';
 import { ToastService } from '../../services/toast/toast.service';
@@ -31,14 +31,23 @@ import { contributors, describeProvenance } from './memory-text';
   selector: 'app-memory-file-view',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [DatePipe, NgIcon, RouterLink, MemoryMeterComponent, MemoryTextComponent],
-  providers: [provideIcons({ heroBookmark, heroBookmarkSolid, heroPencilSquare, heroTrash })],
+  providers: [provideIcons({ heroBookmark, heroBookmarkSolid, heroClock, heroPencilSquare, heroTrash })],
   host: { class: 'block' },
   template: `
     <header class="border-b border-gray-200 p-5 dark:border-gray-700">
       <div class="flex flex-wrap items-start justify-between gap-3">
       <h2 class="min-w-0 font-mono text-lg/7 font-semibold break-all text-gray-900 dark:text-white">{{ entry().slug }}</h2>
-      @if (canEdit() || canPropose()) {
         <div class="flex shrink-0 gap-2">
+          <a
+            [routerLink]="[]"
+            [queryParams]="{ file: entry().slug, view: 'history' }"
+            queryParamsHandling="merge"
+            class="inline-flex items-center gap-1.5 rounded-2xl border border-gray-200 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 transition-colors hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+          >
+            <ng-icon name="heroClock" class="size-4" aria-hidden="true" />
+            History
+          </a>
+      @if (canEdit() || canPropose()) {
           <button
             type="button"
             (click)="canEdit() ? edit.emit() : propose.emit()"
@@ -58,8 +67,8 @@ import { contributors, describeProvenance } from './memory-text';
               <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
             </button>
           }
-        </div>
       }
+        </div>
       </div>
       @if (entry().description) {
         <p class="mt-0.5 text-sm/6 text-gray-600 dark:text-gray-400">{{ entry().description }}</p>
