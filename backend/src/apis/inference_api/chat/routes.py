@@ -301,16 +301,33 @@ async def _find_managed_model(model_id: str | None):
     return None
 
 
+# A project harness's guidance on where teammates' work lives (shared-projects 2.5c).
+# Without it Haiku 4.5 answered "every open escalation" from project memory alone and
+# never listed the shared tasks (0 of 6 first responses on the simulation project);
+# with it, 6 of 6. Constant text, so it costs one cache write per harness, on deploy.
+PROJECT_WORKSPACE_GUIDANCE = (
+    "## Project Workspace\n\n"
+    "Teammates' work reaches you three ways: the project's files, project memory, and tasks "
+    "members have shared with the project. Before answering about the team's status, open "
+    "items, decisions or who owns what, check all three: call `shared_tasks_list` and read the "
+    "relevant shared tasks, not only memory."
+)
+
+
 def compose_agent_system_prompt(base_prompt: str, instructions: str, *, project_harness: bool) -> str:
     """The agent's system text: platform base prompt, then the agent's instructions.
 
-    A project's harness gets its own heading (shared-projects §4.5); every other agent keeps
-    ``Assistant-Specific Instructions`` byte for byte, so no existing agent's cached prefix
-    moves. Deliberately takes nothing about the invoking user: this text is the head of the
+    A project's harness gets its own heading (shared-projects §4.5), preceded by
+    :data:`PROJECT_WORKSPACE_GUIDANCE`; every other agent keeps ``Assistant-Specific
+    Instructions`` byte for byte, so no existing agent's cached prefix moves. The guidance
+    sits before the project's instructions so they stay the section directly above any
+    personal instructions, and context itemization counts it as platform text.
+    Deliberately takes nothing about the invoking user: this text is the head of the
     cacheable system block, and two members of one project must render it identically or
     each member pays a cache write for the same project (the prompt-cache contract).
     """
-    return f"{base_prompt}\n\n## {_instructions_heading(project_harness)}\n\n{instructions}"
+    guidance = f"\n\n{PROJECT_WORKSPACE_GUIDANCE}" if project_harness else ""
+    return f"{base_prompt}{guidance}\n\n## {_instructions_heading(project_harness)}\n\n{instructions}"
 
 
 def _instructions_heading(project_harness: bool) -> str:
