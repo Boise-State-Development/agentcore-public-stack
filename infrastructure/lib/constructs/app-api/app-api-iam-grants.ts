@@ -195,6 +195,31 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
     }),
   );
 
+  // ── Conversation archive bucket ──
+  // app-api writes a forked conversation's turns (shares export) and deletes a
+  // session's turns when the session is deleted, which needs ListBucket to find
+  // them. It never reads an archived turn back in this PR; the search route and
+  // the messages fallback that will are later PRs, and GetObject is granted now
+  // so they need no IAM change. Scoped to the `conversations/` prefix.
+  const conversationArchiveBucketArn = props.refs.conversationArchiveBucket.bucketArn;
+  taskRole.addToPrincipalPolicy(
+    new iam.PolicyStatement({
+      sid: 'ConversationArchiveObjects',
+      effect: iam.Effect.ALLOW,
+      actions: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject'],
+      resources: [`${conversationArchiveBucketArn}/conversations/*`],
+    }),
+  );
+  taskRole.addToPrincipalPolicy(
+    new iam.PolicyStatement({
+      sid: 'ConversationArchiveList',
+      effect: iam.Effect.ALLOW,
+      actions: ['s3:ListBucket'],
+      resources: [conversationArchiveBucketArn],
+      conditions: { StringLike: { 's3:prefix': ['conversations/*'] } },
+    }),
+  );
+
   // ── Core tables (OIDC, Users, Roles, API Keys, OAuth) ──
   const coreTables = [
     { sid: 'OidcStateAccess', arn: props.refs.oidcStateTable.tableArn },

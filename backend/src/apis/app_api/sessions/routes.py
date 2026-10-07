@@ -44,6 +44,7 @@ from apis.shared.sessions.metadata import (
 from .services.session_service import SessionService
 from apis.app_api.shares.service import get_share_service
 from apis.app_api.artifacts.service import get_artifact_share_service
+from apis.shared.conversation_archive import delete_session_archive
 from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.feature_flags import (
     response_feedback_enabled,
@@ -482,6 +483,16 @@ async def delete_session_endpoint(
             user_id
         )
 
+        # 5. Delete the session's archived turns (conversation search). Each
+        # deletion raises S3's Object Deleted event, which is how the search
+        # index drops the turn. Not gated on the index flag: a deployment that
+        # turned indexing off must still remove what it already wrote.
+        background_tasks.add_task(
+            delete_session_archive,
+            user_id,
+            session_id
+        )
+
         logger.info("Successfully deleted session")
 
         return Response(status_code=204)
@@ -570,6 +581,11 @@ async def bulk_delete_sessions_endpoint(
                         artifact_share_service.delete_for_session,
                         session_id,
                         user_id
+                    )
+                    background_tasks.add_task(
+                        delete_session_archive,
+                        user_id,
+                        session_id
                     )
                     results.append(BulkDeleteSessionResult(
                         session_id=session_id,

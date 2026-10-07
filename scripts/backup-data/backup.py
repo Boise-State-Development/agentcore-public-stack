@@ -111,6 +111,10 @@ S3_BUCKETS: list[dict[str, Any]] = [
     {"logical": "shared-conversations", "ssm": "/shares/shared-conversations-bucket-name", "optional": True},
     {"logical": "memory-spaces",        "ssm": "/memory-spaces/bucket-name",            "optional": True},
     {"logical": "skill-resources",      "ssm": "/skills/skill-resources-bucket-name",   "optional": True},
+    # Per-turn conversation transcripts (conversation search). Once Memory's
+    # events expire this is the only copy of a turn's text, and the search
+    # index is rebuilt from it, so it is user data, not a derived cache.
+    {"logical": "conversation-archive", "ssm": "/conversations/archive-bucket-name",    "optional": True},
 ]
 
 # S3 Vectors indexes. Distinct from S3_BUCKETS because S3 Vectors is a

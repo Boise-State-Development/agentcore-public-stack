@@ -124,6 +124,7 @@ BUCKET_SSM_MAP: dict[str, str] = {
     "shared-conversations": "/shares/shared-conversations-bucket-name",
     "memory-spaces":     "/memory-spaces/bucket-name",
     "skill-resources":   "/skills/skill-resources-bucket-name",
+    "conversation-archive": "/conversations/archive-bucket-name",
 }
 
 # S3 Vectors indexes. Mirrors `VECTOR_INDEXES` in scripts/backup-data/backup.py.

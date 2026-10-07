@@ -204,6 +204,27 @@ async def store_user_display_text(
         logger.error(f"Failed to store user displayText: {e}", exc_info=True)
 
 
+def get_user_display_text(session_id: str, user_id: str, message_id: int) -> Optional[str]:
+    """The ``displayText`` stored for one user message, or None.
+
+    Synchronous (call it through ``asyncio.to_thread``). Never raises: a
+    missing table, row or attribute all read as "no display text".
+    """
+    table_name = os.environ.get('DYNAMODB_SESSIONS_METADATA_TABLE_NAME')
+    if not table_name or is_preview_session(session_id):
+        return None
+    try:
+        response = get_dynamodb_table(table_name).get_item(
+            Key={"PK": f"USER#{user_id}", "SK": f"D#{session_id}#{message_id}"},
+            ProjectionExpression="displayText",
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning("Failed to read user displayText", exc_info=True)
+        return None
+    text = (response.get("Item") or {}).get("displayText")
+    return text if isinstance(text, str) and text.strip() else None
+
+
 
 async def _store_message_metadata_cloud(
     session_id: str,

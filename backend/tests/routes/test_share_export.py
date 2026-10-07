@@ -532,6 +532,92 @@ class TestExportSharedConversation:
         mock_copy.assert_called_once()
 
 
+class TestForkFeedsTheConversationArchive:
+    """A fork never runs a turn, so the runtime's after-`done` archive write
+    never sees it; the export path archives the copied turns itself, under the
+    forker's id, positioned as the new session's message ids count them
+    (docs/specs/conversation-search.md §4)."""
+
+    @pytest.fixture
+    def service(self):
+        with patch.dict(os.environ, {"SHARED_CONVERSATIONS_TABLE_NAME": ""}):
+            svc = ShareService()
+        return svc
+
+    @pytest.mark.asyncio
+    async def test_copy_reports_the_messages_that_landed_in_order(self, service):
+        snapshot = [
+            {"id": "m0", "role": "user", "content": [{"type": "text", "text": "Hello"}]},
+            {"id": "m1", "role": "system", "content": [{"type": "text", "text": "dropped"}]},
+            {"id": "m2", "role": "assistant", "content": [{"type": "text", "text": "Hi"}]},
+        ]
+        written = []
+        with patch.dict(os.environ, {"AGENTCORE_MEMORY_ID": "mem-123", "AWS_REGION": "us-east-1"}), \
+             patch("bedrock_agentcore.memory.integrations.strands.session_manager.AgentCoreMemorySessionManager", return_value=MagicMock()), \
+             patch("bedrock_agentcore.memory.integrations.strands.config.AgentCoreMemoryConfig"), \
+             patch("strands.types.session.SessionMessage"):
+            count = await service._copy_messages_to_memory("sess-new", "user-1", snapshot, written=written)
+
+        assert count == 2
+        assert written == [
+            {"role": "user", "content": [{"text": "Hello"}]},
+            {"role": "assistant", "content": [{"text": "Hi"}]},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_export_archives_the_copied_turns_under_the_forker(self, monkeypatch):
+        from apis.shared.auth.models import User
+        from apis.shared.conversation_archive import drain_pending
+
+        monkeypatch.setenv("CONVERSATION_INDEX_ENABLED", "true")
+        with patch.dict(os.environ, {"SHARED_CONVERSATIONS_TABLE_NAME": "shares-table"}), patch("boto3.resource"):
+            service = ShareService()
+        requester = User(email="v@example.com", user_id="viewer-001", name="Viewer", roles=["User"])
+        share_item = {
+            "share_id": "share-001", "session_id": "orig", "owner_id": "owner-001",
+            "access_level": "public", "created_at": "2025-06-01T00:00:00Z",
+            "metadata": {"title": "Chat"}, "messages": [{"id": "x"}],
+        }
+        copied = [
+            {"role": "user", "content": [{"text": "q1"}]},
+            {"role": "assistant", "content": [{"text": "a1"}]},
+            {"role": "user", "content": [{"text": "q2"}]},
+            {"role": "assistant", "content": [{"text": "a2"}]},
+        ]
+
+        async def _fake_copy(session_id, user_id, snapshot, written=None):
+            written.extend(copied)
+            return len(copied)
+
+        archived = []
+
+        async def _fake_write(turns):
+            archived.extend(turns)
+            return len(turns)
+
+        with patch.object(service, "_get_share_item", return_value=share_item), \
+             patch.object(service, "_check_access"), \
+             patch.object(service, "_copy_messages_to_memory", side_effect=_fake_copy), \
+             patch("apis.app_api.shares.service.store_session_metadata", new_callable=AsyncMock), \
+             patch("apis.shared.conversation_archive.write_turns", _fake_write):
+            result = await service.export_shared_conversation("share-001", requester)
+            await drain_pending()
+
+        assert [(t.user_id, t.session_id, t.message_index, t.user_text) for t in archived] == [
+            ("viewer-001", result["sessionId"], 0, "q1"),
+            ("viewer-001", result["sessionId"], 2, "q2"),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_flag_off_archives_nothing(self, monkeypatch):
+        monkeypatch.delenv("CONVERSATION_INDEX_ENABLED", raising=False)
+        with patch("apis.shared.conversation_archive.schedule") as schedule:
+            ShareService._archive_forked_turns(
+                "sess", "user", [{"role": "user", "content": [{"text": "q"}]}], None
+            )
+        schedule.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # Share-fork events skip long-term extraction (Shared Projects Phase 0.2)
 # ---------------------------------------------------------------------------

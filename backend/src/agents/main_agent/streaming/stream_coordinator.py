@@ -1552,6 +1552,26 @@ class StreamCoordinator:
             except Exception as e:
                 logger.error(f"Failed to clear stale interrupted_turn: {e}", exc_info=True)
 
+            # Conversation search's archive (docs/specs/conversation-search.md
+            # §4): one S3 object per turn, written in a background task. Last,
+            # and never awaited, so it cannot delay anything above; `done`
+            # went to the client before this block began. A paused turn is
+            # archived too and re-archived under the same key when it resumes.
+            try:
+                from apis.shared.conversation_archive.live import schedule_turn_archive
+                schedule_turn_archive(
+                    messages=getattr(agent, "messages", None) or [],
+                    user_id=user_id,
+                    session_id=session_id,
+                    last_message_index=message_id,
+                    turn_first_index=initial_message_count,
+                    original_message=original_message,
+                    project_id=turn_project_id,
+                    assistant_id=turn_agent_id,
+                )
+            except Exception as e:
+                logger.error(f"Failed to schedule conversation archive write: {e}", exc_info=True)
+
         except _CooperativeStopSignal:
             # Deliberate user Stop observed mid-stream (see the in-loop check).
             # Unlike the CancelledError/GeneratorExit backstop below — which

@@ -364,6 +364,17 @@ export function createRuntimeExecutionRole(
     resources: [skillResourcesBucketArn, `${skillResourcesBucketArn}/*`],
   }));
 
+  // ── Conversation archive (write-only) ──
+  // The after-`done` put of each turn's transcript (conversation search). The
+  // runtime only ever writes; reading, listing and deleting are app-api's.
+  const conversationArchiveBucketArn = refs.conversationArchiveBucket.bucketArn;
+  role.addToPolicy(new iam.PolicyStatement({
+    sid: 'ConversationArchivePut',
+    effect: iam.Effect.ALLOW,
+    actions: ['s3:PutObject'],
+    resources: [`${conversationArchiveBucketArn}/conversations/*`],
+  }));
+
   // ── Memory Spaces (S3 + DynamoDB, readwrite) ──
   // The runtime writes memory in a later PR; provisioned readwrite now so
   // that PR needs no infra change (apis/shared/memory/*).
