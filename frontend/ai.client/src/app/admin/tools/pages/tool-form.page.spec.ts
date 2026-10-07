@@ -354,6 +354,57 @@ describe('ToolFormPage — external MCP OAuth discovery (protocol=mcp_external)'
     );
   });
 
+  it('removes the clicked (middle) MCP tool row, not the last one, in the rendered list', async () => {
+    makeComponent();
+    const fixture = TestBed.createComponent(ToolFormPage);
+    const cmp = fixture.componentInstance;
+    await cmp.ngOnInit();
+    cmp.form.patchValue({
+      toolId: 'x_mcp',
+      displayName: 'X',
+      description: 'A public MCP server',
+      protocol: 'mcp_external',
+      mcpServerUrl: 'https://mcp.example.com/mcp',
+      mcpAuthType: 'none',
+    });
+
+    // Populate rows the same way discovery does (merged into the FormArray).
+    adminToolService.discoverMCPTools.mockResolvedValueOnce({
+      tools: [{ name: 'alpha_tool' }, { name: 'beta_tool' }, { name: 'gamma_tool' }],
+    });
+    await cmp.discoverMcpTools();
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const el: HTMLElement = fixture.nativeElement;
+    const renderedNames = (): string[] =>
+      Array.from(el.querySelectorAll<HTMLInputElement>('input[aria-label^="Tool name "]')).map(
+        (i) => i.value,
+      );
+    expect(renderedNames()).toEqual(['alpha_tool', 'beta_tool', 'gamma_tool']);
+
+    const removeMiddle = el.querySelector<HTMLButtonElement>('button[aria-label="Remove tool 2"]');
+    expect(removeMiddle).not.toBeNull();
+    removeMiddle!.click();
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(cmp.mcpToolsArray.controls.map((c) => c.get('name')?.value)).toEqual([
+      'alpha_tool',
+      'gamma_tool',
+    ]);
+    expect(renderedNames()).toEqual(['alpha_tool', 'gamma_tool']);
+
+    // Rendered inputs must stay bound to the surviving controls: editing the
+    // second input updates gamma's FormGroup, not a detached/stale one.
+    const inputs = el.querySelectorAll<HTMLInputElement>('input[aria-label^="Tool name "]');
+    inputs[1].value = 'gamma_edited';
+    inputs[1].dispatchEvent(new Event('input'));
+    expect(cmp.mcpToolsArray.at(1).get('name')?.value).toBe('gamma_edited');
+  });
+
   it('sends a null provider when none is selected', async () => {
     const cmp = makeComponent();
     await cmp.ngOnInit();
