@@ -62,6 +62,10 @@ class FakeBedrockAgent:
         self.ingest_calls.append(kwargs)
         if self.fail_ingest is not None:
             raise self.fail_ingest
+        ids = [d["content"]["custom"]["customDocumentIdentifier"]["id"] for d in kwargs["documents"]]
+        if len(ids) != len(set(ids)):
+            # What the service answers (dev, 2026-10-07): the whole call is refused.
+            raise ValueError("ValidationException: You provided duplicate documents in the request.")
         for document in kwargs["documents"]:
             custom = document["content"]["custom"]
             self.documents[custom["customDocumentIdentifier"]["id"]] = document
@@ -166,7 +170,7 @@ class TestIngest:
         assert call["dataSourceId"] == "DSCONV0001"
         [document] = call["documents"]
         custom = document["content"]["custom"]
-        assert custom["customDocumentIdentifier"] == {"id": f"conv#{SESSION_A}#4"}
+        assert custom["customDocumentIdentifier"] == {"id": f"conv#{USER_A}#{SESSION_A}#4"}
         # IN_LINE text, never S3_LOCATION: the KB service role cannot read this bucket.
         assert custom["sourceType"] == "IN_LINE"
         assert "s3Location" not in custom
@@ -186,7 +190,7 @@ class TestIngest:
         assert attrs["project_id"] == "proj-1"
         assert attrs["assistant_id"] == "ast-1"
         # The shared builder's two, and nothing else.
-        assert attrs["document_id"] == f"conv#{SESSION_A}#4"
+        assert attrs["document_id"] == f"conv#{USER_A}#{SESSION_A}#4"
         assert set(attrs) == {
             "user_id", "session_id", "message_index", "created_at",
             "project_id", "assistant_id", "document_id", "filename",
@@ -206,8 +210,8 @@ class TestIngest:
         _archive(_turn(assistant="resumed and finished answer"))
         c.lambda_handler(_sqs(_event(key)), None)
 
-        assert list(env.documents) == [f"conv#{SESSION_A}#0"]
-        text = env.documents[f"conv#{SESSION_A}#0"]["content"]["custom"]["inlineContent"]["textContent"]["data"]
+        assert list(env.documents) == [f"conv#{USER_A}#{SESSION_A}#0"]
+        text = env.documents[f"conv#{USER_A}#{SESSION_A}#0"]["content"]["custom"]["inlineContent"]["textContent"]["data"]
         assert text.endswith("resumed and finished answer")
 
     def test_a_batch_is_one_call_of_up_to_ten(self, env):
@@ -237,7 +241,7 @@ class TestDelete:
 
         [call] = env.delete_calls
         assert call["documentIdentifiers"] == [
-            {"dataSourceType": "CUSTOM", "custom": {"id": f"conv#{SESSION_A}#2"}}
+            {"dataSourceType": "CUSTOM", "custom": {"id": f"conv#{USER_A}#{SESSION_A}#2"}}
         ]
         assert env.documents == {}
 
@@ -307,7 +311,7 @@ class TestDelete:
         result = c.lambda_handler(_sqs(_event(key, "Object Deleted"), ids=["gone"]), None)
 
         assert result == {"batchItemFailures": [{"itemIdentifier": "gone"}]}
-        assert f"conv#{SESSION_A}#0" in env.documents
+        assert f"conv#{USER_A}#{SESSION_A}#0" in env.documents
 
 
 # ── Isolation ────────────────────────────────────────────────────────────────
@@ -318,8 +322,27 @@ class TestIsolation:
 
         c.lambda_handler(_sqs(_event(a), _event(b)), None)
 
-        assert env.visible_to(USER_A) == [f"conv#{SESSION_A}#0"]
-        assert env.visible_to(USER_B) == [f"conv#{SESSION_B}#0"]
+        assert env.visible_to(USER_A) == [f"conv#{USER_A}#{SESSION_A}#0"]
+        assert env.visible_to(USER_B) == [f"conv#{USER_B}#{SESSION_B}#0"]
+
+    def test_two_users_with_the_same_session_id_keep_separate_documents(self, env):
+        """Session ids are not unique across users. Under the first id format both
+        turns were one document: a batch holding both was refused as duplicates
+        (dev, 2026-10-07), and apart, one replaced the other."""
+        a = _archive(_turn(USER_A, SESSION_A, 0, user="alpha question", assistant="alpha answer"))
+        b = _archive(_turn(USER_B, SESSION_A, 0, user="beta question", assistant="beta answer"))
+
+        result = c.lambda_handler(_sqs(_event(a), _event(b)), None)
+
+        assert result == {"batchItemFailures": []}
+        assert env.visible_to(USER_A) == [f"conv#{USER_A}#{SESSION_A}#0"]
+        assert env.visible_to(USER_B) == [f"conv#{USER_B}#{SESSION_A}#0"]
+
+        _s3().delete_object(Bucket=BUCKET, Key=b)
+        c.lambda_handler(_sqs(_event(b, "Object Deleted")), None)
+
+        assert env.visible_to(USER_A) == [f"conv#{USER_A}#{SESSION_A}#0"]
+        assert env.visible_to(USER_B) == []
 
     def test_a_body_naming_another_user_is_refused(self, env):
         # Stored under USER_B's key, but the body says USER_A wrote it.

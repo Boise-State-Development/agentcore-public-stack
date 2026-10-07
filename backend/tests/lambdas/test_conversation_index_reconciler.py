@@ -123,11 +123,11 @@ class TestOrphanDocuments:
     def test_document_without_an_object_is_deleted(self, env):
         _provisioned()
         _archive("s1", 0)
-        env.add("conv#s1#0", "conv#gone#0", "conv#gone#2")
+        env.add("conv#user-a#s1#0", "conv#user-a#gone#0", "conv#user-a#gone#2")
 
         report = _run(env)
 
-        assert sorted(env.documents) == ["conv#s1#0"]
+        assert sorted(env.documents) == ["conv#user-a#s1#0"]
         assert report.orphan_documents == 2
         assert report.orphan_documents_deleted == 2
         assert report.aborted is None
@@ -137,17 +137,17 @@ class TestOrphanDocuments:
         monkeypatch.setenv("CONVERSATION_INDEX_ENABLED", "false")
         _provisioned()
         _archive("s1", 0)
-        env.add("conv#s1#0", "conv#deleted-while-off#0")
+        env.add("conv#user-a#s1#0", "conv#user-a#deleted-while-off#0")
 
         _run(env)
 
-        assert sorted(env.documents) == ["conv#s1#0"]
+        assert sorted(env.documents) == ["conv#user-a#s1#0"]
 
     def test_deletes_ten_at_a_time_one_call_in_flight_with_a_pause(self, env, monkeypatch):
         monkeypatch.setenv("CONVERSATION_RECONCILER_DELETE_PAUSE_SECONDS", "1.5")
         _provisioned()
         _archive("keep", 0)
-        env.add("conv#keep#0", *[f"conv#gone#{i}" for i in range(23)])
+        env.add("conv#user-a#keep#0", *[f"conv#user-a#gone#{i}" for i in range(23)])
         sleeps: List[float] = []
 
         _run(env, sleeps=sleeps)
@@ -159,7 +159,7 @@ class TestOrphanDocuments:
         monkeypatch.setenv("CONVERSATION_RECONCILER_MAX_DOCUMENT_DELETES", "5")
         _provisioned()
         _archive("keep", 0)
-        env.add("conv#keep#0", *[f"conv#gone#{i}" for i in range(8)])
+        env.add("conv#user-a#keep#0", *[f"conv#user-a#gone#{i}" for i in range(8)])
 
         report = _run(env)
 
@@ -171,8 +171,8 @@ class TestOrphanDocuments:
     def test_documents_already_deleting_are_left_alone(self, env):
         _provisioned()
         _archive("s1", 0)
-        env.add("conv#s1#0")
-        env.add("conv#gone#0", status="DELETE_IN_PROGRESS")
+        env.add("conv#user-a#s1#0")
+        env.add("conv#user-a#gone#0", status="DELETE_IN_PROGRESS")
 
         report = _run(env)
 
@@ -183,8 +183,8 @@ class TestOrphanDocuments:
         """A deleted document lingers in the listing as NOT_FOUND."""
         _provisioned()
         _archive("s1", 0)
-        env.add("conv#s1#0")
-        env.add("conv#deleted-yesterday#0", status="NOT_FOUND")
+        env.add("conv#user-a#s1#0")
+        env.add("conv#user-a#deleted-yesterday#0", status="NOT_FOUND")
 
         report = _run(env)
 
@@ -192,10 +192,33 @@ class TestOrphanDocuments:
         assert report.orphan_documents == 0
         assert report.documents_already_deleted == 1
 
+    def test_first_format_documents_are_deleted_and_current_ones_kept(self, env):
+        """``conv#{session}#{index}`` predates the user in the id; nothing writes it
+        any more, so every such document is an orphan, even when its turn exists."""
+        _provisioned()
+        _archive("s1", 0)
+        env.add("conv#user-a#s1#0", "conv#s1#0", "conv#s1#2")
+
+        report = _run(env)
+
+        assert sorted(env.documents) == ["conv#user-a#s1#0"]
+        assert report.legacy_documents == 2
+        assert report.orphan_documents == 2
+
+    def test_two_users_sharing_a_session_id_each_keep_their_document(self, env):
+        _provisioned()
+        _archive("shared", 0, user_id="user-a")
+        _archive("shared", 0, user_id="user-b")
+        env.add("conv#user-a#shared#0", "conv#user-b#shared#0", "conv#user-c#shared#0")
+
+        _run(env)
+
+        assert sorted(env.documents) == ["conv#user-a#shared#0", "conv#user-b#shared#0"]
+
     def test_ids_it_did_not_mint_are_never_touched(self, env):
         _provisioned()
         _archive("s1", 0)
-        env.add("conv#s1#0", "some-other-document", "conv#bad")
+        env.add("conv#user-a#s1#0", "some-other-document", "conv#bad", "conv#u#s#x")
 
         _run(env)
 
@@ -204,13 +227,13 @@ class TestOrphanDocuments:
     def test_dry_run_reports_and_deletes_nothing(self, env):
         _provisioned()
         _archive("s1", 0)
-        env.add("conv#s1#0", "conv#gone#0")
+        env.add("conv#user-a#s1#0", "conv#user-a#gone#0")
 
         report = _run(env, dry_run=True)
 
         assert report.orphan_documents == 1
         assert report.orphan_documents_deleted == 0
-        assert "conv#gone#0" in env.documents
+        assert "conv#user-a#gone#0" in env.documents
 
     def test_no_knowledge_base_means_nothing_to_list_or_delete(self, env):
         _archive("s1", 0)
@@ -228,7 +251,7 @@ class TestExpiry:
         _provisioned()
         _archive("old", 0)
         _archive("old", 2)
-        env.add("conv#old#0", "conv#old#2")
+        env.add("conv#user-a#old#0", "conv#user-a#old#2")
 
         # moto stamps LastModified with the real clock, so run 31 days ahead.
         report = _run(env, now=datetime.now(timezone.utc) + timedelta(days=31))
@@ -243,19 +266,19 @@ class TestExpiry:
     def test_young_objects_stay(self, env):
         _provisioned()
         key = _archive("s1", 0)
-        env.add("conv#s1#0")
+        env.add("conv#user-a#s1#0")
 
         report = _run(env, now=datetime.now(timezone.utc))
 
         assert _keys() == [key]
         assert report.expired_objects == 0
-        assert env.documents == {"conv#s1#0": "INDEXED"}
+        assert env.documents == {"conv#user-a#s1#0": "INDEXED"}
 
     def test_dry_run_counts_expiry_without_deleting(self, env, monkeypatch):
         monkeypatch.setenv("CONVERSATION_RETENTION_DAYS", "1")
         _provisioned()
         key = _archive("s1", 0)
-        env.add("conv#s1#0")
+        env.add("conv#user-a#s1#0")
 
         report = _run(env, now=datetime.now(timezone.utc) + timedelta(days=2), dry_run=True)
 
@@ -280,7 +303,7 @@ class TestSafety:
         monkeypatch.setattr(rc, "list_document_ids", lambda *a: (order.append("kb"), real_list_docs(*a))[1])
         monkeypatch.setattr(rc, "list_archive", lambda *a: (order.append("archive"), real_list_archive(*a))[1])
         _archive("s1", 0)
-        env.add("conv#s1#0")
+        env.add("conv#user-a#s1#0")
 
         _run(env)
 
@@ -289,7 +312,7 @@ class TestSafety:
     def test_a_failed_document_listing_deletes_nothing(self, env):
         _provisioned()
         _archive("s1", 0)
-        env.add("conv#gone#0")
+        env.add("conv#user-a#gone#0")
         env.fail_list = RuntimeError("throttled")
 
         report = _run(env)
@@ -299,7 +322,7 @@ class TestSafety:
 
     def test_a_failed_archive_listing_deletes_nothing(self, env, monkeypatch):
         _provisioned()
-        env.add("conv#s1#0")
+        env.add("conv#user-a#s1#0")
 
         def boom(*_a):
             raise RuntimeError("AccessDenied")
@@ -313,33 +336,33 @@ class TestSafety:
     def test_an_empty_archive_beside_a_full_index_deletes_nothing(self, env):
         """A wrong bucket name or a regressed grant must not empty the index."""
         _provisioned()
-        env.add("conv#s1#0", "conv#s2#0")
+        env.add("conv#user-a#s1#0", "conv#user-a#s2#0")
 
         report = _run(env)
 
         assert report.aborted
-        assert sorted(env.documents) == ["conv#s1#0", "conv#s2#0"]
+        assert sorted(env.documents) == ["conv#user-a#s1#0", "conv#user-a#s2#0"]
 
     def test_handler_raises_on_abort_so_the_error_alarm_fires(self, env):
         _provisioned()
-        env.add("conv#s1#0")
+        env.add("conv#user-a#s1#0")
         with pytest.raises(RuntimeError, match="aborted"):
             rc.lambda_handler({}, None)
 
     def test_handler_event_can_only_make_a_run_safer(self, env):
         _provisioned()
         _archive("s1", 0)
-        env.add("conv#s1#0", "conv#gone#0")
+        env.add("conv#user-a#s1#0", "conv#user-a#gone#0")
 
         result = rc.lambda_handler({"dryRun": True}, None)
 
         assert result["mode"] == "dry-run"
-        assert "conv#gone#0" in env.documents
+        assert "conv#user-a#gone#0" in env.documents
 
     def test_handler_live_by_default(self, env):
         _provisioned()
         _archive("s1", 0)
-        env.add("conv#s1#0", "conv#gone#0")
+        env.add("conv#user-a#s1#0", "conv#user-a#gone#0")
 
         result = rc.lambda_handler({}, None)
 

@@ -11,7 +11,9 @@ archive one S3 event at a time. This pass catches what events miss:
   dead-lettered, or a session deleted while ``CONVERSATION_INDEX_ENABLED`` was
   off (the consumer then acknowledges events without acting, §4 "Turning the
   index off"). Their turns are gone from the archive, so they must be gone from
-  search too.
+  search too. Documents under the first id format (``conv#{session_id}#{index}``,
+  without the user) are always in this set: nothing writes that format any more,
+  and the same turns are indexed again under the current one.
 
 Document deletes run **whatever the flag says**: this is the cleanup path for
 the time the flag was off, and deleting a document makes nothing new.
@@ -63,6 +65,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from apis.shared.conversation_archive.documents import ARCHIVE_PREFIX, parse_archive_key
 from apis.shared.conversation_archive.index_documents import (
     index_document_id,
+    is_legacy_index_document_id,
     parse_index_document_id,
 )
 from apis.shared.conversation_archive.retention import retention_cutoff, retention_days
@@ -193,6 +196,7 @@ class ReconcileReport:
     documents_listed: int = 0
     documents_already_deleting: int = 0
     documents_already_deleted: int = 0
+    legacy_documents: int = 0
     archive_objects: int = 0
     expired_objects: int = 0
     expired_objects_deleted: int = 0
@@ -211,6 +215,7 @@ class ReconcileReport:
             "documentsListed": self.documents_listed,
             "documentsAlreadyDeleting": self.documents_already_deleting,
             "documentsAlreadyDeleted": self.documents_already_deleted,
+            "legacyDocuments": self.legacy_documents,
             "archiveObjects": self.archive_objects,
             "expiredObjects": self.expired_objects,
             "expiredObjectsDeleted": self.expired_objects_deleted,
@@ -230,9 +235,10 @@ class ListingIncomplete(RuntimeError):
 def list_document_ids(client: Any, kb_id: str, data_source_id: str) -> Tuple[Set[str], int, int]:
     """Live conversation document ids, how many are being deleted, and how many already are.
 
-    Ids that are not conversation ids are ignored (the knowledge base only
-    holds conversation turns, but nothing here should act on an id it did not
-    mint). Raises :class:`ListingIncomplete` past :data:`MAX_DOCUMENTS_LISTED`.
+    Ids that are not conversation ids, current or legacy, are ignored (the
+    knowledge base only holds conversation turns, but nothing here should act
+    on an id it did not mint). Raises :class:`ListingIncomplete` past
+    :data:`MAX_DOCUMENTS_LISTED`.
     """
     ids: Set[str] = set()
     deleting = 0
@@ -249,7 +255,7 @@ def list_document_ids(client: Any, kb_id: str, data_source_id: str) -> Tuple[Set
         page = client.list_knowledge_base_documents(**params)
         for detail in page.get("documentDetails") or []:
             document_id = ((detail.get("identifier") or {}).get("custom") or {}).get("id") or ""
-            if parse_index_document_id(document_id) is None:
+            if parse_index_document_id(document_id) is None and not is_legacy_index_document_id(document_id):
                 continue
             status = str(detail.get("status") or "")
             if status in _ALREADY_DELETING:
@@ -282,11 +288,11 @@ def list_archive(s3: Any, bucket: str) -> List[ArchiveObject]:
             parsed = parse_archive_key(obj["Key"])
             if parsed is None:
                 continue
-            _, session_id, message_index = parsed
+            user_id, session_id, message_index = parsed
             modified = obj["LastModified"]
             if modified.tzinfo is None:
                 modified = modified.replace(tzinfo=timezone.utc)
-            out.append(ArchiveObject(obj["Key"], index_document_id(session_id, message_index), modified))
+            out.append(ArchiveObject(obj["Key"], index_document_id(user_id, session_id, message_index), modified))
     return out
 
 
@@ -374,6 +380,7 @@ def reconcile(
             report.aborted = f"knowledge base listing failed: {type(exc).__name__}"
             return report
         report.documents_listed = len(documents)
+        report.legacy_documents = sum(1 for document_id in documents if is_legacy_index_document_id(document_id))
 
     # 2. The archive.
     try:

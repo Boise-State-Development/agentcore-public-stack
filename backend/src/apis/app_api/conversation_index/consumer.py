@@ -259,7 +259,7 @@ def _document_source(turn: ArchivedTurn):
     from apis.shared.kb_backend.protocol import DocumentSource
 
     return DocumentSource(
-        document_id=index_document_id(turn.session_id, turn.message_index),
+        document_id=index_document_id(turn.user_id, turn.session_id, turn.message_index),
         # The shared payload builder writes `filename` as an attribute; the
         # object's leaf is the honest value and carries nothing identifying.
         filename=f"{turn.message_index:06d}.json",
@@ -341,8 +341,8 @@ async def sync_keys(
     if absent:
         document_ids = []
         for key in absent:
-            _, session_id, message_index = parse_archive_key(key)  # type: ignore[misc]
-            document_ids.append(index_document_id(session_id, message_index))
+            user_id, session_id, message_index = parse_archive_key(key)  # type: ignore[misc]
+            document_ids.append(index_document_id(user_id, session_id, message_index))
         try:
             await backend.delete_documents(CONVERSATIONS_KB_ID, document_ids)
         except ManagedKbNotProvisioned:
