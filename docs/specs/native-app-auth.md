@@ -38,6 +38,7 @@ The backend already has every building block; what is missing is the transport.
 |---|---|
 | D1 | Native clients authenticate with a **device session**: the same `SessionRecord` row the BFF uses, carried as `Authorization: Bearer <sealed blob>` instead of a cookie. Cognito tokens stay on the server. |
 | D2 | Login runs the **existing BFF authorization-code + PKCE flow** inside `ASWebAuthenticationSession`, using the existing confidential app client. No new Cognito app client in this phase. |
+| D2b | The device login passes `provider` through to Cognito's `identity_provider`, so the user lands on the organisation's IdP (Entra ID) and never sees the hosted UI. The auth session is **non-ephemeral**, so Safari's existing IdP session and Microsoft's Enterprise SSO plug-in give single sign-on, and tenant-side passkeys give Face ID sign-in. No MSAL, no second trust root. |
 | D3 | The callback hands the session to the app through a **one-time handoff code** on a custom-scheme redirect, exchanged over HTTPS with an **app-side PKCE verifier**. The sealed session blob never appears in a URL. |
 | D4 | Device sessions have **no idle slide**; they live until the 30-day absolute lifetime (the Cognito refresh-token validity) or until revoked. |
 | D5 | Bearer-transport requests **skip CSRF** (no ambient credential). A blob sealed for one transport is **rejected on the other**. |
@@ -69,6 +70,20 @@ The app opens `GET /auth/login?client=device&redirect_uri=<app scheme url>&code_
 `redirect_uri` must be in `NATIVE_AUTH_REDIRECT_URIS` (comma-separated env, CDK `CDK_NATIVE_AUTH_REDIRECT_URIS`), compared as an exact string. Other organisations build their own app with their own bundle id and scheme, so the allowlist is deployment configuration, not code. The app uses its bundle id as the scheme (`edu.example.agentcore://auth/callback`), which keeps one deployment's scheme from colliding with another's on a shared device.
 
 The confidential BFF app client is reused because the code exchange happens on app-api, not on the device, so there is no secret to protect on the phone. This also keeps the inference-api authorizer's `allowedClients` list unchanged (D6). The cost of reuse is that device sessions inherit the client's 30-day refresh-token validity (D4). A dedicated confidential client with a longer validity is a one-line CDK change plus one entry in two `allowedClients` lists; it is listed under follow-ups rather than done now so this phase has zero Cognito and zero authorizer changes.
+
+### D2b — Straight to Entra, with platform single sign-on
+
+Entra ID is already federated behind Cognito, and `GET /auth/login` already forwards an optional `provider` to Cognito as `identity_provider` (`auth/bff/routes.py:312-364`), which skips the hosted UI. The device login carries the same parameter: the app sends `provider=<idp name>` and the first page the user sees is Entra's. The IdP name is deployment configuration (it is the name given to `create-identity-provider`, for example `ms-entra-id`), so the app reads it from `GET /auth/providers` rather than compiling it in; a deployment with no federated IdP omits the parameter and gets the hosted UI.
+
+The `ASWebAuthenticationSession` is opened with `prefersEphemeralWebBrowserSession = false`. That shares Safari's cookie jar with the auth session, which buys three things without any code on our side:
+
+- **An existing Safari sign-in carries over.** A user signed in to Entra in Safari is signed in to the app with no password prompt.
+- **The Microsoft Enterprise SSO plug-in for Apple devices** (pushed by Intune or Jamf on managed devices) completes the Entra login silently from the device's primary refresh token. It intercepts Entra traffic from Safari and from any `ASWebAuthenticationSession`, so it works for this flow exactly as it does for Microsoft's own apps. Open the app, tap Sign in, done.
+- **Passkeys.** Where the tenant enables passkeys (Authenticator or device-bound), the Entra page offers Face ID sign-in inside the same flow.
+
+The price is iOS's standard consent sheet ("AgentCore wants to use *your-host* to sign in"), which every Entra- and Okta-backed app shows, and the fact that signing out of the app does not sign the user out of Entra in Safari. The latter is correct: the device session is what the app revokes; the IdP session belongs to the user and the browser.
+
+What this deliberately does not use is MSAL and the Authenticator broker. See §Alternatives for why, and for the one condition under which that decision should be revisited.
 
 ### D3 — Handoff code with app-side PKCE
 
@@ -110,13 +125,15 @@ The seal-level transport tag (D1) is what makes this safe: the only way to be on
 |---|---|
 | **Public Cognito app client + PKCE in the app; device holds Cognito tokens; app-api accepts `Bearer <Cognito JWT>`** | Puts refresh tokens on the device, which the BFF migration deliberately ended. Requires the validator to accept a second client id, and the Runtime authorizer and Gateway `allowedClients` to include it. Moves refresh logic, clock skew and rotation into the app. Logout cannot be enforced server-side without a token-revocation table. Every one of those is work the device-session design gets for free from the existing row. |
 | **API key, like the TUI** | Reaches one tools-less route. One key per user, so the phone and the TUI would keep revoking each other. 90-day static secret with no device lifecycle. |
+| **MSAL for iOS with the Microsoft Authenticator broker** | The most native Entra experience (brokered SSO, Conditional Access device signals, Intune app-protection), but the app would then hold Entra tokens and bypass Cognito. Cognito user pools cannot exchange an Entra token for Cognito tokens, so app-api would need a second trust root (verify Entra JWTs, map claims to roles) and the Runtime authorizer, which trusts one client of one pool, could not validate the forwarded token. Revisit only if the tenant mandates a Conditional Access policy requiring device compliance or app protection for this app; nothing short of that pays for a second identity path. |
+| **Entra native authentication APIs** | A fully native sign-in UI, but available only to Entra External ID customer tenants, not workforce tenants, so not applicable to a university directory. |
 | **OAuth 2.0 device-authorization grant** | Cognito does not implement it, and it is for input-constrained devices; a phone has a browser. |
 | **Universal link instead of custom scheme for the redirect** | Stronger (only the associated app can claim the URL) but requires hosting an `apple-app-site-association` file carrying the deployment's team id, which is per-deployment config and new CloudFront wiring. The handoff + PKCE design makes scheme capture harmless, so this is a hardening follow-up, not a prerequisite. |
 
 ### iOS side (summary; detail lives with PR 2)
 
 - `AgentCoreKit`: `DeviceSession` actor (sign-in state machine, token in Keychain with `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, no iCloud sync), `AuthenticatedClient` that attaches the header and maps `401 invalid_token` to a signed-out state, PKCE helpers, `HandoffExchange`.
-- App target: the server-URL entry screen (already backed by `ServerConfiguration`), the `ASWebAuthenticationSession` presenter, `CFBundleURLTypes` for the bundle-id scheme (needs a minimal `Info.plist`; Xcode merges the `INFOPLIST_KEY_*` settings into it), and a "signed in as" screen that calls `GET /auth/session`.
+- App target: the server-URL entry screen (already backed by `ServerConfiguration`), the `ASWebAuthenticationSession` presenter (non-ephemeral, with the IdP name from `GET /auth/providers`), `CFBundleURLTypes` for the bundle-id scheme (needs a minimal `Info.plist`; Xcode merges the `INFOPLIST_KEY_*` settings into it), and a "signed in as" screen that calls `GET /auth/session`.
 - The server is discovered from the entered base URL: `{base}/auth/login` and `{base}/auth/device/exchange`. No host is compiled into the app.
 
 ## Cost analysis
@@ -142,7 +159,8 @@ Per-request cost on app-api is identical to the cookie path: one AES-GCM unseal,
 **PR 1 — backend device sessions** (`backend/`, `infrastructure/`, `.github/workflows/platform.yml`, docs-site flag row)
 - `native_auth_enabled()` flag, CDK config and env wiring, `NATIVE_AUTH_REDIRECT_URIS`.
 - `transport` and device metadata on `SessionRecord` and the repository; seal `extras.t`.
-- `client=device` branch in `/auth/login` and `/auth/callback`; handoff store on `OIDCStateData`.
+- `client=device` branch in `/auth/login` (with the existing `provider` passthrough) and `/auth/callback`; handoff store on `OIDCStateData`.
+- `GET /auth/providers` (unauthenticated, flag-gated): the deployment's federated IdP names and display labels, so the app can go straight to Entra without compiling in a name.
 - `apis/app_api/auth/device/routes.py`: `POST /auth/device/exchange`, `POST /auth/device/logout`. Logout deletes the row and calls Cognito `RevokeToken` on the stored refresh token. The browser logout only deletes the row today; giving it the same revoke call is a cheap follow-up, since a restored backup must not resurrect a usable credential.
 - Bearer branch in `SessionRefreshMiddleware`, `bff_transport` on request state, CSRF pass-through, no-slide policy.
 - Tests: handoff happy path, expired/consumed/wrong-verifier, cross-transport rejection, CSRF bypass only on device transport, no-slide, flag off → 404s and inert middleware, and an architecture test that inference-api still has no auth-transport imports.
@@ -162,7 +180,7 @@ Per-request cost on app-api is identical to the cookie path: one AES-GCM unseal,
 
 ## Testing
 
-- Backend unit tests as listed under PR 1; they run in the ordinary `backend` suite.
+- Backend unit tests as listed under PR 1; they run in the ordinary `backend` suite. Add: `provider` is forwarded unchanged on the device branch and still passes the existing allowlist regex; `GET /auth/providers` 404s while the flag is off.
 - Local stack: no headless-browser harness. PR 1 allowlists a loopback `redirect_uri` (`http://127.0.0.1/callback`) in the local `.env`; the dev readout completes Cognito in the in-app browser, copies the handoff from the final URL, and exchanges it with `curl`. A five-minute manual check, recorded as an L1 row in `docs/testing/smoke-regression.md` once PR 2 exists.
 - `smoke_turns.py` gains a `--bearer <token>` option so the existing turn matrix (frame order, interrupt/resume, Stop, restore) runs over the device transport unchanged. That is the regression gate for "every route works for the device".
 - iOS: `AgentCoreKitTests` for the state machine and PKCE; one UI-less integration test against a local stub for the exchange; the simulator smoke in `test-ios`.
@@ -170,6 +188,7 @@ Per-request cost on app-api is identical to the cookie path: one AES-GCM unseal,
 ## Risks and open questions
 
 - **30 days may be too short for a phone.** A dedicated app client with a 90-day or 1-year refresh validity is the lever; it needs entries in the Runtime authorizer and Gateway `allowedClients`. Decide after PR 2 has real use.
+- **Conditional Access can block unmanaged phones.** If the tenant applies a policy requiring a compliant device to all cloud apps, the web flow fails on any phone without the Enterprise SSO plug-in, which is every student device. The Entra app registration that fronts Cognito should be excluded from such a policy, or the app is staff-only by accident. Confirm with the tenant owner before PR 2.
 - **MCP OAuth consent on native.** The SPA passes `OAuth2CallbackUrl` so the consent round-trip lands back in the web app. A device has no such page. Options: open the consent URL in `ASWebAuthenticationSession` with a device redirect, or complete consent on the web and let the device pick it up on the next turn (the vault already warms tokens across clients). Needs its own short spec before the app exposes OAuth-gated tools.
 - **Request logging.** Verify that no app-api log line or OTel span attribute captures the `Authorization` header before PR 1 merges.
 - **Key rotation UX.** Rotating `BFF_COOKIE_DATA_KEY_SECRET_ARN` signs every device out with no explanation; the app's 401 handling must make that a calm "please sign in again", not an error.
