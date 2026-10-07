@@ -84,8 +84,34 @@ function actions(statements: PolicyStatement[]): string[] {
   return statements.flatMap((s) => (Array.isArray(s.Action) ? s.Action : [s.Action ?? '']));
 }
 
+/** The archive event rules (the reconciler's schedule rule has no pattern). */
 function rules(t: Template): Record<string, any>[] {
-  return Object.values(t.findResources('AWS::Events::Rule')).map((r) => r.Properties);
+  return Object.values(t.findResources('AWS::Events::Rule'))
+    .map((r) => r.Properties)
+    .filter((p) => p.EventPattern);
+}
+
+const RECONCILER_HANDLER = 'apis.app_api.conversation_index.reconciler.lambda_handler';
+const RECONCILER_BOOTSTRAP_DIR = path.resolve(
+  __dirname, '..', 'bootstrap-assets', 'conversation-index-reconciler',
+);
+
+function reconcilerProps(t: Template): Record<string, any> {
+  const matches = Object.values(t.findResources('AWS::Lambda::Function'))
+    .map((r) => r.Properties)
+    .filter((p) => p.ImageConfig?.Command?.[0] === RECONCILER_HANDLER);
+  expect(matches).toHaveLength(1);
+  return matches[0];
+}
+
+function reconcilerStatements(t: Template): PolicyStatement[] {
+  const out: PolicyStatement[] = [];
+  for (const r of Object.values(t.findResources('AWS::IAM::Policy'))) {
+    const roles = JSON.stringify(r.Properties.Roles ?? []);
+    if (!roles.includes('ConversationIndexReconcilerLambda')) continue;
+    out.push(...(r.Properties.PolicyDocument?.Statement ?? []));
+  }
+  return out;
 }
 
 describe('ConversationIndexConstruct — rules', () => {
@@ -244,5 +270,79 @@ describe('conversation-index bootstrap asset', () => {
     const second = JSON.stringify(consumerProps(synth()).Code?.ImageUri);
     expect(first).toBe(second);
     expect(first).not.toBe('undefined');
+  });
+});
+
+describe('ConversationIndexConstruct — daily reconciler', () => {
+  it('is a second arm64 function on its own bootstrap asset', () => {
+    const t = synth();
+    const props = reconcilerProps(t);
+    expect(props.Architectures).toEqual(['arm64']);
+    expect(props.Timeout).toBe(15 * 60);
+    // Its own asset, so the consumer's stub digest is untouched.
+    expect(JSON.stringify(props.Code.ImageUri)).not.toBe(JSON.stringify(consumerProps(t).Code.ImageUri));
+  });
+
+  it('runs daily whatever the index flag says', () => {
+    for (const enabled of [true, false]) {
+      const schedules = Object.values(synth(enabled).findResources('AWS::Events::Rule'))
+        .map((r) => r.Properties)
+        .filter((p) => p.ScheduleExpression);
+      expect(schedules).toHaveLength(1);
+      expect(schedules[0].ScheduleExpression).toBe('cron(0 10 * * ? *)');
+      expect(schedules[0].State).toBe('ENABLED');
+    }
+  });
+
+  it('carries the retention setting and the archive bucket', () => {
+    const env = reconcilerProps(synth()).Environment.Variables;
+    expect(env.CONVERSATION_RETENTION_DAYS).toBe('365');
+    expect(env.CONVERSATION_ARCHIVE_BUCKET_NAME).toBeDefined();
+    expect(env.DYNAMODB_ASSISTANTS_TABLE_NAME).toBeDefined();
+  });
+
+  it('lists and deletes documents, but can neither ingest nor create nor delete a knowledge base', () => {
+    const granted = actions(reconcilerStatements(synth()));
+    expect(granted).toEqual(expect.arrayContaining([
+      'bedrock:ListKnowledgeBaseDocuments',
+      'bedrock:DeleteKnowledgeBaseDocuments',
+    ]));
+    for (const forbidden of [
+      'bedrock:IngestKnowledgeBaseDocuments',
+      'bedrock:CreateKnowledgeBase',
+      'bedrock:DeleteKnowledgeBase',
+      'iam:PassRole',
+      'dynamodb:PutItem',
+      'dynamodb:UpdateItem',
+    ]) {
+      expect(granted).not.toContain(forbidden);
+    }
+  });
+
+  it('deletes archive objects under conversations/ only', () => {
+    const del = reconcilerStatements(synth()).find((s) => s.Sid === 'ConversationReconcilerArchiveExpire');
+    expect(del?.Action).toBe('s3:DeleteObject');
+    expect(JSON.stringify(del?.Resource)).toContain('/conversations/*');
+  });
+
+  it('reads only the conversations partition of the assistants table', () => {
+    const record = reconcilerStatements(synth()).find((s) => s.Sid === 'ConversationReconcilerKbRecordRead');
+    expect(record?.Action).toBe('dynamodb:GetItem');
+    expect(record?.Condition?.['ForAllValues:StringEquals']?.['dynamodb:LeadingKeys']).toEqual(['AST#conversations']);
+  });
+
+  it('publishes its function name for the code-deploy step', () => {
+    synth().hasResourceProperties('AWS::SSM::Parameter', {
+      Name: '/test-project/conversation-index/reconciler-function-name',
+    });
+  });
+
+  it('has a byte-stable bootstrap asset holding exactly the stub', () => {
+    expect(fs.readdirSync(RECONCILER_BOOTSTRAP_DIR).sort()).toEqual(['Dockerfile', 'reconciler.py']);
+    const dockerfile = fs.readFileSync(path.join(RECONCILER_BOOTSTRAP_DIR, 'Dockerfile'), 'utf8');
+    expect(dockerfile).toContain('apis/app_api/conversation_index/reconciler.py');
+    expect(dockerfile.split('\n').find((l) => l.startsWith('FROM '))).toMatch(/@sha256:[0-9a-f]{64}$/);
+    const first = JSON.stringify(reconcilerProps(synth()).Code?.ImageUri);
+    expect(JSON.stringify(reconcilerProps(synth()).Code?.ImageUri)).toBe(first);
   });
 });

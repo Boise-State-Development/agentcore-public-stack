@@ -51,6 +51,8 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     corsOrigins: 'http://localhost:4200',
     appVersion: '1.0.0-test',
     conversationRetentionDays: CONVERSATION_RETENTION_DAYS_DEFAULT,
+    conversationRetentionPrunesSessions: true,
+    conversationRetentionPruneArmed: false,
     frontend: {
       cloudFrontPriceClass: 'PriceClass_100',
     },

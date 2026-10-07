@@ -443,6 +443,9 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       - name: Deploy conversation-index consumer image
         run: bash scripts/build/deploy-image-lambda-one.sh conversation-index-consumer
+      # Same image, second function (ImageConfig.Command selects the handler).
+      - name: Deploy conversation-index reconciler image
+        run: bash scripts/build/deploy-image-lambda-one.sh conversation-index-reconciler
 
   build-scheduled-runs:
     name: Build scheduled-runs image

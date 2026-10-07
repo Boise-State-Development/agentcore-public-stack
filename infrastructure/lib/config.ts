@@ -111,6 +111,24 @@ export interface AppConfig {
    * honour them; Memory still stops at 365.
    */
   conversationRetentionDays: number;
+  /**
+   * Whether `conversationRetentionDays` also removes session rows
+   * (CONVERSATION_RETENTION_PRUNES_SESSIONS, from
+   * CDK_CONVERSATION_RETENTION_PRUNES_SESSIONS). Default **true**, `false`
+   * opts out: a feature switch, permanent (docs/specs/conversation-search.md
+   * §3). On does not delete by itself; see `conversationRetentionPruneArmed`.
+   */
+  conversationRetentionPrunesSessions: boolean;
+  /**
+   * Whether the daily retention pruner may delete session rows rather than
+   * only report them (CONVERSATION_RETENTION_PRUNE_ARMED, from
+   * CDK_CONVERSATION_RETENTION_PRUNE_ARMED). Default **false**, the same
+   * inverted convention as `managedKb.reconcilerArmed`: the task is deployed
+   * and runs from day one, report-only, until an environment arms it. Even
+   * armed, the first run in an environment is a dry run (the pruner keeps the
+   * record in SSM).
+   */
+  conversationRetentionPruneArmed: boolean;
   appVersion: string;
   tags: { [key: string]: string };
 }
@@ -1299,6 +1317,18 @@ export function loadConfig(scope: cdk.App): AppConfig {
       ?? parseIntEnv(requireWholeNumber(
         'context conversationRetentionDays', scope.node.tryGetContext('conversationRetentionDays')))
       ?? CONVERSATION_RETENTION_DAYS_DEFAULT,
+    // Default ON with a kill switch: "false"/"0" turns it off, an unset GitHub
+    // variable ('') falls through to the context and then to on, and any other
+    // value fails the synth rather than guessing.
+    conversationRetentionPrunesSessions:
+      parseBooleanEnv(process.env.CDK_CONVERSATION_RETENTION_PRUNES_SESSIONS)
+      ?? parseBooleanEnv(contextString(scope, 'conversationRetentionPrunesSessions'))
+      ?? true,
+    // Inverted, like managedKb.reconcilerArmed: unset or '' is disarmed.
+    conversationRetentionPruneArmed:
+      parseBooleanEnv(process.env.CDK_CONVERSATION_RETENTION_PRUNE_ARMED)
+      ?? parseBooleanEnv(contextString(scope, 'conversationRetentionPruneArmed'))
+      ?? false,
     // Same precedence as managedKb above. The flat dotted read at step 2 is
     // load-bearing: `--context observability.x=y` sets context['observability.x'],
     // it does NOT build a nested object.
@@ -1532,6 +1562,15 @@ export function parseListEnv(value: string | undefined): string[] | undefined {
  * @returns The parsed boolean, or undefined if unset and no default provided
  * @throws Error if the value is present but invalid
  */
+/**
+ * A context value as a string, for the env parsers: `cdk.json` may hold a
+ * real boolean or number where `--context` always gives a string.
+ */
+function contextString(scope: cdk.App, key: string): string | undefined {
+  const value = scope.node.tryGetContext(key);
+  return value === undefined || value === null ? undefined : String(value);
+}
+
 export function parseBooleanEnv(value: string | undefined): boolean | undefined;
 export function parseBooleanEnv(value: string | undefined, defaultValue: boolean): boolean;
 export function parseBooleanEnv(value: string | undefined, defaultValue?: boolean): boolean | undefined {

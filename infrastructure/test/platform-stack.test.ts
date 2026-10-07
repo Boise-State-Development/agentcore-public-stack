@@ -256,9 +256,12 @@ describe('PlatformStack', () => {
       // Deploy-script discovery, the same pattern as every image Lambda:
       // deploy-image-lambda-one.sh resolves the CDK-generated name from it to
       // swap in the real image, and skips gracefully until it exists.
+      //
+      // Raised 55 → 56 for the conversation-index reconciler's function name,
+      // the same deploy-script discovery for the image's second function.
       const params = template.findResources('AWS::SSM::Parameter');
       expect(Object.keys(params).length).toBeGreaterThanOrEqual(30);
-      expect(Object.keys(params).length).toBeLessThanOrEqual(55);
+      expect(Object.keys(params).length).toBeLessThanOrEqual(56);
     });
   });
 

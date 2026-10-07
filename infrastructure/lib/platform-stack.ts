@@ -52,6 +52,7 @@ import { KbSyncConstruct } from './constructs/kb-sync/kb-sync-construct';
 import { ManagedKbRoleConstruct } from './constructs/managed-kb/managed-kb-role-construct';
 import { KbMigrationConstruct } from './constructs/managed-kb/kb-migration-construct';
 import { ConversationIndexConstruct } from './constructs/conversation-index/conversation-index-construct';
+import { SessionRetentionPruneConstruct } from './constructs/conversation-index/session-retention-prune-construct';
 import { PlatformCostSyncConstruct } from './constructs/costs/platform-cost-sync-construct';
 import { ScheduledRunsConstruct } from './constructs/scheduled-runs/scheduled-runs-construct';
 
@@ -1004,6 +1005,19 @@ export class PlatformStack extends cdk.Stack {
       sagemakerPrivateSubnetIds,
     });
 
+    // Session retention pruning (docs/specs/conversation-search.md §3): a
+    // daily one-off task on app-api's own task definition, so a session past
+    // retention is deleted by the same cascade as a user's delete. Report-only
+    // until config.conversationRetentionPruneArmed; disabled when
+    // config.conversationRetentionPrunesSessions is false.
+    new SessionRetentionPruneConstruct(this, 'SessionRetentionPrune', {
+      config: this._config,
+      vpc: this.vpc,
+      cluster: refs.ecsCluster,
+      taskDefinition: appApi.taskDefinition,
+      securityGroup: appApi.securityGroup,
+    });
+
     // After AppApiServiceConstruct: these bind to its target group and service.
     new AlbAlarmsConstruct(this, 'AlbAlarms', {
       config: this._config,
@@ -1059,7 +1073,10 @@ export class PlatformStack extends cdk.Stack {
             ]
           : []),
         ...(this._conversationIndex
-          ? [{ name: 'conversation-index-consumer', fn: this._conversationIndex.consumerLambda }]
+          ? [
+              { name: 'conversation-index-consumer', fn: this._conversationIndex.consumerLambda },
+              { name: 'conversation-index-reconciler', fn: this._conversationIndex.reconcilerLambda },
+            ]
           : []),
         ...(this._kbSync
           ? [

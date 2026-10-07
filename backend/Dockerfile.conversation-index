@@ -1,11 +1,19 @@
-# conversation-index Lambda image — the conversation-search index consumer.
+# conversation-index Lambda image — the conversation-search index consumer and
+# its daily reconciler.
 #
-# One function: apis.app_api.conversation_index.consumer.lambda_handler, fed by
-# an SQS queue that the conversation archive bucket's EventBridge rules fill
-# (docs/specs/conversation-search.md §4, PR-2b). CDK
+# Two functions, handler selected per function by ImageConfig.Command:
+#   - apis.app_api.conversation_index.consumer.lambda_handler (default CMD), fed
+#     by an SQS queue that the conversation archive bucket's EventBridge rules
+#     fill (docs/specs/conversation-search.md §4, PR-2b);
+#   - apis.app_api.conversation_index.reconciler.lambda_handler, a daily
+#     schedule that expires archive objects past retention and deletes KB
+#     documents with no archive object (§3, PR-2c). Same import closure, so
+#     one image and one deploy job serve both.
+# CDK
 # (infrastructure/lib/constructs/conversation-index/conversation-index-construct.ts)
-# ships a bootstrap stub from infrastructure/bootstrap-assets/conversation-index/;
-# the backend workflow swaps this image in with `update-function-code`.
+# ships bootstrap stubs from infrastructure/bootstrap-assets/conversation-index/
+# and .../conversation-index-reconciler/; the backend workflow swaps this image
+# in with `update-function-code`.
 #
 # Keep the COPY surface minimal but COMPLETE: it must cover the handler's whole
 # import closure, function-local imports included.
@@ -43,11 +51,12 @@ COPY backend/src/apis/shared/conversation_archive/__init__.py ${LAMBDA_TASK_ROOT
 COPY backend/src/apis/shared/conversation_archive/documents.py ${LAMBDA_TASK_ROOT}/apis/shared/conversation_archive/documents.py
 COPY backend/src/apis/shared/conversation_archive/store.py ${LAMBDA_TASK_ROOT}/apis/shared/conversation_archive/store.py
 COPY backend/src/apis/shared/conversation_archive/index_documents.py ${LAMBDA_TASK_ROOT}/apis/shared/conversation_archive/index_documents.py
+COPY backend/src/apis/shared/conversation_archive/retention.py ${LAMBDA_TASK_ROOT}/apis/shared/conversation_archive/retention.py
 # extract_records, shared with the kb-migration ingestion consumer.
 COPY backend/src/apis/app_api/kb_migration/__init__.py ${LAMBDA_TASK_ROOT}/apis/app_api/kb_migration/__init__.py
 COPY backend/src/apis/app_api/kb_migration/ingestion_consumer.py ${LAMBDA_TASK_ROOT}/apis/app_api/kb_migration/ingestion_consumer.py
 
-# The handler.
+# The handlers.
 COPY backend/src/apis/app_api/conversation_index/ ${LAMBDA_TASK_ROOT}/apis/app_api/conversation_index/
 
 # /var/task is read-only at runtime, so precompile what we COPYed; pip already

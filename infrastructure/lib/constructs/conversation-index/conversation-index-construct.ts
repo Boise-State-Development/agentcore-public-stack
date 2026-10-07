@@ -56,6 +56,16 @@ export const CONVERSATION_INDEX_TIMEOUT_MINUTES = 10;
  * a message that never succeeds reaches the DLQ after about three hours. */
 export const CONVERSATION_INDEX_MAX_RECEIVE_COUNT = 3;
 
+/**
+ * Daily reconciler timeout. Lambda's maximum: a run lists the knowledge base
+ * and the archive, then deletes at most 2,000 documents one call a second
+ * (`MAX_DOCUMENT_DELETES_PER_RUN` in the reconciler), a few minutes.
+ */
+export const CONVERSATION_INDEX_RECONCILER_TIMEOUT_MINUTES = 15;
+
+/** 10:00 UTC (early morning US time), after the kb-migration reconcilers. */
+export const CONVERSATION_INDEX_RECONCILER_SCHEDULE = { minute: '0', hour: '10' } as const;
+
 export interface ConversationIndexConstructProps {
   config: AppConfig;
   /** The per-turn archive (`ConversationArchiveConstruct`); its EventBridge
@@ -95,8 +105,17 @@ export interface ConversationIndexConstructProps {
  * first ingest, like every other managed knowledge base, and records it on
  * the KB_Record that the kb-migration reconciler joins against.
  *
+ * DAILY RECONCILER (§3 "Daily reconciler, as braces", PR-2c): a second
+ * function from the same image (handler chosen by `cmd`) on a daily schedule.
+ * It deletes archive objects older than `conversationRetentionDays` (a
+ * backstop for the lifecycle rule) and KB documents with no archive object
+ * (dropped events, DLQ'd batches, deletes made while the flag was off). Its
+ * schedule is ENABLED whatever the index flag says: document deletes are the
+ * cleanup for the time the flag was off, and they create nothing.
+ *
  * SSM publication (consumed by the backend workflow's code-deploy step):
  *   /{prefix}/conversation-index/consumer-function-name
+ *   /{prefix}/conversation-index/reconciler-function-name
  */
 export class ConversationIndexConstruct extends Construct {
   public readonly consumerLambda: lambda.DockerImageFunction;
@@ -104,6 +123,9 @@ export class ConversationIndexConstruct extends Construct {
   public readonly deadLetterQueue: sqs.Queue;
   public readonly objectCreatedRule: events.Rule;
   public readonly objectDeletedRule: events.Rule;
+  /** Daily: archive objects past retention, KB documents without an object. */
+  public readonly reconcilerLambda: lambda.DockerImageFunction;
+  public readonly reconcilerScheduleRule: events.Rule;
 
   constructor(scope: Construct, id: string, props: ConversationIndexConstructProps) {
     super(scope, id);
@@ -278,12 +300,112 @@ export class ConversationIndexConstruct extends Construct {
     this.objectCreatedRule = ruleFor('ConversationArchiveObjectCreatedRule', 'Object Created', 'turn written');
     this.objectDeletedRule = ruleFor('ConversationArchiveObjectDeletedRule', 'Object Deleted', 'turn deleted or expired');
 
+    // ── Daily reconciler ──
+    // Its own bootstrap context (bootstrap-assets/conversation-index-reconciler)
+    // so the consumer's stub digest, and therefore the live consumer, is
+    // untouched by this function's existence.
+    const reconcilerBootstrapDir = path.resolve(
+      __dirname,
+      '..',
+      '..',
+      '..',
+      'bootstrap-assets',
+      'conversation-index-reconciler',
+    );
+    const reconcilerLogGroup = new logs.LogGroup(this, 'ConversationIndexReconcilerLogGroup', {
+      retention: logRetentionFor(config),
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+    this.reconcilerLambda = new lambda.DockerImageFunction(this, 'ConversationIndexReconcilerLambda', {
+      code: lambda.DockerImageCode.fromImageAsset(reconcilerBootstrapDir, {
+        cmd: ['apis.app_api.conversation_index.reconciler.lambda_handler'],
+      }),
+      architecture: lambda.Architecture.ARM_64,
+      timeout: cdk.Duration.minutes(CONVERSATION_INDEX_RECONCILER_TIMEOUT_MINUTES),
+      // Holds the document and archive listings (ids only) in memory.
+      memorySize: 1024,
+      logGroup: reconcilerLogGroup,
+      environment: {
+        CONVERSATION_ARCHIVE_BUCKET_NAME: archiveBucket.bucketName,
+        CONVERSATION_RETENTION_DAYS: String(config.conversationRetentionDays),
+        DYNAMODB_ASSISTANTS_TABLE_NAME: assistantsTable.tableName,
+      },
+      description:
+        'Conversation-search daily reconciler - expires archive objects past retention and deletes KB documents with no archive object',
+    });
+
+    // The archive: list it, and delete objects under `conversations/` only.
+    this.reconcilerLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'ConversationReconcilerArchiveList',
+        effect: iam.Effect.ALLOW,
+        actions: ['s3:ListBucket'],
+        resources: [archiveBucket.bucketArn],
+      }),
+    );
+    this.reconcilerLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'ConversationReconcilerArchiveExpire',
+        effect: iam.Effect.ALLOW,
+        actions: ['s3:DeleteObject'],
+        resources: [archiveBucket.arnForObjects(`${CONVERSATION_ARCHIVE_PREFIX}*`)],
+      }),
+    );
+    // The KB_Record: read only, its own partition only. The reconciler never
+    // provisions and never writes the record.
+    this.reconcilerLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'ConversationReconcilerKbRecordRead',
+        effect: iam.Effect.ALLOW,
+        actions: ['dynamodb:GetItem'],
+        resources: [assistantsTable.tableArn],
+        conditions: {
+          'ForAllValues:StringEquals': {
+            'dynamodb:LeadingKeys': [`AST#${CONVERSATIONS_KB_ID}`],
+          },
+        },
+      }),
+    );
+    // List and delete documents. No create, no ingest.
+    managedKbRole.grantDocumentReconciliation(this.reconcilerLambda.role!);
+    this.reconcilerLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'EcrPullProjectImage',
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'ecr:GetAuthorizationToken',
+          'ecr:BatchCheckLayerAvailability',
+          'ecr:GetDownloadUrlForLayer',
+          'ecr:BatchGetImage',
+        ],
+        resources: ['*'],
+      }),
+    );
+
+    this.reconcilerScheduleRule = new events.Rule(this, 'ConversationIndexReconcilerSchedule', {
+      schedule: events.Schedule.cron(CONVERSATION_INDEX_RECONCILER_SCHEDULE),
+      // Enabled whatever the index flag says; see the class docblock.
+      enabled: true,
+      description:
+        'Conversation-search daily reconciler tick - archive past retention, KB documents without an object',
+    });
+    this.reconcilerScheduleRule.addTarget(
+      new targets.LambdaFunction(this.reconcilerLambda, { retryAttempts: 0 }),
+    );
+
     // ── SSM: generated function name for the code-deploy step ──
     new ssm.StringParameter(this, 'ConsumerFunctionNameParameter', {
       parameterName: `/${config.projectPrefix}/conversation-index/consumer-function-name`,
       stringValue: this.consumerLambda.functionName,
       description:
         'Conversation-index consumer Lambda function name (consumed by backend workflow code-deploy step)',
+      tier: ssm.ParameterTier.STANDARD,
+    });
+    new ssm.StringParameter(this, 'ReconcilerFunctionNameParameter', {
+      parameterName: `/${config.projectPrefix}/conversation-index/reconciler-function-name`,
+      stringValue: this.reconcilerLambda.functionName,
+      description:
+        'Conversation-index daily reconciler Lambda function name (consumed by backend workflow code-deploy step)',
       tier: ssm.ParameterTier.STANDARD,
     });
   }
