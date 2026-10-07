@@ -42,7 +42,7 @@ except ImportError:  # pragma: no cover - exercised only without boto3
 
 from apis.shared.dynamo_errors import is_missing_index_error, log_missing_index
 
-from .models import Project, ProjectMember, SharedTask, normalize_email
+from .models import Project, ProjectMember, ProjectOutput, SharedTask, normalize_email
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +50,7 @@ META_SK = "META"
 MEMBER_SK_PREFIX = "MEMBER#"
 COST_SK_PREFIX = "COST#"
 SHARED_TASK_SK_PREFIX = "SHARED_TASK#"
+OUTPUT_SK_PREFIX = "OUTPUT#"
 PERSONAL_SPACE_SK_PREFIX = "PERSONAL_SPACE#"
 OWNER_INDEX = "OwnerIndex"
 MEMBER_INDEX = "MemberIndex"
@@ -486,6 +487,26 @@ class ProjectRepository:
         )
 
     # ── shared tasks ────────────────────────────────────────────────────
+
+    # ---- outputs (3.3) ----------------------------------------------------
+
+    def put_output(self, output: ProjectOutput) -> None:
+        item = output.model_dump(by_alias=True, exclude_none=True)
+        item.update(self._key(output.project_id, f"{OUTPUT_SK_PREFIX}{output.artifact_id}"))
+        self._table.put_item(Item=item)
+
+    def get_output(self, project_id: str, artifact_id: str) -> Optional[ProjectOutput]:
+        item = self._table.get_item(Key=self._key(project_id, f"{OUTPUT_SK_PREFIX}{artifact_id}")).get("Item")
+        return ProjectOutput.model_validate(_strip_keys(item)) if item else None
+
+    def delete_output(self, project_id: str, artifact_id: str) -> None:
+        self._table.delete_item(Key=self._key(project_id, f"{OUTPUT_SK_PREFIX}{artifact_id}"))
+
+    def list_outputs(self, project_id: str) -> List[ProjectOutput]:
+        items = self._query_all(
+            KeyConditionExpression=Key("PK").eq(project_pk(project_id)) & Key("SK").begins_with(OUTPUT_SK_PREFIX)
+        )
+        return [ProjectOutput.model_validate(_strip_keys(i)) for i in items]
 
     def put_shared_task(self, pointer: SharedTask) -> None:
         """Point the project at a task's share, replacing any older one for that task."""

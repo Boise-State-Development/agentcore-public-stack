@@ -28,6 +28,7 @@ import {
   MemoryProposal,
   MemoryProposalDetail,
   MemoryProposalsResponse,
+  ProjectOutputsResponse,
   UpdateProjectRequest,
 } from '../models/project.model';
 import { CreateDocumentRequest, DownloadUrlResponse } from '../../assistants/models/document.model';
@@ -168,6 +169,17 @@ export class ProjectApiService {
   }
 
   /** Tasks members shared with the project, newest first. */
+  // ---- outputs (3.3) -----------------------------------------------------
+
+  outputs(projectId: string): Observable<ProjectOutputsResponse> {
+    return this.http.get<ProjectOutputsResponse>(this.url(projectId, '/outputs'), this.options());
+  }
+
+  /** Stop sharing an artifact with the project: revokes its project share. */
+  removeOutput(projectId: string, artifactId: string): Observable<void> {
+    return this.http.delete<void>(this.url(projectId, `/outputs/${encodeURIComponent(artifactId)}`), this.options());
+  }
+
   // ---- memory proposals (2.5a) -------------------------------------------
 
   /** Editors and the owner get every proposal; anyone else gets their own. */
