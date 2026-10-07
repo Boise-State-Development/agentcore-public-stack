@@ -1,8 +1,8 @@
 import { Component, ChangeDetectionStrategy, inject } from '@angular/core';
 import { DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroExclamationTriangle, heroXMark } from '@ng-icons/heroicons/outline';
-import { DialogDismissDirective } from '../dialog/dialog-dismiss.directive';
+import { heroExclamationTriangle } from '@ng-icons/heroicons/outline';
+import { DialogShellComponent } from '../dialog/dialog-shell.component';
 
 /**
  * Data passed to the confirmation dialog.
@@ -24,7 +24,7 @@ export interface ConfirmationDialogData {
  * A reusable confirmation dialog component using Angular CDK Dialog.
  *
  * Features:
- * - Accessible: Proper ARIA attributes, focus trap, keyboard navigation
+ * - Accessible: an `alertdialog` named by its title, focus trapped and starting on Cancel
  * - Responsive: Works on mobile and desktop
  * - Dark mode support
  * - Configurable: Title, message, button text, destructive styling
@@ -56,122 +56,37 @@ export interface ConfirmationDialogData {
 @Component({
   selector: 'app-confirmation-dialog',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DialogDismissDirective, NgIcon],
-  providers: [provideIcons({ heroExclamationTriangle, heroXMark })],
-  host: {
-    'class': 'block',
-    '(keydown.escape)': 'onCancel()'
-  },
+  imports: [DialogShellComponent, NgIcon],
+  providers: [provideIcons({ heroExclamationTriangle })],
+  host: { class: 'block' },
   template: `
-    <!-- Backdrop -->
-    <div
-      class="dialog-backdrop fixed inset-0 bg-gray-500/75 dark:bg-gray-900/80"
-      aria-hidden="true"
-    ></div>
-
-    <!-- Dialog Panel -->
-    <div class="fixed inset-0 z-10 flex min-h-full items-end justify-center p-4 sm:items-center sm:p-0"
-      appDialogDismiss
-      (dismissed)="onCancel()">
-      <div
-        class="dialog-panel relative transform overflow-hidden rounded-lg bg-white px-4 pt-5 pb-4 text-left shadow-xl sm:my-8 sm:w-full sm:max-w-lg sm:p-6 dark:bg-gray-800 dark:outline dark:-outline-offset-1 dark:outline-white/10"
-        role="alertdialog"
-        aria-modal="true"
-        [attr.aria-labelledby]="'dialog-title'"
-        [attr.aria-describedby]="'dialog-description'"
-      >
-        <!-- Close button (top-right) -->
-        <div class="absolute top-0 right-0 hidden pt-4 pr-4 sm:block">
-          <button
-            type="button"
-            (click)="onCancel()"
-            class="rounded-md bg-white text-gray-400 hover:text-gray-500 focus:outline-2 focus:outline-offset-2 focus:outline-primary-600 dark:bg-gray-800 dark:hover:text-gray-300 dark:focus:outline-white"
-            aria-label="Close dialog"
-          >
-            <span class="sr-only">Close</span>
-            <ng-icon name="heroXMark" class="size-6" aria-hidden="true" />
-          </button>
+    <!-- An alertdialog, so assistive tech announces it as an interruption. Focus starts on
+         Cancel: the least destructive choice, so a stray Enter never confirms. -->
+    <app-dialog-shell [title]="data.title" [description]="data.message" dialogRole="alertdialog" (closed)="onCancel()">
+      @if (data.destructive) {
+        <div
+          dialogIcon
+          class="flex size-10 shrink-0 items-center justify-center rounded-2xl bg-state-danger-100 dark:bg-state-danger-500/10"
+        >
+          <ng-icon name="heroExclamationTriangle" class="size-5 text-state-danger-600 dark:text-state-danger-400" aria-hidden="true" />
         </div>
+      }
 
-        <!-- Icon + Content -->
-        <div class="sm:flex sm:items-start">
-          @if (data.destructive) {
-            <div class="mx-auto flex size-12 shrink-0 items-center justify-center rounded-full bg-state-danger-100 sm:mx-0 sm:size-10 dark:bg-state-danger-500/10">
-              <ng-icon name="heroExclamationTriangle" class="size-6 text-state-danger-600 dark:text-state-danger-400" aria-hidden="true" />
-            </div>
-          }
-          <div class="mt-3 text-center sm:mt-0 sm:text-left" [class.sm:ml-4]="data.destructive">
-            <h3
-              id="dialog-title"
-              class="text-base/7 font-semibold text-gray-900 dark:text-white"
-            >
-              {{ data.title }}
-            </h3>
-            <div class="mt-2">
-              <p
-                id="dialog-description"
-                class="text-sm/6 text-gray-500 dark:text-gray-400"
-              >
-                {{ data.message }}
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <!-- Actions -->
-        <div class="mt-5 sm:mt-4 sm:flex sm:flex-row-reverse">
-          <button
-            type="button"
-            (click)="onConfirm()"
-            [class]="confirmButtonClass"
-          >
-            {{ data.confirmText || 'Confirm' }}
-          </button>
-          <button
-            type="button"
-            (click)="onCancel()"
-            class="mt-3 inline-flex w-full justify-center rounded-2xl bg-white px-3 py-2 text-sm/6 font-semibold text-gray-900 shadow-xs ring-1 ring-gray-300 ring-inset hover:bg-gray-50 sm:mt-0 sm:w-auto dark:bg-white/10 dark:text-white dark:shadow-none dark:ring-white/5 dark:hover:bg-white/20"
-          >
-            {{ data.cancelText || 'Cancel' }}
-          </button>
-        </div>
+      <div dialogFooter class="flex justify-end gap-3 border-t border-gray-200 px-6 py-4 dark:border-gray-700">
+        <button
+          type="button"
+          cdkFocusInitial
+          (click)="onCancel()"
+          class="rounded-2xl px-4 py-2 text-sm/6 font-medium text-gray-600 hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-500 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white"
+        >
+          {{ data.cancelText || 'Cancel' }}
+        </button>
+        <button type="button" (click)="onConfirm()" [class]="confirmButtonClass">
+          {{ data.confirmText || 'Confirm' }}
+        </button>
       </div>
-    </div>
+    </app-dialog-shell>
   `,
-  styles: `
-    @reference "../../../styles/theme.css";
-
-
-    /* Backdrop fade-in animation */
-    .dialog-backdrop {
-      animation: backdrop-fade-in 200ms ease-out;
-    }
-
-    @keyframes backdrop-fade-in {
-      from {
-        opacity: 0;
-      }
-      to {
-        opacity: 1;
-      }
-    }
-
-    /* Dialog panel fade-in-up animation */
-    .dialog-panel {
-      animation: dialog-fade-in-up 200ms ease-out;
-    }
-
-    @keyframes dialog-fade-in-up {
-      from {
-        opacity: 0;
-        transform: translateY(1rem) scale(0.95);
-      }
-      to {
-        opacity: 1;
-        transform: translateY(0) scale(1);
-      }
-    }
-  `
 })
 export class ConfirmationDialogComponent {
   protected readonly dialogRef = inject(DialogRef<boolean>);
@@ -182,13 +97,14 @@ export class ConfirmationDialogComponent {
    * this is a destructive action or not.
    */
   protected get confirmButtonClass(): string {
-    const baseClasses = 'inline-flex w-full justify-center rounded-2xl px-3 py-2 text-sm/6 font-semibold text-white shadow-xs sm:ml-3 sm:w-auto';
+    const baseClasses =
+      'rounded-2xl px-4 py-2 text-sm/6 font-semibold text-white focus-visible:outline-2 focus-visible:outline-offset-2';
 
     if (this.data.destructive) {
-      return `${baseClasses} bg-state-danger-600 hover:bg-state-danger-500 dark:bg-state-danger-500 dark:shadow-none dark:hover:bg-state-danger-400`;
+      return `${baseClasses} bg-state-danger-600 hover:bg-state-danger-700 focus-visible:outline-state-danger-500 dark:bg-state-danger-500 dark:hover:bg-state-danger-600`;
     }
 
-    return `${baseClasses} bg-primary-accessible hover:brightness-95 dark:shadow-none`;
+    return `${baseClasses} bg-primary-accessible hover:brightness-95 focus-visible:outline-primary-500`;
   }
 
   /**

@@ -1,8 +1,10 @@
-import { ChangeDetectionStrategy, Component, DestroyRef, ElementRef, computed, effect, inject, input, output } from '@angular/core';
-import { DialogRef } from '@angular/cdk/dialog';
+import { ChangeDetectionStrategy, Component, HostAttributeToken, computed, contentChild, inject, input, output, viewChild } from '@angular/core';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroXMark } from '@ng-icons/heroicons/outline';
+import { DialogDescriptionDirective } from './dialog-description.directive';
 import { DialogDismissDirective } from './dialog-dismiss.directive';
+import { DialogTitleDirective } from './dialog-title.directive';
+import { injectHostDialog, parseDialogRole, setHostDialogRole } from './host-dialog';
 
 export type DialogShellSize = 'md' | 'lg' | 'xl';
 
@@ -11,18 +13,6 @@ const WIDTHS: Record<DialogShellSize, string> = {
   lg: 'sm:max-w-2xl',
   xl: 'sm:max-w-4xl',
 };
-
-let nextId = 0;
-
-/**
- * The part of CDK's dialog container that names it. `_addAriaLabelledBy` is the hook
- * Angular Material's dialog title uses; it's underscored, so it's reached through this
- * narrow, optional shape and a missing method just leaves the name off.
- */
-interface LabelledContainer {
-  _addAriaLabelledBy?(id: string): void;
-  _removeAriaLabelledBy?(id: string): void;
-}
 
 /**
  * The chrome every CDK dialog in this codebase draws by hand: backdrop, centred
@@ -38,21 +28,33 @@ interface LabelledContainer {
  * </app-dialog-shell>
  * ```
  *
+ * Two more slots sit in the header: `[dialogIcon]` before the title (the danger badge on a
+ * delete confirmation) and `[appDialogDescription]` under it, for a description that needs
+ * markup — import `DialogDescriptionDirective` and use it instead of `description`.
+ *
+ * A confirmation adds the static attribute `dialogRole="alertdialog"`; the container (the
+ * element assistive tech treats as the dialog) takes that role however it was opened.
+ *
  * Escape and a click outside the panel both emit `closed`; the opener decides what
  * closing means (usually `dialogRef.close(result)`). The panel never grows past the
  * viewport: the body scrolls while the title and footer stay put.
  *
  * **Accessible name.** CDK's container is itself the `role="dialog"` element, and it has
  * no name unless the opener passes one (axe `aria-dialog-name`). Opened through `Dialog`,
- * the shell names that container with its title and describes it with its description,
- * and its own panel carries no dialog role, so assistive tech meets one named dialog
- * rather than an unnamed one wrapping a named one. Rendered outside a CDK dialog (a spec,
- * a harness), the panel keeps `role="dialog"` and labels itself.
+ * the shell names that container with its title and describes it with its description
+ * (`appDialogTitle` / `appDialogDescription`), and its own panel carries no dialog role,
+ * so assistive tech meets one named dialog rather than an unnamed one wrapping a named
+ * one. Rendered outside a CDK dialog (a spec, a harness), the panel keeps `role="dialog"`
+ * and labels itself.
+ *
+ * **Focus on open.** CDK focuses the first tabbable element, which is the close button
+ * (or a `dialogActions` button) unless the content marks a better one with
+ * `cdkFocusInitial`: the first field of a form, Cancel on a destructive confirmation.
  */
 @Component({
   selector: 'app-dialog-shell',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DialogDismissDirective, NgIcon],
+  imports: [DialogDescriptionDirective, DialogDismissDirective, DialogTitleDirective, NgIcon],
   providers: [provideIcons({ heroXMark })],
   host: {
     class: 'block',
@@ -69,28 +71,32 @@ interface LabelledContainer {
       <div
         class="dialog-panel relative flex max-h-[calc(100dvh-1.5rem)] w-full flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white text-left shadow-xl sm:max-h-[calc(100dvh-3rem)] dark:border-gray-700 dark:bg-gray-800"
         [class]="widthClass()"
-        [attr.role]="inCdkDialog ? null : 'dialog'"
-        [attr.aria-modal]="inCdkDialog ? null : 'true'"
-        [attr.aria-labelledby]="inCdkDialog ? null : titleId"
-        [attr.aria-describedby]="!inCdkDialog && description() ? descriptionId : null"
+        [attr.role]="hosted ? null : 'dialog'"
+        [attr.aria-modal]="hosted ? null : 'true'"
+        [attr.aria-labelledby]="hosted ? null : heading.id"
+        [attr.aria-describedby]="hosted ? null : panelDescriptionId()"
       >
         <div class="flex items-start gap-3 px-6 pt-5 pb-3">
+          <ng-content select="[dialogIcon]" />
           <div class="min-w-0 flex-1">
-            <h2 [id]="titleId" class="text-lg/7 font-semibold text-gray-900 dark:text-white">{{ title() }}</h2>
+            <h2 appDialogTitle #heading="appDialogTitle" class="text-lg/7 font-semibold text-gray-900 dark:text-white">{{ title() }}</h2>
             @if (description()) {
-              <p [id]="descriptionId" class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">{{ description() }}</p>
+              <p appDialogDescription class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">{{ description() }}</p>
             }
+            <ng-content select="[appDialogDescription]" />
           </div>
           <div class="flex shrink-0 items-center gap-1">
             <ng-content select="[dialogActions]" />
-            <button
-              type="button"
-              (click)="closed.emit()"
-              aria-label="Close dialog"
-              class="flex size-8 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
-            >
-              <ng-icon name="heroXMark" class="size-5" aria-hidden="true" />
-            </button>
+            @if (closeButton()) {
+              <button
+                type="button"
+                (click)="closed.emit()"
+                [attr.aria-label]="closeLabel()"
+                class="flex size-8 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+              >
+                <ng-icon name="heroXMark" class="size-5" aria-hidden="true" />
+              </button>
+            }
           </div>
         </div>
 
@@ -133,35 +139,28 @@ export class DialogShellComponent {
   readonly title = input.required<string>();
   readonly description = input<string | null | undefined>(null);
   readonly size = input<DialogShellSize>('md');
+  /** Off for a dialog the user must answer (an announcement that needs acknowledging). */
+  readonly closeButton = input(true);
+  readonly closeLabel = input('Close dialog');
 
   /** Escape, the close button, or a click outside the panel. */
   readonly closed = output<void>();
 
-  protected readonly titleId = `dialog-shell-title-${++nextId}`;
-  protected readonly descriptionId = `dialog-shell-description-${nextId}`;
   protected readonly widthClass = computed(() => WIDTHS[this.size()]);
 
-  private readonly dialogRef = inject(DialogRef, { optional: true });
-  private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
-  private readonly container = this.dialogRef?.containerInstance as unknown as LabelledContainer | undefined;
+  private readonly ownDescription = viewChild(DialogDescriptionDirective);
+  private readonly projectedDescription = contentChild(DialogDescriptionDirective);
+  /** Only read outside a CDK dialog, where the panel describes itself. */
+  protected readonly panelDescriptionId = computed(
+    () => (this.ownDescription() ?? this.projectedDescription())?.id ?? null,
+  );
+
+  private readonly dialog = injectHostDialog();
   /** Opened through CDK's `Dialog`, whose container is the dialog element (a stub `DialogRef` in a spec has none). */
-  protected readonly inCdkDialog = !!this.container;
+  protected readonly hosted = !!this.dialog;
 
   constructor() {
-    const container = this.container;
-    if (!container) return;
-    container._addAriaLabelledBy?.(this.titleId);
-    inject(DestroyRef).onDestroy(() => container._removeAriaLabelledBy?.(this.titleId));
-
-    // The container's own aria-describedby comes only from the opener's config; when that
-    // is empty the shell's description fills it, and an opener's value is left alone.
-    effect(() => {
-      const describe = !!this.description();
-      const element = this.host.nativeElement.closest('.cdk-dialog-container');
-      if (!element) return;
-      const current = element.getAttribute('aria-describedby');
-      if (describe && !current) element.setAttribute('aria-describedby', this.descriptionId);
-      if (!describe && current === this.descriptionId) element.removeAttribute('aria-describedby');
-    });
+    const role = parseDialogRole(inject(new HostAttributeToken('dialogRole'), { optional: true }));
+    if (this.dialog && role) setHostDialogRole(this.dialog, role);
   }
 }
