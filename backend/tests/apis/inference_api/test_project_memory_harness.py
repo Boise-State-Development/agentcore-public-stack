@@ -186,7 +186,9 @@ def test_the_tools_close_over_a_copy_of_the_member_without_the_token(projects):
     with_token = replace(EDITOR, raw_token="secret-token")
     turn = ProjectMemoryTurn(project.project_id, project.shared_space_id, None)
     tools = build_project_memory_tools(turn, with_token)
-    assert [t.tool_spec["name"] for t in tools] == ["memory_list", "memory_read", "memory_query", "memory_save"]
+    assert [t.tool_spec["name"] for t in tools] == [
+        "memory_list", "memory_read", "memory_query", "memory_save", "memory_propose",
+    ]
     scopes = ProjectMemoryScopes.for_member(project.project_id, None, None, with_token)
     assert scopes.user.raw_token is None and scopes.user.user_id == EDITOR.user_id
 

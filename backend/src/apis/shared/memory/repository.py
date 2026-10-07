@@ -12,6 +12,8 @@ Row shapes (see ``models.py``):
   - ``PK=SPACE#{id}  SK=INDEX``
   - ``PK=SPACE#{id}  SK=MEMBER#{email}``  + ``GSI2PK=MEMBER#{email}``
   - ``PK=SPACE#{id}  SK=FILEVER#{slug}#{n:06d}``  (per-file history, no index)
+  - ``PK=SPACE#{id}  SK=PROPOSAL#{proposalId}``    (review queue, no index: a space's
+    proposals are one ``Query``, filtered on ``state``)
 """
 
 from __future__ import annotations
@@ -31,7 +33,7 @@ except ImportError:  # pragma: no cover - exercised only without boto3
     Key = None  # type: ignore[assignment]
     ClientError = Exception  # type: ignore[assignment, misc]
 
-from .models import FileVersion, MemoryEntryRef, MemoryIndex, MemorySpace, SpaceMember
+from .models import FileVersion, MemoryEntryRef, MemoryIndex, MemoryProposal, MemorySpace, SpaceMember
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +60,7 @@ _META_SK = "META"
 _INDEX_SK = "INDEX"
 _MEMBER_SK_PREFIX = "MEMBER#"
 _FILEVER_SK_PREFIX = "FILEVER#"
+_PROPOSAL_SK_PREFIX = "PROPOSAL#"
 
 MANIFEST_MAX_BYTES = 300 * 1024
 
@@ -468,6 +471,50 @@ class MemorySpaceRepository:
         if slug is not None:
             versions = [v for v in versions if v.slug == slug]
         return versions
+
+    # ---- proposals (PROPOSAL) --------------------------------------------
+
+    @staticmethod
+    def _proposal_key(space_id: str, proposal_id: str) -> dict:
+        return {"PK": _space_pk(space_id), "SK": f"{_PROPOSAL_SK_PREFIX}{proposal_id}"}
+
+    def put_proposal(self, space_id: str, proposal: MemoryProposal, *, expected_state: Optional[str] = None) -> None:
+        """Write a proposal. ``expected_state`` makes it a conditional transition.
+
+        Raises :class:`OptimisticLockError` when the stored row is no longer in
+        ``expected_state`` (another reviewer decided it first). A ``PutItem``
+        rather than an ``UpdateItem``: the Runtime role, which creates proposals,
+        has no ``UpdateItem`` on this table.
+        """
+        item = {**self._proposal_key(space_id, proposal.proposal_id),
+                **_to_dynamo(proposal.model_dump(by_alias=True, exclude_none=True))}
+        kwargs: Dict[str, Any] = {"Item": item}
+        if expected_state is not None:
+            kwargs["ConditionExpression"] = "#s = :expected"
+            kwargs["ExpressionAttributeNames"] = {"#s": "state"}
+            kwargs["ExpressionAttributeValues"] = {":expected": expected_state}
+        try:
+            self._table.put_item(**kwargs)
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+                raise OptimisticLockError(f"proposal {proposal.proposal_id} is no longer {expected_state}") from exc
+            raise
+
+    def get_proposal(self, space_id: str, proposal_id: str) -> Optional[MemoryProposal]:
+        item = self._table.get_item(Key=self._proposal_key(space_id, proposal_id)).get("Item")
+        if not item:
+            return None
+        return MemoryProposal.model_validate(_from_dynamo({k: v for k, v in item.items() if k not in ("PK", "SK")}))
+
+    def list_proposals(self, space_id: str) -> List[MemoryProposal]:
+        """Every proposal in a space, oldest first (ids sort by creation time)."""
+        items = self._query_pages(
+            KeyConditionExpression=Key("PK").eq(_space_pk(space_id)) & Key("SK").begins_with(_PROPOSAL_SK_PREFIX)
+        )
+        return [
+            MemoryProposal.model_validate(_from_dynamo({k: v for k, v in i.items() if k not in ("PK", "SK")}))
+            for i in items
+        ]
 
     def delete_file_versions(self, space_id: str, slug: str) -> List[FileVersion]:
         """Delete every version row of one file; return what was deleted."""

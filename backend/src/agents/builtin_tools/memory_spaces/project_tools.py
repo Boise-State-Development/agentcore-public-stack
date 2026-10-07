@@ -273,7 +273,7 @@ def make_project_memory_save_tool(scopes: ProjectMemoryScopes):
         with `[[name]]`.
 
         "mine" is the member's own and always writable. "project" is shared with every
-        member and needs the editor role; a viewer can save to "mine" instead or ask an editor. A new file
+        member and needs the editor role; a viewer can save to "mine" instead, or use `memory_propose`. A new file
         is added to that scope's MEMORY.md index, which appears in every conversation, as
         one line built from `description`, so give a new file one. The slug "MEMORY.md"
         replaces the index: `memory_read` it first and keep one short line per file, such
@@ -324,6 +324,52 @@ def make_project_memory_save_tool(scopes: ProjectMemoryScopes):
     return memory_save
 
 
+def make_project_memory_propose_tool(scopes: ProjectMemoryScopes):
+    @tool
+    async def memory_propose(slug: str, text: str, description: str = "") -> dict[str, Any]:
+        """Propose a change to project memory for an editor to review.
+
+        Use it when the member can't save to "project" (a viewer), or asks for a
+        change to be reviewed first. The proposal is checked like `memory_save` and
+        then waits; nothing changes until an owner or editor approves it, and they
+        are notified. Write `text` exactly as for `memory_save`: the whole file, one
+        "- " item per line, keeping existing items' anchors.
+
+        Args:
+            slug: The project file to create or change, as in `memory_save`.
+            text: The whole proposed file, one "- " item per line.
+            description: One line describing the file.
+        """
+        from apis.shared.projects.memory_proposals import ProjectMemoryProposals, ProposalProjectError
+
+        user = scopes.user
+        try:
+            proposal, warnings = await asyncio.to_thread(
+                lambda: ProjectMemoryProposals().propose(
+                    scopes.project_id, user, slug, text,
+                    description=description or None, proposer_kind="agent",
+                )
+            )
+        except MemoryValidationError as exc:
+            return _error(f"Not proposed: {exc}")
+        except ProposalProjectError as exc:
+            return _error(str(exc))
+        except (MemorySpacePermissionError, MemorySpaceNotFoundError):
+            return _error(_NOT_A_MEMBER)
+        except MemorySpaceError as exc:
+            return _error(f"Could not propose '{slug}': {exc}")
+        verb = "a change to" if proposal.base_version else "a new file,"
+        text_out = (
+            f'Proposed {verb} "{proposal.slug}" for review. The project\'s editors have been notified; '
+            "it takes effect only if one of them approves it."
+        )
+        if warnings:
+            text_out += " Notes: " + " ".join(warnings)
+        return {"content": [{"text": text_out}], "status": "success"}
+
+    return memory_propose
+
+
 async def _index_new_file(
     service: MemorySpaceService, space_id: str, scopes: ProjectMemoryScopes, scope: str, ref: Any
 ) -> Optional[str]:
@@ -357,7 +403,7 @@ async def _refusal(scopes: ProjectMemoryScopes, scope: str) -> str:
     if scope == "project":
         return (
             'Only project editors can save to project memory. Save it to "mine" instead, '
-            "or ask an editor to add it."
+            "or use memory_propose so an editor can review and add it."
         )
     return _NOT_A_MEMBER
 
@@ -393,10 +439,11 @@ def _saved(result: Any, label: str, indexed: Optional[str], budget: int) -> str:
 
 
 def make_project_memory_tools(scopes: ProjectMemoryScopes) -> list:
-    """The harness's four memory tools, in a fixed order (their specs are prompt-cached)."""
+    """The harness's five memory tools, in a fixed order (their specs are prompt-cached)."""
     return [
         make_project_memory_list_tool(scopes),
         make_project_memory_read_tool(scopes),
         make_project_memory_query_tool(scopes),
         make_project_memory_save_tool(scopes),
+        make_project_memory_propose_tool(scopes),
     ]

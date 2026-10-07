@@ -172,6 +172,41 @@ export interface SharedTask {
   note?: string | null;
 }
 
+/** A proposed change to the project's shared memory (2.5a), as `/memory/proposals` returns it. */
+export interface MemoryProposal {
+  proposalId: string;
+  state: 'pending' | 'approved' | 'rejected' | 'withdrawn';
+  /** The memory file it creates or replaces. */
+  slug: string;
+  /** The whole proposed file, one "- " item per line. */
+  text: string;
+  description?: string | null;
+  /** 0 for a new file. */
+  baseVersion: number;
+  proposedByEmail: string;
+  proposedByName?: string | null;
+  proposerKind: 'member' | 'agent' | 'schedule';
+  createdAt: string;
+  decidedByEmail?: string | null;
+  decidedByName?: string | null;
+  decidedAt?: string | null;
+  note?: string | null;
+  resultVersion?: number | null;
+  edited: boolean;
+  isMine: boolean;
+  /** Pending, and the file changed since: approve an edited version or decline. */
+  stale?: boolean | null;
+}
+
+export interface MemoryProposalDetail extends MemoryProposal {
+  /** Pending only: the file now, items without frontmatter; null for a new file. */
+  currentText?: string | null;
+}
+
+export interface MemoryProposalsResponse {
+  proposals: MemoryProposal[];
+}
+
 export interface SharedTasksResponse {
   /** Most recently shared first; one entry per task. */
   tasks: SharedTask[];

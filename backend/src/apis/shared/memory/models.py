@@ -145,6 +145,47 @@ class FileVersion(BaseModel):
     run_id: Optional[str] = Field(None, alias="runId")
 
 
+ProposalState = Literal["pending", "approved", "rejected", "withdrawn"]
+# ``member``: through the API; ``agent``: a task's assistant on the member's behalf
+# (``memory_propose``); ``schedule``: a scheduled run (3.2).
+ProposerKind = Literal["member", "agent", "schedule"]
+
+
+class MemoryProposal(BaseModel):
+    """A ``PROPOSAL#{proposalId}`` row: a change to a file, waiting for an editor (Shared Projects 2.5a).
+
+    ``text`` is the whole proposed file in the same form ``save_entry`` takes,
+    validated when proposed. ``base_version``/``base_content_hash`` record the
+    file it was written against (0 and "" for a new file), so an approval can
+    tell that the file has moved on since. Decided rows are kept as the review
+    record and go with the space.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    proposal_id: str = Field(..., alias="proposalId")
+    kind: Literal["entry"] = "entry"
+    state: ProposalState = "pending"
+    slug: str
+    text: str
+    description: Optional[str] = None
+    aliases: Optional[List[str]] = None
+    base_version: int = Field(0, alias="baseVersion")
+    base_content_hash: str = Field("", alias="baseContentHash")
+    tokens: Optional[int] = None
+    proposer_id: str = Field(..., alias="proposerId")
+    proposer_email: str = Field("", alias="proposerEmail")
+    proposer_kind: ProposerKind = Field("member", alias="proposerKind")
+    created_at: str = Field(..., alias="createdAt")
+    decided_by: Optional[str] = Field(None, alias="decidedBy")
+    decided_by_email: Optional[str] = Field(None, alias="decidedByEmail")
+    decided_at: Optional[str] = Field(None, alias="decidedAt")
+    note: Optional[str] = None
+    # The FILEVER version an approval wrote, and whether the reviewer edited the text first.
+    result_version: Optional[int] = Field(None, alias="resultVersion")
+    edited: bool = False
+
+
 class MemoryIndex(BaseModel):
     """The ``INDEX`` row: the machine manifest of a space's entries.
 

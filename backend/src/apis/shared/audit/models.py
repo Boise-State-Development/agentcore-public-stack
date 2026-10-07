@@ -83,6 +83,9 @@ class AuditAction:
     PROJECT_KNOWLEDGE_REMOVED = "project.knowledge_removed"
     PROJECT_TASK_SHARED = "project.task_shared"
     PROJECT_TASK_UNSHARED = "project.task_unshared"
+    PROJECT_MEMORY_PROPOSED = "project.memory_proposed"
+    PROJECT_MEMORY_PROPOSAL_APPROVED = "project.memory_proposal_approved"
+    PROJECT_MEMORY_PROPOSAL_REJECTED = "project.memory_proposal_rejected"
 
 
 ALL_ACTIONS: frozenset[str] = frozenset(

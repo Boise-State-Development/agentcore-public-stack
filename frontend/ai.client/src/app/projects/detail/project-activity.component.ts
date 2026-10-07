@@ -126,6 +126,12 @@ export function describeActivity(
       return line(`shared the task “${str(after['title']) || 'Untitled task'}” with the project`);
     case 'project.task_unshared':
       return line(`stopped sharing the task “${str(after['title']) || 'Untitled task'}”`);
+    case 'project.memory_proposed':
+      return line(`proposed a change to the memory file “${str(after['slug'])}”`);
+    case 'project.memory_proposal_approved':
+      return line(`approved a change to the memory file “${str(after['slug'])}”${after['edited'] ? ' with edits' : ''}`);
+    case 'project.memory_proposal_rejected':
+      return line(`declined a change to the memory file “${str(after['slug'])}”`);
     default:
       return line(record.action.replace(/^project\./, '').replace(/_/g, ' '));
   }

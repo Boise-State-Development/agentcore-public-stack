@@ -41,8 +41,11 @@ from .models import (
     FileVersionReason,
     MemoryEntryRef,
     MemoryIndex,
+    MemoryProposal,
     MemoryScope,
     MemorySpace,
+    ProposalState,
+    ProposerKind,
     Role,
     ShareRole,
     SpaceMember,
@@ -112,6 +115,20 @@ def file_hard_cap_tokens() -> int:
 def file_soft_threshold_tokens() -> int:
     pct = min(100, _env_int("MEMORY_FILE_SOFT_THRESHOLD_PCT", _DEFAULT_FILE_SOFT_THRESHOLD_PCT, minimum=1))
     return file_hard_cap_tokens() * pct // 100
+
+
+def max_pending_proposals() -> int:
+    """Pending proposals a space may hold (``MEMORY_MAX_PENDING_PROPOSALS``, default 100)."""
+    return _env_int("MEMORY_MAX_PENDING_PROPOSALS", 100, minimum=1)
+
+
+# A reviewer's note on a decision, like a share's hand-off note.
+MAX_PROPOSAL_NOTE_CHARS = 280
+
+
+def _new_proposal_id() -> str:
+    """Sorts by creation time, so a space's ``PROPOSAL#`` rows list oldest first."""
+    return f"{int(datetime.now(timezone.utc).timestamp() * 1000):013d}-{uuid.uuid4().hex[:8]}"
 
 
 def _next_version(ref: Optional[MemoryEntryRef]) -> int:
@@ -196,6 +213,10 @@ class MemorySpaceConcurrencyError(MemorySpaceError):
     """
 
 
+class MemoryProposalStateError(MemorySpaceError):
+    """The proposal was already decided or withdrawn (409), or there are too many pending."""
+
+
 class MemoryValidationError(MemorySpaceError):
     """A save failed validation (§4.3); nothing was written.
 
@@ -222,6 +243,19 @@ class SaveResult:
     removed_anchors: List[str] = field(default_factory=list)
     archived_links: List[str] = field(default_factory=list)
     over_soft_threshold: bool = False
+
+
+@dataclass
+class PreparedSave:
+    """A save that passed every check (§4.3 steps 1–5) and has not been written yet."""
+
+    slug: str
+    text: str
+    current_ref: Optional[MemoryEntryRef]
+    validated: Optional[CanonicalSave]
+    warnings: List[str]
+    count: TokenCount
+    over_soft: bool
 
 
 @dataclass
@@ -263,6 +297,15 @@ class ConsolidationReport:
     duplicate_groups: List[List[str]] = field(default_factory=list)
     dead_links: List[str] = field(default_factory=list)
     stripped_dead_links: bool = False
+
+
+def _clean_note(note: Optional[str]) -> Optional[str]:
+    text = " ".join((note or "").split())
+    if len(text) > MAX_PROPOSAL_NOTE_CHARS:
+        raise MemoryValidationError(
+            f"A note can be at most {MAX_PROPOSAL_NOTE_CHARS} characters.", code="note_too_long"
+        )
+    return text or None
 
 
 def _now_iso() -> str:
@@ -1009,6 +1052,7 @@ class MemorySpaceService:
         indexed: Optional[Dict[str, Any]] = None,
         aliases: Optional[List[str]] = None,
         reason: FileVersionReason = "edit",
+        proposal_id: Optional[str] = None,
     ) -> SaveResult:
         """Create or replace an entry through the save pipeline (§4.3), editor+.
 
@@ -1028,6 +1072,26 @@ class MemorySpaceService:
         """
         space, _ = self._require(space_id, user_id, user_email, "editor")
         canonical = space.file_format == "canonical"
+        now = _now_iso()
+        prepared = self._prepare_save(space, slug, body, description=description, aliases=aliases, now=now)
+        return self._commit_save(
+            space_id, user_id, prepared, canonical=canonical, entry_type=entry_type,
+            description=description, indexed=indexed, now=now, reason=reason, proposal_id=proposal_id,
+        )
+
+    def _prepare_save(
+        self,
+        space: MemorySpace,
+        slug: str,
+        body: str,
+        *,
+        description: Optional[str],
+        aliases: Optional[List[str]],
+        now: str,
+    ) -> PreparedSave:
+        """§4.3 steps 1–5 against the current manifest: validate, render, count. Writes nothing."""
+        space_id = space.space_id
+        canonical = space.file_format == "canonical"
         try:
             clean_slug = validate_slug(slug, canonical=canonical)
         except MemoryFormatError as exc:
@@ -1037,7 +1101,6 @@ class MemorySpaceService:
 
         index = self.repository.get_index(space_id)
         current_ref = next((e for e in index.entries if e.slug == slug), None)
-        now = _now_iso()
         validated: Optional[CanonicalSave] = None
         if canonical:
             current = self._current_file(current_ref, slug) if current_ref is not None else None
@@ -1087,7 +1150,28 @@ class MemorySpaceService:
             warnings.append(size_note)
         elif over_soft:
             warnings.append(f"This file is about {count.tokens:,} tokens, close to the {hard_cap:,}-token limit.")
+        return PreparedSave(
+            slug=slug, text=text, current_ref=current_ref, validated=validated,
+            warnings=warnings, count=count, over_soft=over_soft,
+        )
 
+    def _commit_save(
+        self,
+        space_id: str,
+        user_id: str,
+        prepared: PreparedSave,
+        *,
+        canonical: bool,
+        entry_type: EntryType,
+        description: Optional[str],
+        indexed: Optional[Dict[str, Any]],
+        now: str,
+        reason: FileVersionReason,
+        proposal_id: Optional[str] = None,
+    ) -> SaveResult:
+        """§4.3 step 7: write the object, swap the manifest conditionally, then write ``FILEVER``."""
+        slug, text, current_ref = prepared.slug, prepared.text, prepared.current_ref
+        validated, warnings, count, over_soft = prepared.validated, prepared.warnings, prepared.count, prepared.over_soft
         content = self._encode(text)
         s3_key = self.store.put(space_id=space_id, content=content, content_type="text/markdown")
         ref = MemoryEntryRef(
@@ -1158,6 +1242,7 @@ class MemorySpaceService:
                 updated_by=user_id,
                 updated_at=now,
                 reason=reason,
+                proposal_id=proposal_id,
             ),
         )
         return SaveResult(
@@ -1201,6 +1286,186 @@ class MemorySpaceService:
         still_used = self._referenced_keys(space_id, index=final_index)
         for key in candidates - still_used:
             self.store.delete(key)
+
+    # ---- proposals (Shared Projects 2.5a) ---------------------------------
+
+    def create_proposal(
+        self,
+        space_id: str,
+        user_id: str,
+        user_email: Optional[str],
+        slug: str,
+        text: str,
+        *,
+        description: Optional[str] = None,
+        aliases: Optional[List[str]] = None,
+        proposer_kind: ProposerKind = "member",
+    ) -> Tuple[MemoryProposal, List[str]]:
+        """Queue a change to a project's shared memory for an editor (viewer+).
+
+        The text goes through the same checks as a save (§4.3 steps 1–5), so a
+        proposal an editor can't approve is refused now, while the proposer can
+        still fix it. What is stored is the proposer's text, not its render: an
+        approval runs the pipeline again against the file as it is by then.
+        Returns the proposal and the save's warnings.
+        """
+        space, _ = self._require(space_id, user_id, user_email, "viewer")
+        if space.scope != "shared":
+            raise MemoryValidationError(
+                "Proposals are for a project's shared memory.", code="proposals_unsupported"
+            )
+        pending = [p for p in self.repository.list_proposals(space_id) if p.state == "pending"]
+        if len(pending) >= max_pending_proposals():
+            raise MemoryProposalStateError(
+                f"This project already has {len(pending)} changes waiting for review. "
+                "Ask an editor to review them before proposing more."
+            )
+        now = _now_iso()
+        prepared = self._prepare_save(space, slug, text, description=description, aliases=aliases, now=now)
+        base = prepared.current_ref
+        proposal = MemoryProposal(
+            proposal_id=_new_proposal_id(),
+            slug=prepared.slug,
+            text=text,
+            description=description,
+            aliases=aliases,
+            base_version=base.version if base else 0,
+            base_content_hash=base.content_hash if base else "",
+            tokens=prepared.count.tokens,
+            proposer_id=user_id,
+            proposer_email=(user_email or "").strip().lower(),
+            proposer_kind=proposer_kind,
+            created_at=now,
+        )
+        self.repository.put_proposal(space_id, proposal)
+        return proposal, list(prepared.warnings)
+
+    def list_proposals(
+        self,
+        space_id: str,
+        user_id: str,
+        user_email: Optional[str],
+        *,
+        state: Optional[ProposalState] = None,
+    ) -> List[MemoryProposal]:
+        """Newest first. Editors see every proposal; anyone else sees their own."""
+        _, role = self._require(space_id, user_id, user_email, "viewer")
+        proposals = self.repository.list_proposals(space_id)
+        if _ROLE_RANK[role] < _ROLE_RANK["editor"]:
+            proposals = [p for p in proposals if p.proposer_id == user_id]
+        if state is not None:
+            proposals = [p for p in proposals if p.state == state]
+        return sorted(proposals, key=lambda p: p.proposal_id, reverse=True)
+
+    def get_proposal(
+        self, space_id: str, user_id: str, user_email: Optional[str], proposal_id: str
+    ) -> MemoryProposal:
+        """One proposal, to an editor or its proposer. Anyone else gets not-found."""
+        _, role = self._require(space_id, user_id, user_email, "viewer")
+        proposal = self.repository.get_proposal(space_id, proposal_id)
+        if proposal is None or (_ROLE_RANK[role] < _ROLE_RANK["editor"] and proposal.proposer_id != user_id):
+            raise MemorySpaceNotFoundError(f"proposal '{proposal_id}' not found in space '{space_id}'")
+        return proposal
+
+    def proposal_is_stale(self, space_id: str, proposal: MemoryProposal) -> bool:
+        """Whether the file changed (or appeared, or went) since the proposal was written."""
+        current = self._find_ref(space_id, proposal.slug)
+        return (current.content_hash if current else "") != proposal.base_content_hash
+
+    def approve_proposal(
+        self,
+        space_id: str,
+        user_id: str,
+        user_email: Optional[str],
+        proposal_id: str,
+        *,
+        text: Optional[str] = None,
+        description: Optional[str] = None,
+        note: Optional[str] = None,
+    ) -> Tuple[MemoryProposal, SaveResult]:
+        """Apply a pending proposal as a save (``reason: proposal``), editor+.
+
+        ``text`` is the reviewer's edited version. Without one, a proposal whose
+        file has changed since it was written is refused (409): applying it would
+        silently undo the newer edit. The proposal is claimed (pending →
+        approved) before the save, so two reviewers can't both apply it, and
+        put back to pending if the save fails.
+        """
+        self._require(space_id, user_id, user_email, "editor")
+        proposal = self.get_proposal(space_id, user_id, user_email, proposal_id)
+        self._require_pending(proposal)
+        if text is None and self.proposal_is_stale(space_id, proposal):
+            raise MemorySpaceConcurrencyError(
+                f"'{proposal.slug}' has changed since this was proposed. "
+                "Review it against the current file and approve an edited version, or reject it."
+            )
+        decided = proposal.model_copy(update={
+            "state": "approved",
+            "decided_by": user_id,
+            "decided_by_email": (user_email or "").strip().lower(),
+            "decided_at": _now_iso(),
+            "note": _clean_note(note),
+            "edited": text is not None,
+        })
+        self._transition(space_id, decided, expected="pending")
+        try:
+            result = self.save_entry(
+                space_id, user_id, user_email, proposal.slug, text if text is not None else proposal.text,
+                description=description if description is not None else proposal.description,
+                aliases=proposal.aliases,
+                reason="proposal",
+                proposal_id=proposal.proposal_id,
+            )
+        except Exception:
+            self._transition(space_id, proposal, expected="approved")
+            raise
+        decided.result_version = result.ref.version
+        try:
+            self.repository.put_proposal(space_id, decided)
+        except Exception:
+            logger.warning("Could not record the version proposal %s wrote", proposal_id, exc_info=True)
+        return decided, result
+
+    def reject_proposal(
+        self, space_id: str, user_id: str, user_email: Optional[str], proposal_id: str, *, note: Optional[str] = None
+    ) -> MemoryProposal:
+        """Decline a pending proposal (editor+). Nothing is written to the file."""
+        self._require(space_id, user_id, user_email, "editor")
+        proposal = self.get_proposal(space_id, user_id, user_email, proposal_id)
+        self._require_pending(proposal)
+        decided = proposal.model_copy(update={
+            "state": "rejected",
+            "decided_by": user_id,
+            "decided_by_email": (user_email or "").strip().lower(),
+            "decided_at": _now_iso(),
+            "note": _clean_note(note),
+        })
+        self._transition(space_id, decided, expected="pending")
+        return decided
+
+    def withdraw_proposal(
+        self, space_id: str, user_id: str, user_email: Optional[str], proposal_id: str
+    ) -> MemoryProposal:
+        """The proposer takes back their own pending proposal."""
+        self._require(space_id, user_id, user_email, "viewer")
+        proposal = self.repository.get_proposal(space_id, proposal_id)
+        if proposal is None or proposal.proposer_id != user_id:
+            raise MemorySpaceNotFoundError(f"proposal '{proposal_id}' not found in space '{space_id}'")
+        self._require_pending(proposal)
+        withdrawn = proposal.model_copy(update={"state": "withdrawn", "decided_at": _now_iso()})
+        self._transition(space_id, withdrawn, expected="pending")
+        return withdrawn
+
+    @staticmethod
+    def _require_pending(proposal: MemoryProposal) -> None:
+        if proposal.state != "pending":
+            raise MemoryProposalStateError(f"This proposal was already {proposal.state}.")
+
+    def _transition(self, space_id: str, proposal: MemoryProposal, *, expected: str) -> None:
+        try:
+            self.repository.put_proposal(space_id, proposal, expected_state=expected)
+        except OptimisticLockError as exc:
+            raise MemoryProposalStateError("Someone else decided this proposal first.") from exc
 
     # ---- version history ------------------------------------------------
 

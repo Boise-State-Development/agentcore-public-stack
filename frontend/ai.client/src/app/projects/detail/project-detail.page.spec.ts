@@ -8,6 +8,7 @@ import { Dialog } from '@angular/cdk/dialog';
 import { of, throwError } from 'rxjs';
 import { ProjectDetailPage } from './project-detail.page';
 import { ProjectComposerComponent } from './project-composer.component';
+import { ProjectProposalsComponent } from './project-proposals.component';
 import { ProjectTasksComponent } from './project-tasks.component';
 import { ProjectInstructionsDialogComponent } from '../components/project-instructions-dialog.component';
 import { ProjectMembersDialogComponent } from '../components/project-members-dialog.component';
@@ -30,6 +31,10 @@ class ComposerStub {
 }
 @Component({ selector: 'app-project-tasks', template: 'tasks' })
 class TasksStub {
+  readonly project = input<Project>();
+}
+@Component({ selector: 'app-project-proposals', template: '' })
+class ProposalsStub {
   readonly project = input<Project>();
 }
 
@@ -86,8 +91,8 @@ describe('ProjectDetailPage', () => {
       ],
     });
     TestBed.overrideComponent(ProjectDetailPage, {
-      remove: { imports: [ProjectComposerComponent, ProjectTasksComponent] },
-      add: { imports: [ComposerStub, TasksStub] },
+      remove: { imports: [ProjectComposerComponent, ProjectProposalsComponent, ProjectTasksComponent] },
+      add: { imports: [ComposerStub, ProposalsStub, TasksStub] },
     });
   });
 

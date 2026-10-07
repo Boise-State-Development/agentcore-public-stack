@@ -73,8 +73,9 @@ can tell you which have changed on your deployment.
   person, share the task, notify them, and add a note.
 - **Activity is for editors and the owner only.** Viewers don't see it.
 - **People appear by email address**, not name or title.
-- **Viewers can't add files or save to project memory.** They can share a
-  task, or ask an editor.
+- **Viewers can't add files or save to project memory directly.** They can
+  propose a memory change for an editor to approve, share a task, or ask an
+  editor to add a file.
 - **The assistant reads a shared task's conversation, not its attachments or
   tool results.** If a teammate's answer depended on a file, add the file to
   **Files** so everyone's tasks can use it.

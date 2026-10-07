@@ -150,16 +150,31 @@ Other useful requests:
   outright.)
 
 :::caution[Check what gets saved]
-Project memory is shared with everyone, and there's no review step yet. If the
-assistant gets something wrong, such as a misread clause or a math error, and
-saves it, every teammate's assistant will repeat it. Ask the assistant to read
-back what it saved, and correct it straight away.
+Project memory is shared with everyone. When an editor saves to it, the change
+takes effect at once. If the assistant gets something wrong, such as a misread
+clause or a math error, and saves it, every teammate's assistant will repeat it.
+Ask the assistant to read back what it saved, and correct it straight away.
 :::
 
-Viewers can't save to project memory. If a viewer asks, the assistant saves to
-their "just for me" memory instead. A viewer with information the team needs,
-such as a principal investigator's hard deadline, should share the task or ask an
-editor to record it.
+### Propose a change
+
+Viewers can't save to project memory directly. A viewer can **propose** a change
+instead: ask the assistant to "propose adding to project memory that…". The
+proposal waits for review, and nothing changes until an editor or the owner
+approves it. Editors can propose too, when they want a second look.
+
+### Review proposed changes
+
+Editors and the owner are notified of each proposal. Proposals waiting for review
+appear under **Proposed memory changes** on the project page, above Recents.
+Open one to see what it adds and removes. Then **Approve** it, **Edit before
+approving**, or **Decline** it, optionally with a note for the person who proposed
+it. They're notified of your decision either way. If someone changed the file
+after the proposal was made, you'll need to edit the proposal against the current
+file before you can approve it.
+
+If you proposed a change, you'll see it in the same place until it's decided, and
+you can **Withdraw** it.
 
 ## Ask for a Word redline
 
