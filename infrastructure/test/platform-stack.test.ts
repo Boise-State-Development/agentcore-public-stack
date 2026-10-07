@@ -251,9 +251,14 @@ describe('PlatformStack', () => {
       // discovery, not restore: the AgentCore Runtime has no env slot left
       // for the bucket (runtime-env-var-limit.test.ts), so it reads this
       // parameter under PROJECT_PREFIX, as the artifacts tools do.
+      //
+      // Raised 54 → 55 for the conversation-index consumer's function name.
+      // Deploy-script discovery, the same pattern as every image Lambda:
+      // deploy-image-lambda-one.sh resolves the CDK-generated name from it to
+      // swap in the real image, and skips gracefully until it exists.
       const params = template.findResources('AWS::SSM::Parameter');
       expect(Object.keys(params).length).toBeGreaterThanOrEqual(30);
-      expect(Object.keys(params).length).toBeLessThanOrEqual(54);
+      expect(Object.keys(params).length).toBeLessThanOrEqual(55);
     });
   });
 

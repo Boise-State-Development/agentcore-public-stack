@@ -51,6 +51,7 @@ import { RagIngestionLambdaConstruct } from './constructs/rag-ingestion/rag-inge
 import { KbSyncConstruct } from './constructs/kb-sync/kb-sync-construct';
 import { ManagedKbRoleConstruct } from './constructs/managed-kb/managed-kb-role-construct';
 import { KbMigrationConstruct } from './constructs/managed-kb/kb-migration-construct';
+import { ConversationIndexConstruct } from './constructs/conversation-index/conversation-index-construct';
 import { PlatformCostSyncConstruct } from './constructs/costs/platform-cost-sync-construct';
 import { ScheduledRunsConstruct } from './constructs/scheduled-runs/scheduled-runs-construct';
 
@@ -277,6 +278,7 @@ export class PlatformStack extends cdk.Stack {
   private _artifactRenderFunction!: lambda.IFunction;
   private _ragIngestionFunction!: lambda.IFunction;
   private _kbMigration?: KbMigrationConstruct;
+  private _conversationIndex?: ConversationIndexConstruct;
   private _tokenEnrichment?: TokenEnrichmentConstruct;
   private _platformCostSync?: PlatformCostSyncConstruct;
   private readonly _spaBucketConstruct: SpaBucketConstruct;
@@ -582,6 +584,26 @@ export class PlatformStack extends cdk.Stack {
     // construct for the same reason the rag-ingestion notification is:
     // a construct never mutates a bucket handed to it as a prop.
     ragData.documentsBucket.enableEventBridgeNotification();
+
+    // ============================================================
+    // Conversation-search index consumer (docs/specs/conversation-search.md
+    // §4, PR-2b). Archive Object Created / Object Deleted → EventBridge →
+    // SQS → consumer Lambda → the shared `conversations` managed knowledge
+    // base, which the consumer provisions lazily on first ingest. Both rules
+    // are created DISABLED unless config.conversationIndex.enabled.
+    //
+    // EventBridge delivery is switched on here rather than in either
+    // construct, for the same reason as the documents bucket above: a
+    // construct never mutates a bucket handed to it. The archive bucket has
+    // no other notification, and delivery with no enabled rule costs nothing.
+    // ============================================================
+    this._conversationIndex = new ConversationIndexConstruct(this, 'ConversationIndex', {
+      config,
+      archiveBucket: conversationArchive.bucket,
+      assistantsTable: this.ragAssistantsTable,
+      managedKbRole,
+    });
+    conversationArchive.bucket.enableEventBridgeNotification();
 
     // ============================================================
     // Fine-tuning data
@@ -1036,6 +1058,9 @@ export class PlatformStack extends cdk.Stack {
               { name: 'kb-ingestion-consumer', fn: this._kbMigration.ingestionConsumerLambda },
             ]
           : []),
+        ...(this._conversationIndex
+          ? [{ name: 'conversation-index-consumer', fn: this._conversationIndex.consumerLambda }]
+          : []),
         ...(this._kbSync
           ? [
               { name: 'kb-sync-dispatcher', fn: this._kbSync.dispatcherLambda, throttleOnly: true },
@@ -1045,9 +1070,14 @@ export class PlatformStack extends cdk.Stack {
         { name: 'scheduled-runs-dispatcher', fn: scheduledRuns.dispatcherLambda, throttleOnly: true },
         { name: 'scheduled-runs-worker', fn: scheduledRuns.workerLambda, throttleOnly: true },
       ],
-      dlqs: this._kbMigration
-        ? [{ name: 'kb-ingestion', queue: this._kbMigration.ingestionConsumerDlq }]
-        : [],
+      dlqs: [
+        ...(this._kbMigration
+          ? [{ name: 'kb-ingestion', queue: this._kbMigration.ingestionConsumerDlq }]
+          : []),
+        ...(this._conversationIndex
+          ? [{ name: 'conversation-index', queue: this._conversationIndex.deadLetterQueue }]
+          : []),
+      ],
     });
 
     // Code Interpreter takes an ID while the others take ARNs — that asymmetry

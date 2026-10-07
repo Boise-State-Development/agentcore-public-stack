@@ -66,6 +66,7 @@ describe('Lambda and DLQ alarms', () => {
     'kb-migration-worker',
     'kb-migration-reconciler',
     'kb-ingestion-consumer',
+    'conversation-index-consumer',
   ];
 
   /**
@@ -149,6 +150,12 @@ describe('Lambda and DLQ alarms', () => {
       expect(alarm.Properties.EvaluationPeriods).toBe(1);
       const dims = alarm.Properties.Dimensions;
       expect(dims[0].Name).toBe('QueueName');
+    });
+
+    it('alarms when the conversation-index DLQ is not empty', () => {
+      const alarm = byName('dlq-conversation-index-not-empty');
+      expect(alarm.Properties.Namespace).toBe('AWS/SQS');
+      expect(alarm.Properties.Threshold).toBe(0);
     });
   });
 
