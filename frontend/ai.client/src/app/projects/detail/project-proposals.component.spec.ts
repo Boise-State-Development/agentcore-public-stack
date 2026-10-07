@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { TestBed } from '@angular/core/testing';
+import { HttpErrorResponse } from '@angular/common/http';
 import { of, throwError } from 'rxjs';
 import { ProjectProposalsComponent, diffProposal } from './project-proposals.component';
 import { ProjectApiService } from '../services/project-api.service';
@@ -114,7 +115,7 @@ describe('ProjectProposalsComponent', () => {
   });
 
   it('stays quiet when the project has no shared memory (409)', async () => {
-    api.proposals.mockReturnValue(throwError(() => ({ status: 409, error: { detail: 'no memory' } })));
+    api.proposals.mockReturnValue(throwError(() => new HttpErrorResponse({ status: 409, error: { detail: 'no memory' } })));
     const { el } = await render();
     expect(el.querySelector('[role=alert]')).toBeNull();
   });
@@ -159,7 +160,7 @@ describe('ProjectProposalsComponent', () => {
   });
 
   it('declines, and shows the API sentence when someone decided first', async () => {
-    api.rejectProposal.mockReturnValue(throwError(() => ({ status: 409, error: { detail: 'Someone else decided this proposal first.' } })));
+    api.rejectProposal.mockReturnValue(throwError(() => new HttpErrorResponse({ status: 409, error: { detail: 'Someone else decided this proposal first.' } })));
     const { el, fixture, button, open } = await render();
     await open();
     button(/Decline/).click();
