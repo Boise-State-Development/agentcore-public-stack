@@ -789,6 +789,11 @@ Each PR targets `develop`, lands behind `PROJECTS_ENABLED` (opt-in while in deve
     - The ✕ on a card reads **Stop sharing** for the sharer and **Remove from project** for an editor, behind a confirmation.
   - **Not built:** a notification when an output is shared. 2.5b's `notify` would fit, but §7 left it out of 3.3.
   - **UI impact (for the 1.8 mockup re-sync):** the Outputs section, and the Project members option in the artifact share dialog.
+  - **Dev-validated 2026-10-07** after #1477 deployed (app-api 19:24:31Z). It ran in a project whose only member is its owner, with the artifact tool bound for the test and unbound afterwards.
+    - *Share:* the assistant made a markdown artifact (`create_artifact`, 227 ms). Its Share dialog listed **Project members** first and selected it ("Everyone in Test Project can open it from the project's Outputs"). Creating the share reported that it is listed under Outputs.
+    - *Outputs:* the project page's headings read Start a task → **Outputs** → Recents → Shared with the project. The card read "Markdown · Shared by you · Oct 7", linked to `/shared-artifact/{id}` and offered **Stop sharing**. Opening it minted a render token and framed the artifact. The card's accessible name read "…, shared by Shared by you", fixed in this PR.
+    - *Members:* a simulation persona was added as a viewer and queried through the persona harness (merged code in-process against dev data). They saw the output (`isMine` false, `canRemove` false) and opened it (200). A non-member got 404 on the list and 403 on the share. Once the persona was removed from the project, it got 404 and 403 too.
+    - *Stop sharing:* behind its confirmation, it removed the section, and the link then returned 404. The trail read output_shared → member_added → member_removed → output_removed.
 - **3.4** Project budgets: `QuotaChecker` reads `COST#` for `settings.budget`, `quota_session_notice` analogue for projects.
 - **3.5** Automated maintenance: threshold triggers, weekly sweeper, split and roll-up ops, stale-pruning, metrics (§9.7).
 - **3.6** Derived semantic index (only if §9.7 metrics show index-and-read retrieval failing at scale): `BatchCreateMemoryRecords` into `projects/{id}/index` with no strategy id, rebuilt from files by the maintenance worker, `memory_search` tool; probe the consolidation residual from §1.3 first.
