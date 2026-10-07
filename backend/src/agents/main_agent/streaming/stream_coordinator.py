@@ -9,7 +9,7 @@ import logging
 import os
 import time
 from datetime import datetime, timezone
-from typing import Any, AsyncGenerator, Callable, Dict, List, Optional, Union
+from typing import Any, AsyncGenerator, Callable, Dict, List, Optional, Tuple, Union
 
 from agents.main_agent.config.constants import EnvVars
 from agents.main_agent.session.hooks.prefix_fingerprint import (
@@ -439,6 +439,12 @@ class StreamCoordinator:
         # This enables accurate per-message latency tracking for multi-turn tool use scenarios
         per_message_metadata: List[Dict[str, Any]] = []
         current_assistant_message_index = -1  # Track which assistant message we're on (0-indexed within this stream)
+
+        # Set once some path has taken ownership of writing this turn's cost
+        # rows (the success block, or a failure arm via
+        # `_record_failed_turn_usage`), so a later failure arm never meters
+        # the same calls a second time.
+        turn_usage_recorded = False
 
         # Accumulate the IN-FLIGHT assistant message's TEXT so an interruption
         # (client Stop / refresh / dropped socket) can persist the partial the
@@ -1200,6 +1206,27 @@ class StreamCoordinator:
                         except Exception as persist_error:
                             logger.error(f"Failed to persist intercepted error to session: {persist_error}", exc_info=True)
 
+                    # The calls this turn completed before the error were
+                    # billed by the provider; meter them, since the `return`
+                    # below skips the post-loop block that otherwise would.
+                    # After the persist above, so the error reply is in place
+                    # at the message id a failed call's usage is keyed to.
+                    turn_usage_recorded = True
+                    await self._record_failed_turn_usage(
+                        session_id=session_id,
+                        user_id=user_id,
+                        main_agent_wrapper=main_agent_wrapper,
+                        history_count=history_count,
+                        per_message_metadata=per_message_metadata,
+                        accumulated_metadata=accumulated_metadata,
+                        stream_start_time=stream_start_time,
+                        first_token_time=first_token_time,
+                        turn_started_at=turn_started_at,
+                        citations=citations,
+                        turn_agent_id=turn_agent_id,
+                        turn_project_id=turn_project_id,
+                    )
+
                     # Skip the original error event and exit the loop - we've handled the error
                     return
 
@@ -1388,6 +1415,11 @@ class StreamCoordinator:
             if assistant_message_ids:
                 message_id = assistant_message_ids[-1]
 
+            # From here on the turn's usage is this block's to record, so a
+            # coordinator exception after this point must not re-meter it in
+            # the `except` arm below.
+            turn_usage_recorded = True
+
             # Always update session metadata (for last_model, message_count, etc.)
             await self._update_session_metadata(
                 session_id=session_id,
@@ -1401,109 +1433,21 @@ class StreamCoordinator:
             message_ids_to_store = assistant_message_ids if assistant_message_ids else ([message_id] if message_id is not None else [])
 
             if message_ids_to_store:
-                # Content-free tool census, read (not drained) per call so each
-                # cost row carries the tools that call requested. None when the
-                # wrapper has no hook (tests, older agents) or the census is off.
-                tool_census_hook = getattr(main_agent_wrapper, "tool_census_hook", None)
-                # Same discipline for the context ledger (window trims +
-                # compaction decisions per call).
-                context_ledger_hook = getattr(main_agent_wrapper, "context_ledger_hook", None)
-
-                # Build list of metadata storage tasks for parallel execution
-                metadata_tasks = []
-                for idx, msg_id in enumerate(message_ids_to_store):
-                    # Use individual metadata if we have it, otherwise use accumulated
-                    if idx < len(per_message_metadata):
-                        metadata_for_message = per_message_metadata[idx].copy()  # Copy to avoid mutation
-                        # Use per-message timing for accurate latency calculation
-                        # Each message has its own start_time, first_token_time, and end_time
-                        msg_start_time = metadata_for_message.get("start_time") or stream_start_time
-                        msg_end_time = metadata_for_message.get("end_time") or stream_end_time
-                        first_token_for_message = metadata_for_message.get("first_token_time")
-
-                        # For the FIRST message, enrich with global timeToFirstByteMs if available
-                        # The provider's timeToFirstByteMs in metadata_summary is for the first LLM call
-                        if idx == 0:
-                            global_ttfb = accumulated_metadata.get("metrics", {}).get("timeToFirstByteMs")
-                            if global_ttfb and "timeToFirstByteMs" not in metadata_for_message.get("metrics", {}):
-                                if "metrics" not in metadata_for_message:
-                                    metadata_for_message["metrics"] = {}
-                                metadata_for_message["metrics"]["timeToFirstByteMs"] = global_ttfb
-                                logger.info(f"📊 Enriched message 0 with global timeToFirstByteMs: {global_ttfb}ms")
-
-                        # Fallback: if no first_token_time for this message, try global (for first message only)
-                        if first_token_for_message is None and idx == 0:
-                            first_token_for_message = first_token_time
-
-                        first_token_str = f"{first_token_for_message:.3f}" if first_token_for_message is not None else "None"
-                        logger.debug(f"📊 Message {idx} timing: start={msg_start_time:.3f}, first_token={first_token_str}, end={msg_end_time:.3f}")
-                    else:
-                        # Fallback to accumulated metadata and global timing (backward compatibility)
-                        metadata_for_message = accumulated_metadata
-                        msg_start_time = stream_start_time
-                        msg_end_time = stream_end_time
-                        first_token_for_message = first_token_time if idx == 0 else None
-
-                    logger.info(f"📊 Queuing message metadata for message_id={msg_id} (index {idx})")
-                    # Only attach citations to the first assistant message in the stream (RAG retrieval is for entire response)
-                    citations_for_message = citations if idx == 0 else None
-                    metadata_tasks.append(
-                        self._store_message_metadata(
-                            session_id=session_id,
-                            user_id=user_id,
-                            message_id=msg_id,
-                            accumulated_metadata=metadata_for_message,
-                            stream_start_time=msg_start_time,
-                            stream_end_time=msg_end_time,
-                            first_token_time=first_token_for_message,
-                            agent=main_agent_wrapper,  # Use wrapper instead of internal agent
-                            citations=citations_for_message,  # Pass citations for persistence
-                            call_index=idx,  # Nth model call of this turn (prefix fingerprint lookup)
-                            # Turn-level, so only the LAST message carries it.
-                            # The per-message `endToEndLatency` cannot stand in:
-                            # it prefers the provider's own API-call time, so
-                            # summing it across a turn silently drops tool
-                            # execution and the pre-stream agent build — a turn
-                            # the user watched for 9s would read as 3s.
-                            turn_duration_ms=(
-                                int(
-                                    (stream_end_time - (turn_started_at or stream_start_time))
-                                    * 1000
-                                )
-                                if idx == len(message_ids_to_store) - 1
-                                else None
-                            ),
-                            # The breakdown on the agent describes the turn's
-                            # LAST model call (the hook overwrites it per call),
-                            # so only the last message may carry it.
-                            include_context_breakdown=idx == len(message_ids_to_store) - 1,
-                            turn_agent_id=turn_agent_id,  # Which Agent ran this turn (#756)
-                            turn_project_id=turn_project_id,
-                            tool_calls=(
-                                tool_census_hook.tally_for_call(idx)
-                                if tool_census_hook is not None else None
-                            ),
-                            context_ledger=(
-                                context_ledger_hook.ledger_for_call(idx)
-                                if context_ledger_hook is not None else None
-                            ),
-                        )
-                    )
-
-                # Execute metadata storage tasks SEQUENTIALLY, in call order.
-                # The write path derives each call's cacheStatus from the
-                # session's previous cost row; parallel writes would race the
-                # turn's own rows and misclassify calls 2..N. These are
-                # post-stream background writes, so the latency cost is
-                # invisible to the user.
-                for idx, task in enumerate(metadata_tasks):
-                    try:
-                        await task
-                    except Exception as task_error:
-                        # Log but don't raise - metadata failures shouldn't break streaming
-                        logger.error(f"Failed to store metadata for message {message_ids_to_store[idx]}: {task_error}")
-
-                logger.info(f"✅ Message metadata stored for {len(message_ids_to_store)} assistant messages (sequential)")
+                await self._store_turn_call_metadata(
+                    session_id=session_id,
+                    user_id=user_id,
+                    main_agent_wrapper=main_agent_wrapper,
+                    calls=list(enumerate(message_ids_to_store)),
+                    per_message_metadata=per_message_metadata,
+                    accumulated_metadata=accumulated_metadata,
+                    stream_start_time=stream_start_time,
+                    stream_end_time=stream_end_time,
+                    first_token_time=first_token_time,
+                    turn_started_at=turn_started_at,
+                    citations=citations,
+                    turn_agent_id=turn_agent_id,
+                    turn_project_id=turn_project_id,
+                )
 
             # displayText backstop. `DisplayTextHook` normally wrote this at
             # append time, which is the write that matters — it is the only
@@ -1682,6 +1626,25 @@ class StreamCoordinator:
                 )
             except Exception as persist_error:
                 logger.error(f"Failed to persist stream error to session: {persist_error}")
+
+            # Same metering as the in-loop error arm, unless the success
+            # block (or that arm) already took this turn's usage.
+            if not turn_usage_recorded:
+                turn_usage_recorded = True
+                await self._record_failed_turn_usage(
+                    session_id=session_id,
+                    user_id=user_id,
+                    main_agent_wrapper=main_agent_wrapper,
+                    history_count=history_count,
+                    per_message_metadata=per_message_metadata,
+                    accumulated_metadata=accumulated_metadata,
+                    stream_start_time=stream_start_time,
+                    first_token_time=first_token_time,
+                    turn_started_at=turn_started_at,
+                    citations=citations,
+                    turn_agent_id=turn_agent_id,
+                    turn_project_id=turn_project_id,
+                )
         finally:
             # The first model output was the stream's last event (or the turn
             # ended right after it): emit now rather than never.
@@ -3366,6 +3329,229 @@ class StreamCoordinator:
         # Create structured error event
         error_event = StreamErrorEvent(error=error_message, code=ErrorCode.STREAM_ERROR, detail=None, recoverable=False)
         return f"event: error\ndata: {json.dumps(error_event.model_dump(exclude_none=True))}\n\n"
+
+    async def _store_turn_call_metadata(
+        self,
+        *,
+        session_id: str,
+        user_id: str,
+        main_agent_wrapper: Any,
+        calls: List[Tuple[int, int]],
+        per_message_metadata: List[Dict[str, Any]],
+        accumulated_metadata: Dict[str, Any],
+        stream_start_time: float,
+        stream_end_time: float,
+        first_token_time: Optional[float],
+        turn_started_at: Optional[float],
+        citations: Optional[List],
+        turn_agent_id: Optional[str],
+        turn_project_id: Optional[str],
+        attach_context_breakdown: bool = True,
+    ) -> None:
+        """Write one cost row per model call of this turn, in call order.
+
+        ``calls`` pairs each call's index within the turn (its slot in
+        ``per_message_metadata``, and the key the tool census, context ledger
+        and prefix fingerprints are read by) with the message id its row is
+        keyed to. Each row also bumps the session aggregates and the user's
+        cost summary (``store_message_metadata``), so this is what puts a
+        call in front of the quota and the cost dashboards.
+
+        ``attach_context_breakdown`` is off for a failed turn: the breakdown
+        describes the turn's last *attempted* call, which on a failure may be
+        the one that never answered rather than the last row written.
+        """
+        # Content-free tool census, read (not drained) per call so each
+        # cost row carries the tools that call requested. None when the
+        # wrapper has no hook (tests, older agents) or the census is off.
+        tool_census_hook = getattr(main_agent_wrapper, "tool_census_hook", None)
+        # Same discipline for the context ledger (window trims +
+        # compaction decisions per call).
+        context_ledger_hook = getattr(main_agent_wrapper, "context_ledger_hook", None)
+
+        # Build list of metadata storage tasks for parallel execution
+        metadata_tasks = []
+        for position, (idx, msg_id) in enumerate(calls):
+            is_last = position == len(calls) - 1
+            # Use individual metadata if we have it, otherwise use accumulated
+            if idx < len(per_message_metadata):
+                metadata_for_message = per_message_metadata[idx].copy()  # Copy to avoid mutation
+                # Use per-message timing for accurate latency calculation
+                # Each message has its own start_time, first_token_time, and end_time
+                msg_start_time = metadata_for_message.get("start_time") or stream_start_time
+                msg_end_time = metadata_for_message.get("end_time") or stream_end_time
+                first_token_for_message = metadata_for_message.get("first_token_time")
+
+                # For the FIRST message, enrich with global timeToFirstByteMs if available
+                # The provider's timeToFirstByteMs in metadata_summary is for the first LLM call
+                if idx == 0:
+                    global_ttfb = accumulated_metadata.get("metrics", {}).get("timeToFirstByteMs")
+                    if global_ttfb and "timeToFirstByteMs" not in metadata_for_message.get("metrics", {}):
+                        if "metrics" not in metadata_for_message:
+                            metadata_for_message["metrics"] = {}
+                        metadata_for_message["metrics"]["timeToFirstByteMs"] = global_ttfb
+                        logger.info(f"📊 Enriched message 0 with global timeToFirstByteMs: {global_ttfb}ms")
+
+                # Fallback: if no first_token_time for this message, try global (for first message only)
+                if first_token_for_message is None and idx == 0:
+                    first_token_for_message = first_token_time
+
+                first_token_str = f"{first_token_for_message:.3f}" if first_token_for_message is not None else "None"
+                logger.debug(f"📊 Message {idx} timing: start={msg_start_time:.3f}, first_token={first_token_str}, end={msg_end_time:.3f}")
+            else:
+                # Fallback to accumulated metadata and global timing (backward compatibility)
+                metadata_for_message = accumulated_metadata
+                msg_start_time = stream_start_time
+                msg_end_time = stream_end_time
+                first_token_for_message = first_token_time if idx == 0 else None
+
+            logger.info(f"📊 Queuing message metadata for message_id={msg_id} (index {idx})")
+            # Only attach citations to the first assistant message in the stream (RAG retrieval is for entire response)
+            citations_for_message = citations if idx == 0 else None
+            metadata_tasks.append(
+                self._store_message_metadata(
+                    session_id=session_id,
+                    user_id=user_id,
+                    message_id=msg_id,
+                    accumulated_metadata=metadata_for_message,
+                    stream_start_time=msg_start_time,
+                    stream_end_time=msg_end_time,
+                    first_token_time=first_token_for_message,
+                    agent=main_agent_wrapper,  # Use wrapper instead of internal agent
+                    citations=citations_for_message,  # Pass citations for persistence
+                    call_index=idx,  # Nth model call of this turn (prefix fingerprint lookup)
+                    # Turn-level, so only the LAST message carries it.
+                    # The per-message `endToEndLatency` cannot stand in:
+                    # it prefers the provider's own API-call time, so
+                    # summing it across a turn silently drops tool
+                    # execution and the pre-stream agent build — a turn
+                    # the user watched for 9s would read as 3s.
+                    turn_duration_ms=(
+                        int((stream_end_time - (turn_started_at or stream_start_time)) * 1000)
+                        if is_last
+                        else None
+                    ),
+                    # The breakdown on the agent describes the turn's
+                    # LAST model call (the hook overwrites it per call),
+                    # so only the last message may carry it.
+                    include_context_breakdown=attach_context_breakdown and is_last,
+                    turn_agent_id=turn_agent_id,  # Which Agent ran this turn (#756)
+                    turn_project_id=turn_project_id,
+                    tool_calls=(
+                        tool_census_hook.tally_for_call(idx)
+                        if tool_census_hook is not None else None
+                    ),
+                    context_ledger=(
+                        context_ledger_hook.ledger_for_call(idx)
+                        if context_ledger_hook is not None else None
+                    ),
+                )
+            )
+
+        # Execute metadata storage tasks SEQUENTIALLY, in call order.
+        # The write path derives each call's cacheStatus from the
+        # session's previous cost row; parallel writes would race the
+        # turn's own rows and misclassify calls 2..N. These are
+        # post-stream background writes, so the latency cost is
+        # invisible to the user.
+        for position, task in enumerate(metadata_tasks):
+            try:
+                await task
+            except Exception as task_error:
+                # Log but don't raise - metadata failures shouldn't break streaming
+                logger.error(f"Failed to store metadata for message {calls[position][1]}: {task_error}")
+
+        logger.info(f"✅ Message metadata stored for {len(calls)} assistant messages (sequential)")
+
+    async def _record_failed_turn_usage(
+        self,
+        *,
+        session_id: str,
+        user_id: str,
+        main_agent_wrapper: Any,
+        history_count: HistoryCount,
+        per_message_metadata: List[Dict[str, Any]],
+        accumulated_metadata: Dict[str, Any],
+        stream_start_time: float,
+        first_token_time: Optional[float],
+        turn_started_at: Optional[float],
+        citations: Optional[List],
+        turn_agent_id: Optional[str],
+        turn_project_id: Optional[str],
+    ) -> None:
+        """Meter the model calls a failed turn made before it failed.
+
+        A turn that ends in an error (a force-stop, an exception out of the
+        agent stream, a max_tokens truncation, a coordinator exception) skips
+        the success path's post-loop block, which is the only other caller of
+        ``_store_message_metadata``. Before this, every call such a turn made
+        was billed by the provider and seen by nothing of ours: no ``C#`` row,
+        no session ``totalCost``, no user cost summary, so the quota never
+        counted it. Observed in prod on a GPT-6 turn whose eighth model call
+        failed mid-stream after seven succeeded between MCP tool calls.
+
+        A call is metered exactly when the provider reported usage for it,
+        which covers every completed call and the failed one only if its
+        stream got as far as a usage event. That is also what keeps this
+        honest under retries: a retried attempt that failed before reporting
+        usage has an empty slot and writes nothing, and ``.update()`` on a slot
+        is last-write-wins, so no usage is ever summed twice. A turn that fails
+        on its first call before any usage writes no cost rows at all.
+
+        Each call's row is keyed to the odd-position message id the success
+        path uses. For the completed calls that is exact (Strands committed
+        them); for a failed call with usage it is the position the synthetic
+        error reply lands at.
+
+        End-of-turn work, run after the error frames and ``done`` are already
+        yielded, so the user sees the failure before any of these writes.
+        Best-effort: never raises.
+        """
+        try:
+            # The turn happened — the user message and the error reply are in
+            # the conversation — so the session's activity advances like any
+            # other turn's (messageCount, lastMessageAt, last model).
+            await self._update_session_metadata(
+                session_id=session_id,
+                user_id=user_id,
+                message_id=None,
+                agent=main_agent_wrapper,
+            )
+
+            metered = [idx for idx, meta in enumerate(per_message_metadata) if meta.get("usage")]
+            if not metered:
+                logger.info(
+                    "Failed turn for session %s reported no model usage; no cost rows written",
+                    session_id,
+                )
+                return
+
+            initial_message_count = await history_count.resolve()
+            await self._store_turn_call_metadata(
+                session_id=session_id,
+                user_id=user_id,
+                main_agent_wrapper=main_agent_wrapper,
+                calls=[(idx, initial_message_count + 2 * idx + 1) for idx in metered],
+                per_message_metadata=per_message_metadata,
+                accumulated_metadata=accumulated_metadata,
+                stream_start_time=stream_start_time,
+                stream_end_time=time.time(),
+                first_token_time=first_token_time,
+                turn_started_at=turn_started_at,
+                citations=citations,
+                turn_agent_id=turn_agent_id,
+                turn_project_id=turn_project_id,
+                attach_context_breakdown=False,
+            )
+            logger.info(
+                "📊 Metered failed turn for session %s: %d of %d model call(s) reported usage",
+                session_id, len(metered), len(per_message_metadata),
+            )
+        except Exception as e:  # noqa: BLE001 - metering must never mask the error the user saw
+            logger.error(
+                "Failed to record usage for failed turn in session %s: %s",
+                session_id, e, exc_info=True,
+            )
 
     async def _store_metadata_parallel(
         self,
