@@ -559,15 +559,91 @@ def test_adopting_the_conversation_also_adopts_the_compaction_offset(monkeypatch
     """
     live_inner = SimpleNamespace(messages=[{"role": "user", "t": 1}, {"role": "assistant", "t": 2}])
     live_wrapper = SimpleNamespace(agent=live_inner, session_manager=SimpleNamespace(_live_offset=7))
-    monkeypatch.setattr(service, "_agent_cache", {("s", "key-a"): live_wrapper})
+    monkeypatch.setattr(service, "_agent_cache", {("s", "u", "key-a"): live_wrapper})
 
     fresh_inner = SimpleNamespace(messages=[{"role": "user", "t": 1}])
     fresh = SimpleNamespace(agent=fresh_inner, session_manager=SimpleNamespace(_live_offset=0))
 
-    service._adopt_session_conversation(fresh, "s")
+    service._adopt_session_conversation(fresh, "s", "u")
 
     assert fresh.agent.messages is live_inner.messages
     assert fresh.session_manager._live_offset == 7
+
+
+@pytest.mark.asyncio
+async def test_adoption_never_crosses_users_on_one_session_id(mock_freshness_hash):
+    """Two users, one session id, one container: neither may see the other's thread.
+
+    The dev leak of 2026-08-31. User A's agent is warm with A's conversation;
+    user B sends a turn on the same session id (a fork from before #906 let
+    that happen, and runtime affinity hashes the session id alone, so B lands
+    in A's container). B's key differs in its user element → cache miss → B
+    restores from B's own Memory actor, which is empty. Adoption matched on the
+    session id alone, found A's live agent, and aliased A's list onto B's agent.
+    The model then answered B from A's history.
+
+    ``stores`` stands in for AgentCore Memory, scoped by actor exactly as it is.
+    """
+    stores: dict[str, list[dict]] = {"user-a": [], "user-b": []}
+
+    def _build(**kwargs):
+        return _fake_agent_with_messages(
+            system_prompt=kwargs.get("system_prompt"),
+            restored=stores[kwargs["user_id"]],
+        )
+
+    with patch.object(service, "create_agent") as mock:
+        mock.side_effect = _build
+
+        a = await service.get_agent(session_id="shared", user_id="user-a")
+        a.agent.messages.extend([{"role": "user", "t": "my memo: EXAMPLE-0001"}])
+        stores["user-a"].extend(a.agent.messages)
+
+        b = await service.get_agent(session_id="shared", user_id="user-b")
+
+    assert b is not a
+    assert b.agent.messages == [], "user B's agent inherited user A's conversation"
+    assert b.agent.messages is not a.agent.messages
+
+    # And the other direction: B's turn must not write into A's thread.
+    b.agent.messages.append({"role": "user", "t": "B's own question"})
+    assert a.agent.messages == [{"role": "user", "t": "my memo: EXAMPLE-0001"}]
+
+
+def test_adoption_matches_only_the_callers_own_cached_agents(monkeypatch):
+    """Unit-level pin on the match: a cached agent for the same session id under
+    another user is invisible to adoption, while the caller's own one (any
+    configuration) is adopted. Guards against a refactor back to ``key[0]``."""
+    other_user = SimpleNamespace(agent=SimpleNamespace(messages=[{"t": "theirs"}]))
+    own = SimpleNamespace(agent=SimpleNamespace(messages=[{"t": "mine"}, {"t": "mine-2"}]))
+    monkeypatch.setattr(
+        service,
+        "_agent_cache",
+        {
+            ("s", "user-b", "cfg-1"): own,
+            ("s", "user-a", "cfg-1"): other_user,  # newest, so a session-only match would pick it
+        },
+    )
+
+    fresh = SimpleNamespace(agent=SimpleNamespace(messages=[]))
+    service._adopt_session_conversation(fresh, "s", "user-b")
+    assert fresh.agent.messages is own.agent.messages
+
+    stranger = SimpleNamespace(agent=SimpleNamespace(messages=[]))
+    service._adopt_session_conversation(stranger, "s", "user-c")
+    assert stranger.agent.messages == []
+
+
+def test_cache_key_opens_with_session_and_user():
+    """``_adopt_session_conversation`` reads ``key[:2]`` as the conversation's
+    owner, so the key must keep opening with exactly ``(session, user)``."""
+    key = service._create_cache_key(
+        session_id="s", user_id="u", enabled_tools=None, model_id=None,
+        inference_params=None, system_prompt=None, caching_enabled=None,
+        provider=None, freshness_hash="f", agent_type=None,
+    )
+    assert key[:2] == ("s", "u")
+    assert key[:2] == service._conversation_owner_key("s", "u")
 
 
 def test_create_cache_key_includes_assistant_id():

@@ -3329,9 +3329,13 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # to both parties. In prod on 2026-08-31 that also left the original
     # owner's session resolving non-deterministically between the two rows.
     #
-    # Not a confidentiality fix — conversation content is keyed by actor id in
-    # AgentCore Memory, so the second user only ever saw an empty thread. This
-    # stops the id from being forked at all. 404 rather than 403 so the
+    # This IS a confidentiality guard. Memory scopes history by actor id, but
+    # runtime affinity hashes the session id alone, so both users' turns land
+    # in one container. There, `_adopt_session_conversation` used to alias the
+    # second user's new agent onto the first user's live message list, and each
+    # model saw the other's turns (dev, 2026-08-31). Adoption now matches on
+    # (session, user), so the cache is safe without this guard; this guard
+    # stops the id being forked at all. 404 rather than 403 so the
     # response says nothing about whether the session exists, matching what
     # `GET /sessions/{id}/metadata` already returns for the same case.
     #
