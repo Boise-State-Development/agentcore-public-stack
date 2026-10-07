@@ -1014,6 +1014,48 @@ class MemorySpaceService:
             f"the index of memory space '{space_id}' is being edited concurrently; retry the write"
         )
 
+    def remove_index_link(self, space_id: str, user_id: str, user_email: Optional[str], slug: str) -> bool:
+        """Drop ``MEMORY.md``'s own line for a deleted file (editor+). Returns whether one was removed.
+
+        Only a list line that starts with ``[[slug]]`` (the line ``add_index_link``
+        writes, or one shaped like it) goes; a mention anywhere else stays, as a
+        dead link the next index save warns about. Without this a deleted file
+        kept its line in the block every task loads, and the assistant went
+        looking for it. The write is conditional on the index it read, like
+        ``add_index_link``.
+        """
+        space: Optional[MemorySpace]
+        space, _ = self._require(space_id, user_id, user_email, "editor")
+        pattern = re.compile(r"^\s*[-*]\s+\[\[\s*" + re.escape(slug) + r"\s*\]\]", re.IGNORECASE)
+        for attempt in range(_MAX_MANIFEST_RETRIES):
+            if attempt:
+                space = self.repository.get_space(space_id)
+            if space is None:
+                raise MemorySpaceNotFoundError(f"Memory space '{space_id}' not found")
+            previous = self.store.get(space.index_s3_key).decode("utf-8") if space.index_s3_key else ""
+            lines = previous.split("\n")
+            kept = [line for line in lines if not pattern.match(line)]
+            if len(kept) == len(lines):
+                return False
+            content = self._encode("\n".join(kept))
+            old_key, old_hash = space.index_s3_key, space.index_content_hash
+            new_key = self.store.put(space_id=space_id, content=content, content_type="text/markdown")
+            space.index_s3_key = new_key
+            space.index_content_hash = compute_content_hash(content)
+            space.updated_at = _now_iso()
+            try:
+                self.repository.put_space_if_index_unchanged(space, old_hash)
+            except OptimisticLockError:
+                if new_key != old_key and not self._key_in_use(space_id, new_key):
+                    self.store.delete(new_key)
+                continue
+            if old_key and old_key != new_key and not self._key_in_use(space_id, old_key):
+                self.store.delete(old_key)
+            return True
+        raise MemorySpaceConcurrencyError(
+            f"the index of memory space '{space_id}' is being edited concurrently; retry the write"
+        )
+
     # ---- entries -------------------------------------------------------
 
     def list_entries(

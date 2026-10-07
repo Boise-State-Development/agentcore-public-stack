@@ -1,9 +1,9 @@
-import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal, untracked } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, effect, inject, input, output, signal, untracked } from '@angular/core';
 import { DatePipe } from '@angular/common';
 import { RouterLink } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroBookmark } from '@ng-icons/heroicons/outline';
+import { heroBookmark, heroPencilSquare, heroTrash } from '@ng-icons/heroicons/outline';
 import { heroBookmarkSolid } from '@ng-icons/heroicons/solid';
 import { UserService } from '../../auth/user.service';
 import { ToastService } from '../../services/toast/toast.service';
@@ -31,11 +31,36 @@ import { contributors, describeProvenance } from './memory-text';
   selector: 'app-memory-file-view',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [DatePipe, NgIcon, RouterLink, MemoryMeterComponent, MemoryTextComponent],
-  providers: [provideIcons({ heroBookmark, heroBookmarkSolid })],
+  providers: [provideIcons({ heroBookmark, heroBookmarkSolid, heroPencilSquare, heroTrash })],
   host: { class: 'block' },
   template: `
     <header class="border-b border-gray-200 p-5 dark:border-gray-700">
-      <h2 class="font-mono text-lg/7 font-semibold break-all text-gray-900 dark:text-white">{{ entry().slug }}</h2>
+      <div class="flex flex-wrap items-start justify-between gap-3">
+      <h2 class="min-w-0 font-mono text-lg/7 font-semibold break-all text-gray-900 dark:text-white">{{ entry().slug }}</h2>
+      @if (canEdit() || canPropose()) {
+        <div class="flex shrink-0 gap-2">
+          <button
+            type="button"
+            (click)="canEdit() ? edit.emit() : propose.emit()"
+            class="inline-flex items-center gap-1.5 rounded-2xl border border-gray-200 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 transition-colors hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+          >
+            <ng-icon name="heroPencilSquare" class="size-4" aria-hidden="true" />
+            {{ canEdit() ? 'Edit' : 'Propose a change' }}
+          </button>
+          @if (canEdit()) {
+            <button
+              type="button"
+              (click)="remove.emit()"
+              [attr.aria-label]="'Delete ' + entry().slug"
+              title="Delete this file"
+              class="grid size-9 place-items-center rounded-2xl text-gray-500 transition-colors hover:bg-state-danger-50 hover:text-state-danger-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:bg-state-danger-900/20 dark:hover:text-state-danger-300"
+            >
+              <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
+            </button>
+          }
+        </div>
+      }
+      </div>
       @if (entry().description) {
         <p class="mt-0.5 text-sm/6 text-gray-600 dark:text-gray-400">{{ entry().description }}</p>
       }
@@ -78,10 +103,10 @@ import { contributors, describeProvenance } from './memory-text';
                 <p class="text-sm/6 break-words text-gray-900 dark:text-gray-100"><app-memory-text [text]="item.text" [entries]="entries()" /></p>
                 <p class="mt-0.5 text-xs/5 text-gray-600 dark:text-gray-400">
                   @if (item.pinned) {
-                    <span class="font-medium text-primary-accessible dark:text-primary-accessible-dark">Pinned</span> ·
+                    <span class="font-medium text-primary-accessible dark:text-primary-50">Pinned</span> ·
                   }
                   {{ provenance(item).text }}@if (provenance(item).sessionId; as sid) {
-                    (<a [routerLink]="['/s', sid]" class="rounded-sm font-medium text-primary-accessible underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-accessible-dark">open it</a>)}@if (provenance(item).at) { · {{ at(provenance(item).at) | date: 'MMM d, y' }}}
+                    (<a [routerLink]="['/s', sid]" class="rounded-sm font-medium text-primary-accessible underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-50">open it</a>)}@if (provenance(item).at) { · {{ at(provenance(item).at) | date: 'MMM d, y' }}}
                 </p>
               </div>
               @if (canEdit()) {
@@ -93,7 +118,7 @@ import { contributors, describeProvenance } from './memory-text';
                   [attr.aria-label]="(item.pinned ? 'Unpin: ' : 'Pin: ') + item.text"
                   [title]="item.pinned ? 'Pinned: no save can drop it until it’s unpinned' : 'Pin, so no save can drop it'"
                   class="grid size-8 shrink-0 place-items-center rounded-xl transition-colors hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:opacity-50 dark:hover:bg-white/10"
-                  [class]="item.pinned ? 'text-primary-accessible dark:text-primary-accessible-dark' : 'text-gray-500 dark:text-gray-400'"
+                  [class]="item.pinned ? 'text-primary-accessible dark:text-primary-50' : 'text-gray-500 dark:text-gray-400'"
                 >
                   <ng-icon [name]="item.pinned ? 'heroBookmarkSolid' : 'heroBookmark'" class="size-4" aria-hidden="true" />
                 </button>
@@ -118,8 +143,14 @@ export class MemoryFileViewComponent {
   /** The scope's files, for resolving links. */
   readonly entries = input.required<readonly MemoryEntry[]>();
   readonly limits = input.required<MemoryLimits>();
-  /** May pin and unpin (an editor of project memory, or anyone in their own). */
+  /** May edit, delete, pin and unpin (an editor of project memory, or anyone in their own). */
   readonly canEdit = input(false);
+  /** May propose a change instead (a viewer of an active project's shared memory). */
+  readonly canPropose = input(false);
+
+  readonly edit = output<void>();
+  readonly propose = output<void>();
+  readonly remove = output<void>();
 
   protected readonly file = signal<MemoryFile | null>(null);
   protected readonly loading = signal(true);

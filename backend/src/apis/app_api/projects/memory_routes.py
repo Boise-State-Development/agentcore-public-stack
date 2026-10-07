@@ -27,7 +27,7 @@ from apis.shared.memory.service import (
     MemorySpacePermissionError,
     MemoryValidationError,
 )
-from apis.shared.projects.memory_files import ProjectMemoryFiles
+from apis.shared.projects.memory_files import EditedItem, ProjectMemoryFiles
 from apis.shared.projects.memory_proposals import ProjectMemoryProposals, ProposalProjectError
 
 from .routes import _svc, require_projects_user
@@ -297,8 +297,52 @@ class RestoreResponse(BaseModel):
     version: int
 
 
+class EditedItemRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    anchor: Optional[str] = Field(None, max_length=32, description="The anchor it was read with; omit for a new item")
+    text: str
+
+
+class SaveFileRequest(BaseModel):
+    """A file as the Memory tab's editor sends it (§4.4's structured body)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    items: List[EditedItemRequest] = Field(..., max_length=500)
+    description: Optional[str] = Field(None, description="Omit to keep the current one")
+    aliases: Optional[List[str]] = Field(None, description="Omit to keep the current ones")
+    base_version: Optional[int] = Field(
+        None, alias="baseVersion", ge=0, description="The version opened; 0 for a new file. A mismatch is a 409"
+    )
+
+
+class SaveFileResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    slug: str
+    version: int
+    tokens: Optional[int] = None
+    item_count: Optional[int] = Field(None, alias="itemCount")
+    warnings: List[str] = Field(default_factory=list)
+    over_soft_threshold: bool = Field(False, alias="overSoftThreshold")
+    removed_anchors: List[str] = Field(default_factory=list, alias="removedAnchors")
+    indexed: Optional[str] = Field(
+        None, description="A new file's index line: added, already_linked or over_budget; null for an existing file"
+    )
+
+
+class IndexRequest(BaseModel):
+    content: str = Field(..., max_length=64_000)
+
+
+class IndexResponse(BaseModel):
+    content: str
+
+
 def _files() -> ProjectMemoryFiles:
-    return ProjectMemoryFiles(repository=_svc().repository)
+    svc = _svc()
+    return ProjectMemoryFiles(repository=svc.repository, audit=svc.audit)
 
 
 def _emails(provenance: dict) -> set:
@@ -385,3 +429,59 @@ def restore_archived_item(
     except _ERRORS as e:
         raise _translate(e)
     return RestoreResponse(slug=result.ref.slug, version=result.ref.version)
+
+
+@files_router.put("/files/{slug:path}", response_model=SaveFileResponse, response_model_by_alias=True)
+def save_memory_file(
+    project_id: str,
+    slug: str,
+    body: SaveFileRequest,
+    scope: Scope = Query("project"),
+    user: User = Depends(require_projects_user),
+) -> SaveFileResponse:
+    """Create or replace a file from its items (editor+ for project memory; any member in their own).
+
+    Each item keeps the anchor it was read with, so its history follows it; an
+    item left out goes to the archive. A 400's detail says what to fix.
+    """
+    try:
+        result, indexed = _files().save(
+            project_id, user, scope, slug,
+            [EditedItem(text=i.text, anchor=i.anchor) for i in body.items],
+            description=body.description, aliases=body.aliases, base_version=body.base_version,
+        )
+    except _ERRORS as e:
+        raise _translate(e)
+    return SaveFileResponse(
+        slug=result.ref.slug,
+        version=result.ref.version,
+        tokens=result.ref.tokens,
+        item_count=result.ref.item_count,
+        warnings=result.warnings,
+        over_soft_threshold=result.over_soft_threshold,
+        removed_anchors=result.removed_anchors,
+        indexed=indexed,
+    )
+
+
+@files_router.delete("/files/{slug:path}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_memory_file(
+    project_id: str, slug: str, scope: Scope = Query("project"), user: User = Depends(require_projects_user)
+) -> None:
+    """Delete a file; its items go to the archive and its index line goes too (editor+ / your own)."""
+    try:
+        _files().delete(project_id, user, scope, slug)
+    except _ERRORS as e:
+        raise _translate(e)
+
+
+@files_router.put("/index", response_model=IndexResponse)
+def save_memory_index(
+    project_id: str, body: IndexRequest, scope: Scope = Query("project"), user: User = Depends(require_projects_user)
+) -> IndexResponse:
+    """Replace a scope's MEMORY.md, its links checked (editor+ / your own)."""
+    try:
+        _files().save_index(project_id, user, scope, body.content)
+    except _ERRORS as e:
+        raise _translate(e)
+    return IndexResponse(content=body.content)

@@ -101,9 +101,8 @@ can tell you which have changed on your deployment.
 
 **Memory and settings**
 
-- **Memory is changed through the assistant.** The Memory page shows files,
-  pins, the archive and the review queue, but to add or edit an item, ask the
-  assistant in a task.
+- **No memory history yet.** The Memory page shows a file as it is now. To undo
+  a removal, restore the item from the archive.
 - **No one-click revert** for instructions. Copy an old version from History
   and save it.
 - **Switching models inside a task** starts a new task in the project. The

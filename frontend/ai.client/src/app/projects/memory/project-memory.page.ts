@@ -1,15 +1,20 @@
 import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal, untracked } from '@angular/core';
 import { DatePipe } from '@angular/common';
 import { HttpErrorResponse } from '@angular/common/http';
-import { RouterLink } from '@angular/router';
+import { Router, RouterLink } from '@angular/router';
+import { Dialog } from '@angular/cdk/dialog';
 import { firstValueFrom } from 'rxjs';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroArchiveBox, heroChevronLeft, heroInboxArrowDown } from '@ng-icons/heroicons/outline';
+import { heroArchiveBox, heroChevronLeft, heroInboxArrowDown, heroPlus } from '@ng-icons/heroicons/outline';
+import { ConfirmationDialogComponent, ConfirmationDialogData } from '../../components/confirmation-dialog/confirmation-dialog.component';
+import { ToastService } from '../../services/toast/toast.service';
 import { parseIso } from '../../utils/date';
 import { MemoryEntry, MemoryLimits, MemoryScope, Project, ProjectMemory } from '../models/project.model';
 import { ProjectApiService } from '../services/project-api.service';
 import { isUnavailable, projectErrorMessage } from '../services/projects.service';
 import { MemoryArchiveComponent } from './memory-archive.component';
+import { MemoryEditorComponent, MemoryEditorDone, MemoryEditorMode } from './memory-editor.component';
+import { MemoryIndexEditorComponent } from './memory-index-editor.component';
 import { MemoryFileViewComponent } from './memory-file-view.component';
 import { MemoryIndexViewComponent } from './memory-index-view.component';
 import { MemoryMeterComponent } from './memory-meter.component';
@@ -53,16 +58,21 @@ const EMPTY: ScopeState = { entries: [], index: '' };
     NgIcon,
     RouterLink,
     MemoryArchiveComponent,
+    MemoryEditorComponent,
     MemoryFileViewComponent,
+    MemoryIndexEditorComponent,
     MemoryIndexViewComponent,
     MemoryMeterComponent,
     MemoryReviewComponent,
   ],
-  providers: [provideIcons({ heroArchiveBox, heroChevronLeft, heroInboxArrowDown })],
+  providers: [provideIcons({ heroArchiveBox, heroChevronLeft, heroInboxArrowDown, heroPlus })],
   templateUrl: './project-memory.page.html',
 })
 export class ProjectMemoryPage {
   private api = inject(ProjectApiService);
+  private router = inject(Router);
+  private dialog = inject(Dialog);
+  private toast = inject(ToastService);
 
   protected readonly indexSlug = INDEX_SLUG;
 
@@ -81,6 +91,9 @@ export class ProjectMemoryPage {
   private readonly scopes = signal<Record<MemoryScope, ScopeState>>({ project: EMPTY, mine: EMPTY });
   protected readonly scopeError = signal<string | null>(null);
   protected readonly pending = signal(0);
+  /** The editor open in place of the file view, if any (2.8b). */
+  protected readonly editing = signal<MemoryEditorMode | 'index' | null>(null);
+  protected readonly starting = signal(false);
 
   protected readonly activeScope = computed<MemoryScope>(() => (this.scope() === 'mine' ? 'mine' : 'project'));
   protected readonly activeView = computed<MemoryView>(() => {
@@ -122,11 +135,17 @@ export class ProjectMemoryPage {
     const p = this.project();
     return !!p && p.status === 'active' && p.role !== 'viewer';
   });
-  /** Pin, restore (and, in 2.8b, edit) in the scope shown: your own always; the project's as an editor. */
+  /** Edit, delete, pin and restore in the scope shown: your own always; the project's as an editor. */
   protected readonly canEdit = computed(() => {
     const p = this.project();
     if (!p || p.status !== 'active') return false;
     return this.activeScope() === 'mine' || p.role !== 'viewer';
+  });
+
+  /** A viewer proposes changes to the shared memory instead. */
+  protected readonly canPropose = computed(() => {
+    const p = this.project();
+    return !!p && p.status === 'active' && p.role === 'viewer' && this.activeScope() === 'project';
   });
 
   constructor() {
@@ -134,6 +153,72 @@ export class ProjectMemoryPage {
       const id = this.id();
       untracked(() => void this.load(id));
     });
+    // Moving to another scope, file or view leaves the editor.
+    effect(() => {
+      this.scope();
+      this.file();
+      this.view();
+      untracked(() => this.editing.set(null));
+    });
+  }
+
+  protected startEditing(mode: MemoryEditorMode | 'index'): void {
+    this.editing.set(mode);
+  }
+
+  /** "Just me" starts on a member's first file: the space is made, then the new-file editor opens. */
+  protected async startMine(): Promise<void> {
+    const project = this.project();
+    if (!project || this.starting()) return;
+    this.starting.set(true);
+    try {
+      const { spaceId } = await firstValueFrom(this.api.createMyMemory(project.projectId));
+      this.memory.update(m => (m ? { ...m, personalSpaceId: spaceId } : m));
+      await this.loadScope('mine');
+      this.editing.set('new');
+    } catch (err) {
+      this.toast.error('Your memory couldn’t be started', projectErrorMessage(err));
+    } finally {
+      this.starting.set(false);
+    }
+  }
+
+  protected async onEdited(done: MemoryEditorDone): Promise<void> {
+    this.editing.set(null);
+    if (done.proposed) {
+      this.pending.update(n => n + 1);
+      return;
+    }
+    await this.loadScope(this.activeScope());
+    void this.router.navigate([], { queryParams: { file: done.slug }, queryParamsHandling: 'merge' });
+  }
+
+  protected async onIndexSaved(): Promise<void> {
+    this.editing.set(null);
+    await this.loadScope(this.activeScope());
+  }
+
+  protected async deleteFile(entry: MemoryEntry): Promise<void> {
+    const project = this.project();
+    if (!project) return;
+    const keep = this.activeScope() === 'project' ? 'a year' : '30 days';
+    const ref = this.dialog.open<boolean, ConfirmationDialogData>(ConfirmationDialogComponent, {
+      data: {
+        title: `Delete “${entry.slug}”?`,
+        message: `Its items go to the archive, where they can be restored for ${keep}, and its line leaves the index.`,
+        confirmText: 'Delete file',
+        destructive: true,
+      },
+    });
+    if ((await firstValueFrom(ref.closed)) !== true) return;
+    try {
+      await firstValueFrom(this.api.deleteMemoryFile(project.projectId, this.activeScope(), entry.slug));
+      this.toast.success(`Deleted “${entry.slug}”`, 'Its items are in the archive.');
+      await this.loadScope(this.activeScope());
+      void this.router.navigate([], { queryParams: { file: null }, queryParamsHandling: 'merge' });
+    } catch (err) {
+      this.toast.error('The file couldn’t be deleted', projectErrorMessage(err));
+    }
   }
 
   protected updated(entry: MemoryEntry): Date {

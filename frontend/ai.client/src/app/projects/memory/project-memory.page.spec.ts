@@ -3,6 +3,7 @@ import { signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { HttpErrorResponse } from '@angular/common/http';
 import { provideRouter } from '@angular/router';
+import { Dialog } from '@angular/cdk/dialog';
 import { of, throwError } from 'rxjs';
 import { ProjectMemoryPage } from './project-memory.page';
 import { ProjectApiService } from '../services/project-api.service';
@@ -21,7 +22,10 @@ describe('ProjectMemoryPage', () => {
     proposals: vi.fn(),
     proposal: vi.fn(),
     memoryArchive: vi.fn(),
+    deleteMemoryFile: vi.fn(),
+    createMyMemory: vi.fn(),
   };
+  const dialog = { open: vi.fn() };
 
   beforeEach(() => {
     TestBed.resetTestingModule();
@@ -38,12 +42,16 @@ describe('ProjectMemoryPage', () => {
     api.proposals.mockReturnValue(of({ proposals: [{ proposalId: 'p1', slug: 'rates', baseVersion: 1, createdAt: '2026-10-07T12:00:00Z', proposedByEmail: 'v@x.edu', isMine: false }] }));
     api.proposal.mockReturnValue(throwError(() => new Error('not needed')));
     api.memoryArchive.mockReturnValue(of({ items: [], people: {} }));
+    api.deleteMemoryFile.mockReturnValue(of(undefined));
+    api.createMyMemory.mockReturnValue(of({ spaceId: 'spc_new' }));
+    dialog.open.mockReturnValue({ closed: of(true) });
     TestBed.configureTestingModule({
       imports: [ProjectMemoryPage],
       providers: [
         { provide: ProjectApiService, useValue: api },
         { provide: ToastService, useValue: { success: vi.fn(), error: vi.fn() } },
         { provide: UserService, useValue: { currentUser: signal({ email: 'me@x.edu' }) } },
+        { provide: Dialog, useValue: dialog },
         provideRouter([]),
       ],
     });
@@ -125,5 +133,56 @@ describe('ProjectMemoryPage', () => {
     api.get.mockReturnValue(throwError(() => new HttpErrorResponse({ status: 404 })));
     const { el } = await render();
     expect(el.querySelector('[role=alert]')?.textContent).toContain('doesn’t exist, or you’re not a member');
+  });
+
+  it('opens the editor in place of the files for Edit and New file', async () => {
+    const { el, fixture } = await render();
+    const click = async (label: RegExp) => {
+      (Array.from(el.querySelectorAll('button')).find(b => label.test(b.textContent ?? '')) as HTMLButtonElement).click();
+      fixture.detectChanges();
+      await fixture.whenStable();
+      fixture.detectChanges();
+    };
+    await click(/^\s*Edit\s*$/);
+    expect(el.querySelector('app-memory-editor')).not.toBeNull();
+    expect(el.querySelector('nav[aria-label="Memory files"]')).toBeNull();
+    await click(/^\s*Cancel\s*$/);
+    await click(/New file/);
+    expect(el.querySelector('app-memory-editor h2')?.textContent).toContain('New file');
+  });
+
+  it('offers a viewer Propose instead of Edit, and no delete', async () => {
+    api.get.mockReturnValue(of({ ...PROJECT, role: 'viewer' } satisfies Project));
+    const { el } = await render();
+    const labels = Array.from(el.querySelectorAll('button')).map(b => b.textContent?.trim());
+    expect(labels).toContain('Propose a file');
+    expect(labels).toContain('Propose a change');
+    expect(labels).not.toContain('Edit');
+    expect(el.querySelector('button[aria-label^="Delete"]')).toBeNull();
+  });
+
+  it('deletes a file after confirming', async () => {
+    const { el, fixture } = await render();
+    (el.querySelector('button[aria-label="Delete rates"]') as HTMLButtonElement).click();
+    for (let i = 0; i < 3; i++) {
+      await fixture.whenStable();
+      await new Promise(r => setTimeout(r, 0));
+    }
+    expect(dialog.open).toHaveBeenCalled();
+    expect(api.deleteMemoryFile).toHaveBeenCalledWith('prj_1', 'project', 'rates');
+  });
+
+  it('starts “Just me” with a first file', async () => {
+    api.memory.mockReturnValue(of({ sharedSpaceId: 'spc_p', personalSpaceId: null, role: 'editor', limits: MEMORY_LIMITS }));
+    const { el, fixture } = await render({ scope: 'mine' });
+    (Array.from(el.querySelectorAll('button')).find(b => b.textContent?.includes('New file')) as HTMLButtonElement).click();
+    for (let i = 0; i < 4; i++) {
+      await fixture.whenStable();
+      await new Promise(r => setTimeout(r, 0));
+      fixture.detectChanges();
+    }
+    expect(api.createMyMemory).toHaveBeenCalledWith('prj_1');
+    expect(api.memoryEntries).toHaveBeenCalledWith('spc_new');
+    expect(el.querySelector('app-memory-editor h2')?.textContent).toContain('New file');
   });
 });

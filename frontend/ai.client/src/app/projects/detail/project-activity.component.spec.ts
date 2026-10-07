@@ -48,6 +48,10 @@ describe('describeActivity', () => {
     [rec('project.memory_proposed', { after: { slug: 'sis' } }), 'proposed a change to the memory file “sis”'],
     [rec('project.memory_proposal_approved', { after: { slug: 'sis', edited: true } }), 'approved a change to the memory file “sis” with edits'],
     [rec('project.memory_proposal_rejected', { after: { slug: 'sis' } }), 'declined a change to the memory file “sis”'],
+    [rec('project.memory_edited', { after: { slug: 'sis', created: 'True' } }), 'created the memory file “sis”'],
+    [rec('project.memory_edited', { after: { slug: 'sis' } }), 'edited the memory file “sis”'],
+    [rec('project.memory_edited', { after: { slug: 'MEMORY.md' } }), 'edited the memory index'],
+    [rec('project.memory_deleted', { before: { slug: 'sis' } }), 'deleted the memory file “sis”'],
     [rec('project.task_unshared', { after: { title: 'Roster diff' } }), 'stopped sharing the task “Roster diff”'],
     [rec('project.something_new'), 'something new'],
   ])('%#: %s', (record, text) => {

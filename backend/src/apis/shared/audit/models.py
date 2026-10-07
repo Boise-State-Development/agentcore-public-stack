@@ -86,6 +86,8 @@ class AuditAction:
     PROJECT_MEMORY_PROPOSED = "project.memory_proposed"
     PROJECT_MEMORY_PROPOSAL_APPROVED = "project.memory_proposal_approved"
     PROJECT_MEMORY_PROPOSAL_REJECTED = "project.memory_proposal_rejected"
+    PROJECT_MEMORY_EDITED = "project.memory_edited"
+    PROJECT_MEMORY_DELETED = "project.memory_deleted"
     PROJECT_OUTPUT_SHARED = "project.output_shared"
     PROJECT_OUTPUT_REMOVED = "project.output_removed"
 
