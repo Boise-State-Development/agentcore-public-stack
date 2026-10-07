@@ -99,12 +99,14 @@ class ProjectMemoryProposals:
         description: Optional[str] = None,
         aliases: Optional[List[str]] = None,
         proposer_kind: str = "member",
+        source_session_id: Optional[str] = None,
     ):
         """Queue a change for review. Returns ``(proposal, warnings)``."""
         project, space_id = self._space(project_id, user, writable=True)
         proposal, warnings = self.memory.create_proposal(
             space_id, user.user_id, user.email, slug, text,
             description=description, aliases=aliases, proposer_kind=proposer_kind,
+            source_session_id=source_session_id,
         )
         self.notifications.notify_many(
             self._reviewers(project),

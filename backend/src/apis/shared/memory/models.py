@@ -116,6 +116,10 @@ class MemoryEntryRef(BaseModel):
         None, alias="itemCount", description="Number of items (canonical files)"
     )
     archived: bool = Field(False, description="Archived files still resolve as link targets")
+    pinned: List[str] = Field(
+        default_factory=list,
+        description="Anchors of pinned items: a save may not drop them (Shared Projects 2.5a-2)",
+    )
     version: int = Field(
         0,
         description="Number of FILEVER rows for this slug; 0 = written before history existed",
@@ -143,6 +147,53 @@ class FileVersion(BaseModel):
     reason: FileVersionReason = "edit"
     proposal_id: Optional[str] = Field(None, alias="proposalId")
     run_id: Optional[str] = Field(None, alias="runId")
+
+
+class ItemProvenance(BaseModel):
+    """Where one item came from (Shared Projects 2.5a-2). People are emails, never user ids.
+
+    ``added*`` is fixed when the item first appears; ``updated*`` moves on every
+    save that changes its text. ``source_session_id`` is the task the item was
+    saved or proposed from, when a task's assistant wrote it. ``proposal_id``,
+    ``proposed_by`` and ``approved_by`` are set when it arrived through a
+    proposal; ``restored_*`` when it came back from the archive.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    added_by: str = Field("", alias="addedBy")
+    added_at: str = Field("", alias="addedAt")
+    updated_by: Optional[str] = Field(None, alias="updatedBy")
+    updated_at: Optional[str] = Field(None, alias="updatedAt")
+    source_session_id: Optional[str] = Field(None, alias="sourceSessionId")
+    proposal_id: Optional[str] = Field(None, alias="proposalId")
+    proposed_by: Optional[str] = Field(None, alias="proposedBy")
+    approved_by: Optional[str] = Field(None, alias="approvedBy")
+    restored_by: Optional[str] = Field(None, alias="restoredBy")
+    restored_at: Optional[str] = Field(None, alias="restoredAt")
+
+
+ArchiveReason = Literal["removed", "deleted"]
+
+
+class ArchivedItem(BaseModel):
+    """An ``ARCHIVE#{archivedAt}#{anchor}`` row: an item that left its file, restorable until ``ttl``.
+
+    ``removed``: a save left it out. ``deleted``: its whole file was deleted.
+    The text and provenance travel with it, so a restore needs nothing else.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    archive_id: str = Field(..., alias="archiveId")
+    slug: str
+    anchor: str
+    text: str
+    reason: ArchiveReason
+    archived_by: str = Field("", alias="archivedBy")
+    archived_at: str = Field(..., alias="archivedAt")
+    restorable_until: str = Field(..., alias="restorableUntil")
+    provenance: Optional[ItemProvenance] = None
 
 
 ProposalState = Literal["pending", "approved", "rejected", "withdrawn"]
@@ -176,6 +227,8 @@ class MemoryProposal(BaseModel):
     proposer_id: str = Field(..., alias="proposerId")
     proposer_email: str = Field("", alias="proposerEmail")
     proposer_kind: ProposerKind = Field("member", alias="proposerKind")
+    # The task it was proposed from, carried into the approved items' provenance.
+    source_session_id: Optional[str] = Field(None, alias="sourceSessionId")
     created_at: str = Field(..., alias="createdAt")
     decided_by: Optional[str] = Field(None, alias="decidedBy")
     decided_by_email: Optional[str] = Field(None, alias="decidedByEmail")

@@ -34,7 +34,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Literal, Optional
 
-from strands import tool
+from strands import ToolContext, tool
 
 from apis.shared.auth.models import User
 from apis.shared.memory.hydration import MINE_MEMORY_MAX_TOKENS, PROJECT_MEMORY_MAX_TOKENS
@@ -45,6 +45,7 @@ from apis.shared.memory.service import (
     MemorySpacePermissionError,
     MemorySpaceService,
     MemoryValidationError,
+    SaveContext,
 )
 from apis.shared.projects.service import ProjectConflictError, ProjectError, ProjectNotFoundError
 
@@ -58,6 +59,18 @@ _INDEX_BUDGETS = {"project": PROJECT_MEMORY_MAX_TOKENS, "mine": MINE_MEMORY_MAX_
 _INDEX_SLUG = "MEMORY.md"
 _ARCHIVED = "This project is archived, so its memory is read-only."
 _NOT_A_MEMBER = "You are no longer a member of this project, so its memory is unavailable."
+
+
+def _session_of(tool_context: Optional[ToolContext]) -> Optional[str]:
+    """The task this call runs in, for item provenance (2.5a-2), or None.
+
+    Read at call time from the agent's session manager (``config.session_id``),
+    as the context ledger does, so the tools stay memoized per member rather
+    than per session.
+    """
+    manager = getattr(getattr(tool_context, "agent", None), "_session_manager", None)
+    session_id = getattr(getattr(manager, "config", None), "session_id", None)
+    return session_id if isinstance(session_id, str) and session_id else None
 
 
 def _is_index_slug(slug: str) -> bool:
@@ -256,8 +269,10 @@ def make_project_memory_query_tool(scopes: ProjectMemoryScopes):
 
 
 def make_project_memory_save_tool(scopes: ProjectMemoryScopes):
-    @tool
-    async def memory_save(scope: Scope, slug: str, text: str, description: str = "") -> dict[str, Any]:
+    @tool(context=True)
+    async def memory_save(
+        scope: Scope, slug: str, text: str, description: str = "", tool_context: Optional[ToolContext] = None
+    ) -> dict[str, Any]:
         """Save a memory file, creating it or replacing it whole. It persists across conversations.
 
         When the member asks you to remember something for them alone (a preference, how
@@ -302,10 +317,11 @@ def make_project_memory_save_tool(scopes: ProjectMemoryScopes):
             if _is_index_slug(slug):
                 await asyncio.to_thread(service.update_index, space_id, user.user_id, user.email, text)
                 return {"content": [{"text": f"Updated the MEMORY.md index of {label}."}], "status": "success"}
+            context = SaveContext(source_session_id=_session_of(tool_context))
             result = await asyncio.to_thread(
                 lambda: service.save_entry(
                     space_id, user.user_id, user.email, slug, text,
-                    description=description or None, reason="save",
+                    description=description or None, reason="save", context=context,
                 )
             )
         except MemoryValidationError as exc:
@@ -325,8 +341,10 @@ def make_project_memory_save_tool(scopes: ProjectMemoryScopes):
 
 
 def make_project_memory_propose_tool(scopes: ProjectMemoryScopes):
-    @tool
-    async def memory_propose(slug: str, text: str, description: str = "") -> dict[str, Any]:
+    @tool(context=True)
+    async def memory_propose(
+        slug: str, text: str, description: str = "", tool_context: Optional[ToolContext] = None
+    ) -> dict[str, Any]:
         """Propose a change to project memory for an editor to review.
 
         Use it when the member can't save to "project" (a viewer), or asks for a
@@ -343,11 +361,12 @@ def make_project_memory_propose_tool(scopes: ProjectMemoryScopes):
         from apis.shared.projects.memory_proposals import ProjectMemoryProposals, ProposalProjectError
 
         user = scopes.user
+        session_id = _session_of(tool_context)
         try:
             proposal, warnings = await asyncio.to_thread(
                 lambda: ProjectMemoryProposals().propose(
                     scopes.project_id, user, slug, text,
-                    description=description or None, proposer_kind="agent",
+                    description=description or None, proposer_kind="agent", source_session_id=session_id,
                 )
             )
         except MemoryValidationError as exc:

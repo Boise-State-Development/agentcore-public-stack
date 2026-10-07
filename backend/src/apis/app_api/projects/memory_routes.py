@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from apis.shared.auth.models import User
 from apis.shared.directory import display_names
-from apis.shared.memory.models import MemoryProposal
+from apis.shared.memory.models import ArchivedItem, ItemProvenance, MemoryProposal
 from apis.shared.memory.service import (
     MAX_PROPOSAL_NOTE_CHARS,
     MemoryProposalStateError,
@@ -27,6 +27,7 @@ from apis.shared.memory.service import (
     MemorySpacePermissionError,
     MemoryValidationError,
 )
+from apis.shared.projects.memory_files import ProjectMemoryFiles
 from apis.shared.projects.memory_proposals import ProjectMemoryProposals, ProposalProjectError
 
 from .routes import _svc, require_projects_user
@@ -138,7 +139,7 @@ def _translate(e: Exception) -> HTTPException:
     if isinstance(e, MemorySpacePermissionError):
         return HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
     if isinstance(e, MemorySpaceNotFoundError):
-        return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Proposal not found")
+        return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     if isinstance(e, (MemorySpaceConcurrencyError, MemoryProposalStateError)):
         return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
     if isinstance(e, MemoryValidationError):
@@ -236,3 +237,146 @@ def withdraw_proposal(project_id: str, proposal_id: str, user: User = Depends(re
     except _ERRORS as e:
         raise _translate(e)
     return ProposalResponse.build(proposal, user, _names(proposal))
+
+
+# ── files, pins and the archive (2.5a-2) ────────────────────────────────
+
+files_router = APIRouter(prefix="/projects/{project_id}/memory", tags=["projects"])
+
+Scope = Literal["project", "mine"]
+
+
+class MemoryFileItem(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    anchor: str
+    text: str
+    pinned: bool = False
+    provenance: Optional[ItemProvenance] = None
+
+
+class MemoryFileResponse(BaseModel):
+    """A memory file as items, each with its pin and where it came from."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    slug: str
+    description: str = ""
+    version: int = 0
+    tokens: Optional[int] = None
+    items: List[MemoryFileItem]
+    people: dict = Field(default_factory=dict, description="Display names for the emails in provenance")
+
+
+class PinRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    scope: Scope = "project"
+    slug: str = Field(..., min_length=1, max_length=128)
+    anchor: str = Field(..., min_length=1, max_length=32)
+
+
+class PinsResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    slug: str
+    pinned: List[str]
+
+
+class ArchiveResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    items: List[ArchivedItem] = Field(..., description="Newest first; only those still restorable")
+
+
+class RestoreResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    slug: str
+    version: int
+
+
+def _files() -> ProjectMemoryFiles:
+    return ProjectMemoryFiles(repository=_svc().repository)
+
+
+def _emails(provenance: dict) -> set:
+    found = set()
+    for p in provenance.values():
+        for value in (p.added_by, p.updated_by, p.proposed_by, p.approved_by, p.restored_by):
+            if value:
+                found.add(value)
+    return found
+
+
+@files_router.get("/files/{slug:path}", response_model=MemoryFileResponse, response_model_by_alias=True)
+def read_memory_file(
+    project_id: str, slug: str, scope: Scope = Query("project"), user: User = Depends(require_projects_user)
+) -> MemoryFileResponse:
+    """One file's items, pins and provenance (viewer+)."""
+    try:
+        ref, items, provenance = _files().read(project_id, user, scope, slug)
+    except _ERRORS as e:
+        raise _translate(e)
+    pinned = set(ref.pinned)
+    return MemoryFileResponse(
+        slug=ref.slug,
+        description=ref.description,
+        version=ref.version,
+        tokens=ref.tokens,
+        items=[
+            MemoryFileItem(anchor=i.anchor, text=i.text, pinned=i.anchor in pinned, provenance=provenance.get(i.anchor))
+            for i in items
+        ],
+        people=display_names(_emails(provenance)),
+    )
+
+
+@files_router.post("/pins", response_model=PinsResponse, response_model_by_alias=True)
+def pin_item(project_id: str, body: PinRequest, user: User = Depends(require_projects_user)) -> PinsResponse:
+    """Pin an item, so no save can drop it until it's unpinned (editor+)."""
+    try:
+        pinned = _files().set_pinned(project_id, user, body.scope, body.slug, body.anchor, pinned=True)
+    except _ERRORS as e:
+        raise _translate(e)
+    return PinsResponse(slug=body.slug, pinned=pinned)
+
+
+@files_router.delete("/pins", response_model=PinsResponse, response_model_by_alias=True)
+def unpin_item(
+    project_id: str,
+    slug: str = Query(..., min_length=1, max_length=128),
+    anchor: str = Query(..., min_length=1, max_length=32),
+    scope: Scope = Query("project"),
+    user: User = Depends(require_projects_user),
+) -> PinsResponse:
+    """Unpin an item (editor+). Query parameters, because a slug may contain "/"."""
+    try:
+        pinned = _files().set_pinned(project_id, user, scope, slug, anchor, pinned=False)
+    except _ERRORS as e:
+        raise _translate(e)
+    return PinsResponse(slug=slug, pinned=pinned)
+
+
+@files_router.get("/archive", response_model=ArchiveResponse, response_model_by_alias=True)
+def list_archive(
+    project_id: str, scope: Scope = Query("project"), user: User = Depends(require_projects_user)
+) -> ArchiveResponse:
+    """Items that left a file and can still be restored (viewer+)."""
+    try:
+        items = _files().archive(project_id, user, scope)
+    except _ERRORS as e:
+        raise _translate(e)
+    return ArchiveResponse(items=items)
+
+
+@files_router.post("/archive/{archive_id}/restore", response_model=RestoreResponse, response_model_by_alias=True)
+def restore_archived_item(
+    project_id: str, archive_id: str, scope: Scope = Query("project"), user: User = Depends(require_projects_user)
+) -> RestoreResponse:
+    """Put an archived item back at the end of its file, with its anchor and provenance (editor+)."""
+    try:
+        result = _files().restore(project_id, user, scope, archive_id)
+    except _ERRORS as e:
+        raise _translate(e)
+    return RestoreResponse(slug=result.ref.slug, version=result.ref.version)

@@ -99,6 +99,12 @@ describe('Shared Projects compute wiring', () => {
     expect(runtimeEnv).not.toHaveProperty('OAUTH_CLIENT_SECRETS_ARN');
   });
 
+  it('expires archived memory items on `ttl` in the memory-spaces table (2.5a-2)', () => {
+    const tables = Object.values(template.findResources('AWS::DynamoDB::Table')) as any[];
+    const memory = tables.find((r) => String(JSON.stringify(r.Properties.TableName)).includes('memory-spaces'));
+    expect(memory.Properties.TimeToLiveSpecification).toEqual({ AttributeName: 'ttl', Enabled: true });
+  });
+
   it('grants the Runtime read + update on the table and its indexes, never put or delete', () => {
     const statement = findStatement(template, 'ProjectsTableReadUpdate');
 
