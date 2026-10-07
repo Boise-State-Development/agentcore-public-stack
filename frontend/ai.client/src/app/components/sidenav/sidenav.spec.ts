@@ -242,23 +242,38 @@ describe('Sidenav — nav entries', () => {
     expect(el.querySelector('app-notification-bell')).toBeNull();
   });
 
-  it('offers the search button in a build with conversation search on', async () => {
+  it('offers the search button in the header, beside the collapse control, in a build with search on', async () => {
     TestBed.overrideProvider(FEATURES, { useValue: { projects: false, conversationSearch: true } });
     const { SearchDialogService } = await import('../search/search-dialog.service');
     const open = vi.fn().mockResolvedValue(undefined);
     TestBed.overrideProvider(SearchDialogService, { useValue: { open } });
     const fixture = await renderSidenav();
-    const button = (fixture.nativeElement as HTMLElement).querySelector('button[aria-label="Search conversations"]') as HTMLButtonElement;
+    const el = fixture.nativeElement as HTMLElement;
+    const button = el.querySelector('button[aria-label="Search"]') as HTMLButtonElement;
     expect(button).not.toBeNull();
     expect(button.getAttribute('aria-keyshortcuts')).toMatch(/^(Meta|Control)\+K$/);
+    // In the header row with the collapse button, and unlike it not desktop-only,
+    // so touch and narrow screens keep it.
+    const collapse = el.querySelector('button[aria-label="Collapse sidebar"]') as HTMLButtonElement;
+    expect(button.parentElement).toBe(collapse.parentElement);
+    expect(button.classList.contains('hidden')).toBe(false);
     button.click();
     expect(open).toHaveBeenCalledWith();
+  });
+
+  it('keeps New Session a single full-width button in its own row', async () => {
+    TestBed.overrideProvider(FEATURES, { useValue: { projects: false, conversationSearch: true } });
+    const fixture = await renderSidenav();
+    const el = fixture.nativeElement as HTMLElement;
+    const newSession = Array.from(el.querySelectorAll('button')).find(b => b.textContent?.includes('New Session'))!;
+    expect(newSession.classList.contains('w-full')).toBe(true);
+    expect(newSession.parentElement?.querySelectorAll('button')).toHaveLength(1);
   });
 
   it('has no search button in a build with conversation search off', async () => {
     TestBed.overrideProvider(FEATURES, { useValue: { projects: false, conversationSearch: false } });
     const fixture = await renderSidenav();
-    expect((fixture.nativeElement as HTMLElement).querySelector('button[aria-label="Search conversations"]')).toBeNull();
+    expect((fixture.nativeElement as HTMLElement).querySelector('button[aria-label="Search"]')).toBeNull();
   });
 
   it('renders the Agents nav entry for a NON-admin', async () => {

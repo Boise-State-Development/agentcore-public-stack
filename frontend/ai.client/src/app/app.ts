@@ -18,7 +18,12 @@ import { BrandingService } from '../branding/branding.service';
 import { Dialog } from '@angular/cdk/dialog';
 import { FEATURES } from './services/features';
 import { SearchDialogService } from './components/search/search-dialog.service';
-import { isSearchShortcut, searchShortcutHandoff } from './components/search/search-shortcut';
+import {
+  isSearchShortcut,
+  searchShortcutAria,
+  searchShortcutHandoff,
+  searchShortcutLabel,
+} from './components/search/search-shortcut';
 
 @Component({
   selector: 'app-root',
@@ -48,7 +53,9 @@ export class App {
   private branding = inject(BrandingService);
   private dialog = inject(Dialog);
   private searchDialog = inject(SearchDialogService);
-  private readonly conversationSearchOn = inject(FEATURES).conversationSearch;
+  protected readonly conversationSearchOn = inject(FEATURES).conversationSearch;
+  protected readonly searchShortcutLabel = searchShortcutLabel();
+  protected readonly searchShortcutAria = searchShortcutAria();
 
   /** Re-read on every completed navigation; the value itself is unused,
    *  it exists so `minimalChrome` recomputes when the route changes. */
@@ -131,6 +138,10 @@ export class App {
       document.addEventListener('visibilitychange', handler);
       destroyRef.onDestroy(() => document.removeEventListener('visibilitychange', handler));
     }
+  }
+
+  protected openSearch(): void {
+    void this.searchDialog.open();
   }
 
   newChat() {
