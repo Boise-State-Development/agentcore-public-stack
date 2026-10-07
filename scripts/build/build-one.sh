@@ -186,6 +186,35 @@ case "$SERVICE" in
         PLATFORM="linux/arm64"
         SSM_KEY="/${CDK_PROJECT_PREFIX}/kb-migration/image-tag"
         ;;
+    conversation-index)
+        DOCKERFILE="backend/Dockerfile.conversation-index"
+        # One image, one Lambda (the conversation-search index consumer).
+        # Keep SOURCE_DIRS/MANIFESTS in lockstep with the Dockerfile's COPY
+        # list — a path copied but not hashed here would ship stale code
+        # under an unchanged content-hash tag.
+        SOURCE_DIRS=(
+            "backend/src/apis/app_api/conversation_index"
+            "backend/src/apis/shared/kb_backend"
+            "backend/src/apis/shared/observability"
+        )
+        # Single files. conversation_archive/ is copied file by file (its
+        # live.py is not in the image), so its files are hashed one by one.
+        MANIFESTS=(
+            "backend/src/apis/shared/__init__.py"
+            "backend/src/apis/shared/timestamps.py"
+            "backend/src/apis/shared/aws_clients.py"
+            "backend/src/apis/shared/feature_flags.py"
+            "backend/src/apis/shared/conversation_archive/__init__.py"
+            "backend/src/apis/shared/conversation_archive/documents.py"
+            "backend/src/apis/shared/conversation_archive/store.py"
+            "backend/src/apis/shared/conversation_archive/index_documents.py"
+            "backend/src/apis/app_api/kb_migration/__init__.py"
+            "backend/src/apis/app_api/kb_migration/ingestion_consumer.py"
+        )
+        # The consumer Lambda is arm64 (see the conversation-index construct).
+        PLATFORM="linux/arm64"
+        SSM_KEY="/${CDK_PROJECT_PREFIX}/conversation-index/image-tag"
+        ;;
     scheduled-runs)
         DOCKERFILE="backend/Dockerfile.scheduled-runs"        # One image, two Lambdas (dispatcher + worker via ImageConfig
         # command overrides). Keep SOURCE_DIRS in lockstep with the
@@ -219,7 +248,7 @@ case "$SERVICE" in
         ;;
     *)
         echo "Unknown service: $SERVICE" >&2
-        echo "Expected one of: app-api | inference-api | rag-ingestion | kb-sync | scheduled-runs" >&2
+        echo "Expected one of: app-api | inference-api | rag-ingestion | kb-sync | kb-migration | conversation-index | scheduled-runs" >&2
         exit 1
         ;;
 esac
