@@ -44,6 +44,10 @@ from .models import ExportReceipt, MessageMetadata, PausedTurnSnapshot, PendingI
 # is_preview_session, so a lazy import would only defer the crash.
 from .preview import is_preview_session
 
+# Stdlib-only normalizer for the conversation-search attributes written beside
+# the title (titleLower, firstPrompt).
+from .search_text import first_prompt_value, normalize_search_text
+
 logger = logging.getLogger(__name__)
 
 # How many recent call rows to read when looking for the predecessor whose cache
@@ -1041,6 +1045,10 @@ async def _store_session_metadata_cloud(
         item = session_metadata.model_dump(by_alias=True, exclude_none=True)
         for gsi_key in _RECENCY_KEY_ATTRS:
             item.pop(gsi_key, None)
+        # The lexical search attribute follows the title on every full-row write
+        # (the rename route, the first-turn create), never a stale copy of it.
+        if isinstance(item.get('title'), str):
+            item['titleLower'] = normalize_search_text(item['title'])
 
         # Convert floats to Decimal for DynamoDB compatibility
         item = _convert_floats_to_decimal(item)
@@ -1338,8 +1346,17 @@ async def ensure_session_metadata_exists(
         return False
 
 
-async def update_session_title(session_id: str, user_id: str, title: str) -> None:
-    """Update only the title attribute on the session row.
+async def update_session_title(
+    session_id: str, user_id: str, title: str, first_prompt: Optional[str] = None
+) -> None:
+    """Update only the title attributes on the session row.
+
+    Writes ``title`` and its search form ``titleLower`` together, and, when the
+    caller has the conversation's opening prompt, ``firstPrompt`` (first 300
+    normalized characters, set only if absent so a later title can never
+    replace it). Both feed the lexical leg of conversation search
+    (``docs/specs/conversation-search.md`` §5) and ride on this one write, so a
+    title costs no extra round trip.
 
     Uses a targeted ``UpdateExpression`` so it can run concurrently with
     ``store_session_metadata`` (which does a full-row merge) without racing
@@ -1365,13 +1382,14 @@ async def update_session_title(session_id: str, user_id: str, title: str) -> Non
         from botocore.exceptions import ClientError
 
         table = get_dynamodb_table(sessions_metadata_table)
+        update_expression, values = _title_update(title, first_prompt)
 
         try:
             table.update_item(
                 Key={"PK": f"USER#{user_id}", "SK": _static_session_sk(session_id)},
-                UpdateExpression="SET title = :t",
+                UpdateExpression=update_expression,
                 ConditionExpression="attribute_exists(PK)",
-                ExpressionAttributeValues={":t": title},
+                ExpressionAttributeValues=values,
             )
             logger.info(f"💾 Updated title for session {session_id}")
             return
@@ -1390,12 +1408,23 @@ async def update_session_title(session_id: str, user_id: str, title: str) -> Non
 
         table.update_item(
             Key={"PK": f"USER#{user_id}", "SK": sk},
-            UpdateExpression="SET title = :t",
-            ExpressionAttributeValues={":t": title},
+            UpdateExpression=update_expression,
+            ExpressionAttributeValues=values,
         )
         logger.info(f"💾 Updated title for session {session_id}")
     except Exception as e:
         logger.error(f"update_session_title failed: {e}", exc_info=True)
+
+
+def _title_update(title: str, first_prompt: Optional[str]) -> Tuple[str, Dict[str, Any]]:
+    """The ``UpdateExpression`` for a title write, with its search attributes."""
+    expression = "SET title = :t, titleLower = :tl"
+    values: Dict[str, Any] = {":t": title, ":tl": normalize_search_text(title)}
+    prompt = first_prompt_value(first_prompt)
+    if prompt:
+        expression += ", firstPrompt = if_not_exists(firstPrompt, :fp)"
+        values[":fp"] = prompt
+    return expression, values
 
 
 async def set_session_unread(session_id: str, user_id: str, unread: bool) -> None:

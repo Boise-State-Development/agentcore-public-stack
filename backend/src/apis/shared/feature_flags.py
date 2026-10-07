@@ -645,6 +645,26 @@ def conversation_index_enabled() -> bool:
     return os.environ.get("CONVERSATION_INDEX_ENABLED", "").strip().lower() == "true"
 
 
+def conversation_search_enabled() -> bool:
+    """Whether ``GET /sessions/search`` is served.
+
+    The read path of conversation search (``docs/specs/conversation-search.md``
+    §5): a lexical leg over the user's own session rows and a text leg over the
+    shared ``conversations`` knowledge base. **Opt-in while the feature is in
+    development** (CLAUDE.md "Feature flags"): only ``"true"`` (case-insensitive)
+    enables it; unset or anything else is off, and the route 404s. CDK sets it
+    on app-api from ``config.conversationSearch.enabled``; the SPA's
+    ``features.conversationSearch`` decides whether the modal is offered.
+
+    A feature switch, not a rollout switch. It is separate from
+    :func:`conversation_index_enabled` because indexing has to run ahead of
+    search: turn this on only once the index holds the environment's history
+    (PR-3's backfill). With the index off and this on, the text leg finds
+    nothing and search is title and opening-prompt matches only.
+    """
+    return os.environ.get("CONVERSATION_SEARCH_ENABLED", "").strip().lower() == "true"
+
+
 def conversation_retention_prunes_sessions() -> bool:
     """Whether the retention setting also removes session rows.
 

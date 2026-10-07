@@ -327,6 +327,11 @@ export function buildAppApiEnvironment(
     // only (the fork copy path here, the after-`done` put on the runtime).
     CONVERSATION_ARCHIVE_BUCKET_NAME: params.conversationArchiveBucketName,
     CONVERSATION_INDEX_ENABLED: config.conversationIndex.enabled ? 'true' : 'false',
+    // Conversation search (§5): GET /sessions/search 404s while this is off. The
+    // retention setting is the search's read-path belt (§3): a turn older than
+    // this is dropped from results even before the reconciler deletes it.
+    CONVERSATION_SEARCH_ENABLED: config.conversationSearch.enabled ? 'true' : 'false',
+    CONVERSATION_RETENTION_DAYS: String(config.conversationRetentionDays),
     BFF_SESSIONS_TABLE_NAME: params.bffSessionsTableName,
     BFF_COOKIE_SIGNING_KEY_ARN: params.bffCookieSigningKeyArn,
     BFF_COOKIE_DATA_KEY_SECRET_ARN: params.bffCookieDataKeySecretArn,

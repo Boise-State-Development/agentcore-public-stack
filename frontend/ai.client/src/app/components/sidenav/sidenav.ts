@@ -14,6 +14,7 @@ import { FEATURES } from '../../services/features';
 import { SidenavService } from '../../services/sidenav/sidenav.service';
 import { TooltipDirective } from '../tooltip/tooltip.directive';
 import { BrandingService } from '../../../branding/branding.service';
+import { SearchDialogService } from '../search/search-dialog.service';
 
 @Component({
   selector: 'app-sidenav',
@@ -30,6 +31,11 @@ export class Sidenav {
   protected branding = inject(BrandingService);
   /** This build's front-end feature switches (compile-time; see environments/feature-flags.ts). */
   protected readonly features = inject(FEATURES);
+  private readonly searchDialog = inject(SearchDialogService);
+
+  /** The search shortcut as this platform spells it, for the button's tooltip. */
+  protected readonly searchShortcutLabel = isApplePlatform() ? '⌘K' : 'Ctrl+K';
+  protected readonly searchShortcutAria = isApplePlatform() ? 'Meta+K' : 'Control+K';
 
   /** Whether the branding logo image failed to load (Requirement 2.8). */
   protected logoLoadFailed = signal(false);
@@ -81,6 +87,12 @@ export class Sidenav {
    */
   protected isAdmin = this.userService.canAccessAdmin;
 
+  /** Opens conversation search; the drawer closes first so the dialog is not under it on mobile. */
+  protected openSearch(): void {
+    this.sidenavService.close();
+    void this.searchDialog.open();
+  }
+
   newSession() {
     this.sidenavService.close();
     this.router.navigate(['']);
@@ -117,4 +129,9 @@ export class Sidenav {
     await this.bffSession.logout();
     this.router.navigate(['/auth/login']);
   }
+}
+
+function isApplePlatform(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  return /mac|iphone|ipad|ipod/i.test(navigator.platform || navigator.userAgent);
 }

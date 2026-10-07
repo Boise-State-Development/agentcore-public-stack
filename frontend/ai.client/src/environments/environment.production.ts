@@ -17,5 +17,6 @@ export const environment = {
     // production GitHub environment's CDK_*_ENABLED variables.
     features: {
         projects: false,
+        conversationSearch: false,
     } satisfies FeatureFlags,
 };

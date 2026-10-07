@@ -12,5 +12,6 @@ export const environment = {
     // until you choose to turn them on; match your backend's *_ENABLED values.
     features: {
         projects: false,
+        conversationSearch: false,
     } satisfies FeatureFlags,
 };

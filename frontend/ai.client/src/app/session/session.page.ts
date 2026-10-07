@@ -112,6 +112,13 @@ export class ConversationPage implements OnDestroy {
    */
   private lastViewedSessionId: string | null = null;
 
+  /**
+   * The `?m=` message last scrolled to (conversation search's jump-to-message),
+   * as `{sessionId}|{messageId}`, so a query-param re-emission does not yank the
+   * viewport back after the user has scrolled away from it.
+   */
+  private lastJumpedTo: string | null = null;
+
   sessionId = signal<string | null>(null);
   assistantIdFromQuery = signal<string | null>(null);
 
@@ -421,6 +428,7 @@ export class ConversationPage implements OnDestroy {
         this.scrollContainer?.scrollTo({ top: 0, behavior: 'auto' });
       }
       this.lastViewedSessionId = id;
+      this.lastJumpedTo = null;
 
       this.sessionId.set(id);
 
@@ -541,10 +549,22 @@ export class ConversationPage implements OnDestroy {
       }
     });
 
-    // Subscribe to query parameter changes for assistantId
+    // Subscribe to query parameter changes for assistantId, and for `m` — the
+    // turn a search result points at. A new `m` on the conversation already
+    // open (no route-param change, so no restore) scrolls straight to it; on a
+    // fresh navigation the element is not rendered yet, so this misses and
+    // restoreScrollPosition handles it once the messages land.
     this.queryParamSubscription = this.route.queryParamMap.subscribe(params => {
       const assistantId = params.get('assistantId');
       this.assistantIdFromQuery.set(assistantId);
+
+      const messageId = params.get('m');
+      const sessionId = this.sessionId();
+      if (this.isBrowser && messageId && sessionId) {
+        requestAnimationFrame(() => {
+          if (this.sessionId() === sessionId) this.jumpToMessage(sessionId, messageId);
+        });
+      }
     });
   }
 
@@ -582,6 +602,11 @@ export class ConversationPage implements OnDestroy {
       requestAnimationFrame(() => {
         if (this.sessionId() !== sessionId) return;
 
+        // Opened from a search result: the matching turn wins over any
+        // remembered position. Falls through when that turn is not rendered.
+        const messageId = this.route.snapshot.queryParamMap.get('m');
+        if (messageId && this.jumpToMessage(sessionId, messageId)) return;
+
         const saved = this.scrollPositions.get(sessionId);
         if (saved !== undefined) {
           this.scrollContainer?.scrollTo({ top: saved, behavior: 'auto' });
@@ -590,6 +615,19 @@ export class ConversationPage implements OnDestroy {
         }
       });
     });
+  }
+
+  /**
+   * Scroll to a turn's user message (`message-{id}` anchor), instantly. True if
+   * it was there to scroll to. Only user messages carry anchors, which is where
+   * a matched turn's answer begins (conversation-search §6).
+   */
+  private jumpToMessage(sessionId: string, messageId: string): boolean {
+    const key = `${sessionId}|${messageId}`;
+    if (this.lastJumpedTo === key) return true;
+    if (!this.chatContainer()?.scrollToMessage(messageId, 'auto')) return false;
+    this.lastJumpedTo = key;
+    return true;
   }
 
   /**

@@ -380,6 +380,13 @@ jobs:
       # `CDK_CONVERSATION_INDEX_ENABLED` variable to "true" in an environment
       # to turn it on there. Unset (empty string) or anything else means off.
       CDK_CONVERSATION_INDEX_ENABLED: ${{ vars.CDK_CONVERSATION_INDEX_ENABLED }}
+      # Conversation search read path: GET /sessions/search on app-api
+      # (docs/specs/conversation-search.md §5). Opt-in while in development:
+      # set the `CDK_CONVERSATION_SEARCH_ENABLED` variable to "true" in an
+      # environment to turn it on there, and only once that environment's
+      # archive has been backfilled (PR-3). Keep `features.conversationSearch`
+      # in the matching environment file in step. Unset or anything else is off.
+      CDK_CONVERSATION_SEARCH_ENABLED: ${{ vars.CDK_CONVERSATION_SEARCH_ENABLED }}
       # Observability. All optional — unset means the default in config.ts.
       # XRAY_SAMPLING_RATE is a rate (0.0-1.0), not a percentage.
       CDK_OBSERVABILITY_ALARM_TOPIC_ENABLED: ${{ vars.CDK_OBSERVABILITY_ALARM_TOPIC_ENABLED }}
