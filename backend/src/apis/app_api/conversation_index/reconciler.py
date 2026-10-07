@@ -95,8 +95,15 @@ MAX_DOCUMENTS_LISTED = 1_000_000
 #: Statuses that mean a delete is already under way.
 _ALREADY_DELETING = frozenset({"DELETING", "DELETE_IN_PROGRESS"})
 
-#: ``ListKnowledgeBaseDocuments`` page size (the API maximum).
-_LIST_PAGE_SIZE = 1000
+#: A deleted document stays in the listing as ``NOT_FOUND`` (observed on dev
+#: 2026-10-07: every turn the consumer had deleted). It is already gone;
+#: deleting it again would repeat every day and count it as an orphan forever.
+_ALREADY_DELETED = frozenset({"NOT_FOUND"})
+
+#: ``ListKnowledgeBaseDocuments`` page size. The SDK model allows 1,000, but a
+#: managed knowledge base rejects anything above 100 with a ValidationException
+#: (observed on dev 2026-10-07, the reconciler's first run).
+_LIST_PAGE_SIZE = 100
 
 #: ``DeleteObjects`` takes at most this many keys.
 _S3_DELETE_BATCH = 1000
@@ -185,6 +192,7 @@ class ReconcileReport:
     kb_provisioned: bool = False
     documents_listed: int = 0
     documents_already_deleting: int = 0
+    documents_already_deleted: int = 0
     archive_objects: int = 0
     expired_objects: int = 0
     expired_objects_deleted: int = 0
@@ -202,6 +210,7 @@ class ReconcileReport:
             "kbProvisioned": self.kb_provisioned,
             "documentsListed": self.documents_listed,
             "documentsAlreadyDeleting": self.documents_already_deleting,
+            "documentsAlreadyDeleted": self.documents_already_deleted,
             "archiveObjects": self.archive_objects,
             "expiredObjects": self.expired_objects,
             "expiredObjectsDeleted": self.expired_objects_deleted,
@@ -218,8 +227,8 @@ class ListingIncomplete(RuntimeError):
 
 
 # ── Listings ─────────────────────────────────────────────────────────────────
-def list_document_ids(client: Any, kb_id: str, data_source_id: str) -> Tuple[Set[str], int]:
-    """Conversation document ids in the knowledge base, and how many are already deleting.
+def list_document_ids(client: Any, kb_id: str, data_source_id: str) -> Tuple[Set[str], int, int]:
+    """Live conversation document ids, how many are being deleted, and how many already are.
 
     Ids that are not conversation ids are ignored (the knowledge base only
     holds conversation turns, but nothing here should act on an id it did not
@@ -227,6 +236,7 @@ def list_document_ids(client: Any, kb_id: str, data_source_id: str) -> Tuple[Set
     """
     ids: Set[str] = set()
     deleting = 0
+    deleted = 0
     token: Optional[str] = None
     while True:
         params: Dict[str, Any] = {
@@ -241,15 +251,19 @@ def list_document_ids(client: Any, kb_id: str, data_source_id: str) -> Tuple[Set
             document_id = ((detail.get("identifier") or {}).get("custom") or {}).get("id") or ""
             if parse_index_document_id(document_id) is None:
                 continue
-            if str(detail.get("status") or "") in _ALREADY_DELETING:
+            status = str(detail.get("status") or "")
+            if status in _ALREADY_DELETING:
                 deleting += 1
                 continue
+            if status in _ALREADY_DELETED:
+                deleted += 1
+                continue
             ids.add(document_id)
-        if len(ids) + deleting > MAX_DOCUMENTS_LISTED:
+        if len(ids) + deleting + deleted > MAX_DOCUMENTS_LISTED:
             raise ListingIncomplete(f"more than {MAX_DOCUMENTS_LISTED} documents listed")
         token = page.get("nextToken")
         if not token:
-            return ids, deleting
+            return ids, deleting, deleted
 
 
 @dataclass(frozen=True)
@@ -351,7 +365,11 @@ def reconcile(
     if located is not None:
         report.kb_provisioned = True
         try:
-            documents, report.documents_already_deleting = list_document_ids(client, *located)
+            (
+                documents,
+                report.documents_already_deleting,
+                report.documents_already_deleted,
+            ) = list_document_ids(client, *located)
         except Exception as exc:  # noqa: BLE001 - never act on a partial listing
             report.aborted = f"knowledge base listing failed: {type(exc).__name__}"
             return report
