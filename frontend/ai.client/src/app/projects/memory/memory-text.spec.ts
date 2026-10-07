@@ -6,6 +6,7 @@ import {
   contributors,
   describeProvenance,
   estimateTokens,
+  inlineRuns,
   itemProblem,
   linkParts,
   parseItems,
@@ -170,5 +171,19 @@ describe('editor checks', () => {
     expect(itemProblem('See [[nowhere]].', '', entries)).toBe('[[nowhere]] doesn’t match a file name or alias.');
     expect(itemProblem('See [[nowhere]] again.', 'See [[Nowhere]].', entries)).toBeNull();
     expect(itemProblem('See [[banner]] and [[memory.md]].', '', entries)).toBeNull();
+  });
+});
+
+describe('inlineRuns', () => {
+  it('reads bold, emphasis and code, and leaves everything else literal', () => {
+    expect(inlineRuns('**Fixed price:** $184,500, *net* 30 per `§6`; 2 * 3 * 4')).toEqual([
+      { kind: 'strong', text: 'Fixed price:' },
+      { kind: 'plain', text: ' $184,500, ' },
+      { kind: 'em', text: 'net' },
+      { kind: 'plain', text: ' 30 per ' },
+      { kind: 'code', text: '§6' },
+      { kind: 'plain', text: '; 2 * 3 * 4' },
+    ]);
+    expect(inlineRuns('plain')).toEqual([{ kind: 'plain', text: 'plain' }]);
   });
 });

@@ -108,6 +108,33 @@ export function linkParts(text: string, entries: readonly MemoryEntry[]): TextPa
   return parts;
 }
 
+export interface InlineRun {
+  kind: 'plain' | 'strong' | 'em' | 'code';
+  text: string;
+}
+
+const INLINE = /(\*\*[^*\n]+\*\*|`[^`\n]+`|(?<![\w*])\*[^*\s][^*\n]*?\*(?![\w*]))/g;
+
+/**
+ * The inline markdown the assistant writes into items (`**bold**`, `*emphasis*`, `` `code` ``)
+ * as runs, so a fact reads as text rather than asterisks. Anything else stays literal.
+ */
+export function inlineRuns(text: string): InlineRun[] {
+  const runs: InlineRun[] = [];
+  let last = 0;
+  for (const match of text.matchAll(INLINE)) {
+    const at = match.index ?? 0;
+    if (at > last) runs.push({ kind: 'plain', text: text.slice(last, at) });
+    const token = match[0];
+    if (token.startsWith('**')) runs.push({ kind: 'strong', text: token.slice(2, -2) });
+    else if (token.startsWith('`')) runs.push({ kind: 'code', text: token.slice(1, -1) });
+    else runs.push({ kind: 'em', text: token.slice(1, -1) });
+    last = at + token.length;
+  }
+  if (last < text.length) runs.push({ kind: 'plain', text: text.slice(last) });
+  return runs;
+}
+
 export function resolveLink(name: string, entries: readonly MemoryEntry[]): string | null {
   const key = name.trim().toLowerCase();
   if (key === INDEX_SLUG.toLowerCase()) return INDEX_SLUG;

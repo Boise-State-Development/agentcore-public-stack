@@ -1,10 +1,10 @@
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { MemoryEntry } from '../models/project.model';
-import { linkParts } from './memory-text';
+import { inlineRuns, linkParts } from './memory-text';
 
 /**
- * Memory text with its `[[links]]` as chips. A link that resolves opens that file on the
+ * Memory text with its `[[links]]` as chips and its inline markdown (bold, emphasis, code) rendered. A link that resolves opens that file on the
  * Memory page (same scope); one that matches no file or alias is drawn dashed and says so
  * to a screen reader.
  */
@@ -12,7 +12,7 @@ import { linkParts } from './memory-text';
   selector: 'app-memory-text',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [RouterLink],
-  template: `@for (part of parts(); track $index) {@if (part.kind === 'text') {<span class="whitespace-pre-wrap">{{ part.text }}</span>} @else if (part.slug) {<a
+  template: `@for (part of parts(); track $index) {@if (part.kind === 'text') {<span class="whitespace-pre-wrap">@for (run of runs(part.text); track $index) {@switch (run.kind) {@case ('strong') {<strong class="font-semibold">{{ run.text }}</strong>} @case ('em') {<em>{{ run.text }}</em>} @case ('code') {<code class="rounded bg-gray-100 px-1 font-mono text-[0.8125rem] dark:bg-gray-700">{{ run.text }}</code>} @default {{{ run.text }}}}}</span>} @else if (part.slug) {<a
           [routerLink]="[]"
           [queryParams]="{ file: part.slug, view: null }"
           queryParamsHandling="merge"
@@ -28,4 +28,5 @@ export class MemoryTextComponent {
   readonly entries = input.required<readonly MemoryEntry[]>();
 
   protected readonly parts = computed(() => linkParts(this.text(), this.entries()));
+  protected readonly runs = inlineRuns;
 }
