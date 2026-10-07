@@ -94,6 +94,80 @@ def _extract_user_from_token(token: str) -> Optional[Dict[str, str]]:
         return None
 
 
+def _handshake_bearer_token(websocket: WebSocket) -> str:
+    """The ``Authorization: Bearer`` token on the WebSocket upgrade, or ``""``.
+
+    In the deployed Runtime this is the token its JWT authorizer validated:
+    ``Authorization`` is on ``requestHeaderAllowlist``, so the Runtime forwards
+    it to the container, and app-api's relay sends its bearer here (local dev
+    too). The browser-only ``base64UrlBearerAuthorization`` subprotocol is
+    deliberately not read: nothing says the Runtime forwards it, nor which of
+    several offered protocols it checked.
+    """
+    authorization = websocket.headers.get("authorization", "")
+    if authorization[:7].lower() != "bearer ":
+        return ""
+    return authorization[7:].strip()
+
+
+def _resolve_voice_identity(
+    *,
+    handshake_token: str,
+    frame_token: str,
+    claimed_user_ids: list[Optional[str]],
+) -> tuple[str, str]:
+    """Return ``(user_id, auth_token)`` for a voice connection, or ``("", "")`` to refuse it.
+
+    The identity is the ``sub`` of the token on the upgrade, never a
+    ``user_id`` the client names. The config frame, the query string and the
+    ``user-id`` custom header are all client-supplied (anyone reaching the
+    Runtime's ``/ws`` directly can set them, custom headers included, as query
+    params), so a claimed id is only checked against the token, and a mismatch
+    refuses the connection rather than being quietly corrected.
+
+    The config frame's ``auth_token`` is not an identity source either. It is
+    decoded without a signature check (the Runtime's authorizer only ever saw
+    the upgrade's token), so any caller holding one valid token could mint an
+    unsigned one naming another user, or carrying chosen roles, and send it in
+    the frame. A frame token for a different ``sub`` refuses the connection.
+
+    No upgrade token is refused, except under ``SKIP_AUTH``, the local-dev
+    bypass the text route on this service already honours. There the frame
+    token's ``sub`` or a claimed id is accepted as given.
+    """
+    claims = [str(c) for c in claimed_user_ids if c]
+
+    if not handshake_token:
+        from apis.shared.auth.dependencies import _skip_auth_user
+
+        local_user = _skip_auth_user()
+        if local_user is None:
+            logger.warning("Rejected voice connection: no bearer token on the upgrade")
+            return "", ""
+        frame_info = _extract_user_from_token(frame_token) if frame_token else None
+        if frame_info:
+            return frame_info["user_id"], frame_token
+        return (claims[0] if claims else local_user.user_id), ""
+
+    user_info = _extract_user_from_token(handshake_token)
+    if not user_info:
+        logger.warning("Rejected voice connection: upgrade token carries no usable identity")
+        return "", ""
+    user_id = user_info["user_id"]
+
+    if frame_token and frame_token != handshake_token:
+        frame_info = _extract_user_from_token(frame_token)
+        if not frame_info or frame_info["user_id"] != user_id:
+            logger.warning("Rejected voice connection: config-frame token names a different user")
+            return "", ""
+
+    if any(claim != user_id for claim in claims):
+        logger.warning("Rejected voice connection: claimed user_id does not match the token")
+        return "", ""
+
+    return user_id, handshake_token
+
+
 async def _always_on_tool_ids_for_voice(
     auth_token: str, user_id: str
 ) -> list:
@@ -374,13 +448,17 @@ async def voice_stream(
 
     **AgentCore (deployed):** Browser connects via
     ``wss://bedrock-agentcore.<region>.amazonaws.com/runtimes/<ARN>/ws``.
-    Auth is handled by AgentCore's JWT Authorizer at the proxy layer.
-    The bearer token for user-claim extraction arrives in the first
-    ``config`` message sent by the client after connection opens.
+    Auth is handled by AgentCore's JWT Authorizer at the proxy layer,
+    on the upgrade's ``Authorization`` header, which the Runtime forwards.
+    The user is that token's ``sub``. A ``user_id`` or ``auth_token`` the
+    client sends anywhere else must agree with it, or the connection closes
+    with 4001.
 
     **Local dev:** Browser connects directly to
     ``ws://localhost:8001/voice/stream``. Session ID and token are
-    plain query params; the config message supplements them.
+    plain query params; the config message supplements them. With no
+    bearer on the upgrade, a ``user_id`` is accepted only under
+    ``SKIP_AUTH``.
     """
     # Accept immediately — AgentCore validates auth at the proxy layer;
     # user claims are extracted from the config message after accept.
@@ -392,6 +470,7 @@ async def voice_stream(
     enabled_tools_list = _get_enabled_tools_from_request(websocket, enabled_tools)
     auth_token = _get_param_from_request(websocket, "auth-token", token) or ""
     requested_voice: Optional[str] = None
+    frame_user_id: Optional[str] = None
 
     # Always read config message from client (sent on WebSocket open).
     # Required for auth_token in AgentCore mode and supplements any
@@ -402,7 +481,7 @@ async def voice_stream(
         )
         if first_msg.get("type") == "config":
             session_id = first_msg.get("session_id") or session_id
-            user_id = first_msg.get("user_id") or user_id
+            frame_user_id = first_msg.get("user_id")
             enabled_tools_list = first_msg.get("enabled_tools") or enabled_tools_list
             auth_token = first_msg.get("auth_token") or auth_token
             # The user's chosen Nova 2 Sonic voice. Validated in VoiceAgent
@@ -420,11 +499,13 @@ async def voice_stream(
         session_id = str(uuid.uuid4())
         logger.info(f"Generated new voice session ID: {_sanitize_log(session_id)}")
 
-    # Extract user from token (query param or config message)
-    if not user_id and auth_token:
-        user_info = _extract_user_from_token(auth_token)
-        if user_info:
-            user_id = user_info["user_id"]
+    # Identity is the token's `sub`. A `user_id` from the query, the custom
+    # header or the config frame is a claim to check, never a source.
+    user_id, auth_token = _resolve_voice_identity(
+        handshake_token=_handshake_bearer_token(websocket),
+        frame_token=auth_token,
+        claimed_user_ids=[user_id, frame_user_id],
+    )
 
     if not user_id:
         await websocket.send_json({"type": "bidi_error", "message": "Authentication required"})
