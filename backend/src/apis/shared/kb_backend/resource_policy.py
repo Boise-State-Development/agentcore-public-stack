@@ -72,7 +72,7 @@ POLICY_SID = "PlatformSharedRetrieve"
 POLICY_VERSION = "2012-10-17"
 
 #: Comma-separated ARNs of the infrastructure identities that retrieve on users'
-#: behalf — the AgentCore runtime role, and the App API task role for test-chat.
+#: behalf — the AgentCore runtime role.
 #: Read at call time, never captured in a default argument.
 PRINCIPALS_ENV = "MANAGED_KB_RETRIEVAL_PRINCIPAL_ARNS"
 

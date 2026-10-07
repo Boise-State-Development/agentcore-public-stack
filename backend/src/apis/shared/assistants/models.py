@@ -1914,15 +1914,6 @@ class AdminQueueCountsResponse(BaseModel):
     )
 
 
-class AssistantTestChatRequest(BaseModel):
-    """Request body for testing assistant chat with RAG"""
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    message: str = Field(..., description="User message to test")
-    session_id: Optional[str] = Field(None, description="Optional session ID for ephemeral chat")
-
-
 class ShareAssistantRequest(BaseModel):
     """Request body for sharing an assistant with email addresses"""
 

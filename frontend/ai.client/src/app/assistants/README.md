@@ -56,7 +56,7 @@ bug, and "fixing" it reintroduces the 422.
 ## Backend note
 
 `/assistants/*` on the backend is **not** deprecated and is not going away. The Agent routes
-are an alias surface over the same records, and two sub-surfaces deliberately stayed put:
-`test-chat` (what `preview-chat.service` calls) and the document sub-routes (what the
-knowledge-base section calls). See the "Inference API boundary" and import-boundary notes in
-the root `CLAUDE.md`.
+are an alias surface over the same records, and the document sub-routes (what the
+knowledge-base section calls) deliberately stayed put. Previews stream through the main
+chat's `/invocations` path via `shared/preview/preview-session.service`; the old
+`POST /assistants/{id}/test-chat` endpoint is gone.
