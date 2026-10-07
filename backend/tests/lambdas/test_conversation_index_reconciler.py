@@ -39,6 +39,8 @@ class FakeBedrockAgent:
             raise self.fail_list
         assert kwargs["knowledgeBaseId"] == "KBCONV0001"
         assert kwargs["dataSourceId"] == "DSCONV0001"
+        # A managed knowledge base rejects anything above 100.
+        assert kwargs["maxResults"] <= 100
         ids = sorted(self.documents)
         start = int(kwargs.get("nextToken") or 0)
         page = ids[start : start + self.page_size]
@@ -176,6 +178,19 @@ class TestOrphanDocuments:
 
         assert env.delete_calls == []
         assert report.documents_already_deleting == 1
+
+    def test_deleted_documents_listed_as_not_found_are_not_orphans(self, env):
+        """A deleted document lingers in the listing as NOT_FOUND."""
+        _provisioned()
+        _archive("s1", 0)
+        env.add("conv#s1#0")
+        env.add("conv#deleted-yesterday#0", status="NOT_FOUND")
+
+        report = _run(env)
+
+        assert env.delete_calls == []
+        assert report.orphan_documents == 0
+        assert report.documents_already_deleted == 1
 
     def test_ids_it_did_not_mint_are_never_touched(self, env):
         _provisioned()
