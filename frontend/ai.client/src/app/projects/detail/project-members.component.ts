@@ -1,5 +1,4 @@
 import { ChangeDetectionStrategy, Component, computed, effect, inject, input, output, signal, untracked, viewChild } from '@angular/core';
-import { Router } from '@angular/router';
 import { Dialog } from '@angular/cdk/dialog';
 import { firstValueFrom } from 'rxjs';
 import { NgIcon, provideIcons } from '@ng-icons/core';
@@ -15,7 +14,7 @@ import { personLabel } from '../../shared/utils/person';
 import { MemberRole, Project, ProjectMember, ProjectRole } from '../models/project.model';
 import { PeoplePickerComponent, PeoplePickerSubmit } from '../components/people-picker.component';
 import { ProjectApiService } from '../services/project-api.service';
-import { ProjectsService, projectErrorMessage } from '../services/projects.service';
+import { projectErrorMessage } from '../services/projects.service';
 
 const ROLE_LABELS: Record<ProjectRole, string> = { owner: 'Owner', editor: 'Editor', viewer: 'Viewer' };
 
@@ -36,7 +35,7 @@ const ROLE_LABELS: Record<ProjectRole, string> = { owner: 'Owner', editor: 'Edit
   imports: [NgIcon, PeoplePickerComponent, TooltipDirective],
   providers: [provideIcons({ heroChevronDown, heroTrash })],
   template: `
-    <div class="max-w-3xl space-y-8">
+    <div class="space-y-8">
       @if (canManage()) {
         <section aria-labelledby="add-people-heading">
           <h2 id="add-people-heading" class="sr-only">Add people</h2>
@@ -45,30 +44,20 @@ const ROLE_LABELS: Record<ProjectRole, string> = { owner: 'Owner', editor: 'Edit
       }
 
       <section aria-labelledby="members-heading">
-        <div class="flex items-baseline justify-between gap-3">
-          <h2 id="members-heading" class="text-base/7 font-semibold text-gray-900 dark:text-white">
+        <h3 id="members-heading" class="text-sm/6 font-semibold text-gray-900 dark:text-white" [class.sr-only]="members().length === 0">
+          @if (members().length) {
+            {{ members().length }} {{ members().length === 1 ? 'person' : 'people' }}
+          } @else {
             Members
-            @if (members().length) {
-              <span class="font-normal text-gray-600 dark:text-gray-400">· {{ members().length }}</span>
-            }
-          </h2>
-          @if (canLeave()) {
-            <button
-              type="button"
-              (click)="leave()"
-              class="rounded-2xl px-3 py-1.5 text-sm/6 font-medium text-state-danger-600 hover:bg-state-danger-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-600 dark:text-state-danger-400 dark:hover:bg-state-danger-900/20"
-            >
-              Leave project
-            </button>
           }
-        </div>
+        </h3>
 
         @if (error()) {
           <p role="alert" class="mt-3 text-sm/6 text-state-danger-600 dark:text-state-danger-400">{{ error() }}</p>
         }
 
         @if (loading() && members().length === 0) {
-          <div class="mt-3 h-32 animate-pulse rounded-2xl bg-gray-100 dark:bg-gray-800" aria-busy="true"></div>
+          <div class="mt-3 h-32 animate-pulse rounded-2xl bg-gray-100 dark:bg-gray-700" aria-busy="true"></div>
         } @else {
           <ul class="mt-3 divide-y divide-gray-200 overflow-hidden rounded-2xl border border-gray-200 bg-white dark:divide-gray-700 dark:border-gray-700 dark:bg-gray-800">
             @for (member of members(); track member.email) {
@@ -136,16 +125,33 @@ const ROLE_LABELS: Record<ProjectRole, string> = { owner: 'Owner', editor: 'Edit
           }
         }
       </section>
+
+      @if (isOwner()) {
+        <section aria-labelledby="member-access-heading" class="border-t border-gray-200 pt-6 dark:border-gray-700">
+          <h3 id="member-access-heading" class="sr-only">Who can manage members</h3>
+          <label class="flex items-start gap-3">
+            <input
+              type="checkbox"
+              [checked]="project().editorsManageMembers"
+              [disabled]="!active() || savingAccess()"
+              (change)="setEditorsManageMembers($any($event.target).checked)"
+              class="mt-1 size-4 rounded border-gray-300 text-primary-accessible focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700"
+            />
+            <span>
+              <span class="block text-sm/6 font-medium text-gray-900 dark:text-white">Editors can manage members</span>
+              <span class="block text-xs/5 text-gray-600 dark:text-gray-400">Otherwise only you can add, change or remove people.</span>
+            </span>
+          </label>
+        </section>
+      }
     </div>
   `,
 })
 export class ProjectMembersComponent {
   private api = inject(ProjectApiService);
-  private projects = inject(ProjectsService);
   private user = inject(UserService);
   private toast = inject(ToastService);
   private dialog = inject(Dialog);
-  private router = inject(Router);
 
   readonly project = input.required<Project>();
   readonly projectChange = output<Project>();
@@ -163,8 +169,8 @@ export class ProjectMembersComponent {
   protected readonly isOwner = computed(() => this.project().role === 'owner');
   protected readonly active = computed(() => this.project().status === 'active');
   protected readonly canManage = computed(() => this.serverCanManage() && this.active());
-  protected readonly canLeave = computed(() => !this.isOwner() && !!this.me());
   protected readonly hasTransferTarget = computed(() => this.members().some(m => this.canTransferTo(m)));
+  protected readonly savingAccess = signal(false);
 
   // Keyed on the id, not the object: a tab hands back an updated project after most
   // changes, and that must not reload what it just saved.
@@ -257,20 +263,20 @@ export class ProjectMembersComponent {
     }
   }
 
-  protected async leave(): Promise<void> {
-    const ok = await this.confirm({
-      title: 'Leave this project?',
-      message: 'You lose access to it and to the tasks shared in it. Someone would have to add you again.',
-      confirmText: 'Leave project',
-      destructive: true,
-    });
-    if (!ok) return;
+  /** Owner only: whether editors may add, change and remove people. */
+  protected async setEditorsManageMembers(value: boolean): Promise<void> {
+    this.savingAccess.set(true);
+    this.error.set(null);
     try {
-      await firstValueFrom(this.api.leave(this.project().projectId));
-      this.projects.remove(this.project().projectId);
-      await this.router.navigate(['/projects']);
+      const project = await firstValueFrom(this.api.update(this.project().projectId, { editorsManageMembers: value }));
+      this.toast.success('Saved');
+      this.projectChange.emit(project);
+      // `canManage` comes from the server, so re-read it for the new rule.
+      await this.load(project.projectId);
     } catch (err) {
-      this.error.set(projectErrorMessage(err, 'You could not leave the project.'));
+      this.error.set(projectErrorMessage(err, 'That change could not be saved.'));
+    } finally {
+      this.savingAccess.set(false);
     }
   }
 

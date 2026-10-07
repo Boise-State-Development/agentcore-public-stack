@@ -28,7 +28,7 @@ archived. Admins archive; they do not purge.
 
 Every admin change is recorded on the project's trail with the admin as actor.
 Members with the editor role see the same trail, by email and without user ids,
-on the project's **Activity** tab.
+in the project's **Activity** dialog.
 
 ## Turning Projects on
 

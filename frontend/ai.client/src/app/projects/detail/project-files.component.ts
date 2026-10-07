@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, DestroyRef, computed, effect, inject, input, signal, untracked } from '@angular/core';
+import { ChangeDetectionStrategy, Component, DestroyRef, computed, effect, inject, input, output, signal, untracked } from '@angular/core';
 import { DatePipe } from '@angular/common';
 import { Dialog } from '@angular/cdk/dialog';
 import { firstValueFrom } from 'rxjs';
@@ -61,22 +61,23 @@ export function formatBytes(bytes: number): string {
   imports: [DatePipe, NgIcon, TooltipDirective],
   providers: [provideIcons({ heroArrowDownTray, heroArrowUpTray, heroDocumentText, heroTrash })],
   template: `
-    <div class="max-w-3xl space-y-6">
+    <div class="space-y-6">
       <section aria-labelledby="files-heading">
         <div class="flex flex-wrap items-center justify-between gap-3">
-          <h2 id="files-heading" class="text-base/7 font-semibold text-gray-900 dark:text-white">
-            Files
+          <h3 id="files-heading" class="text-sm/6 font-semibold text-gray-900 dark:text-white" [class.sr-only]="documents().length === 0">
             @if (documents().length) {
-              <span class="font-normal text-gray-600 dark:text-gray-400">· {{ documents().length }}</span>
+              {{ documents().length }} {{ documents().length === 1 ? 'file' : 'files' }}
+            } @else {
+              Files
             }
-          </h2>
+          </h3>
           @if (canEdit()) {
             <input #picker type="file" class="sr-only" tabindex="-1" aria-hidden="true" multiple [accept]="accept" (change)="onFilesPicked($event)" />
             <button
               type="button"
               (click)="picker.click()"
               [disabled]="uploading()"
-              class="inline-flex items-center gap-2 rounded-2xl bg-primary-accessible px-3.5 py-1.5 text-sm/6 font-semibold text-white shadow-xs transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-60"
+              class="ml-auto inline-flex items-center gap-2 rounded-2xl bg-primary-accessible px-3.5 py-1.5 text-sm/6 font-semibold text-white shadow-xs transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <ng-icon name="heroArrowUpTray" class="size-4" aria-hidden="true" />
               Add files
@@ -123,7 +124,7 @@ export function formatBytes(bytes: number): string {
         }
 
         @if (loading() && documents().length === 0) {
-          <div class="mt-4 h-24 animate-pulse rounded-2xl bg-gray-100 dark:bg-gray-800" aria-busy="true"></div>
+          <div class="mt-4 h-24 animate-pulse rounded-2xl bg-gray-100 dark:bg-gray-700" aria-busy="true"></div>
         } @else if (loaded() && documents().length === 0) {
           <div class="mt-4 rounded-2xl border border-dashed border-gray-300 p-6 text-center dark:border-gray-700">
             <ng-icon name="heroDocumentText" class="mx-auto size-6 text-gray-400 dark:text-gray-500" aria-hidden="true" />
@@ -200,6 +201,8 @@ export class ProjectFilesComponent {
   protected readonly personLabel = personLabel;
 
   readonly project = input.required<Project>();
+  /** The number of files listed, whenever it changes (after a load, upload or delete). */
+  readonly countChange = output<number>();
 
   protected readonly accept = ACCEPT;
   protected readonly statusLabels = STATUS_LABELS;
@@ -249,6 +252,11 @@ export class ProjectFilesComponent {
     inject(DestroyRef).onDestroy(() => {
       this.generation++;
       this.polling.clear();
+    });
+    // Reported only once a list has loaded, so an opener's count never flashes to 0.
+    effect(() => {
+      const n = this.documents().length;
+      if (this.loaded()) this.countChange.emit(n);
     });
   }
 

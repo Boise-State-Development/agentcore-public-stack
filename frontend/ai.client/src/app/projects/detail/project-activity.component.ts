@@ -141,18 +141,13 @@ export function describeActivity(
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [DatePipe, RouterLink],
   template: `
-    <section class="max-w-3xl" aria-labelledby="activity-heading">
-      <h2 id="activity-heading" class="text-base/7 font-semibold text-gray-900 dark:text-white">Activity</h2>
-      <p class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">
-        Who changed what in this project. Only editors and the owner can see this.
-      </p>
-
+    <section aria-label="Activity">
       @if (error()) {
         <p role="alert" class="mt-3 text-sm/6 text-state-danger-600 dark:text-state-danger-400">{{ error() }}</p>
       }
 
       @if (loading() && entries().length === 0) {
-        <div class="mt-4 h-32 animate-pulse rounded-2xl bg-gray-100 dark:bg-gray-800" aria-busy="true"></div>
+        <div class="mt-4 h-32 animate-pulse rounded-2xl bg-gray-100 dark:bg-gray-700" aria-busy="true"></div>
       } @else if (loaded() && entries().length === 0 && !error()) {
         <div class="mt-4 rounded-2xl border border-dashed border-gray-300 p-6 text-center dark:border-gray-700">
           <p class="text-sm/6 text-gray-600 dark:text-gray-400">Nothing has happened here yet.</p>
@@ -166,7 +161,7 @@ export function describeActivity(
                 {{ entry.line.text }}.
                 @if (entry.line.version !== null) {
                   <a
-                    [routerLink]="['/projects', project().projectId, 'settings']"
+                    [routerLink]="['/projects', project().projectId, 'history']"
                     class="rounded-sm font-medium whitespace-nowrap text-primary-accessible hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-50"
                   >Version {{ entry.line.version }}</a>
                 }

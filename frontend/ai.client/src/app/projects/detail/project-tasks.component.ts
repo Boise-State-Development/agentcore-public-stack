@@ -4,7 +4,7 @@ import { Router, RouterLink } from '@angular/router';
 import { Dialog } from '@angular/cdk/dialog';
 import { firstValueFrom } from 'rxjs';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroArrowTopRightOnSquare, heroChatBubbleLeftRight, heroDocumentDuplicate, heroTrash } from '@ng-icons/heroicons/outline';
+import { heroChatBubbleLeftRight, heroDocumentDuplicate, heroTrash } from '@ng-icons/heroicons/outline';
 import {
   ConfirmationDialogComponent,
   ConfirmationDialogData,
@@ -22,10 +22,10 @@ import { projectErrorMessage } from '../services/projects.service';
 const PAGE_SIZE = 20;
 
 /**
- * A project's Tasks tab (shared-projects §5, PR-1.6).
+ * A project's tasks, beneath its composer (shared-projects §5, PR-1.6).
  *
  * Two lists, because a task is private until its owner shares it:
- *  - **Your tasks** — the caller's own sessions in the project, newest first,
+ *  - **Recents** — the caller's own sessions in the project, newest first,
  *    paged by the backend's value cursor. Each opens on the project's agent.
  *  - **Shared with the project** — one entry per task a member shared to
  *    "Project members". Opens in the existing `/shared/{shareId}` view; anyone
@@ -36,47 +36,39 @@ const PAGE_SIZE = 20;
   selector: 'app-project-tasks',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [DatePipe, NgIcon, RouterLink, TooltipDirective],
-  providers: [provideIcons({ heroArrowTopRightOnSquare, heroChatBubbleLeftRight, heroDocumentDuplicate, heroTrash })],
+  providers: [provideIcons({ heroChatBubbleLeftRight, heroDocumentDuplicate, heroTrash })],
   template: `
-    <div class="max-w-3xl space-y-10">
+    <div class="space-y-10">
       <section aria-labelledby="my-tasks-heading">
-        <div class="flex items-baseline justify-between gap-3">
-          <h2 id="my-tasks-heading" class="text-base/7 font-semibold text-gray-900 dark:text-white">Your tasks</h2>
-          @if (!archived()) {
-            <a
-              [routerLink]="['/projects', project().projectId, 'overview']"
-              class="rounded-sm text-sm/6 font-medium text-primary-accessible hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-accessible-dark"
-            >
-              Start a task
-            </a>
-          }
-        </div>
-        <p class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">
-          Only you can see these. To show one to the project, open it and share it with “Project members”.
-        </p>
+        <h2 id="my-tasks-heading" class="text-sm/6 font-medium text-gray-600 dark:text-gray-400">Recents</h2>
 
         @if (tasksError()) {
           <p role="alert" class="mt-3 text-sm/6 text-state-danger-600 dark:text-state-danger-400">{{ tasksError() }}</p>
         }
 
         @if (tasksLoading() && tasks().length === 0) {
-          <div class="mt-3 h-24 animate-pulse rounded-2xl bg-gray-100 dark:bg-gray-800" aria-busy="true"></div>
+          <div class="mt-3 space-y-3" aria-busy="true">
+            @for (i of [1, 2, 3]; track i) {
+              <div class="h-5 animate-pulse rounded bg-gray-200 dark:bg-gray-700" [style.width.%]="70 - i * 12"></div>
+            }
+          </div>
         } @else if (tasks().length === 0 && !tasksError()) {
-          <div class="mt-3 rounded-2xl border border-dashed border-gray-300 p-6 text-center dark:border-gray-700">
+          <div class="mt-3 rounded-2xl border border-dashed border-gray-300 px-6 py-8 text-center dark:border-gray-700">
             <ng-icon name="heroChatBubbleLeftRight" class="mx-auto size-6 text-gray-400 dark:text-gray-500" aria-hidden="true" />
             <p class="mt-2 text-sm/6 text-gray-600 dark:text-gray-400">You haven’t started a task in this project yet.</p>
+            <p class="text-xs/5 text-gray-600 dark:text-gray-400">Only you can see your tasks. To show one to the project, open it and share it with “Project members”.</p>
           </div>
         } @else if (tasks().length > 0) {
-          <ul class="mt-3 divide-y divide-gray-200 overflow-hidden rounded-2xl border border-gray-200 bg-white dark:divide-gray-700 dark:border-gray-700 dark:bg-gray-800">
+          <ul class="mt-1 divide-y divide-gray-200/80 dark:divide-white/10">
             @for (task of tasks(); track task.sessionId) {
               <li>
                 <a
                   [routerLink]="['/s', task.sessionId]"
                   [queryParams]="taskQueryParams()"
-                  class="flex items-center gap-3 px-4 py-3 hover:bg-gray-50 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary-500 dark:hover:bg-gray-700/50"
+                  class="-mx-3 flex items-center gap-4 rounded-2xl px-3 py-3.5 transition-colors hover:bg-gray-100 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary-500 dark:hover:bg-white/5"
                 >
-                  <span class="min-w-0 flex-1 truncate text-sm/6 font-medium text-gray-900 dark:text-white">{{ task.title || 'Untitled task' }}</span>
-                  <span class="shrink-0 text-xs/5 text-gray-600 dark:text-gray-400">{{ when(task) | date: 'mediumDate' }}</span>
+                  <span class="min-w-0 flex-1 truncate text-sm/6 text-gray-900 dark:text-white">{{ task.title || 'Untitled task' }}</span>
+                  <span class="shrink-0 text-xs/5 text-gray-600 dark:text-gray-400">{{ when(task) | date: 'MMM d' }}</span>
                 </a>
               </li>
             }
@@ -90,39 +82,42 @@ const PAGE_SIZE = 20;
             >
               {{ tasksLoading() ? 'Loading…' : 'Show more' }}
             </button>
+          } @else if (tasks().length > 0) {
+            <p class="mt-3 text-xs/5 text-gray-600 dark:text-gray-400">Only you can see these. To show one to the project, open it and share it with “Project members”.</p>
           }
         }
       </section>
 
       <section aria-labelledby="shared-tasks-heading">
-        <h2 id="shared-tasks-heading" class="text-base/7 font-semibold text-gray-900 dark:text-white">Shared with the project</h2>
-        <p class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">
-          A snapshot of each task at the moment it was shared. Continue one to pick it up in a task of your own.
-        </p>
+        <h2 id="shared-tasks-heading" class="text-sm/6 font-medium text-gray-600 dark:text-gray-400">Shared with the project</h2>
 
         @if (sharedError()) {
           <p role="alert" class="mt-3 text-sm/6 text-state-danger-600 dark:text-state-danger-400">{{ sharedError() }}</p>
         }
 
         @if (sharedLoading() && shared().length === 0) {
-          <div class="mt-3 h-24 animate-pulse rounded-2xl bg-gray-100 dark:bg-gray-800" aria-busy="true"></div>
+          <div class="mt-3 space-y-3" aria-busy="true">
+            @for (i of [1, 2]; track i) {
+              <div class="h-5 animate-pulse rounded bg-gray-200 dark:bg-gray-700" [style.width.%]="64 - i * 12"></div>
+            }
+          </div>
         } @else if (shared().length === 0 && !sharedError()) {
-          <div class="mt-3 rounded-2xl border border-dashed border-gray-300 p-6 text-center dark:border-gray-700">
+          <div class="mt-3 rounded-2xl border border-dashed border-gray-300 px-6 py-6 text-center dark:border-gray-700">
             <p class="text-sm/6 text-gray-600 dark:text-gray-400">No one has shared a task with the project yet.</p>
           </div>
         } @else if (shared().length > 0) {
-          <ul class="mt-3 divide-y divide-gray-200 overflow-hidden rounded-2xl border border-gray-200 bg-white dark:divide-gray-700 dark:border-gray-700 dark:bg-gray-800">
+          <ul class="mt-1 divide-y divide-gray-200/80 dark:divide-white/10">
             @for (task of shared(); track task.shareId) {
-              <li class="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3">
+              <li class="flex flex-wrap items-center gap-x-4 gap-y-2 py-3.5">
                 <div class="min-w-0 flex-1">
                   <a
                     [routerLink]="['/shared', task.shareId]"
-                    class="block truncate rounded-sm text-sm/6 font-medium text-gray-900 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-white"
+                    class="block truncate rounded-sm text-sm/6 text-gray-900 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-white"
                   >
                     {{ task.title || 'Untitled task' }}
                   </a>
                   <p class="text-xs/5 text-gray-600 dark:text-gray-400">
-                    Shared by <span [attr.title]="!task.isMine && task.sharedByName ? task.sharedByEmail : null">{{ task.isMine ? 'you' : personLabel(task.sharedByName, task.sharedByEmail) }}</span> · {{ sharedAt(task) | date: 'mediumDate' }}
+                    Shared by <span [attr.title]="!task.isMine && task.sharedByName ? task.sharedByEmail : null">{{ task.isMine ? 'you' : personLabel(task.sharedByName, task.sharedByEmail) }}</span> · {{ sharedAt(task) | date: 'MMM d' }}
                   </p>
                 </div>
                 <div class="flex items-center gap-1">
@@ -152,6 +147,7 @@ const PAGE_SIZE = 20;
               </li>
             }
           </ul>
+          <p class="mt-3 text-xs/5 text-gray-600 dark:text-gray-400">A snapshot of each task at the moment it was shared. Continue one to pick it up in a task of your own.</p>
         }
       </section>
     </div>
@@ -241,7 +237,7 @@ export class ProjectTasksComponent {
   /**
    * Fork the snapshot into a task of the caller's. For a member of an active
    * project the backend keeps the project and binds the project's current agent,
-   * so the copy opens on that agent and lands in Your tasks.
+   * so the copy opens on that agent and lands in Recents.
    */
   protected async continueTask(task: SharedTask): Promise<void> {
     this.busyShareId.set(task.shareId);
