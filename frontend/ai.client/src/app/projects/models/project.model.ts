@@ -172,6 +172,28 @@ export interface SharedTask {
   note?: string | null;
 }
 
+/** An artifact a member shared with the project (3.3), as `/projects/{id}/outputs` returns it. */
+export interface ProjectOutput {
+  artifactId: string;
+  shareId: string;
+  version: number;
+  title: string;
+  contentType: string;
+  sharedByEmail: string;
+  sharedByName?: string | null;
+  sharedAt: string;
+  /** The shared-artifact view, `/shared-artifact/{shareId}`. */
+  shareUrl: string;
+  isMine: boolean;
+  /** The sharer, or an editor of an active project. */
+  canRemove: boolean;
+}
+
+export interface ProjectOutputsResponse {
+  /** Most recently shared first. */
+  outputs: ProjectOutput[];
+}
+
 /** A proposed change to the project's shared memory (2.5a), as `/memory/proposals` returns it. */
 export interface MemoryProposal {
   proposalId: string;

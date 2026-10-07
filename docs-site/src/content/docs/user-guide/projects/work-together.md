@@ -91,6 +91,20 @@ along with the snapshot.
 **Public link** and **Limited share** are also offered. They share the task
 outside the project, so think twice before using them for project work.
 
+## Share an output with the project
+
+When the assistant makes an artifact in a project task, such as a chart, a web
+page or a CSV, you can share that artifact with the project on its own, without
+sharing the whole task. Open the artifact's **Share** menu and pick **Project
+members**.
+
+- It appears under **Outputs** on the project page, between the composer and
+  your recent tasks, and every member can open it.
+- A share shows one version. Sharing a newer version replaces the one listed.
+- To take it off the project, use the ✕ on its card. Editors can remove anyone's
+  output; everyone else can remove only their own.
+- People removed from the project lose access to its outputs too.
+
 ## Pick up someone else's work
 
 Open a shared task to read its snapshot.

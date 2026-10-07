@@ -25,7 +25,8 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
 from apis.shared.auth import User, get_current_user_from_session
-from apis.shared.feature_flags import artifact_share_inbox_enabled
+from apis.shared.audit import AuditAction
+from apis.shared.feature_flags import artifact_share_inbox_enabled, projects_enabled
 from apis.shared.security.log_sanitize import scrub_log
 
 from .models import (
@@ -53,7 +54,10 @@ from .service import (
     get_artifact_content_service,
     get_artifact_share_service,
     get_render_token_service,
+    _get_share_lookup,
+    _get_version_item,
 )
+from . import project_outputs
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +75,7 @@ def _share_response(share: dict) -> ArtifactShareResponse:
         owner_id=share.get("owner_id", ""),
         access_level=share.get("access_level", "specific"),
         allowed_emails=share.get("allowed_emails"),
+        project_id=share.get("project_id"),
         title=share.get("title", ""),
         content_type=share.get("content_type", ""),
         created_at=share.get("created_at", ""),
@@ -103,13 +108,31 @@ async def create_artifact_share(
     artifact — someone else's version is an indistinguishable 404.
     """
     try:
+        project_id = None
+        if request.access_level == "project":
+            # The project is the one the artifact's task belongs to (3.3).
+            version_item = _get_version_item(user.user_id, artifact_id, request.version)
+            project = await project_outputs.require_shareable_project(user, str(version_item.get("session_id", "")))
+            project_id = project.project_id
         share = service.create(
             owner=user,
             artifact_id=artifact_id,
             version=request.version,
             access_level=request.access_level,
             allowed_emails=request.allowed_emails,
+            project_id=project_id,
         )
+        if project_id:
+            # Unlisted, a project share is one nobody can find: list it or undo it.
+            try:
+                project_outputs.put_output(share)
+            except Exception:
+                logger.exception("could not list artifact share in its project; rolling back")
+                service.delete_share(share)
+                raise ArtifactQueryError("project output write failed")
+            project_outputs.record(AuditAction.PROJECT_OUTPUT_SHARED, user, share)
+    except project_outputs.ArtifactProjectError as exc:
+        raise HTTPException(exc.status_code, str(exc))
     except ArtifactNotFoundError:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND, "Artifact version not found"
@@ -163,8 +186,20 @@ async def list_artifact_shares(
             "Artifact sharing is temporarily unavailable",
         )
 
+    # Whether "Project members" is an option: the artifact was made in a task
+    # of an active project the caller belongs to (3.3).
+    project = None
+    if projects_enabled():
+        try:
+            project = await project_outputs.shareable_project(
+                user, project_outputs.artifact_session_id(user.user_id, artifact_id)
+            )
+        except Exception:
+            logger.warning("could not resolve an artifact's project", exc_info=True)
     return ArtifactShareListResponse(
-        shares=[_share_response(share) for share in shares]
+        shares=[_share_response(share) for share in shares],
+        project_id=project.project_id if project else None,
+        project_name=project.name if project else None,
     )
 
 
@@ -181,12 +216,30 @@ async def update_artifact_share(
 ) -> ArtifactShareResponse:
     """Change who may view an existing share. Owner only."""
     try:
+        before = _get_share_lookup(share_id) or {}
+        project_id = None
+        if request.access_level == "project" and before.get("access_level") != "project":
+            if before.get("owner_id") != user.user_id:
+                raise NotShareOwnerError("not the share owner")
+            project = await project_outputs.require_shareable_project(user, str(before.get("session_id", "")))
+            project_id = project.project_id
         share = service.update(
             share_id=share_id,
             owner=user,
             access_level=request.access_level,
             allowed_emails=request.allowed_emails,
+            project_id=project_id,
         )
+        old_project, new_project = before.get("project_id"), share.get("project_id")
+        for pid in {old_project, new_project} - {None}:
+            project_outputs.sync_output(user.user_id, str(share.get("artifact_id", "")), str(pid))
+        if old_project != new_project:
+            if old_project:
+                project_outputs.record(AuditAction.PROJECT_OUTPUT_REMOVED, user, {**before, "project_id": old_project})
+            if new_project:
+                project_outputs.record(AuditAction.PROJECT_OUTPUT_SHARED, user, share)
+    except project_outputs.ArtifactProjectError as exc:
+        raise HTTPException(exc.status_code, str(exc))
     except ShareNotFoundError:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Share not found")
     except NotShareOwnerError:
@@ -226,7 +279,10 @@ async def revoke_artifact_share(
     the length of the recipient's session.
     """
     try:
-        service.revoke(share_id=share_id, owner=user)
+        revoked = service.revoke(share_id=share_id, owner=user)
+        if revoked.get("access_level") == "project" and revoked.get("project_id"):
+            project_outputs.sync_output(user.user_id, str(revoked.get("artifact_id", "")), str(revoked["project_id"]))
+            project_outputs.record(AuditAction.PROJECT_OUTPUT_REMOVED, user, revoked)
     except ShareNotFoundError:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Share not found")
     except NotShareOwnerError:

@@ -147,7 +147,7 @@ export type ArtifactShareModalResult = ArtifactShare[] | undefined;
           <fieldset class="flex flex-col gap-2">
             <legend class="sr-only">Access level</legend>
 
-            @for (option of accessOptions; track option.value) {
+            @for (option of accessOptions(); track option.value) {
               <label
                 class="flex cursor-pointer items-start gap-3 rounded-2xl border p-3 transition-colors"
                 [class]="
@@ -161,7 +161,7 @@ export type ArtifactShareModalResult = ArtifactShare[] | undefined;
                   name="artifactAccessLevel"
                   [value]="option.value"
                   [checked]="selectedAccess() === option.value"
-                  (change)="selectedAccess.set(option.value)"
+                  (change)="choose(option.value)"
                   class="mt-1 size-4 text-primary-accessible focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
                 />
                 <span class="min-w-0">
@@ -253,6 +253,10 @@ export type ArtifactShareModalResult = ArtifactShare[] | undefined;
               <p class="mb-2 text-xs/5 text-state-success-700 dark:text-state-success-400">
                 This link always shows version {{ result.version }}. Later
                 versions aren't included.
+                @if (result.accessLevel === 'project') {
+                  It’s listed under Outputs on the project page, replacing any
+                  earlier version shared there.
+                }
               </p>
               <div class="flex items-center gap-2">
                 <input
@@ -458,7 +462,12 @@ export class ArtifactShareModalComponent implements OnInit {
    *  revoked in the same dialog. */
   private committed = false;
 
-  protected readonly accessOptions = [
+  /** The project this artifact may be shared with (made in one of its tasks), once known. */
+  protected readonly project = signal<{ projectId: string; name: string } | null>(null);
+  /** The user picked an option, so a late-arriving project must not override it. */
+  private chosen = false;
+
+  private static readonly BASE_OPTIONS = [
     {
       value: 'public' as ArtifactShareAccessLevel,
       label: 'Public link',
@@ -471,6 +480,20 @@ export class ArtifactShareModalComponent implements OnInit {
     },
   ];
 
+  /** "Project members" first, as in the conversation Share dialog, when the artifact can go to one (3.3). */
+  protected readonly accessOptions = computed(() => {
+    const project = this.project();
+    if (!project) return ArtifactShareModalComponent.BASE_OPTIONS;
+    return [
+      {
+        value: 'project' as ArtifactShareAccessLevel,
+        label: 'Project members',
+        description: `Everyone in ${project.name} can open it from the project’s Outputs`,
+      },
+      ...ArtifactShareModalComponent.BASE_OPTIONS,
+    ];
+  });
+
   /** Existing links, minus the one just created — that has its own
    *  result panel above and would otherwise be listed twice. */
   protected readonly otherShares = computed(() => {
@@ -480,7 +503,10 @@ export class ArtifactShareModalComponent implements OnInit {
 
   async ngOnInit(): Promise<void> {
     try {
-      this.shares.set(await this.shareService.listShares(this.data.artifactId));
+      const options = await this.shareService.shareOptions(this.data.artifactId);
+      this.shares.set(options.shares);
+      this.project.set(options.project);
+      if (options.project && !this.chosen) this.selectedAccess.set('project');
     } catch {
       // No existing links, or the list call failed. Either way the
       // create path still works, so don't block the dialog on it.
@@ -492,8 +518,14 @@ export class ArtifactShareModalComponent implements OnInit {
     return `${window.location.origin}${share.shareUrl}`;
   }
 
+  protected choose(value: ArtifactShareAccessLevel): void {
+    this.chosen = true;
+    this.selectedAccess.set(value);
+  }
+
   protected audienceLabel(share: ArtifactShare): string {
     if (share.accessLevel === 'public') return 'Anyone signed in';
+    if (share.accessLevel === 'project') return 'Project members';
     const count = share.allowedEmails?.length ?? 0;
     return count === 1 ? '1 person' : `${count} people`;
   }
@@ -621,7 +653,8 @@ function describeShareError(err: unknown): string | null {
   const detail = (err as { error?: { detail?: string } } | null)?.error?.detail;
 
   if (status === 404) return 'That artifact version no longer exists.';
-  if (status === 403) return 'You do not have permission to change this share.';
+  // A project share's 400/403/409 carry a sentence for people ("not a member", "archived").
+  if (status === 403) return detail ?? 'You do not have permission to change this share.';
   if (status === 503) {
     return 'Sharing is temporarily unavailable. Please try again.';
   }

@@ -1005,7 +1005,26 @@ def _check_share_access(share: dict, viewer: User) -> None:
         if viewer_email and viewer_email in allowed:
             return
 
+    if access_level == "project" and share.get("project_id"):
+        # Membership at read time (Shared Projects 3.3): a member removed from
+        # the project loses the output with the rest of it. Any role, on an
+        # active or archived project, as for shared tasks.
+        if _is_project_member(str(share["project_id"]), viewer):
+            return
+
     raise ShareAccessDeniedError("access denied")
+
+
+def _is_project_member(project_id: str, viewer: User) -> bool:
+    """Whether ``viewer`` belongs to ``project_id``. False while Projects is off."""
+    from apis.shared.feature_flags import projects_enabled
+
+    if not projects_enabled():
+        return False
+    from apis.shared.projects.access import resolve_project_role
+
+    _, role = resolve_project_role(project_id, viewer.user_id, viewer.email)
+    return role is not None
 
 
 def _resolve_allowed_emails(
@@ -1045,8 +1064,13 @@ class ArtifactShareService:
         version: int,
         access_level: str,
         allowed_emails: Optional[list[str]],
+        project_id: Optional[str] = None,
     ) -> dict:
         """Create a share for one artifact version.
+
+        ``project_id`` is required for a ``project`` share and resolved by the
+        caller (``project_outputs.require_shareable_project``), which knows the
+        artifact's task and checks membership.
 
         The version row is fetched with a PK built from the *owner's*
         session id, so a caller can only ever share their own artifact —
@@ -1078,6 +1102,10 @@ class ArtifactShareService:
         )
         if resolved is not None:
             attrs["allowed_emails"] = resolved
+        if access_level == "project":
+            if not project_id:
+                raise ValueError("a project share needs its project")
+            attrs["project_id"] = project_id
 
         self._write_share_rows(attrs)
         # After, never before: a fan-out row must never point at a share
@@ -1132,8 +1160,12 @@ class ArtifactShareService:
         owner: User,
         access_level: Optional[str],
         allowed_emails: Optional[list[str]],
+        project_id: Optional[str] = None,
     ) -> dict:
         """Change access level / allowlist on an existing share.
+
+        ``project_id`` is required when a share becomes ``project`` (the caller
+        resolves it); leaving ``project`` drops it.
 
         Rewrites both rows so the owner row and the lookup row the
         recipient path reads can never disagree about who may view."""
@@ -1160,6 +1192,14 @@ class ArtifactShareService:
             # leaving a list that no longer gates anything.
             updated.pop("allowed_emails", None)
 
+        if new_access == "project":
+            if previous.get("access_level") != "project":
+                if not project_id:
+                    raise ValueError("a project share needs its project")
+                updated["project_id"] = project_id
+        else:
+            updated.pop("project_id", None)
+
         updated["version"] = int(updated.get("version", 0))
         updated["updated_at"] = _now_iso()
 
@@ -1175,14 +1215,33 @@ class ArtifactShareService:
         )
         return updated
 
-    def revoke(self, *, share_id: str, owner: User) -> None:
-        """Delete both rows. Effective within one render-token TTL."""
+    def revoke(self, *, share_id: str, owner: User) -> dict:
+        """Delete both rows. Effective within one render-token TTL. Returns the share revoked."""
         share = _get_share_lookup(share_id)
         if not share:
             raise ShareNotFoundError("share not found")
         if share.get("owner_id") != owner.user_id:
             raise NotShareOwnerError("not the share owner")
+        self.delete_share(share)
+        return self._strip_keys(share)
 
+    @staticmethod
+    def _sync_project_outputs(owner_id: str, shares: list) -> None:
+        """Re-list the project Outputs these shares fed (3.3). Never raises."""
+        try:
+            from .project_outputs import sync_outputs
+
+            sync_outputs(owner_id, shares)
+        except Exception:
+            logger.warning("could not sync project outputs", exc_info=True)
+
+    def delete_share(self, share: dict) -> None:
+        """Delete one share's rows, whoever is asking.
+
+        The authorization is the caller's: ``revoke`` checks the owner, and a
+        project editor removing an output (3.3) is checked by the project.
+        """
+        share_id = str(share.get("share_id", ""))
         table = _table()
         # Discovery first, then reachability, then visibility — the same
         # ordering principle as `ArtifactLifecycleService.delete`.
@@ -1438,6 +1497,7 @@ class ArtifactShareService:
                     },
                 )
 
+            self._sync_project_outputs(owner_id, shares)
             logger.info(
                 "revoked %s of %s artifact share(s) for deleted session %s",
                 revoked,
@@ -1502,6 +1562,7 @@ class ArtifactShareService:
                 },
             )
 
+        self._sync_project_outputs(owner_id, shares)
         logger.info(
             "revoked %s of %s artifact share(s) for deleted artifact %s",
             revoked,
@@ -1683,9 +1744,17 @@ class ArtifactShareService:
         ############################################################
         """
         try:
-            return self._retitle_for_artifact(
+            retitled = self._retitle_for_artifact(
                 owner_id=owner_id, artifact_id=artifact_id, title=title
             )
+            # A project's Outputs list carries the title too (3.3).
+            from apis.shared.feature_flags import projects_enabled
+
+            if projects_enabled():
+                self._sync_project_outputs(
+                    owner_id, self.list_for_artifact(owner_id=owner_id, artifact_id=artifact_id)
+                )
+            return retitled
         except RenderTokenConfigError:
             # Artifacts aren't configured here at all — a normal no-op.
             return 0

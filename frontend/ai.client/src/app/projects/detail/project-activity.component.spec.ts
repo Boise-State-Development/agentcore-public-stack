@@ -43,6 +43,8 @@ describe('describeActivity', () => {
     [rec('project.knowledge_added', { after: { url: 'https://x.edu', source: 'web' } }), 'started adding pages from https://x.edu'],
     [rec('project.knowledge_removed', { before: { filename: 'plan.pdf' } }), 'removed the file plan.pdf'],
     [rec('project.task_shared', { after: { title: 'Roster diff' } }), 'shared the task “Roster diff” with the project'],
+    [rec('project.output_shared', { after: { title: 'Roster chart' } }), 'shared the output “Roster chart” with the project'],
+    [rec('project.output_removed', { after: { title: 'Roster chart' } }), 'removed the output “Roster chart” from the project'],
     [rec('project.memory_proposed', { after: { slug: 'sis' } }), 'proposed a change to the memory file “sis”'],
     [rec('project.memory_proposal_approved', { after: { slug: 'sis', edited: true } }), 'approved a change to the memory file “sis” with edits'],
     [rec('project.memory_proposal_rejected', { after: { slug: 'sis' } }), 'declined a change to the memory file “sis”'],

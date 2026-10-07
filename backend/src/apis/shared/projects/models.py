@@ -80,6 +80,28 @@ class ProjectMember(BaseModel):
     updated_at: str = Field(..., alias="updatedAt")
 
 
+class ProjectOutput(BaseModel):
+    """A ``PROJECT#{id}`` / ``OUTPUT#{artifactId}`` pointer (Shared Projects 3.3).
+
+    Written when a member shares an artifact with "Project members"
+    (``access_level: "project"`` on an artifact share). One per artifact: sharing
+    another version moves the pointer, newest wins. The artifact share row is
+    the grant, checked against membership at read time; this row only lists it.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    project_id: str = Field(..., alias="projectId")
+    artifact_id: str = Field(..., alias="artifactId")
+    share_id: str = Field(..., alias="shareId")
+    version: int
+    title: str = ""
+    content_type: str = Field("", alias="contentType")
+    owner_id: str = Field(..., alias="ownerId")
+    owner_email: str = Field(..., alias="ownerEmail")
+    shared_at: str = Field(..., alias="sharedAt")
+
+
 class SharedTask(BaseModel):
     """A ``PROJECT#{id}`` / ``SHARED_TASK#{sessionId}`` pointer.
 

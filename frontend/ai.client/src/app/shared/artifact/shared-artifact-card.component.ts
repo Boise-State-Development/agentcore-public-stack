@@ -21,7 +21,7 @@ import {
   type SharedArtifactDialogData,
 } from './shared-artifact-dialog.component';
 
-interface TypeStyle {
+export interface TypeStyle {
   readonly label: string;
   readonly icon: string;
   readonly bg: string;
@@ -75,6 +75,11 @@ const DEFAULT_TYPE_STYLE: TypeStyle = {
   bg: 'bg-gray-100 dark:bg-gray-700',
   text: 'text-gray-600 dark:text-gray-300',
 };
+
+/** How an artifact of ``contentType`` is labelled and coloured; shared with the project Outputs cards. */
+export function artifactTypeStyle(contentType: string): TypeStyle {
+  return TYPE_STYLES[contentType.split(';')[0].trim().toLowerCase()] ?? DEFAULT_TYPE_STYLE;
+}
 
 /**
  * An artifact inside a shared conversation, as its recipient sees it.
