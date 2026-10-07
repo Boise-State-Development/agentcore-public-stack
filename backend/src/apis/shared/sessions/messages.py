@@ -1,12 +1,13 @@
 """Messages service layer
 
-Retrieves conversation history from AgentCore Memory.
+Retrieves conversation history from AgentCore Memory, falling back to the
+conversation archive (text only) for a session whose Memory events expired.
 """
 
 import base64
 import logging
 import os
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, TypeVar
 
 # Relative imports from shared sessions module
 from .models import Message, MessageContent, MessageResponse, MessagesListResponse, MessageMetadata, Citation
@@ -315,7 +316,10 @@ def _convert_message(msg: Any, metadata: Any = None) -> Message:
     return Message(role=role, content=content_blocks, timestamp=str(timestamp) if timestamp else None, metadata=message_metadata)
 
 
-def _apply_pagination(messages: List[Message], limit: Optional[int] = None, next_token: Optional[str] = None) -> Tuple[List[Message], Optional[str]]:
+_Page = TypeVar("_Page")
+
+
+def _apply_pagination(messages: List[_Page], limit: Optional[int] = None, next_token: Optional[str] = None) -> Tuple[List[_Page], Optional[str]]:
     """
     Apply pagination to a list of messages
 
@@ -354,6 +358,78 @@ def _apply_pagination(messages: List[Message], limit: Optional[int] = None, next
         next_token = None
 
     return paginated_messages, next_token
+
+
+def _archived_turn_messages(session_id: str, turns: List[Any]) -> List[MessageResponse]:
+    """Archived turns as the messages the SPA renders: text only, original ids.
+
+    Each turn becomes its user message at ``msg-{session}-{messageIndex}`` (the
+    id a search hit jumps to) and, when it has a reply, one assistant message
+    at ``messageIndex + 1``, which in the original history is always the first
+    assistant message of that turn. Tool calls, attachments and reasoning were
+    never archived, so they are not here.
+    """
+    responses: List[MessageResponse] = []
+    for turn in turns:
+        if turn.user_text:
+            responses.append(
+                MessageResponse(
+                    id=f"msg-{session_id}-{turn.message_index}",
+                    role="user",
+                    content=[MessageContent(type="text", text=turn.user_text)],
+                    created_at=turn.created_at,
+                )
+            )
+        if turn.assistant_text:
+            responses.append(
+                MessageResponse(
+                    id=f"msg-{session_id}-{turn.message_index + 1}",
+                    role="assistant",
+                    content=[MessageContent(type="text", text=turn.assistant_text)],
+                    created_at=turn.created_at,
+                )
+            )
+    return responses
+
+
+async def _get_archived_messages(
+    session_id: str,
+    user_id: str,
+    limit: Optional[int],
+    next_token: Optional[str],
+    pending_interrupts: List[Any],
+) -> Optional[MessagesListResponse]:
+    """The conversation archive's copy of a session Memory no longer holds, or None.
+
+    Only reached when Memory returned no message at all, so a session with
+    live events never pays for it. A brand-new session pays one S3 listing that
+    finds nothing. Never raises: a failed read is the same empty history the
+    caller would have shown anyway.
+    """
+    import asyncio
+
+    from apis.shared.sessions.preview import is_preview_session
+
+    if is_preview_session(session_id):
+        return None
+    try:
+        from apis.shared.conversation_archive import read_session_turns
+
+        turns = await asyncio.to_thread(read_session_turns, user_id, session_id)
+    except Exception as e:  # noqa: BLE001 - see docstring
+        logger.warning(f"Conversation archive fallback failed: {type(e).__name__}")
+        return None
+    if not turns:
+        return None
+
+    messages = _archived_turn_messages(session_id, turns)
+    page, next_page_token = _apply_pagination(messages, limit, next_token)
+    logger.info(f"Memory held no events; served {len(messages)} messages from the conversation archive")
+    return MessagesListResponse(
+        messages=page,
+        next_token=next_page_token,
+        pending_interrupts=pending_interrupts,
+    )
 
 
 async def get_messages_from_cloud(
@@ -466,6 +542,11 @@ async def get_messages_from_cloud(
         )
 
         messages_raw = list(messages_raw or [])
+
+        if not messages_raw:
+            archived = await _get_archived_messages(session_id, user_id, limit, next_token, pending_interrupts)
+            if archived is not None:
+                return archived
 
         logger.info(f"AgentCore Memory returned {len(messages_raw)} raw messages")
         logger.info(f"Metadata index contains {len(metadata_index)} entries")
