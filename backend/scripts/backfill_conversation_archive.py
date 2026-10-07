@@ -35,6 +35,8 @@ Objects byte-identical to the runtime's for the same history:
 What it skips
 -------------
 * deleted sessions; preview sessions (never archived, anywhere);
+* session ids AgentCore Memory cannot address (its ``sessionId`` pattern);
+  such a session can hold no events, so it is held, not read and failed;
 * sessions that moved in the last 15 minutes (a turn may be in flight; the
   runtime archives it when it ends, and a re-run picks the rest up);
 * every key that already exists. The check is a listing per session, and the
@@ -91,6 +93,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import sys
 import time
 from dataclasses import dataclass, field, replace
@@ -114,6 +117,9 @@ logger = logging.getLogger("backfill_conversation_archive")
 DEFAULT_SLEEP_SECONDS = 0.2
 #: A session that moved this recently may have a turn in flight.
 RECENT_ACTIVITY_GRACE = timedelta(minutes=15)
+#: AgentCore Memory's ``sessionId`` constraint. ``ListEvents`` rejects anything
+#: else with a ValidationException, so no event can exist under such an id.
+MEMORY_SESSION_ID = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9\-_]*")
 #: What ``AgentCoreMemorySessionManager.list_messages`` fetches; the same here.
 MAX_EVENTS = 10000
 
@@ -391,6 +397,9 @@ def run(
             continue
         if is_preview_session(ids[1]):
             report.hold("preview")
+            continue
+        if not MEMORY_SESSION_ID.fullmatch(ids[1]):
+            report.hold("invalid_memory_session_id")
             continue
         last = parse_timestamp(row.get("lastMessageAt"))
         if last is not None and last >= recent_cutoff:
