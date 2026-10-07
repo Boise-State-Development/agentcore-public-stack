@@ -439,6 +439,9 @@ class StreamCoordinator:
         # This enables accurate per-message latency tracking for multi-turn tool use scenarios
         per_message_metadata: List[Dict[str, Any]] = []
         current_assistant_message_index = -1  # Track which assistant message we're on (0-indexed within this stream)
+        # Model-call retries this turn (one `model_retry` event each); see the
+        # `model_retry` branch in the loop.
+        model_retries_seen = 0
 
         # Set once some path has taken ownership of writing this turn's cost
         # rows (the success block, a failure arm via
@@ -579,6 +582,31 @@ class StreamCoordinator:
                     raise _CooperativeStopSignal()
 
                 # Track when new assistant messages start (to associate metadata with them)
+                # A model call is being retried (`TransientModelRetryStrategy`).
+                # The abandoned attempt produced no message — Strands commits
+                # only a completed call to history — but providers that open
+                # with `messageStart` before any content (the OpenAI Responses
+                # transport does so the moment the response opens) already
+                # opened a slot for it. Left in place, that slot shifted every
+                # later call's message id by two and put a usage-less row on a
+                # message that never existed. Drop it so the retry reopens the
+                # same position. Strands yields exactly one of these per retry,
+                # before the next attempt's BeforeModelCallEvent fires.
+                if event.get("type") == "model_retry":
+                    model_retries_seen += 1
+                    if per_message_metadata and per_message_metadata[-1].get("end_time") is None:
+                        abandoned = per_message_metadata.pop()
+                        current_assistant_message_index -= 1
+                        assistant_text_acc.clear()
+                        if abandoned.get("usage"):
+                            # Not reachable today: usage arrives at the end of
+                            # a stream, after the content that makes a failure
+                            # non-retryable. Said loudly if a provider changes.
+                            logger.warning(
+                                "Dropped usage %s reported by an abandoned model attempt in session %s",
+                                abandoned["usage"], session_id,
+                            )
+
                 if event.get("type") == "message_start":
                     role = event.get("data", {}).get("role")
                     if role == "assistant":
@@ -596,6 +624,12 @@ class StreamCoordinator:
                                 "start_time": time.time(),  # When this message started
                                 "first_token_time": None,  # When first token was received
                                 "end_time": None,  # When this message ended
+                                # The hooks that key per-call data by model
+                                # call (prefix fingerprints, tool census,
+                                # context ledger) count every BeforeModelCallEvent,
+                                # retried attempts included, so their index for
+                                # this call is its position plus the retries so far.
+                                "call_index": current_assistant_message_index + model_retries_seen,
                             }
                         )
                         logger.debug(f"📝 Assistant message {current_assistant_message_index} started at {per_message_metadata[-1]['start_time']}")
@@ -1548,6 +1582,7 @@ class StreamCoordinator:
                 turn_agent_id=turn_agent_id,
                 turn_project_id=turn_project_id,
                 meter_usage=meter_usage,
+                model_retries=model_retries_seen,
             )
             # Terminal frames so any still-connected client ends cleanly; the
             # SPA already stopped rendering on Stop, so this is belt-and-braces.
@@ -1593,6 +1628,7 @@ class StreamCoordinator:
                 turn_agent_id=turn_agent_id,
                 turn_project_id=turn_project_id,
                 meter_usage=meter_usage,
+                model_retries=model_retries_seen,
             )
             raise
         except Exception as e:
@@ -1730,6 +1766,7 @@ class StreamCoordinator:
         turn_agent_id: Optional[str] = None,
         turn_project_id: Optional[str] = None,
         meter_usage: bool = True,
+        model_retries: int = 0,
     ) -> None:
         """Persist the in-flight partial assistant turn + an interrupted
         marker when a turn is torn down mid-stream, and meter the model calls
@@ -1886,7 +1923,11 @@ class StreamCoordinator:
                             projected = self._projected_input_usage(agent)
                             if projected:
                                 while len(slots) <= in_flight_idx:
-                                    slots.append({"usage": {}, "metrics": {}})
+                                    # Its hooks' index counts this turn's
+                                    # retried attempts, like any slot's.
+                                    slots.append(
+                                        {"usage": {}, "metrics": {}, "call_index": len(slots) + model_retries}
+                                    )
                                 slots[in_flight_idx] = {**slots[in_flight_idx], "usage": projected}
                                 metered.append(in_flight_idx)
 
@@ -3439,6 +3480,15 @@ class StreamCoordinator:
         metadata_tasks = []
         for position, (idx, msg_id) in enumerate(calls):
             is_last = position == len(calls) - 1
+            # The hooks' index for this call counts retried attempts too (see
+            # the `call_index` set at message_start); the message id does not.
+            # Slots without one (interrupted-turn projection, older callers)
+            # had no retry to account for.
+            hook_index = (
+                per_message_metadata[idx].get("call_index", idx)
+                if idx < len(per_message_metadata)
+                else idx
+            )
             # Use individual metadata if we have it, otherwise use accumulated
             if idx < len(per_message_metadata):
                 metadata_for_message = per_message_metadata[idx].copy()  # Copy to avoid mutation
@@ -3485,7 +3535,7 @@ class StreamCoordinator:
                     first_token_time=first_token_for_message,
                     agent=main_agent_wrapper,  # Use wrapper instead of internal agent
                     citations=citations_for_message,  # Pass citations for persistence
-                    call_index=idx,  # Nth model call of this turn (prefix fingerprint lookup)
+                    call_index=hook_index,  # Nth model call of this turn (prefix fingerprint lookup)
                     # Turn-level, so only the LAST message carries it.
                     # The per-message `endToEndLatency` cannot stand in:
                     # it prefers the provider's own API-call time, so
@@ -3504,11 +3554,11 @@ class StreamCoordinator:
                     turn_agent_id=turn_agent_id,  # Which Agent ran this turn (#756)
                     turn_project_id=turn_project_id,
                     tool_calls=(
-                        tool_census_hook.tally_for_call(idx)
+                        tool_census_hook.tally_for_call(hook_index)
                         if tool_census_hook is not None else None
                     ),
                     context_ledger=(
-                        context_ledger_hook.ledger_for_call(idx)
+                        context_ledger_hook.ledger_for_call(hook_index)
                         if context_ledger_hook is not None else None
                     ),
                 )
