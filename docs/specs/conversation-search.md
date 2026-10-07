@@ -83,7 +83,7 @@ What the variable means to a deployment, in one sentence for the docs: *a conver
 
 **Verify on dev before prod:** whether raising `eventExpiryDuration` applies to events already written. The API documentation does not say. If existing events keep their 90-day clock, the backfill (§7 PR-3) is the rescue for sessions between 90 and 365 days old on the day the change lands: it copies every event still alive into the archive, and the archive is what the messages route reads from then on.
 
-The 1,439 prod conversations already past the cliff cannot be recovered; their events are gone. A 365-day prune does not reach them for months (they are between 90 and 365 days old), so their rows stay, opening empty and matching by title only, until either they age past `n` or a deployment chooses to remove them sooner (open question 3, §10).
+The 1,439 prod conversations already past the cliff cannot be recovered; their events are gone. A 365-day prune does not reach them for months (they are between 90 and 365 days old), so their rows stay, opening empty and matching by title only, until they age past `n`, or until a deployment removes them sooner with the one-off `backend/scripts/prune_sessions_without_events.py` (decided 2026-10-07, §10 q3): sessions older than 90 days whose Memory events **and** archive objects are both verifiably gone, through the same cascade and guards as the pruner, dry-run by default, behind a canary that stops the run if recent sessions show no events (a wrong Memory id would otherwise make every session look empty).
 
 ## 4. Data flow
 
@@ -229,7 +229,7 @@ For scale, the summary records this plan no longer leans on already cost ~$33/mo
 1. **Does raising `eventExpiryDuration` extend events already written?** Decides whether PR-3's backfill is also the rescue for sessions between 90 and 365 days old on the day PR-R lands. Test on dev with a known old session.
 2. **Governance.** The index is one shared KB isolated by identity-bound filters, the same posture as the legacy assistant index and the same data class as sessions behind the same JWT + RBAC. Nothing new is exposed; stating it here so the question is not re-opened per PR.
 
-3. **The sessions already past the 90-day cliff.** A 365-day prune leaves them for months. Options are in the PR-2c description; not decided.
+3. **The sessions already past the 90-day cliff.** A 365-day prune leaves them for months. **Decided 2026-10-07: a one-off script** (`backend/scripts/prune_sessions_without_events.py`, §3), not a permanent pruner criterion and not waiting. Run on prod after q1 is answered and #1450 is in prod; if q1 says existing events kept their 90-day clock, run it again 90 days after that deploy (or after PR-3's backfill has rescued what is still alive). Also decided: `CONVERSATION_RETENTION_PRUNES_SESSIONS` defaults on and `CONVERSATION_RETENTION_PRUNE_ARMED` defaults off, as built in PR-2c.
 
 Decided 2026-10-06: archived sessions and shared forks are indexed (§4); retention is one variable across Memory, archive, index and session rows, with session pruning on by default (§3).
 
