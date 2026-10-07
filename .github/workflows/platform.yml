@@ -362,6 +362,12 @@ jobs:
       # stored (docs/specs/conversation-search.md §3). Unset means 365. Memory
       # events stop at 365 even if this is higher; minimum 3.
       CDK_CONVERSATION_RETENTION_DAYS: ${{ vars.CDK_CONVERSATION_RETENTION_DAYS }}
+      # Conversation index write path: the per-turn transcript archive that
+      # conversation search is built from (docs/specs/conversation-search.md
+      # §4). Opt-in while in development: set the
+      # `CDK_CONVERSATION_INDEX_ENABLED` variable to "true" in an environment
+      # to turn it on there. Unset (empty string) or anything else means off.
+      CDK_CONVERSATION_INDEX_ENABLED: ${{ vars.CDK_CONVERSATION_INDEX_ENABLED }}
       # Observability. All optional — unset means the default in config.ts.
       # XRAY_SAMPLING_RATE is a rate (0.0-1.0), not a percentage.
       CDK_OBSERVABILITY_ALARM_TOPIC_ENABLED: ${{ vars.CDK_OBSERVABILITY_ALARM_TOPIC_ENABLED }}

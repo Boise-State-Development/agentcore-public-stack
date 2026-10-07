@@ -643,6 +643,40 @@ class TestDeleteSession:
             "sess-001", user.user_id
         )
 
+    def test_queues_conversation_archive_cleanup_on_delete(
+        self, app, make_user, authenticated_client
+    ):
+        """The session's archived turns go with it; the S3 deletions are what
+        tell the search index to drop them (conversation-search.md §4)."""
+        user = make_user()
+        client = authenticated_client(app, user)
+
+        mock_service = AsyncMock()
+        mock_service.delete_session = AsyncMock(return_value=True)
+        mock_service.delete_agentcore_memory = AsyncMock()
+        mock_service.delete_session_files = AsyncMock()
+        mock_share_service = AsyncMock()
+        mock_share_service.delete_shares_for_session = AsyncMock(return_value=0)
+        mock_archive_delete = MagicMock(return_value=3)
+
+        with patch(
+            "apis.app_api.sessions.routes.SessionService",
+            return_value=mock_service,
+        ), patch(
+            "apis.app_api.sessions.routes.get_share_service",
+            return_value=mock_share_service,
+        ), patch(
+            "apis.app_api.sessions.routes.get_artifact_share_service",
+            return_value=MagicMock(),
+        ), patch(
+            "apis.app_api.sessions.routes.delete_session_archive",
+            mock_archive_delete,
+        ):
+            resp = client.delete("/sessions/sess-001")
+
+        assert resp.status_code == 204
+        mock_archive_delete.assert_called_once_with(user.user_id, "sess-001")
+
     def test_artifact_share_cleanup_failure_does_not_break_delete(
         self, app, make_user, authenticated_client
     ):
@@ -823,6 +857,41 @@ class TestBulkDeleteSessions:
             call("sess-001", user.user_id),
             call("sess-002", user.user_id),
         ]
+
+    def test_bulk_delete_queues_conversation_archive_cleanup_for_deleted_sessions_only(
+        self, app, make_user, authenticated_client
+    ):
+        user = make_user()
+        client = authenticated_client(app, user)
+
+        mock_service = AsyncMock()
+        mock_service.delete_session = AsyncMock(side_effect=[True, False])
+        mock_service.delete_agentcore_memory = AsyncMock()
+        mock_service.delete_session_files = AsyncMock()
+        mock_share_service = AsyncMock()
+        mock_share_service.delete_shares_for_session = AsyncMock(return_value=0)
+        mock_archive_delete = MagicMock(return_value=1)
+
+        with patch(
+            "apis.app_api.sessions.routes.SessionService",
+            return_value=mock_service,
+        ), patch(
+            "apis.app_api.sessions.routes.get_share_service",
+            return_value=mock_share_service,
+        ), patch(
+            "apis.app_api.sessions.routes.get_artifact_share_service",
+            return_value=MagicMock(),
+        ), patch(
+            "apis.app_api.sessions.routes.delete_session_archive",
+            mock_archive_delete,
+        ):
+            resp = client.post(
+                "/sessions/bulk-delete",
+                json={"sessionIds": ["sess-001", "sess-002"]},
+            )
+
+        assert resp.status_code == 200
+        assert mock_archive_delete.call_args_list == [call(user.user_id, "sess-001")]
 
     def test_bulk_delete_skips_artifact_cleanup_for_failed_deletes(
         self, app, make_user, authenticated_client

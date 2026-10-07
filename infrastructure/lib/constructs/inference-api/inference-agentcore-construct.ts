@@ -415,6 +415,13 @@ export class InferenceAgentCoreConstruct extends Construct {
         DYNAMODB_PROJECTS_TABLE_NAME: props.refs.projectsTable.tableName,
         PROJECTS_ENABLED: config.projects.enabled ? 'true' : 'false',
 
+        // Conversation index write path (in development, default off): gates
+        // the fire-and-forget archive put after `done`. One slot, not two: the
+        // archive bucket name is resolved from SSM under PROJECT_PREFIX
+        // (`/{prefix}/conversations/archive-bucket-name`), as the artifacts
+        // tools do, because this budget is nearly spent.
+        CONVERSATION_INDEX_ENABLED: config.conversationIndex.enabled ? 'true' : 'false',
+
         // Skills v2 (default ON with a kill switch, mirroring the app-api flag).
         // Gates skill resolution on the invocation path — the AgentSkills plugin's
         // <available_skills> block, the `skills` activation tool, and

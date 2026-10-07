@@ -626,6 +626,25 @@ def projects_enabled() -> bool:
     return os.environ.get("PROJECTS_ENABLED", "").strip().lower() == "true"
 
 
+def conversation_index_enabled() -> bool:
+    """Whether finished turns are written to the conversation archive.
+
+    The write path of conversation search (``docs/specs/conversation-search.md``
+    §4): the runtime's fire-and-forget put of each turn's user and assistant
+    text after ``done``, and app-api's put of each copied turn when a shared
+    conversation is forked. **Opt-in while the feature is in development**
+    (CLAUDE.md "Feature flags"): only ``"true"`` (case-insensitive) enables it;
+    unset or anything else is off. CDK sets it on app-api and the AgentCore
+    Runtime from ``config.conversationIndex.enabled``.
+
+    A feature switch, not a rollout switch: a deployment may legitimately not
+    want a second copy of its transcripts. It gates writes only. Deleting a
+    session's archived turns does not consult it, so a deployment that turns
+    indexing off can still remove what it already wrote.
+    """
+    return os.environ.get("CONVERSATION_INDEX_ENABLED", "").strip().lower() == "true"
+
+
 def compaction_summary_extract_enabled() -> bool:
     """Whether a compaction cut pins verbatim facts ahead of its summary.
 

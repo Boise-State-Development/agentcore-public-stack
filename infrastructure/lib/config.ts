@@ -78,6 +78,7 @@ export interface AppConfig {
   platformCosts: PlatformCostsConfig;
   memorySpaces: MemorySpacesConfig;
   projects: ProjectsConfig;
+  conversationIndex: ConversationIndexConfig;
   platformSelfService: PlatformSelfServiceConfig;
   feedbackEvalSampling: FeedbackEvalSamplingConfig;
   skills: SkillsConfig;
@@ -102,8 +103,9 @@ export interface AppConfig {
    * it is stored (docs/specs/conversation-search.md §3). One number for every
    * copy so the clocks cannot drift: today it sets AgentCore Memory's
    * `eventExpiryDuration` (clamped to Memory's 365-day maximum); the
-   * conversation archive's lifecycle rule and the search index follow it once
-   * they exist. Long-term memory records (facts, preferences) are unaffected.
+   * conversation archive's lifecycle rule (`ConversationArchiveConstruct`)
+   * takes the raw value, and the search index follows the archive. Long-term
+   * memory records (facts, preferences) are unaffected.
    *
    * Integer >= 3. Values above 365 are accepted here because the archive can
    * honour them; Memory still stops at 365.
@@ -376,6 +378,20 @@ export interface MemorySpacesConfig {
  * the invocation path at runtime.
  */
 export interface ProjectsConfig {
+  enabled: boolean;
+}
+
+/**
+ * Conversation index write path (docs/specs/conversation-search.md §4).
+ * **Opt-in while in development**: off unless CDK_CONVERSATION_INDEX_ENABLED=true
+ * (or a `conversationIndex.enabled: true` cdk.json context). Sets
+ * CONVERSATION_INDEX_ENABLED on app-api and the AgentCore Runtime, which gates
+ * every write to the conversation archive (the runtime's after-`done` put and
+ * app-api's fork copy). The archive bucket is provisioned unconditionally, and
+ * deleting a session's archive objects does not wait on this flag: a deployment
+ * that turns indexing off must still be able to remove what it already wrote.
+ */
+export interface ConversationIndexConfig {
   enabled: boolean;
 }
 
@@ -1094,6 +1110,12 @@ export function loadConfig(scope: cdk.App): AppConfig {
         ? process.env.CDK_PROJECTS_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('projects')?.enabled ?? false,
     },
+    conversationIndex: {
+      // Opt-in while in development, same parsing as projects above.
+      enabled: process.env.CDK_CONVERSATION_INDEX_ENABLED
+        ? process.env.CDK_CONVERSATION_INDEX_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('conversationIndex')?.enabled ?? false,
+    },
     platformSelfService: {
       // Opt-in while in development (CLAUDE.md "Feature flags"): only the literal
       // "true" turns it on. The workflow forwards an EMPTY STRING when the variable
@@ -1450,6 +1472,7 @@ export function loadConfig(scope: cdk.App): AppConfig {
   console.log(
     `   Conversation retention: ${config.conversationRetentionDays} days`
     + ` (Memory events: ${Math.min(config.conversationRetentionDays, AGENTCORE_MEMORY_EVENT_EXPIRY_MAX_DAYS)})`
+    + ` index writes=${config.conversationIndex.enabled}`
   );
 
   // Printed because this list is a security control supplied entirely from

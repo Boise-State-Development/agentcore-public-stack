@@ -462,8 +462,9 @@ class ShareService:
         now = datetime.now(timezone.utc).isoformat()
 
         # Copy snapshot messages into AgentCore Memory for the new session
+        copied: List[dict] = []
         message_count = await self._copy_messages_to_memory(
-            new_session_id, requester.user_id, snapshot_messages
+            new_session_id, requester.user_id, snapshot_messages, written=copied
         )
 
         from apis.shared.sessions.models import SessionMetadata
@@ -485,6 +486,8 @@ class ShareService:
             session_metadata=session_meta,
         )
 
+        self._archive_forked_turns(new_session_id, requester.user_id, copied, session_meta.preferences)
+
         logger.info(
             f"Exported share {self._sanitize_id(share_id)} to new session {self._sanitize_id(new_session_id)} "
             f"for user {self._sanitize_id(requester.user_id)} ({message_count} messages copied)"
@@ -499,11 +502,51 @@ class ShareService:
     # ------------------------------------------------------------------
     # Message copying helpers
 
+    @staticmethod
+    def _archive_forked_turns(
+        session_id: str,
+        user_id: str,
+        copied: List[dict],
+        preferences: Any,
+    ) -> None:
+        """Queue the fork's turns for the conversation archive (search index).
+
+        A fork never runs a turn, so the runtime's after-``done`` archive write
+        never sees these messages; without this the forker could not find the
+        conversation they now own. Indexed under the forker's id and the new
+        session id, from the messages as copied (``displayText`` already
+        substituted, attachments already reduced to a note), positioned exactly
+        as the new session's message ids count them, and attributed to the
+        fork's own project and agent (``preferences``), not the snapshot's.
+        Background, best-effort, and only while ``CONVERSATION_INDEX_ENABLED``
+        is on.
+        """
+        from apis.shared.feature_flags import conversation_index_enabled
+
+        if not copied or not conversation_index_enabled():
+            return
+        try:
+            from apis.shared.conversation_archive import schedule, split_turns, write_turns
+
+            turns = split_turns(
+                copied,
+                user_id=user_id,
+                session_id=session_id,
+                created_at=datetime.now(timezone.utc).isoformat(),
+                project_id=getattr(preferences, "project_id", None),
+                assistant_id=getattr(preferences, "assistant_id", None),
+            )
+            if turns:
+                schedule(lambda: write_turns(turns))
+        except Exception:  # noqa: BLE001 — never fail the fork over its index
+            logger.warning("Failed to queue forked conversation for the archive", exc_info=True)
+
     async def _copy_messages_to_memory(
         self,
         session_id: str,
         user_id: str,
         snapshot_messages: list,
+        written: Optional[List[dict]] = None,
     ) -> int:
         """Write snapshot messages into AgentCore Memory for a new session.
 
@@ -521,6 +564,11 @@ class ShareService:
         when it finds that record; without it the fork's first turn took the
         new-agent branch and ran on an empty history ("Restore @init: 0
         messages") even though the copied conversation was on screen.
+
+        ``written``, when given, receives each Converse message that landed, in
+        order, so its position in the list is its message index in the new
+        session (a message that failed to convert or write is absent, exactly
+        as ``list_messages`` will not return it).
 
         Returns:
             Number of messages successfully written.
@@ -582,6 +630,8 @@ class ShareService:
                 session_msg = SessionMessage.from_message(converse_msg, index=idx)
                 await asyncio.to_thread(mgr.create_message, session_id, _FORK_AGENT_ID, session_msg)
                 count += 1
+                if written is not None:
+                    written.append(converse_msg)
             except Exception as e:
                 logger.warning(f"Failed to copy message {idx}: {e}")
 

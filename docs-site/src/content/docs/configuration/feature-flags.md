@@ -85,6 +85,7 @@ what you get if you set nothing.
 | Feedback → Evaluations sampling | `CDK_FEEDBACK_EVAL_SAMPLING_ENABLED` | **OFF** | **yes — per eval run + PII** | Admin batch sends down-thumbed conversations to AgentCore Evaluations |
 | MCP token enrichment | `CDK_MCP_TOKEN_ENRICHMENT_ENABLED` | **OFF** | **yes — Cognito plan** | Pre-token Lambda that copies pool attributes into access-token claims; forces Cognito **Essentials** feature plan (per-MAU cost) |
 | MCP Apps host renderer | `AGENTCORE_MCP_APPS_HOST_ENABLED` | **ON** | none | Renders third-party MCP-server UI in the sandbox iframe (needs `mcp-sandbox` deployed) |
+| Conversation index (archive writes) | `CDK_CONVERSATION_INDEX_ENABLED` | **OFF** (in development) | **yes — S3, later KB storage** | Feature switch. Writes each finished turn's user and assistant text to the conversation-archive bucket that conversation search is built from. Off stops new writes only; deleting a conversation still removes its archived turns. See `docs/specs/conversation-search.md` |
 | Token exchange (RFC 8693) | `CDK_TOKEN_EXCHANGE_URL` (+ `_CLIENT_ID`) | **absent** | none | Optional external token-service exchange. Unset ⇒ no resources created |
 
 ## Runtime-only flags (on by default, no `CDK_*` variable)
@@ -176,6 +177,11 @@ If you care about the bill, these are the only flags that move it:
 - **`CDK_MCP_TOKEN_ENRICHMENT_ENABLED`** — turning it on forces the Cognito user
   pool onto the **Essentials** feature plan, which bills per monthly active
   user. Default **OFF**.
+- **`CDK_CONVERSATION_INDEX_ENABLED`** — default **OFF** while in development.
+  Writes one small S3 object per finished turn (cents a month at today's scale);
+  once the search index lands it also feeds a managed knowledge base billed at
+  ~$5/GB-month. Estimated ~$4/month for ~13k sessions, ~$45 at 30k users
+  (`docs/specs/conversation-search.md` §8).
 - **`CDK_KB_SYNC_ENABLED`** — default **ON**. Runs a scheduled Lambda that
   re-embeds assistant KB sources; cost is the embedding calls + Lambda time on
   the schedule. Turn off if you do not use assistant knowledge bases.

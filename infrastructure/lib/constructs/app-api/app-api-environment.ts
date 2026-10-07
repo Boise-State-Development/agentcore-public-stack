@@ -98,6 +98,7 @@ export interface AppApiSsmParams {
   sharedConversationsTableName: string;
   sharedConversationsTableArn: string;
   sharedConversationsBucketName: string;
+  conversationArchiveBucketName: string;
   memoryId: string;
   // Memory Spaces
   memorySpacesTableName: string;
@@ -221,6 +222,7 @@ export function resolveAppApiParams(
     sharedConversationsTableName: refs.sharedConversationsTable.tableName,
     sharedConversationsTableArn: refs.sharedConversationsTable.tableArn,
     sharedConversationsBucketName: refs.sharedConversationsBucket.bucketName,
+    conversationArchiveBucketName: refs.conversationArchiveBucket.bucketName,
     memoryId: overrides.memoryId,
     // Memory Spaces
     memorySpacesTableName: refs.memorySpacesTable.tableName,
@@ -319,6 +321,12 @@ export function buildAppApiEnvironment(
     COGNITO_REGION: config.awsRegion,
     SHARED_CONVERSATIONS_TABLE_NAME: params.sharedConversationsTableName,
     SHARED_CONVERSATIONS_BUCKET_NAME: params.sharedConversationsBucketName,
+    // Conversation archive (docs/specs/conversation-search.md §4). The bucket is
+    // always wired so a session delete removes its archived turns even after a
+    // deployment turns indexing off; CONVERSATION_INDEX_ENABLED gates writes
+    // only (the fork copy path here, the after-`done` put on the runtime).
+    CONVERSATION_ARCHIVE_BUCKET_NAME: params.conversationArchiveBucketName,
+    CONVERSATION_INDEX_ENABLED: config.conversationIndex.enabled ? 'true' : 'false',
     BFF_SESSIONS_TABLE_NAME: params.bffSessionsTableName,
     BFF_COOKIE_SIGNING_KEY_ARN: params.bffCookieSigningKeyArn,
     BFF_COOKIE_DATA_KEY_SECRET_ARN: params.bffCookieDataKeySecretArn,

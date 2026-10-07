@@ -89,6 +89,8 @@ export interface PlatformComputeRefs {
   agentTemplatesTable: dynamodb.ITable;
   sharedConversationsTable: dynamodb.ITable;
   sharedConversationsBucket: s3.IBucket;
+  /** Per-turn transcript archive (conversation search). */
+  conversationArchiveBucket: s3.IBucket;
   fileUploadBucket: s3.IBucket;
   fileUploadTable: dynamodb.ITable;
 

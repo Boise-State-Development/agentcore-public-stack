@@ -6,6 +6,10 @@ For narrative release notes written for operators and product owners, see [RELEA
 
 ## [Unreleased]
 
+### 🚀 Added
+
+- **Conversation archive (in development, off by default)** — the write path conversation search is built from. With `CDK_CONVERSATION_INDEX_ENABLED=true`, each finished turn's user and assistant text (tool calls and results excluded, 16 KB cap) is written to a new private, unversioned `{prefix}-conversation-archive` bucket in the background after the response completes, so it adds nothing before the first token. Forked shared conversations are archived under the forker. Deleting a conversation removes its archived turns whether or not the flag is on, and the bucket's lifecycle rule follows `CDK_CONVERSATION_RETENTION_DAYS`. A CDK deploy creates the bucket; nothing reads it yet (#1380, `docs/specs/conversation-search.md` §4)
+
 ### ⚠️ Changed
 
 - **Conversations are kept for 365 days by default, up from 90**, and the period is now configurable with `CDK_CONVERSATION_RETENTION_DAYS` (minimum 3; AgentCore Memory stops at 365 even when it is set higher). Message text lives only in AgentCore Memory events, so before this a conversation older than 90 days stayed in the sidebar but opened with no messages. The change is an in-place update to the Memory resource; it does not replace it. Long-term memory records are unaffected (#1380, `docs/specs/conversation-search.md` §3)

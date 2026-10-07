@@ -43,6 +43,7 @@ import { AuditLogConstruct } from './constructs/data/audit-log-construct';
 import { ProjectsConstruct } from './constructs/data/projects-construct';
 import { QuotaTablesConstruct } from './constructs/data/quota-tables-construct';
 import { SharedConversationsConstruct } from './constructs/data/shared-conversations-construct';
+import { ConversationArchiveConstruct } from './constructs/data/conversation-archive-construct';
 
 // RAG (data half lives in Platform)
 import { RagDataConstruct } from './constructs/rag/rag-data-construct';
@@ -192,6 +193,7 @@ export class PlatformStack extends cdk.Stack {
   public readonly agentTemplatesTable: dynamodb.ITable;
   public readonly sharedConversationsTable: dynamodb.ITable;
   public readonly sharedConversationsBucket: s3.IBucket;
+  public readonly conversationArchiveBucket: s3.IBucket;
   public readonly fileUploadBucket: s3.IBucket;
   public readonly fileUploadTable: dynamodb.ITable;
 
@@ -461,6 +463,15 @@ export class PlatformStack extends cdk.Stack {
     );
     this.sharedConversationsTable = sharedConversations.table;
     this.sharedConversationsBucket = sharedConversations.bucket;
+
+    // Per-turn transcript archive for conversation search (always provisioned;
+    // writes are gated by config.conversationIndex.enabled at runtime).
+    const conversationArchive = new ConversationArchiveConstruct(
+      this,
+      'ConversationArchive',
+      { config },
+    );
+    this.conversationArchiveBucket = conversationArchive.bucket;
 
     // ============================================================
     // RAG data
@@ -881,6 +892,7 @@ export class PlatformStack extends cdk.Stack {
       agentTemplatesTable: this.agentTemplatesTable,
       sharedConversationsTable: this.sharedConversationsTable,
       sharedConversationsBucket: this.sharedConversationsBucket,
+      conversationArchiveBucket: this.conversationArchiveBucket,
       fileUploadBucket: this.fileUploadBucket,
       fileUploadTable: this.fileUploadTable,
       ragDocumentsBucket: this.ragDocumentsBucket,
