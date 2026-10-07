@@ -25,7 +25,7 @@ Key invariants under test:
 
 import asyncio
 from typing import Any, AsyncIterator, Dict, List
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -316,6 +316,8 @@ async def test_interruption_persists_partial_turn_metadata():
     ), patch(
         "agents.main_agent.session.hooks.context_attribution.get_projected_input_tokens",
         return_value=1234,
+    ), patch(
+        "apis.shared.sessions.metadata.update_session_activity", AsyncMock(return_value=True)
     ):
         await coordinator._persist_interruption(
             agent=_InterruptingAgent(),
@@ -326,6 +328,9 @@ async def test_interruption_persists_partial_turn_metadata():
             accumulated_metadata={"usage": {}, "metrics": {}},
             initial_message_count=4,
             current_assistant_message_index=0,
+            # The interrupted call opened its slot (message_start) and never
+            # reached message_stop or a usage event.
+            per_message_metadata=[{"usage": {}, "metrics": {}, "start_time": 100.0, "end_time": None}],
             stream_start_time=100.0,
             first_token_time=100.2,
         )

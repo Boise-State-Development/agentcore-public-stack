@@ -13,6 +13,7 @@ For narrative release notes written for operators and product owners, see [RELEA
 ### 🐛 Fixed
 
 - **A failed turn now meters the model calls it completed.** A turn that ended in an error (a force-stop, a provider fault after retries, a max_tokens truncation, a coordinator exception) skipped every cost write. The provider billed its successful calls, but the session's `totalCost` and `messageCount` stayed at 0 and the user's quota never counted them. Each call that reported usage now gets its `C#` row, session aggregates and cost-summary update, and the session's activity advances. A call that failed before reporting usage is still not recorded, so a turn that fails on its first call writes no cost
+- **An interrupted turn now meters every model call it made.** A Stop or a disconnect wrote at most one cost row, from the last call's usage, so the calls completed earlier in the turn were billed but never counted. Each completed call now gets its own row, and the call that was cut off is still priced from its projected input
 
 ## [1.26.0] - 2026-10-03
 
