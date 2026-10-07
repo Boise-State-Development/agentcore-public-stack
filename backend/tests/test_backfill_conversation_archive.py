@@ -226,6 +226,24 @@ def test_preview_sessions_are_never_archived(world):
     assert report.held == {"preview": 1}
 
 
+def test_a_session_id_memory_cannot_address_is_held_not_read(world):
+    """``ListEvents`` rejects such an id outright, so it can hold no events; reading
+    it would only count a failure and turn every run's exit code red."""
+    world.session("bad id'--", TWO_TURNS)
+    world.session("ok_id-2", TWO_TURNS)
+    reads: List[str] = []
+
+    def history(user_id, session_id):
+        reads.append(session_id)
+        return world.history(user_id, session_id)
+
+    report = world.run(history=history)
+
+    assert reads == ["ok_id-2"]
+    assert report.held == {"invalid_memory_session_id": 1}
+    assert report.failed_sessions == 0
+
+
 def test_archived_sessions_are_backfilled_and_deleted_ones_are_not(world):
     world.session("kept", TWO_TURNS, status="archived")
     world.session("gone", TWO_TURNS, status="deleted", deleted=True)
