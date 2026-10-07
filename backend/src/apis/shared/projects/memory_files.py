@@ -175,6 +175,67 @@ class ProjectMemoryFiles:
         if scope == "project":
             self._record(AuditAction.PROJECT_MEMORY_EDITED, user, project, after={"slug": "MEMORY.md"})
 
+    def restore_version(self, project_id: str, user: User, scope: MemoryScope, slug: str, version: int):
+        """Make an earlier version of a file the current one, as a new version (2.8c; editor+ / your own).
+
+        The restore is an ordinary save (``reason: restore``) of that version's
+        items, description and aliases, so it is validated, counted and
+        versioned like any other, and nothing in history is rewritten. Items
+        keep the anchors they had then: one that has left the file since comes
+        back with the provenance its archive row kept (and that row goes), and
+        one that is in the file now but not in that version goes to the
+        archive. A pinned item the old version lacks blocks the restore until
+        it's unpinned, as for any save.
+        """
+        from apis.shared.memory.format import parse_file
+        from apis.shared.memory.models import ItemProvenance
+        from apis.shared.memory.service import MemoryValidationError, SaveContext
+
+        project, space_id = self._resolve(project_id, user, scope, writable=True)
+        current = next(
+            (e for e in self.memory.list_entries(space_id, user.user_id, user.email) if e.slug == slug), None
+        )
+        if current is not None and (current.version or 1) == version:
+            raise MemoryValidationError("That's the current version already.", code="restore_current")
+        _, text = self.memory.read_file_version(space_id, user.user_id, user.email, slug, version)
+        parsed = parse_file(text)
+        fm = parsed.frontmatter or {}
+        _, now_items, _ = self.memory.read_file_items(space_id, user.user_id, user.email, slug)
+        present = {i.anchor for i in now_items}
+        returning = [i.anchor for i in parsed.items if i.anchor and i.anchor not in present]
+        archived = {
+            row.anchor: row
+            for row in self.memory.repository.list_archived_items(space_id)
+            if row.slug == slug and row.anchor in returning
+        }
+        restored = {
+            anchor: (archived[anchor].provenance or ItemProvenance(added_by=archived[anchor].archived_by))
+            if anchor in archived else ItemProvenance()
+            for anchor in returning
+        }
+        description = fm.get("description")
+        aliases = fm.get("aliases")
+        result = self.memory.save_entry(
+            space_id, user.user_id, user.email, slug,
+            render_items_for_save([EditedItem(text=i.text, anchor=i.anchor) for i in parsed.items]),
+            description=description if isinstance(description, str) else None,
+            aliases=list(aliases) if isinstance(aliases, list) else None,
+            reason="restore",
+            restorable=returning,
+            context=SaveContext(restored=restored),
+        )
+        for row in archived.values():
+            try:
+                self.memory.repository.delete_archived_item(space_id, row.archive_id)
+            except Exception:
+                logger.warning("Could not clear archive row %s in %s", row.archive_id, space_id, exc_info=True)
+        if scope == "project":
+            self._record(
+                AuditAction.PROJECT_MEMORY_EDITED, user, project,
+                after={"slug": result.ref.slug, "version": result.ref.version, "restoredFrom": version},
+            )
+        return result
+
     def _index_new_file(self, space_id: str, user: User, scope: MemoryScope, result: Any) -> Optional[str]:
         from apis.shared.memory.hydration import MINE_MEMORY_MAX_TOKENS, PROJECT_MEMORY_MAX_TOKENS
 

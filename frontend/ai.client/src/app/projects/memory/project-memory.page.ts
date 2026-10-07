@@ -16,6 +16,7 @@ import { MemoryArchiveComponent } from './memory-archive.component';
 import { MemoryEditorComponent, MemoryEditorDone, MemoryEditorMode } from './memory-editor.component';
 import { MemoryIndexEditorComponent } from './memory-index-editor.component';
 import { MemoryFileViewComponent } from './memory-file-view.component';
+import { MemoryHistoryComponent } from './memory-history.component';
 import { MemoryIndexViewComponent } from './memory-index-view.component';
 import { MemoryMeterComponent } from './memory-meter.component';
 import { MemoryReviewComponent, ReviewOutcome } from './memory-review.component';
@@ -29,7 +30,7 @@ const DEFAULT_LIMITS: MemoryLimits = {
   personalIndexBudgetTokens: 1000,
 };
 
-type MemoryView = 'files' | 'review' | 'archive';
+type MemoryView = 'files' | 'review' | 'archive' | 'history';
 
 interface ScopeState {
   entries: MemoryEntry[];
@@ -60,6 +61,7 @@ const EMPTY: ScopeState = { entries: [], index: '' };
     MemoryArchiveComponent,
     MemoryEditorComponent,
     MemoryFileViewComponent,
+    MemoryHistoryComponent,
     MemoryIndexEditorComponent,
     MemoryIndexViewComponent,
     MemoryMeterComponent,
@@ -99,6 +101,7 @@ export class ProjectMemoryPage {
   protected readonly activeView = computed<MemoryView>(() => {
     const view = this.view();
     if (view === 'archive' && this.spaceId()) return 'archive';
+    if (view === 'history' && this.selectedEntry()) return 'history';
     if (view === 'review' && this.activeScope() === 'project' && this.spaceId()) return 'review';
     return 'files';
   });

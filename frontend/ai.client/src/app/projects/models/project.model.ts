@@ -337,6 +337,32 @@ export interface MemoryRestoreResponse {
   version: number;
 }
 
+/** One saved version of a memory file (`GET /memory/spaces/{id}/history?slug=`). */
+export interface MemoryFileVersion {
+  version: number;
+  contentHash: string;
+  size: number;
+  tokens: number | null;
+  /** Email of who saved it; empty when unknown. */
+  updatedBy: string;
+  updatedByName: string | null;
+  updatedAt: string;
+  /** `edit` (in the Memory tab), `save` (by the assistant), `proposal`, `restore`, `baseline` or `maintenance`. */
+  reason: string;
+}
+
+export interface MemoryFileHistory {
+  slug: string;
+  /** Newest first. */
+  versions: MemoryFileVersion[];
+}
+
+export interface MemoryFileVersionContent extends MemoryFileVersion {
+  slug: string;
+  /** The file as saved then, frontmatter included. */
+  content: string;
+}
+
 /** One item as the editor sends it: the anchor it was read with, or none for a new item. */
 export interface EditedMemoryItem {
   anchor?: string | null;

@@ -332,6 +332,13 @@ class SaveFileResponse(BaseModel):
     )
 
 
+class RestoreVersionRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    slug: str = Field(..., min_length=1, max_length=128)
+    version: int = Field(..., ge=1)
+
+
 class IndexRequest(BaseModel):
     content: str = Field(..., max_length=64_000)
 
@@ -485,3 +492,22 @@ def save_memory_index(
     except _ERRORS as e:
         raise _translate(e)
     return IndexResponse(content=body.content)
+
+
+@files_router.post("/history/restore", response_model=RestoreResponse, response_model_by_alias=True)
+def restore_memory_version(
+    project_id: str,
+    body: RestoreVersionRequest,
+    scope: Scope = Query("project"),
+    user: User = Depends(require_projects_user),
+) -> RestoreResponse:
+    """Make an earlier version current again, as a new version (editor+ / your own).
+
+    The slug travels in the body, as it does on the history routes' query
+    string: slugs may contain "/".
+    """
+    try:
+        result = _files().restore_version(project_id, user, scope, body.slug, body.version)
+    except _ERRORS as e:
+        raise _translate(e)
+    return RestoreResponse(slug=result.ref.slug, version=result.ref.version)

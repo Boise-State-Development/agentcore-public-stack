@@ -265,6 +265,18 @@
         <div class="mt-2">
           @if (activeView() === 'review') {
             <app-memory-review [project]="p" [entries]="entries()" (decided)="onDecided($event)" />
+          } @else if (activeView() === 'history') {
+            @if (selectedEntry(); as entry) {
+              <app-memory-history
+                [projectId]="p.projectId"
+                [scope]="activeScope()"
+                [spaceId]="spaceId()!"
+                [entry]="entry"
+                [entries]="entries()"
+                [canEdit]="canEdit()"
+                (restored)="onRestored()"
+              />
+            }
           } @else {
             <app-memory-archive
               [projectId]="p.projectId"

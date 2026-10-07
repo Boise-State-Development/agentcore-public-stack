@@ -170,7 +170,7 @@ export function describeProvenance(
 
   let text: string;
   if (provenance.restoredBy) {
-    text = `Restored from the archive by ${who(provenance.restoredBy)}`;
+    text = `Restored by ${who(provenance.restoredBy)}`;
   } else if (provenance.proposedBy || provenance.proposalId) {
     const approver = provenance.approvedBy ? `, approved by ${who(provenance.approvedBy)}` : '';
     text = `Proposed by ${who(provenance.proposedBy ?? provenance.addedBy)}${fromTask}${approver}`;
