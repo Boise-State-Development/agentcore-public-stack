@@ -103,10 +103,10 @@ import { contributors, describeProvenance } from './memory-text';
                 <p class="text-sm/6 break-words text-gray-900 dark:text-gray-100"><app-memory-text [text]="item.text" [entries]="entries()" /></p>
                 <p class="mt-0.5 text-xs/5 text-gray-600 dark:text-gray-400">
                   @if (item.pinned) {
-                    <span class="font-medium text-primary-accessible dark:text-primary-accessible-dark">Pinned</span> ·
+                    <span class="font-medium text-primary-accessible dark:text-primary-50">Pinned</span> ·
                   }
                   {{ provenance(item).text }}@if (provenance(item).sessionId; as sid) {
-                    (<a [routerLink]="['/s', sid]" class="rounded-sm font-medium text-primary-accessible underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-accessible-dark">open it</a>)}@if (provenance(item).at) { · {{ at(provenance(item).at) | date: 'MMM d, y' }}}
+                    (<a [routerLink]="['/s', sid]" class="rounded-sm font-medium text-primary-accessible underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-50">open it</a>)}@if (provenance(item).at) { · {{ at(provenance(item).at) | date: 'MMM d, y' }}}
                 </p>
               </div>
               @if (canEdit()) {
@@ -118,7 +118,7 @@ import { contributors, describeProvenance } from './memory-text';
                   [attr.aria-label]="(item.pinned ? 'Unpin: ' : 'Pin: ') + item.text"
                   [title]="item.pinned ? 'Pinned: no save can drop it until it’s unpinned' : 'Pin, so no save can drop it'"
                   class="grid size-8 shrink-0 place-items-center rounded-xl transition-colors hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:opacity-50 dark:hover:bg-white/10"
-                  [class]="item.pinned ? 'text-primary-accessible dark:text-primary-accessible-dark' : 'text-gray-500 dark:text-gray-400'"
+                  [class]="item.pinned ? 'text-primary-accessible dark:text-primary-50' : 'text-gray-500 dark:text-gray-400'"
                 >
                   <ng-icon [name]="item.pinned ? 'heroBookmarkSolid' : 'heroBookmark'" class="size-4" aria-hidden="true" />
                 </button>
