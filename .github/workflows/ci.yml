@@ -52,6 +52,7 @@ jobs:
       backend_contracts: ${{ steps.classify.outputs.backend_contracts }}
       frontend: ${{ steps.classify.outputs.frontend }}
       infra: ${{ steps.classify.outputs.infra }}
+      ios: ${{ steps.classify.outputs.ios }}
       load: ${{ steps.classify.outputs.load }}
       scripts: ${{ steps.classify.outputs.scripts }}
     steps:
@@ -96,6 +97,10 @@ jobs:
       # workflows keep running the plain suite.
       run_frontend_coverage: ${{ needs.changes.outputs.frontend == 'true' }}
       run_infra: ${{ needs.changes.outputs.infra == 'true' }}
+      # The iOS client on a macOS runner. PR gate only, and only for ios/
+      # changes: macOS minutes are ~10x Ubuntu minutes and no deploy workflow
+      # ships the app.
+      run_ios: ${{ needs.changes.outputs.ios == 'true' }}
       # Pure-logic tests for tests/load. Deliberately only on the PR gate: the
       # deploy workflows run test suites to protect a deploy, and the load
       # suite has no bearing on one.

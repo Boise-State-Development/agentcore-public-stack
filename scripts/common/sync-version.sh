@@ -53,6 +53,11 @@ README="${REPO_ROOT}/README.md"
 TUI_PYPROJECT="${REPO_ROOT}/tui/pyproject.toml"
 TUI_INIT="${REPO_ROOT}/tui/src/agentcore_tui/__init__.py"
 TUI_UV_LOCK="${REPO_ROOT}/tui/uv.lock"
+# iOS client (optional, same guard). MARKETING_VERSION must be plain dotted
+# numbers (CFBundleShortVersionString), so a SemVer pre-release suffix is
+# dropped: 1.27.0-rc.1 -> 1.27.0.
+IOS_XCCONFIG="${REPO_ROOT}/ios/Config/Version.xcconfig"
+IOS_VERSION="${VERSION%%-*}"
 
 CHECK_MODE=false
 if [ "${1:-}" = "--check" ]; then
@@ -109,6 +114,12 @@ if [ -f "${TUI_UV_LOCK}" ]; then
     TUI_UV_LOCK_VER=$(awk -F'"' '/name = "agentcore-tui"/{f=1} f && /^version = /{print $2; exit}' "${TUI_UV_LOCK}" || echo "")
 fi
 
+# iOS client version (empty when the ios/ tree is not present)
+IOS_VER=""
+if [ -f "${IOS_XCCONFIG}" ]; then
+    IOS_VER=$(sed -n 's/^MARKETING_VERSION[[:space:]]*=[[:space:]]*\([^[:space:]]*\).*/\1/p' "${IOS_XCCONFIG}" | head -1 || echo "")
+fi
+
 if [ "${CHECK_MODE}" = true ]; then
     echo "Checking manifests against VERSION=${VERSION}..."
     sync_or_check "${PYPROJECT}" "${PY_VER}" "backend/pyproject.toml"
@@ -125,6 +136,9 @@ if [ "${CHECK_MODE}" = true ]; then
     fi
     if [ -f "${TUI_UV_LOCK}" ]; then
         sync_or_check "${TUI_UV_LOCK}" "${TUI_UV_LOCK_VER}" "tui/uv.lock" "${PEP440_VERSION}"
+    fi
+    if [ -f "${IOS_XCCONFIG}" ]; then
+        sync_or_check "${IOS_XCCONFIG}" "${IOS_VER}" "ios/Config/Version.xcconfig" "${IOS_VERSION}"
     fi
 
     if [ ${errors} -gt 0 ]; then
@@ -150,6 +164,11 @@ fi
 if [ -f "${TUI_INIT}" ]; then
     sed_inplace "s/^__version__ = \"[^\"]*\"/__version__ = \"${VERSION}\"/" "${TUI_INIT}"
     echo -e "${GREEN}[UPDATED]${NC} tui/src/agentcore_tui/__init__.py"
+fi
+
+if [ -f "${IOS_XCCONFIG}" ]; then
+    sed_inplace "s/^MARKETING_VERSION[[:space:]]*=.*/MARKETING_VERSION = ${IOS_VERSION}/" "${IOS_XCCONFIG}"
+    echo -e "${GREEN}[UPDATED]${NC} ios/Config/Version.xcconfig"
 fi
 
 # package.json: replace only the FIRST `"version": "..."` (the top-level key).
