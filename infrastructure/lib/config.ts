@@ -79,6 +79,7 @@ export interface AppConfig {
   memorySpaces: MemorySpacesConfig;
   projects: ProjectsConfig;
   conversationIndex: ConversationIndexConfig;
+  conversationSearch: ConversationSearchConfig;
   platformSelfService: PlatformSelfServiceConfig;
   feedbackEvalSampling: FeedbackEvalSamplingConfig;
   skills: SkillsConfig;
@@ -410,6 +411,20 @@ export interface ProjectsConfig {
  * that turns indexing off must still be able to remove what it already wrote.
  */
 export interface ConversationIndexConfig {
+  enabled: boolean;
+}
+
+/**
+ * Conversation search read path (docs/specs/conversation-search.md §5).
+ * **Opt-in while in development**: off unless CDK_CONVERSATION_SEARCH_ENABLED=true
+ * (or a `conversationSearch.enabled: true` cdk.json context). Sets
+ * CONVERSATION_SEARCH_ENABLED on app-api, which serves `GET /sessions/search`
+ * only while it is on. Nothing on the AgentCore Runtime reads it, so it spends
+ * none of the Runtime's environment-variable budget. Separate from
+ * `conversationIndex` because indexing has to run ahead of search: turn this on
+ * in an environment only once its archive has been backfilled.
+ */
+export interface ConversationSearchConfig {
   enabled: boolean;
 }
 
@@ -1134,6 +1149,12 @@ export function loadConfig(scope: cdk.App): AppConfig {
         ? process.env.CDK_CONVERSATION_INDEX_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('conversationIndex')?.enabled ?? false,
     },
+    conversationSearch: {
+      // Opt-in while in development, same parsing as projects above.
+      enabled: process.env.CDK_CONVERSATION_SEARCH_ENABLED
+        ? process.env.CDK_CONVERSATION_SEARCH_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('conversationSearch')?.enabled ?? false,
+    },
     platformSelfService: {
       // Opt-in while in development (CLAUDE.md "Feature flags"): only the literal
       // "true" turns it on. The workflow forwards an EMPTY STRING when the variable
@@ -1503,6 +1524,7 @@ export function loadConfig(scope: cdk.App): AppConfig {
     `   Conversation retention: ${config.conversationRetentionDays} days`
     + ` (Memory events: ${Math.min(config.conversationRetentionDays, AGENTCORE_MEMORY_EVENT_EXPIRY_MAX_DAYS)})`
     + ` index writes=${config.conversationIndex.enabled}`
+    + ` search=${config.conversationSearch.enabled}`
   );
 
   // Printed because this list is a security control supplied entirely from

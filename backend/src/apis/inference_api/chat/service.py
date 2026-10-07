@@ -648,9 +648,9 @@ def _converse_for_title(**kwargs: Any) -> Dict[str, Any]:
     return _get_title_bedrock_client().converse(**kwargs)
 
 
-def _schedule_title_write(session_id: str, user_id: str, title: str) -> None:
+def _schedule_title_write(session_id: str, user_id: str, title: str, first_prompt: Optional[str] = None) -> None:
     task = asyncio.create_task(
-        update_session_title(session_id=session_id, user_id=user_id, title=title)
+        update_session_title(session_id=session_id, user_id=user_id, title=title, first_prompt=first_prompt)
     )
     _pending_title_writes.add(task)
     task.add_done_callback(_pending_title_writes.discard)
@@ -743,7 +743,9 @@ async def generate_conversation_title(
         # seeing the name. Targeted update — only writes the title attribute.
         # The post-stream update_session_activity write is also targeted and
         # disjoint, so the two cannot clobber each other on overlapping turns.
-        _schedule_title_write(session_id, user_id, title)
+        # The same write carries the opening prompt's search form (firstPrompt,
+        # conversation search's lexical leg), so it costs no round trip of its own.
+        _schedule_title_write(session_id, user_id, title, first_prompt=user_input)
 
         return title
 
