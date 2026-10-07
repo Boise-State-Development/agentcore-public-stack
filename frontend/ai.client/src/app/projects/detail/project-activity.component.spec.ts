@@ -117,7 +117,7 @@ describe('ProjectActivityComponent', () => {
     const rows = Array.from(el.querySelectorAll('li')).map(li => li.textContent?.replace(/\s+/g, ' ').trim());
     expect(rows[0]).toContain('You updated the instructions. Version 2');
     expect(rows[1]).toContain('ann@x.edu added bo@x.edu as an editor.');
-    expect(el.querySelector('a')?.getAttribute('href')).toBe('/projects/prj_1/settings');
+    expect(el.querySelector('a')?.getAttribute('href')).toBe('/projects/prj_1/history');
   });
 
   it('names people from the page’s directory names, with the email on hover', async () => {

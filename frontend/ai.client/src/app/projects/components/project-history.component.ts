@@ -32,7 +32,7 @@ const FIELD_LABELS: Record<string, string> = {
     @if (error()) {
       <p role="alert" class="text-sm/6 text-state-danger-600 dark:text-state-danger-400">{{ error() }}</p>
     } @else if (versions() === null) {
-      <div class="h-16 animate-pulse rounded-2xl bg-gray-100 dark:bg-gray-800" aria-busy="true"></div>
+      <div class="h-16 animate-pulse rounded-2xl bg-gray-100 dark:bg-gray-700" aria-busy="true"></div>
     } @else if (versions()!.length === 0) {
       <p class="text-sm/6 text-gray-600 dark:text-gray-400">No changes yet. Each save will be listed here.</p>
     } @else {
