@@ -35,6 +35,7 @@ import { UserConnectorsService } from '../../settings/connectors/services/user-c
 import { OAuthConsentService } from '../../services/oauth-consent/oauth-consent.service';
 import { ToastService } from '../../services/toast/toast.service';
 import { DialogDismissDirective } from '../../components/dialog/dialog-dismiss.directive';
+import { DialogTitleDirective } from '../../components/dialog/dialog-title.directive';
 import { SpinnerComponent } from '../../components/spinner/spinner.component';
 
 /**
@@ -91,11 +92,16 @@ type ConnectPhase = 'initiating' | 'awaiting';
  * files and import, or select the current folder. Closes with the created
  * {@link Document} records, a {@link FolderSelection}, or `undefined` if
  * cancelled.
+ *
+ * Drawn by hand rather than with `<app-dialog-shell>`: the browser view pins
+ * its search and breadcrumb bars above a list that scrolls on its own, and the
+ * footer exists only in that view. `appDialogTitle` on the heading names CDK's
+ * container.
  */
 @Component({
   selector: 'app-file-source-browser-dialog',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DialogDismissDirective, NgIcon, SpinnerComponent],
+  imports: [DialogDismissDirective, DialogTitleDirective, NgIcon, SpinnerComponent],
   providers: [
     provideIcons({
       heroArrowDownTray,
