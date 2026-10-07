@@ -1,4 +1,5 @@
-import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
+import { ChangeDetectionStrategy, Component, DestroyRef, ElementRef, computed, effect, inject, input, output } from '@angular/core';
+import { DialogRef } from '@angular/cdk/dialog';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroXMark } from '@ng-icons/heroicons/outline';
 import { DialogDismissDirective } from './dialog-dismiss.directive';
@@ -12,6 +13,16 @@ const WIDTHS: Record<DialogShellSize, string> = {
 };
 
 let nextId = 0;
+
+/**
+ * The part of CDK's dialog container that names it. `_addAriaLabelledBy` is the hook
+ * Angular Material's dialog title uses; it's underscored, so it's reached through this
+ * narrow, optional shape and a missing method just leaves the name off.
+ */
+interface LabelledContainer {
+  _addAriaLabelledBy?(id: string): void;
+  _removeAriaLabelledBy?(id: string): void;
+}
 
 /**
  * The chrome every CDK dialog in this codebase draws by hand: backdrop, centred
@@ -30,6 +41,13 @@ let nextId = 0;
  * Escape and a click outside the panel both emit `closed`; the opener decides what
  * closing means (usually `dialogRef.close(result)`). The panel never grows past the
  * viewport: the body scrolls while the title and footer stay put.
+ *
+ * **Accessible name.** CDK's container is itself the `role="dialog"` element, and it has
+ * no name unless the opener passes one (axe `aria-dialog-name`). Opened through `Dialog`,
+ * the shell names that container with its title and describes it with its description,
+ * and its own panel carries no dialog role, so assistive tech meets one named dialog
+ * rather than an unnamed one wrapping a named one. Rendered outside a CDK dialog (a spec,
+ * a harness), the panel keeps `role="dialog"` and labels itself.
  */
 @Component({
   selector: 'app-dialog-shell',
@@ -51,10 +69,10 @@ let nextId = 0;
       <div
         class="dialog-panel relative flex max-h-[calc(100dvh-1.5rem)] w-full flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white text-left shadow-xl sm:max-h-[calc(100dvh-3rem)] dark:border-gray-700 dark:bg-gray-800"
         [class]="widthClass()"
-        role="dialog"
-        aria-modal="true"
-        [attr.aria-labelledby]="titleId"
-        [attr.aria-describedby]="description() ? descriptionId : null"
+        [attr.role]="inCdkDialog ? null : 'dialog'"
+        [attr.aria-modal]="inCdkDialog ? null : 'true'"
+        [attr.aria-labelledby]="inCdkDialog ? null : titleId"
+        [attr.aria-describedby]="!inCdkDialog && description() ? descriptionId : null"
       >
         <div class="flex items-start gap-3 px-6 pt-5 pb-3">
           <div class="min-w-0 flex-1">
@@ -122,4 +140,28 @@ export class DialogShellComponent {
   protected readonly titleId = `dialog-shell-title-${++nextId}`;
   protected readonly descriptionId = `dialog-shell-description-${nextId}`;
   protected readonly widthClass = computed(() => WIDTHS[this.size()]);
+
+  private readonly dialogRef = inject(DialogRef, { optional: true });
+  private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
+  private readonly container = this.dialogRef?.containerInstance as unknown as LabelledContainer | undefined;
+  /** Opened through CDK's `Dialog`, whose container is the dialog element (a stub `DialogRef` in a spec has none). */
+  protected readonly inCdkDialog = !!this.container;
+
+  constructor() {
+    const container = this.container;
+    if (!container) return;
+    container._addAriaLabelledBy?.(this.titleId);
+    inject(DestroyRef).onDestroy(() => container._removeAriaLabelledBy?.(this.titleId));
+
+    // The container's own aria-describedby comes only from the opener's config; when that
+    // is empty the shell's description fills it, and an opener's value is left alone.
+    effect(() => {
+      const describe = !!this.description();
+      const element = this.host.nativeElement.closest('.cdk-dialog-container');
+      if (!element) return;
+      const current = element.getAttribute('aria-describedby');
+      if (describe && !current) element.setAttribute('aria-describedby', this.descriptionId);
+      if (!describe && current === this.descriptionId) element.removeAttribute('aria-describedby');
+    });
+  }
 }

@@ -1,5 +1,6 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { Component, signal } from '@angular/core';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { Component, inject, signal } from '@angular/core';
+import { DIALOG_DATA, Dialog } from '@angular/cdk/dialog';
 import { TestBed } from '@angular/core/testing';
 import { DialogShellComponent } from './dialog-shell.component';
 
@@ -18,6 +19,14 @@ class Host {
   readonly description = signal<string | null>('Who is in the project.');
   readonly size = signal<'md' | 'lg' | 'xl'>('lg');
   readonly closed = vi.fn();
+}
+
+@Component({
+  imports: [DialogShellComponent],
+  template: `<app-dialog-shell title="Members" [description]="description" (closed)="0"><p>Body</p></app-dialog-shell>`,
+})
+class Opened {
+  readonly description = inject<{ description: string | null }>(DIALOG_DATA).description;
 }
 
 describe('DialogShellComponent', () => {
@@ -71,5 +80,38 @@ describe('DialogShellComponent', () => {
     const a = render().el.querySelector('h2')!.id;
     const b = render().el.querySelector('h2')!.id;
     expect(a).not.toBe(b);
+  });
+
+  describe('opened through CDK Dialog', () => {
+    afterEach(() => TestBed.inject(Dialog).closeAll());
+
+    async function open(description: string | null, config: Record<string, unknown> = {}) {
+      const ref = TestBed.inject(Dialog).open(Opened, { data: { description }, ...config });
+      await new Promise(r => setTimeout(r, 0));
+      const containers = document.querySelectorAll<HTMLElement>('.cdk-dialog-container');
+      const container = containers[containers.length - 1];
+      return { ref, container, title: container.querySelector('h2')! };
+    }
+
+    it('names CDK’s container with its title and description, and is the only dialog role', async () => {
+      const { container, title } = await open('Who is in the project.');
+      expect(container.getAttribute('role')).toBe('dialog');
+      expect(container.getAttribute('aria-labelledby')).toBe(title.id);
+      expect(document.getElementById(container.getAttribute('aria-describedby')!)?.textContent).toBe('Who is in the project.');
+      expect(container.querySelectorAll('[role=dialog]').length).toBe(0);
+      expect(container.querySelector('.dialog-panel')?.getAttribute('aria-modal')).toBeNull();
+    });
+
+    it('leaves the description off when there is none, and an opener’s own name and description alone', async () => {
+      const bare = await open(null);
+      expect(bare.container.getAttribute('aria-describedby')).toBeNull();
+      bare.ref.close();
+      await new Promise(r => setTimeout(r, 0));
+
+      const named = await open('Shell text.', { ariaLabel: 'Opener name', ariaDescribedBy: 'opener-desc' });
+      expect(named.container.getAttribute('aria-label')).toBe('Opener name');
+      expect(named.container.getAttribute('aria-labelledby')).toBeNull();
+      expect(named.container.getAttribute('aria-describedby')).toBe('opener-desc');
+    });
   });
 });
