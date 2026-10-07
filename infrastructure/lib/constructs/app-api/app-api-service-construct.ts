@@ -91,6 +91,10 @@ export class AppApiServiceConstruct extends Construct {
   public readonly ecsService: ecs.FargateService;
   /** Exposed so alarms bind to the real target-group dimensions. */
   public readonly targetGroup: elbv2.ApplicationTargetGroup;
+  /** Exposed so scheduled one-off tasks (the session retention pruner) run
+   * app-api's own code, environment and role. */
+  public readonly taskDefinition: ecs.FargateTaskDefinition;
+  public readonly securityGroup: ec2.SecurityGroup;
 
   constructor(scope: Construct, id: string, props: AppApiServiceConstructProps) {
     super(scope, id);
@@ -111,7 +115,7 @@ export class AppApiServiceConstruct extends Construct {
     const ecsCluster = props.refs.ecsCluster;
 
     // ── Security group ──
-    const ecsSecurityGroup = new ec2.SecurityGroup(this, 'AppEcsSecurityGroup', {
+    const ecsSecurityGroup = this.securityGroup = new ec2.SecurityGroup(this, 'AppEcsSecurityGroup', {
       vpc,
       securityGroupName: getResourceName(config, 'app-ecs-sg'),
       description: 'Security group for App API ECS Fargate tasks',
@@ -123,7 +127,7 @@ export class AppApiServiceConstruct extends Construct {
     );
 
     // ── Task definition ──
-    const taskDefinition = new ecs.FargateTaskDefinition(this, 'AppApiTaskDefinition', {
+    const taskDefinition = this.taskDefinition = new ecs.FargateTaskDefinition(this, 'AppApiTaskDefinition', {
       family: getResourceName(config, 'app-api-task'),
       cpu: config.appApi.cpu,
       memoryLimitMiB: config.appApi.memory,

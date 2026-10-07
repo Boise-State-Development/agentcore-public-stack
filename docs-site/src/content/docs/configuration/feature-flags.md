@@ -85,7 +85,9 @@ what you get if you set nothing.
 | Feedback → Evaluations sampling | `CDK_FEEDBACK_EVAL_SAMPLING_ENABLED` | **OFF** | **yes — per eval run + PII** | Admin batch sends down-thumbed conversations to AgentCore Evaluations |
 | MCP token enrichment | `CDK_MCP_TOKEN_ENRICHMENT_ENABLED` | **OFF** | **yes — Cognito plan** | Pre-token Lambda that copies pool attributes into access-token claims; forces Cognito **Essentials** feature plan (per-MAU cost) |
 | MCP Apps host renderer | `AGENTCORE_MCP_APPS_HOST_ENABLED` | **ON** | none | Renders third-party MCP-server UI in the sandbox iframe (needs `mcp-sandbox` deployed) |
-| Conversation index (archive writes) | `CDK_CONVERSATION_INDEX_ENABLED` | **OFF** (in development) | **yes — S3, KB storage** | Feature switch. Writes each finished turn's user and assistant text to the conversation-archive bucket that conversation search is built from, and enables the two EventBridge rules that index those turns into a shared managed knowledge base (created on the first indexed turn). Off stops new writes and indexing; deleting a conversation still removes its archived turns, but its index documents stay until the reconciler removes them. See `docs/specs/conversation-search.md` |
+| Conversation index (archive writes) | `CDK_CONVERSATION_INDEX_ENABLED` | **OFF** (in development) | **yes — S3, KB storage** | Feature switch. Writes each finished turn's user and assistant text to the conversation-archive bucket that conversation search is built from, and enables the two EventBridge rules that index those turns into a shared managed knowledge base (created on the first indexed turn). Off stops new writes and indexing; deleting a conversation still removes its archived turns, but its index documents stay until the daily reconciler removes them (it runs whatever this flag says). See `docs/specs/conversation-search.md` |
+| Conversation retention — prune sessions | `CDK_CONVERSATION_RETENTION_PRUNES_SESSIONS` | **ON** | a few minutes of one Fargate task a day | Feature switch, permanent. Lets `CDK_CONVERSATION_RETENTION_DAYS` remove session rows too: a daily task deletes conversations whose last turn is older than the retention period, through the same cleanup as a user's delete, so they leave the sidebar instead of opening empty. Nothing is deleted until the next flag arms it. `false` keeps them as title-only rows and stops the task |
+| Conversation retention — pruner armed | `CDK_CONVERSATION_RETENTION_PRUNE_ARMED` | **OFF** | none (report-only until armed) | Pruner *deletes* sessions past retention vs only logging how many it would (with the oldest and newest last-message time). Even armed, the first run in an environment, and the first run after the retention period changes, is a dry run |
 | Token exchange (RFC 8693) | `CDK_TOKEN_EXCHANGE_URL` (+ `_CLIENT_ID`) | **absent** | none | Optional external token-service exchange. Unset ⇒ no resources created |
 
 ## Runtime-only flags (on by default, no `CDK_*` variable)
@@ -233,8 +235,11 @@ for the authoritative list and defaults:
   conversation's content is kept for this many days after each turn, wherever it
   is stored; nothing about a user's long-term memory records (facts,
   preferences) changes. Whole days, at least 3. Today it sets AgentCore Memory's
-  event expiry, which stops at 365 even if the value is higher. Unset or empty
-  means 365.
+  event expiry, which stops at 365 even if the value is higher, and the
+  conversation archive's lifecycle rule; a daily reconciler deletes archive
+  objects and search-index documents past it, and, once armed, sessions whose
+  last turn is past it (`CDK_CONVERSATION_RETENTION_PRUNES_SESSIONS`,
+  `CDK_CONVERSATION_RETENTION_PRUNE_ARMED` above). Unset or empty means 365.
 
 ## Source of truth
 

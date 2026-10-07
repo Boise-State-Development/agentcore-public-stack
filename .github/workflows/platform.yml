@@ -362,6 +362,18 @@ jobs:
       # stored (docs/specs/conversation-search.md §3). Unset means 365. Memory
       # events stop at 365 even if this is higher; minimum 3.
       CDK_CONVERSATION_RETENTION_DAYS: ${{ vars.CDK_CONVERSATION_RETENTION_DAYS }}
+      # Session rows follow the retention setting too: a daily task deletes
+      # sessions whose last turn is past it, through the same cascade as a
+      # user's delete (docs/specs/conversation-search.md §3).
+      #   CDK_CONVERSATION_RETENTION_PRUNES_SESSIONS  unset means ON; "false"
+      #                                               keeps rows as title-only
+      #                                               shells and stops the task
+      #   CDK_CONVERSATION_RETENTION_PRUNE_ARMED      unset means REPORT-ONLY;
+      #                                               "true" lets the task delete.
+      #                                               Even armed, the first run in
+      #                                               an environment is a dry run.
+      CDK_CONVERSATION_RETENTION_PRUNES_SESSIONS: ${{ vars.CDK_CONVERSATION_RETENTION_PRUNES_SESSIONS }}
+      CDK_CONVERSATION_RETENTION_PRUNE_ARMED: ${{ vars.CDK_CONVERSATION_RETENTION_PRUNE_ARMED }}
       # Conversation index write path: the per-turn transcript archive that
       # conversation search is built from (docs/specs/conversation-search.md
       # §4). Opt-in while in development: set the

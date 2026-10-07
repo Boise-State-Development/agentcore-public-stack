@@ -188,7 +188,8 @@ case "$SERVICE" in
         ;;
     conversation-index)
         DOCKERFILE="backend/Dockerfile.conversation-index"
-        # One image, one Lambda (the conversation-search index consumer).
+        # One image, two Lambdas (the conversation-search index consumer and
+        # its daily reconciler, via ImageConfig command overrides).
         # Keep SOURCE_DIRS/MANIFESTS in lockstep with the Dockerfile's COPY
         # list — a path copied but not hashed here would ship stale code
         # under an unchanged content-hash tag.
@@ -208,10 +209,11 @@ case "$SERVICE" in
             "backend/src/apis/shared/conversation_archive/documents.py"
             "backend/src/apis/shared/conversation_archive/store.py"
             "backend/src/apis/shared/conversation_archive/index_documents.py"
+            "backend/src/apis/shared/conversation_archive/retention.py"
             "backend/src/apis/app_api/kb_migration/__init__.py"
             "backend/src/apis/app_api/kb_migration/ingestion_consumer.py"
         )
-        # The consumer Lambda is arm64 (see the conversation-index construct).
+        # Both Lambdas are arm64 (see the conversation-index construct).
         PLATFORM="linux/arm64"
         SSM_KEY="/${CDK_PROJECT_PREFIX}/conversation-index/image-tag"
         ;;

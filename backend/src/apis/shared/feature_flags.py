@@ -645,6 +645,37 @@ def conversation_index_enabled() -> bool:
     return os.environ.get("CONVERSATION_INDEX_ENABLED", "").strip().lower() == "true"
 
 
+def conversation_retention_prunes_sessions() -> bool:
+    """Whether the retention setting also removes session rows.
+
+    ``docs/specs/conversation-search.md`` §3: once a conversation's last turn is
+    older than ``CONVERSATION_RETENTION_DAYS``, every copy of its content has
+    expired, and the daily pruner deletes the row too (through the same cascade
+    as a user's delete) so it leaves the sidebar instead of opening empty.
+    **Default ON with a kill switch**: unset or empty is on, only the literal
+    ``"false"`` (case-insensitive) turns it off. A feature switch, permanent: a
+    deployment may prefer title-only shells to deletions.
+
+    On is not the same as deleting. The pruner reports what it would delete and
+    deletes nothing until :func:`conversation_retention_prune_armed` is set in
+    that environment, and even then not before a dry run has been recorded
+    there. Off, the pruner does not run its scan at all.
+    """
+    return os.environ.get("CONVERSATION_RETENTION_PRUNES_SESSIONS", "").strip().lower() != "false"
+
+
+def conversation_retention_prune_armed() -> bool:
+    """Whether the retention pruner may delete session rows, rather than only report.
+
+    **Opt-in per environment, default off**, like ``MANAGED_KB_RECONCILER_ARMED``:
+    the pruner deletes rows users can see, so every environment starts with
+    report-only runs whose counts can be checked against real data first. Only
+    an affirmative value arms it (``1``/``true``/``yes``/``on``); unset, empty and
+    anything else are off, because an unset GitHub variable arrives as ``""``.
+    """
+    return os.environ.get("CONVERSATION_RETENTION_PRUNE_ARMED", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def compaction_summary_extract_enabled() -> bool:
     """Whether a compaction cut pins verbatim facts ahead of its summary.
 

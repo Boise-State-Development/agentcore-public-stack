@@ -143,3 +143,52 @@ describe('AgentCore Memory eventExpiryDuration', () => {
     expect(memoryExpiry(730)).toBe(365);
   });
 });
+
+// Session pruning (PR-2c): a feature switch that defaults on, and an arming
+// flag that defaults off, so an upgraded deployment reports and deletes
+// nothing until it arms.
+describe('conversation retention pruning config', () => {
+  const saved = { ...process.env };
+  const PRUNES = 'CDK_CONVERSATION_RETENTION_PRUNES_SESSIONS';
+  const ARMED = 'CDK_CONVERSATION_RETENTION_PRUNE_ARMED';
+
+  beforeEach(() => {
+    delete process.env[PRUNES];
+    delete process.env[ARMED];
+    jest.spyOn(console, 'log').mockImplementation(() => undefined);
+    jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+  });
+  afterEach(() => {
+    process.env = { ...saved };
+    jest.restoreAllMocks();
+  });
+
+  it.each([undefined, ''])('prunes sessions by default (%p) and is disarmed by default', (value) => {
+    if (value !== undefined) {
+      process.env[PRUNES] = value;
+      process.env[ARMED] = value;
+    }
+    const config = load();
+    expect(config.conversationRetentionPrunesSessions).toBe(true);
+    expect(config.conversationRetentionPruneArmed).toBe(false);
+  });
+
+  it('opts out with "false" and arms with "true"', () => {
+    process.env[PRUNES] = 'false';
+    process.env[ARMED] = 'true';
+    const config = load();
+    expect(config.conversationRetentionPrunesSessions).toBe(false);
+    expect(config.conversationRetentionPruneArmed).toBe(true);
+  });
+
+  it('reads boolean cdk.json context', () => {
+    const config = load({ conversationRetentionPrunesSessions: false, conversationRetentionPruneArmed: true });
+    expect(config.conversationRetentionPrunesSessions).toBe(false);
+    expect(config.conversationRetentionPruneArmed).toBe(true);
+  });
+
+  it('fails synth on a value it cannot read rather than guessing', () => {
+    process.env[ARMED] = 'yes please';
+    expect(() => load()).toThrow(/Invalid boolean/);
+  });
+});

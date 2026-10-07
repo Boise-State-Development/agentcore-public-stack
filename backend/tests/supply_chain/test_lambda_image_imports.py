@@ -74,11 +74,15 @@ IMAGES: Dict[str, Tuple[str, List[str], List[str]]] = {
         ],
         [],
     ),
-    # The conversation-search index consumer. It borrows `extract_records` from
-    # the kb-migration ingestion consumer, so that module's closure is walked too.
+    # The conversation-search index consumer and its daily reconciler (one
+    # image, handler per function). The consumer borrows `extract_records`
+    # from the kb-migration ingestion consumer, so that closure is walked too.
     "conversation-index": (
         "backend/Dockerfile.conversation-index",
-        ["apis/app_api/conversation_index/consumer.py"],
+        [
+            "apis/app_api/conversation_index/consumer.py",
+            "apis/app_api/conversation_index/reconciler.py",
+        ],
         [],
     ),
     "scheduled-runs": (
