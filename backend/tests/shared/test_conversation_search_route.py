@@ -51,7 +51,7 @@ class Doc:
             "session_id": self.session_id,
             "message_index": str(self.message_index),
             "created_at": self.created_at,
-            "document_id": f"conv#{self.session_id}#{self.message_index}",
+            "document_id": f"conv#{self.user_id}#{self.session_id}#{self.message_index}",
         }
         if self.project_id:
             md["project_id"] = self.project_id
@@ -99,7 +99,7 @@ class FakeRuntime:
                 {
                     "content": {"text": d.text},
                     "score": d.score,
-                    "location": {"type": "CUSTOM", "customDocumentLocation": {"id": f"conv#{d.session_id}#{d.message_index}"}},
+                    "location": {"type": "CUSTOM", "customDocumentLocation": {"id": f"conv#{d.user_id}#{d.session_id}#{d.message_index}"}},
                     "metadata": d.metadata,
                 }
                 for d in found[: config["numberOfResults"]]
@@ -274,6 +274,23 @@ def test_a_forged_owner_attribute_is_dropped_by_the_row_join(two_users, runtime)
     body = _search("user-a", "budget", mode="all")
     assert "b-other" not in _ids(body)
     assert "leak attempt" not in str(body)
+
+
+def test_two_users_sharing_a_session_id_each_see_only_their_own_turn(tables, runtime):
+    """Session ids are not unique across users (found on dev, 2026-10-07)."""
+    _session(tables, "user-a", "shared", "Chat")
+    _session(tables, "user-b", "shared", "Chat")
+    runtime.docs = [
+        Doc("shared", 0, "user-a", "budget, as user a wrote it", score=0.9),
+        Doc("shared", 0, "user-b", "budget, as user b wrote it", score=0.8),
+    ]
+    for honor in (True, False):
+        runtime.honor_filter = honor
+        a = _search("user-a", "budget", mode="all")
+        b = _search("user-b", "budget", mode="all")
+        assert [r["snippet"] for r in a["results"]] == ["budget, as user a wrote it"]
+        assert [r["snippet"] for r in b["results"]] == ["budget, as user b wrote it"]
+        text_search_throttle().reset()
 
 
 def test_a_user_parameter_is_ignored(two_users, runtime):

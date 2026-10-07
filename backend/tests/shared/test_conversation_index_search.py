@@ -27,8 +27,12 @@ class RecordingBackend:
 
 
 def _chunk(doc_id: str, user_id: str, text: str = "t", score: float = 0.5, **extra) -> Chunk:
+    """``doc_id`` is ``session#index``; the id is built as the index writes it,
+    under ``user_id`` unless ``id_user`` says otherwise."""
+    id_user = extra.pop("id_user", user_id)
+    full_id = f"conv#{id_user}#{doc_id}"
     metadata = {"user_id": user_id, "created_at": "2026-10-07T17:09:45.716Z", **extra}
-    return Chunk(text=text, relevance=score, document_id=doc_id, metadata=metadata, key=doc_id)
+    return Chunk(text=text, relevance=score, document_id=full_id, metadata=metadata, key=full_id)
 
 
 @pytest.mark.asyncio
@@ -90,10 +94,10 @@ def test_the_function_accepts_no_filter_argument():
 async def test_hits_naming_another_user_or_no_user_are_dropped():
     backend = RecordingBackend(
         [
-            _chunk("conv#s1#2", "user-a", text="mine", score=0.9),
-            _chunk("conv#s2#0", "user-b", text="theirs", score=0.8),
-            Chunk(text="ownerless", relevance=0.7, document_id="conv#s3#0", metadata={}, key="x"),
-            _chunk("not-a-conversation-doc", "user-a"),
+            _chunk("s1#2", "user-a", text="mine", score=0.9),
+            _chunk("s2#0", "user-b", text="theirs", score=0.8),
+            Chunk(text="ownerless", relevance=0.7, document_id="conv#user-a#s3#0", metadata={}, key="x"),
+            Chunk(text="junk", relevance=0.6, document_id="not-a-conversation-doc", metadata={"user_id": "user-a"}, key="y"),
         ]
     )
     hits = await search_conversation_index("user-a", "q", backend=backend)
@@ -105,10 +109,33 @@ async def test_hits_naming_another_user_or_no_user_are_dropped():
 async def test_project_scope_drops_hits_from_another_project():
     backend = RecordingBackend(
         [
-            _chunk("conv#s1#0", "user-a", project_id="proj-1"),
-            _chunk("conv#s2#0", "user-a", project_id="proj-2"),
-            _chunk("conv#s3#0", "user-a"),
+            _chunk("s1#0", "user-a", project_id="proj-1"),
+            _chunk("s2#0", "user-a", project_id="proj-2"),
+            _chunk("s3#0", "user-a"),
         ]
     )
     hits = await search_conversation_index("user-a", "q", project_id="proj-1", backend=backend)
     assert [h.session_id for h in hits] == ["s1"]
+
+
+@pytest.mark.asyncio
+async def test_an_id_naming_another_user_is_dropped_even_with_the_callers_attribute():
+    """The id and the attribute must both name the caller."""
+    backend = RecordingBackend([_chunk("s9#0", "user-a", id_user="user-b", text="forged")])
+    assert await search_conversation_index("user-a", "q", backend=backend) == []
+
+
+@pytest.mark.asyncio
+async def test_two_users_sharing_a_session_id_each_get_only_their_own_turn():
+    # Session ids are not unique across users (found on dev, 2026-10-07).
+    backend = RecordingBackend([_chunk("shared#0", "user-a", text="a's turn"), _chunk("shared#0", "user-b", text="b's turn")])
+    hits = await search_conversation_index("user-a", "q", backend=backend)
+    assert [(h.session_id, h.text) for h in hits] == [("shared", "a's turn")]
+
+
+@pytest.mark.asyncio
+async def test_a_legacy_two_part_id_is_never_a_hit():
+    backend = RecordingBackend(
+        [Chunk(text="old", relevance=0.9, document_id="conv#s1#2", metadata={"user_id": "user-a"}, key="conv#s1#2")]
+    )
+    assert await search_conversation_index("user-a", "q", backend=backend) == []

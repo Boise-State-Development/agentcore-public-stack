@@ -13,10 +13,15 @@ enforce, and it is enforced here, in one place (§7, PR-4 isolation requirements
 2. Nothing else calls ``Retrieve`` with the conversations KB id.
    ``tests/architecture/test_conversation_index_retrieve_boundary.py`` fails the
    build if another module does.
-3. A hit whose ``user_id`` attribute is not the caller's is dropped here, and
-   every surviving hit is joined to its session row under ``USER#{caller}`` by
-   the service above (``service.py``), which drops it when that row is missing
-   or deleted. Either check alone would stop a leak through a lost filter.
+3. A hit is dropped here unless **both** the user its document id names
+   (``conv#{user_id}#{session_id}#{message_index}``) and its ``user_id``
+   attribute are the caller's, and every surviving hit is joined to its session
+   row under ``USER#{caller}`` by the service above (``service.py``), which
+   drops it when that row is missing or deleted. Any one of the three would
+   stop a leak through a lost filter. A legacy two-part id
+   (``conv#{session_id}#{message_index}``, from before the user was put in the
+   id because session ids are not unique across users) names no user, so it is
+   never a hit; the reconciler removes those documents.
 
 A missing or empty user id raises before anything is sent: an empty ``equals``
 value makes Bedrock raise ``ValidationException`` (measured on dev 2026-10-07),
@@ -106,23 +111,22 @@ async def search_conversation_index(
     hits: List[IndexHit] = []
     foreign = 0
     for chunk in chunks:
-        parsed = parse_index_document_id(chunk.document_id or "")
-        if parsed is None:
+        ref = parse_index_document_id(chunk.document_id or "")
+        if ref is None:
             continue
         metadata = chunk.metadata or {}
-        # Fail closed: a hit that does not name the caller is never theirs, and
-        # one with no owner at all cannot be shown to be.
-        if metadata.get("user_id") != caller:
+        # Fail closed: a hit whose id or attribute does not name the caller is
+        # never theirs, and one with no owner attribute cannot be shown to be.
+        if ref.user_id != caller or metadata.get("user_id") != caller:
             foreign += 1
             continue
         if project_id and metadata.get("project_id") != project_id:
             foreign += 1
             continue
-        session_id, message_index = parsed
         hits.append(
             IndexHit(
-                session_id=session_id,
-                message_index=message_index,
+                session_id=ref.session_id,
+                message_index=ref.message_index,
                 text=chunk.text or "",
                 score=chunk.relevance,
                 created_at=metadata.get("created_at"),
