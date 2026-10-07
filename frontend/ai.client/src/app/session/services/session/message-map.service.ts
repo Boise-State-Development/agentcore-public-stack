@@ -62,6 +62,19 @@ export class MessageMapService {
   readonly isLoadingSession = this._isLoadingSession.asReadonly();
 
   /**
+   * Sessions whose last fetch was served from the conversation archive
+   * (`fromArchive` on the messages response): Memory's events expired, so the
+   * agent would start with no context and a new turn would overwrite the
+   * archived history. The composer is replaced while a session is in here.
+   */
+  private archiveServedSessions = signal<ReadonlySet<string>>(new Set());
+
+  /** Whether the session's history was served from the conversation archive. */
+  isArchiveServed(sessionId: string | null | undefined): boolean {
+    return !!sessionId && this.archiveServedSessions().has(sessionId);
+  }
+
+  /**
    * Set the loading session state.
    * Call this before loadMessagesForSession to show skeleton immediately on route change.
    */
@@ -451,6 +464,8 @@ export class MessageMapService {
         return updated;
       });
 
+      this.setArchiveServed(sessionId, messagesResponse.fromArchive === true);
+
       // Hydrate OAuth consent service from any persisted pending interrupts
       // so a reload restores the consent prompt anchored to the right turn.
       // Anchor falls back to the most recent assistant message in history,
@@ -695,6 +710,22 @@ export class MessageMapService {
     this.messageMap.update(map => {
       const { [sessionId]: _, ...rest } = map;
       return rest;
+    });
+    this.setArchiveServed(sessionId, false);
+  }
+
+  private setArchiveServed(sessionId: string, served: boolean): void {
+    if (this.archiveServedSessions().has(sessionId) === served) {
+      return;
+    }
+    this.archiveServedSessions.update(set => {
+      const next = new Set(set);
+      if (served) {
+        next.add(sessionId);
+      } else {
+        next.delete(sessionId);
+      }
+      return next;
     });
   }
 
