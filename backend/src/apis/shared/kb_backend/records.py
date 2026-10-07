@@ -918,7 +918,20 @@ def request_teardown(
     Guarded on the generation this call read, so two concurrent deletes and a
     worker's own transition cannot interleave into a lost update; a lost race
     re-reads and tries again.
+
+    **Refuses a reserved id** (:mod:`~apis.shared.kb_backend.reserved`), returning
+    ``None`` as for an absent record. The conversation-search index keeps its
+    record at ``AST#conversations``, a partition with no agent in it, which is
+    exactly what an orphan sweep looks for; queuing it here would delete every
+    user's search index. This is the one function every agent teardown goes
+    through, so the check lives here rather than at each caller.
     """
+    from apis.shared.kb_backend.reserved import is_reserved_kb_id
+
+    if is_reserved_kb_id(assistant_id) or is_reserved_kb_id(app_kb_id):
+        logger.warning(f"refusing to queue reserved knowledge base {app_kb_id} for teardown")
+        return None
+
     table = _table()
     key = {"PK": kb_pk(assistant_id), "SK": kb_sk(app_kb_id)}
     for _ in range(attempts):
