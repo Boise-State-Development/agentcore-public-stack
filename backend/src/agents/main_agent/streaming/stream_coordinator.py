@@ -441,9 +441,10 @@ class StreamCoordinator:
         current_assistant_message_index = -1  # Track which assistant message we're on (0-indexed within this stream)
 
         # Set once some path has taken ownership of writing this turn's cost
-        # rows (the success block, or a failure arm via
-        # `_record_failed_turn_usage`), so a later failure arm never meters
-        # the same calls a second time.
+        # rows (the success block, a failure arm via
+        # `_record_failed_turn_usage`, or an interruption arm via
+        # `_persist_interruption`), so a later arm never meters the same
+        # calls a second time.
         turn_usage_recorded = False
 
         # Accumulate the IN-FLIGHT assistant message's TEXT so an interruption
@@ -1527,6 +1528,8 @@ class StreamCoordinator:
             # (user_stopped), then end the SSE stream cleanly rather than
             # re-raising, so a still-connected client sees a proper close and
             # the route's finally releases the lease.
+            meter_usage = not turn_usage_recorded
+            turn_usage_recorded = True
             await self._persist_interruption(
                 agent=agent,
                 session_id=session_id,
@@ -1539,6 +1542,12 @@ class StreamCoordinator:
                 stream_start_time=stream_start_time,
                 first_token_time=first_token_time,
                 reason="user_stopped",
+                per_message_metadata=per_message_metadata,
+                turn_started_at=turn_started_at,
+                citations=citations,
+                turn_agent_id=turn_agent_id,
+                turn_project_id=turn_project_id,
+                meter_usage=meter_usage,
             )
             # Terminal frames so any still-connected client ends cleanly; the
             # SPA already stopped rendering on Stop, so this is belt-and-braces.
@@ -1563,6 +1572,10 @@ class StreamCoordinator:
             # `connection_lost` is the fallback reason; a `user_stopped`
             # client signal, if it lands, wins via reason precedence in
             # set_interrupted_turn.
+            # A disconnect can land while the success block or a failure arm
+            # is already writing this turn's cost rows; never meter twice.
+            meter_usage = not turn_usage_recorded
+            turn_usage_recorded = True
             await self._persist_interruption(
                 agent=agent,
                 session_id=session_id,
@@ -1574,6 +1587,12 @@ class StreamCoordinator:
                 current_assistant_message_index=current_assistant_message_index,
                 stream_start_time=stream_start_time,
                 first_token_time=first_token_time,
+                per_message_metadata=per_message_metadata,
+                turn_started_at=turn_started_at,
+                citations=citations,
+                turn_agent_id=turn_agent_id,
+                turn_project_id=turn_project_id,
+                meter_usage=meter_usage,
             )
             raise
         except Exception as e:
@@ -1705,9 +1724,16 @@ class StreamCoordinator:
         stream_start_time: Optional[float] = None,
         first_token_time: Optional[float] = None,
         reason: str = "connection_lost",
+        per_message_metadata: Optional[List[Dict[str, Any]]] = None,
+        turn_started_at: Optional[float] = None,
+        citations: Optional[List] = None,
+        turn_agent_id: Optional[str] = None,
+        turn_project_id: Optional[str] = None,
+        meter_usage: bool = True,
     ) -> None:
         """Persist the in-flight partial assistant turn + an interrupted
-        marker when a turn is torn down mid-stream.
+        marker when a turn is torn down mid-stream, and meter the model calls
+        the turn made.
 
         ``reason`` records why: the default ``connection_lost`` is the
         disconnect backstop (conditional, never downgrades a stronger
@@ -1746,6 +1772,11 @@ class StreamCoordinator:
         ``history_count``, when passed, supersedes ``initial_message_count``
         and is resolved inside the shielded task, so the teardown cannot
         cancel the wait for it.
+
+        ``meter_usage`` is False when another path already took this turn's
+        usage (``turn_usage_recorded`` in ``stream_response``): a disconnect
+        that lands while the success block or a failure arm is writing must
+        not meter the same calls again.
         """
         async def _do() -> None:
             base_index = initial_message_count
@@ -1806,46 +1837,81 @@ class StreamCoordinator:
                     session_id, marker_error, exc_info=True,
                 )
 
-            # Partial-turn metadata. On a Stop the client's socket is already
-            # gone, so the `done`-path metadata SSE (usage / cost / context)
-            # never reaches it and BOTH the per-message badges and the session
-            # cost badge stay blank — even after a reload, because nothing was
-            # persisted. Store it here with the same `_store_message_metadata`
-            # the completion path uses: that writes the per-message row AND
-            # bumps the session aggregates that hydrate the cost badge. Runs
-            # only when an assistant message was actually persisted above
-            # (`should_persist`), keyed to the same odd-position index the
-            # messages endpoint re-derives on reload. Best-effort: a cut
-            # generation often never delivered Bedrock's terminal usage event,
-            # so fall back to the context-attribution projection for the input
-            # side (drives the context-% badge + input-side cost; output is
-            # unknown and priced at zero).
-            if should_persist and main_agent_wrapper is not None:
+            # Interrupted-turn metering. A Stop or disconnect skips the
+            # post-loop block, so without this the calls the turn already
+            # completed — billed by the provider — reach no cost row, no
+            # session aggregate and no quota. On a Stop the client's socket is
+            # also gone, so the `done`-path metadata SSE never reached it and
+            # these rows are what hydrate the per-message and session cost
+            # badges on reload.
+            #
+            # Every call that reported usage is metered, keyed to the
+            # odd-position message id the success path uses — whatever the
+            # tail looks like, so a Stop during tool execution (assistant
+            # tail, nothing synthetic persisted) still meters the calls
+            # before it.
+            #
+            # The call in flight is the one the synthetic reply above stands
+            # in for: it exists exactly when that reply was persisted (the
+            # tail is the turn's user or tool-result message, so a model call
+            # was streaming or awaiting its first token). A cut generation
+            # often never delivered the provider's terminal usage event, so
+            # its input side falls back to the context-attribution projection
+            # (output unknown, priced at zero). Never projected for a Stop
+            # during tool execution: the projection then describes the last
+            # completed call, which is already metered.
+            if meter_usage and main_agent_wrapper is not None:
                 try:
-                    metadata_for_message = dict(accumulated_metadata or {})
-                    if not metadata_for_message.get("usage"):
-                        projected = self._projected_input_usage(agent)
-                        if projected:
-                            metadata_for_message = {**metadata_for_message, "usage": projected}
-                    message_id = (
-                        base_index + 2 * current_assistant_message_index + 1
-                        if current_assistant_message_index >= 0
-                        else base_index + 1
-                    )
-                    await self._store_message_metadata(
+                    await self._update_session_metadata(
                         session_id=session_id,
                         user_id=user_id,
-                        message_id=message_id,
-                        accumulated_metadata=metadata_for_message,
-                        stream_start_time=stream_start_time if stream_start_time is not None else time.time(),
-                        stream_end_time=time.time(),
-                        first_token_time=first_token_time,
+                        message_id=None,
                         agent=main_agent_wrapper,
-                        include_context_breakdown=True,
                     )
+
+                    slots = [dict(meta) for meta in (per_message_metadata or [])]
+                    metered = [idx for idx, meta in enumerate(slots) if meta.get("usage")]
+                    in_flight_idx: Optional[int] = None
+                    if should_persist:
+                        # An open slot (message_start seen, no message_stop)
+                        # is the call in flight; otherwise it is the next one,
+                        # which had not streamed anything yet.
+                        open_slot = bool(slots) and slots[-1].get("end_time") is None
+                        in_flight_idx = (
+                            current_assistant_message_index
+                            if open_slot
+                            else current_assistant_message_index + 1
+                        )
+                        if in_flight_idx not in metered:
+                            projected = self._projected_input_usage(agent)
+                            if projected:
+                                while len(slots) <= in_flight_idx:
+                                    slots.append({"usage": {}, "metrics": {}})
+                                slots[in_flight_idx] = {**slots[in_flight_idx], "usage": projected}
+                                metered.append(in_flight_idx)
+
+                    if metered:
+                        await self._store_turn_call_metadata(
+                            session_id=session_id,
+                            user_id=user_id,
+                            main_agent_wrapper=main_agent_wrapper,
+                            calls=[(idx, base_index + 2 * idx + 1) for idx in metered],
+                            per_message_metadata=slots,
+                            accumulated_metadata=accumulated_metadata or {"usage": {}, "metrics": {}},
+                            stream_start_time=stream_start_time if stream_start_time is not None else time.time(),
+                            stream_end_time=time.time(),
+                            first_token_time=first_token_time,
+                            turn_started_at=turn_started_at,
+                            citations=citations,
+                            turn_agent_id=turn_agent_id,
+                            turn_project_id=turn_project_id,
+                            # The breakdown describes the call in flight, so
+                            # only a row for that call may carry it.
+                            attach_context_breakdown=metered[-1] == in_flight_idx,
+                        )
                     logger.info(
-                        "📊 Persisted interrupted-turn metadata for session %s (message_id=%s)",
-                        session_id, message_id,
+                        "📊 Metered interrupted turn for session %s: %d model call(s) (in flight: %s)",
+                        session_id, len(metered), in_flight_idx,
                     )
                 except Exception as meta_error:
                     logger.error(
