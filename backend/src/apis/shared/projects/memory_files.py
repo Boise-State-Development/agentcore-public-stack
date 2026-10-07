@@ -107,8 +107,12 @@ class ProjectMemoryFiles:
         return self.memory.list_archived_items(space_id, user.user_id, user.email)
 
     def restore(self, project_id: str, user: User, scope: MemoryScope, archive_id: str):
+        """Put an archived item back; a file it recreates rejoins the index, as Delete took it out."""
         space_id = self.space(project_id, user, scope, writable=True)
-        return self.memory.restore_archived_item(space_id, user.user_id, user.email, archive_id)
+        result = self.memory.restore_archived_item(space_id, user.user_id, user.email, archive_id)
+        if result.ref.version == 1:
+            self._index_new_file(space_id, user, scope, result)
+        return result
 
     # ---- edits (2.8b) -------------------------------------------------
 

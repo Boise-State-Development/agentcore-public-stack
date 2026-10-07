@@ -139,6 +139,13 @@ class TestDeleteAndIndex:
         assert [r["action"] for r in audit.records][-1] == "project.memory_deleted"
         assert audit.records[-1]["before"] == {"slug": "sis"}
 
+    def test_restoring_an_item_of_a_deleted_file_puts_the_file_back_in_the_index(self, files, memory, team):
+        files.save(team.project_id, EDITOR, "project", "sis", [EditedItem(text="A.")], description="Banner")
+        files.delete(team.project_id, EDITOR, "project", "sis")
+        [row] = files.archive(team.project_id, EDITOR, "project")
+        files.restore(team.project_id, EDITOR, "project", row.archive_id)
+        assert "- [[sis]]" in _index(memory, team.shared_space_id)
+
     def test_the_index_save_checks_new_links(self, files, team):
         with pytest.raises(MemoryValidationError):
             files.save_index(team.project_id, EDITOR, "project", "- [[nowhere]]\n")
