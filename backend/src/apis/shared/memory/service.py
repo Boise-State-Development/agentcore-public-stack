@@ -367,7 +367,8 @@ def _check_pins_kept(current_ref: Optional[MemoryEntryRef], validated: Canonical
         raise MemoryValidationError(
             f"{'An item' if len(dropped) == 1 else f'{len(dropped)} items'} this save leaves out "
             f"{'is' if len(dropped) == 1 else 'are'} pinned ({', '.join(dropped)}). "
-            "Keep pinned items, or unpin them first.",
+            "Keep pinned items in the file. Only a person can unpin one (an editor, for "
+            "project memory), so ask them to if it should go.",
             code="pinned_item_removed",
         )
 

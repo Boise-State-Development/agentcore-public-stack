@@ -215,6 +215,8 @@ class TestPins:
         with pytest.raises(MemoryValidationError, match="pinned") as e:
             _save(memory, team, EDITOR, _line(first))
         assert e.value.code == "pinned_item_removed"
+        # Read by a model that has no unpin tool: it must not offer to unpin it itself.
+        assert "Only a person can unpin" in str(e.value)
 
     def test_a_save_that_keeps_it_keeps_the_pin(self, memory, team):
         first, second = self._pin_second(memory, team)
