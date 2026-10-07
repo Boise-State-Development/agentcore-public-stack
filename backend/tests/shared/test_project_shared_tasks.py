@@ -307,7 +307,7 @@ class TestTheTools:
 
 
 class TestTheTurn:
-    """Only a project harness's turn gets the tools, after its four memory tools."""
+    """Only a project harness's turn gets the tools, after its memory tools."""
 
     def _names(self, monkeypatch, project_memory):
         from apis.inference_api.chat import routes
@@ -325,7 +325,8 @@ class TestTheTurn:
 
         turn = ProjectMemoryTurn(project_id="prj_1", shared_space_id="spc_1", personal_space_id=None)
         assert self._names(monkeypatch, turn) == [
-            "memory_list", "memory_read", "memory_query", "memory_save", "shared_tasks_list", "shared_task_read",
+            "memory_list", "memory_read", "memory_query", "memory_save", "memory_propose",
+            "shared_tasks_list", "shared_task_read",
         ]
 
     def test_an_ordinary_turn_does_not(self, monkeypatch):

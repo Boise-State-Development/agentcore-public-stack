@@ -12,7 +12,9 @@ export type NotificationKind =
   | 'project_archived'
   | 'project_restored'
   | 'project_member_left'
-  | 'project_task_shared';
+  | 'project_task_shared'
+  | 'project_proposal_pending'
+  | 'project_proposal_decided';
 
 export interface AppNotification {
   notificationId: string;
@@ -26,9 +28,18 @@ export interface AppNotification {
   actorName?: string | null;
   /**
    * `role` for invitations, role changes and a member leaving (the role they had);
-   * `shareId`, `title` and an optional `note` for a shared task.
+   * `shareId`, `title` and an optional `note` for a shared task;
+   * `proposalId`, `slug`, and for a decision `decision` and an optional `note`, for a memory proposal.
    */
-  payload: { role?: string; shareId?: string; title?: string; note?: string } & Record<string, unknown>;
+  payload: {
+    role?: string;
+    shareId?: string;
+    title?: string;
+    note?: string;
+    proposalId?: string;
+    slug?: string;
+    decision?: string;
+  } & Record<string, unknown>;
   createdAt: string;
   readAt?: string | null;
 }

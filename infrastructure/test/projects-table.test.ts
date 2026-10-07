@@ -112,6 +112,15 @@ describe('Shared Projects compute wiring', () => {
     expect(statement.Resource).toHaveLength(2);
   });
 
+  it('lets the Runtime put notification rows on the projects table and nothing else (2.5a)', () => {
+    const statement = findStatement(template, 'ProjectsInboxWrite');
+    expect([...statement.Action].sort()).toEqual(['dynamodb:BatchWriteItem', 'dynamodb:PutItem']);
+    expect(statement.Condition).toEqual({
+      'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['INBOX#*'] },
+    });
+    expect(JSON.stringify(statement.Resource)).not.toContain('/index/');
+  });
+
   it('lets the Runtime read one share row and its snapshot body, nothing else (2.5c)', () => {
     const table = findStatement(template, 'SharedConversationsTableRead');
     expect(table.Action).toEqual('dynamodb:GetItem');

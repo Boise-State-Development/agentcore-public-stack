@@ -406,6 +406,18 @@ export function createRuntimeExecutionRole(
               'dynamodb:UpdateItem'],
     resources: [projectsTableArn, `${projectsTableArn}/index/*`],
   }));
+  // A member's `memory_propose` tells the project's editors (Shared Projects
+  // 2.5a). Notifications are `INBOX#{email}` rows on this table, so the
+  // Runtime may put rows under that key prefix and no other.
+  role.addToPolicy(new iam.PolicyStatement({
+    sid: 'ProjectsInboxWrite',
+    effect: iam.Effect.ALLOW,
+    actions: ['dynamodb:PutItem', 'dynamodb:BatchWriteItem'],
+    resources: [projectsTableArn],
+    conditions: {
+      'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['INBOX#*'] },
+    },
+  }));
 
   // ── Shared tasks, read-only (Shared Projects 2.5c) ──
   // A project harness's `shared_task_read` tool reads one project share by id:

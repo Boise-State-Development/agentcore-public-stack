@@ -36,6 +36,14 @@ export function describeNotification(n: AppNotification): string {
       return `${who} restored ${project}.`;
     case 'project_member_left':
       return `${who} left ${project}.`;
+    case 'project_proposal_pending':
+      return `${who} proposed a change to “${n.payload?.slug || 'a memory file'}” in ${project}’s memory.`;
+    case 'project_proposal_decided': {
+      const file = n.payload?.slug || 'a memory file';
+      return n.payload?.decision === 'approved'
+        ? `${who} approved your change to “${file}” in ${project}.`
+        : `${who} declined your change to “${file}” in ${project}.`;
+    }
     case 'project_task_shared': {
       const title = typeof n.payload?.title === 'string' && n.payload.title ? n.payload.title : 'a task';
       return `${who} shared “${title}” with you in ${project}.`;
@@ -237,9 +245,10 @@ export class NotificationBellComponent {
     return describeNotification(n);
   }
 
-  /** The sharer's note on a shared task, if they left one. */
+  /** The sharer's note on a shared task, or the reviewer's on a decision, if they left one. */
   protected noteOf(n: AppNotification): string | null {
-    return n.kind === 'project_task_shared' && typeof n.payload?.note === 'string' ? n.payload.note : null;
+    const noted = n.kind === 'project_task_shared' || n.kind === 'project_proposal_decided';
+    return noted && typeof n.payload?.note === 'string' ? n.payload.note : null;
   }
 
   protected when(n: AppNotification): string {

@@ -28,6 +28,7 @@ import {
 } from '../components/project-details-dialog.component';
 import { ProjectComposerComponent } from './project-composer.component';
 import { ProjectPanel, ProjectRailComponent } from './project-rail.component';
+import { ProjectProposalsComponent } from './project-proposals.component';
 import { ProjectTasksComponent } from './project-tasks.component';
 
 /**
@@ -72,7 +73,7 @@ const MENU_POSITIONS: ConnectedPosition[] = [
 @Component({
   selector: 'app-project-detail',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, RouterLink, CdkMenu, CdkMenuItem, CdkMenuTrigger, ProjectComposerComponent, ProjectRailComponent, ProjectTasksComponent],
+  imports: [NgIcon, RouterLink, CdkMenu, CdkMenuItem, CdkMenuTrigger, ProjectComposerComponent, ProjectProposalsComponent, ProjectRailComponent, ProjectTasksComponent],
   providers: [provideIcons({ heroArchiveBox, heroArrowRightOnRectangle, heroArrowUturnLeft, heroChevronDown, heroPencilSquare, heroTrash })],
   templateUrl: './project-detail.page.html',
 })

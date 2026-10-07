@@ -200,7 +200,9 @@ class TestProjectHarnessSpecs:
 
     def test_every_tool_takes_a_scope_enum(self):
         specs = self._specs()
-        assert list(specs) == ["memory_list", "memory_read", "memory_query", "memory_save"]
+        assert list(specs) == ["memory_list", "memory_read", "memory_query", "memory_save", "memory_propose"]
+        # Proposals only ever target the project's shared memory (2.5a).
+        assert "scope" not in specs.pop("memory_propose")["inputSchema"]["json"]["properties"]
         for spec in specs.values():
             schema = spec["inputSchema"]["json"]
             assert "scope" in schema["required"]

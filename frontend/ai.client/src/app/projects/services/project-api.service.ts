@@ -25,6 +25,9 @@ import {
   SettingsVersion,
   SettingsVersionsResponse,
   SharedTasksResponse,
+  MemoryProposal,
+  MemoryProposalDetail,
+  MemoryProposalsResponse,
   UpdateProjectRequest,
 } from '../models/project.model';
 import { CreateDocumentRequest, DownloadUrlResponse } from '../../assistants/models/document.model';
@@ -165,6 +168,50 @@ export class ProjectApiService {
   }
 
   /** Tasks members shared with the project, newest first. */
+  // ---- memory proposals (2.5a) -------------------------------------------
+
+  /** Editors and the owner get every proposal; anyone else gets their own. */
+  proposals(projectId: string, state?: MemoryProposal['state']): Observable<MemoryProposalsResponse> {
+    const params = state ? new HttpParams().set('state', state) : undefined;
+    return this.http.get<MemoryProposalsResponse>(this.url(projectId, '/memory/proposals'), this.options(params));
+  }
+
+  proposal(projectId: string, proposalId: string): Observable<MemoryProposalDetail> {
+    return this.http.get<MemoryProposalDetail>(
+      this.url(projectId, `/memory/proposals/${encodeURIComponent(proposalId)}`),
+      this.options(),
+    );
+  }
+
+  /** `text` is the reviewer's edited version; omit it to apply the proposal as written. */
+  approveProposal(
+    projectId: string,
+    proposalId: string,
+    body: { text?: string; note?: string },
+  ): Observable<MemoryProposal> {
+    return this.http.post<MemoryProposal>(
+      this.url(projectId, `/memory/proposals/${encodeURIComponent(proposalId)}/approve`),
+      body,
+      this.options(),
+    );
+  }
+
+  rejectProposal(projectId: string, proposalId: string, note?: string): Observable<MemoryProposal> {
+    return this.http.post<MemoryProposal>(
+      this.url(projectId, `/memory/proposals/${encodeURIComponent(proposalId)}/reject`),
+      note ? { note } : {},
+      this.options(),
+    );
+  }
+
+  withdrawProposal(projectId: string, proposalId: string): Observable<MemoryProposal> {
+    return this.http.post<MemoryProposal>(
+      this.url(projectId, `/memory/proposals/${encodeURIComponent(proposalId)}/withdraw`),
+      {},
+      this.options(),
+    );
+  }
+
   sharedTasks(projectId: string): Observable<SharedTasksResponse> {
     return this.http.get<SharedTasksResponse>(this.url(projectId, '/shared-tasks'), this.options());
   }
