@@ -17,7 +17,7 @@ from apis.app_api.shares.service import (
     ShareService,
     ShareStorageUnavailableError,
 )
-from apis.app_api.shares.snapshot_store import ShareSnapshotStore
+from apis.shared.shares.snapshot_store import ShareSnapshotStore
 from apis.app_api.shares.models import CreateShareRequest
 from apis.shared.auth.models import User
 

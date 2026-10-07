@@ -27,7 +27,10 @@ Updated 2026-10-06. All fixes below are merged into `develop`.
 | B10 | [PR 1438](https://github.com/Boise-State-Development/agentcore-public-stack/pull/1438) | Re-sharing a task to the project now says "This task is already shared with the project. Sharing again replaces the snapshot the project sees." |
 | G20 | [PR 1438](https://github.com/Boise-State-Development/agentcore-public-stack/pull/1438), [PR 1442](https://github.com/Boise-State-Development/agentcore-public-stack/pull/1442) | A turn in an archived project says the project is read-only and to ask the owner to restore it. Archive and restore notify every member, and the owner is notified when someone leaves. |
 
-**Still open:** B6, and every gap except G2, G17, G18 and G20. G6 is partly
+**Still open:** B6, and every gap except G2, G5, G17, G18 and G20. G5 is addressed by
+2.5c: a project task's assistant lists and reads the project's shared tasks
+(`shared_tasks_list`, `shared_task_read`), pending a dev re-run of counsel's
+escalation summary. G6 is partly
 addressed: archive, restore and leaving notify, and so does sharing a task when
 the sharer picks who to tell (2.5b, with an optional note). New files and
 instruction changes still don't. The end-user guide no longer lists the fixed items

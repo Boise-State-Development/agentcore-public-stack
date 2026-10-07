@@ -20,13 +20,13 @@ Spaces S3 offload) and ``apis/shared/skills/resource_store.py``:
   - The DynamoDB row references the object by key; the bytes never travel
     through DynamoDB.
 
-It lives under ``app_api/shares/`` rather than ``apis/shared/`` because app-api
-is the only consumer (create writes; view/export read; revoke deletes). If a
-second consumer ever appears it moves to ``apis.shared`` per the import
-boundary rule.
+It lives in ``apis.shared`` because it has two consumers: app-api (create
+writes; view/export read; revoke deletes) and, read-only, a project harness's
+``shared_task_read`` tool in the AgentCore Runtime (Shared Projects 2.5c).
 
-Configuration: the bucket name comes from ``SHARED_CONVERSATIONS_BUCKET_NAME``
-(set on the app-api role by the CDK ``SharedConversationsConstruct`` wiring).
+Configuration: app-api's bucket name comes from ``SHARED_CONVERSATIONS_BUCKET_NAME``
+(set on the app-api role by the CDK ``SharedConversationsConstruct`` wiring). The
+Runtime derives it instead (:mod:`.snapshots`).
 When boto3 or the bucket name is absent (local dev without AWS), the store is
 ``enabled == False`` and every write raises ``ShareSnapshotStoreError`` so a
 misconfigured deploy surfaces loudly rather than silently reintroducing the

@@ -3090,12 +3090,19 @@ async def _build_turn_tools(
         user_id=user_id,
         user_email=current_user.email,
     )
-    # A project harness addresses its spaces by scope instead (2.4b).
+    # A project harness addresses its spaces by scope instead (2.4b), and
+    # reads the team's shared tasks (2.5c). Memory first, so the four memory
+    # specs keep their place in the cached toolConfig.
     if project_memory is not None:
-        from apis.inference_api.chat.project_memory import build_project_memory_tools
+        from apis.inference_api.chat.project_memory import (
+            build_project_memory_tools,
+            build_shared_task_tools,
+        )
 
         memory_tools = build_project_memory_tools(project_memory, current_user)
-    extra_tools = extra_tools + memory_tools
+        extra_tools = extra_tools + memory_tools + build_shared_task_tools(project_memory.project_id, current_user)
+    else:
+        extra_tools = extra_tools + memory_tools
 
     # document_read for any session that carries a readable attachment
     # (this turn's uploads count). Gated on session state, not the

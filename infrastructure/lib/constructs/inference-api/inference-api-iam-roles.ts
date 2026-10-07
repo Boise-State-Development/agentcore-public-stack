@@ -396,6 +396,26 @@ export function createRuntimeExecutionRole(
     resources: [projectsTableArn, `${projectsTableArn}/index/*`],
   }));
 
+  // ── Shared tasks, read-only (Shared Projects 2.5c) ──
+  // A project harness's `shared_task_read` tool reads one project share by id:
+  // a GetItem on its row and a GetObject on its snapshot body. The Runtime
+  // never lists, writes or deletes shares; app-api owns that surface. Names are
+  // derived from PROJECT_PREFIX in the container (apis/shared/shares/snapshots.py)
+  // because the Runtime's environment has no room for two more variables.
+  const sharedConversationsTableArn = refs.sharedConversationsTable.tableArn;
+  role.addToPolicy(new iam.PolicyStatement({
+    sid: 'SharedConversationsTableRead',
+    effect: iam.Effect.ALLOW,
+    actions: ['dynamodb:GetItem'],
+    resources: [sharedConversationsTableArn],
+  }));
+  role.addToPolicy(new iam.PolicyStatement({
+    sid: 'SharedConversationsBodyRead',
+    effect: iam.Effect.ALLOW,
+    actions: ['s3:GetObject'],
+    resources: [`${refs.sharedConversationsBucket.bucketArn}/shares/*`],
+  }));
+
   // ── S3 Vectors (RAG query) ──
   const vectorBucketName = refs.ragVectorBucketName;
   const vectorIndexName = refs.ragVectorIndexName;

@@ -112,6 +112,16 @@ describe('Shared Projects compute wiring', () => {
     expect(statement.Resource).toHaveLength(2);
   });
 
+  it('lets the Runtime read one share row and its snapshot body, nothing else (2.5c)', () => {
+    const table = findStatement(template, 'SharedConversationsTableRead');
+    expect(table.Action).toEqual('dynamodb:GetItem');
+    expect(JSON.stringify(table.Resource)).not.toContain('/index/');
+
+    const body = findStatement(template, 'SharedConversationsBodyRead');
+    expect(body.Action).toEqual('s3:GetObject');
+    expect(JSON.stringify(body.Resource)).toContain('/shares/*');
+  });
+
   it('gives app-api the table name, the flag and full CRUD on the table', () => {
     template.hasResourceProperties('AWS::ECS::TaskDefinition', {
       ContainerDefinitions: Match.arrayWith([
