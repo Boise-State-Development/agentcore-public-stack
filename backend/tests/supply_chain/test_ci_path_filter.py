@@ -24,7 +24,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = REPO_ROOT / "scripts" / "ci" / "classify-changes.sh"
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 
-SUITES = ("backend", "backend_contracts", "frontend", "infra", "load", "scripts")
+SUITES = ("backend", "backend_contracts", "frontend", "infra", "ios", "load", "scripts")
 
 
 def classify(paths: list[str]) -> dict[str, bool]:
@@ -82,6 +82,8 @@ class TestRules:
             (["backend/README.md"], on("backend", "load")),
             (["frontend/ai.client/src/app/app.ts"], on("frontend")),
             (["frontend/ai.client/src/branding/README.md"], on("frontend")),
+            (["ios/AgentCore/ContentView.swift", "ios/AgentCoreKit/Package.swift"], on("ios")),
+            (["ios/README.md", "ios/Config/Version.xcconfig"], on("ios")),
             (["infrastructure/lib/config.ts"], on("infra", "backend_contracts")),
             (["infrastructure/test/platform-stack.test.ts"], on("infra", "backend_contracts")),
             (["tests/supply_chain/test_backup_coverage.py"], on("backend_contracts")),
@@ -98,6 +100,9 @@ class TestRules:
                 ["frontend/ai.client/src/app/app.ts", "backend/src/x.py", "docs/x.md"],
                 on("frontend", "backend", "load"),
             ),
+            # An iOS change beside a backend one never drags the macOS runner
+            # into the backend suites, nor the backend into the iOS one.
+            (["ios/AgentCore/AppInfo.swift", "backend/src/x.py"], on("ios", "backend", "load")),
             (
                 ["infrastructure/lib/x.ts", "backend/src/x.py"],
                 on("infra", "backend_contracts", "backend", "load"),
