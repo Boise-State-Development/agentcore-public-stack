@@ -1,8 +1,10 @@
 <nav class="flex h-full flex-col">
     @if (showFilter()) {
-        <!-- Title filter over the loaded conversations. Sticky, so it stays in
-             reach after scrolling down to pull more pages; its background
-             matches the sidebar so rows pass beneath it cleanly. -->
+        <!-- Title filter over the loaded conversations, for builds without
+             conversation search (with it on, the Search button replaces this).
+             Sticky, so it stays in reach after scrolling down to pull more
+             pages; its background matches the sidebar so rows pass beneath
+             it cleanly. -->
         <div role="search" class="sidenav-body-enter sticky top-0 z-20 bg-gray-100 pb-2 dark:bg-gray-900" style="animation-delay: 60ms">
             <div class="relative">
                 <ng-icon
@@ -16,7 +18,6 @@
                     [value]="query()"
                     (input)="onQueryInput(filterInput.value)"
                     (keydown)="onQueryKeydown($event)"
-                    [attr.data-search-handoff]="searchOn ? '' : null"
                     placeholder="Search conversations"
                     aria-label="Search conversations by title"
                     autocomplete="off"

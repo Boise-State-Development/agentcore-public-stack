@@ -22,7 +22,6 @@ import { InViewDirective } from './in-view.directive';
 import { ProjectsService } from '../../../../projects/services/projects.service';
 import { FEATURES } from '../../../../services/features';
 import { SessionTitleFilter, UNTITLED_SESSION_TITLE, filterSessionsByTitle } from './session-title-filter';
-import { SearchDialogService } from '../../../search/search-dialog.service';
 
 /**
  * One row of a time bucket: a plain conversation, or the tasks of one project
@@ -77,9 +76,12 @@ export class SessionList {
   private projectsService = inject(ProjectsService);
   /** With Projects off in this build, project tasks list as plain rows (no heading to a dead link). */
   private readonly projectsOn = inject(FEATURES).projects;
-  /** With conversation search on, Enter in the filter box hands its query to the search dialog. */
-  protected readonly searchOn = inject(FEATURES).conversationSearch;
-  private readonly searchDialog = inject(SearchDialogService);
+  /**
+   * The title filter box is the fallback for builds without conversation search.
+   * With search on, the sidebar's Search button (and Cmd/Ctrl+K) covers titles
+   * and more, so the box is not drawn.
+   */
+  private readonly titleFilterOn = !inject(FEATURES).conversationSearch;
 
   /** Project names for the group headings; a project not in the list reads "Project". */
   private readonly projectNames = computed(
@@ -138,8 +140,12 @@ export class SessionList {
   /** What the user typed into the sidebar filter. */
   protected readonly query = this.titleFilter.query;
 
-  /** Whether a query is narrowing the list; while it is, the date grouping is hidden. */
-  readonly isFiltering = this.titleFilter.isActive;
+  /**
+   * Whether a query is narrowing the list; while it is, the date grouping is hidden.
+   * With search on, a query left in session storage from before is ignored: there is
+   * no box to show or clear it.
+   */
+  readonly isFiltering = computed(() => this.titleFilterOn && this.titleFilter.isActive());
 
   /**
    * The loaded conversations whose title matches the query, in recency order.
@@ -157,25 +163,15 @@ export class SessionList {
 
   /** Show the box once there is something to filter, or while a query is held. */
   protected readonly showFilter = computed(
-    () => this.isFiltering() || this.isLoading() || (this.sessions()?.length ?? 0) > 0,
+    () => this.titleFilterOn && (this.isFiltering() || this.isLoading() || (this.sessions()?.length ?? 0) > 0),
   );
 
   protected onQueryInput(value: string): void {
     this.titleFilter.setQuery(value);
   }
 
-  /**
-   * Escape clears a held query; with nothing to clear it is left to whatever sits above.
-   * Enter, with conversation search on, opens the search dialog with the query, so a
-   * quick filter that found nothing becomes a full search in one keystroke.
-   */
+  /** Escape clears a held query; with nothing to clear it is left to whatever sits above. */
   protected onQueryKeydown(event: KeyboardEvent): void {
-    if (event.key === 'Enter' && this.searchOn && !event.isComposing) {
-      event.preventDefault();
-      this.sidenavService.close();
-      void this.searchDialog.open(this.query());
-      return;
-    }
     if (event.key !== 'Escape' || !this.query()) return;
     event.preventDefault();
     event.stopPropagation();
