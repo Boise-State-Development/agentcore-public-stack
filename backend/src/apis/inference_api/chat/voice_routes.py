@@ -29,7 +29,11 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from apis.shared.sessions.metadata import get_session_metadata, store_session_metadata
+from apis.shared.sessions.metadata import (
+    get_session_metadata,
+    session_owned_by_other_user,
+    store_session_metadata,
+)
 from apis.shared.tools.always_on import union_enabled_tools
 from apis.shared.sessions.models import SessionMetadata
 
@@ -429,6 +433,21 @@ async def voice_stream(
     if not user_id:
         await websocket.send_json({"type": "bidi_error", "message": "Authentication required"})
         await websocket.close(code=4001, reason="Authentication required")
+        return
+
+    # Refuse a session id another user already owns, before anything reads
+    # history or writes metadata. `_ensure_session_metadata` below would
+    # otherwise create a second META row on the owner's session id, and that
+    # row is what the text route's ownership guard reads as "this user's
+    # session" — so a voice connect re-opened the cross-user fork that guard
+    # closed. Same 404-shaped answer as the text route: nothing about whether
+    # the session exists. Fails open, like every caller of this check.
+    if await session_owned_by_other_user(session_id, user_id):
+        logger.warning(
+            f"Rejected voice session {_sanitize_log(session_id)} — owned by a different user"
+        )
+        await websocket.send_json({"type": "bidi_error", "message": "Session not found"})
+        await websocket.close(code=4004, reason="Session not found")
         return
 
     # Admin-pinned tools reach voice too (D5). Resolved BEFORE the connection

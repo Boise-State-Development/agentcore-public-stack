@@ -115,3 +115,70 @@ class TestDebugEndpoints:
         assert result["status"] == "stopped"
         mock_agent.stop.assert_called_once()
         assert "sess-stop" not in _active_sessions
+
+
+class TestVoiceSessionOwnership:
+    """A voice connect must not open another user's session id.
+
+    `_ensure_session_metadata` creates a META row for the caller on whatever
+    session id the config frame names. On an id another user owns, that row is
+    a cross-user fork, and the text route's ownership guard then reads it as
+    the caller's own session and lets their next text turn through.
+    """
+
+    @staticmethod
+    def _websocket(session_id: str, user_id: str) -> MagicMock:
+        ws = MagicMock()
+        ws.headers = {}
+        ws.accept = AsyncMock()
+        ws.send_json = AsyncMock()
+        ws.close = AsyncMock()
+        ws.receive_json = AsyncMock(
+            return_value={"type": "config", "session_id": session_id, "user_id": user_id}
+        )
+        return ws
+
+    @pytest.mark.asyncio
+    async def test_session_owned_by_another_user_is_refused_before_anything_runs(self):
+        from apis.inference_api.chat import voice_routes
+
+        ws = self._websocket("owners-session", "intruder")
+        with patch.object(
+            voice_routes, "session_owned_by_other_user", new=AsyncMock(return_value=True)
+        ) as owned, patch.object(
+            voice_routes, "_ensure_session_metadata", new=AsyncMock()
+        ) as ensure, patch.object(
+            voice_routes, "_get_voice_agent_class"
+        ) as agent_class, patch.object(
+            voice_routes, "_always_on_tool_ids_for_voice", new=AsyncMock(return_value=[])
+        ):
+            await voice_routes.voice_stream(ws)
+
+        owned.assert_awaited_once_with("owners-session", "intruder")
+        ensure.assert_not_awaited()
+        agent_class.assert_not_called()
+        ws.close.assert_awaited_once()
+        assert ws.close.await_args.kwargs["code"] == 4004
+        assert "owners-session" not in voice_routes._active_sessions
+
+    @pytest.mark.asyncio
+    async def test_own_or_new_session_proceeds_to_the_agent(self):
+        from apis.inference_api.chat import voice_routes
+
+        class _Stop(Exception):
+            pass
+
+        ws = self._websocket("my-session", "owner")
+        with patch.object(
+            voice_routes, "session_owned_by_other_user", new=AsyncMock(return_value=False)
+        ), patch.object(
+            voice_routes, "_get_voice_agent_class", side_effect=_Stop
+        ) as agent_class, patch.object(
+            voice_routes, "_always_on_tool_ids_for_voice", new=AsyncMock(return_value=[])
+        ):
+            try:
+                await voice_routes.voice_stream(ws)
+            except _Stop:
+                pass
+
+        agent_class.assert_called_once()
