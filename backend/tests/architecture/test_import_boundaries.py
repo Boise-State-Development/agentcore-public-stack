@@ -222,15 +222,13 @@ class TestScheduledRunsLeanImageIsImportable:
 class TestAppApiDoesNotImportInferenceApi:
     """app_api must not import from inference_api.
 
-    The one exception is the assistants route that calls inference_api
-    for test-chat functionality — this is a known coupling that should
-    eventually be refactored into a shared service.
+    The one remaining exception is the title-generation proxy in
+    ``app_api/chat/routes.py`` — a known coupling that should eventually be
+    refactored into a shared service.
     """
 
     # Files that are allowed to import from inference_api (known exceptions)
     _ALLOWED_FILES = {
-        # Assistants test-chat calls the inference streaming endpoint directly
-        Path("apis/app_api/assistants/routes.py"),
         # Chat routes proxy to inference_api (BFF pattern) — tracked in issue #106
         Path("apis/app_api/chat/routes.py"),
     }

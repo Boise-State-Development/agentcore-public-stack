@@ -23,6 +23,10 @@ For narrative release notes written for operators and product owners, see [RELEA
 
 - **Conversations are kept for 365 days by default, up from 90**, and the period is now configurable with `CDK_CONVERSATION_RETENTION_DAYS` (minimum 3; AgentCore Memory stops at 365 even when it is set higher). Message text lives only in AgentCore Memory events, so before this a conversation older than 90 days stayed in the sidebar but opened with no messages. The change is an in-place update to the Memory resource; it does not replace it. Long-term memory records are unaffected (#1380, `docs/specs/conversation-search.md` §3)
 
+### 🗑️ Removed
+
+- **`POST /assistants/{id}/test-chat`** — the pre-Agent-Designer RAG test chat. Nothing has called it since the SPA's `TestChatService` was deleted in February (the Designer preview and the marketplace test drive both stream through `/invocations`), and dev's app-api and CloudFront access logs show no requests in the last 30 days. It was the last reason `app_api` imported the inference-api agent factory (`get_agent`) into its own process, so the assistants router drops off the import-boundary allow-list. It also accepted a client-supplied `session_id` with only an assistant-permission check and persisted turns to AgentCore Memory under whatever id the caller chose. `AssistantTestChatRequest` is removed from `apis.shared.assistants`. A client still calling the path now gets a 404
+
 ### 🐛 Fixed
 
 - **A failed turn now meters the model calls it completed.** A turn that ended in an error (a force-stop, a provider fault after retries, a max_tokens truncation, a coordinator exception) skipped every cost write. The provider billed its successful calls, but the session's `totalCost` and `messageCount` stayed at 0 and the user's quota never counted them. Each call that reported usage now gets its `C#` row, session aggregates and cost-summary update, and the session's activity advances. A call that failed before reporting usage is still not recorded, so a turn that fails on its first call writes no cost

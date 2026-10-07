@@ -3,31 +3,22 @@
 Provides endpoints for managing AI assistants (CRUD operations).
 """
 
-import asyncio
-import json
 import logging
-import uuid
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import StreamingResponse
 
 from apis.app_api.agent_designer.services.binding_validation import (
     BindingValidationError,
     validate_agent_write,
 )
 from apis.app_api.agent_designer.services.agent_deletion import delete_owned_agent
-from apis.app_api.documents.services.document_service import list_assistant_documents
-from apis.inference_api.chat.routes import stream_conversational_message
-from apis.inference_api.chat.service import get_agent
 from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.models import User
-from apis.shared.errors import ErrorCode, build_conversational_error_event
 from apis.shared.assistants.models import (
     AssistantResponse,
     AssistantSharesResponse,
     AssistantsListResponse,
-    AssistantTestChatRequest,
     CreateAssistantDraftRequest,
     CreateAssistantRequest,
     ShareAssistantRequest,
@@ -53,8 +44,6 @@ from apis.shared.assistants.service import (
     update_assistant,
     update_share_permission,
 )
-from apis.shared.assistants.kb_access import granted
-from apis.shared.assistants.rag_service import augment_prompt_with_context, resolve_context_cap, search_assistant_knowledgebase_with_formatting
 
 logger = logging.getLogger(__name__)
 
@@ -431,158 +420,6 @@ async def delete_assistant_endpoint(assistant_id: str, current_user: User = Depe
     except Exception as e:
         logger.error(f"Error deleting assistant: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to delete assistant: {str(e)}")
-
-
-@router.post("/{assistant_id}/test-chat")
-async def test_chat_endpoint(assistant_id: str, request: AssistantTestChatRequest, current_user: User = Depends(get_current_user_from_session)):
-    """
-    Test chat endpoint for assistants with RAG functionality.
-
-    This endpoint allows users to test their assistant's RAG capabilities
-    by querying the vector store and getting responses augmented with
-    retrieved context. Messages are ephemeral and not persisted.
-
-    Requires:
-    - Assistant must exist and be owned by the user
-    - Assistant must have at least one processed document (status='complete')
-
-    Args:
-        assistant_id: Assistant identifier from URL path
-        request: AssistantTestChatRequest with message and optional session_id
-        current_user: Authenticated user from JWT token (injected by dependency)
-
-    Returns:
-        StreamingResponse with SSE events (same format as main chat)
-
-    Raises:
-        HTTPException:
-            - 401 if not authenticated
-            - 404 if assistant not found or not owned by user
-            - 400 if assistant has no processed documents
-            - 500 if server error
-    """
-    user_id = current_user.user_id
-
-    logger.info("POST /assistants/{assistant_id}/test-chat")
-
-    try:
-        # 1. Resolve permission — owner or editor may test-chat (editors need to preview their edits)
-        assistant, permission = await resolve_assistant_permission(
-            assistant_id=assistant_id, user_id=user_id, user_email=current_user.email
-        )
-
-        if not assistant:
-            raise HTTPException(status_code=404, detail=f"Assistant not found: {assistant_id}")
-        if permission not in ("owner", "editor"):
-            raise HTTPException(
-                status_code=403, detail="You do not have permission to test-chat this assistant"
-            )
-
-        # 2. Check if assistant has processed documents (use the real owner_id)
-        documents, _ = await list_assistant_documents(
-            assistant_id=assistant_id,
-            owner_id=assistant.owner_id,
-            limit=100,  # Check up to 100 documents
-        )
-
-        processed_documents = [doc for doc in documents if doc.status == "complete"]
-        if not processed_documents:
-            raise HTTPException(status_code=400, detail="Assistant has no processed documents. Please upload and process documents before testing.")
-
-        # 3. Generate session_id if not provided (for ephemeral chat)
-        session_id = request.session_id or f"test-{uuid.uuid4().hex[:12]}"
-
-        # 4. Search vector store for relevant context
-        # The permission resolved in step 1 is handed to the facade rather than
-        # re-resolved there (Requirement 25.1): one lookup, and the grant the
-        # retrieval runs under is provably the one this route checked.
-        context_chunks = await search_assistant_knowledgebase_with_formatting(
-            assistant_id=assistant_id,
-            query=request.message,
-            top_k=5,
-            access=granted(assistant_id, user_id, permission),
-        )
-
-        # 5. Augment user message with retrieved context (engine-aware cap:
-        # managed 8,000, legacy 2,000 — Requirement 3.2 / HANDOFF §5.40).
-        cap = resolve_context_cap(assistant_id)
-        augmented_message = augment_prompt_with_context(user_message=request.message, context_chunks=context_chunks, max_context_length=cap)
-
-        # 6. Create agent with assistant's instructions as system prompt
-        agent = await get_agent(
-            session_id=session_id,
-            user_id=user_id,
-            enabled_tools=None,  # No tools for test chat
-            system_prompt=assistant.instructions,  # Use assistant's custom instructions
-            caching_enabled=False,  # Disable caching for test chat
-        )
-
-        # 7. Stream response using existing infrastructure
-        async def stream_response():
-            # Send debug event with RAG context information
-            debug_data = {
-                "type": "rag_debug",
-                "chunk_count": len(context_chunks),
-                "chunks": [
-                    {
-                        "index": i + 1,
-                        "text": chunk.get("text", "")[:500] + ("..." if len(chunk.get("text", "")) > 500 else ""),  # Truncate to 500 chars
-                        "distance": chunk.get("distance"),
-                        "key": chunk.get("key", ""),
-                        "source": chunk.get("metadata", {}).get("source", "unknown"),
-                    }
-                    for i, chunk in enumerate(context_chunks)
-                ],
-            }
-            yield f"event: debug\ndata: {json.dumps(debug_data)}\n\n"
-
-            try:
-                stream_iterator = agent.stream_async(augmented_message, session_id=session_id, files=None)
-
-                # Add timeout to prevent hanging streams
-                async with asyncio.timeout(600):  # 10 minutes
-                    async for event in stream_iterator:
-                        yield event
-
-            except asyncio.TimeoutError:
-                logger.error(f"⏱️ Stream timeout for test chat session {session_id}")
-                error_event = build_conversational_error_event(
-                    code=ErrorCode.TIMEOUT, error=Exception("Stream processing time exceeded 600 seconds"), session_id=session_id, recoverable=True
-                )
-                async for event in stream_conversational_message(
-                    message=error_event.message,
-                    stop_reason="error",
-                    metadata_event=error_event,
-                    session_id=session_id,
-                    user_id=user_id,
-                    user_input=request.message,
-                ):
-                    yield event
-
-            except Exception as e:
-                logger.error(f"Error during test chat streaming: {e}", exc_info=True)
-                error_event = build_conversational_error_event(code=ErrorCode.STREAM_ERROR, error=e, session_id=session_id, recoverable=True)
-                async for event in stream_conversational_message(
-                    message=error_event.message,
-                    stop_reason="error",
-                    metadata_event=error_event,
-                    session_id=session_id,
-                    user_id=user_id,
-                    user_input=request.message,
-                ):
-                    yield event
-
-        return StreamingResponse(
-            stream_response(),
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "X-Session-ID": session_id},
-        )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error in test_chat_endpoint: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to process test chat: {str(e)}")
 
 
 @router.post("/{assistant_id}/shares", response_model=AssistantSharesResponse)

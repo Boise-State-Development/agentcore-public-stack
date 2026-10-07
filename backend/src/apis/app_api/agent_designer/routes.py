@@ -10,9 +10,8 @@ Gating: the router is mounted unconditionally but every route depends on
 behaves as if unmounted while the feature ships incrementally. Auth is the standard SPA
 cookie dependency per the CLAUDE.md app-api rule.
 
-Deliberately excluded in Phase 1: ``test-chat`` (the only reason the assistants router is
-on the architecture import-boundary allow-list — aliasing it would force a second
-exception) and document sub-routes. Those stay on ``/assistants/*``. ``GET /agents`` lists
+Deliberately excluded in Phase 1: the document sub-routes, which stay on
+``/assistants/*``. ``GET /agents`` lists
 the caller's own + shared-with-them agents; ``include_public``/pagination parity is a
 Phase-4 concern when the Designer consumes it.
 """
