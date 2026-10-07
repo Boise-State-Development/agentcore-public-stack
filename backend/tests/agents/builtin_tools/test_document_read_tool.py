@@ -69,8 +69,22 @@ class TestTool:
         ))
         monkeypatch.setattr(f"{TOOL_MODULE}.read_document", read)
         result = await _call(make_document_read_tool("s1", "u1"), upload_id="up-1", page_range="4-7", max_pages=6)
-        read.assert_awaited_once_with("u1", "s1", "up-1", page_range="4-7", pattern=None, max_pages=6, offset=0)
+        read.assert_awaited_once_with(
+            "u1", "s1", "up-1", page_range="4-7", pattern=None, max_pages=6, offset=0, text_only=False
+        )
         assert result["content"] == [{"json": {"pages_returned": 4}}, block]
+
+    @pytest.mark.asyncio
+    async def test_text_only_tool_reads_text_with_an_identical_spec(self, monkeypatch):
+        # A TEXT-only model gets page text, never a document block — and the
+        # same tool spec, so the flag cannot change toolConfig on its own.
+        read = AsyncMock(return_value=DocumentReadResult(mode="pages_text", payload={"page_texts": []}))
+        monkeypatch.setattr(f"{TOOL_MODULE}.read_document", read)
+        text_only = make_document_read_tool("s1", "u1", text_only=True)
+        result = await _call(text_only, upload_id="up-1", page_range="4-7")
+        assert read.await_args.kwargs["text_only"] is True
+        assert result["content"] == [{"json": {"page_texts": []}}]
+        assert text_only.tool_spec == make_document_read_tool("s1", "u1").tool_spec
 
     @pytest.mark.asyncio
     async def test_empty_strings_mean_absent_arguments(self, monkeypatch):

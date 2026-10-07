@@ -895,6 +895,18 @@ class TestFormatForceStopMessage:
         assert "remove the image" not in message
         assert recoverable is True
 
+    def test_model_does_not_support_the_image_content_block(self):
+        # zai.glm-5's actual wording (measured 2026-10-06): "the" sits between
+        # "support" and "image", which the older substring check missed.
+        reason = (
+            "An error occurred (ValidationException) when calling the "
+            "ConverseStream operation: This model doesn't support the image content block"
+        )
+        message, recoverable = _format_force_stop_message(reason)
+
+        assert "can't read attached images" in message
+        assert recoverable is True
+
     def test_document_size_limit_classic_message(self):
         reason = (
             "ValidationException: The provided document exceeds the maximum "

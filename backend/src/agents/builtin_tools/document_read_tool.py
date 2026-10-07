@@ -105,8 +105,14 @@ def record_document_read(result: DocumentReadResult) -> None:
         logger.debug("document_read EMF skipped: %s", e)
 
 
-def make_document_read_tool(session_id: str, user_id: str):
-    """Create a ``document_read`` tool bound to the given identity."""
+def make_document_read_tool(session_id: str, user_id: str, *, text_only: bool = False):
+    """Create a ``document_read`` tool bound to the given identity.
+
+    ``text_only`` is for a model whose catalog row declares TEXT input only:
+    page-range reads return text instead of a native document block. The
+    tool's spec (name, docstring, parameters) is identical either way, so the
+    flag never changes ``toolConfig``.
+    """
     if not session_id or not user_id:
         raise ValueError("document_read requires a session_id and a user_id")
 
@@ -177,6 +183,7 @@ def make_document_read_tool(session_id: str, user_id: str):
                     pattern=pattern or None,
                     max_pages=max_pages,
                     offset=offset,
+                    text_only=text_only,
                 )
         except WorkspaceStorageNotConfiguredError:
             return _error(_NO_STORAGE_MESSAGE)

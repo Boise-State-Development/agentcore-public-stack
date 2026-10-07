@@ -185,6 +185,31 @@ class TestPdf:
         assert "page k is original page 4 + k - 1" in result.payload["page_numbering"]
 
     @pytest.mark.asyncio
+    async def test_text_only_page_range_returns_text_and_no_document_block(self, stored):
+        # A TEXT-only model (zai.glm-5) rejects any document block, so the
+        # same range comes back as the pages' text layers instead.
+        stored(_meta(), build_pdf(PAGES))
+        result = await dr.read_document("u1", "s1", "up-1", page_range="4-5", text_only=True)
+
+        assert result.mode == "pages_text"
+        assert result.document_block is None
+        assert result.extra_blocks == []
+        assert result.pages_returned == 2
+        assert result.payload["page_texts"] == [
+            {"page": 4, "text": "Page 4 alpha beta"},
+            {"page": 5, "text": "Page 5 alpha beta"},
+        ]
+        assert result.bytes_returned == len(b"Page 4 alpha beta") * 2
+
+    @pytest.mark.asyncio
+    async def test_text_only_page_range_keeps_the_max_pages_cap(self, stored):
+        stored(_meta(), build_pdf(PAGES))
+        result = await dr.read_document("u1", "s1", "up-1", page_range="1-12", max_pages=3, text_only=True)
+        assert [p["page"] for p in result.payload["page_texts"]] == [1, 2, 3]
+        assert result.payload["truncated_to_max_pages"] is True
+        assert result.payload["next_start"] == 4
+
+    @pytest.mark.asyncio
     async def test_max_pages_caps_a_range_and_points_at_the_continuation(self, stored):
         stored(_meta(), build_pdf(PAGES))
         result = await dr.read_document("u1", "s1", "up-1", page_range="1-12", max_pages=3)

@@ -47,7 +47,12 @@ from uuid import UUID
 
 from strands.types.exceptions import MaxTokensReachedException
 
-from apis.shared.errors import StreamErrorEvent, ErrorCode, is_service_unavailable_error
+from apis.shared.errors import (
+    ErrorCode,
+    StreamErrorEvent,
+    is_service_unavailable_error,
+    unsupported_attachment_message,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -398,31 +403,14 @@ def _format_force_stop_message(reason: Any) -> tuple[str, bool]:
             True,
         )
 
-    # Some Bedrock-hosted models (e.g. gpt-oss-120b) reject any document or
-    # image content block outright with "This model doesn't support
-    # documents." Check this BEFORE the size-limit branch — the AWS message
-    # contains "ValidationException" + "documents" and would otherwise be
-    # misclassified as a 4.5 MB overflow.
-    #
-    # Copy notes: keep the actionable advice deployment-agnostic — no brand
-    # names (model lineups change), no UI affordance names (might drift),
-    # no references to optional tools like Spreadsheet Analysis (not
-    # guaranteed enabled across forks/deployments).
-    if "doesn't support document" in reason_lower or "does not support document" in reason_lower:
-        return (
-            "⚠️ The selected model can't read attached files.\n\n"
-            "To work with this file, switch to a model that supports "
-            "documents.",
-            True,
-        )
-
-    if "doesn't support image" in reason_lower or "does not support image" in reason_lower:
-        return (
-            "⚠️ The selected model can't read attached images.\n\n"
-            "To work with this image, switch to a model that supports "
-            "images.",
-            True,
-        )
+    # Some Bedrock-hosted models (e.g. gpt-oss-120b, zai.glm-5) reject any
+    # document or image content block outright. Check this BEFORE the
+    # size-limit branch — the AWS message contains "ValidationException" +
+    # "documents" and would otherwise be misclassified as a 4.5 MB overflow.
+    # The matcher and copy are shared with the raised-exception path.
+    unsupported = unsupported_attachment_message(reason_lower)
+    if unsupported:
+        return unsupported, True
 
     # Bedrock ConverseStream rejects document content blocks over ~4.5 MB
     # internal size. Triggered most often by XLSX files that inflate

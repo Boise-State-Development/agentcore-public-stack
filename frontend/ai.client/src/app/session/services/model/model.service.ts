@@ -22,6 +22,22 @@ export function isSpeechModel(model: { outputModalities?: string[] }): boolean {
   return (model.outputModalities ?? []).some((m) => m.toUpperCase() === 'SPEECH');
 }
 
+/**
+ * A row that declares TEXT input and nothing else: the backend converts its
+ * documents to text and drops its images (`is_text_only_model` in
+ * `inference_api/chat/routes.py` — keep the two in step).
+ *
+ * Keyed on TEXT-*only*, never on a missing entry: Claude rows declare
+ * `['TEXT', 'IMAGE']` with no DOCUMENT and read PDFs natively. An empty or
+ * absent list is not text-only either.
+ */
+export function isTextOnlyModel(model: { inputModalities?: string[] } | null | undefined): boolean {
+  const declared = new Set(
+    (model?.inputModalities ?? []).map((m) => m.trim().toUpperCase()).filter(Boolean),
+  );
+  return declared.size === 1 && declared.has('TEXT');
+}
+
 @Injectable({
   providedIn: 'root'
 })
@@ -48,7 +64,9 @@ export class ModelService {
     modelName: 'System Default',
     provider: 'bedrock',
     providerName: 'Anthropic',
-    inputModalities: ['TEXT'],
+    // Haiku 4.5 reads images (and PDFs natively). A bare ['TEXT'] would mark the
+    // fallback text-only and warn about attachments it handles fine.
+    inputModalities: ['TEXT', 'IMAGE'],
     outputModalities: ['TEXT'],
     maxInputTokens: 200000,
     maxOutputTokens: 4096,
