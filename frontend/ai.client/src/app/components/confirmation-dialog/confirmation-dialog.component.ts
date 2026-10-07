@@ -101,7 +101,7 @@ export class ConfirmationDialogComponent {
       'rounded-2xl px-4 py-2 text-sm/6 font-semibold text-white focus-visible:outline-2 focus-visible:outline-offset-2';
 
     if (this.data.destructive) {
-      return `${baseClasses} bg-state-danger-600 hover:bg-state-danger-700 focus-visible:outline-state-danger-500 dark:bg-state-danger-500 dark:hover:bg-state-danger-600`;
+      return `${baseClasses} bg-state-danger-600 hover:bg-state-danger-700 focus-visible:outline-state-danger-500`;
     }
 
     return `${baseClasses} bg-primary-accessible hover:brightness-95 focus-visible:outline-primary-500`;
