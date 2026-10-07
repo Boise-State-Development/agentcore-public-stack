@@ -17,8 +17,8 @@ export type MemoryLinkPickerResult = string | undefined;
 /**
  * Pick a file to link to with `[[name]]` (shared-projects 2.8b).
  *
- * Open it with `autoFocus: '#memory-link-filter'` and an `ariaLabel`: CDK's container is
- * the outer dialog, and by default it focuses the first tabbable, the shell's Close button.
+ * Open it with `autoFocus: '#memory-link-filter'`: by default CDK focuses the first
+ * tabbable, which is the shell's Close button.
  *
  * The APG combobox pattern: the filter keeps focus while ArrowUp and ArrowDown move the
  * active option (`aria-activedescendant`), Enter picks it, Escape closes. The match count

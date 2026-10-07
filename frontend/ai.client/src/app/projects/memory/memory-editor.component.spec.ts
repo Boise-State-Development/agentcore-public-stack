@@ -153,7 +153,7 @@ describe('MemoryEditorComponent', () => {
     area.setSelectionRange(0, 0);
     button(/Insert a link in item 3/).click();
     await settle();
-    expect(dialog.open).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ ariaLabel: 'Link to a file', autoFocus: '#memory-link-filter' }));
+    expect(dialog.open).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ autoFocus: '#memory-link-filter' }));
     expect(areas()[2].value).toBe('[[rates]]Section IDs are CRN plus term.');
   });
 
