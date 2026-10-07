@@ -19,10 +19,11 @@ import logging
 import os
 import threading
 import time
-from typing import Any, Awaitable, Callable, Optional, Sequence, Set
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Awaitable, Callable, List, Optional, Sequence, Set
 
 from apis.shared.aws_clients import get_client
-from apis.shared.conversation_archive.documents import ArchivedTurn, session_prefix
+from apis.shared.conversation_archive.documents import ArchivedTurn, parse_archive_key, session_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +145,55 @@ def delete_session_archive(user_id: str, session_id: str) -> int:
     if deleted:
         logger.info("Deleted %d archived turn(s) for a deleted session", deleted)
     return deleted
+
+
+#: Parallel GETs when reading a session back. A session is tens of turns; this
+#: keeps a long one from taking a round trip per turn in series.
+_READ_WORKERS = 8
+
+
+def read_session_turns(user_id: str, session_id: str) -> List[ArchivedTurn]:
+    """Every archived turn of one session, in conversation order. Never raises.
+
+    The messages route's fallback for a session whose Memory events have
+    expired. An object whose body names a different user, session or turn
+    than its key is skipped, the same refusal the index consumer makes, so a
+    malformed write can never show one user's words in another's session.
+    Any failure reads as "nothing archived": the caller already has an empty
+    history to show.
+    """
+    bucket = archive_bucket_name()
+    if not bucket:
+        return []
+    try:
+        prefix = session_prefix(user_id, session_id)
+    except ValueError:
+        return []
+    s3 = get_client("s3", _region())
+    try:
+        keys: List[str] = []
+        for page in s3.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=prefix):
+            keys.extend(obj["Key"] for obj in page.get("Contents", []))
+    except Exception:  # noqa: BLE001 — see docstring
+        logger.warning("Conversation archive listing failed", exc_info=True)
+        return []
+    if not keys:
+        return []
+
+    def fetch(key: str) -> Optional[ArchivedTurn]:
+        try:
+            turn = ArchivedTurn.from_json(s3.get_object(Bucket=bucket, Key=key)["Body"].read())
+        except Exception:  # noqa: BLE001 — one unreadable turn must not hide the rest
+            logger.warning("Conversation archive object unreadable; skipped", exc_info=True)
+            return None
+        if parse_archive_key(key) != (turn.user_id, turn.session_id, turn.message_index):
+            logger.warning("Conversation archive object does not match its key; skipped")
+            return None
+        return turn
+
+    with ThreadPoolExecutor(max_workers=min(_READ_WORKERS, len(keys))) as pool:
+        turns = [turn for turn in pool.map(fetch, keys) if turn is not None]
+    return sorted(turns, key=lambda turn: turn.message_index)
 
 
 async def write_turns(turns: Sequence[ArchivedTurn]) -> int:

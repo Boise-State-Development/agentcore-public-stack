@@ -10,6 +10,7 @@ from apis.shared.conversation_archive import (
     build_turn,
     delete_session_archive,
     put_turns,
+    read_session_turns,
     reset_bucket_cache,
 )
 
@@ -139,3 +140,40 @@ def test_delete_with_an_unusable_id_does_nothing(s3, monkeypatch):
     assert delete_session_archive("u1", "") == 0
     assert delete_session_archive("u1/..", "x") == 0
     assert len(_keys(s3)) == 1
+
+
+# ── reading a session back (the messages-route fallback) ─────────────────
+
+
+def test_read_returns_one_sessions_turns_in_order(s3, monkeypatch):
+    monkeypatch.setenv("CONVERSATION_ARCHIVE_BUCKET_NAME", BUCKET)
+    put_turns([_turn("s1", 12), _turn("s1", 0), _turn("s1", 4), _turn("s10", 0), _turn("s1", 0, user_id="u2")])
+
+    turns = read_session_turns("u1", "s1")
+
+    assert [t.message_index for t in turns] == [0, 4, 12]
+    assert turns[1].user_text == "question 4"
+
+
+def test_read_skips_an_object_whose_body_names_another_owner(s3, monkeypatch):
+    """Same refusal as the index consumer: a body that disagrees with its key is never shown."""
+    monkeypatch.setenv("CONVERSATION_ARCHIVE_BUCKET_NAME", BUCKET)
+    put_turns([_turn("s1", 0)])
+    s3.put_object(Bucket=BUCKET, Key="conversations/u1/s1/000002.json", Body=_turn("s1", 2, user_id="u2").to_json())
+    s3.put_object(Bucket=BUCKET, Key="conversations/u1/s1/000004.json", Body=b"not json")
+
+    assert [t.message_index for t in read_session_turns("u1", "s1")] == [0]
+
+
+def test_read_without_a_bucket_or_with_a_bad_id_is_empty(s3, monkeypatch):
+    monkeypatch.delenv("CONVERSATION_ARCHIVE_BUCKET_NAME", raising=False)
+    monkeypatch.delenv("PROJECT_PREFIX", raising=False)
+    assert read_session_turns("u1", "s1") == []
+    monkeypatch.setenv("CONVERSATION_ARCHIVE_BUCKET_NAME", BUCKET)
+    assert read_session_turns("u1/..", "s1") == []
+
+
+def test_read_failure_is_swallowed(aws, monkeypatch):
+    monkeypatch.setenv("CONVERSATION_ARCHIVE_BUCKET_NAME", "no-such-bucket")
+    monkeypatch.setenv("AWS_REGION", REGION)
+    assert read_session_turns("u1", "s1") == []
