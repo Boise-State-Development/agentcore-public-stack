@@ -91,6 +91,31 @@ def test_message_text_keeps_prose_and_drops_tool_and_reasoning_blocks():
     assert message_text(msg) == "First.\n\nSecond."
 
 
+def test_injected_long_term_memory_is_not_the_users_words():
+    """Found on dev (#1463): the runtime inserts retrieved memory as the user
+    message's first block, and every archived turn began with it."""
+    injected = {
+        "role": "user",
+        "content": [
+            {"text": '<user_context>{"preference": "Prefers concise output"}\n'
+                     "Favorite color is chartreuse.</user_context>"},
+            {"text": "Reply with exactly the single word PONG."},
+        ],
+    }
+    assert message_text(injected) == "Reply with exactly the single word PONG."
+    turns = split_turns([injected, _assistant("PONG")], user_id="u", session_id="s", created_at="t")
+    assert [t.user_text for t in turns] == ["Reply with exactly the single word PONG."]
+
+
+def test_only_a_whole_context_block_is_dropped():
+    # The user quoting the tag mid-sentence keeps their words; an assistant
+    # block is never filtered.
+    quoted = _user("why does my prompt contain <user_context>x</user_context> sometimes?")
+    assert "user_context" in message_text(quoted)
+    assistant = {"role": "assistant", "content": [{"text": "<user_context>x</user_context>"}]}
+    assert message_text(assistant) == "<user_context>x</user_context>"
+
+
 def test_split_turns_indexes_each_turn_at_its_user_message():
     messages = [
         _user("find the syllabus"),         # 0  turn 1
