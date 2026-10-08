@@ -223,6 +223,66 @@ describe('MemoryMaintenanceComponent', () => {
       expect(el.textContent).not.toContain('Tidied up');
     });
 
+    describe('a split (2.6c)', () => {
+      const split = {
+        type: 'split' as const,
+        sources: [1, 2, 3, 4, 5].map(i => ({ anchor: `s${i}`, text: `SIS fact ${i}.` })),
+        text: 'Moved to [[sis-conventions]]: SIS rules',
+        newSlug: 'sis-conventions',
+        description: 'SIS rules',
+        why: 'About the SIS',
+      };
+      const splitRun = (overrides: Partial<MaintenanceRun> = {}) => applied({
+        results: [
+          { slug: 'canvas', outcome: 'applied', planned: 2, kept: 2, dropped: 0, version: 2, ops: [merge, split] },
+          { slug: 'sis-conventions', outcome: 'created', planned: 0, kept: 0, dropped: 0, version: 1, splitFrom: 'canvas' },
+        ],
+        ...overrides,
+      });
+
+      it('names the new file and what moved into it', async () => {
+        api.maintenanceRuns.mockReturnValue(of({ runs: [splitRun()] }));
+        const { el } = await render(true, 'mine');
+        expect(el.textContent).toContain('Tidied up your memory: 2 changes to 1 file, moving items into 1 new file.');
+        const details = el.querySelector('details') as HTMLDetailsElement;
+        expect(details.textContent).toContain('Moved 5 items into a new file, “sis-conventions”');
+        expect(details.textContent).toContain('A new file, with the items moved from “canvas”.');
+        const links = [...details.querySelectorAll('a')].map(a => a.textContent?.trim());
+        expect(links).toEqual(['canvas', 'sis-conventions']);
+      });
+
+      it('undoes the split whole, or says why both files were left', async () => {
+        api.maintenanceRuns.mockReturnValue(of({ runs: [splitRun()] }));
+        api.undoMaintenance.mockReturnValue(of(splitRun({
+          undoneAt: '2026-10-08T13:00:00Z',
+          undoableUntil: null,
+          results: [
+            { slug: 'canvas', outcome: 'applied', planned: 2, kept: 2, dropped: 0, ops: [merge, split], undo: 'restored', undoVersion: 3 },
+            { slug: 'sis-conventions', outcome: 'created', planned: 0, kept: 0, dropped: 0, splitFrom: 'canvas', undo: 'removed' },
+          ],
+        })));
+        const { el, tick } = await render(true, 'mine');
+        ([...el.querySelectorAll('button')].find(b => b.textContent?.includes('Undo')) as HTMLButtonElement).click();
+        await tick(0);
+        expect(el.textContent).toContain('Undone: 1 file is back as before.');
+        expect(el.textContent).toContain('Taken away again: its items are back in “canvas”.');
+
+        api.undoMaintenance.mockReturnValue(of(splitRun({
+          undoneAt: '2026-10-08T13:00:00Z',
+          undoableUntil: null,
+          results: [
+            { slug: 'canvas', outcome: 'applied', planned: 2, kept: 2, dropped: 0, ops: [merge, split], undo: 'changed' },
+            { slug: 'sis-conventions', outcome: 'created', planned: 0, kept: 0, dropped: 0, splitFrom: 'canvas', undo: 'changed' },
+          ],
+        })));
+        const second = await render(true, 'mine');
+        ([...second.el.querySelectorAll('button')].find(b => b.textContent?.includes('Undo')) as HTMLButtonElement).click();
+        await second.tick(0);
+        expect(second.el.textContent).toContain('Nothing was undone');
+        expect(second.el.textContent).toContain('Left as it is, because “sis-conventions”, which its items moved to, changed since.');
+      });
+    });
+
     it('says why an undo was refused', async () => {
       api.maintenanceRuns.mockReturnValue(of({ runs: [applied()] }));
       api.undoMaintenance.mockReturnValue(

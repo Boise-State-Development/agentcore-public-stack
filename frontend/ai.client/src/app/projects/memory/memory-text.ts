@@ -1,4 +1,4 @@
-import { ItemProvenance, MemoryEntry } from '../models/project.model';
+import { ItemProvenance, MemoryEntry, ReplacedMemoryItem } from '../models/project.model';
 
 /**
  * Plain helpers for the Memory tab (shared-projects 2.8): reading memory files as items,
@@ -149,6 +149,8 @@ export interface ProvenanceLine {
   at: string;
   /** The caller's own task it came from, which they can open. */
   sessionId: string | null;
+  /** The file a tidy-up's split moved it from (2.6c). */
+  movedFrom: string | null;
 }
 
 /**
@@ -160,7 +162,7 @@ export function describeProvenance(
   people: Record<string, string>,
   myEmail: string | null,
 ): ProvenanceLine {
-  if (!provenance) return { text: 'Added before item history was kept', at: '', sessionId: null };
+  if (!provenance) return { text: 'Added before item history was kept', at: '', sessionId: null, movedFrom: null };
   const me = (myEmail ?? '').toLowerCase();
   const who = (email: string | null | undefined) =>
     !email ? 'someone' : email.toLowerCase() === me ? 'you' : people[email] || email;
@@ -181,7 +183,12 @@ export function describeProvenance(
   }
   const changedBy = provenance.updatedBy || provenance.addedBy;
   const mine = !!me && changedBy?.toLowerCase() === me;
-  return { text: capitalize(text), at, sessionId: mine ? (provenance.sourceSessionId ?? null) : null };
+  return {
+    text: capitalize(text),
+    at,
+    sessionId: mine ? (provenance.sourceSessionId ?? null) : null,
+    movedFrom: provenance.movedFrom ?? null,
+  };
 }
 
 /** Everyone who added, changed, proposed, approved or restored an item in the file. */
@@ -189,11 +196,25 @@ export function contributors(provenances: readonly (ItemProvenance | null | unde
   const seen = new Set<string>();
   for (const p of provenances) {
     if (!p) continue;
-    for (const email of [p.addedBy, p.updatedBy, p.proposedBy, p.approvedBy, p.restoredBy]) {
+    for (const email of [p.addedBy, p.updatedBy, p.proposedBy, p.approvedBy, p.restoredBy, p.movedBy]) {
       if (email) seen.add(email);
     }
   }
   return [...seen];
+}
+
+/**
+ * An item's supersede marker (2.6c): what it replaced, in one phrase, counting only what the
+ * archive holds and the marker shows. A merge's surviving item had its own text rewritten,
+ * and its old wording is in the file's History, not the archive.
+ */
+export function replacedLabel(replaces: readonly ReplacedMemoryItem[]): string {
+  const merged = replaces.filter(r => r.reason === 'merged').length;
+  const superseded = replaces.length - merged;
+  const parts: string[] = [];
+  if (merged) parts.push(merged === 1 ? 'Merged with 1 other item' : `Merged with ${merged} other items`);
+  if (superseded) parts.push(superseded === 1 ? 'Replaces an older item' : `Replaces ${superseded} older items`);
+  return parts.join(' · ');
 }
 
 function capitalize(text: string): string {

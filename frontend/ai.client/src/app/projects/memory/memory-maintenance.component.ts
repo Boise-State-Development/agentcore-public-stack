@@ -35,7 +35,8 @@ interface StatusMessage {
  * maintenance run, and one live line that follows it until it ends.
  *
  * A run reads every file (or one) and merges items that repeat each other, replaces outdated
- * ones and removes ones whose dates have passed.
+ * ones and removes ones whose dates have passed. A file near its size limit may also have a
+ * sub-topic's items moved into a new file (2.6c).
  *
  * - **Project** memory: what it finds waits in the review queue, and nothing changes until an
  *   editor approves, which the confirmation says before anything starts.
@@ -115,7 +116,9 @@ interface StatusMessage {
                         <span class="text-gray-600 dark:text-gray-300">{{ note }}</span>
                       }
                     </p>
-                    @if (file.ops?.length) {
+                    @if (file.outcome === 'created') {
+                      <p class="mt-1 text-gray-600 dark:text-gray-300">A new file, with the items moved from “{{ file.splitFrom }}”.</p>
+                    } @else if (file.ops?.length) {
                       <ul class="mt-1 list-disc space-y-1 pl-5" role="list">
                         @for (op of file.ops; track $index) {
                           <li>{{ describe(op) }}</li>
@@ -173,9 +176,9 @@ export class MemoryMaintenanceComponent {
     return state === 'queued' || state === 'running';
   });
 
-  /** Files the run saved changes to (your own memory). */
+  /** Files the run saved changes to (your own memory), and the files its splits made. */
   protected readonly applied = computed(() =>
-    this.dismissed() ? [] : (this.run()?.results ?? []).filter(r => r.outcome === 'applied'),
+    this.dismissed() ? [] : (this.run()?.results ?? []).filter(r => r.outcome === 'applied' || r.outcome === 'created'),
   );
 
   protected readonly undoableUntil = computed(() => {
@@ -211,7 +214,9 @@ export class MemoryMaintenanceComponent {
       const applied = run.results.filter(r => r.outcome === 'applied');
       if (!applied.length) return { text: `Maintenance found nothing to tidy in ${where}.${tail}`, tone: 'info' };
       const total = applied.reduce((n, r) => n + opCount(r), 0);
-      return { text: `Tidied up ${where}: ${plural(total, 'change')} to ${files(applied.length)}.${tail}`, tone: 'info' };
+      const made = count('created');
+      const moved = made ? `, moving items into ${plural(made, 'new file')}` : '';
+      return { text: `Tidied up ${where}: ${plural(total, 'change')} to ${files(applied.length)}${moved}.${tail}`, tone: 'info' };
     }
     const proposed = count('proposed');
     if (!proposed) return { text: `Maintenance found nothing to tidy in ${where}.${tail}`, tone: 'info' };
@@ -249,7 +254,8 @@ export class MemoryMaintenanceComponent {
             title: slug ? `Tidy up “${slug}”?` : 'Tidy up your memory?',
             message:
               `The assistant reads ${target} in your own memory here, merges items that repeat each other, ` +
-              'replaces ones a newer item updates, and removes ones whose dates have passed. The changes are saved ' +
+              'replaces ones a newer item updates, and removes ones whose dates have passed. A file near its size limit ' +
+              'may have a separate topic moved into a new file. The changes are saved ' +
               'straight away, and you can undo them afterwards. It takes a few minutes.',
             confirmText: 'Start',
           }
@@ -257,7 +263,8 @@ export class MemoryMaintenanceComponent {
             title: slug ? `Tidy up “${slug}”?` : 'Tidy up project memory?',
             message:
               `The assistant reads ${target} and suggests merging items that repeat each other, ` +
-              'replacing ones a newer item updates, and removing ones whose dates have passed. Its suggestions wait in the ' +
+              'replacing ones a newer item updates, removing ones whose dates have passed, and moving a large file’s ' +
+              'separate topics into new files. Its suggestions wait in the ' +
               'review queue: nothing in memory changes until an editor approves them. It takes a few minutes.',
             confirmText: 'Start',
           },
@@ -312,6 +319,7 @@ export class MemoryMaintenanceComponent {
       return `Merged ${op.sources.length} items that said the same thing into “${op.text ?? ''}”`;
     }
     if (op.type === 'supersede') return `Removed “${first?.text ?? ''}”, since the newer “${second?.text ?? ''}” updates it`;
+    if (op.type === 'split') return `Moved ${plural(op.sources.length, 'item')} into a new file, “${op.newSlug ?? ''}”`;
     return `Removed “${first?.text ?? ''}”, whose dates have passed`;
   }
 
@@ -319,17 +327,27 @@ export class MemoryMaintenanceComponent {
     return plural(opCount(file), 'change');
   }
 
-  /** After an undo, what happened to one file. */
+  /**
+   * After an undo, what happened to one file. A split comes undone whole, so a file is left as
+   * it is when the new file its items moved to was changed since, too.
+   */
   protected undoNote(file: MaintenanceFileResult): string | null {
     switch (file.undo) {
       case 'restored':
         return 'Put back as it was.';
-      case 'changed':
+      case 'changed': {
+        const made = (this.run()?.results ?? []).find(r => r.splitFrom === file.slug && r.undo !== 'removed');
+        if (file.outcome === 'applied' && made && made.undo !== 'restored') {
+          return `Left as it is, because “${made.slug}”, which its items moved to, changed since. Its History has the version from before.`;
+        }
         return 'Saved after the tidy-up, so it was left as it is. Its History has the version from before.';
+      }
       case 'missing':
         return 'Deleted since, so there was nothing to put back.';
       case 'failed':
         return 'Couldn’t be put back. Its History has the version from before.';
+      case 'removed':
+        return `Taken away again: its items are back in “${file.splitFrom ?? ''}”.`;
       default:
         return null;
     }
@@ -385,7 +403,8 @@ export class MemoryMaintenanceComponent {
 }
 
 function undoneText(run: MaintenanceRun): string {
-  const undone = run.results.filter(r => r.undo);
+  // A file a split made goes with the file it came from, so only the files the run changed count.
+  const undone = run.results.filter(r => r.undo && r.outcome === 'applied');
   const restored = undone.filter(r => r.undo === 'restored').length;
   const kept = undone.length - restored;
   if (!restored) return 'Nothing was undone: every file was changed or deleted after the tidy-up.';

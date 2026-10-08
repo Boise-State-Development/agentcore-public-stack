@@ -236,6 +236,34 @@ describe('MemoryReviewComponent', () => {
       void el;
     });
 
+    it('shows a split as items moving to a new file, and names the file approval made', async () => {
+      const split = {
+        type: 'split' as const,
+        sources: [1, 2, 3, 4, 5].map(i => ({ anchor: `s000000${i}`, text: `SIS fact ${i}.` })),
+        text: 'Moved to [[sis-conventions]]: SIS rules',
+        newSlug: 'sis-conventions',
+        description: 'SIS rules',
+        why: 'These are about the SIS',
+      };
+      const proposal = { ...COMPACTION, ops: [split] };
+      api.proposals.mockReturnValue(of({ proposals: [proposal] }));
+      api.proposal.mockReturnValue(of({ ...proposal, currentText: null }));
+      api.approveProposal.mockReturnValue(of({ ...proposal, state: 'approved', appliedOps: [0], createdFiles: ['sis-conventions'] }));
+      const { el, button, settle } = await render();
+      const change = el.querySelector('ul[aria-label="Suggested changes"] > li') as HTMLElement;
+      const text = change.textContent?.replace(/\s+/g, ' ') ?? '';
+      expect(text).toContain('Move 5 items to a new file');
+      expect(text).toContain('New file sis-conventions: SIS rules');
+      expect(text).toContain('Moves: SIS fact 1.');
+      expect(text).toContain('A line pointing to sis-conventions');
+      // Moving isn't removing: nothing is struck through.
+      expect(change.querySelector('.line-through')).toBeNull();
+
+      button(/Apply 1 change/).click();
+      await settle();
+      expect(toast.success).toHaveBeenCalledWith('Applied 1 change to “canvas”. Moved items into “sis-conventions”.');
+    });
+
     it('when none of its changes still apply, only declining is left', async () => {
       api.proposal.mockReturnValue(of({ ...COMPACTION, stale: true, currentText: null }));
       const { el, button } = await render();
