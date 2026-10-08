@@ -1,11 +1,12 @@
 """Static policy for Python source executed in the diagram/analysis sandbox.
 
 The diagram and spreadsheet-analysis tools accept user-shaped Python code
-and forward it to AWS Bedrock Code Interpreter. The sandbox is isolated
-(no AWS credentials, no outbound network), but it is still arbitrary code
-execution from the application's perspective: nothing about the system
-prevents a user from asking it to ``import subprocess`` or read files in
-``/etc/``.
+and forward it to AWS Bedrock Code Interpreter. The sandbox is isolated from
+the application: its execution role can only write its own logs. It runs in
+PUBLIC network mode, though, so it has outbound internet access, and it is
+still arbitrary code execution from the application's perspective: nothing
+about the system prevents a user from asking it to ``import subprocess``,
+read files in ``/etc/``, or send the session's files to another host.
 
 This module provides :func:`validate_diagram_code`, a pre-execution gate
 that parses the source with :mod:`ast` and rejects programs that reach

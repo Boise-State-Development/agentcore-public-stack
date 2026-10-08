@@ -166,13 +166,27 @@ async def test_close_is_idempotent_and_fails_pending_commands() -> None:
         "http://localhost:8000/admin",
         "http://127.0.0.1/",
         "ftp://example.com/x",
+        # Every spelling of the metadata endpoint Chromium canonicalizes.
+        "http://2852039166/latest/meta-data/",
+        "http://0xa9fea9fe/",
+        "http://0251.0376.0251.0376/",
+        "http://169.254.43518/",
+        "http://[::ffff:169.254.169.254]/",
+        "http://[fd00:ec2::254]/",
+        "http://169.254.170.2/v2/credentials",
+        "http://instance-data/latest/",
+        "http://10.0.0.5/",
+        "http://192.168.1.1/",
+        "http://app.localhost/",
+        "http://[::1]/",
+        "http://0.0.0.0/",
     ],
 )
 def test_unsafe_urls_are_refused(url: str) -> None:
     assert browse_tool._validate_url(url) is not None
 
 
-@pytest.mark.parametrize("url", ["https://example.com", "http://example.com/a?b=c"])
+@pytest.mark.parametrize("url", ["https://example.com", "http://example.com/a?b=c", "https://93.184.216.34/", "https://1password.com/"])
 def test_public_urls_are_allowed(url: str) -> None:
     assert browse_tool._validate_url(url) is None
 
