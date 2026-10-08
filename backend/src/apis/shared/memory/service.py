@@ -1171,17 +1171,84 @@ class MemorySpaceService:
         conflict rather than a silent overwrite.
         """
         space, _ = self._require(space_id, user_id, user_email, "editor")
+        return self._save(
+            space, user_id, user_email, slug, body,
+            entry_type=entry_type, description=description, indexed=indexed, aliases=aliases, reason=reason,
+            proposal_id=proposal_id, context=context, restorable=restorable, run_id=run_id,
+            base_content_hash=base_content_hash,
+        )
+
+    def apply_maintenance(
+        self,
+        space_id: str,
+        *,
+        user_id: str,
+        user_email: Optional[str],
+        slug: str,
+        items: Sequence[Item],
+        run_id: str,
+        base_content_hash: str,
+        archive_reasons: Dict[str, Tuple[str, Optional[str]]],
+    ) -> SaveResult:
+        """Save a maintenance run's changes to a member's own file (Shared Projects 2.6b).
+
+        Called by the maintenance worker, which holds no user session: it
+        checked that the space is the requester's and that they are still a
+        member of an active project. The save is conditional on the file still
+        being the one the run snapshotted (``base_content_hash``), so an edit
+        made while the run was planning is never overwritten. Items that leave
+        go to the archive with their maintenance reason.
+        """
+        space = self.repository.get_space(space_id)
+        if space is None:
+            raise MemorySpaceNotFoundError(f"memory space '{space_id}' not found")
+        if space.scope != "personal_in_project" or space.user_id != user_id:
+            raise MemorySpacePermissionError("Maintenance changes are saved directly only to a member's own memory.")
+        return self._save(
+            space, user_id, user_email, slug, render_items(items),
+            reason="maintenance", run_id=run_id, base_content_hash=base_content_hash,
+            context=SaveContext(archive_reasons=dict(archive_reasons)),
+        )
+
+    def _save(
+        self,
+        space: MemorySpace,
+        user_id: str,
+        user_email: Optional[str],
+        slug: str,
+        body: str,
+        *,
+        entry_type: EntryType = "fact",
+        description: Optional[str] = None,
+        indexed: Optional[Dict[str, Any]] = None,
+        aliases: Optional[List[str]] = None,
+        reason: FileVersionReason = "edit",
+        proposal_id: Optional[str] = None,
+        context: Optional[SaveContext] = None,
+        restorable: Sequence[str] = (),
+        run_id: Optional[str] = None,
+        base_content_hash: Optional[str] = None,
+    ) -> SaveResult:
+        """:meth:`save_entry` once the caller's access is settled."""
+        space_id = space.space_id
         canonical = space.file_format == "canonical"
         now = _now_iso()
+        moved = MemorySpaceConcurrencyError(
+            f"'{slug}' was changed by someone else while this save was in progress. Read it again and retry."
+        )
+        # Before validation: ``body`` was derived from that version, so against a
+        # newer one its anchors may not even exist, and that's a conflict, not bad input.
+        if base_content_hash is not None:
+            base = self._find_ref(space_id, slug)
+            if base is None or base.content_hash != base_content_hash:
+                raise moved
         prepared = self._prepare_save(
             space, slug, body, description=description, aliases=aliases, now=now, restorable=restorable
         )
         if base_content_hash is not None and (
             prepared.current_ref is None or prepared.current_ref.content_hash != base_content_hash
         ):
-            raise MemorySpaceConcurrencyError(
-                f"'{slug}' was changed by someone else while this save was in progress. Read it again and retry."
-            )
+            raise moved
         result = self._commit_save(
             space_id, user_id, prepared, canonical=canonical, entry_type=entry_type,
             description=description, indexed=indexed, now=now, reason=reason, proposal_id=proposal_id,
