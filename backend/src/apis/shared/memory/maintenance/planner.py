@@ -32,7 +32,7 @@ SYSTEM_PROMPT = """You maintain one file of a team's shared memory. The file is 
 
 You can propose three kinds of change:
 
-- merge: two or more items that state the same fact. Write one item that says everything they say, using only their words, names, numbers and dates. Keep every number, date, link ([[name]]), URL, email and `code` from the sources, and keep any reason they give ("because ...").
+- merge: two or more items that state the same fact. Write the one item that replaces them in "text"; a merge without text is discarded. It must say everything they say, using only their words, names, numbers and dates. Keep every number, date, link ([[name]]), URL, email and `code` from the sources, and keep any reason they give ("because ...").
 - supersede: a newer item replaces an older one it contradicts or updates. Give [old, new]. Use it only when the newer item clearly makes the older one wrong or out of date.
 - prune: an item about something with a date that has passed and nothing lasting in it (a meeting that happened, a deadline that is over). Its reason is "expired". Never prune a decision, a rule, a convention or anything still true.
 
@@ -40,9 +40,9 @@ Rules:
 - Never invent anything. If you are not sure a change is right, leave the items alone.
 - Never change a pinned item's meaning, and never remove one.
 - An item may appear in at most one change.
-- Items are numbered; refer to them by number.
+- Items are numbered; refer to them by number in "items".
 - Propose nothing when nothing needs to change. That is a good answer.
-- Give each change a short "why" a teammate would understand."""
+- Give each change a short "why" a teammate would understand. The reviewer never sees the numbers, so the why says what the items are about ("the owner changed from Marcus to Priya"), never "item 4"."""
 
 TOOL_SPEC = {
     "toolSpec": {
@@ -63,9 +63,9 @@ TOOL_SPEC = {
                                     "items": {"type": "integer"},
                                     "description": "Item numbers. merge: two or more. supersede: [old, new]. prune: one.",
                                 },
-                                "text": {"type": "string", "description": "merge only: the one item that replaces them."},
+                                "text": {"type": "string", "description": "Required for a merge: the one item that replaces them. Omit for supersede and prune."},
                                 "reason": {"type": "string", "enum": ["expired"], "description": "prune only."},
-                                "why": {"type": "string", "description": "One short sentence for the reviewer."},
+                                "why": {"type": "string", "description": "One short sentence for the reviewer, about what the items say. No item numbers."},
                             },
                             "required": ["type", "items", "why"],
                         },

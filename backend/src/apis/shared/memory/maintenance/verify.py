@@ -5,14 +5,17 @@ Every op is checked against the file it was planned for, and one that fails is
 dropped with a stable ``code`` rather than repaired:
 
 - **Shape.** Known type, the right number of distinct items, text for a merge.
+  A ``why`` that cites the planner's item numbers is cleared: the reviewer
+  never sees them.
 - **Identity.** Every item exists, and no item is used by two ops.
 - **Pins.** A pinned item never leaves the file. A merge may rewrite one pinned
   item, which keeps its anchor; two pinned items can't merge.
 - **A merge says nothing new and loses nothing.** It is for items that repeat
   each other, so its text must carry exactly the numbers and dates, links,
   URLs, emails and code spans of its sources, mention no name they don't and
-  drop none they do, keep a reason if any source gave one, and be no longer
-  than the sources together. These are cheap token checks, not a judge of
+  drop none they do, keep what any source's reason says (its content words,
+  with or without its "because"), and be no longer than the sources together.
+  These are cheap token checks, not a judge of
   meaning: they block invented and dropped facts, which are the failures that
   cost a team something, and they accept the plain rewording a merge needs.
 - **A supersede goes forward.** The replacing item may not be older than the
@@ -56,6 +59,8 @@ _RATIONALE_RE = re.compile(
     r"\b(because|since|so that|due to|in order to|to avoid|as required by|which is why)\b", re.IGNORECASE
 )
 _SENTENCE_BREAK = re.compile(r"[.!?:;]\s*$")
+# The planner sees items numbered; a reason that cites a number means nothing to the reviewer.
+_ITEM_NUMBER_RE = re.compile(r"(?:\bitems?\b|#)\s*\[?\d", re.IGNORECASE)
 
 _MONTHS = {name.lower(): i for i, name in enumerate(calendar.month_name) if name}
 _MONTHS.update({name.lower(): i for i, name in enumerate(calendar.month_abbr) if name})
@@ -161,9 +166,27 @@ def _check_merge(text: str, sources: Sequence[str]) -> Optional[Tuple[str, str]]
     lost_names = _union(sources, _names) - _words(text)
     if lost_names:
         return "lost_name", f"It drops names the sources have: {', '.join(sorted(lost_names))}."
-    if any(_RATIONALE_RE.search(s) for s in sources) and not _RATIONALE_RE.search(text):
-        return "lost_rationale", "A source gives a reason and the merged item doesn't."
+    merged_words = _words(text)
+    for source in sources:
+        for clause in _reason_clauses(source):
+            missing = clause - merged_words if clause else set()
+            if missing or (not clause and not _RATIONALE_RE.search(text)):
+                return "lost_rationale", "A source gives a reason and the merged item doesn't keep it."
     return None
+
+
+def _reason_clauses(text: str) -> List[Set[str]]:
+    """The content words of each reason a text gives: what follows "because", "so that" and the like.
+
+    A merge keeps a reason when it keeps what the reason says, with or without
+    the word that introduced it: "…in groups of 50; larger batches hit the rate
+    limit" keeps "…, because larger batches hit the rate limit".
+    """
+    clauses = []
+    for match in _RATIONALE_RE.finditer(text):
+        rest = re.split(r"[.;!?]", text[match.end():], maxsplit=1)[0]
+        clauses.append({w for w in _words(rest) if len(w) >= 4})
+    return clauses
 
 
 def _written_at(provenance: Optional[ItemProvenance]) -> str:
@@ -210,11 +233,15 @@ def verify_plan(
             drop(change, "overlap", "Another change already uses one of these items.")
             continue
 
-        op = MaintenanceOp(type=change.type, sources=sources, why=" ".join((change.why or "").split())[:300])
+        why = " ".join((change.why or "").split())[:300]
+        op = MaintenanceOp(type=change.type, sources=sources, why="" if _ITEM_NUMBER_RE.search(why) else why)
         if change.type == "merge":
             pinned_sources = [a for a in anchors if a in pins]
             if len(pinned_sources) > 1:
                 drop(change, "pinned", "Two pinned items can't be merged.")
+                continue
+            if not (change.text or "").strip():
+                drop(change, "missing_text", "A merge needs the item that replaces them.")
                 continue
             try:
                 text = check_item_text(change.text or "")
