@@ -512,6 +512,14 @@ export class InferenceAgentCoreConstruct extends Construct {
         AGENTCORE_MCP_APPS_SANDBOX_ORIGIN: props.refs.mcpSandboxProxyOrigin,
       },
     });
+
+    // Set on every synth, V1 included. Leaving it off for V1 would make a
+    // V2 -> V1 rollback a property removal, and whether removing it reverts
+    // the Runtime is the service's call; an explicit V1 is an in-place update
+    // that keeps the runtime id. aws-cdk-lib 2.265.0 has no typed
+    // `platformVersion` (2.272.0 adds one), hence the override.
+    this.runtime.addPropertyOverride('PlatformVersion', config.inferenceApi.runtimePlatformVersion);
+
     this.runtime.node.addDependency(runtimeExecutionRole);
 
     // ============================================================
