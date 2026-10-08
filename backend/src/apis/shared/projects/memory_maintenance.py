@@ -368,13 +368,19 @@ class ProjectMemoryMaintenance:
                 logger.warning("Could not clear archive row %s in %s", row.archive_id, space_id, exc_info=True)
         return "restored", saved.ref.version
 
-    def _undo_created(self, space_id: str, new: Any, *, restored: bool) -> str:
-        """Take away a file a split made, once its items are back where they came from."""
+    def _undo_created(self, space_id: str, new: Any, *, restored: bool) -> Optional[str]:
+        """Take away a file a split made, once its items are back where they came from.
+
+        When the file they came from wasn't put back, this one stays too: ``changed``
+        or ``missing`` if that is why, and no outcome if it is untouched.
+        """
         from apis.shared.memory.service import MemorySpaceConcurrencyError, MemorySpaceNotFoundError
 
         if not restored:
             current = next((e for e in self.memory.repository.get_index(space_id).entries if e.slug == new.slug), None)
-            return "missing" if current is None else "changed"
+            if current is None:
+                return "missing"
+            return "changed" if current.content_hash != new.content_hash else None
         try:
             self.memory.discard_file(space_id, new.slug, delete_objects=True, expected_hash=new.content_hash)
         except MemorySpaceNotFoundError:

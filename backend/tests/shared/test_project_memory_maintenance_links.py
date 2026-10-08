@@ -326,6 +326,16 @@ class TestPersonalSplit:
         assert [(r.slug, r.undo) for r in undone.results] == [("canvas", "changed"), ("sis-conventions", "changed")]
         assert _texts(memory, space_id, "canvas", VIEWER) == [*CANVAS, POINTER]
 
+    def test_an_edit_to_the_original_file_leaves_the_new_one_untouched_and_unblamed(
+        self, maintenance, memory, projects, inbox, team, small_cap
+    ):
+        space_id = _mine(projects, memory, team)
+        run = _run_mine(maintenance, memory, projects, inbox, team, ScriptedPlanner([SPLIT]))
+        memory.save_entry(space_id, VIEWER.user_id, VIEWER.email, "canvas", f"- {CANVAS[0]}\n- {POINTER}\n")
+        undone = maintenance.undo(team.project_id, VIEWER, run.run_id)
+        assert [(r.slug, r.undo) for r in undone.results] == [("canvas", "changed"), ("sis-conventions", None)]
+        assert _texts(memory, space_id, "sis-conventions", VIEWER) == SIS
+
     def test_a_failed_save_of_the_file_rolls_back_the_new_file(self, memory, projects, team, small_cap, monkeypatch):
         space_id = _mine(projects, memory, team)
         ref = next(e for e in memory.repository.get_index(space_id).entries if e.slug == "canvas")

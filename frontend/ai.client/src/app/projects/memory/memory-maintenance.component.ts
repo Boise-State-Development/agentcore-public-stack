@@ -337,7 +337,7 @@ export class MemoryMaintenanceComponent {
         return 'Put back as it was.';
       case 'changed': {
         const made = (this.run()?.results ?? []).find(r => r.splitFrom === file.slug && r.undo !== 'removed');
-        if (file.outcome === 'applied' && made && made.undo !== 'restored') {
+        if (file.outcome === 'applied' && (made?.undo === 'changed' || made?.undo === 'missing')) {
           return `Left as it is, because “${made.slug}”, which its items moved to, changed since. Its History has the version from before.`;
         }
         return 'Saved after the tidy-up, so it was left as it is. Its History has the version from before.';
