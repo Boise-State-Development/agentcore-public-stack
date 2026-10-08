@@ -75,6 +75,24 @@ describe('MemoryArchiveComponent', () => {
     expect(second).toContain('Its file was deleted by you');
   });
 
+  it('says when maintenance took an item out', async () => {
+    api.memoryArchive.mockReturnValue(
+      of({
+        items: [
+          ROW('a1', 'sis', { reason: 'merged', supersededBy: 'aaaaaaaa' }),
+          ROW('a2', 'sis', { reason: 'superseded', supersededBy: 'bbbbbbbb' }),
+          ROW('a3', 'sis', { reason: 'pruned' }),
+        ],
+        people: { 'dana@x.edu': 'Dana Whitfield' },
+      }),
+    );
+    const { rows } = await render();
+    const text = rows().map(r => r.textContent?.replace(/\s+/g, ' ') ?? '');
+    expect(text[0]).toContain('Merged into another item by maintenance, approved by Dana Whitfield');
+    expect(text[1]).toContain('Replaced by a newer item by maintenance, approved by Dana Whitfield');
+    expect(text[2]).toContain('Removed as past by maintenance, approved by Dana Whitfield');
+  });
+
   it('filters by file', async () => {
     const { el, fixture, rows } = await render();
     const select = el.querySelector<HTMLSelectElement>('#archive-file')!;

@@ -61,7 +61,7 @@ import { MemoryTextComponent } from './memory-text.component';
               <p class="text-sm/6 break-words text-gray-900 dark:text-gray-100"><app-memory-text [text]="row.text" [entries]="entries()" /></p>
               <p class="mt-1 text-xs/5 text-gray-600 dark:text-gray-400">
                 <span class="font-mono">{{ row.slug }}</span> ·
-                {{ row.reason === 'deleted' ? 'Its file was deleted by' : 'Removed by' }} {{ who(row.archivedBy) }} · {{ at(row.archivedAt) | date: 'MMM d, y' }} ·
+                {{ removedBy(row) }} {{ who(row.archivedBy) }} · {{ at(row.archivedAt) | date: 'MMM d, y' }} ·
                 restorable until {{ at(row.restorableUntil) | date: 'MMM d, y' }}
               </p>
             </div>
@@ -126,6 +126,22 @@ export class MemoryArchiveComponent {
 
   protected at(iso: string): Date {
     return parseIso(iso);
+  }
+
+  /** How the item left, ending where the person's name follows. */
+  protected removedBy(row: ArchivedMemoryItem): string {
+    switch (row.reason) {
+      case 'deleted':
+        return 'Its file was deleted by';
+      case 'merged':
+        return 'Merged into another item by maintenance, approved by';
+      case 'superseded':
+        return 'Replaced by a newer item by maintenance, approved by';
+      case 'pruned':
+        return 'Removed as past by maintenance, approved by';
+      default:
+        return 'Removed by';
+    }
   }
 
   protected who(email: string): string {

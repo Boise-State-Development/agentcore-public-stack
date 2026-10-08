@@ -25,6 +25,8 @@ import {
   SettingsVersion,
   SettingsVersionsResponse,
   SharedTasksResponse,
+  MaintenanceRun,
+  MaintenanceRunsResponse,
   MemoryProposal,
   MemoryProposalDetail,
   MemoryProposalsResponse,
@@ -207,11 +209,14 @@ export class ProjectApiService {
     );
   }
 
-  /** `text` is the reviewer's edited version; omit it to apply the proposal as written. */
+  /**
+   * `text` is the reviewer's edited version; omit it to apply the proposal as written.
+   * `ops` picks a maintenance proposal's changes by index; omit it to apply them all.
+   */
   approveProposal(
     projectId: string,
     proposalId: string,
-    body: { text?: string; note?: string },
+    body: { text?: string; note?: string; ops?: number[] },
   ): Observable<MemoryProposal> {
     return this.http.post<MemoryProposal>(
       this.url(projectId, `/memory/proposals/${encodeURIComponent(proposalId)}/approve`),
@@ -232,6 +237,25 @@ export class ProjectApiService {
     return this.http.post<MemoryProposal>(
       this.url(projectId, `/memory/proposals/${encodeURIComponent(proposalId)}/withdraw`),
       {},
+      this.options(),
+    );
+  }
+
+  // ---- maintenance (2.6a) -------------------------------------------------
+
+  /** Owner or editor: queue a maintenance run on the shared memory, every file or one. 409 while one runs. */
+  startMaintenance(projectId: string, slug?: string): Observable<MaintenanceRun> {
+    return this.http.post<MaintenanceRun>(this.url(projectId, '/memory/maintenance'), slug ? { slug } : {}, this.options());
+  }
+
+  /** The project's recent runs, newest first (owner and editors). */
+  maintenanceRuns(projectId: string): Observable<MaintenanceRunsResponse> {
+    return this.http.get<MaintenanceRunsResponse>(this.url(projectId, '/memory/maintenance'), this.options());
+  }
+
+  maintenanceRun(projectId: string, runId: string): Observable<MaintenanceRun> {
+    return this.http.get<MaintenanceRun>(
+      this.url(projectId, `/memory/maintenance/${encodeURIComponent(runId)}`),
       this.options(),
     );
   }

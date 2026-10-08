@@ -806,6 +806,31 @@ Each PR targets `develop`, lands behind `PROJECTS_ENABLED` (opt-in while in deve
     - *After:* 6 of 6 samples kept merge, supersede and prune, none was dropped, and no `why` cited a number. Invented and dropped facts are still refused (unit tests).
   - **First deploy:** Platform must create the function before Backend Deploy can ship its image. If Backend runs first, its `deploy-memory-maintenance-code` job fails, and re-running it after Platform fixes it. Until then, a started run reads as failed after 20 minutes.
   - **UI impact (for the 1.8 mockup re-sync):** a `project_memory_maintenance` bell notification. The SPA's archive view shows the new reasons as "Removed" until 2.6a-2.
+  **2.6a-2 as built (SPA)**, on 2.6a's API, with no backend change:
+  - **Tidy up.** On the Memory page's project scope, owners and editors get a **Tidy up** button beside Review and Archive, and each file's header gets a ✨ button for that file alone.
+    - A confirmation says what a run does, and that nothing changes until an editor approves.
+    - `app-memory-maintenance` then shows one live status line (`role=status`) and re-reads the run every 4 s until it ends. The result reads "suggested changes to N files" (with a **Review them** link) or "found nothing to tidy", and adds any files that failed or weren't reached.
+    - A run already in flight when the page opens is picked up from `GET …/maintenance`, so leaving and coming back shows where it got to.
+    - The page re-reads its pending count when a run ends.
+  - **Review.** A compaction proposal is listed as **Tidy-up**, credited "Suggested by maintenance X ran", and replaces the side-by-side file diff with a list of its changes.
+    - Each change shows its title (merge N items / replace an item a newer one updates / remove an item whose dates have passed), the planner's `why`, the items it takes out (struck through), and, for a merge, what they become.
+    - Every change starts ticked. **Apply N changes** sends `ops` only when some are unticked.
+    - The toast reports how many went in, and says so when some no longer matched the file.
+    - There is no "Edit before approving" for these. A stale one (none still applies) can only be declined.
+    - An unticked change shows its items unstruck, under "Not chosen: … stays in the file as it is", rather than dimmed, which would fail contrast.
+  - **Archive and Activity.** Archive rows read "Merged into another item / Replaced by a newer item / Removed as past by maintenance, approved by …". Activity gains "ran maintenance on project memory" (or on one file) and "applied N (of M) maintenance changes to the memory file …".
+  - **Docs:** the user guide's work-together page has a **Tidy up memory** section, and its notification list now includes proposals and maintenance.
+  - **UI impact (for the 1.8 mockup re-sync):** the Tidy up button and status line, the file's ✨ button, and the change-list review.
+  - **Verified locally, end to end (2026-10-08).** This was this branch's app-api with `SKIP_AUTH`, against dev tables, in a disposable project since deleted. The worker invoke was swapped for an in-process `MaintenanceRunner`, so the planner made real Bedrock calls on the catalog default, Haiku 4.5.
+    - A file was seeded with two items that say the same thing, an owner change and a past kickoff. The planner proposed the supersede (Marcus → Priya) and the prune, and the verifier dropped its merge.
+    - Unticking the prune and applying one change wrote v2 without the Marcus item, and its archive row read "Replaced by a newer item by maintenance, approved by you". The audit recorded `appliedOps 1 / totalOps 2`.
+    - The one-file run proposed the prune again, and declining it worked.
+    - axe was clean in light and dark on the review (ticked and unticked) and the files toolbar.
+    - Fixed from this check:
+      - The Activity line now reads the audit's numbers, which are stored as strings.
+      - **New file** stays on the toolbar row while the status line shows.
+      - Unticked changes are no longer struck through.
+      - Two planner findings went to the 2.6a branch: Haiku sometimes sent a merge with no `text`, and its `why` cited the prompt's item numbers ("item 6 updates item 4"), which reviewers never see.
 - **2.7** Content lint (`memoryLintMode`, §9.3) and the export `provenance.json`.
 - **2.8** SPA Memory tab: browser, file view, block editor, link picker, history, review queue, archive, size meters, "My memory in this project".
   **Split in three**, like 2.3, 2.4 and 2.5a. 2.8a is the read side plus the governance that already had APIs (pins, archive, review). 2.8b is the block editor, link picker and Propose. 2.8c is history with diff and restore.

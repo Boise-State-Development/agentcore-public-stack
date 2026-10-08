@@ -84,8 +84,8 @@
         </div>
       } @else if (activeView() === 'files') {
         @if (spaceId()) {
-          <div class="mt-6 flex flex-wrap items-center justify-between gap-3">
-            <div class="flex flex-wrap items-center gap-2">
+          <div class="mt-6 flex flex-wrap items-start justify-between gap-3">
+            <div class="flex min-w-0 flex-1 flex-wrap items-center gap-2">
               @if (activeScope() === 'project' && (canReview() || pending())) {
                 <a
                   [routerLink]="[]"
@@ -111,6 +111,14 @@
                 <ng-icon name="heroArchiveBox" class="size-4" aria-hidden="true" />
                 Archive
               </a>
+              @if (activeScope() === 'project') {
+                <app-memory-maintenance
+                  #maintenance
+                  [projectId]="p.projectId"
+                  [canRun]="canReview()"
+                  (finished)="onMaintenanceFinished()"
+                />
+              }
             </div>
             @if (!editing() && (canEdit() || canPropose())) {
               <button
@@ -216,9 +224,11 @@
                   [limits]="limits()"
                   [canEdit]="canEdit()"
                   [canPropose]="canPropose()"
+                  [canTidy]="canReview() && activeScope() === 'project'"
                   (edit)="startEditing('edit')"
                   (propose)="startEditing('propose')"
                   (remove)="deleteFile(entry)"
+                  (tidy)="tidy(entry)"
                 />
               } @else {
                 <app-memory-index-view

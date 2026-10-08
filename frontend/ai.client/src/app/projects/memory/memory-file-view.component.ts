@@ -3,7 +3,7 @@ import { DatePipe } from '@angular/common';
 import { RouterLink } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroBookmark, heroClock, heroPencilSquare, heroTrash } from '@ng-icons/heroicons/outline';
+import { heroBookmark, heroClock, heroPencilSquare, heroSparkles, heroTrash } from '@ng-icons/heroicons/outline';
 import { heroBookmarkSolid } from '@ng-icons/heroicons/solid';
 import { UserService } from '../../auth/user.service';
 import { ToastService } from '../../services/toast/toast.service';
@@ -31,7 +31,7 @@ import { contributors, describeProvenance } from './memory-text';
   selector: 'app-memory-file-view',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [DatePipe, NgIcon, RouterLink, MemoryMeterComponent, MemoryTextComponent],
-  providers: [provideIcons({ heroBookmark, heroBookmarkSolid, heroClock, heroPencilSquare, heroTrash })],
+  providers: [provideIcons({ heroBookmark, heroBookmarkSolid, heroClock, heroPencilSquare, heroSparkles, heroTrash })],
   host: { class: 'block' },
   template: `
     <header class="border-b border-gray-200 p-5 dark:border-gray-700">
@@ -56,6 +56,17 @@ import { contributors, describeProvenance } from './memory-text';
             <ng-icon name="heroPencilSquare" class="size-4" aria-hidden="true" />
             {{ canEdit() ? 'Edit' : 'Propose a change' }}
           </button>
+          @if (canTidy()) {
+            <button
+              type="button"
+              (click)="tidy.emit()"
+              [attr.aria-label]="'Tidy up ' + entry().slug"
+              title="Suggest merging, replacing or removing items in this file"
+              class="grid size-9 place-items-center rounded-2xl text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-white"
+            >
+              <ng-icon name="heroSparkles" class="size-4" aria-hidden="true" />
+            </button>
+          }
           @if (canEdit()) {
             <button
               type="button"
@@ -156,10 +167,13 @@ export class MemoryFileViewComponent {
   readonly canEdit = input(false);
   /** May propose a change instead (a viewer of an active project's shared memory). */
   readonly canPropose = input(false);
+  /** Owner or editor, in the project scope: a one-file maintenance run (2.6a). */
+  readonly canTidy = input(false);
 
   readonly edit = output<void>();
   readonly propose = output<void>();
   readonly remove = output<void>();
+  readonly tidy = output<void>();
 
   protected readonly file = signal<MemoryFile | null>(null);
   protected readonly loading = signal(true);

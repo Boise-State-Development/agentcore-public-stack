@@ -4,7 +4,7 @@ import { firstValueFrom, Observable } from 'rxjs';
 import { ToastService } from '../../services/toast/toast.service';
 import { personLabel } from '../../shared/utils/person';
 import { parseIso } from '../../utils/date';
-import { MemoryEntry, MemoryProposal, MemoryProposalDetail, Project } from '../models/project.model';
+import { MaintenanceOp, MemoryEntry, MemoryProposal, MemoryProposalDetail, Project } from '../models/project.model';
 import { ProjectApiService } from '../services/project-api.service';
 import { projectErrorMessage } from '../services/projects.service';
 import { MemoryTextComponent } from './memory-text.component';
@@ -27,6 +27,11 @@ export interface ReviewOutcome {
  * owner see every pending proposal and approve it as written, edit it first, or decline it,
  * with a note the proposer is sent. Anyone else sees only their own and can withdraw them.
  * A proposal whose file changed since it was written can only be approved after editing.
+ *
+ * A maintenance proposal (2.6a) is a list of changes instead: merges, replacements and
+ * removals, each with the assistant's reason. The reviewer ticks the ones to apply. They
+ * land on the file as it is at approval, so a change whose items were edited since is
+ * skipped rather than undoing the edit; only none of them still applying makes it stale.
  */
 @Component({
   selector: 'app-memory-review',
@@ -67,7 +72,7 @@ export interface ReviewOutcome {
                 [class]="selectedId() === p.proposalId ? 'bg-gray-100 dark:bg-gray-800' : 'hover:bg-gray-50 dark:hover:bg-white/5'"
               >
                 <span class="flex items-center gap-2">
-                  <span class="text-xs/5 font-semibold text-gray-700 dark:text-gray-200">{{ p.baseVersion ? 'Change' : 'New file' }}</span>
+                  <span class="text-xs/5 font-semibold text-gray-700 dark:text-gray-200">{{ p.kind === 'compaction' ? 'Tidy-up' : p.baseVersion ? 'Change' : 'New file' }}</span>
                   <span class="truncate font-mono text-[0.8125rem] text-gray-900 dark:text-white">{{ p.slug }}</span>
                 </span>
                 <span class="truncate text-xs/5 text-gray-600 dark:text-gray-400">{{ proposer(p) }} · {{ created(p) | date: 'MMM d, h:mm a' }}</span>
@@ -82,50 +87,113 @@ export interface ReviewOutcome {
         <article class="min-w-0 rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-800" [attr.aria-busy]="detailLoading()">
           @if (selected(); as p) {
             <h3 class="text-base/7 font-semibold text-gray-900 dark:text-white">
-              {{ p.baseVersion ? 'Change to' : 'New file' }} <span class="font-mono">{{ p.slug }}</span>
+              {{ p.kind === 'compaction' ? 'Tidy up' : p.baseVersion ? 'Change to' : 'New file' }} <span class="font-mono">{{ p.slug }}</span>
             </h3>
             @if (p.description) {
               <p class="text-sm/6 text-gray-600 dark:text-gray-400">{{ p.description }}</p>
             }
             <p class="mt-1 text-xs/5 text-gray-600 dark:text-gray-400">
-              {{ proposer(p) }}{{ p.proposerKind === 'agent' ? ', through the assistant' : p.proposerKind === 'schedule' ? ', from a scheduled run' : '' }} · {{ created(p) | date: 'MMM d, y, h:mm a' }}
+              @if (p.proposerKind === 'maintenance') {
+                Suggested by maintenance {{ p.isMine ? 'you' : proposer(p) }} ran · {{ created(p) | date: 'MMM d, y, h:mm a' }}
+              } @else {
+                {{ proposer(p) }}{{ p.proposerKind === 'agent' ? ', through the assistant' : p.proposerKind === 'schedule' ? ', from a scheduled run' : '' }} · {{ created(p) | date: 'MMM d, y, h:mm a' }}
+              }
             </p>
 
             @if (detailLoading()) {
               <div class="mt-5 h-24 animate-pulse rounded-xl bg-gray-100 dark:bg-gray-700"></div>
             } @else if (detail(); as d) {
-              @if (d.stale) {
-                <p role="status" class="mt-4 rounded-xl bg-state-warning-50 px-3 py-2 text-xs/5 text-state-warning-800 dark:bg-state-warning-900/20 dark:text-state-warning-300">
-                  Someone changed “{{ d.slug }}” after this was proposed. Compare the two, then approve an edited version or decline it.
-                </p>
+              @if (d.kind === 'compaction') {
+                @if (d.stale) {
+                  <p role="status" class="mt-4 rounded-xl bg-state-warning-50 px-3 py-2 text-xs/5 text-state-warning-800 dark:bg-state-warning-900/20 dark:text-state-warning-300">
+                    “{{ d.slug }}” changed after maintenance ran, and none of these changes still apply. Decline it, and run maintenance again if the file still needs it.
+                  </p>
+                }
+                <p class="mt-4 text-xs/5 text-gray-600 dark:text-gray-400">{{ opsSummary() }}</p>
+                <ul class="mt-3 flex flex-col gap-3" aria-label="Suggested changes">
+                  @for (op of ops(); track $index; let i = $index) {
+                    <li class="rounded-xl border border-gray-200 p-3.5 dark:border-gray-700">
+                      <div class="flex items-start gap-3">
+                        @if (canReview()) {
+                          <input
+                            type="checkbox"
+                            [id]="'op-' + p.proposalId + '-' + i"
+                            [checked]="chosen().has(i)"
+                            (change)="toggleOp(i)"
+                            [disabled]="busy() || d.stale"
+                            [attr.aria-describedby]="op.why ? 'op-why-' + p.proposalId + '-' + i : null"
+                            class="mt-1 size-4 shrink-0 rounded border-gray-300 text-primary-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-900"
+                          />
+                        }
+                        <div class="min-w-0 flex-1">
+                          <label [attr.for]="canReview() ? 'op-' + p.proposalId + '-' + i : null" class="text-sm/6 font-semibold text-gray-900 dark:text-white">{{ opTitle(op) }}</label>
+                          @if (op.why) {
+                            <p [id]="'op-why-' + p.proposalId + '-' + i" class="text-xs/5 text-gray-600 dark:text-gray-400">{{ op.why }}</p>
+                          }
+                          <ul class="mt-2 flex flex-col gap-1.5">
+                            @if (canReview() && !chosen().has(i)) {
+                              <li class="text-xs/5 text-gray-600 dark:text-gray-400">Not chosen: {{ removedSources(op).length === 1 ? 'this item stays' : 'these items stay' }} in the file as {{ removedSources(op).length === 1 ? 'it is' : 'they are' }}.</li>
+                              @for (source of removedSources(op); track source.anchor) {
+                                <li class="rounded-lg px-2.5 py-1.5 text-sm/6 break-words text-gray-700 dark:text-gray-300">
+                                  <app-memory-text [text]="source.text" [entries]="entries()" />
+                                </li>
+                              }
+                            } @else {
+                            @for (source of removedSources(op); track source.anchor) {
+                              <li class="rounded-lg bg-state-danger-50 px-2.5 py-1.5 text-sm/6 break-words text-state-danger-900 line-through dark:bg-state-danger-900/30 dark:text-state-danger-200">
+                                <span class="sr-only">Removed: </span><app-memory-text [text]="source.text" [entries]="entries()" />
+                              </li>
+                            }
+                            @if (op.type === 'merge') {
+                              <li class="rounded-lg bg-state-success-50 px-2.5 py-1.5 text-sm/6 break-words text-state-success-900 dark:bg-state-success-900/30 dark:text-state-success-200">
+                                <span class="sr-only">Becomes: </span><app-memory-text [text]="op.text || ''" [entries]="entries()" />
+                              </li>
+                            } @else if (op.type === 'supersede') {
+                              <li class="rounded-lg px-2.5 py-1.5 text-sm/6 break-words text-gray-700 dark:text-gray-300">
+                                <span class="text-xs/5 font-medium text-gray-600 dark:text-gray-400">Kept, and replaces it: </span><app-memory-text [text]="op.sources[1]?.text || ''" [entries]="entries()" />
+                              </li>
+                            }
+                            }
+                          </ul>
+                        </div>
+                      </div>
+                    </li>
+                  }
+                </ul>
+              } @else {
+                @if (d.stale) {
+                  <p role="status" class="mt-4 rounded-xl bg-state-warning-50 px-3 py-2 text-xs/5 text-state-warning-800 dark:bg-state-warning-900/20 dark:text-state-warning-300">
+                    Someone changed “{{ d.slug }}” after this was proposed. Compare the two, then approve an edited version or decline it.
+                  </p>
+                }
+                <p class="mt-4 text-xs/5 text-gray-600 dark:text-gray-400">{{ summary() }}</p>
+                <div class="mt-3 grid gap-5 md:grid-cols-2">
+                  <section [attr.aria-labelledby]="'current-' + p.proposalId">
+                    <h4 [id]="'current-' + p.proposalId" class="mb-2 text-xs/5 font-semibold tracking-wide text-gray-600 uppercase dark:text-gray-400">Current</h4>
+                    <ul class="flex flex-col gap-1.5">
+                      @for (line of diff().current; track $index) {
+                        <li class="rounded-lg px-2.5 py-1.5 text-sm/6 break-words" [class]="line.kind === 'removed' ? 'bg-state-danger-50 text-state-danger-900 line-through dark:bg-state-danger-900/30 dark:text-state-danger-200' : 'text-gray-700 dark:text-gray-300'">
+                          @if (line.kind === 'removed') {<span class="sr-only">Removed: </span>}<app-memory-text [text]="line.text" [entries]="entries()" />
+                        </li>
+                      } @empty {
+                        <li class="rounded-lg border border-dashed border-gray-300 px-2.5 py-3 text-sm/6 text-gray-600 dark:border-gray-600 dark:text-gray-400">New file. Nothing here yet.</li>
+                      }
+                    </ul>
+                  </section>
+                  <section [attr.aria-labelledby]="'proposed-' + p.proposalId">
+                    <h4 [id]="'proposed-' + p.proposalId" class="mb-2 text-xs/5 font-semibold tracking-wide text-gray-600 uppercase dark:text-gray-400">{{ editing() ? 'Your edited version' : 'Proposed' }}</h4>
+                    <ul class="flex flex-col gap-1.5">
+                      @for (line of diff().proposed; track $index) {
+                        <li class="rounded-lg px-2.5 py-1.5 text-sm/6 break-words" [class]="line.kind === 'added' ? 'bg-state-success-50 text-state-success-900 dark:bg-state-success-900/30 dark:text-state-success-200' : 'text-gray-700 dark:text-gray-300'">
+                          @if (line.kind === 'added') {<span class="sr-only">Added: </span>}<app-memory-text [text]="line.text" [entries]="entries()" />
+                        </li>
+                      } @empty {
+                        <li class="rounded-lg border border-dashed border-gray-300 px-2.5 py-3 text-sm/6 text-gray-600 dark:border-gray-600 dark:text-gray-400">Empty.</li>
+                      }
+                    </ul>
+                  </section>
+                </div>
               }
-              <p class="mt-4 text-xs/5 text-gray-600 dark:text-gray-400">{{ summary() }}</p>
-              <div class="mt-3 grid gap-5 md:grid-cols-2">
-                <section [attr.aria-labelledby]="'current-' + p.proposalId">
-                  <h4 [id]="'current-' + p.proposalId" class="mb-2 text-xs/5 font-semibold tracking-wide text-gray-600 uppercase dark:text-gray-400">Current</h4>
-                  <ul class="flex flex-col gap-1.5">
-                    @for (line of diff().current; track $index) {
-                      <li class="rounded-lg px-2.5 py-1.5 text-sm/6 break-words" [class]="line.kind === 'removed' ? 'bg-state-danger-50 text-state-danger-900 line-through dark:bg-state-danger-900/30 dark:text-state-danger-200' : 'text-gray-700 dark:text-gray-300'">
-                        @if (line.kind === 'removed') {<span class="sr-only">Removed: </span>}<app-memory-text [text]="line.text" [entries]="entries()" />
-                      </li>
-                    } @empty {
-                      <li class="rounded-lg border border-dashed border-gray-300 px-2.5 py-3 text-sm/6 text-gray-600 dark:border-gray-600 dark:text-gray-400">New file. Nothing here yet.</li>
-                    }
-                  </ul>
-                </section>
-                <section [attr.aria-labelledby]="'proposed-' + p.proposalId">
-                  <h4 [id]="'proposed-' + p.proposalId" class="mb-2 text-xs/5 font-semibold tracking-wide text-gray-600 uppercase dark:text-gray-400">{{ editing() ? 'Your edited version' : 'Proposed' }}</h4>
-                  <ul class="flex flex-col gap-1.5">
-                    @for (line of diff().proposed; track $index) {
-                      <li class="rounded-lg px-2.5 py-1.5 text-sm/6 break-words" [class]="line.kind === 'added' ? 'bg-state-success-50 text-state-success-900 dark:bg-state-success-900/30 dark:text-state-success-200' : 'text-gray-700 dark:text-gray-300'">
-                        @if (line.kind === 'added') {<span class="sr-only">Added: </span>}<app-memory-text [text]="line.text" [entries]="entries()" />
-                      </li>
-                    } @empty {
-                      <li class="rounded-lg border border-dashed border-gray-300 px-2.5 py-3 text-sm/6 text-gray-600 dark:border-gray-600 dark:text-gray-400">Empty.</li>
-                    }
-                  </ul>
-                </section>
-              </div>
 
               @if (canReview()) {
                 @if (editing()) {
@@ -157,12 +225,18 @@ export interface ReviewOutcome {
                   <button type="button" (click)="reject(p)" [disabled]="busy()" class="rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700">
                     Decline
                   </button>
+                  @if (d.kind === 'compaction') {
+                    <button type="button" (click)="approve(p)" [disabled]="busy() || d.stale || !chosen().size" class="rounded-2xl bg-primary-accessible px-3 py-1.5 text-sm/6 font-semibold text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50">
+                      Apply {{ changes(chosen().size) }}
+                    </button>
+                  } @else {
                   <button type="button" (click)="toggleEditing(p)" [disabled]="busy()" class="rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700">
                     {{ editing() ? 'Cancel edits' : 'Edit before approving' }}
                   </button>
                   <button type="button" (click)="approve(p)" [disabled]="busy() || (d.stale && !editing())" class="rounded-2xl bg-primary-accessible px-3 py-1.5 text-sm/6 font-semibold text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50">
                     {{ editing() ? 'Approve edited version' : 'Approve' }}
                   </button>
+                  }
                 </div>
               } @else if (p.isMine) {
                 <div class="mt-5 flex justify-end border-t border-gray-100 pt-5 dark:border-gray-700">
@@ -204,6 +278,15 @@ export class MemoryReviewComponent {
   protected readonly note = signal('');
   protected readonly busy = signal(false);
   protected readonly actionError = signal<string | null>(null);
+  /** A maintenance proposal's changes the reviewer has ticked, by index. All start ticked. */
+  protected readonly chosen = signal<ReadonlySet<number>>(new Set());
+
+  protected readonly ops = computed<readonly MaintenanceOp[]>(() => this.detail()?.ops ?? []);
+  protected readonly opsSummary = computed(() => {
+    const total = this.ops().length;
+    if (!this.canReview()) return `Maintenance suggests ${changes(total)} to this file.`;
+    return `${this.chosen().size} of ${changes(total)} chosen. Untick any you don’t want; the rest are applied together.`;
+  });
 
   /** Owner or editor of an active project. An archived project takes no decisions. */
   protected readonly canReview = computed(() => {
@@ -270,7 +353,10 @@ export class MemoryReviewComponent {
     this.detailLoading.set(true);
     try {
       const detail = await firstValueFrom(this.api.proposal(this.projectId(), proposalId));
-      if (this.selectedId() === proposalId) this.detail.set(detail);
+      if (this.selectedId() === proposalId) {
+        this.detail.set(detail);
+        this.chosen.set(new Set((detail.ops ?? []).map((_, i) => i)));
+      }
     } catch (err) {
       if (this.selectedId() === proposalId) this.actionError.set(projectErrorMessage(err, 'Couldn’t open this proposal.'));
     } finally {
@@ -285,9 +371,41 @@ export class MemoryReviewComponent {
 
   protected approve(p: MemoryProposal): Promise<void> {
     const note = this.note().trim() || undefined;
+    if (p.kind === 'compaction') {
+      const total = this.ops().length;
+      const ops = [...this.chosen()].sort((a, b) => a - b);
+      const body = ops.length === total ? { note } : { note, ops };
+      return this.decide(p, this.api.approveProposal(this.projectId(), p.proposalId, body), applied => {
+        const done = applied?.length ?? ops.length;
+        return done < ops.length
+          ? `Applied ${changes(done)} to “${p.slug}”. The others no longer matched the file.`
+          : `Applied ${changes(done)} to “${p.slug}”.`;
+      }, true);
+    }
     const body = this.editing() ? { text: this.editedText(), note } : { note };
     return this.decide(p, this.api.approveProposal(this.projectId(), p.proposalId, body), `Saved “${p.slug}” to project memory.`, true);
   }
+
+  protected toggleOp(index: number): void {
+    this.chosen.update(set => {
+      const next = new Set(set);
+      if (!next.delete(index)) next.add(index);
+      return next;
+    });
+  }
+
+  protected opTitle(op: MaintenanceOp): string {
+    if (op.type === 'merge') return `Merge ${op.sources.length} items that say the same thing`;
+    if (op.type === 'supersede') return 'Replace an item a newer one updates';
+    return 'Remove an item whose dates have passed';
+  }
+
+  /** The items a change takes out of the file, as they read when maintenance ran. */
+  protected removedSources(op: MaintenanceOp): MaintenanceOp['sources'] {
+    return op.type === 'supersede' ? op.sources.slice(0, 1) : op.sources;
+  }
+
+  protected readonly changes = changes;
 
   protected reject(p: MemoryProposal): Promise<void> {
     const note = this.note().trim() || undefined;
@@ -298,7 +416,12 @@ export class MemoryReviewComponent {
     return this.decide(p, this.api.withdrawProposal(this.projectId(), p.proposalId), `Withdrew your change to “${p.slug}”.`, false);
   }
 
-  private async decide(p: MemoryProposal, call: Observable<MemoryProposal>, done: string, applied: boolean): Promise<void> {
+  private async decide(
+    p: MemoryProposal,
+    call: Observable<MemoryProposal>,
+    done: string | ((appliedOps: number[] | null | undefined) => string),
+    applied: boolean,
+  ): Promise<void> {
     this.busy.set(true);
     this.actionError.set(null);
     try {
@@ -307,7 +430,7 @@ export class MemoryReviewComponent {
       this.proposals.update(list => list.filter(x => x.proposalId !== p.proposalId));
       this.detail.set(null);
       this.selectedId.set(null);
-      this.toast.success(done);
+      this.toast.success(typeof done === 'string' ? done : done(result.appliedOps));
       this.decided.emit({ proposal: result, applied });
       const next = this.proposals()[Math.min(index, this.proposals().length - 1)];
       if (next) void this.select(next.proposalId);
@@ -322,4 +445,8 @@ export class MemoryReviewComponent {
 
 function count(n: number): string {
   return `${n} ${n === 1 ? 'item' : 'items'}`;
+}
+
+function changes(n: number): string {
+  return `${n} ${n === 1 ? 'change' : 'changes'}`;
 }

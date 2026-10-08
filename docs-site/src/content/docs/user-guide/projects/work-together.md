@@ -256,6 +256,29 @@ file before you can approve it.
 If you proposed a change, you'll see it under **Your proposals** on the Memory
 page until it's decided, and you can **Withdraw** it.
 
+### Tidy up memory
+
+Over time a project's memory collects items that repeat each other, items a
+newer one has replaced, and notes about meetings and deadlines that have passed.
+Editors and the owner can ask the assistant to tidy it: **Tidy up** on the Memory
+page reads every file, and the ✨ button on a file reads just that one. It takes
+a few minutes, and you can leave the page while it runs.
+
+The assistant only **suggests** changes. They wait in the review queue, and
+memory doesn't change until an editor approves them. It suggests three kinds:
+
+- **Merge** items that say the same thing into one. A merge keeps every number,
+  date, link, name and reason its items had, and adds nothing new. The
+  assistant's suggestion is checked for that before you see it.
+- **Replace** an item that a newer one updates or contradicts.
+- **Remove** an item whose dates have all passed, like a meeting that happened.
+
+Pinned items are never removed. Each suggestion shows what it takes out and
+why. Untick any you don't want, then **Apply** the rest. If someone edited the
+file since the run, the edit is kept. Any suggestion that touches an edited item
+is skipped, and the review says so. Items that leave go to the archive like any
+other removed item, labelled with how they left, so you can bring one back.
+
 ## Ask for a Word redline
 
 If the project has the **Word Documents** tool, the assistant can produce a
@@ -308,6 +331,8 @@ The bell next to your name in the sidebar shows when someone:
 - archives or restores a project you're in
 - leaves a project you own
 - shares a task and chooses to notify you, with their note if they left one
+- proposes a change to project memory, or decides on one you proposed
+- runs memory maintenance that suggests changes for you to review
 
 ![The notifications panel: "made you the owner" and "added you … as an editor".](../../../../assets/user-guide/projects/notifications.jpg)
 
