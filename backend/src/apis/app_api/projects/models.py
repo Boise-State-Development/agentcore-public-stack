@@ -340,6 +340,22 @@ class BindingsResponse(_SettingsResponse):
     bindings: List[BindingRef]
 
 
+class SkillBindingRef(BindingRef):
+    """A bound skill and the version it runs (shared-projects 3.1)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    version: Optional[int] = Field(None, description="Pinned version; null runs the latest (bound before pins)")
+    pinned_at: Optional[str] = Field(None, alias="pinnedAt", description="When the pinned version was cut")
+    update_available: bool = Field(
+        False, alias="updateAvailable", description="The skill has changed since the pinned version"
+    )
+
+
+class SkillBindingsResponse(_SettingsResponse):
+    bindings: List[SkillBindingRef]
+
+
 class SettingsVersionSummary(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 

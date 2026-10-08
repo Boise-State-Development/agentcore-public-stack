@@ -19,6 +19,9 @@ import apis.app_api.projects.routes as project_routes
 from apis.app_api.agent_designer.services.binding_validation import BindingValidationError
 from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.models import User
+from apis.shared.skills import repository as skill_repository_module
+from apis.shared.skills.models import SkillDefinition
+from apis.shared.skills.repository import SkillCatalogRepository
 
 from tests.shared.test_project_harness_rules import (  # noqa: F401 (fixtures)
     EDITOR,
@@ -56,7 +59,18 @@ def validation(monkeypatch) -> ValidationRecorder:
 
 
 @pytest.fixture()
-def pid(project, validation, monkeypatch) -> str:
+def skills(roles_table, monkeypatch) -> SkillCatalogRepository:
+    """The skill catalog, with one skill a project can bind (pinning reads it)."""
+    repo = SkillCatalogRepository(table_name="test-app-roles")
+    monkeypatch.setattr(skill_repository_module, "_repository_instance", repo)
+    asyncio.run(repo.create_skill(SkillDefinition(
+        skill_id="skill_one", display_name="Skill one", description="The first skill.", instructions="Do one thing.",
+    )))
+    return repo
+
+
+@pytest.fixture()
+def pid(project, validation, skills, monkeypatch) -> str:
     service, created = project
     monkeypatch.setenv("PROJECTS_ENABLED", "true")
     monkeypatch.setattr(project_routes, "_service", service)
@@ -78,7 +92,7 @@ MATRIX = [
     ("GET", "/tools", None, {"owner": 200, "editor": 200, "viewer": 200, "stranger": 404}),
     ("PUT", "/tools", {"bindings": [{"ref": "web_search"}]}, {"owner": 200, "editor": 200, "viewer": 403, "stranger": 404}),
     ("GET", "/skills", None, {"owner": 200, "editor": 200, "viewer": 200, "stranger": 404}),
-    ("PUT", "/skills", {"bindings": [{"ref": "sk-1"}]}, {"owner": 200, "editor": 200, "viewer": 403, "stranger": 404}),
+    ("PUT", "/skills", {"bindings": [{"ref": "skill_one"}]}, {"owner": 200, "editor": 200, "viewer": 403, "stranger": 404}),
     ("GET", "/instructions/versions", None, {"owner": 200, "editor": 200, "viewer": 200, "stranger": 404}),
 ]
 PRINCIPALS = {"owner": OWNER, "editor": EDITOR, "viewer": VIEWER, "stranger": STRANGER}
@@ -164,13 +178,13 @@ def test_version_detail_diffs_against_the_one_before(pid):
 def test_tools_and_skills_replace_only_their_own_kind(pid):
     editor = client(EDITOR)
     editor.put(f"/projects/{pid}/tools", json={"bindings": [{"ref": "web_search"}, {"ref": "calculator"}]})
-    editor.put(f"/projects/{pid}/skills", json={"bindings": [{"ref": "sk-1"}]})
+    editor.put(f"/projects/{pid}/skills", json={"bindings": [{"ref": "skill_one"}]})
     editor.put(f"/projects/{pid}/tools", json={"bindings": [{"ref": "calculator"}]})
 
     assert [b["ref"] for b in client(VIEWER).get(f"/projects/{pid}/tools").json()["bindings"]] == ["calculator"]
-    assert [b["ref"] for b in client(VIEWER).get(f"/projects/{pid}/skills").json()["bindings"]] == ["sk-1"]
+    assert [b["ref"] for b in client(VIEWER).get(f"/projects/{pid}/skills").json()["bindings"]] == ["skill_one"]
     detail = client(VIEWER).get(f"/projects/{pid}/instructions/versions/4").json()
-    assert ([t["ref"] for t in detail["tools"]], [s["ref"] for s in detail["skills"]]) == (["calculator"], ["sk-1"])
+    assert ([t["ref"] for t in detail["tools"]], [s["ref"] for s in detail["skills"]]) == (["calculator"], ["skill_one"])
 
 
 def test_only_what_a_save_adds_is_checked_against_the_saver(pid, validation):
@@ -250,3 +264,92 @@ def test_each_settings_save_is_on_the_projects_audit_trail(pid, project, monkeyp
     assert trail.records[1]["before"] == {"refs": []}
     assert trail.records[1]["after"] == {"version": 3, "refs": ["web_search"]}
     assert "Be brief." not in str(trail.records[0])  # the text lives in the version history
+
+
+# --- Skill pins (shared-projects 3.1) -----------------------------------------------
+
+
+def _skill(body: dict, ref: str = "skill_one") -> dict:
+    return next(b for b in body["bindings"] if b["ref"] == ref)
+
+
+def test_adding_a_skill_pins_it_to_its_content_now(pid, skills):
+    body = client(EDITOR).put(f"/projects/{pid}/skills", json={"bindings": [{"ref": "skill_one"}]}).json()
+    pinned = _skill(body)
+    assert (pinned["version"], pinned["config"], pinned["updateAvailable"]) == (1, {"version": 1}, False)
+    assert pinned["pinnedAt"]
+
+    version = asyncio.run(skills.get_latest_skill_version("skill_one"))
+    assert (version.version, version.instructions, version.created_by) == (1, "Do one thing.", EDITOR.user_id)
+
+
+def test_a_changed_skill_offers_an_update_and_keeps_running_its_pin(pid, skills):
+    editor = client(EDITOR)
+    editor.put(f"/projects/{pid}/skills", json={"bindings": [{"ref": "skill_one"}]})
+    asyncio.run(skills.update_skill("skill_one", {"instructions": "Do two things."}))
+
+    assert _skill(client(VIEWER).get(f"/projects/{pid}/skills").json())["updateAvailable"] is True
+    # Re-saving the list without versions (the dialog toggling something else) keeps the pin.
+    kept = editor.put(f"/projects/{pid}/skills", json={"bindings": [{"ref": "skill_one"}]}).json()
+    assert (_skill(kept)["version"], kept["version"]) == (1, 2)
+
+    updated = editor.post(f"/projects/{pid}/skills/skill_one/pin").json()
+    assert (_skill(updated)["version"], _skill(updated)["updateAvailable"], updated["version"]) == (2, False, 3)
+    assert asyncio.run(skills.get_latest_skill_version("skill_one")).instructions == "Do two things."
+    history = client(VIEWER).get(f"/projects/{pid}/instructions/versions").json()["versions"]
+    assert history[0]["changes"] == ["bindings"]
+
+
+def test_pinning_an_unchanged_skill_changes_nothing(pid, skills):
+    editor = client(EDITOR)
+    first = editor.put(f"/projects/{pid}/skills", json={"bindings": [{"ref": "skill_one"}]}).json()
+    again = editor.post(f"/projects/{pid}/skills/skill_one/pin").json()
+    assert (again["version"], _skill(again)["version"]) == (first["version"], 1)
+
+
+def test_a_skill_bound_before_pins_runs_live_until_someone_updates_it(pid, project, skills):
+    from apis.shared.assistants.models import AgentBinding
+    from apis.shared.assistants.service import update_assistant
+
+    service, created = project
+    harness = asyncio.run(harness_settings.load_harness(service.get_project(created.project_id, OWNER)[0]))
+    asyncio.run(update_assistant(
+        assistant_id=harness.assistant_id, owner_id=harness.owner_id,
+        bindings=[AgentBinding(kind="skill", ref="skill_one")],
+    ))
+
+    live = _skill(client(VIEWER).get(f"/projects/{pid}/skills").json())
+    assert (live["version"], live["pinnedAt"], live["updateAvailable"]) == (None, None, False)
+    # A save that only re-sends it leaves it live.
+    resent = client(EDITOR).put(f"/projects/{pid}/skills", json={"bindings": [{"ref": "skill_one"}]}).json()
+    assert _skill(resent)["version"] is None
+
+    assert _skill(client(EDITOR).post(f"/projects/{pid}/skills/skill_one/pin").json())["version"] == 1
+
+
+def test_a_refused_skill_cuts_no_version(pid, skills, validation):
+    validation.refuse.add("skill_one")
+    response = client(EDITOR).put(f"/projects/{pid}/skills", json={"bindings": [{"ref": "skill_one"}]})
+    assert response.status_code == 403
+    assert asyncio.run(skills.get_latest_skill_version("skill_one")) is None
+
+
+def test_pin_needs_an_editor_and_a_bound_skill(pid):
+    assert client(EDITOR).post(f"/projects/{pid}/skills/skill_one/pin").status_code == 404
+    client(EDITOR).put(f"/projects/{pid}/skills", json={"bindings": [{"ref": "skill_one"}]})
+    assert client(VIEWER).post(f"/projects/{pid}/skills/skill_one/pin").status_code == 403
+    assert client(STRANGER).post(f"/projects/{pid}/skills/skill_one/pin").status_code == 404
+
+
+def test_the_trail_records_which_version_a_skill_moved_to(pid, project, skills, monkeypatch):
+    service, _ = project
+    records: list = []
+    monkeypatch.setattr(service, "record", lambda action, user, project_id, **detail: records.append((action, detail)))
+    client(EDITOR).put(f"/projects/{pid}/skills", json={"bindings": [{"ref": "skill_one"}]})
+    asyncio.run(skills.update_skill("skill_one", {"instructions": "Do two things."}))
+    client(EDITOR).post(f"/projects/{pid}/skills/skill_one/pin")
+
+    (_, added), (_, updated) = records
+    assert (added["before"]["versions"], added["after"]["versions"]) == ({}, {"skill_one": 1})
+    assert updated["before"] == {"refs": ["skill_one"], "versions": {"skill_one": 1}}
+    assert (updated["after"]["refs"], updated["after"]["versions"]) == (["skill_one"], {"skill_one": 2})

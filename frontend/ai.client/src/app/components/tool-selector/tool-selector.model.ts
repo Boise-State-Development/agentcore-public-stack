@@ -38,4 +38,17 @@ export interface ToolSelectorItem {
   addBlocked?: boolean;
   /** An MCP server's tools. When present, a selected row can be narrowed to some of them. */
   children?: readonly ToolSelectorChild[];
+  /**
+   * A button on the row for something other than selecting it, such as "Update" on a
+   * pinned skill. The selector only reports the click (`itemAction`); the parent runs it.
+   */
+  action?: ToolSelectorAction;
+}
+
+export interface ToolSelectorAction {
+  /** Visible text. */
+  label: string;
+  /** The accessible name when the label alone wouldn't say which row it acts on. */
+  ariaLabel?: string;
+  disabled?: boolean;
 }

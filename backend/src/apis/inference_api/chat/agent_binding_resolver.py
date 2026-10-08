@@ -63,6 +63,7 @@ from apis.shared.models.retirement import (
 from apis.shared.rbac.model_access import model_access_denied_message
 from apis.shared.rbac.service import get_app_role_service
 from apis.shared.skills.access import resolve_invocable_skill_ids
+from apis.shared.skills.pins import binding_pin, pinned_ref
 from apis.shared.tools.scoped_ids import base_tool_id
 
 _ROLE_RANK = {"viewer": 1, "editor": 2, "owner": 3}
@@ -139,6 +140,7 @@ class ResolvedSkills:
     binding) rather than an empty ``ResolvedSkills``.
     """
 
+    # A pinned binding's id carries its version (``skill_id@3``, ``skills.pins``).
     skill_ids: List[str]
 
 
@@ -315,9 +317,11 @@ async def _resolve_skills(
         return None
 
     refs: List[str] = []
+    pins: dict = {}
     for binding in skill_bindings:
         if binding.ref not in refs:
             refs.append(binding.ref)
+            pins[binding.ref] = binding_pin(binding.config)
 
     if not skills_enabled():
         if dropped is not None:
@@ -338,7 +342,9 @@ async def _resolve_skills(
         )
     if missing:
         dropped.skills.extend(missing)
-    kept = [ref for ref in refs if ref in invocable]
+    # A pinned binding (shared-projects 3.1) runs as ``skill_id@n``; access was judged on
+    # the catalog id above, and the pin only chooses which content the skill runs.
+    kept = [pinned_ref(ref, pins[ref]) for ref in refs if ref in invocable]
     # Always non-empty (see ResolvedSkills): a degraded harness left with no skills runs
     # as if it bound none.
     return ResolvedSkills(skill_ids=kept) if kept else None

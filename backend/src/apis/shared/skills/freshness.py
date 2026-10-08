@@ -85,13 +85,20 @@ async def get_freshness_hash(skill_ids: List[str]) -> str:
 
     Changes when any of the given skills' config is edited. Empty list
     returns the empty string so callers can short-circuit.
+
+    A pinned id (``skill_id@3``) is looked up by its catalog id and hashed whole,
+    so changing a pin changes the key. Its live ``updated_at`` still counts: a live
+    edit rebuilds the agent, which runs the same pinned content (so the Bedrock
+    prefix is unchanged), but a live disable has to take effect.
     """
     if not skill_ids:
         return ""
 
+    from apis.shared.skills.pins import base_skill_id
+
     sorted_ids = sorted(skill_ids)
     values = await asyncio.gather(
-        *(get_skill_updated_at(sid) for sid in sorted_ids)
+        *(get_skill_updated_at(base_skill_id(sid)) for sid in sorted_ids)
     )
 
     payload = "|".join(

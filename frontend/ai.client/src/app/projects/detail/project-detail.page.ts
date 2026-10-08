@@ -46,7 +46,7 @@ const PANEL_FOR_TAB: Record<string, ProjectPanel | null> = {
   files: 'files',
   model: 'model',
   tools: 'tools',
-  skills: 'tools',
+  skills: 'skills',
   members: 'members',
   activity: 'activity',
   history: 'history',

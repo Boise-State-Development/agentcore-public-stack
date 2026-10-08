@@ -93,7 +93,8 @@ describe('ProjectRailComponent', () => {
     expect(text(row('Instructions'))).toBe('Instructions Not set Edit');
     expect(text(row('Files'))).toBe('Files 3 files Add');
     expect(text(row('Model'))).toBe('Model Haiku 4.5 Change');
-    expect(text(row('Tools'))).toBe('Tools & skills 2 tools · 1 skill Edit');
+    expect(text(row('Tools'))).toBe('Tools 2 tools Edit');
+    expect(text(row('Skills'))).toBe('Skills 1 skill Edit');
     expect(text(row('Members'))).toBe('Members 4 people Manage');
     expect(text(row('History'))).toBe('History Version 2 View');
     expect(el.textContent).toContain('Shared with 3 other people. Owned by Olive Owner. You’re an editor.');
@@ -151,7 +152,7 @@ describe('ProjectRailComponent', () => {
     expect(text(row('History'))).toBe('History Version 3 View');
   });
 
-  it('opens the Model and Tools & skills dialogs with the palettes, and applies their saves', async () => {
+  it('opens the Model and Tools dialogs with the palettes, and applies their saves', async () => {
     dialog.open.mockReturnValueOnce({ closed: of({ modelConfig: { modelId: 'm-secret' }, version: 3, canEdit: true }), close: vi.fn() });
     const { row, fixture } = await render();
     row('Model').click();
@@ -163,22 +164,51 @@ describe('ProjectRailComponent', () => {
     expect(text(row('Model'))).toBe('Model m-secret Change');
 
     dialog.open.mockReturnValueOnce({
-      closed: of({ tools: { bindings: [{ ref: 't1' }, { ref: 't2' }, { ref: 'gone' }], version: 4, canEdit: true } }),
+      closed: of({ bindings: [{ ref: 't1' }, { ref: 't2' }, { ref: 'gone' }], version: 4, canEdit: true }),
       close: vi.fn(),
     });
     row('Tools').click();
     await fixture.whenStable();
     fixture.detectChanges();
     expect(dialog.open).toHaveBeenLastCalledWith(ProjectBindingsDialogComponent, {
+      data: { projectId: 'prj_1', canEdit: true, kind: 'tools', bound: ['t1', 'gone'], palette: PALETTE.tool },
+    });
+    expect(text(row('Tools'))).toBe('Tools 3 tools Edit');
+    expect(text(row('Skills'))).toBe('Skills 1 skill Edit');
+    expect(text(row('History'))).toBe('History Version 4 View');
+  });
+
+  it('opens the Skills dialog with each skill’s pin, and takes back a save or an Update', async () => {
+    api.bindings.mockImplementation((_id: string, kind: 'tools' | 'skills') =>
+      of({
+        bindings: kind === 'tools' ? [] : [{ ref: 's1', version: 2, pinnedAt: '2026-10-01T00:00:00Z', updateAvailable: true }],
+        version: 2,
+        canEdit: true,
+      }),
+    );
+    dialog.open.mockReturnValueOnce({
+      closed: of({ bindings: [{ ref: 's1', version: 3, pinnedAt: '2026-10-08T00:00:00Z', updateAvailable: false }], version: 5, canEdit: true }),
+      close: vi.fn(),
+    });
+    const { row, fixture } = await render();
+    expect(text(row('Tools'))).toBe('Tools None Edit');
+    expect(text(row('Skills'))).toBe('Skills 1 skill · 1 update Edit');
+
+    row('Skills').click();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(dialog.open).toHaveBeenLastCalledWith(ProjectBindingsDialogComponent, {
       data: {
         projectId: 'prj_1',
         canEdit: true,
-        bound: { tools: ['t1', 'gone'], skills: ['s1'] },
-        palette: { tools: PALETTE.tool, skills: PALETTE.skill },
+        kind: 'skills',
+        bound: ['s1'],
+        palette: PALETTE.skill,
+        pins: { s1: { ref: 's1', version: 2, pinnedAt: '2026-10-01T00:00:00Z', updateAvailable: true } },
       },
     });
-    expect(text(row('Tools'))).toBe('Tools & skills 3 tools · 1 skill Edit');
-    expect(text(row('History'))).toBe('History Version 4 View');
+    expect(text(row('Skills'))).toBe('Skills 1 skill Edit');
+    expect(text(row('History'))).toBe('History Version 5 View');
   });
 
   it('hands the Files dialog a live project and takes its count back', async () => {

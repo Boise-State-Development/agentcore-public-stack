@@ -157,6 +157,15 @@ export class ProjectApiService {
     return this.http.put<BindingsResponse>(this.url(projectId, `/${kind}`), { bindings }, this.options());
   }
 
+  /** Pin a bound skill to its current content (a new settings version when it changed). */
+  pinSkill(projectId: string, skillId: string): Observable<BindingsResponse> {
+    return this.http.post<BindingsResponse>(
+      this.url(projectId, `/skills/${encodeURIComponent(skillId)}/pin`),
+      {},
+      this.options(),
+    );
+  }
+
   versions(projectId: string, limit = 50): Observable<SettingsVersionsResponse> {
     const params = new HttpParams().set('limit', limit);
     return this.http.get<SettingsVersionsResponse>(this.url(projectId, '/instructions/versions'), this.options(params));
