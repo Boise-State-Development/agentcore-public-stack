@@ -241,21 +241,40 @@ export class ProjectApiService {
     );
   }
 
-  // ---- maintenance (2.6a) -------------------------------------------------
+  // ---- maintenance (2.6a, 2.6b) -------------------------------------------
 
-  /** Owner or editor: queue a maintenance run on the shared memory, every file or one. 409 while one runs. */
-  startMaintenance(projectId: string, slug?: string): Observable<MaintenanceRun> {
-    return this.http.post<MaintenanceRun>(this.url(projectId, '/memory/maintenance'), slug ? { slug } : {}, this.options());
+  /**
+   * Queue a maintenance run, every file or one. `project`: owner or editor, ends in proposals.
+   * `mine`: your own memory, saved straight away. 409 while one runs on that memory.
+   */
+  startMaintenance(projectId: string, slug?: string, scope: MemoryScope = 'project'): Observable<MaintenanceRun> {
+    return this.http.post<MaintenanceRun>(
+      this.url(projectId, '/memory/maintenance'),
+      slug ? { slug } : {},
+      this.options(new HttpParams().set('scope', scope)),
+    );
   }
 
-  /** The project's recent runs, newest first (owner and editors). */
-  maintenanceRuns(projectId: string): Observable<MaintenanceRunsResponse> {
-    return this.http.get<MaintenanceRunsResponse>(this.url(projectId, '/memory/maintenance'), this.options());
+  /** Recent runs on one scope, newest first (project: owner and editors; mine: your own). */
+  maintenanceRuns(projectId: string, scope: MemoryScope = 'project'): Observable<MaintenanceRunsResponse> {
+    return this.http.get<MaintenanceRunsResponse>(
+      this.url(projectId, '/memory/maintenance'),
+      this.options(new HttpParams().set('scope', scope)),
+    );
   }
 
-  maintenanceRun(projectId: string, runId: string): Observable<MaintenanceRun> {
+  maintenanceRun(projectId: string, runId: string, scope: MemoryScope = 'project'): Observable<MaintenanceRun> {
     return this.http.get<MaintenanceRun>(
       this.url(projectId, `/memory/maintenance/${encodeURIComponent(runId)}`),
+      this.options(new HttpParams().set('scope', scope)),
+    );
+  }
+
+  /** Undo a tidy-up of your own memory (2.6b). Files saved since the run are left alone. */
+  undoMaintenance(projectId: string, runId: string): Observable<MaintenanceRun> {
+    return this.http.post<MaintenanceRun>(
+      this.url(projectId, `/memory/maintenance/${encodeURIComponent(runId)}/undo`),
+      {},
       this.options(),
     );
   }

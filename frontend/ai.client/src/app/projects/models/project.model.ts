@@ -481,25 +481,46 @@ export interface ProjectAuditResponse {
   nextCursor?: string | null;
 }
 
-// ---- maintenance (2.6a) -------------------------------------------------
+// ---- maintenance (2.6a, 2.6b) -------------------------------------------
 
 export type MaintenanceRunState = 'queued' | 'running' | 'done' | 'failed';
 
-/** What a run did with one file. */
+/**
+ * What a run did with one file. `proposed`: changes wait for review (project memory).
+ * `applied`: the changes were saved (your own memory, 2.6b). `changed`: the file was saved
+ * while the run planned it, so it was left alone.
+ */
 export interface MaintenanceFileResult {
   slug: string;
-  outcome: 'proposed' | 'nothing_to_do' | 'pending_review' | 'failed' | 'not_reached';
+  outcome: 'proposed' | 'applied' | 'changed' | 'nothing_to_do' | 'pending_review' | 'failed' | 'not_reached';
   proposalId?: string | null;
   planned: number;
   kept: number;
   dropped: number;
   error?: string | null;
+  /** Applied: the version the run saved, and the changes it made. */
+  version?: number | null;
+  ops?: MaintenanceOp[] | null;
+  /** Applied, in a run too large to keep every change: counts only. */
+  opsOmitted?: boolean;
+  /**
+   * After an undo: `restored` (put back, as `undoVersion`), `changed` (saved since the run, so
+   * left alone), `missing` (deleted since), `failed`.
+   */
+  undo?: 'restored' | 'changed' | 'missing' | 'failed' | null;
+  undoVersion?: number | null;
 }
 
-/** A maintenance run on the project's shared memory, as the owner and editors see it. */
+/**
+ * A maintenance run. `scope` is the Memory page's: `project` (owner and editors see it, and it
+ * ends in proposals) or `mine` (your own memory, saved straight away and undoable until
+ * `undoableUntil`).
+ */
 export interface MaintenanceRun {
   runId: string;
   state: MaintenanceRunState;
+  /** Absent before 2.6b, when every run was on project memory. */
+  scope?: MemoryScope;
   /** The one file it maintains; null for every file. */
   slug?: string | null;
   requestedByEmail: string;
@@ -509,6 +530,9 @@ export interface MaintenanceRun {
   finishedAt?: string | null;
   results: MaintenanceFileResult[];
   error?: string | null;
+  undoneAt?: string | null;
+  /** Set while an applied run on your own memory can still be undone. */
+  undoableUntil?: string | null;
 }
 
 export interface MaintenanceRunsResponse {

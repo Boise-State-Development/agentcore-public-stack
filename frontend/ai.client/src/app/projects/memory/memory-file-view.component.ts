@@ -61,7 +61,7 @@ import { contributors, describeProvenance } from './memory-text';
               type="button"
               (click)="tidy.emit()"
               [attr.aria-label]="'Tidy up ' + entry().slug"
-              title="Suggest merging, replacing or removing items in this file"
+              [title]="scope() === 'mine' ? 'Merge, replace or remove items in this file (you can undo it)' : 'Suggest merging, replacing or removing items in this file'"
               class="grid size-9 place-items-center rounded-2xl text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-white"
             >
               <ng-icon name="heroSparkles" class="size-4" aria-hidden="true" />
@@ -167,7 +167,7 @@ export class MemoryFileViewComponent {
   readonly canEdit = input(false);
   /** May propose a change instead (a viewer of an active project's shared memory). */
   readonly canPropose = input(false);
-  /** Owner or editor, in the project scope: a one-file maintenance run (2.6a). */
+  /** A one-file maintenance run: owner or editor in the project scope (2.6a), anyone in their own (2.6b). */
   readonly canTidy = input(false);
 
   readonly edit = output<void>();
