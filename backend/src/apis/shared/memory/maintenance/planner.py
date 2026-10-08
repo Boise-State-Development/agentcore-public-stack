@@ -1,4 +1,4 @@
-"""The maintenance planner: one model call per file (Shared Projects §4.6 step 3).
+"""The maintenance planner: one model call per file, two for a large one (Shared Projects §4.6 step 3).
 
 The model sees one file's items, numbered, with their dates and pins, and
 answers through a forced tool call, so its reply is structured data rather
@@ -7,6 +7,14 @@ than prose to parse. It proposes only; ``verify.py`` decides what survives.
 The call runs in the maintenance worker, never on a turn, and is bounded: one
 call per file, a fixed output ceiling, and a read timeout well inside the
 worker's 15 minutes. Usage comes back with the plan so the run can meter it.
+
+A file at the soft size threshold also gets a second call (2.6c) with its own
+prompt and tool, :data:`SPLIT_PROMPT` and ``propose_splits``, which asks only
+for groups of items to move into files of their own. Offering splits inside
+the first call didn't work: Haiku 4.5 returned an empty ``splits`` list in 16
+of 16 samples across three wordings, since that prompt rightly tells it to
+leave items alone when unsure. A separate call also leaves the change prompt
+byte-identical for every file, large ones included.
 """
 
 from __future__ import annotations
@@ -16,7 +24,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from ..format import Item
 from ..models import ItemProvenance
@@ -25,6 +33,7 @@ from .verify import PlannedChange
 logger = logging.getLogger(__name__)
 
 TOOL_NAME = "propose_changes"
+SPLIT_TOOL_NAME = "propose_splits"
 MAX_OUTPUT_TOKENS = 4_000
 _READ_TIMEOUT_SECONDS = 120
 
@@ -85,6 +94,66 @@ TOOL_SPEC = {
 }
 
 
+SPLIT_PROMPT = """You organise one file of a team's shared memory. The file is a list of items, each one fact, decision or note the team saved. It has grown close to its size limit. A large file is worse to use: a task reads a whole file at a time, so a task that needs one fact pays for all of them, and once the file reaches its limit nothing more can be saved to it.
+
+Find groups of items that are about a sub-topic of their own and would read better as a separate file, and propose moving each group into a new file. Moved items keep their exact words; one line pointing to the new file takes their place, so nothing is lost.
+
+For each group give:
+- "items": the item numbers that move, five or more.
+- "newSlug": a short name for the new file, lowercase words joined by hyphens (for example "canvas-rate-limits"). Not this file's name.
+- "description": one line, under 160 characters, saying what the new file holds.
+- "why": why these items belong together, for the reviewer. The reviewer never sees the numbers, so say what the items are about, never "items 4 to 9".
+
+Rules:
+- Only split along a real seam: a sub-topic someone would look for on its own, different in kind from the rest of the file. A list of the same kind of thing (fields, endpoints, terms, people) is one topic: never cut it into smaller lists.
+- A group must be big enough to be worth a file of its own: at least 5 items, usually 10 or more.
+- Leave the file's main topic in the file.
+- Never move a pinned item.
+- An item may be in at most one group.
+- If the file is about one subject, propose no groups. That is a good answer."""
+
+SPLIT_TOOL_SPEC = {
+    "toolSpec": {
+        "name": SPLIT_TOOL_NAME,
+        "description": "Propose groups of items to move into new files. Call it once, with an empty list if none should move.",
+        "inputSchema": {
+            "json": {
+                "type": "object",
+                "properties": {
+                    "splits": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "items": {
+                                    "type": "array",
+                                    "items": {"type": "integer"},
+                                    "description": "Item numbers that move, five or more.",
+                                },
+                                "newSlug": {"type": "string", "description": "The new file's name: lowercase words joined by hyphens."},
+                                "description": {"type": "string", "description": "One line: what the new file holds."},
+                                "why": {"type": "string", "description": "One short sentence for the reviewer. No item numbers."},
+                            },
+                            # All required: Haiku leaves optional fields out (2.6a's merge text).
+                            "required": ["items", "newSlug", "description", "why"],
+                        },
+                    }
+                },
+                "required": ["splits"],
+            }
+        },
+    }
+}
+
+
+@dataclass(frozen=True)
+class FileSize:
+    """A file's size and the limit for one file, in tokens: given only for a file near that limit."""
+
+    tokens: int
+    cap: int
+
+
 @dataclass
 class Plan:
     changes: List[PlannedChange] = field(default_factory=list)
@@ -112,13 +181,16 @@ def render_file_for_planner(
     pinned: Sequence[str] = (),
     provenance: Optional[Dict[str, ItemProvenance]] = None,
     today: date,
+    size: Optional[FileSize] = None,
 ) -> str:
-    """The user message: the file's items, numbered, each with its date and pin."""
+    """The user message: the file's items, numbered, each with its date and pin (and, for splits, its size)."""
     prov = provenance or {}
     pins = set(pinned)
     lines = [f"Today is {today.isoformat()}.", f"File: {slug}"]
     if description:
         lines.append(f"About: {description}")
+    if size is not None:
+        lines.append(f"Size: about {size.tokens:,} tokens; the limit for one file is {size.cap:,}.")
     lines.append("")
     for number, item in enumerate(items, start=1):
         p = prov.get(item.anchor or "")
@@ -150,6 +222,31 @@ def _client(region: Optional[str]) -> Any:
     )
 
 
+def _ids(entry: Dict[str, Any]) -> tuple:
+    ids = entry.get("items")
+    if not isinstance(ids, list):
+        return ()
+    return tuple(int(i) for i in ids if isinstance(i, (int, float)) or (isinstance(i, str) and i.isdigit()))
+
+
+def _text(entry: Dict[str, Any], key: str) -> Optional[str]:
+    return entry.get(key) if isinstance(entry.get(key), str) else None
+
+
+def _parse_splits(tool_input: Any) -> List[PlannedChange]:
+    raw = tool_input.get("splits") if isinstance(tool_input, dict) else None
+    if not isinstance(raw, list):
+        raise PlannerError("The planner's answer had no list of splits.")
+    return [
+        PlannedChange(
+            type="split", ids=_ids(entry), new_slug=_text(entry, "newSlug"),
+            description=_text(entry, "description"), why=str(entry.get("why") or ""),
+        )
+        for entry in raw
+        if isinstance(entry, dict)
+    ]
+
+
 def _parse_changes(tool_input: Any) -> List[PlannedChange]:
     raw = tool_input.get("changes") if isinstance(tool_input, dict) else None
     if not isinstance(raw, list):
@@ -158,8 +255,7 @@ def _parse_changes(tool_input: Any) -> List[PlannedChange]:
     for entry in raw:
         if not isinstance(entry, dict):
             continue
-        ids = entry.get("items")
-        ids = tuple(int(i) for i in ids if isinstance(i, (int, float)) or (isinstance(i, str) and i.isdigit())) if isinstance(ids, list) else ()
+        ids = _ids(entry)
         changes.append(
             PlannedChange(
                 type=str(entry.get("type") or ""),
@@ -190,31 +286,57 @@ class Planner:
         pinned: Sequence[str] = (),
         provenance: Optional[Dict[str, ItemProvenance]] = None,
         today: date,
+        size: Optional[FileSize] = None,
     ) -> Plan:
+        """Plan one file. Given ``size`` (a file near its limit), also ask for splits.
+
+        The changes call decides whether the file fails: a failed split call
+        is logged and its usage metered, and the file keeps its changes.
+        """
         message = render_file_for_planner(
             slug, description, items, pinned=pinned, provenance=provenance, today=today
         )
+        tool_input, usage = self._call(SYSTEM_PROMPT, TOOL_SPEC, TOOL_NAME, message)
+        plan = Plan(input_tokens=usage[0], output_tokens=usage[1])
+        try:
+            plan.changes = _parse_changes(tool_input)
+        except PlannerError as exc:
+            raise PlannerError(str(exc), input_tokens=usage[0], output_tokens=usage[1]) from exc
+        if size is None:
+            return plan
+        sized = render_file_for_planner(
+            slug, description, items, pinned=pinned, provenance=provenance, today=today, size=size
+        )
+        try:
+            split_input, split_usage = self._call(SPLIT_PROMPT, SPLIT_TOOL_SPEC, SPLIT_TOOL_NAME, sized)
+            plan.input_tokens += split_usage[0]
+            plan.output_tokens += split_usage[1]
+            plan.changes.extend(_parse_splits(split_input))
+        except PlannerError as exc:
+            plan.input_tokens += exc.input_tokens
+            plan.output_tokens += exc.output_tokens
+            logger.warning("memory-maintenance: the split call for %s failed: %s", slug, exc)
+        return plan
+
+    def _call(self, system: str, tool: Dict[str, Any], tool_name: str, message: str) -> Tuple[Any, Tuple[int, int]]:
+        """One forced-tool Converse call: ``(tool input, (input tokens, output tokens))``."""
         try:
             response = self.client.converse(
                 modelId=self.model_id,
-                system=[{"text": SYSTEM_PROMPT}],
+                system=[{"text": system}],
                 messages=[{"role": "user", "content": [{"text": message}]}],
-                toolConfig={"tools": [TOOL_SPEC], "toolChoice": {"any": {}}},
+                toolConfig={"tools": [tool], "toolChoice": {"any": {}}},
                 inferenceConfig={"maxTokens": MAX_OUTPUT_TOKENS},
             )
         except Exception as exc:  # noqa: BLE001 - reported per file; one bad call never fails the run
             raise PlannerError(f"The model call failed ({type(exc).__name__}).") from exc
         usage = response.get("usage") or {}
-        plan = Plan(
-            input_tokens=int(usage.get("inputTokens") or 0),
-            output_tokens=int(usage.get("outputTokens") or 0),
-        )
-        billed = {"input_tokens": plan.input_tokens, "output_tokens": plan.output_tokens}
+        billed = {"input_tokens": int(usage.get("inputTokens") or 0), "output_tokens": int(usage.get("outputTokens") or 0)}
         if response.get("stopReason") == "max_tokens":
             raise PlannerError("The planner's answer was cut off.", **billed)
         content = ((response.get("output") or {}).get("message") or {}).get("content") or []
         tool_use = next((c["toolUse"] for c in content if isinstance(c, dict) and "toolUse" in c), None)
-        if tool_use is None or tool_use.get("name") != TOOL_NAME:
+        if tool_use is None or tool_use.get("name") != tool_name:
             raise PlannerError("The planner answered without proposing changes.", **billed)
         tool_input = tool_use.get("input")
         if isinstance(tool_input, str):
@@ -222,8 +344,4 @@ class Planner:
                 tool_input = json.loads(tool_input)
             except ValueError as exc:
                 raise PlannerError("The planner's answer wasn't valid JSON.", **billed) from exc
-        try:
-            plan.changes = _parse_changes(tool_input)
-        except PlannerError as exc:
-            raise PlannerError(str(exc), **billed) from exc
-        return plan
+        return tool_input, (billed["input_tokens"], billed["output_tokens"])

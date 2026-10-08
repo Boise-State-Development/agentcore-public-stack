@@ -9,12 +9,12 @@ import { UserService } from '../../auth/user.service';
 import { ToastService } from '../../services/toast/toast.service';
 import { personLabel } from '../../shared/utils/person';
 import { parseIso } from '../../utils/date';
-import { MemoryEntry, MemoryFile, MemoryItem, MemoryLimits, MemoryScope } from '../models/project.model';
+import { MemoryEntry, MemoryFile, MemoryItem, MemoryLimits, MemoryRestoreResponse, MemoryScope, ReplacedMemoryItem } from '../models/project.model';
 import { ProjectApiService } from '../services/project-api.service';
 import { projectErrorMessage } from '../services/projects.service';
 import { MemoryMeterComponent } from './memory-meter.component';
 import { MemoryTextComponent } from './memory-text.component';
-import { contributors, describeProvenance } from './memory-text';
+import { contributors, describeProvenance, replacedLabel, resolveLink } from './memory-text';
 
 /**
  * One memory file as items (shared-projects §6, 2.8): each item with where it came from
@@ -26,6 +26,11 @@ import { contributors, describeProvenance } from './memory-text';
  *
  * Pinning is for whoever can edit the scope: a pinned item can't be dropped by any save,
  * the assistant's included, until a person unpins it.
+ *
+ * An item that replaced others carries a supersede marker (2.6c): "Merged with 1 other item" or
+ * "Replaces an older item", which opens to what it replaced while the archive still has it,
+ * with **Put it back** for whoever can edit. An item a tidy-up moved here says which file it
+ * came from.
  */
 @Component({
   selector: 'app-memory-file-view',
@@ -126,8 +131,35 @@ import { contributors, describeProvenance } from './memory-text';
                     <span class="font-medium text-primary-accessible dark:text-primary-50">Pinned</span> ·
                   }
                   {{ provenance(item).text }}@if (provenance(item).sessionId; as sid) {
-                    (<a [routerLink]="['/s', sid]" class="rounded-sm font-medium text-primary-accessible underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-50">open it</a>)}@if (provenance(item).at) { · {{ at(provenance(item).at) | date: 'MMM d, y' }}}
+                    (<a [routerLink]="['/s', sid]" class="rounded-sm font-medium text-primary-accessible underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-50">open it</a>)}@if (provenance(item).at) { · {{ at(provenance(item).at) | date: 'MMM d, y' }}}@if (provenance(item).movedFrom; as from) { · moved here from
+                    @if (fileExists(from)) {<a [routerLink]="[]" [queryParams]="{ file: from }" queryParamsHandling="merge" class="rounded-sm font-mono font-medium text-primary-accessible underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-50">{{ from }}</a>} @else {<span class="font-mono">{{ from }}</span>} in a tidy-up}
                 </p>
+                @if (item.replaces?.length) {
+                  <details class="mt-1 text-xs/5">
+                    <summary class="w-fit cursor-pointer rounded-sm font-medium text-gray-700 underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-200">
+                      {{ replacedLabel(item.replaces!) }}
+                    </summary>
+                    <ul class="mt-1.5 space-y-2 border-l-2 border-gray-200 pl-3 dark:border-gray-600" [attr.aria-label]="'What “' + item.text + '” replaced'">
+                      @for (old of item.replaces; track old.archiveId) {
+                        <li>
+                          <p class="text-sm/6 break-words text-gray-700 dark:text-gray-300">
+                            <span class="sr-only">{{ old.reason === 'merged' ? 'Merged in: ' : 'Replaced: ' }}</span><app-memory-text [text]="old.text" [entries]="entries()" />
+                          </p>
+                          <p class="text-gray-600 dark:text-gray-400">
+                            {{ old.reason === 'merged' ? 'Merged in' : 'Replaced' }} {{ at(old.archivedAt) | date: 'MMM d, y' }} · in the archive until {{ at(old.restorableUntil) | date: 'MMM d, y' }}@if (canEdit()) { ·
+                              <button
+                                type="button"
+                                (click)="putBack(old)"
+                                [disabled]="restoring() === old.archiveId"
+                                [attr.aria-label]="'Put it back: ' + old.text"
+                                class="rounded-sm font-medium text-primary-accessible underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed dark:text-primary-50"
+                              >Put it back</button>}
+                          </p>
+                        </li>
+                      }
+                    </ul>
+                  </details>
+                }
               </div>
               @if (canEdit()) {
                 <button
@@ -174,11 +206,15 @@ export class MemoryFileViewComponent {
   readonly propose = output<void>();
   readonly remove = output<void>();
   readonly tidy = output<void>();
+  /** An item it replaced was put back: the file has a new version. */
+  readonly restored = output<MemoryRestoreResponse>();
 
   protected readonly file = signal<MemoryFile | null>(null);
   protected readonly loading = signal(true);
   protected readonly error = signal<string | null>(null);
   protected readonly pinning = signal<string | null>(null);
+  protected readonly restoring = signal<string | null>(null);
+  protected readonly replacedLabel = replacedLabel;
 
   private readonly myEmail = computed(() => this.user.currentUser()?.email ?? null);
   protected readonly updated = computed(() => parseIso(this.entry().updated));
@@ -205,6 +241,25 @@ export class MemoryFileViewComponent {
 
   protected at(iso: string): Date {
     return parseIso(iso);
+  }
+
+  /** Whether a file still has that name, so "moved here from" can link to it. */
+  protected fileExists(slug: string): boolean {
+    return resolveLink(slug, this.entries()) === slug;
+  }
+
+  /** Put an item this one replaced back at the end of the file (the archive's restore). */
+  protected async putBack(old: ReplacedMemoryItem): Promise<void> {
+    this.restoring.set(old.archiveId);
+    try {
+      const result = await firstValueFrom(this.api.restoreMemoryItem(this.projectId(), this.scope(), old.archiveId));
+      this.toast.success('Put back', `It’s at the end of “${result.slug}” again, as version ${result.version}.`);
+      this.restored.emit(result);
+    } catch (err) {
+      this.toast.error('That item could not be put back', projectErrorMessage(err));
+    } finally {
+      this.restoring.set(null);
+    }
   }
 
   protected provenance(item: MemoryItem) {

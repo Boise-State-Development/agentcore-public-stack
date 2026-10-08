@@ -34,7 +34,7 @@ const FILE: MemoryFile = {
 };
 
 describe('MemoryFileViewComponent', () => {
-  const api = { memoryFile: vi.fn(), pinMemoryItem: vi.fn(), unpinMemoryItem: vi.fn() };
+  const api = { memoryFile: vi.fn(), pinMemoryItem: vi.fn(), unpinMemoryItem: vi.fn(), restoreMemoryItem: vi.fn() };
   const toast = { success: vi.fn(), error: vi.fn() };
 
   beforeEach(() => {
@@ -114,6 +114,73 @@ describe('MemoryFileViewComponent', () => {
   it('offers no pins to a viewer', async () => {
     const { items } = await render(false);
     expect(items()[0].querySelector('button')).toBeNull();
+  });
+
+  describe('supersede markers and moved items (2.6c)', () => {
+    const MARKED: MemoryFile = {
+      ...FILE,
+      items: [
+        {
+          anchor: 'aaaaaaaa',
+          text: 'Owner: Priya.',
+          pinned: false,
+          provenance: { addedBy: 'me@x.edu', addedAt: '2026-09-20T12:00:00Z' },
+          replaces: [
+            { archiveId: 'arch-1', text: 'Owner: Marcus.', reason: 'superseded', archivedAt: '2026-10-08T12:00:00Z', restorableUntil: '2027-10-08T12:00:00Z' },
+          ],
+        },
+        {
+          anchor: 'bbbbbbbb',
+          text: 'Batch calls in groups of 50.',
+          pinned: false,
+          provenance: { addedBy: 'dana@x.edu', addedAt: '2026-09-18T12:00:00Z', movedFrom: 'rates', movedBy: 'me@x.edu', movedAt: '2026-10-08T12:00:00Z' },
+          replaces: [
+            { archiveId: 'arch-2', text: 'Calls go in batches of 50.', reason: 'merged', archivedAt: '2026-10-08T12:00:00Z', restorableUntil: '2027-10-08T12:00:00Z' },
+          ],
+        },
+        { anchor: 'cccccccc', text: 'Plain.', pinned: false, provenance: null, replaces: [] },
+      ],
+    };
+
+    beforeEach(() => {
+      api.memoryFile.mockReturnValue(of(MARKED));
+      api.restoreMemoryItem.mockReturnValue(of({ slug: 'sis', version: 4 }));
+    });
+
+    it('marks an item that replaced others, and opens to what it replaced', async () => {
+      const { items } = await render();
+      const [first, second, third] = items();
+      expect(first.querySelector('summary')?.textContent?.trim()).toBe('Replaces an older item');
+      expect(second.querySelector('summary')?.textContent?.trim()).toBe('Merged with 1 other item');
+      expect(third.querySelector('details')).toBeNull();
+      const text = first.querySelector('details')?.textContent?.replace(/\s+/g, ' ') ?? '';
+      expect(text).toContain('Replaced: Owner: Marcus.');
+      expect(text).toContain('Replaced Oct 8, 2026 · in the archive until Oct 8, 2027');
+    });
+
+    it('says which file a moved item came from, as a link', async () => {
+      const { items } = await render();
+      const line = items()[1].querySelector('p + p') as HTMLElement;
+      expect(line.textContent?.replace(/\s+/g, ' ')).toContain('moved here from rates in a tidy-up');
+      expect(line.querySelector('a')?.getAttribute('href')).toContain('file=rates');
+    });
+
+    it('puts a replaced item back for an editor, and tells the page', async () => {
+      const { fixture, items } = await render();
+      const restored = vi.fn();
+      fixture.componentInstance.restored.subscribe(restored);
+      const putBack = items()[0].querySelector('details button') as HTMLButtonElement;
+      expect(putBack.getAttribute('aria-label')).toBe('Put it back: Owner: Marcus.');
+      putBack.click();
+      await fixture.whenStable();
+      expect(api.restoreMemoryItem).toHaveBeenCalledWith('prj_1', 'project', 'arch-1');
+      expect(restored).toHaveBeenCalledWith({ slug: 'sis', version: 4 });
+    });
+
+    it('offers a viewer no Put it back', async () => {
+      const { items } = await render(false);
+      expect(items()[0].querySelector('details button')).toBeNull();
+    });
   });
 
   it('warns when the file is close to its size limit', async () => {

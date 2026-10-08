@@ -104,6 +104,7 @@ class ProposalResponse(BaseModel):
     verification: Optional[MaintenanceVerification] = None
     run_id: Optional[str] = Field(None, alias="runId")
     applied_ops: Optional[List[int]] = Field(None, alias="appliedOps")
+    created_files: Optional[List[str]] = Field(None, alias="createdFiles", description="Files an approved split created")
 
     @classmethod
     def build(cls, p: MemoryProposal, caller: User, names: dict, stale: Optional[bool] = None) -> "ProposalResponse":
@@ -116,6 +117,7 @@ class ProposalResponse(BaseModel):
             decided_at=p.decided_at, note=p.note, result_version=p.result_version, edited=p.edited,
             is_mine=p.proposer_id == caller.user_id, stale=stale,
             ops=p.ops, verification=p.verification, run_id=p.run_id, applied_ops=p.applied_ops,
+            created_files=p.created_files,
         )
 
 
@@ -266,6 +268,18 @@ files_router = APIRouter(prefix="/projects/{project_id}/memory", tags=["projects
 Scope = Literal["project", "mine"]
 
 
+class ReplacedItem(BaseModel):
+    """An item this one replaced (a merge folded it in, or it superseded it), still in the archive (2.6c)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    archive_id: str = Field(..., alias="archiveId")
+    text: str
+    reason: str = Field(..., description="merged | superseded")
+    archived_at: str = Field(..., alias="archivedAt")
+    restorable_until: str = Field(..., alias="restorableUntil")
+
+
 class MemoryFileItem(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -273,6 +287,7 @@ class MemoryFileItem(BaseModel):
     text: str
     pinned: bool = False
     provenance: Optional[ItemProvenance] = None
+    replaces: List[ReplacedItem] = Field(default_factory=list, description="The supersede marker's items, oldest first")
 
 
 class MemoryFileResponse(BaseModel):
@@ -375,7 +390,7 @@ def _files() -> ProjectMemoryFiles:
 def _emails(provenance: dict) -> set:
     found = set()
     for p in provenance.values():
-        for value in (p.added_by, p.updated_by, p.proposed_by, p.approved_by, p.restored_by):
+        for value in (p.added_by, p.updated_by, p.proposed_by, p.approved_by, p.restored_by, p.moved_by):
             if value:
                 found.add(value)
     return found
@@ -385,11 +400,18 @@ def _emails(provenance: dict) -> set:
 def read_memory_file(
     project_id: str, slug: str, scope: Scope = Query("project"), user: User = Depends(require_projects_user)
 ) -> MemoryFileResponse:
-    """One file's items, pins and provenance (viewer+)."""
+    """One file's items, pins and provenance (viewer+), and what each item replaced (its supersede marker)."""
+    files = _files()
     try:
-        ref, items, provenance = _files().read(project_id, user, scope, slug)
+        ref, items, provenance = files.read(project_id, user, scope, slug)
     except _ERRORS as e:
         raise _translate(e)
+    try:
+        replaced = files.replaced(project_id, user, scope, slug)
+    except Exception:
+        # The markers are a courtesy: the file still reads without them.
+        logger.warning("Could not read what the items of %s replaced", slug, exc_info=True)
+        replaced = {}
     pinned = set(ref.pinned)
     return MemoryFileResponse(
         slug=ref.slug,
@@ -397,7 +419,16 @@ def read_memory_file(
         version=ref.version,
         tokens=ref.tokens,
         items=[
-            MemoryFileItem(anchor=i.anchor, text=i.text, pinned=i.anchor in pinned, provenance=provenance.get(i.anchor))
+            MemoryFileItem(
+                anchor=i.anchor, text=i.text, pinned=i.anchor in pinned, provenance=provenance.get(i.anchor),
+                replaces=[
+                    ReplacedItem(
+                        archive_id=a.archive_id, text=a.text, reason=a.reason, archived_at=a.archived_at,
+                        restorable_until=a.restorable_until,
+                    )
+                    for a in replaced.get(i.anchor, [])
+                ],
+            )
             for i in items
         ],
         people=display_names(_emails(provenance)),

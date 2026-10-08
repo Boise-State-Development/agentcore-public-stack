@@ -138,7 +138,10 @@ export function describeActivity(
         const applied = Number(after['appliedOps']);
         const total = Number.isFinite(Number(after['totalOps'] ?? NaN)) ? Number(after['totalOps']) : applied;
         const which = applied === total ? `${applied} maintenance ${applied === 1 ? 'change' : 'changes'}` : `${applied} of ${total} maintenance changes`;
-        return line(`applied ${which} to the memory file “${str(after['slug'])}”`);
+        // A split's new files (2.6c).
+        const made = Array.isArray(after['createdFiles']) ? (after['createdFiles'] as unknown[]).map(f => `“${str(f)}”`) : [];
+        const moved = made.length ? `, moving items into ${made.join(', ')}` : '';
+        return line(`applied ${which} to the memory file “${str(after['slug'])}”${moved}`);
       }
       return line(`approved a change to the memory file “${str(after['slug'])}”${after['edited'] ? ' with edits' : ''}`);
     case 'project.memory_maintenance_started':

@@ -10,6 +10,7 @@ import {
   itemProblem,
   linkParts,
   parseItems,
+  replacedLabel,
   aliasProblem,
   renderItems,
   resolveLink,
@@ -90,6 +91,7 @@ describe('describeProvenance', () => {
       text: 'Added by Dana Whitfield',
       at: '2026-09-18T00:00:00Z',
       sessionId: null,
+      movedFrom: null,
     });
     const saved = describeProvenance(
       { addedBy: 'dana@x.edu', addedAt: 'a', sourceSessionId: 'sess-1' },
@@ -102,7 +104,7 @@ describe('describeProvenance', () => {
 
   it('links the caller to their own task, and calls them you', () => {
     const mine = describeProvenance({ addedBy: 'Me@x.edu', addedAt: 'a', sourceSessionId: 'sess-1' }, people, 'me@x.edu');
-    expect(mine).toEqual({ text: 'Saved by you from a task', at: 'a', sessionId: 'sess-1' });
+    expect(mine).toEqual({ text: 'Saved by you from a task', at: 'a', sessionId: 'sess-1', movedFrom: null });
   });
 
   it('tells a proposal, an edit and a restore apart', () => {
@@ -122,6 +124,25 @@ describe('describeProvenance', () => {
 
   it('says so when an item predates provenance', () => {
     expect(describeProvenance(null, people, null).text).toBe('Added before item history was kept');
+  });
+
+  it('keeps who added a moved item, and says where it came from (2.6c)', () => {
+    const moved = describeProvenance(
+      { addedBy: 'dana@x.edu', addedAt: 'a', movedFrom: 'canvas', movedBy: 'pat@x.edu', movedAt: 'm' }, people, null,
+    );
+    expect(moved).toEqual({ text: 'Added by Dana Whitfield', at: 'a', sessionId: null, movedFrom: 'canvas' });
+  });
+});
+
+describe('replacedLabel (2.6c)', () => {
+  const row = (reason: 'merged' | 'superseded') => ({ archiveId: 'x', text: 't', reason, archivedAt: 'a', restorableUntil: 'b' });
+
+  it('counts the items it shows: what merged in, and what it superseded', () => {
+    expect(replacedLabel([row('merged')])).toBe('Merged with 1 other item');
+    expect(replacedLabel([row('merged'), row('merged')])).toBe('Merged with 2 other items');
+    expect(replacedLabel([row('superseded')])).toBe('Replaces an older item');
+    expect(replacedLabel([row('superseded'), row('superseded')])).toBe('Replaces 2 older items');
+    expect(replacedLabel([row('merged'), row('superseded')])).toBe('Merged with 1 other item · Replaces an older item');
   });
 });
 

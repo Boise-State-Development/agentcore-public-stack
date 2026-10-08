@@ -228,6 +228,7 @@
                   (propose)="startEditing('propose')"
                   (remove)="deleteFile(entry)"
                   (tidy)="tidy(entry)"
+                  (restored)="onRestored()"
                 />
               } @else {
                 <app-memory-index-view

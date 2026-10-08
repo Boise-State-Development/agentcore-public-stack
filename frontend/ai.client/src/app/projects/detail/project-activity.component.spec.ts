@@ -49,6 +49,10 @@ describe('describeActivity', () => {
     [rec('project.memory_proposal_approved', { after: { slug: 'sis', edited: true } }), 'approved a change to the memory file “sis” with edits'],
     [rec('project.memory_proposal_approved', { after: { slug: 'sis', kind: 'compaction', appliedOps: 2, totalOps: 2 } }), 'applied 2 maintenance changes to the memory file “sis”'],
     [rec('project.memory_proposal_approved', { after: { slug: 'sis', kind: 'compaction', appliedOps: '1', totalOps: '3' } }), 'applied 1 of 3 maintenance changes to the memory file “sis”'],
+    [
+      rec('project.memory_proposal_approved', { after: { slug: 'canvas', kind: 'compaction', appliedOps: '4', totalOps: '4', createdFiles: ['lti-tools'] } }),
+      'applied 4 maintenance changes to the memory file “canvas”, moving items into “lti-tools”',
+    ],
     [rec('project.memory_maintenance_started', { after: { runId: 'r1' } }), 'ran maintenance on project memory'],
     [rec('project.memory_maintenance_started', { after: { runId: 'r1', slug: 'sis' } }), 'ran maintenance on the memory file “sis”'],
     [rec('project.memory_proposal_rejected', { after: { slug: 'sis' } }), 'declined a change to the memory file “sis”'],

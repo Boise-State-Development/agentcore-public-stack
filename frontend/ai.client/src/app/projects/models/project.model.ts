@@ -203,16 +203,20 @@ export interface MaintenanceOpSource {
 /**
  * One change a maintenance run proposes (2.6a). `merge`: `sources` become one item, `text`,
  * kept under `keep`'s anchor. `supersede`: `sources` is `[old, new]`, and the old one leaves.
- * `prune`: the one source leaves because every date in it has passed.
+ * `prune`: the one source leaves because every date in it has passed. `split` (2.6c): `sources`
+ * move, unchanged, to a new file `newSlug` described by `description`, and `text` is the
+ * pointer item that takes their place.
  */
 export interface MaintenanceOp {
-  type: 'merge' | 'supersede' | 'prune';
+  type: 'merge' | 'supersede' | 'prune' | 'split';
   sources: MaintenanceOpSource[];
   text?: string | null;
   keep?: string | null;
   reason?: 'expired' | null;
   /** The planner's reason, for the reviewer. */
   why: string;
+  newSlug?: string | null;
+  description?: string | null;
 }
 
 /** A proposed change to the project's shared memory (2.5a), as `/memory/proposals` returns it. */
@@ -248,6 +252,8 @@ export interface MemoryProposal {
   ops?: MaintenanceOp[] | null;
   runId?: string | null;
   appliedOps?: number[] | null;
+  /** The files an approved split created (2.6c). */
+  createdFiles?: string[] | null;
 }
 
 export interface MemoryProposalDetail extends MemoryProposal {
@@ -317,6 +323,20 @@ export interface ItemProvenance {
   approvedBy?: string | null;
   restoredBy?: string | null;
   restoredAt?: string | null;
+  /** A tidy-up's split moved it here from this file (2.6c). */
+  movedFrom?: string | null;
+  movedBy?: string | null;
+  movedAt?: string | null;
+}
+
+/** An item this one replaced, still in the archive: its supersede marker (2.6c). */
+export interface ReplacedMemoryItem {
+  archiveId: string;
+  text: string;
+  /** `merged`: folded into this item. `superseded`: this newer item replaced it. */
+  reason: 'merged' | 'superseded';
+  archivedAt: string;
+  restorableUntil: string;
 }
 
 export interface MemoryItem {
@@ -325,6 +345,8 @@ export interface MemoryItem {
   pinned: boolean;
   /** Null for an item saved before provenance was recorded and not changed since. */
   provenance?: ItemProvenance | null;
+  /** What it replaced, oldest first; absent or empty when nothing. */
+  replaces?: ReplacedMemoryItem[];
 }
 
 /** `GET /projects/{id}/memory/files/{slug}`: one file as items. */
@@ -488,11 +510,12 @@ export type MaintenanceRunState = 'queued' | 'running' | 'done' | 'failed';
 /**
  * What a run did with one file. `proposed`: changes wait for review (project memory).
  * `applied`: the changes were saved (your own memory, 2.6b). `changed`: the file was saved
- * while the run planned it, so it was left alone.
+ * while the run planned it, so it was left alone. `created`: a new file a split made from
+ * `splitFrom` (2.6c).
  */
 export interface MaintenanceFileResult {
   slug: string;
-  outcome: 'proposed' | 'applied' | 'changed' | 'nothing_to_do' | 'pending_review' | 'failed' | 'not_reached';
+  outcome: 'proposed' | 'applied' | 'changed' | 'nothing_to_do' | 'pending_review' | 'failed' | 'not_reached' | 'created';
   proposalId?: string | null;
   planned: number;
   kept: number;
@@ -505,10 +528,12 @@ export interface MaintenanceFileResult {
   opsOmitted?: boolean;
   /**
    * After an undo: `restored` (put back, as `undoVersion`), `changed` (saved since the run, so
-   * left alone), `missing` (deleted since), `failed`.
+   * left alone), `missing` (deleted since), `failed`, or for a file a split made, `removed`.
    */
-  undo?: 'restored' | 'changed' | 'missing' | 'failed' | null;
+  undo?: 'restored' | 'changed' | 'missing' | 'failed' | 'removed' | null;
   undoVersion?: number | null;
+  /** `created`: the file its items came from. */
+  splitFrom?: string | null;
 }
 
 /**

@@ -29,7 +29,8 @@ export interface ReviewOutcome {
  * A proposal whose file changed since it was written can only be approved after editing.
  *
  * A maintenance proposal (2.6a) is a list of changes instead: merges, replacements and
- * removals, each with the assistant's reason. The reviewer ticks the ones to apply. They
+ * removals, each with the assistant's reason, and for a large file, moves of a sub-topic's
+ * items into a new file (2.6c), which approval creates. The reviewer ticks the ones to apply. They
  * land on the file as it is at approval, so a change whose items were edited since is
  * skipped rather than undoing the edit; only none of them still applying makes it stale.
  */
@@ -138,6 +139,18 @@ export interface ReviewOutcome {
                                   <app-memory-text [text]="source.text" [entries]="entries()" />
                                 </li>
                               }
+                            } @else if (op.type === 'split') {
+                              <li class="text-xs/5 text-gray-600 dark:text-gray-400">
+                                New file <span class="font-mono font-medium text-gray-900 dark:text-white">{{ op.newSlug }}</span>@if (op.description) {: {{ op.description }}}
+                              </li>
+                              @for (source of op.sources; track source.anchor) {
+                                <li class="rounded-lg bg-gray-50 px-2.5 py-1.5 text-sm/6 break-words text-gray-800 dark:bg-gray-900/60 dark:text-gray-200">
+                                  <span class="sr-only">Moves: </span><app-memory-text [text]="source.text" [entries]="entries()" />
+                                </li>
+                              }
+                              <li class="rounded-lg bg-state-success-50 px-2.5 py-1.5 text-sm/6 break-words text-state-success-900 dark:bg-state-success-900/30 dark:text-state-success-200">
+                                <span class="sr-only">Added in their place: </span>A line pointing to <span class="font-mono">{{ op.newSlug }}</span>, so anything that reads this file still finds them
+                              </li>
                             } @else {
                             @for (source of removedSources(op); track source.anchor) {
                               <li class="rounded-lg bg-state-danger-50 px-2.5 py-1.5 text-sm/6 break-words text-state-danger-900 line-through dark:bg-state-danger-900/30 dark:text-state-danger-200">
@@ -375,11 +388,14 @@ export class MemoryReviewComponent {
       const total = this.ops().length;
       const ops = [...this.chosen()].sort((a, b) => a - b);
       const body = ops.length === total ? { note } : { note, ops };
-      return this.decide(p, this.api.approveProposal(this.projectId(), p.proposalId, body), applied => {
-        const done = applied?.length ?? ops.length;
+      return this.decide(p, this.api.approveProposal(this.projectId(), p.proposalId, body), result => {
+        const done = result.appliedOps?.length ?? ops.length;
+        const made = result.createdFiles?.length
+          ? ` Moved items into ${result.createdFiles.map(slug => `“${slug}”`).join(', ')}.`
+          : '';
         return done < ops.length
-          ? `Applied ${changes(done)} to “${p.slug}”. The others no longer matched the file.`
-          : `Applied ${changes(done)} to “${p.slug}”.`;
+          ? `Applied ${changes(done)} to “${p.slug}”.${made} The others no longer matched the file.`
+          : `Applied ${changes(done)} to “${p.slug}”.${made}`;
       }, true);
     }
     const body = this.editing() ? { text: this.editedText(), note } : { note };
@@ -397,6 +413,7 @@ export class MemoryReviewComponent {
   protected opTitle(op: MaintenanceOp): string {
     if (op.type === 'merge') return `Merge ${op.sources.length} items that say the same thing`;
     if (op.type === 'supersede') return 'Replace an item a newer one updates';
+    if (op.type === 'split') return `Move ${count(op.sources.length)} to a new file`;
     return 'Remove an item whose dates have passed';
   }
 
@@ -419,7 +436,7 @@ export class MemoryReviewComponent {
   private async decide(
     p: MemoryProposal,
     call: Observable<MemoryProposal>,
-    done: string | ((appliedOps: number[] | null | undefined) => string),
+    done: string | ((result: MemoryProposal) => string),
     applied: boolean,
   ): Promise<void> {
     this.busy.set(true);
@@ -430,7 +447,7 @@ export class MemoryReviewComponent {
       this.proposals.update(list => list.filter(x => x.proposalId !== p.proposalId));
       this.detail.set(null);
       this.selectedId.set(null);
-      this.toast.success(typeof done === 'string' ? done : done(result.appliedOps));
+      this.toast.success(typeof done === 'string' ? done : done(result));
       this.decided.emit({ proposal: result, applied });
       const next = this.proposals()[Math.min(index, this.proposals().length - 1)];
       if (next) void this.select(next.proposalId);

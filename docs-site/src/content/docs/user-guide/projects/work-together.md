@@ -265,25 +265,38 @@ page reads every file, and the ✨ button on a file reads just that one. It take
 a few minutes, and you can leave the page while it runs.
 
 The assistant only **suggests** changes. They wait in the review queue, and
-memory doesn't change until an editor approves them. It suggests three kinds:
+memory doesn't change until an editor approves them. It suggests four kinds:
 
 - **Merge** items that say the same thing into one. A merge keeps every number,
   date, link, name and reason its items had, and adds nothing new. The
   assistant's suggestion is checked for that before you see it.
 - **Replace** an item that a newer one updates or contradicts.
 - **Remove** an item whose dates have all passed, like a meeting that happened.
+- **Move** a group of items to a new file. This is only suggested for a file
+  that is close to its size limit, and only for a group of at least five items
+  about a topic of its own, such as the LTI tools in a file about the Canvas
+  sync. The items move word for word, and the file keeps a line that links to
+  the new one, so anything that pointed at the old file still finds them. The
+  new file is added to the memory index.
 
-Pinned items are never removed. Each suggestion shows what it takes out and
+Pinned items are never removed or moved. Each suggestion shows what it takes out and
 why. Untick any you don't want, then **Apply** the rest. If someone edited the
 file since the run, the edit is kept. Any suggestion that touches an edited item
 is skipped, and the review says so. Items that leave go to the archive like any
 other removed item, labelled with how they left, so you can bring one back.
+Moved items aren't archived, because they haven't left memory.
+
+An item that replaced others says so under it: **Replaces an older item** or
+**Merged with 1 other item**. Open it to see what it replaced, and, if you can
+edit the file, **Put it back** to return that item to the end of the file. You
+can do this for as long as the archive keeps it. An item that was moved says
+which file it came from.
 
 #### Tidy up your own memory
 
 Anyone in the project can tidy their own memory: open **Just me** and use
-**Tidy up**, or the ✨ button on one of your files. It makes the same three kinds
-of change, checked the same way, but there's no review queue: the changes are
+**Tidy up**, or the ✨ button on one of your files. It makes the same kinds of
+change, checked the same way, but there's no review queue: the changes are
 saved as soon as the run ends, because nobody else's memory is affected.
 
 When it finishes, the line under the buttons says how many changes it made, and
@@ -293,6 +306,10 @@ can undo for about a month (the line says until when). If you've changed a file
 since the run, Undo leaves that file alone so your edit is kept, and says so.
 Its **History** still has the version from before the tidy-up, and the archive
 still has the items it took out, so you can bring those back yourself.
+
+If the tidy-up moved items to a new file, Undo puts them back where they were
+and removes the new file. It does that only if you haven't changed either file
+since; otherwise it leaves both as they are and says why.
 
 If you edit a file while the run is working on it, the run leaves that file
 alone too.

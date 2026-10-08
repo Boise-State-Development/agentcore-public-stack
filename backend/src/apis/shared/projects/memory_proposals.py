@@ -257,6 +257,8 @@ class ProjectMemoryProposals:
             if proposal.applied_ops is not None:
                 after["appliedOps"] = len(proposal.applied_ops)
                 after["totalOps"] = len(proposal.ops or [])
+            if proposal.created_files:
+                after["createdFiles"] = list(proposal.created_files)
         if proposal.result_version is not None:
             after["version"] = proposal.result_version
         if proposal.edited:

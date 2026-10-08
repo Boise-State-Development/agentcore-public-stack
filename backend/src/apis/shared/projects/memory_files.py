@@ -101,6 +101,11 @@ class ProjectMemoryFiles:
         space_id = self.space(project_id, user, scope, writable=False)
         return self.memory.read_file_items(space_id, user.user_id, user.email, slug)
 
+    def replaced(self, project_id: str, user: User, scope: MemoryScope, slug: str):
+        """``{anchor: archived items}``: what each item of a file replaced, while the archive has it (2.6c)."""
+        space_id = self.space(project_id, user, scope, writable=False)
+        return self.memory.replaced_items(space_id, user.user_id, user.email, slug)
+
     def set_pinned(self, project_id: str, user: User, scope: MemoryScope, slug: str, anchor: str, *, pinned: bool):
         space_id = self.space(project_id, user, scope, writable=True)
         return self.memory.set_pinned(space_id, user.user_id, user.email, slug, anchor, pinned=pinned)
