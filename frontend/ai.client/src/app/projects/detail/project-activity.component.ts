@@ -133,7 +133,15 @@ export function describeActivity(
     case 'project.memory_proposed':
       return line(`proposed a change to the memory file “${str(after['slug'])}”`);
     case 'project.memory_proposal_approved':
+      if (after['kind'] === 'compaction' && typeof after['appliedOps'] === 'number') {
+        const applied = Number(after['appliedOps']);
+        const total = typeof after['totalOps'] === 'number' ? Number(after['totalOps']) : applied;
+        const which = applied === total ? `${applied} maintenance ${applied === 1 ? 'change' : 'changes'}` : `${applied} of ${total} maintenance changes`;
+        return line(`applied ${which} to the memory file “${str(after['slug'])}”`);
+      }
       return line(`approved a change to the memory file “${str(after['slug'])}”${after['edited'] ? ' with edits' : ''}`);
+    case 'project.memory_maintenance_started':
+      return line(str(after['slug']) ? `ran maintenance on the memory file “${str(after['slug'])}”` : 'ran maintenance on project memory');
     case 'project.memory_proposal_rejected':
       return line(`declined a change to the memory file “${str(after['slug'])}”`);
     case 'project.memory_edited':

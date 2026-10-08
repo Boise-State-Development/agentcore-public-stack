@@ -194,9 +194,32 @@ export interface ProjectOutputsResponse {
   outputs: ProjectOutput[];
 }
 
+/** One item a maintenance change reads, with its text when the change was planned. */
+export interface MaintenanceOpSource {
+  anchor: string;
+  text: string;
+}
+
+/**
+ * One change a maintenance run proposes (2.6a). `merge`: `sources` become one item, `text`,
+ * kept under `keep`'s anchor. `supersede`: `sources` is `[old, new]`, and the old one leaves.
+ * `prune`: the one source leaves because every date in it has passed.
+ */
+export interface MaintenanceOp {
+  type: 'merge' | 'supersede' | 'prune';
+  sources: MaintenanceOpSource[];
+  text?: string | null;
+  keep?: string | null;
+  reason?: 'expired' | null;
+  /** The planner's reason, for the reviewer. */
+  why: string;
+}
+
 /** A proposed change to the project's shared memory (2.5a), as `/memory/proposals` returns it. */
 export interface MemoryProposal {
   proposalId: string;
+  /** `compaction`: a maintenance run's changes (2.6a), reviewed op by op. Absent before 2.6a. */
+  kind?: 'entry' | 'compaction';
   state: 'pending' | 'approved' | 'rejected' | 'withdrawn';
   /** The memory file it creates or replaces. */
   slug: string;
@@ -207,7 +230,7 @@ export interface MemoryProposal {
   baseVersion: number;
   proposedByEmail: string;
   proposedByName?: string | null;
-  proposerKind: 'member' | 'agent' | 'schedule';
+  proposerKind: 'member' | 'agent' | 'schedule' | 'maintenance';
   createdAt: string;
   decidedByEmail?: string | null;
   decidedByName?: string | null;
@@ -216,8 +239,15 @@ export interface MemoryProposal {
   resultVersion?: number | null;
   edited: boolean;
   isMine: boolean;
-  /** Pending, and the file changed since: approve an edited version or decline. */
+  /**
+   * Pending, and the file changed since: approve an edited version or decline. For a
+   * maintenance proposal, none of its changes still apply.
+   */
   stale?: boolean | null;
+  /** Maintenance proposals: the changes, the run that planned them, and which were applied. */
+  ops?: MaintenanceOp[] | null;
+  runId?: string | null;
+  appliedOps?: number[] | null;
 }
 
 export interface MemoryProposalDetail extends MemoryProposal {
@@ -319,7 +349,10 @@ export interface ArchivedMemoryItem {
   anchor: string;
   text: string;
   /** `removed`: a save left it out. `deleted`: its whole file was deleted. */
-  reason: 'removed' | 'deleted';
+  /** `merged`, `superseded`, `pruned`: an approved maintenance change took it out (2.6a). */
+  reason: 'removed' | 'deleted' | 'merged' | 'superseded' | 'pruned';
+  /** The anchor of the item that took its place (a merge or a supersede). */
+  supersededBy?: string | null;
   archivedBy: string;
   archivedAt: string;
   restorableUntil: string;
@@ -446,4 +479,39 @@ export interface ProjectAuditResponse {
   /** Display names by email for the people the page mentions (actors and members). */
   people?: Record<string, string>;
   nextCursor?: string | null;
+}
+
+// ---- maintenance (2.6a) -------------------------------------------------
+
+export type MaintenanceRunState = 'queued' | 'running' | 'done' | 'failed';
+
+/** What a run did with one file. */
+export interface MaintenanceFileResult {
+  slug: string;
+  outcome: 'proposed' | 'nothing_to_do' | 'pending_review' | 'failed' | 'not_reached';
+  proposalId?: string | null;
+  planned: number;
+  kept: number;
+  dropped: number;
+  error?: string | null;
+}
+
+/** A maintenance run on the project's shared memory, as the owner and editors see it. */
+export interface MaintenanceRun {
+  runId: string;
+  state: MaintenanceRunState;
+  /** The one file it maintains; null for every file. */
+  slug?: string | null;
+  requestedByEmail: string;
+  requestedByName?: string | null;
+  createdAt: string;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  results: MaintenanceFileResult[];
+  error?: string | null;
+}
+
+export interface MaintenanceRunsResponse {
+  /** Newest first. */
+  runs: MaintenanceRun[];
 }

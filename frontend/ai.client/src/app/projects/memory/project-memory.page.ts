@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal, untracked } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal, untracked, viewChild } from '@angular/core';
 import { DatePipe } from '@angular/common';
 import { HttpErrorResponse } from '@angular/common/http';
 import { Router, RouterLink } from '@angular/router';
@@ -18,6 +18,7 @@ import { MemoryIndexEditorComponent } from './memory-index-editor.component';
 import { MemoryFileViewComponent } from './memory-file-view.component';
 import { MemoryHistoryComponent } from './memory-history.component';
 import { MemoryIndexViewComponent } from './memory-index-view.component';
+import { MemoryMaintenanceComponent } from './memory-maintenance.component';
 import { MemoryMeterComponent } from './memory-meter.component';
 import { MemoryReviewComponent, ReviewOutcome } from './memory-review.component';
 import { INDEX_SLUG, estimateTokens } from './memory-text';
@@ -64,6 +65,7 @@ const EMPTY: ScopeState = { entries: [], index: '' };
     MemoryHistoryComponent,
     MemoryIndexEditorComponent,
     MemoryIndexViewComponent,
+    MemoryMaintenanceComponent,
     MemoryMeterComponent,
     MemoryReviewComponent,
   ],
@@ -96,6 +98,8 @@ export class ProjectMemoryPage {
   /** The editor open in place of the file view, if any (2.8b). */
   protected readonly editing = signal<MemoryEditorMode | 'index' | null>(null);
   protected readonly starting = signal(false);
+  /** The Tidy up control, which a file's own Tidy up starts a one-file run through (2.6a). */
+  private readonly maintenance = viewChild<MemoryMaintenanceComponent>('maintenance');
 
   protected readonly activeScope = computed<MemoryScope>(() => (this.scope() === 'mine' ? 'mine' : 'project'));
   protected readonly activeView = computed<MemoryView>(() => {
@@ -296,6 +300,15 @@ export class ProjectMemoryPage {
   protected onDecided(outcome: ReviewOutcome): void {
     this.pending.update(n => Math.max(0, n - 1));
     if (outcome.applied) void this.loadScope('project');
+  }
+
+  protected tidy(entry: MemoryEntry): void {
+    void this.maintenance()?.start(entry.slug);
+  }
+
+  /** A maintenance run ended; any proposals it made are now in the review count. */
+  protected onMaintenanceFinished(): void {
+    void this.loadPending();
   }
 
   /** The restored item's file has a new version; the archive stays open for the next one. */

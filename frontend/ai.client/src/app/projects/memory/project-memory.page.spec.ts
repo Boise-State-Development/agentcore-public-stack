@@ -24,6 +24,9 @@ describe('ProjectMemoryPage', () => {
     memoryArchive: vi.fn(),
     deleteMemoryFile: vi.fn(),
     createMyMemory: vi.fn(),
+    maintenanceRuns: vi.fn(),
+    startMaintenance: vi.fn(),
+    maintenanceRun: vi.fn(),
   };
   const dialog = { open: vi.fn() };
 
@@ -44,6 +47,8 @@ describe('ProjectMemoryPage', () => {
     api.memoryArchive.mockReturnValue(of({ items: [], people: {} }));
     api.deleteMemoryFile.mockReturnValue(of(undefined));
     api.createMyMemory.mockReturnValue(of({ spaceId: 'spc_new' }));
+    api.maintenanceRuns.mockReturnValue(of({ runs: [] }));
+    api.startMaintenance.mockReturnValue(of({ runId: 'r1', state: 'done', requestedByEmail: 'me@x.edu', createdAt: '2026-10-07T12:00:00Z', results: [] }));
     dialog.open.mockReturnValue({ closed: of(true) });
     TestBed.configureTestingModule({
       imports: [ProjectMemoryPage],
@@ -184,5 +189,33 @@ describe('ProjectMemoryPage', () => {
     expect(api.createMyMemory).toHaveBeenCalledWith('prj_1');
     expect(api.memoryEntries).toHaveBeenCalledWith('spc_new');
     expect(el.querySelector('app-memory-editor h2')?.textContent).toContain('New file');
+  });
+
+  describe('tidy up (2.6a)', () => {
+    const tidyButtons = (el: HTMLElement) =>
+      Array.from(el.querySelectorAll('button')).filter(b => /Tidy up/.test(b.textContent ?? '') || /^Tidy up /.test(b.getAttribute('aria-label') ?? ''));
+
+    it('an editor tidies all of project memory or one file', async () => {
+      const { el, fixture } = await render();
+      const [all, file] = tidyButtons(el);
+      expect(all.textContent).toContain('Tidy up');
+      expect(file.getAttribute('aria-label')).toBe('Tidy up rates');
+
+      file.click();
+      for (let i = 0; i < 3; i++) {
+        await fixture.whenStable();
+        await new Promise(r => setTimeout(r, 0));
+      }
+      expect(api.startMaintenance).toHaveBeenCalledWith('prj_1', 'rates');
+    });
+
+    it('is not offered in your own memory or to a viewer', async () => {
+      const mine = await render({ scope: 'mine' });
+      expect(tidyButtons(mine.el)).toEqual([]);
+
+      api.get.mockReturnValue(of({ ...PROJECT, role: 'viewer' } as Project));
+      const viewer = await render();
+      expect(tidyButtons(viewer.el)).toEqual([]);
+    });
   });
 });

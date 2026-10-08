@@ -24,6 +24,31 @@ const PROPOSAL: MemoryProposal = {
   stale: false,
 };
 
+const COMPACTION: MemoryProposal = {
+  ...PROPOSAL,
+  proposalId: 'c1',
+  kind: 'compaction',
+  slug: 'canvas',
+  proposerKind: 'maintenance',
+  text: '- Batch calls in groups of 50. <!-- e:aaaaaaaa -->',
+  ops: [
+    {
+      type: 'merge',
+      sources: [{ anchor: 'aaaaaaaa', text: 'Batch calls in groups of 50.' }, { anchor: 'bbbbbbbb', text: 'Calls go in batches of 50.' }],
+      text: 'Batch calls in groups of 50.',
+      keep: 'aaaaaaaa',
+      why: 'The same rule twice',
+    },
+    { type: 'prune', sources: [{ anchor: 'cccccccc', text: 'Kickoff on 2026-09-14.' }], reason: 'expired', why: 'The meeting happened' },
+    {
+      type: 'supersede',
+      sources: [{ anchor: 'dddddddd', text: 'Owner: Marcus.' }, { anchor: 'eeeeeeee', text: 'Owner: Priya.' }],
+      why: 'Priya took over',
+    },
+  ],
+  runId: 'r1',
+};
+
 const DETAIL: MemoryProposalDetail = {
   ...PROPOSAL,
   currentText: '- Term codes are YYYYTT. <!-- e:aaaaaaaa -->\n- Old fact. <!-- e:bbbbbbbb -->',
@@ -167,5 +192,55 @@ describe('MemoryReviewComponent', () => {
     button(/Decline/).click();
     await settle();
     expect(api.proposal).toHaveBeenLastCalledWith('prj_1', 'p2');
+  });
+
+  describe('a maintenance proposal', () => {
+    beforeEach(() => {
+      api.proposals.mockReturnValue(of({ proposals: [COMPACTION] }));
+      api.proposal.mockReturnValue(of({ ...COMPACTION, currentText: null }));
+      api.approveProposal.mockReturnValue(of({ ...COMPACTION, state: 'approved', appliedOps: [0, 1, 2] }));
+    });
+
+    it('lists each change with its reason and what it removes, all chosen', async () => {
+      const { el, button } = await render();
+      expect(el.textContent).toContain('Tidy up');
+      expect(el.textContent).toContain('Suggested by maintenance Vi Viewer ran');
+      expect(el.textContent).toContain('Merge 2 items that say the same thing');
+      expect(el.textContent).toContain('The meeting happened');
+      expect(el.textContent).toContain('Kept, and replaces it:');
+      expect(el.querySelectorAll('section h4').length).toBe(0);
+      const boxes = el.querySelectorAll<HTMLInputElement>('input[type="checkbox"]');
+      expect(Array.from(boxes).map(b => b.checked)).toEqual([true, true, true]);
+      expect(button(/Apply 3 changes/)).toBeDefined();
+      expect(button(/Edit before approving/)).toBeUndefined();
+    });
+
+    it('applies every change with no ops list, or only the ones left ticked', async () => {
+      const { el, button, settle, decided } = await render();
+      button(/Apply 3 changes/).click();
+      await settle();
+      expect(api.approveProposal).toHaveBeenCalledWith('prj_1', 'c1', { note: undefined });
+      expect(toast.success).toHaveBeenCalledWith('Applied 3 changes to “canvas”.');
+      expect(decided).toHaveBeenCalledWith(expect.objectContaining({ applied: true }));
+
+      api.proposals.mockReturnValue(of({ proposals: [COMPACTION] }));
+      const second = await render();
+      second.el.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')[1].click();
+      await second.settle();
+      api.approveProposal.mockReturnValue(of({ ...COMPACTION, state: 'approved', appliedOps: [0] }));
+      second.button(/Apply 2 changes/).click();
+      await second.settle();
+      expect(api.approveProposal).toHaveBeenLastCalledWith('prj_1', 'c1', { note: undefined, ops: [0, 2] });
+      expect(toast.success).toHaveBeenLastCalledWith('Applied 1 change to “canvas”. The others no longer matched the file.');
+      void el;
+    });
+
+    it('when none of its changes still apply, only declining is left', async () => {
+      api.proposal.mockReturnValue(of({ ...COMPACTION, stale: true, currentText: null }));
+      const { el, button } = await render();
+      expect(el.textContent).toContain('none of these changes still apply');
+      expect(button(/Apply 3 changes/).disabled).toBe(true);
+      expect(button(/Decline/).disabled).toBe(false);
+    });
   });
 });
