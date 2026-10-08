@@ -14,6 +14,7 @@ Attributes:
 """
 
 import hashlib
+import asyncio
 import logging
 import os
 from datetime import datetime, timezone
@@ -27,7 +28,13 @@ logger = logging.getLogger(__name__)
 
 
 class ApiKeyRepository:
-    """DynamoDB repository for API key CRUD operations."""
+    """DynamoDB repository for API key CRUD operations.
+
+    Every table call runs on a worker thread (``asyncio.to_thread``): boto3 is
+    synchronous, and app-api is one uvicorn process, so a call made directly
+    from these ``async`` methods held the event loop for the DynamoDB round
+    trip on every API-key request.
+    """
 
     def __init__(self):
         self.dynamodb = boto3.resource("dynamodb")
@@ -52,7 +59,8 @@ class ApiKeyRepository:
     async def create_key(self, item: Dict[str, Any]) -> None:
         """Put a new API key item into the table."""
         try:
-            self.table.put_item(
+            await asyncio.to_thread(
+                self.table.put_item,
                 Item=item,
                 ConditionExpression="attribute_not_exists(PK) AND attribute_not_exists(SK)",
             )
@@ -63,7 +71,8 @@ class ApiKeyRepository:
     async def delete_key(self, user_id: str, key_id: str) -> bool:
         """Delete an API key. Returns True if deleted."""
         try:
-            self.table.delete_item(
+            await asyncio.to_thread(
+                self.table.delete_item,
                 Key={"PK": f"USER#{user_id}", "SK": f"KEY#{key_id}"},
                 ConditionExpression="attribute_exists(PK)",
             )
@@ -77,7 +86,8 @@ class ApiKeyRepository:
     async def update_last_used(self, user_id: str, key_id: str) -> None:
         """Stamp lastUsedAt on a key after successful validation."""
         try:
-            self.table.update_item(
+            await asyncio.to_thread(
+                self.table.update_item,
                 Key={"PK": f"USER#{user_id}", "SK": f"KEY#{key_id}"},
                 UpdateExpression="SET lastUsedAt = :ts",
                 ExpressionAttributeValues={
@@ -94,14 +104,16 @@ class ApiKeyRepository:
 
     async def get_key(self, user_id: str, key_id: str) -> Optional[Dict[str, Any]]:
         """Fetch a single key item by user_id + key_id."""
-        resp = self.table.get_item(
+        resp = await asyncio.to_thread(
+            self.table.get_item,
             Key={"PK": f"USER#{user_id}", "SK": f"KEY#{key_id}"}
         )
         return resp.get("Item")
 
     async def get_key_for_user(self, user_id: str) -> Optional[Dict[str, Any]]:
         """Get the API key belonging to a user (one key per user)."""
-        resp = self.table.query(
+        resp = await asyncio.to_thread(
+            self.table.query,
             KeyConditionExpression=Key("PK").eq(f"USER#{user_id}"),
             Limit=1,
         )
@@ -110,7 +122,8 @@ class ApiKeyRepository:
 
     async def get_key_by_hash(self, key_hash: str) -> Optional[Dict[str, Any]]:
         """Look up a key by its hash via the KeyHashIndex GSI."""
-        resp = self.table.query(
+        resp = await asyncio.to_thread(
+            self.table.query,
             IndexName="KeyHashIndex",
             KeyConditionExpression=Key("keyHash").eq(key_hash),
             Limit=1,

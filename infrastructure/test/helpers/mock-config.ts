@@ -7,6 +7,7 @@
  */
 import * as cdk from 'aws-cdk-lib';
 import { AppConfig,
+  API_CONVERSE_MAX_IN_FLIGHT_DEFAULT,
   CONVERSATION_RETENTION_DAYS_DEFAULT,
   MANAGED_KB_DEFAULT_PER_OWNER_BYTES,
   MANAGED_KB_ELEVATED_PER_OWNER_BYTES,
@@ -61,6 +62,7 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
       memory: 512,
       desiredCount: 1,
       maxCapacity: 2,
+      apiConverseMaxInFlight: API_CONVERSE_MAX_IN_FLIGHT_DEFAULT,
     },
     inferenceApi: {},
     // Observability mirrors the shipped OSS defaults rather than hardcoded

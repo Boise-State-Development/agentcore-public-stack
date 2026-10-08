@@ -6,7 +6,7 @@
 // empty string and must fall through to the committed default rather than
 // becoming 0 or NaN.
 import * as cdk from 'aws-cdk-lib';
-import { loadConfig } from '../lib/config';
+import { API_CONVERSE_MAX_IN_FLIGHT_DEFAULT, loadConfig } from '../lib/config';
 
 const BASE: Record<string, unknown> = {
   projectPrefix: 'test-project',
@@ -72,5 +72,40 @@ describe('appApi sizing precedence', () => {
     const c = mk({ appApi: { cpu: 1024, memory: 2048, desiredCount: 2, maxCapacity: 10 } });
     expect([c.appApi.cpu, c.appApi.memory, c.appApi.desiredCount, c.appApi.maxCapacity])
       .toEqual([1024, 2048, 2, 10]);
+  });
+});
+
+describe('appApi.apiConverseMaxInFlight', () => {
+  const saved = { ...process.env };
+  const sized = { appApi: { cpu: 1024, memory: 2048, desiredCount: 2, maxCapacity: 10 } };
+  afterEach(() => { process.env = { ...saved }; });
+
+  it('defaults to the committed constant when nothing sets it', () => {
+    delete process.env.CDK_APP_API_CONVERSE_MAX_IN_FLIGHT;
+    expect(mk(sized).appApi.apiConverseMaxInFlight).toBe(API_CONVERSE_MAX_IN_FLIGHT_DEFAULT);
+  });
+
+  it('an unset GitHub variable arrives as "" and falls through to the default', () => {
+    process.env.CDK_APP_API_CONVERSE_MAX_IN_FLIGHT = '';
+    expect(mk(sized).appApi.apiConverseMaxInFlight).toBe(API_CONVERSE_MAX_IN_FLIGHT_DEFAULT);
+  });
+
+  it('env var beats flat context beats nested context', () => {
+    expect(mk({ ...sized, appApi: { ...sized.appApi, apiConverseMaxInFlight: 4 } })
+      .appApi.apiConverseMaxInFlight).toBe(4);
+    expect(mk({ ...sized, appApi: { ...sized.appApi, apiConverseMaxInFlight: 4 },
+      'appApi.apiConverseMaxInFlight': '8' }).appApi.apiConverseMaxInFlight).toBe(8);
+    process.env.CDK_APP_API_CONVERSE_MAX_IN_FLIGHT = '32';
+    expect(mk({ ...sized, 'appApi.apiConverseMaxInFlight': '8' }).appApi.apiConverseMaxInFlight).toBe(32);
+  });
+
+  it('rejects 0 rather than shipping a cap that refuses every call', () => {
+    process.env.CDK_APP_API_CONVERSE_MAX_IN_FLIGHT = '0';
+    expect(() => mk(sized)).toThrow(/apiConverseMaxInFlight/);
+  });
+
+  it('rejects a value that is not a whole number instead of truncating it', () => {
+    process.env.CDK_APP_API_CONVERSE_MAX_IN_FLIGHT = '8.5';
+    expect(() => mk(sized)).toThrow(/CDK_APP_API_CONVERSE_MAX_IN_FLIGHT/);
   });
 });

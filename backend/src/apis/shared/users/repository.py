@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import Optional, List, Tuple
 import boto3
 from botocore.exceptions import ClientError
+import asyncio
 import logging
 import os
 
@@ -84,6 +85,13 @@ class UserRepository:
         EmailIndex: email (for exact email lookup)
         EmailDomainIndex: GSI2PK=DOMAIN#<domain>, GSI2SK=lastLoginAt
         StatusLoginIndex: GSI3PK=STATUS#<status>, GSI3SK=lastLoginAt
+
+    Every table call in an ``async`` method runs on a worker thread
+    (``asyncio.to_thread``): boto3 is synchronous, and app-api is one uvicorn
+    process, so a call made directly from a coroutine held the event loop for
+    the DynamoDB round trip — on the cookie-session path that is every
+    request. ``query_users_by_status`` stays synchronous for its synchronous
+    callers; ``list_users_by_status`` wraps it.
     """
 
     def __init__(self, table_name: str = None):
@@ -119,7 +127,8 @@ class UserRepository:
             return None
 
         try:
-            response = self.table.get_item(
+            response = await asyncio.to_thread(
+                self.table.get_item,
                 Key={
                     "PK": f"USER#{user_id}",
                     "SK": "PROFILE"
@@ -143,7 +152,8 @@ class UserRepository:
             return None
 
         try:
-            response = self.table.query(
+            response = await asyncio.to_thread(
+                self.table.query,
                 IndexName="UserIdIndex",
                 KeyConditionExpression="userId = :userId",
                 ExpressionAttributeValues={
@@ -179,7 +189,7 @@ class UserRepository:
             }
             items: List[dict] = []
             while True:
-                response = self.table.query(**kwargs)
+                response = await asyncio.to_thread(self.table.query, **kwargs)
                 items.extend(response.get("Items", []))
                 last_key = response.get("LastEvaluatedKey")
                 if not last_key:
@@ -220,7 +230,8 @@ class UserRepository:
         item = self._profile_to_item(profile)
 
         try:
-            self.table.put_item(
+            await asyncio.to_thread(
+                self.table.put_item,
                 Item=item,
                 ConditionExpression="attribute_not_exists(PK)"
             )
@@ -240,7 +251,7 @@ class UserRepository:
         item = self._profile_to_item(profile)
 
         try:
-            self.table.put_item(Item=item)
+            await asyncio.to_thread(self.table.put_item, Item=item)
             logger.debug(f"Updated user: {profile.user_id}")
             return profile
         except ClientError as e:
@@ -318,7 +329,7 @@ class UserRepository:
             if last_evaluated_key:
                 kwargs["ExclusiveStartKey"] = last_evaluated_key
 
-            response = self.table.query(**kwargs)
+            response = await asyncio.to_thread(self.table.query, **kwargs)
             items = [self._item_to_list_item(item) for item in response.get("Items", [])]
             next_key = response.get("LastEvaluatedKey")
 
@@ -337,7 +348,7 @@ class UserRepository:
         List users by status, sorted by last login (descending).
         Uses StatusLoginIndex GSI.
         """
-        return self.query_users_by_status(status, limit, last_evaluated_key)
+        return await asyncio.to_thread(self.query_users_by_status, status, limit, last_evaluated_key)
 
     def query_users_by_status(
         self,
@@ -397,7 +408,7 @@ class UserRepository:
                 "Select": "COUNT",
             }
             while True:
-                response = self.table.query(**kwargs)
+                response = await asyncio.to_thread(self.table.query, **kwargs)
                 total += int(response.get("Count", 0))
                 last_key = response.get("LastEvaluatedKey")
                 if not last_key:
