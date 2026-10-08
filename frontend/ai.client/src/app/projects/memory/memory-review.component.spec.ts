@@ -227,6 +227,7 @@ describe('MemoryReviewComponent', () => {
       const second = await render();
       second.el.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')[1].click();
       await second.settle();
+      expect(second.el.textContent).toContain('Not chosen: this item stays in the file as it is.');
       api.approveProposal.mockReturnValue(of({ ...COMPACTION, state: 'approved', appliedOps: [0] }));
       second.button(/Apply 2 changes/).click();
       await second.settle();

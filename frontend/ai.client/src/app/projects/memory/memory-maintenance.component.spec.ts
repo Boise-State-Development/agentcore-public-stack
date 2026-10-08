@@ -93,6 +93,7 @@ describe('MemoryMaintenanceComponent', () => {
   });
 
   it('runs on one file', async () => {
+    api.startMaintenance.mockReturnValue(of(run({ slug: 'canvas' })));
     const { fixture, el, tick } = await render();
     void fixture.componentInstance.start('canvas');
     await tick(0);

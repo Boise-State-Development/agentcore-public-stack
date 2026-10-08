@@ -133,9 +133,10 @@ export function describeActivity(
     case 'project.memory_proposed':
       return line(`proposed a change to the memory file “${str(after['slug'])}”`);
     case 'project.memory_proposal_approved':
-      if (after['kind'] === 'compaction' && typeof after['appliedOps'] === 'number') {
+      // The audit trail stores numbers as strings, so read them either way.
+      if (after['kind'] === 'compaction' && Number.isFinite(Number(after['appliedOps'] ?? NaN))) {
         const applied = Number(after['appliedOps']);
-        const total = typeof after['totalOps'] === 'number' ? Number(after['totalOps']) : applied;
+        const total = Number.isFinite(Number(after['totalOps'] ?? NaN)) ? Number(after['totalOps']) : applied;
         const which = applied === total ? `${applied} maintenance ${applied === 1 ? 'change' : 'changes'}` : `${applied} of ${total} maintenance changes`;
         return line(`applied ${which} to the memory file “${str(after['slug'])}”`);
       }

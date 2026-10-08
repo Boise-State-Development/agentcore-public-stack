@@ -813,9 +813,20 @@ Each PR targets `develop`, lands behind `PROJECTS_ENABLED` (opt-in while in deve
     - Every change starts ticked. **Apply N changes** sends `ops` only when some are unticked.
     - The toast reports how many went in, and says so when some no longer matched the file.
     - There is no "Edit before approving" for these. A stale one (none still applies) can only be declined.
+    - An unticked change shows its items unstruck, under "Not chosen: … stays in the file as it is", rather than dimmed, which would fail contrast.
   - **Archive and Activity.** Archive rows read "Merged into another item / Replaced by a newer item / Removed as past by maintenance, approved by …". Activity gains "ran maintenance on project memory" (or on one file) and "applied N (of M) maintenance changes to the memory file …".
   - **Docs:** the user guide's work-together page has a **Tidy up memory** section, and its notification list now includes proposals and maintenance.
   - **UI impact (for the 1.8 mockup re-sync):** the Tidy up button and status line, the file's ✨ button, and the change-list review.
+  - **Verified locally, end to end (2026-10-08).** This was this branch's app-api with `SKIP_AUTH`, against dev tables, in a disposable project since deleted. The worker invoke was swapped for an in-process `MaintenanceRunner`, so the planner made real Bedrock calls on the catalog default, Haiku 4.5.
+    - A file was seeded with two items that say the same thing, an owner change and a past kickoff. The planner proposed the supersede (Marcus → Priya) and the prune, and the verifier dropped its merge.
+    - Unticking the prune and applying one change wrote v2 without the Marcus item, and its archive row read "Replaced by a newer item by maintenance, approved by you". The audit recorded `appliedOps 1 / totalOps 2`.
+    - The one-file run proposed the prune again, and declining it worked.
+    - axe was clean in light and dark on the review (ticked and unticked) and the files toolbar.
+    - Fixed from this check:
+      - The Activity line now reads the audit's numbers, which are stored as strings.
+      - **New file** stays on the toolbar row while the status line shows.
+      - Unticked changes are no longer struck through.
+      - Two planner findings went to the 2.6a branch: Haiku sometimes sent a merge with no `text`, and its `why` cited the prompt's item numbers ("item 6 updates item 4"), which reviewers never see.
 - **2.7** Content lint (`memoryLintMode`, §9.3) and the export `provenance.json`.
 - **2.8** SPA Memory tab: browser, file view, block editor, link picker, history, review queue, archive, size meters, "My memory in this project".
   **Split in three**, like 2.3, 2.4 and 2.5a. 2.8a is the read side plus the governance that already had APIs (pins, archive, review). 2.8b is the block editor, link picker and Propose. 2.8c is history with diff and restore.

@@ -131,6 +131,14 @@ export interface ReviewOutcome {
                             <p [id]="'op-why-' + p.proposalId + '-' + i" class="text-xs/5 text-gray-600 dark:text-gray-400">{{ op.why }}</p>
                           }
                           <ul class="mt-2 flex flex-col gap-1.5">
+                            @if (canReview() && !chosen().has(i)) {
+                              <li class="text-xs/5 text-gray-600 dark:text-gray-400">Not chosen: {{ removedSources(op).length === 1 ? 'this item stays' : 'these items stay' }} in the file as {{ removedSources(op).length === 1 ? 'it is' : 'they are' }}.</li>
+                              @for (source of removedSources(op); track source.anchor) {
+                                <li class="rounded-lg px-2.5 py-1.5 text-sm/6 break-words text-gray-700 dark:text-gray-300">
+                                  <app-memory-text [text]="source.text" [entries]="entries()" />
+                                </li>
+                              }
+                            } @else {
                             @for (source of removedSources(op); track source.anchor) {
                               <li class="rounded-lg bg-state-danger-50 px-2.5 py-1.5 text-sm/6 break-words text-state-danger-900 line-through dark:bg-state-danger-900/30 dark:text-state-danger-200">
                                 <span class="sr-only">Removed: </span><app-memory-text [text]="source.text" [entries]="entries()" />
@@ -144,6 +152,7 @@ export interface ReviewOutcome {
                               <li class="rounded-lg px-2.5 py-1.5 text-sm/6 break-words text-gray-700 dark:text-gray-300">
                                 <span class="text-xs/5 font-medium text-gray-600 dark:text-gray-400">Kept, and replaces it: </span><app-memory-text [text]="op.sources[1]?.text || ''" [entries]="entries()" />
                               </li>
+                            }
                             }
                           </ul>
                         </div>
