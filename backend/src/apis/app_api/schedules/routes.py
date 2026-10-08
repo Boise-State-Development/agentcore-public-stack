@@ -10,10 +10,10 @@ Gating is a single per-environment control (spec §6):
 * ``SCHEDULED_RUNS_ENABLED`` — kill switch (default on). Off -> every route
   here 404s, as if unmounted.
 
-The surface is otherwise open to any authenticated user. It carries no nav
-entry and isn't linked from the SPA, so it stays low-key / reachable only by
-direct URL — deliberately *not* behind the ``scheduled-runs`` RBAC capability
-(which turned every non-beta caller into a 403 the SPA surfaced as a toast).
+The surface is otherwise open to any authenticated user, and the SPA links
+it from the sidebar's Schedules entry. It is deliberately *not* behind the
+``scheduled-runs`` RBAC capability (which turned every non-beta caller into a
+403 the SPA surfaced as a toast).
 
 Auth is the standard SPA cookie dependency (``get_current_user_from_session``)
 per the CLAUDE.md app-api rule.

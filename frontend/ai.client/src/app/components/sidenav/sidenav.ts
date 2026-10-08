@@ -2,6 +2,18 @@ import { Component, inject, computed, signal } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { NavigationEnd, Router, RouterLink, RouterLinkActive } from '@angular/router';
 import { filter } from 'rxjs/operators';
+import { Dialog } from '@angular/cdk/dialog';
+import { CdkMenu, CdkMenuItem, CdkMenuTrigger } from '@angular/cdk/menu';
+import { ConnectedPosition } from '@angular/cdk/overlay';
+import { NgIcon, provideIcons } from '@ng-icons/core';
+import {
+  heroAdjustmentsHorizontal,
+  heroChevronRight,
+  heroClock,
+  heroDocumentText,
+  heroFolderOpen,
+  heroSparkles,
+} from '@ng-icons/heroicons/outline';
 import { SessionList } from './components/session-list/session-list';
 import { AdminNav } from '../../admin/admin-nav';
 import { isAdminChromeRoute } from '../../shared/utils/route-chrome';
@@ -16,10 +28,35 @@ import { TooltipDirective } from '../tooltip/tooltip.directive';
 import { BrandingService } from '../../../branding/branding.service';
 import { SearchDialogService } from '../search/search-dialog.service';
 import { searchShortcutAria, searchShortcutLabel } from '../search/search-shortcut';
+import { SidebarLayoutService } from './sidebar-layout.service';
+import { EditSidebarDialogComponent } from './components/edit-sidebar-dialog.component';
 
 @Component({
   selector: 'app-sidenav',
-  imports: [SessionList, AdminNav, UserDropdownComponent, NotificationBellComponent, TooltipDirective, RouterLink, RouterLinkActive],
+  imports: [
+    SessionList,
+    AdminNav,
+    UserDropdownComponent,
+    NotificationBellComponent,
+    TooltipDirective,
+    RouterLink,
+    RouterLinkActive,
+    CdkMenuTrigger,
+    CdkMenu,
+    CdkMenuItem,
+    NgIcon,
+  ],
+  // Every icon an entry in `sidebar-items.ts` names, plus More's chevron.
+  providers: [
+    provideIcons({
+      heroAdjustmentsHorizontal,
+      heroChevronRight,
+      heroClock,
+      heroDocumentText,
+      heroFolderOpen,
+      heroSparkles,
+    }),
+  ],
   templateUrl: './sidenav.html',
   styleUrl: './sidenav.css',
 })
@@ -33,6 +70,17 @@ export class Sidenav {
   /** This build's front-end feature switches (compile-time; see environments/feature-flags.ts). */
   protected readonly features = inject(FEATURES);
   private readonly searchDialog = inject(SearchDialogService);
+  private readonly dialog = inject(Dialog);
+  /** Which navigation entries the user shows, in what order (Edit sidebar). */
+  protected readonly sidebarLayout = inject(SidebarLayoutService);
+
+  /** Beside the More row where there is room; under or over it in a narrow drawer. */
+  protected readonly moreMenuPositions: ConnectedPosition[] = [
+    { originX: 'end', originY: 'top', overlayX: 'start', overlayY: 'top', offsetX: 8 },
+    { originX: 'end', originY: 'bottom', overlayX: 'start', overlayY: 'bottom', offsetX: 8 },
+    { originX: 'start', originY: 'bottom', overlayX: 'start', overlayY: 'top', offsetY: 4 },
+    { originX: 'start', originY: 'top', overlayX: 'start', overlayY: 'bottom', offsetY: -4 },
+  ];
 
   /** The search shortcut as this platform spells it, for the button's tooltip. */
   protected readonly searchShortcutLabel = searchShortcutLabel();
@@ -64,6 +112,15 @@ export class Sidenav {
   protected readonly isAdminChrome = computed(() => {
     this.navigated();
     return isAdminChromeRoute(this.router.routerState.snapshot.root);
+  });
+
+  /** Whether the active page is one of the entries waiting under More. */
+  protected readonly moreActive = computed(() => {
+    this.navigated();
+    const url = (this.router.url ?? '').split(/[?#]/)[0];
+    return this.sidebarLayout
+      .hiddenEntries()
+      .some((entry) => url === entry.route || url.startsWith(`${entry.route}/`));
   });
 
   // Access to current session signals - available for use in template or component logic
@@ -102,6 +159,17 @@ export class Sidenav {
   navigateToAgents() {
     this.sidenavService.close();
     this.router.navigate(['/agents']);
+  }
+
+  /**
+   * Opens Edit sidebar. Its changes show in the sidebar as they are made; the
+   * layout is saved once, however the dialog closes. A failed save surfaces
+   * through the global error toast and the sidebar keeps the edit.
+   */
+  protected openEditSidebar(): void {
+    this.dialog
+      .open<void>(EditSidebarDialogComponent)
+      .closed.subscribe(() => void this.sidebarLayout.save().catch(() => undefined));
   }
 
   onBodyScroll(event: Event): void {
