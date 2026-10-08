@@ -45,6 +45,9 @@ async def update_settings(
         # '' is the wire value for "back to the default"; the repository
         # removes a None attribute rather than storing an empty string.
         update_data["voiceId"] = update_data["voiceId"] or None
+    if "sidebarItems" in update_data:
+        # An empty list means "back to the default layout", like null.
+        update_data["sidebarItems"] = update_data["sidebarItems"] or None
 
     # Validate defaultModelId if provided and not null
     if "defaultModelId" in update_data and update_data["defaultModelId"] is not None:
