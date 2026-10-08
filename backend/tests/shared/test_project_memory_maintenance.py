@@ -456,6 +456,8 @@ class TestPlanner:
         assert (plan.input_tokens, plan.output_tokens) == (900, 80)
         call = client.calls[0]
         assert call["toolConfig"]["toolChoice"] == {"any": {}}
+        change_schema = call["toolConfig"]["tools"][0]["toolSpec"]["inputSchema"]["json"]["properties"]["changes"]["items"]
+        assert "text" in change_schema["required"]  # optional, Haiku sometimes left it out of a merge
         message = call["messages"][0]["content"][0]["text"]
         assert "[1] a" in message and "[2] (pinned) b" in message and "Today is 2026-10-07." in message
 

@@ -141,6 +141,10 @@ class TestSupersede:
 
 
 class TestPrune:
+    def test_the_empty_text_a_prune_now_carries_is_ignored(self):
+        [op], report = verify(PlannedChange(type="prune", ids=(4,), reason="expired", text=""))
+        assert op.text is None and codes(report) == []
+
     def test_only_an_item_whose_dates_have_passed(self):
         assert len(verify(PlannedChange(type="prune", ids=(4,), reason="expired"))[0]) == 1
         assert codes(verify(PlannedChange(type="prune", ids=(1,), reason="expired"))[1]) == ["not_expired"]

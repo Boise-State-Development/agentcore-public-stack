@@ -63,11 +63,18 @@ TOOL_SPEC = {
                                     "items": {"type": "integer"},
                                     "description": "Item numbers. merge: two or more. supersede: [old, new]. prune: one.",
                                 },
-                                "text": {"type": "string", "description": "Required for a merge: the one item that replaces them. Omit for supersede and prune."},
+                                "text": {
+                                    "type": "string",
+                                    "description": "For a merge: the one item that replaces them. For supersede and prune: an empty string.",
+                                },
                                 "reason": {"type": "string", "enum": ["expired"], "description": "prune only."},
                                 "why": {"type": "string", "description": "One short sentence for the reviewer, about what the items say. No item numbers."},
                             },
-                            "required": ["type", "items", "why"],
+                            # `text` is required for every change, though only a merge uses it:
+                            # optional, Haiku 4.5 left it out of 2 in 8 merges on dev
+                            # (2026-10-08), which the verifier then had to drop; required,
+                            # 0 in 8.
+                            "required": ["type", "items", "text", "why"],
                         },
                     }
                 },
