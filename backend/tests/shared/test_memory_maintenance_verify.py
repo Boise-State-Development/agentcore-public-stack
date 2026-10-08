@@ -63,6 +63,30 @@ class TestMerge:
         ops, report = verify(merge(1, 2, text=text))
         assert ops == [] and codes(report) == [code]
 
+    def test_a_reason_kept_without_its_because_still_counts(self):
+        items = (
+            Item("Batch Canvas enrollment calls in groups of 50; larger batches hit the rate limit.", "aaaaaaaa"),
+            Item("Canvas enrollment calls go in batches of 50, because larger batches hit the rate limit.", "bbbbbbbb"),
+        )
+        ops, report = verify_plan(
+            [merge(1, 2, text=items[0].text)], items, today=TODAY,
+        )
+        assert len(ops) == 1 and codes(report) == []
+
+    def test_a_merge_without_its_text_is_dropped(self):
+        ops, report = verify(PlannedChange(type="merge", ids=(1, 2), text=None))
+        assert ops == [] and codes(report) == ["missing_text"]
+
+    @pytest.mark.parametrize("why, kept", [
+        ("Item 6 updates item 4 with the new owner.", ""),
+        ("Items [1] and 2 repeat each other.", ""),
+        ("See #3.", ""),
+        ("The owner changed from Marcus to Priya.", "The owner changed from Marcus to Priya."),
+    ])
+    def test_a_reason_citing_item_numbers_is_cleared(self, why, kept):
+        [op], _ = verify(PlannedChange(type="supersede", ids=(5, 6), why=why))
+        assert op.why == kept
+
     def test_a_reason_survives_a_merge(self):
         text = "Term codes are YYYYTT for the SIS (decided 2026-03), and Canvas enrollment calls batch in groups of 50."
         ops, report = verify(merge(3, 1, text=text))
