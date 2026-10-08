@@ -76,7 +76,7 @@ export type DeclineSubmissionDialogResult = string | undefined;
           type="button"
           [disabled]="!reason().trim()"
           (click)="onSubmit()"
-          class="inline-flex items-center gap-1.5 rounded-2xl bg-state-danger-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-state-danger-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-state-danger-500 dark:hover:bg-state-danger-600"
+          class="inline-flex items-center gap-1.5 rounded-2xl bg-state-danger-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-state-danger-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <ng-icon name="heroNoSymbol" class="size-4" aria-hidden="true" />
           Decline

@@ -191,7 +191,7 @@ type SortOrder = 'asc' | 'desc';
               type="button"
               (click)="confirmBulkDelete()"
               [disabled]="selectedCount() === 0 || isDeleting()"
-              class="flex items-center gap-2 rounded-lg bg-state-danger-600 px-4 py-2 text-sm/6 font-medium text-white transition-colors hover:bg-state-danger-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-state-danger-500 dark:hover:bg-state-danger-600"
+              class="flex items-center gap-2 rounded-lg bg-state-danger-600 px-4 py-2 text-sm/6 font-medium text-white transition-colors hover:bg-state-danger-700 disabled:cursor-not-allowed disabled:opacity-50"
               [appTooltip]="'Delete selected files'"
               appTooltipPosition="top"
             >

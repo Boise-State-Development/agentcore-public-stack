@@ -67,7 +67,7 @@ export type DeleteModelDialogResult = true | undefined;
         <button
           type="button"
           (click)="onConfirm()"
-          class="inline-flex items-center gap-2 rounded-2xl bg-state-danger-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-state-danger-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500 dark:bg-state-danger-500 dark:hover:bg-state-danger-600"
+          class="inline-flex items-center gap-2 rounded-2xl bg-state-danger-600 px-4 py-2 text-sm/6 font-medium text-white hover:bg-state-danger-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500"
         >
           Delete model
         </button>

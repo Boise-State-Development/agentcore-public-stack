@@ -49,14 +49,14 @@ export type DeleteToolDialogResult = boolean | undefined;
           type="button"
           cdkFocusInitial
           (click)="onCancel()"
-          class="inline-flex justify-center rounded-2xl bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring-1 inset-ring-gray-300 hover:bg-gray-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20"
+          class="rounded-2xl border border-gray-300 bg-white px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
         >
           Cancel
         </button>
         <button
           type="button"
           (click)="onConfirm()"
-          class="inline-flex justify-center rounded-md bg-state-danger-600 px-3 py-2 text-sm font-semibold text-white shadow-xs hover:bg-state-danger-500 dark:bg-state-danger-500 dark:shadow-none dark:hover:bg-state-danger-400"
+          class="rounded-2xl bg-state-danger-600 px-4 py-2 text-sm/6 font-semibold text-white hover:bg-state-danger-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500"
         >
           Delete
         </button>
