@@ -24,6 +24,12 @@ that file is reported as changed instead, and its History still has the version
 from before the run. A file deleted since is reported as missing. A restore is
 a new version (``reason: restore``), never a rewrite of history, and the items
 it brings back leave the archive with the provenance they had.
+
+**A split is undone whole** (2.6c). The file it came from is put back, and the
+file it made taken away again, only while *both* are exactly as the run wrote
+them; otherwise both stay as they are. Items that come back from the new file
+keep their provenance (without the move), and the pointer item the split left
+goes without an archive row, since nothing it said is lost.
 """
 
 from __future__ import annotations
@@ -273,9 +279,18 @@ class ProjectMemoryMaintenance:
             raise MaintenanceRequestError(409, "Maintenance is running on your memory. Undo once it has finished.")
         try:
             snapshot = {e.slug: e for e in (run.snapshot.entries if run.snapshot else [])}
+            made_from: dict = {}
+            for result in run.results:
+                if result.outcome == "created" and result.split_from:
+                    made_from.setdefault(result.split_from, []).append(result)
             for result in run.results:
                 if result.outcome == "applied":
-                    result.undo, result.undo_version = self._undo_file(space_id, user, run, result, snapshot.get(result.slug))
+                    made = made_from.get(result.slug, [])
+                    result.undo, result.undo_version = self._undo_file(
+                        space_id, user, run, result, snapshot.get(result.slug), made
+                    )
+                    for new in made:
+                        new.undo = self._undo_created(space_id, new, restored=result.undo == "restored")
             run.undone_at = now.isoformat()
             run.undone_by = (user.email or "").strip().lower()
             repo.put_maintenance_run(run, run_ttl(run.space_scope, now=datetime.fromisoformat(run.created_at)))
@@ -287,32 +302,47 @@ class ProjectMemoryMaintenance:
         )
         return run
 
-    def _undo_file(self, space_id: str, user: User, run: Any, result: Any, before: Any) -> Tuple[str, Optional[int]]:
-        """``(outcome, version)`` for one applied file."""
+    def _undo_file(
+        self, space_id: str, user: User, run: Any, result: Any, before: Any, made: Optional[List[Any]] = None
+    ) -> Tuple[str, Optional[int]]:
+        """``(outcome, version)`` for one applied file. ``made`` are the files its splits created."""
         from apis.shared.memory.format import parse_file
         from apis.shared.memory.models import ItemProvenance
         from apis.shared.memory.service import MemorySpaceConcurrencyError, MemorySpaceError, SaveContext
         from apis.shared.projects.memory_files import EditedItem, render_items_for_save
 
         memory = self.memory
-        current = next((e for e in memory.repository.get_index(space_id).entries if e.slug == result.slug), None)
+        entries = {e.slug: e for e in memory.repository.get_index(space_id).entries}
+        current = entries.get(result.slug)
         if current is None or before is None:
             return "missing", None
         if current.content_hash != result.content_hash:
+            return "changed", None
+        # A split comes undone whole, or not at all.
+        if any(entries.get(new.slug) is None or entries[new.slug].content_hash != new.content_hash for new in made or []):
             return "changed", None
         try:
             parsed = parse_file(memory.store.get(before.s3_key).decode("utf-8"))
             present = {i.anchor for i in memory._current_file(current, result.slug).items}
             returning = [i.anchor for i in parsed.items if i.anchor and i.anchor not in present]
+            moved_back = {}
+            for new in made or []:
+                for anchor, prov in memory.repository.get_provenance(space_id, new.slug).items():
+                    if anchor in returning:
+                        moved_back[anchor] = prov.model_copy(update={"moved_from": None, "moved_by": None, "moved_at": None})
             archived = {}
             for row in sorted(memory.repository.list_archived_items(space_id), key=lambda a: a.archive_id):
-                if row.slug == result.slug and row.anchor in returning:
+                if row.slug == result.slug and row.anchor in returning and row.anchor not in moved_back:
                     archived[row.anchor] = row
             restored = {
                 anchor: (archived[anchor].provenance or ItemProvenance(added_by=archived[anchor].archived_by))
                 if anchor in archived else ItemProvenance()
                 for anchor in returning
+                if anchor not in moved_back
             }
+            # The file now is exactly what the run wrote, so an anchor the
+            # snapshot lacks is one the run minted: a split's pointer.
+            minted = present - {i.anchor for i in parsed.items if i.anchor}
             fm = parsed.frontmatter or {}
             description, aliases = fm.get("description"), fm.get("aliases")
             saved = memory.save_entry(
@@ -324,7 +354,7 @@ class ProjectMemoryMaintenance:
                 run_id=run.run_id,
                 base_content_hash=current.content_hash,
                 restorable=returning,
-                context=SaveContext(restored=restored),
+                context=SaveContext(restored=restored, moved=moved_back, not_archived=minted),
             )
         except MemorySpaceConcurrencyError:
             return "changed", None
@@ -337,6 +367,24 @@ class ProjectMemoryMaintenance:
             except Exception:
                 logger.warning("Could not clear archive row %s in %s", row.archive_id, space_id, exc_info=True)
         return "restored", saved.ref.version
+
+    def _undo_created(self, space_id: str, new: Any, *, restored: bool) -> str:
+        """Take away a file a split made, once its items are back where they came from."""
+        from apis.shared.memory.service import MemorySpaceConcurrencyError, MemorySpaceNotFoundError
+
+        if not restored:
+            current = next((e for e in self.memory.repository.get_index(space_id).entries if e.slug == new.slug), None)
+            return "missing" if current is None else "changed"
+        try:
+            self.memory.discard_file(space_id, new.slug, delete_objects=True, expected_hash=new.content_hash)
+        except MemorySpaceNotFoundError:
+            return "missing"
+        except MemorySpaceConcurrencyError:
+            return "changed"
+        except Exception:
+            logger.warning("memory-maintenance: could not remove %s after an undo", new.slug, exc_info=True)
+            return "failed"
+        return "removed"
 
     def _as_seen(self, run: Any) -> Any:
         """A run still queued or running after its lease has expired is reported as failed.

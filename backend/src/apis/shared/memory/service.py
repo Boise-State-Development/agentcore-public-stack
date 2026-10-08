@@ -20,9 +20,9 @@ import logging
 import os
 import re
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Dict, List, Literal, Optional, Sequence, Tuple, TypeVar
+from typing import Any, Callable, Dict, List, Literal, Optional, Sequence, Set, Tuple, TypeVar
 
 from .format import (
     Frontmatter,
@@ -57,7 +57,7 @@ from .models import (
     ShareRole,
     SpaceMember,
 )
-from .maintenance.ops import CompactionResult, apply_ops
+from .maintenance.ops import CompactionResult, NewFile, apply_ops
 from .repository import ManifestTooLargeError, MemorySpaceRepository, OptimisticLockError
 from .store import (
     MemorySpaceStore,
@@ -71,6 +71,8 @@ from .tokens import TokenCount, count_file_tokens, estimate_tokens
 from .validation import (
     CanonicalSave,
     CurrentFile,
+    FileTarget,
+    build_name_table,
     check_name_collisions,
     freeform_link_warnings,
     validate_canonical_save,
@@ -153,6 +155,11 @@ class SaveContext:
     restored: Dict[str, ItemProvenance] = field(default_factory=dict)
     # Maintenance (2.6): why each anchor leaving the file left, and what replaced it.
     archive_reasons: Dict[str, Tuple[str, Optional[str]]] = field(default_factory=dict)
+    # A split (2.6c): anchors arriving from another file, with the provenance
+    # they carry, and anchors that leave without an archive row (moved to a new
+    # file, or a split's pointer that an undo takes back out).
+    moved: Dict[str, ItemProvenance] = field(default_factory=dict)
+    not_archived: Set[str] = field(default_factory=set)
 
 
 def max_pending_proposals() -> int:
@@ -281,6 +288,10 @@ class SaveResult:
     removed_anchors: List[str] = field(default_factory=list)
     archived_links: List[str] = field(default_factory=list)
     over_soft_threshold: bool = False
+    # Maintenance splits (2.6c): the files this save created, and how each one's
+    # index line went (``added``, ``already_linked``, ``over_budget``, or absent).
+    created: List[MemoryEntryRef] = field(default_factory=list)
+    created_indexed: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -363,6 +374,15 @@ def _get_nested(data: Dict[str, Any], dotted: str) -> Any:
             return None
         cur = cur[part]
     return cur
+
+
+@dataclass(frozen=True)
+class _PendingFile:
+    """A file a pending split would create, so the pointer to it resolves while the proposal is checked."""
+
+    slug: str
+    aliases: Tuple[str, ...] = ()
+    archived: bool = False
 
 
 def _check_pins_kept(current_ref: Optional[MemoryEntryRef], validated: CanonicalSave) -> None:
@@ -985,8 +1005,19 @@ class MemorySpaceService:
         members creating files at once keep both lines; the index is not
         versioned, so no ``FILEVER`` row is written.
         """
-        space: Optional[MemorySpace]
         space, _ = self._require(space_id, user_id, user_email, "editor")
+        return self._add_index_line(space, ref, max_tokens=max_tokens)
+
+    def _add_index_line(
+        self, space: Optional[MemorySpace], ref: MemoryEntryRef, *, max_tokens: int, collect: bool = True
+    ) -> IndexLinkOutcome:
+        """:meth:`add_index_link` once the caller's access is settled.
+
+        ``collect=False`` leaves the replaced index object in the bucket (the
+        maintenance worker may put objects but not delete them); ``consolidate``
+        reclaims it.
+        """
+        space_id = space.space_id if space is not None else ""
         names = {ref.slug.casefold(), *(a.casefold() for a in ref.aliases)}
         line = _index_line(ref.slug, ref.description)
         for attempt in range(_MAX_MANIFEST_RETRIES):
@@ -1009,10 +1040,10 @@ class MemorySpaceService:
             try:
                 self.repository.put_space_if_index_unchanged(space, old_hash)
             except OptimisticLockError:
-                if new_key != old_key and not self._key_in_use(space_id, new_key):
+                if collect and new_key != old_key and not self._key_in_use(space_id, new_key):
                     self.store.delete(new_key)
                 continue
-            if old_key and old_key != new_key and not self._key_in_use(space_id, old_key):
+            if collect and old_key and old_key != new_key and not self._key_in_use(space_id, old_key):
                 self.store.delete(old_key)
             return "added"
         raise MemorySpaceConcurrencyError(
@@ -1029,8 +1060,12 @@ class MemorySpaceService:
         looking for it. The write is conditional on the index it read, like
         ``add_index_link``.
         """
-        space: Optional[MemorySpace]
         space, _ = self._require(space_id, user_id, user_email, "editor")
+        return self._remove_index_line(space, slug)
+
+    def _remove_index_line(self, space: Optional[MemorySpace], slug: str, *, collect: bool = True) -> bool:
+        """:meth:`remove_index_link` once the caller's access is settled (``collect`` as for :meth:`_add_index_line`)."""
+        space_id = space.space_id if space is not None else ""
         pattern = re.compile(r"^\s*[-*]\s+\[\[\s*" + re.escape(slug) + r"\s*\]\]", re.IGNORECASE)
         for attempt in range(_MAX_MANIFEST_RETRIES):
             if attempt:
@@ -1051,10 +1086,10 @@ class MemorySpaceService:
             try:
                 self.repository.put_space_if_index_unchanged(space, old_hash)
             except OptimisticLockError:
-                if new_key != old_key and not self._key_in_use(space_id, new_key):
+                if collect and new_key != old_key and not self._key_in_use(space_id, new_key):
                     self.store.delete(new_key)
                 continue
-            if old_key and old_key != new_key and not self._key_in_use(space_id, old_key):
+            if collect and old_key and old_key != new_key and not self._key_in_use(space_id, old_key):
                 self.store.delete(old_key)
             return True
         raise MemorySpaceConcurrencyError(
@@ -1185,10 +1220,10 @@ class MemorySpaceService:
         user_id: str,
         user_email: Optional[str],
         slug: str,
-        items: Sequence[Item],
+        result: CompactionResult,
         run_id: str,
         base_content_hash: str,
-        archive_reasons: Dict[str, Tuple[str, Optional[str]]],
+        index_budget: int,
     ) -> SaveResult:
         """Save a maintenance run's changes to a member's own file (Shared Projects 2.6b).
 
@@ -1197,18 +1232,135 @@ class MemorySpaceService:
         member of an active project. The save is conditional on the file still
         being the one the run snapshotted (``base_content_hash``), so an edit
         made while the run was planning is never overwritten. Items that leave
-        go to the archive with their maintenance reason.
+        go to the archive with their maintenance reason; a split's new files
+        are created first (2.6c, :meth:`_apply_compaction`). The worker can't
+        delete objects, so nothing is collected here.
         """
         space = self.repository.get_space(space_id)
         if space is None:
             raise MemorySpaceNotFoundError(f"memory space '{space_id}' not found")
         if space.scope != "personal_in_project" or space.user_id != user_id:
             raise MemorySpacePermissionError("Maintenance changes are saved directly only to a member's own memory.")
-        return self._save(
-            space, user_id, user_email, slug, render_items(items),
-            reason="maintenance", run_id=run_id, base_content_hash=base_content_hash,
-            context=SaveContext(archive_reasons=dict(archive_reasons)),
+        return self._apply_compaction(
+            space, user_id, user_email, slug, result,
+            base_content_hash=base_content_hash, index_budget=index_budget, collect=False, run_id=run_id,
         )
+
+    def _apply_compaction(
+        self,
+        space: MemorySpace,
+        user_id: str,
+        user_email: Optional[str],
+        slug: str,
+        result: CompactionResult,
+        *,
+        base_content_hash: str,
+        index_budget: int,
+        collect: bool,
+        proposal_id: Optional[str] = None,
+        run_id: Optional[str] = None,
+        context: Optional[SaveContext] = None,
+    ) -> SaveResult:
+        """Save a maintenance result (``reason: maintenance``): the files its splits create, then the file.
+
+        The new files go first, so the pointer items the file gains link to
+        files that exist. Then the file, conditional on ``base_content_hash``;
+        if that save fails, the new files are discarded again (their items are
+        still in the file), so a conflict leaves the space as it was. Moved
+        items keep their anchors and provenance, plus where they came from, and
+        aren't archived: they haven't left the space. New files join
+        ``MEMORY.md`` last, under ``index_budget``; a full index leaves them
+        reachable through the pointer in the file they came from.
+        """
+        space_id = space.space_id
+        current = self._find_ref(space_id, slug)
+        if current is None or current.content_hash != base_content_hash:
+            raise MemorySpaceConcurrencyError(
+                f"'{slug}' was changed by someone else while this save was in progress. Read it again and retry."
+            )
+        ctx = context or SaveContext()
+        actor, now = _normalize_email(user_email), _now_iso()
+        provenance = self.repository.get_provenance(space_id, slug) if result.new_files else {}
+        created: List[MemoryEntryRef] = []
+        try:
+            for new in result.new_files:
+                if self._find_ref(space_id, new.slug) is not None:
+                    raise MemoryValidationError(
+                        f"A file named '{new.slug}' already exists, so items can't move to it.", code="name_collision"
+                    )
+                moved = {
+                    i.anchor: (provenance.get(i.anchor) or ItemProvenance()).model_copy(
+                        update={"moved_from": slug, "moved_by": actor or None, "moved_at": now}
+                    )
+                    for i in new.items if i.anchor
+                }
+                made = self._save(
+                    space, user_id, user_email, new.slug, render_items(new.items),
+                    description=new.description, reason="maintenance", proposal_id=proposal_id, run_id=run_id,
+                    restorable=list(moved), context=SaveContext(moved=moved),
+                )
+                created.append(made.ref)
+            saved = self._save(
+                space, user_id, user_email, slug, render_items(result.items, allow_new=True),
+                reason="maintenance", proposal_id=proposal_id, run_id=run_id,
+                base_content_hash=base_content_hash,
+                context=replace(ctx, archive_reasons=dict(result.archive), not_archived=ctx.not_archived | result.moved),
+            )
+        except Exception:
+            for ref in created:
+                try:
+                    self.discard_file(space_id, ref.slug, delete_objects=collect)
+                except Exception:
+                    logger.warning("Could not roll back new file '%s' in %s", ref.slug, space_id, exc_info=True)
+            raise
+        saved.created = created
+        for ref in created:
+            try:
+                saved.created_indexed[ref.slug] = self._add_index_line(
+                    self.repository.get_space(space_id), ref, max_tokens=index_budget, collect=collect
+                )
+            except Exception:
+                logger.warning("Could not index new file '%s' in %s", ref.slug, space_id, exc_info=True)
+        return saved
+
+    def discard_file(
+        self, space_id: str, slug: str, *, delete_objects: bool, expected_hash: Optional[str] = None
+    ) -> None:
+        """Take a file a split created out of the space again, without archiving its items (2.6c).
+
+        For a rollback, or an undo that has already put the items back where
+        they came from, so nothing is lost. Its history, provenance and read
+        counts go with it, and its own ``MEMORY.md`` line. ``expected_hash``
+        makes it conditional on the file being unchanged. ``delete_objects``
+        collects objects nothing else references (the maintenance worker can't
+        delete; ``consolidate`` reclaims what it leaves).
+        """
+
+        def apply(index: MemoryIndex) -> List[MemoryEntryRef]:
+            removed = [e for e in index.entries if e.slug == slug]
+            if not removed:
+                raise MemoryEntryNotFoundError(f"entry '{slug}' not found in space '{space_id}'")
+            if expected_hash is not None and removed[0].content_hash != expected_hash:
+                raise MemorySpaceConcurrencyError(f"'{slug}' changed since; it was left as it is.")
+            index.entries = [e for e in index.entries if e.slug != slug]
+            return removed
+
+        removed, final_index = self._mutate_index(space_id, apply)
+        versions = self.repository.delete_file_versions(space_id, slug)
+        for cleanup in (self.repository.delete_provenance, self.repository.delete_retrieval_stats):
+            try:
+                cleanup(space_id, slug)
+            except Exception:
+                logger.warning("Could not clean up discarded file '%s' in %s", slug, space_id, exc_info=True)
+        try:
+            self._remove_index_line(self.repository.get_space(space_id), slug, collect=delete_objects)
+        except Exception:
+            logger.warning("Could not drop the index line of discarded file '%s' in %s", slug, space_id, exc_info=True)
+        if delete_objects:
+            candidates = {prev.s3_key for prev in removed}
+            candidates.update(content_key(space_id, v.content_hash) for v in versions)
+            for key in candidates - self._referenced_keys(space_id):
+                self.store.delete(key)
 
     def _save(
         self,
@@ -1268,11 +1420,13 @@ class MemorySpaceService:
         aliases: Optional[List[str]],
         now: str,
         restorable: Sequence[str] = (),
+        extra_files: Sequence[FileTarget] = (),
     ) -> PreparedSave:
         """§4.3 steps 1–5 against the current manifest: validate, render, count. Writes nothing.
 
         A save may not drop a pinned item (2.5a-2): the pin is how a member says
-        "keep this", so dropping it takes an unpin first.
+        "keep this", so dropping it takes an unpin first. ``extra_files`` are
+        files a pending split would create (2.6c), so a pointer to one resolves.
         """
         space_id = space.space_id
         canonical = space.file_format == "canonical"
@@ -1293,7 +1447,7 @@ class MemorySpaceService:
             try:
                 validated = validate_canonical_save(
                     slug=slug,
-                    files=index.entries,
+                    files=[*index.entries, *extra_files],
                     current=current,
                     text=body,
                     description=description,
@@ -1541,6 +1695,8 @@ class MemorySpaceService:
                 kept = before.get(anchor)
                 if anchor in ctx.restored:
                     after[anchor] = ctx.restored[anchor].model_copy(update={"restored_by": actor, "restored_at": now})
+                elif anchor in ctx.moved:
+                    after[anchor] = ctx.moved[anchor]
                 elif anchor in minted:
                     after[anchor] = ItemProvenance(added_by=actor, added_at=now, **stamp)
                 elif old_text.get(anchor) != item.text:
@@ -1550,7 +1706,9 @@ class MemorySpaceService:
                     after[anchor] = kept
             self.repository.put_provenance(space_id, slug, after)
             leaving = [
-                (a, old_text[a], before.get(a)) for a in validated.removed_anchors if a in old_text
+                (a, old_text[a], before.get(a))
+                for a in validated.removed_anchors
+                if a in old_text and a not in ctx.not_archived
             ]
             self._archive(
                 space, slug, leaving, reason="removed", actor=actor, now=now, reasons=ctx.archive_reasons
@@ -1606,6 +1764,24 @@ class MemorySpaceService:
             raise MemoryValidationError("This space doesn't use the item format.", code="not_canonical")
         current = self._current_file(ref, slug)
         return ref, current.items, self.repository.get_provenance(space_id, slug)
+
+    def replaced_items(
+        self, space_id: str, user_id: str, user_email: Optional[str], slug: str
+    ) -> Dict[str, List[ArchivedItem]]:
+        """What each of a file's items replaced, while the archive still has it (viewer+; 2.6c's markers).
+
+        ``{anchor: [archived items, oldest first]}``, from the ``ARCHIVE#`` rows
+        whose ``supersededBy`` is that anchor: the items a merge folded into it,
+        or an older item it superseded. Nothing new is stored, and nothing here
+        reaches a model: it is for the file view only.
+        """
+        self._require(space_id, user_id, user_email, "viewer")
+        now = _now_iso()
+        out: Dict[str, List[ArchivedItem]] = {}
+        for row in sorted(self.repository.list_archived_items(space_id), key=lambda a: a.archive_id):
+            if row.slug == slug and row.superseded_by and row.restorable_until > now:
+                out.setdefault(row.superseded_by, []).append(row)
+        return out
 
     def set_pinned(
         self, space_id: str, user_id: str, user_email: Optional[str], slug: str, anchor: str, *, pinned: bool
@@ -1876,13 +2052,15 @@ class MemorySpaceService:
         run_id: str,
         base: MemoryEntryRef,
         items: Sequence[Item],
+        new_files: Sequence[NewFile] = (),
     ) -> MemoryProposal:
         """Queue a maintenance run's changes to one file, in the name of the member who started it.
 
         Called by the maintenance worker, which holds no user session: the
         member's editor role was checked when they started the run. The result
-        (``items``) is checked like any save first, so a reviewer is never shown
-        a change that can't be applied. A file takes one maintenance proposal at
+        (``items``) is checked like any save first, and so is every file a split
+        would create (``new_files``, 2.6c), so a reviewer is never shown a
+        change that can't be applied. A file takes one maintenance proposal at
         a time, and the space's pending cap applies.
         """
         space = self.repository.get_space(space_id)
@@ -1893,8 +2071,19 @@ class MemorySpaceService:
             raise MemoryProposalStateError(f"'{slug}' already has maintenance changes waiting for review.")
         if len(pending) >= max_pending_proposals():
             raise MemoryProposalStateError(f"This project already has {len(pending)} changes waiting for review.")
-        body = render_items(items)
-        prepared = self._prepare_save(space, slug, body, description=None, aliases=None, now=_now_iso())
+        body = render_items(items, allow_new=True)
+        now = _now_iso()
+        for new in new_files:
+            if self._find_ref(space_id, new.slug) is not None:
+                raise MemoryValidationError(f"A file named '{new.slug}' already exists.", code="name_collision")
+            self._prepare_save(
+                space, new.slug, render_items(new.items), description=new.description, aliases=None, now=now,
+                restorable=[i.anchor for i in new.items if i.anchor],
+            )
+        prepared = self._prepare_save(
+            space, slug, body, description=None, aliases=None, now=now,
+            extra_files=[_PendingFile(slug=new.slug) for new in new_files],
+        )
         proposal = MemoryProposal(
             proposal_id=_new_proposal_id(),
             kind="compaction",
@@ -1917,14 +2106,21 @@ class MemorySpaceService:
     def preview_compaction(
         self, space_id: str, proposal: MemoryProposal, *, selected: Optional[Sequence[int]] = None
     ) -> Tuple[CompactionResult, Optional[MemoryEntryRef]]:
-        """A compaction proposal's ops applied to the file as it is now. Reads the file."""
-        ref = self._find_ref(space_id, proposal.slug)
+        """A compaction proposal's ops applied to the file as it is now. Reads the file.
+
+        A split whose new name has been taken since (by a file's name or alias)
+        no longer applies.
+        """
+        entries = self.repository.get_index(space_id).entries
+        ref = next((e for e in entries if e.slug == proposal.slug), None)
         if ref is None:
             ops = proposal.ops or []
             skipped = list(range(len(ops))) if selected is None else list(selected)
             return CompactionResult(items=(), skipped=skipped), None
         items = self._current_file(ref, proposal.slug).items
-        return apply_ops(items, proposal.ops or [], pinned=ref.pinned, selected=selected), ref
+        return apply_ops(
+            items, proposal.ops or [], pinned=ref.pinned, selected=selected, taken=build_name_table(entries)
+        ), ref
 
     def compaction_view(self, space_id: str, proposal: MemoryProposal) -> Tuple[str, bool]:
         """``(text, stale)`` for a pending compaction proposal, as a reviewer should see it.
@@ -1938,7 +2134,7 @@ class MemorySpaceService:
         result, ref = self.preview_compaction(space_id, proposal)
         if ref is None or not result.applied:
             return proposal.text, True
-        return render_items(result.items), False
+        return render_items(result.items, allow_new=True), False
 
     def _approve_compaction(
         self,
@@ -1954,7 +2150,9 @@ class MemorySpaceService:
 
         Ops are addressed by anchor, so an edit since the run doesn't block the
         rest: an op whose items changed, went or got pinned is skipped, and
-        ``applied_ops`` records what went in. None left to apply is a 409.
+        ``applied_ops`` records what went in. None left to apply is a 409. A
+        split creates its file (``created_files``), which joins ``MEMORY.md``
+        under the shared index budget.
         """
         total = len(proposal.ops or [])
         if ops is not None and (not ops or any(i < 0 or i >= total for i in ops)):
@@ -1975,25 +2173,33 @@ class MemorySpaceService:
             "note": _clean_note(note),
             "applied_ops": result.applied,
         })
+        from .hydration import PROJECT_MEMORY_MAX_TOKENS
+
+        # approve_proposal required editor already.
+        space = self.repository.get_space(space_id)
+        if space is None:
+            raise MemorySpaceNotFoundError(f"memory space '{space_id}' not found")
         self._transition(space_id, decided, expected="pending")
         try:
-            saved = self.save_entry(
-                space_id, user_id, user_email, proposal.slug, render_items(result.items),
-                reason="maintenance",
+            saved = self._apply_compaction(
+                space, user_id, user_email, proposal.slug, result,
+                base_content_hash=ref.content_hash,
+                index_budget=PROJECT_MEMORY_MAX_TOKENS,
+                collect=True,
                 proposal_id=proposal.proposal_id,
                 run_id=proposal.run_id,
-                base_content_hash=ref.content_hash,
                 context=SaveContext(
                     proposal_id=proposal.proposal_id,
                     proposed_by=proposal.proposer_email or None,
                     approved_by=_normalize_email(user_email) or None,
-                    archive_reasons=result.archive,
                 ),
             )
         except Exception:
             self._transition(space_id, proposal, expected="approved")
             raise
         decided.result_version = saved.ref.version
+        if saved.created:
+            decided.created_files = [r.slug for r in saved.created]
         try:
             self.repository.put_proposal(space_id, decided)
         except Exception:

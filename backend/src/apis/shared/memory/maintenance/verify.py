@@ -22,6 +22,12 @@ dropped with a stable ``code`` rather than repaired:
   one it replaces, when provenance says when each was written.
 - **A prune is only for the past.** The item must carry a date, and every date
   in it must have passed.
+- **A split moves, never rewrites** (2.6c). It is offered only for a file near
+  its size limit, takes at least :data:`MIN_SPLIT_ITEMS` items and leaves at
+  least one, moves no pinned item, and names a new file that is a valid name
+  no file or alias in the space already answers to, with a description. The items keep their text
+  and anchors; the pointer item that takes their place is written here, not
+  by the model.
 
 Pure functions: no I/O.
 """
@@ -34,8 +40,17 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
-from ..format import Item, MemoryFormatError, check_item_text, extract_links
+from ..format import (
+    INDEX_SLUG,
+    Item,
+    MemoryFormatError,
+    check_item_text,
+    extract_links,
+    normalize_description,
+    validate_slug,
+)
 from ..models import DroppedOp, ItemProvenance, MaintenanceOp, MaintenanceVerification, OpSource
+from ..validation import FileTarget, build_name_table
 
 
 @dataclass(frozen=True)
@@ -47,7 +62,15 @@ class PlannedChange:
     text: Optional[str] = None
     reason: Optional[str] = None
     why: str = ""
+    # A split's new file (2.6c).
+    new_slug: Optional[str] = None
+    description: Optional[str] = None
 
+
+# The smallest group a split may move. Asked to split, Haiku 4.5 cut a
+# 25-item, single-topic reference into 3 to 7 files of 2 to 5 items in 8 of 8
+# samples (2026-10-08); the prompt now asks for 5 or more, and this holds it.
+MIN_SPLIT_ITEMS = 5
 
 _NUMBER_RE = re.compile(r"\d+(?:[.,:/-]\d+)*")
 _THOUSANDS_RE = re.compile(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?")
@@ -189,6 +212,16 @@ def _reason_clauses(text: str) -> List[Set[str]]:
     return clauses
 
 
+def split_pointer(slug: str, description: str) -> str:
+    """The item a split leaves where its items stood, so anything that reads the file finds them."""
+    return f"Moved to [[{slug}]]: {description}"
+
+
+def _new_slug(raw: Optional[str]) -> str:
+    """The model's name for a new file, the way a person would type it: lowercase, spaces as hyphens."""
+    return re.sub(r"\s+", "-", (raw or "").strip().lower())
+
+
 def _written_at(provenance: Optional[ItemProvenance]) -> str:
     if provenance is None:
         return ""
@@ -202,26 +235,40 @@ def verify_plan(
     pinned: Sequence[str] = (),
     provenance: Optional[Dict[str, ItemProvenance]] = None,
     today: date,
+    files: Sequence[FileTarget] = (),
+    allow_split: bool = False,
 ) -> Tuple[List[MaintenanceOp], MaintenanceVerification]:
-    """Check each planned change in order. Returns the ops that passed and the report."""
+    """Check each planned change in order. Returns the ops that passed and the report.
+
+    ``files`` is the space's manifest, which a split's new name is checked
+    against; ``allow_split`` says the file was offered splits (it is near its
+    size limit).
+    """
     pins = set(pinned)
     prov = provenance or {}
     report = MaintenanceVerification(planned=len(changes))
     kept: List[MaintenanceOp] = []
     consumed: Set[str] = set()
+    taken = set(build_name_table(files)) | {INDEX_SLUG.casefold()}
 
     def drop(change: PlannedChange, code: str, detail: str = "") -> None:
         report.dropped.append(DroppedOp(type=change.type, code=code, detail=detail))
 
     for change in changes:
-        if change.type not in ("merge", "supersede", "prune"):
+        if change.type not in ("merge", "supersede", "prune", "split"):
             drop(change, "unknown_type", f"'{change.type}' is not a change maintenance makes.")
+            continue
+        if change.type == "split" and not allow_split:
+            drop(change, "not_large", "Only a file near its size limit is split.")
+            continue
+        if change.type == "split" and len(set(change.ids)) < MIN_SPLIT_ITEMS:
+            drop(change, "too_small", f"A split moves at least {MIN_SPLIT_ITEMS} items.")
             continue
         expected = {"supersede": 2, "prune": 1}.get(change.type)
         ids = list(change.ids)
         if len(set(ids)) != len(ids) or (expected is not None and len(ids) != expected) or (
             change.type == "merge" and len(ids) < 2
-        ):
+        ) or (change.type == "split" and len(ids) >= len(items)):
             drop(change, "bad_shape", "The change names the wrong number of items.")
             continue
         if any(i < 1 or i > len(items) or not items[i - 1].anchor for i in ids):
@@ -254,6 +301,28 @@ def verify_plan(
                 continue
             op.text = text
             op.keep = pinned_sources[0] if pinned_sources else anchors[0]
+        elif change.type == "split":
+            if set(anchors) & pins:
+                drop(change, "pinned", "A pinned item stays in its file.")
+                continue
+            try:
+                slug = validate_slug(_new_slug(change.new_slug), canonical=True)
+            except MemoryFormatError as exc:
+                drop(change, "bad_name", str(exc))
+                continue
+            if slug.casefold() in taken:
+                drop(change, "name_taken", f"A file in this memory already answers to '{slug}'.")
+                continue
+            try:
+                description = normalize_description(change.description or "")
+            except MemoryFormatError as exc:
+                drop(change, "bad_description", str(exc))
+                continue
+            if not description:
+                drop(change, "missing_description", "A new file needs a description.")
+                continue
+            taken.add(slug.casefold())
+            op.new_slug, op.description, op.text = slug, description, split_pointer(slug, description)
         elif change.type == "supersede":
             if anchors[0] in pins:
                 drop(change, "pinned", "The item it replaces is pinned.")

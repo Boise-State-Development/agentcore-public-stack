@@ -156,7 +156,9 @@ class ItemProvenance(BaseModel):
     save that changes its text. ``source_session_id`` is the task the item was
     saved or proposed from, when a task's assistant wrote it. ``proposal_id``,
     ``proposed_by`` and ``approved_by`` are set when it arrived through a
-    proposal; ``restored_*`` when it came back from the archive.
+    proposal; ``restored_*`` when it came back from the archive; ``moved_*``
+    when a maintenance split moved it here from another file (2.6c), which
+    keeps everything else about where it came from.
     """
 
     model_config = ConfigDict(populate_by_name=True)
@@ -171,6 +173,9 @@ class ItemProvenance(BaseModel):
     approved_by: Optional[str] = Field(None, alias="approvedBy")
     restored_by: Optional[str] = Field(None, alias="restoredBy")
     restored_at: Optional[str] = Field(None, alias="restoredAt")
+    moved_from: Optional[str] = Field(None, alias="movedFrom")
+    moved_by: Optional[str] = Field(None, alias="movedBy")
+    moved_at: Optional[str] = Field(None, alias="movedAt")
 
 
 ArchiveReason = Literal["removed", "deleted", "merged", "superseded", "pruned"]
@@ -205,8 +210,10 @@ class ArchivedItem(BaseModel):
 # ``merge``: two or more items that say the same thing become one, written only
 # from what they say. ``supersede``: a newer item replaces an older one it
 # contradicts or updates. ``prune``: an item whose dates have all passed and
-# that holds nothing lasting.
-MaintenanceOpType = Literal["merge", "supersede", "prune"]
+# that holds nothing lasting. ``split`` (2.6c): items about one sub-topic of a
+# file near its size limit move, unchanged, to a new file, and a pointer item
+# takes their place.
+MaintenanceOpType = Literal["merge", "supersede", "prune", "split"]
 PruneReason = Literal["expired"]
 
 
@@ -228,8 +235,11 @@ class MaintenanceOp(BaseModel):
 
     ``sources``: merge, every item merged (``keep`` takes the merged ``text``,
     the rest leave the file); supersede, ``[old, new]`` (old leaves, new is
-    untouched); prune, the one item. ``why`` is the planner's reason, shown to
-    the reviewer.
+    untouched); prune, the one item; split, the items that move to the new
+    file ``new_slug`` (described by ``description``), in their order, while
+    ``text`` is the pointer item that takes their place (written by the
+    verifier, never the model). ``why`` is the planner's reason, shown to the
+    reviewer.
     """
 
     model_config = ConfigDict(populate_by_name=True)
@@ -240,6 +250,8 @@ class MaintenanceOp(BaseModel):
     keep: Optional[str] = None
     reason: Optional[PruneReason] = None
     why: str = ""
+    new_slug: Optional[str] = Field(None, alias="newSlug")
+    description: Optional[str] = None
 
     @property
     def anchors(self) -> List[str]:
@@ -247,9 +259,11 @@ class MaintenanceOp(BaseModel):
 
     @property
     def removed(self) -> List[str]:
-        """The anchors this op takes out of the file."""
+        """The anchors this op takes out of the file (a split's move to its new file)."""
         if self.type == "merge":
             return [a for a in self.anchors if a != self.keep]
+        if self.type == "split":
+            return self.anchors
         return self.anchors[:1]
 
 
@@ -326,6 +340,8 @@ class MemoryProposal(BaseModel):
     verification: Optional[MaintenanceVerification] = None
     run_id: Optional[str] = Field(None, alias="runId")
     applied_ops: Optional[List[int]] = Field(None, alias="appliedOps")
+    # The files an approved split created (2.6c).
+    created_files: Optional[List[str]] = Field(None, alias="createdFiles")
 
 
 MaintenanceRunState = Literal["queued", "running", "done", "failed"]
@@ -335,13 +351,17 @@ MaintenanceRunState = Literal["queued", "running", "done", "failed"]
 # so it was left as it is. ``nothing_to_do``: the planner found nothing, or the
 # verifier dropped all of it. ``pending_review``: the file already has a
 # maintenance proposal waiting. ``not_reached``: the run ran out of time first.
+# ``created``: a new file a split in a member's own memory made (2.6c);
+# ``split_from`` names the file its items came from.
 MaintenanceFileOutcome = Literal[
-    "proposed", "applied", "changed", "nothing_to_do", "pending_review", "failed", "not_reached"
+    "proposed", "applied", "changed", "nothing_to_do", "pending_review", "failed", "not_reached", "created"
 ]
 # What an undo did with one applied file (2.6b). ``restored``: put back as the
 # snapshot had it, in a new version. ``changed``: saved since the run, so left
 # alone. ``missing``: deleted since the run. ``failed``: the restore was refused.
-MaintenanceUndoOutcome = Literal["restored", "changed", "missing", "failed"]
+# ``removed``: a file a split created, taken away again once its items were
+# back where they came from (2.6c).
+MaintenanceUndoOutcome = Literal["restored", "changed", "missing", "failed", "removed"]
 
 
 class MaintenanceFileResult(BaseModel):
@@ -369,6 +389,7 @@ class MaintenanceFileResult(BaseModel):
     ops_omitted: bool = Field(False, alias="opsOmitted")
     undo: Optional[MaintenanceUndoOutcome] = None
     undo_version: Optional[int] = Field(None, alias="undoVersion")
+    split_from: Optional[str] = Field(None, alias="splitFrom")
 
 
 class MaintenanceSnapshot(BaseModel):

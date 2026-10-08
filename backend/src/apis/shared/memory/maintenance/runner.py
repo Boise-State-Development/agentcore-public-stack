@@ -9,7 +9,8 @@ invokes the maintenance worker, which calls :meth:`MaintenanceRunner.run`:
    Objects are content-addressed and every version row keeps its object, so
    the snapshot is enough to put the space back.
 3. **Plan** each file with one model call, largest file first, a few at a
-   time, stopping before the worker's deadline.
+   time, stopping before the worker's deadline. A file at the soft size
+   threshold is also offered splits (2.6c).
 4. **Verify** each plan deterministically (``verify.py``); what fails is
    dropped and counted, never repaired.
 5. **Propose or apply.** In a project's shared memory the surviving ops become
@@ -18,7 +19,8 @@ invokes the maintenance worker, which calls :meth:`MaintenanceRunner.run`:
    a member's own memory (``personal_in_project``, 2.6b) they are saved
    straight away, conditional on the file still being the one snapshotted,
    and the run row keeps what changed so the member can read it and undo it
-   (``apis/shared/projects/memory_maintenance.py``).
+   (``apis/shared/projects/memory_maintenance.py``). A split's new file is
+   created with it and recorded as its own ``created`` result.
 6. **Tell** the owner and editors once per run (shared memory only: in a
    member's own memory the requester is the only person affected, and the
    page that started the run shows the result), **meter** the model calls to
@@ -41,7 +43,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 
 from ..format import Item
 from ..models import (
@@ -53,8 +55,9 @@ from ..models import (
     MemoryEntryRef,
     MemorySpace,
 )
+from ..validation import build_name_table
 from .ops import apply_ops
-from .planner import Plan, Planner, PlannerError
+from .planner import FileSize, Plan, Planner, PlannerError
 from .verify import verify_plan
 
 logger = logging.getLogger(__name__)
@@ -101,6 +104,8 @@ class _FileWork:
     ref: MemoryEntryRef
     items: Tuple[Item, ...]
     provenance: Dict[str, ItemProvenance]
+    # Set for a file at the soft size threshold: it is offered splits.
+    size: Optional[FileSize] = None
 
 
 class MaintenanceError(RuntimeError):
@@ -237,6 +242,9 @@ class MaintenanceRunner:
         }
         planner = self._planner_factory(run.model_id)
         today = self._clock().date()
+        from ..service import file_hard_cap_tokens, file_soft_threshold_tokens
+
+        cap, soft = file_hard_cap_tokens(), file_soft_threshold_tokens()
 
         # Three phases, because boto3 resources (the repositories) aren't
         # thread-safe: read every file here, run only the model calls in the
@@ -252,7 +260,8 @@ class MaintenanceRunner:
                 if len(items) < 2:
                     results[ref.slug] = MaintenanceFileResult(slug=ref.slug, outcome="nothing_to_do")
                     continue
-                work.append(_FileWork(ref, items, repo.get_provenance(run.space_id, ref.slug)))
+                size = FileSize(tokens=ref.tokens, cap=cap) if (ref.tokens or 0) >= soft else None
+                work.append(_FileWork(ref, items, repo.get_provenance(run.space_id, ref.slug), size))
             except Exception:  # noqa: BLE001 - one unreadable file never stops the others
                 logger.exception("memory-maintenance: run=%s could not read %s", run.run_id, ref.slug)
                 results[ref.slug] = MaintenanceFileResult(slug=ref.slug, outcome="failed", error="This file couldn't be read.")
@@ -262,16 +271,23 @@ class MaintenanceRunner:
                 return None
             try:
                 return planner.plan(
-                    w.ref.slug, w.ref.description, w.items, pinned=w.ref.pinned, provenance=w.provenance, today=today
+                    w.ref.slug, w.ref.description, w.items, pinned=w.ref.pinned, provenance=w.provenance,
+                    today=today, size=w.size,
                 )
             except PlannerError as exc:
                 return exc
 
         with ThreadPoolExecutor(max_workers=self._concurrency) as pool:
             plans = list(pool.map(plan, work))
+        # Names a split may not take: every file's name and alias, plus each
+        # new file an earlier file's split in this run claimed.
+        claimed: Set[str] = set(build_name_table(index.entries))
+        created: List[MaintenanceFileResult] = []
         for w, outcome in zip(work, plans):
-            results[w.ref.slug] = self._settle(run, space, w, outcome, today, apply=personal)
-        run.results = [results[ref.slug] for ref in candidates]
+            results[w.ref.slug] = self._settle(
+                run, space, w, outcome, today, apply=personal, files=index.entries, claimed=claimed, created=created
+            )
+        run.results = [results[ref.slug] for ref in candidates] + created
         _bound_summaries(run.results)
         if not personal:
             self._announce(run, project)
@@ -293,8 +309,15 @@ class MaintenanceRunner:
         today,
         *,
         apply: bool,
+        files: List[MemoryEntryRef],
+        claimed: Set[str],
+        created: List[MaintenanceFileResult],
     ) -> MaintenanceFileResult:
-        """Verify one file's plan and, if anything survives, propose it or (``apply``) save it."""
+        """Verify one file's plan and, if anything survives, propose it or (``apply``) save it.
+
+        A split whose name another file's split in this run took first is
+        skipped; the new files a saved split made go on ``created``.
+        """
         from ..service import MemoryProposalStateError, MemorySpaceConcurrencyError, MemoryValidationError
 
         slug = w.ref.slug
@@ -305,7 +328,8 @@ class MaintenanceRunner:
             return MaintenanceFileResult(slug=slug, outcome="failed", error=str(outcome))
         try:
             ops, verification = verify_plan(
-                outcome.changes, w.items, pinned=w.ref.pinned, provenance=w.provenance, today=today
+                outcome.changes, w.items, pinned=w.ref.pinned, provenance=w.provenance, today=today,
+                files=files, allow_split=w.size is not None,
             )
             counts = {"planned": verification.planned, "kept": verification.kept, "dropped": len(verification.dropped)}
             if verification.dropped:
@@ -315,18 +339,28 @@ class MaintenanceRunner:
                 )
             if not ops:
                 return MaintenanceFileResult(slug=slug, outcome="nothing_to_do", **counts)
-            result = apply_ops(w.items, ops, pinned=w.ref.pinned)
+            result = apply_ops(w.items, ops, pinned=w.ref.pinned, taken=claimed)
+            if not result.applied:
+                return MaintenanceFileResult(slug=slug, outcome="nothing_to_do", **counts)
             if apply:
+                from ..hydration import MINE_MEMORY_MAX_TOKENS
+
                 saved = self.memory.apply_maintenance(
                     space.space_id,
                     user_id=run.requested_by,
                     user_email=run.requested_by_email,
                     slug=slug,
-                    items=result.items,
+                    result=result,
                     run_id=run.run_id,
                     base_content_hash=w.ref.content_hash,
-                    archive_reasons=result.archive,
+                    index_budget=MINE_MEMORY_MAX_TOKENS,
                 )
+                for ref in saved.created:
+                    claimed.add(ref.slug.casefold())
+                    created.append(MaintenanceFileResult(
+                        slug=ref.slug, outcome="created", version=ref.version, content_hash=ref.content_hash,
+                        split_from=slug,
+                    ))
                 return MaintenanceFileResult(
                     slug=slug, outcome="applied", version=saved.ref.version, content_hash=saved.ref.content_hash,
                     ops=[ops[i] for i in result.applied], **counts,
@@ -341,7 +375,9 @@ class MaintenanceRunner:
                 run_id=run.run_id,
                 base=w.ref,
                 items=result.items,
+                new_files=result.new_files,
             )
+            claimed.update(new.slug.casefold() for new in result.new_files)
             return MaintenanceFileResult(slug=slug, outcome="proposed", proposal_id=proposal.proposal_id, **counts)
         except MemoryProposalStateError as exc:
             return MaintenanceFileResult(slug=slug, outcome="pending_review", error=str(exc))

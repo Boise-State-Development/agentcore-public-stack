@@ -73,9 +73,11 @@ class ScriptedPlanner:
         self.changes = list(changes or [])
         self.error = error
         self.seen: List[str] = []
+        self.sizes: List[object] = []
 
-    def plan(self, slug, description, items, *, pinned=(), provenance=None, today):
+    def plan(self, slug, description, items, *, pinned=(), provenance=None, today, size=None):
         self.seen.append(slug)
+        self.sizes.append(size)
         if self.error is not None:
             raise self.error
         return Plan(changes=list(self.changes), input_tokens=1_000, output_tokens=200)
