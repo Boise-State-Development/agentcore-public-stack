@@ -58,7 +58,7 @@ import { SearchDialogData, SearchDialogService } from './search-dialog.service';
 import { ScopeLoadState, SearchAgentTag, SearchScopesService, SearchableAgent } from './search-scopes.service';
 import { HighlightSegment, formatLastMoved, highlightSegments } from './search-text';
 
-/** sessionStorage key for the dialog's query; separate from the sidebar filter's. */
+/** sessionStorage key for the dialog's query, so a refresh keeps it. */
 export const SEARCH_DIALOG_STORAGE_KEY = 'search.conversationQuery';
 
 /** How many recent conversations the empty state lists (§6a). */

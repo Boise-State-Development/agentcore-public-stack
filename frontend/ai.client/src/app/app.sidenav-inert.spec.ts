@@ -16,7 +16,7 @@ import { SearchDialogService } from './components/search/search-dialog.service';
 // transforms the App graph on demand; give it the same budget.
 const IMPORT_TIMEOUT_MS = 30_000;
 
-@Component({ selector: 'app-sidenav', template: '<input aria-label="Search conversations by title" />' })
+@Component({ selector: 'app-sidenav', template: '<input aria-label="Sidebar control" />' })
 class StubSidenav {}
 
 @Component({ selector: 'app-error-toast', template: '' })

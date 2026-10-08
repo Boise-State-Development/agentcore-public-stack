@@ -650,19 +650,21 @@ def conversation_search_enabled() -> bool:
 
     The read path of conversation search (``docs/specs/conversation-search.md``
     §5): a lexical leg over the user's own session rows and a text leg over the
-    shared ``conversations`` knowledge base. **Opt-in while the feature is in
-    development** (CLAUDE.md "Feature flags"): only ``"true"`` (case-insensitive)
-    enables it; unset or anything else is off, and the route 404s. CDK sets it
-    on app-api from ``config.conversationSearch.enabled``; the SPA's
-    ``features.conversationSearch`` decides whether the modal is offered.
+    shared ``conversations`` knowledge base. **Default ON with a kill switch**
+    (CLAUDE.md "Feature flags"): unset or empty resolves to enabled; only the
+    literal ``"false"`` (case-insensitive) disables it, and then the route
+    404s. CDK sets it on app-api from ``config.conversationSearch.enabled``; the
+    SPA's ``features.conversationSearch`` decides whether the modal is offered.
 
-    A feature switch, not a rollout switch. It is separate from
-    :func:`conversation_index_enabled` because indexing has to run ahead of
-    search: turn this on only once the index holds the environment's history
-    (PR-3's backfill). With the index off and this on, the text leg finds
-    nothing and search is title and opening-prompt matches only.
+    A feature switch, not a rollout switch: a deployment may not want search at
+    all. It is separate from :func:`conversation_index_enabled`, which stays
+    opt-in because it keeps a second copy of every transcript and spends
+    knowledge-base calls. With the index off and this on, the text leg is never
+    called and search is title and opening-prompt matches only, at no
+    knowledge-base cost. Rows written before ``titleLower`` existed match only
+    once ``backend/scripts/backfill_session_search_attributes.py`` has run.
     """
-    return os.environ.get("CONVERSATION_SEARCH_ENABLED", "").strip().lower() == "true"
+    return os.environ.get("CONVERSATION_SEARCH_ENABLED", "").strip().lower() != "false"
 
 
 def conversation_retention_prunes_sessions() -> bool:

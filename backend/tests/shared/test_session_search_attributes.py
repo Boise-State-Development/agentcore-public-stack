@@ -71,9 +71,9 @@ async def test_full_row_store_keeps_title_lower_in_step(sessions_metadata_table)
 
 @pytest.mark.parametrize(
     "value,expected",
-    [(None, False), ("", False), ("false", False), ("yes", False), ("true", True), (" TRUE ", True)],
+    [(None, True), ("", True), ("true", True), ("yes", True), ("false", False), (" FALSE ", False)],
 )
-def test_conversation_search_is_on_only_when_explicitly_enabled(monkeypatch, value, expected):
+def test_conversation_search_is_on_unless_explicitly_disabled(monkeypatch, value, expected):
     from apis.shared.feature_flags import conversation_search_enabled
 
     if value is None:
