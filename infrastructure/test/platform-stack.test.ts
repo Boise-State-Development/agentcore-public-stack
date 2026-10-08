@@ -259,9 +259,13 @@ describe('PlatformStack', () => {
       //
       // Raised 55 → 56 for the conversation-index reconciler's function name,
       // the same deploy-script discovery for the image's second function.
+      //
+      // Raised 56 → 57 for the memory-maintenance worker's function name
+      // (Shared Projects 2.6), the same deploy-script discovery. app-api
+      // takes the name through PlatformComputeRefs, not this parameter.
       const params = template.findResources('AWS::SSM::Parameter');
       expect(Object.keys(params).length).toBeGreaterThanOrEqual(30);
-      expect(Object.keys(params).length).toBeLessThanOrEqual(56);
+      expect(Object.keys(params).length).toBeLessThanOrEqual(57);
     });
   });
 

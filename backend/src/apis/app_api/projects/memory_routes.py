@@ -17,7 +17,13 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from apis.shared.auth.models import User
 from apis.shared.directory import display_names
-from apis.shared.memory.models import ArchivedItem, ItemProvenance, MemoryProposal
+from apis.shared.memory.models import (
+    ArchivedItem,
+    ItemProvenance,
+    MaintenanceOp,
+    MaintenanceVerification,
+    MemoryProposal,
+)
 from apis.shared.memory.service import (
     MAX_PROPOSAL_NOTE_CHARS,
     MemoryProposalStateError,
@@ -55,6 +61,9 @@ class ApproveProposalRequest(BaseModel):
     text: Optional[str] = Field(None, description="The reviewer's edited version; omitted applies it as proposed")
     description: Optional[str] = None
     note: Optional[str] = Field(None, max_length=MAX_PROPOSAL_NOTE_CHARS)
+    ops: Optional[List[int]] = Field(
+        None, description="Maintenance proposals: the changes to apply, by index into ``ops``; omitted applies all"
+    )
 
 
 class RejectProposalRequest(BaseModel):
@@ -69,6 +78,7 @@ class ProposalResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     proposal_id: str = Field(..., alias="proposalId")
+    kind: str = Field("entry", description="entry | compaction (a maintenance run's changes)")
     state: str
     slug: str
     text: str
@@ -90,17 +100,22 @@ class ProposalResponse(BaseModel):
     stale: Optional[bool] = Field(
         None, description="Pending and the file changed since: approve an edited version or reject it"
     )
+    ops: Optional[List[MaintenanceOp]] = Field(None, description="Compaction only: the proposed changes")
+    verification: Optional[MaintenanceVerification] = None
+    run_id: Optional[str] = Field(None, alias="runId")
+    applied_ops: Optional[List[int]] = Field(None, alias="appliedOps")
 
     @classmethod
     def build(cls, p: MemoryProposal, caller: User, names: dict, stale: Optional[bool] = None) -> "ProposalResponse":
         return cls(
-            proposal_id=p.proposal_id, state=p.state, slug=p.slug, text=p.text, description=p.description,
+            proposal_id=p.proposal_id, kind=p.kind, state=p.state, slug=p.slug, text=p.text, description=p.description,
             aliases=p.aliases, base_version=p.base_version, tokens=p.tokens,
             proposed_by_email=p.proposer_email, proposed_by_name=names.get(p.proposer_email),
             proposer_kind=p.proposer_kind, created_at=p.created_at,
             decided_by_email=p.decided_by_email, decided_by_name=names.get(p.decided_by_email or ""),
             decided_at=p.decided_at, note=p.note, result_version=p.result_version, edited=p.edited,
             is_mine=p.proposer_id == caller.user_id, stale=stale,
+            ops=p.ops, verification=p.verification, run_id=p.run_id, applied_ops=p.applied_ops,
         )
 
 
@@ -207,10 +222,15 @@ def get_proposal(project_id: str, proposal_id: str, user: User = Depends(require
 def approve_proposal(
     project_id: str, proposal_id: str, body: ApproveProposalRequest, user: User = Depends(require_projects_user)
 ) -> ApproveProposalResponse:
-    """Editor+. Without ``text``, a proposal whose file has changed since is a 409."""
+    """Editor+. Without ``text``, a proposal whose file has changed since is a 409.
+
+    A maintenance proposal applies its ``ops`` (all, or the chosen indexes) to
+    the file as it is now; only none of them still applying is a 409.
+    """
     try:
         proposal, result = _proposals().approve(
             project_id, user, proposal_id, text=body.text, description=body.description, note=body.note,
+            ops=body.ops,
         )
     except _ERRORS as e:
         raise _translate(e)

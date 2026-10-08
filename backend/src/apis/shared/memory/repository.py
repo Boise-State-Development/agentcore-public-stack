@@ -16,6 +16,8 @@ Row shapes (see ``models.py``):
     proposals are one ``Query``, filtered on ``state``)
   - ``PK=SPACE#{id}  SK=PROV#{slug}``             (each item's provenance, by anchor)
   - ``PK=SPACE#{id}  SK=ARCHIVE#{at}#{anchor}``   (items that left a file; expire on ``ttl``)
+  - ``PK=SPACE#{id}  SK=SNAPSHOT#{runId}``        (a maintenance run and its snapshot; expire on ``ttl``)
+  - ``PK=SPACE#{id}  SK=MAINTENANCE_LOCK``        (the one run a space may have in flight)
 """
 
 from __future__ import annotations
@@ -39,6 +41,7 @@ from .models import (
     ArchivedItem,
     FileVersion,
     ItemProvenance,
+    MaintenanceRun,
     MemoryEntryRef,
     MemoryIndex,
     MemoryProposal,
@@ -74,6 +77,8 @@ _FILEVER_SK_PREFIX = "FILEVER#"
 _PROPOSAL_SK_PREFIX = "PROPOSAL#"
 _PROV_SK_PREFIX = "PROV#"
 _ARCHIVE_SK_PREFIX = "ARCHIVE#"
+_SNAPSHOT_SK_PREFIX = "SNAPSHOT#"
+_MAINTENANCE_LOCK_SK = "MAINTENANCE_LOCK"
 
 MANIFEST_MAX_BYTES = 300 * 1024
 
@@ -591,3 +596,70 @@ class MemorySpaceRepository:
             for v in versions:
                 batch.delete_item(Key={"PK": _space_pk(space_id), "SK": _file_version_sk(v.slug, v.version)})
         return versions
+
+    # ---- maintenance runs (SNAPSHOT) and their lock (Shared Projects 2.6) -----
+
+    @staticmethod
+    def _run_key(space_id: str, run_id: str) -> dict:
+        return {"PK": _space_pk(space_id), "SK": f"{_SNAPSHOT_SK_PREFIX}{run_id}"}
+
+    def put_maintenance_run(self, run: MaintenanceRun, ttl: int) -> None:
+        self._table.put_item(Item={
+            **self._run_key(run.space_id, run.run_id),
+            **_to_dynamo(run.model_dump(by_alias=True, exclude_none=True)),
+            "ttl": int(ttl),
+        })
+
+    def get_maintenance_run(self, space_id: str, run_id: str) -> Optional[MaintenanceRun]:
+        item = self._table.get_item(Key=self._run_key(space_id, run_id)).get("Item")
+        if not item:
+            return None
+        return MaintenanceRun.model_validate(_from_dynamo({k: v for k, v in item.items() if k not in ("PK", "SK", "ttl")}))
+
+    def list_maintenance_runs(self, space_id: str, limit: int) -> List[MaintenanceRun]:
+        """Newest first (run ids sort by creation time)."""
+        resp = self._table.query(
+            KeyConditionExpression=Key("PK").eq(_space_pk(space_id)) & Key("SK").begins_with(_SNAPSHOT_SK_PREFIX),
+            ScanIndexForward=False,
+            Limit=limit,
+        )
+        return [
+            MaintenanceRun.model_validate(_from_dynamo({k: v for k, v in i.items() if k not in ("PK", "SK", "ttl")}))
+            for i in resp.get("Items", [])
+        ]
+
+    def acquire_maintenance_lock(self, space_id: str, run_id: str, *, now: int, lease_seconds: int) -> bool:
+        """Claim the space's one maintenance slot. False while another run holds an unexpired lease.
+
+        The lease outlives the worker's 15-minute ceiling, so a worker that died
+        without releasing it frees the slot on its own.
+        """
+        try:
+            self._table.put_item(
+                Item={
+                    "PK": _space_pk(space_id),
+                    "SK": _MAINTENANCE_LOCK_SK,
+                    "runId": run_id,
+                    "expiresAt": now + lease_seconds,
+                    "ttl": now + lease_seconds,
+                },
+                ConditionExpression="attribute_not_exists(PK) OR expiresAt < :now",
+                ExpressionAttributeValues={":now": now},
+            )
+            return True
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+                return False
+            raise
+
+    def release_maintenance_lock(self, space_id: str, run_id: str) -> None:
+        """Free the slot if this run still holds it."""
+        try:
+            self._table.delete_item(
+                Key={"PK": _space_pk(space_id), "SK": _MAINTENANCE_LOCK_SK},
+                ConditionExpression="runId = :run",
+                ExpressionAttributeValues={":run": run_id},
+            )
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+                raise
