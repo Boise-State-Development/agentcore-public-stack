@@ -44,6 +44,11 @@ export function describeNotification(n: AppNotification): string {
         ? `${who} approved your change to “${file}” in ${project}.`
         : `${who} declined your change to “${file}” in ${project}.`;
     }
+    case 'project_memory_maintenance': {
+      const count = typeof n.payload?.fileCount === 'number' ? n.payload.fileCount : 0;
+      const files = count === 1 ? '1 file' : count > 1 ? `${count} files` : 'some files';
+      return `Memory maintenance that ${who} ran suggests changes to ${files} in ${project}’s memory.`;
+    }
     case 'project_task_shared': {
       const title = typeof n.payload?.title === 'string' && n.payload.title ? n.payload.title : 'a task';
       return `${who} shared “${title}” with you in ${project}.`;
@@ -294,8 +299,9 @@ export class NotificationBellComponent {
       this.sidenav.close();
       return;
     }
-    // A pending proposal opens the Memory tab's review queue; a decision, the file it was about.
-    if (n.kind === 'project_proposal_pending' && n.projectId) {
+    // A pending proposal (or a maintenance run's) opens the Memory tab's review
+    // queue; a decision, the file it was about.
+    if ((n.kind === 'project_proposal_pending' || n.kind === 'project_memory_maintenance') && n.projectId) {
       void this.router.navigate(['/projects', n.projectId, 'memory'], { queryParams: { view: 'review' } });
       this.sidenav.close();
       return;

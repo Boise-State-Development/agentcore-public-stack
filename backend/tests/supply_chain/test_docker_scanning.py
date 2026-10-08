@@ -18,6 +18,7 @@ EXPECTED_DOCKERFILES = [
     "Dockerfile.rag-ingestion",
     "Dockerfile.kb-sync",
     "Dockerfile.conversation-index",
+    "Dockerfile.memory-maintenance",
 ]
 
 

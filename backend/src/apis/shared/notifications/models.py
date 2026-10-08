@@ -31,6 +31,7 @@ NotificationKind = Literal[
     "project_task_shared",
     "project_proposal_pending",
     "project_proposal_decided",
+    "project_memory_maintenance",
 ]
 
 

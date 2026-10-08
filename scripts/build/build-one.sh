@@ -248,9 +248,30 @@ case "$SERVICE" in
         PLATFORM="linux/arm64"
         SSM_KEY="/${CDK_PROJECT_PREFIX}/scheduled-runs/image-tag"
         ;;
+    memory-maintenance)
+        # Shared Projects 2.6 maintenance worker. Keep SOURCE_DIRS and
+        # MANIFESTS in lockstep with Dockerfile.memory-maintenance's COPY list.
+        DOCKERFILE="backend/Dockerfile.memory-maintenance"
+        SOURCE_DIRS=(
+            "backend/src/lambdas/memory_maintenance_worker"
+            "backend/src/apis/shared/memory"
+            "backend/src/apis/shared/notifications"
+        )
+        MANIFESTS=(
+            "backend/src/apis/shared/__init__.py"
+            "backend/src/apis/shared/projects/__init__.py"
+            "backend/src/apis/shared/projects/models.py"
+            "backend/src/apis/shared/projects/repository.py"
+            "backend/src/apis/shared/dynamo_errors.py"
+            "backend/src/apis/shared/timestamps.py"
+            "backend/src/apis/shared/auth/models.py"
+        )
+        PLATFORM="linux/arm64"
+        SSM_KEY="/${CDK_PROJECT_PREFIX}/memory-maintenance/image-tag"
+        ;;
     *)
         echo "Unknown service: $SERVICE" >&2
-        echo "Expected one of: app-api | inference-api | rag-ingestion | kb-sync | kb-migration | conversation-index | scheduled-runs" >&2
+        echo "Expected one of: app-api | inference-api | rag-ingestion | kb-sync | kb-migration | conversation-index | scheduled-runs | memory-maintenance" >&2
         exit 1
         ;;
 esac

@@ -66,6 +66,7 @@ import { ArtifactRenderLambdaConstruct } from './constructs/artifacts/artifact-r
 import { ArtifactsDistributionConstruct } from './constructs/artifacts/artifacts-distribution-construct';
 import { SkillResourcesConstruct } from './constructs/skills/skill-resources-construct';
 import { MemorySpacesConstruct } from './constructs/memory/memory-spaces-construct';
+import { MemoryMaintenanceConstruct } from './constructs/memory/memory-maintenance-construct';
 
 // AgentCore (Memory, Code Interpreter, Browser, Gateway).
 // Pure infrastructure — no code, no out-of-band updates needed.
@@ -280,6 +281,7 @@ export class PlatformStack extends cdk.Stack {
   private _ragIngestionFunction!: lambda.IFunction;
   private _kbMigration?: KbMigrationConstruct;
   private _conversationIndex?: ConversationIndexConstruct;
+  private _memoryMaintenance!: MemoryMaintenanceConstruct;
   private _tokenEnrichment?: TokenEnrichmentConstruct;
   private _platformCostSync?: PlatformCostSyncConstruct;
   private readonly _spaBucketConstruct: SpaBucketConstruct;
@@ -666,6 +668,20 @@ export class PlatformStack extends cdk.Stack {
       config,
     }).projectsTable;
 
+    // ============================================================
+    // Memory maintenance (Shared Projects 2.6) — the worker app-api
+    // async-invokes when an editor starts a run on a project's shared
+    // memory. Threaded to app-api via PlatformComputeRefs
+    // .memoryMaintenanceWorker below (function name + invoke grant).
+    // ============================================================
+    this._memoryMaintenance = new MemoryMaintenanceConstruct(this, 'MemoryMaintenance', {
+      config,
+      memorySpacesTable: this.memorySpacesTable,
+      memorySpacesBucket: this.memorySpacesBucket,
+      projectsTable: this.projectsTable,
+      alarmTopic: this.alarmTopic,
+    });
+
     const artifactsDomainName = config.domainName!;
     this.artifactsFrameAncestors = [
       `https://${artifactsDomainName}`,
@@ -932,6 +948,7 @@ export class PlatformStack extends cdk.Stack {
       memorySpacesBucket: this.memorySpacesBucket,
       memorySpacesTable: this.memorySpacesTable,
       projectsTable: this.projectsTable,
+      memoryMaintenanceWorker: this._memoryMaintenance.workerLambda,
       fineTuningJobsTable: this.fineTuningJobsTable,
       fineTuningAccessTable: this.fineTuningAccessTable,
       fineTuningDataBucket: this.fineTuningDataBucket,
@@ -1086,6 +1103,8 @@ export class PlatformStack extends cdk.Stack {
           : []),
         { name: 'scheduled-runs-dispatcher', fn: scheduledRuns.dispatcherLambda, throttleOnly: true },
         { name: 'scheduled-runs-worker', fn: scheduledRuns.workerLambda, throttleOnly: true },
+        // Its own error alarm lives in MemoryMaintenanceConstruct.
+        { name: 'memory-maintenance-worker', fn: this._memoryMaintenance.workerLambda, throttleOnly: true },
       ],
       dlqs: [
         ...(this._kbMigration

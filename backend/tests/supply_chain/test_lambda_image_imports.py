@@ -93,6 +93,12 @@ IMAGES: Dict[str, Tuple[str, List[str], List[str]]] = {
         ],
         ["lambdas/scheduled_runs_dispatcher", "lambdas/scheduled_runs_worker"],
     ),
+    # Shared Projects 2.6: one maintenance run over a project's shared memory.
+    "memory-maintenance": (
+        "backend/Dockerfile.memory-maintenance",
+        ["lambdas/memory_maintenance_worker/worker.py"],
+        ["lambdas/memory_maintenance_worker"],
+    ),
 }
 
 # The kb-sync image deliberately ships these alongside their packages but

@@ -145,10 +145,22 @@ class ProjectMemoryProposals:
         if not any(p.state == "pending" for p in proposals):
             return [(p, None) for p in proposals]
         hashes = {e.slug: e.content_hash for e in self.memory.repository.get_index(space_id).entries}
-        return [
-            (p, hashes.get(p.slug, "") != p.base_content_hash if p.state == "pending" else None)
-            for p in proposals
-        ]
+        rows = []
+        for p in proposals:
+            if p.state != "pending":
+                rows.append((p, None))
+                continue
+            stale = hashes.get(p.slug, "") != p.base_content_hash
+            if stale and p.kind == "compaction":
+                rows.append(self._compaction_view(space_id, p))
+            else:
+                rows.append((p, stale))
+        return rows
+
+    def _compaction_view(self, space_id: str, proposal: Any):
+        """A maintenance proposal on a file edited since: its changes applied to the file as it is now."""
+        text, stale = self.memory.compaction_view(space_id, proposal)
+        return proposal.model_copy(update={"text": text}), stale
 
     def current_text(self, project_id: str, user: User, slug: str) -> Optional[str]:
         """The file a proposal would change, as its items (no frontmatter), or None for a new file."""
@@ -167,6 +179,8 @@ class ProjectMemoryProposals:
         _, space_id = self._space(project_id, user, writable=False)
         proposal = self.memory.get_proposal(space_id, user.user_id, user.email, proposal_id)
         stale = proposal.state == "pending" and self.memory.proposal_is_stale(space_id, proposal)
+        if stale and proposal.kind == "compaction":
+            return self._compaction_view(space_id, proposal)
         return proposal, stale
 
     # ── decide ─────────────────────────────────────────────────────────
@@ -180,11 +194,13 @@ class ProjectMemoryProposals:
         text: Optional[str] = None,
         description: Optional[str] = None,
         note: Optional[str] = None,
+        ops: Optional[List[int]] = None,
     ):
-        """Apply it. Returns ``(proposal, save_result)``."""
+        """Apply it. Returns ``(proposal, save_result)``. ``ops`` picks a maintenance proposal's changes."""
         project, space_id = self._space(project_id, user, writable=True)
         proposal, result = self.memory.approve_proposal(
             space_id, user.user_id, user.email, proposal_id, text=text, description=description, note=note,
+            ops=ops,
         )
         self._index_new_file(space_id, user, result)
         self._tell_proposer(project, user, proposal)
@@ -236,6 +252,11 @@ class ProjectMemoryProposals:
         from apis.shared.audit import TARGET_PROJECT
 
         after = {"proposalId": proposal.proposal_id, "slug": proposal.slug}
+        if proposal.kind == "compaction":
+            after["kind"] = "compaction"
+            if proposal.applied_ops is not None:
+                after["appliedOps"] = len(proposal.applied_ops)
+                after["totalOps"] = len(proposal.ops or [])
         if proposal.result_version is not None:
             after["version"] = proposal.result_version
         if proposal.edited:

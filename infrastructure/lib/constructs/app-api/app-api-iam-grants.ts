@@ -505,6 +505,10 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
     }),
   );
 
+  // ── Memory maintenance (Shared Projects 2.6) ──
+  // Starting a run async-invokes the worker (InvocationType=Event); nothing else.
+  props.refs.memoryMaintenanceWorker.grantInvoke(taskRole);
+
   // ── Fine-tuning ──
   // Sourced from typed PlatformStack refs.
   const ftJobsTableArn = props.refs.fineTuningJobsTable.tableArn;

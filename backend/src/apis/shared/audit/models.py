@@ -90,6 +90,7 @@ class AuditAction:
     PROJECT_MEMORY_DELETED = "project.memory_deleted"
     PROJECT_OUTPUT_SHARED = "project.output_shared"
     PROJECT_OUTPUT_REMOVED = "project.output_removed"
+    PROJECT_MEMORY_MAINTENANCE_STARTED = "project.memory_maintenance_started"
 
 
 ALL_ACTIONS: frozenset[str] = frozenset(

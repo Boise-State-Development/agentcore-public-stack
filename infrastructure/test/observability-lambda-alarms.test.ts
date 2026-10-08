@@ -78,6 +78,7 @@ describe('Lambda and DLQ alarms', () => {
     'kb-sync-worker',
     'scheduled-runs-dispatcher',
     'scheduled-runs-worker',
+    'memory-maintenance-worker',
   ];
 
   it('creates error and throttle alarms for the previously unmonitored functions', () => {
@@ -99,6 +100,7 @@ describe('Lambda and DLQ alarms', () => {
     expect(byName('kb-sync-worker-errors').Properties.Threshold).toBe(3);
     expect(byName('scheduled-runs-dispatcher-errors').Properties.Threshold).toBe(1);
     expect(byName('scheduled-runs-worker-errors').Properties.Threshold).toBe(3);
+    expect(byName('memory-maintenance-worker-errors').Properties.Threshold).toBe(1);
   });
 
   // Deploy-time machinery is excluded: its failure fails the deploy directly.

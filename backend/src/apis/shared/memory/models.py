@@ -173,14 +173,17 @@ class ItemProvenance(BaseModel):
     restored_at: Optional[str] = Field(None, alias="restoredAt")
 
 
-ArchiveReason = Literal["removed", "deleted"]
+ArchiveReason = Literal["removed", "deleted", "merged", "superseded", "pruned"]
 
 
 class ArchivedItem(BaseModel):
     """An ``ARCHIVE#{archivedAt}#{anchor}`` row: an item that left its file, restorable until ``ttl``.
 
     ``removed``: a save left it out. ``deleted``: its whole file was deleted.
-    The text and provenance travel with it, so a restore needs nothing else.
+    ``merged``, ``superseded`` and ``pruned``: an approved maintenance change
+    took it out (Shared Projects 2.6); ``superseded_by`` names the item that
+    took its place (the merged item, or the newer one). The text and
+    provenance travel with it, so a restore needs nothing else.
     """
 
     model_config = ConfigDict(populate_by_name=True)
@@ -194,12 +197,88 @@ class ArchivedItem(BaseModel):
     archived_at: str = Field(..., alias="archivedAt")
     restorable_until: str = Field(..., alias="restorableUntil")
     provenance: Optional[ItemProvenance] = None
+    superseded_by: Optional[str] = Field(None, alias="supersededBy")
+
+
+# ---- maintenance (Shared Projects 2.6) ------------------------------------
+
+# ``merge``: two or more items that say the same thing become one, written only
+# from what they say. ``supersede``: a newer item replaces an older one it
+# contradicts or updates. ``prune``: an item whose dates have all passed and
+# that holds nothing lasting.
+MaintenanceOpType = Literal["merge", "supersede", "prune"]
+PruneReason = Literal["expired"]
+
+
+class OpSource(BaseModel):
+    """An item an op reads, with its text when the plan was made.
+
+    An op applies only while every source still reads the same, so a file
+    edited since the run keeps the edit and loses only the ops it touched.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    anchor: str
+    text: str
+
+
+class MaintenanceOp(BaseModel):
+    """One change a maintenance run proposes to one file.
+
+    ``sources``: merge, every item merged (``keep`` takes the merged ``text``,
+    the rest leave the file); supersede, ``[old, new]`` (old leaves, new is
+    untouched); prune, the one item. ``why`` is the planner's reason, shown to
+    the reviewer.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    type: MaintenanceOpType
+    sources: List[OpSource]
+    text: Optional[str] = None
+    keep: Optional[str] = None
+    reason: Optional[PruneReason] = None
+    why: str = ""
+
+    @property
+    def anchors(self) -> List[str]:
+        return [s.anchor for s in self.sources]
+
+    @property
+    def removed(self) -> List[str]:
+        """The anchors this op takes out of the file."""
+        if self.type == "merge":
+            return [a for a in self.anchors if a != self.keep]
+        return self.anchors[:1]
+
+
+class DroppedOp(BaseModel):
+    """A planned op the verifier refused, and why (``code`` is stable, for metrics)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    type: str
+    code: str
+    detail: str = ""
+
+
+class MaintenanceVerification(BaseModel):
+    """What the deterministic verifier did with one file's plan."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    planned: int = 0
+    kept: int = 0
+    dropped: List[DroppedOp] = Field(default_factory=list)
 
 
 ProposalState = Literal["pending", "approved", "rejected", "withdrawn"]
 # ``member``: through the API; ``agent``: a task's assistant on the member's behalf
-# (``memory_propose``); ``schedule``: a scheduled run (3.2).
-ProposerKind = Literal["member", "agent", "schedule"]
+# (``memory_propose``); ``schedule``: a scheduled run (3.2); ``maintenance``: a
+# maintenance run a member started (2.6), which proposes in their name.
+ProposerKind = Literal["member", "agent", "schedule", "maintenance"]
+ProposalKind = Literal["entry", "compaction"]
 
 
 class MemoryProposal(BaseModel):
@@ -210,12 +289,16 @@ class MemoryProposal(BaseModel):
     file it was written against (0 and "" for a new file), so an approval can
     tell that the file has moved on since. Decided rows are kept as the review
     record and go with the space.
+
+    A ``compaction`` proposal (2.6) comes from a maintenance run: ``ops`` are
+    its changes, addressed by anchor, and ``text`` is the file with all of them
+    applied. It is approved op by op against the file as it is by then.
     """
 
     model_config = ConfigDict(populate_by_name=True)
 
     proposal_id: str = Field(..., alias="proposalId")
-    kind: Literal["entry"] = "entry"
+    kind: ProposalKind = "entry"
     state: ProposalState = "pending"
     slug: str
     text: str
@@ -237,6 +320,79 @@ class MemoryProposal(BaseModel):
     # The FILEVER version an approval wrote, and whether the reviewer edited the text first.
     result_version: Optional[int] = Field(None, alias="resultVersion")
     edited: bool = False
+    # Compaction only: the changes, what the verifier dropped, the run that
+    # planned them, and which ops an approval applied (by index into ``ops``).
+    ops: Optional[List[MaintenanceOp]] = None
+    verification: Optional[MaintenanceVerification] = None
+    run_id: Optional[str] = Field(None, alias="runId")
+    applied_ops: Optional[List[int]] = Field(None, alias="appliedOps")
+
+
+MaintenanceRunState = Literal["queued", "running", "done", "failed"]
+# ``proposed``: a compaction proposal is waiting for review. ``nothing_to_do``:
+# the planner found nothing, or the verifier dropped all of it.
+# ``pending_review``: the file already has a maintenance proposal waiting.
+# ``not_reached``: the run ran out of time first.
+MaintenanceFileOutcome = Literal["proposed", "nothing_to_do", "pending_review", "failed", "not_reached"]
+
+
+class MaintenanceFileResult(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    slug: str
+    outcome: MaintenanceFileOutcome
+    proposal_id: Optional[str] = Field(None, alias="proposalId")
+    planned: int = 0
+    kept: int = 0
+    dropped: int = 0
+    error: Optional[str] = None
+
+
+class MaintenanceSnapshot(BaseModel):
+    """The space as the run found it (§4.6 step 2): the manifest and ``MEMORY.md``'s hash.
+
+    Objects are content-addressed and every version row keeps its object, so
+    this is enough to put the space back as it was.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    manifest_version: int = Field(0, alias="manifestVersion")
+    index_content_hash: Optional[str] = Field(None, alias="indexContentHash")
+    entries: List[MemoryEntryRef] = Field(default_factory=list)
+    taken_at: str = Field("", alias="takenAt")
+
+
+class MaintenanceRun(BaseModel):
+    """A ``SNAPSHOT#{runId}`` row: one maintenance run and the snapshot it worked from (Shared Projects 2.6).
+
+    app-api writes it ``queued`` with the model and its prices; the worker
+    takes the snapshot, plans, verifies and proposes, then marks it ``done``
+    or ``failed``. It expires with the space's archive retention.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    run_id: str = Field(..., alias="runId")
+    space_id: str = Field(..., alias="spaceId")
+    project_id: Optional[str] = Field(None, alias="projectId")
+    state: MaintenanceRunState = "queued"
+    slug: Optional[str] = Field(None, description="The one file to maintain; None for every file")
+    requested_by: str = Field(..., alias="requestedBy")
+    requested_by_email: str = Field("", alias="requestedByEmail")
+    requested_by_name: Optional[str] = Field(None, alias="requestedByName")
+    model_id: str = Field(..., alias="modelId")
+    input_price_per_million_tokens: Optional[float] = Field(None, alias="inputPricePerMillionTokens")
+    output_price_per_million_tokens: Optional[float] = Field(None, alias="outputPricePerMillionTokens")
+    created_at: str = Field(..., alias="createdAt")
+    started_at: Optional[str] = Field(None, alias="startedAt")
+    finished_at: Optional[str] = Field(None, alias="finishedAt")
+    snapshot: Optional[MaintenanceSnapshot] = None
+    results: List[MaintenanceFileResult] = Field(default_factory=list)
+    input_tokens: int = Field(0, alias="inputTokens")
+    output_tokens: int = Field(0, alias="outputTokens")
+    cost: Optional[float] = None
+    error: Optional[str] = None
 
 
 class MemoryIndex(BaseModel):

@@ -29,6 +29,8 @@ describe('describeNotification', () => {
     [notif({ kind: 'project_proposal_pending', payload: { proposalId: 'p1', slug: 'sis' } }), 'ann@x.edu proposed a change to “sis” in Enrollment Sync’s memory.'],
     [notif({ kind: 'project_proposal_decided', payload: { slug: 'sis', decision: 'approved' } }), 'ann@x.edu approved your change to “sis” in Enrollment Sync.'],
     [notif({ kind: 'project_proposal_decided', payload: { slug: 'sis', decision: 'rejected' } }), 'ann@x.edu declined your change to “sis” in Enrollment Sync.'],
+    [notif({ kind: 'project_memory_maintenance', payload: { runId: 'r1', fileCount: 3 } }), 'Memory maintenance that ann@x.edu ran suggests changes to 3 files in Enrollment Sync’s memory.'],
+    [notif({ kind: 'project_memory_maintenance', payload: { runId: 'r1', fileCount: 1 } }), 'Memory maintenance that ann@x.edu ran suggests changes to 1 file in Enrollment Sync’s memory.'],
     [notif({ actorEmail: null, projectName: null, payload: {} }), 'Someone added you to a project.'],
     [notif({ actorName: 'Ann Lee' }), 'Ann Lee added you to Enrollment Sync as an editor.'],
   ])('%#: reads as a sentence', (n, text) => {
@@ -189,6 +191,8 @@ describe('NotificationBellComponent', () => {
     expect(navigate).toHaveBeenCalledWith(['/projects', 'prj_1', 'memory'], { queryParams: { view: 'review' } });
     component.open(notif({ kind: 'project_proposal_decided', payload: { slug: 'sis', decision: 'approved' } }));
     expect(navigate).toHaveBeenLastCalledWith(['/projects', 'prj_1', 'memory'], { queryParams: { file: 'sis' } });
+    component.open(notif({ kind: 'project_memory_maintenance', payload: { runId: 'r1', fileCount: 2 } }));
+    expect(navigate).toHaveBeenLastCalledWith(['/projects', 'prj_1', 'memory'], { queryParams: { view: 'review' } });
   });
 
   it('a shared task opens the shared view, revoked or not', () => {

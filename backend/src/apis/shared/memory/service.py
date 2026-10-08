@@ -44,6 +44,8 @@ from .models import (
     FileVersion,
     FileVersionReason,
     ItemProvenance,
+    MaintenanceOp,
+    MaintenanceVerification,
     MemoryEntryRef,
     MemoryIndex,
     MemoryProposal,
@@ -55,6 +57,7 @@ from .models import (
     ShareRole,
     SpaceMember,
 )
+from .maintenance.ops import CompactionResult, apply_ops
 from .repository import ManifestTooLargeError, MemorySpaceRepository, OptimisticLockError
 from .store import (
     MemorySpaceStore,
@@ -148,6 +151,8 @@ class SaveContext:
     proposed_by: Optional[str] = None
     approved_by: Optional[str] = None
     restored: Dict[str, ItemProvenance] = field(default_factory=dict)
+    # Maintenance (2.6): why each anchor leaving the file left, and what replaced it.
+    archive_reasons: Dict[str, Tuple[str, Optional[str]]] = field(default_factory=dict)
 
 
 def max_pending_proposals() -> int:
@@ -1144,6 +1149,8 @@ class MemorySpaceService:
         proposal_id: Optional[str] = None,
         context: Optional[SaveContext] = None,
         restorable: Sequence[str] = (),
+        run_id: Optional[str] = None,
+        base_content_hash: Optional[str] = None,
     ) -> SaveResult:
         """Create or replace an entry through the save pipeline (§4.3), editor+.
 
@@ -1159,7 +1166,9 @@ class MemorySpaceService:
         kept: their version rows still reference them.
 
         ``description=None`` keeps a canonical file's description; a freeform
-        entry treats it as empty, as it always has.
+        entry treats it as empty, as it always has. ``base_content_hash`` is the
+        version ``body`` was derived from; a file that has moved on since is a
+        conflict rather than a silent overwrite.
         """
         space, _ = self._require(space_id, user_id, user_email, "editor")
         canonical = space.file_format == "canonical"
@@ -1167,9 +1176,16 @@ class MemorySpaceService:
         prepared = self._prepare_save(
             space, slug, body, description=description, aliases=aliases, now=now, restorable=restorable
         )
+        if base_content_hash is not None and (
+            prepared.current_ref is None or prepared.current_ref.content_hash != base_content_hash
+        ):
+            raise MemorySpaceConcurrencyError(
+                f"'{slug}' was changed by someone else while this save was in progress. Read it again and retry."
+            )
         result = self._commit_save(
             space_id, user_id, prepared, canonical=canonical, entry_type=entry_type,
             description=description, indexed=indexed, now=now, reason=reason, proposal_id=proposal_id,
+            run_id=run_id,
         )
         if canonical:
             self._record_items(space, prepared, result, actor=_normalize_email(user_email), now=now, context=context)
@@ -1273,6 +1289,7 @@ class MemorySpaceService:
         now: str,
         reason: FileVersionReason,
         proposal_id: Optional[str] = None,
+        run_id: Optional[str] = None,
     ) -> SaveResult:
         """§4.3 step 7: write the object, swap the manifest conditionally, then write ``FILEVER``."""
         slug, text, current_ref = prepared.slug, prepared.text, prepared.current_ref
@@ -1350,6 +1367,7 @@ class MemorySpaceService:
                 updated_at=now,
                 reason=reason,
                 proposal_id=proposal_id,
+                run_id=run_id,
             ),
         )
         return SaveResult(
@@ -1463,7 +1481,9 @@ class MemorySpaceService:
             leaving = [
                 (a, old_text[a], before.get(a)) for a in validated.removed_anchors if a in old_text
             ]
-            self._archive(space, slug, leaving, reason="removed", actor=actor, now=now)
+            self._archive(
+                space, slug, leaving, reason="removed", actor=actor, now=now, reasons=ctx.archive_reasons
+            )
         except Exception:
             logger.warning("Could not record item provenance for '%s' in space %s", slug, space_id, exc_info=True)
 
@@ -1476,9 +1496,12 @@ class MemorySpaceService:
         reason: str,
         actor: str,
         now: str,
+        reasons: Optional[Dict[str, Tuple[str, Optional[str]]]] = None,
     ) -> None:
+        """Archive ``leaving`` items. ``reasons`` overrides ``reason`` per anchor, with what replaced it."""
         if not leaving:
             return
+        reasons = reasons or {}
         days = archive_retention_days(space.scope)
         moment = datetime.now(timezone.utc)
         until = moment + timedelta(days=days)
@@ -1489,11 +1512,12 @@ class MemorySpaceService:
                 slug=slug,
                 anchor=anchor,
                 text=text,
-                reason=reason,
+                reason=reasons.get(anchor, (reason, None))[0],
                 archived_by=actor,
                 archived_at=now,
                 restorable_until=until.isoformat(),
                 provenance=prov,
+                superseded_by=reasons.get(anchor, (reason, None))[1],
             )
             for anchor, text, prov in leaving
         ]
@@ -1677,6 +1701,7 @@ class MemorySpaceService:
         text: Optional[str] = None,
         description: Optional[str] = None,
         note: Optional[str] = None,
+        ops: Optional[Sequence[int]] = None,
     ) -> Tuple[MemoryProposal, SaveResult]:
         """Apply a pending proposal as a save (``reason: proposal``), editor+.
 
@@ -1685,10 +1710,19 @@ class MemorySpaceService:
         silently undo the newer edit. The proposal is claimed (pending →
         approved) before the save, so two reviewers can't both apply it, and
         put back to pending if the save fails.
+
+        A compaction proposal (2.6) without ``text`` applies its ``ops`` (all, or
+        the indexes given) to the file as it is now; see :meth:`_approve_compaction`.
         """
         self._require(space_id, user_id, user_email, "editor")
         proposal = self.get_proposal(space_id, user_id, user_email, proposal_id)
         self._require_pending(proposal)
+        if ops is not None and (proposal.kind != "compaction" or text is not None):
+            raise MemoryValidationError(
+                "Choosing changes is for maintenance proposals approved as proposed.", code="ops_unsupported"
+            )
+        if proposal.kind == "compaction" and text is None:
+            return self._approve_compaction(space_id, user_id, user_email, proposal, ops=ops, note=note)
         if text is None and self.proposal_is_stale(space_id, proposal):
             raise MemorySpaceConcurrencyError(
                 f"'{proposal.slug}' has changed since this was proposed. "
@@ -1756,6 +1790,144 @@ class MemorySpaceService:
         withdrawn = proposal.model_copy(update={"state": "withdrawn", "decided_at": _now_iso()})
         self._transition(space_id, withdrawn, expected="pending")
         return withdrawn
+
+    # ---- maintenance proposals (Shared Projects 2.6) ----------------------
+
+    def create_compaction_proposal(
+        self,
+        space_id: str,
+        *,
+        requester_id: str,
+        requester_email: str,
+        slug: str,
+        ops: List[MaintenanceOp],
+        verification: MaintenanceVerification,
+        run_id: str,
+        base: MemoryEntryRef,
+        items: Sequence[Item],
+    ) -> MemoryProposal:
+        """Queue a maintenance run's changes to one file, in the name of the member who started it.
+
+        Called by the maintenance worker, which holds no user session: the
+        member's editor role was checked when they started the run. The result
+        (``items``) is checked like any save first, so a reviewer is never shown
+        a change that can't be applied. A file takes one maintenance proposal at
+        a time, and the space's pending cap applies.
+        """
+        space = self.repository.get_space(space_id)
+        if space is None:
+            raise MemorySpaceNotFoundError(f"memory space '{space_id}' not found")
+        pending = [p for p in self.repository.list_proposals(space_id) if p.state == "pending"]
+        if any(p.kind == "compaction" and p.slug == slug for p in pending):
+            raise MemoryProposalStateError(f"'{slug}' already has maintenance changes waiting for review.")
+        if len(pending) >= max_pending_proposals():
+            raise MemoryProposalStateError(f"This project already has {len(pending)} changes waiting for review.")
+        body = render_items(items)
+        prepared = self._prepare_save(space, slug, body, description=None, aliases=None, now=_now_iso())
+        proposal = MemoryProposal(
+            proposal_id=_new_proposal_id(),
+            kind="compaction",
+            slug=slug,
+            text=body,
+            base_version=base.version,
+            base_content_hash=base.content_hash,
+            tokens=prepared.count.tokens,
+            proposer_id=requester_id,
+            proposer_email=_normalize_email(requester_email),
+            proposer_kind="maintenance",
+            created_at=_now_iso(),
+            ops=ops,
+            verification=verification,
+            run_id=run_id,
+        )
+        self.repository.put_proposal(space_id, proposal)
+        return proposal
+
+    def preview_compaction(
+        self, space_id: str, proposal: MemoryProposal, *, selected: Optional[Sequence[int]] = None
+    ) -> Tuple[CompactionResult, Optional[MemoryEntryRef]]:
+        """A compaction proposal's ops applied to the file as it is now. Reads the file."""
+        ref = self._find_ref(space_id, proposal.slug)
+        if ref is None:
+            ops = proposal.ops or []
+            skipped = list(range(len(ops))) if selected is None else list(selected)
+            return CompactionResult(items=(), skipped=skipped), None
+        items = self._current_file(ref, proposal.slug).items
+        return apply_ops(items, proposal.ops or [], pinned=ref.pinned, selected=selected), ref
+
+    def compaction_view(self, space_id: str, proposal: MemoryProposal) -> Tuple[str, bool]:
+        """``(text, stale)`` for a pending compaction proposal, as a reviewer should see it.
+
+        While the file is unchanged that is the stored text. Once it has
+        changed, the text is recomputed against the current file, and the
+        proposal is stale only if none of its changes still apply.
+        """
+        if not self.proposal_is_stale(space_id, proposal):
+            return proposal.text, False
+        result, ref = self.preview_compaction(space_id, proposal)
+        if ref is None or not result.applied:
+            return proposal.text, True
+        return render_items(result.items), False
+
+    def _approve_compaction(
+        self,
+        space_id: str,
+        user_id: str,
+        user_email: Optional[str],
+        proposal: MemoryProposal,
+        *,
+        ops: Optional[Sequence[int]],
+        note: Optional[str],
+    ) -> Tuple[MemoryProposal, SaveResult]:
+        """Apply the chosen ops to the file as it is now (``reason: maintenance``).
+
+        Ops are addressed by anchor, so an edit since the run doesn't block the
+        rest: an op whose items changed, went or got pinned is skipped, and
+        ``applied_ops`` records what went in. None left to apply is a 409.
+        """
+        total = len(proposal.ops or [])
+        if ops is not None and (not ops or any(i < 0 or i >= total for i in ops)):
+            raise MemoryValidationError(
+                f"Choose one or more changes, numbered 0 to {total - 1}.", code="ops_invalid"
+            )
+        result, ref = self.preview_compaction(space_id, proposal, selected=ops)
+        if ref is None or not result.applied:
+            raise MemorySpaceConcurrencyError(
+                f"'{proposal.slug}' has changed since maintenance ran, and none of these changes still apply. "
+                "Decline it, and run maintenance again if the file still needs it."
+            )
+        decided = proposal.model_copy(update={
+            "state": "approved",
+            "decided_by": user_id,
+            "decided_by_email": _normalize_email(user_email),
+            "decided_at": _now_iso(),
+            "note": _clean_note(note),
+            "applied_ops": result.applied,
+        })
+        self._transition(space_id, decided, expected="pending")
+        try:
+            saved = self.save_entry(
+                space_id, user_id, user_email, proposal.slug, render_items(result.items),
+                reason="maintenance",
+                proposal_id=proposal.proposal_id,
+                run_id=proposal.run_id,
+                base_content_hash=ref.content_hash,
+                context=SaveContext(
+                    proposal_id=proposal.proposal_id,
+                    proposed_by=proposal.proposer_email or None,
+                    approved_by=_normalize_email(user_email) or None,
+                    archive_reasons=result.archive,
+                ),
+            )
+        except Exception:
+            self._transition(space_id, proposal, expected="approved")
+            raise
+        decided.result_version = saved.ref.version
+        try:
+            self.repository.put_proposal(space_id, decided)
+        except Exception:
+            logger.warning("Could not record the version proposal %s wrote", proposal.proposal_id, exc_info=True)
+        return decided, saved
 
     @staticmethod
     def _require_pending(proposal: MemoryProposal) -> None:

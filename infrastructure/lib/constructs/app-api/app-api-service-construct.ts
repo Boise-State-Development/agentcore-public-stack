@@ -207,6 +207,10 @@ export class AppApiServiceConstruct extends Construct {
     // Memory Spaces storage. Read by apis/shared/memory/* via these env vars.
     environment['S3_MEMORY_SPACES_BUCKET_NAME'] = props.refs.memorySpacesBucket.bucketName;
     environment['DYNAMODB_MEMORY_SPACES_TABLE_NAME'] = props.refs.memorySpacesTable.tableName;
+    // Memory maintenance (Shared Projects 2.6): the worker a run is handed to.
+    // Read by apis/shared/projects/memory_maintenance.py; the invoke grant is
+    // in app-api-iam-grants.ts.
+    environment['MEMORY_MAINTENANCE_FUNCTION_NAME'] = props.refs.memoryMaintenanceWorker.functionName;
 
     // Fine-tuning env vars. Names verified against
     // backend/src/apis/app_api/fine_tuning/* to match the exact env
