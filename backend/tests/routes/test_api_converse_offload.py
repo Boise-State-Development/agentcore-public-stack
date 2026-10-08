@@ -122,9 +122,10 @@ class _GatedStream:
     network read, and ``close()`` exists.
     """
 
-    def __init__(self, events, gate: threading.Event):
+    def __init__(self, events, gate: threading.Event, *, close_gate_after_first: bool = False):
         self._events = iter(events)
         self._gate = gate
+        self._close_gate_after_first = close_gate_after_first
         self.closed = False
         self.delivered = 0
 
@@ -135,6 +136,8 @@ class _GatedStream:
         self._gate.wait(timeout=10)
         event = next(self._events)
         self.delivered += 1
+        if self._close_gate_after_first and self.delivered == 1:
+            self._gate.clear()
         return event
 
     def close(self):
@@ -498,20 +501,27 @@ class TestIterateStreamInThread:
 
     @pytest.mark.asyncio
     async def test_abandoning_the_consumer_stops_and_closes_the_stream(self):
+        # The gate opens for the first item only, so the worker is parked in
+        # ``next()`` (as it would be on a slow Bedrock chunk) when the consumer
+        # leaves. An always-open gate let the worker drain all 100 items before
+        # ``aclose`` ran, and then there was nothing left to abandon: the test
+        # passed or failed on scheduling alone.
         gate = threading.Event()
         gate.set()
-        stream = _GatedStream(list(range(100)), gate)
+        stream = _GatedStream(list(range(100)), gate, close_gate_after_first=True)
 
         agen = iterate_stream_in_thread(lambda: stream)
         first = await agen.__anext__()
         assert first == 0
         await agen.aclose()
+        assert stream.delivered == 1
 
-        # The worker observes the abandon flag at its next chunk, breaks, and
-        # closes the stream — it does not drain the remaining 99 items.
-        for _ in range(100):
+        # Release the worker: it reads one more chunk, sees the abandon flag,
+        # breaks, and closes the stream — it does not drain the remaining items.
+        gate.set()
+        for _ in range(500):
             if stream.closed:
                 break
             await asyncio.sleep(0.01)
         assert stream.closed
-        assert stream.delivered < 100
+        assert stream.delivered <= 2
