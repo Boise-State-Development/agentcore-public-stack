@@ -98,7 +98,7 @@ export class ProjectMemoryPage {
   /** The editor open in place of the file view, if any (2.8b). */
   protected readonly editing = signal<MemoryEditorMode | 'index' | null>(null);
   protected readonly starting = signal(false);
-  /** The Tidy up control, which a file's own Tidy up starts a one-file run through (2.6a). */
+  /** The Tidy up control, which a file's own Tidy up starts a one-file run through (2.6a, 2.6b). */
   private readonly maintenance = viewChild<MemoryMaintenanceComponent>('maintenance');
 
   protected readonly activeScope = computed<MemoryScope>(() => (this.scope() === 'mine' ? 'mine' : 'project'));
@@ -148,6 +148,14 @@ export class ProjectMemoryPage {
     if (!p || p.status !== 'active') return false;
     return this.activeScope() === 'mine' || p.role !== 'viewer';
   });
+
+  /**
+   * Tidy up the scope shown: project memory as its owner or an editor (changes wait for review),
+   * your own as any member of an active project (changes are saved, and can be undone).
+   */
+  protected readonly canTidy = computed(() =>
+    this.activeScope() === 'mine' ? this.canEdit() && !!this.spaceId() : this.canReview(),
+  );
 
   /** A viewer proposes changes to the shared memory instead. */
   protected readonly canPropose = computed(() => {
@@ -306,9 +314,13 @@ export class ProjectMemoryPage {
     void this.maintenance()?.start(entry.slug);
   }
 
-  /** A maintenance run ended; any proposals it made are now in the review count. */
+  /**
+   * A maintenance run ended. On project memory any proposals it made are now in the review
+   * count; on your own, its changes (or their undo) are saved, so the files are re-read.
+   */
   protected onMaintenanceFinished(): void {
-    void this.loadPending();
+    if (this.activeScope() === 'mine') void this.loadScope('mine');
+    else void this.loadPending();
   }
 
   /** The restored item's file has a new version; the archive stays open for the next one. */

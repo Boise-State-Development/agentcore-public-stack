@@ -25,7 +25,7 @@ export interface MemoryMaintenanceConstructProps {
   config: AppConfig;
   /** Memory spaces table: the run row and snapshot, proposals, provenance. */
   memorySpacesTable: dynamodb.ITable;
-  /** Memory spaces bucket: the worker reads files, and never writes. */
+  /** Memory spaces bucket: the worker reads files, and writes a member's tidied files (2.6b). */
   memorySpacesBucket: s3.IBucket;
   /** Projects table: project META and members, the cost rollup, the inbox. */
   projectsTable: dynamodb.ITable;
@@ -39,12 +39,17 @@ export interface MemoryMaintenanceConstructProps {
  * One DockerImage Lambda (backend/Dockerfile.memory-maintenance). app-api
  * async-invokes it with `{spaceId, runId}` when an editor starts a run; it
  * snapshots the space, asks the model for compaction changes one file at a
- * time, verifies them deterministically and writes compaction proposals for
- * an editor to review. It never changes memory itself, which is why it has
- * no write access to the bucket.
+ * time and verifies them deterministically. In a project's shared memory it
+ * writes compaction proposals for an editor to review (2.6a); in a member's
+ * own memory it saves the changes, which the member can undo (2.6b). Saves
+ * only ever add content-addressed objects, so the bucket grant is read and
+ * put, never delete.
  *
  * Nothing schedules it yet: the only initiator is a person, through app-api
  * (which needs the projects feature on). Phase 3.5 adds a weekly sweeper.
+ * The worker itself never reads PROJECTS_ENABLED: app-api checked the
+ * requester's access when the run was queued, and the worker re-checks the
+ * project and membership from the projects table.
  *
  * Same platform-as-bootstrap pattern as scheduled-runs: `fromImageAsset`
  * points at the byte-stable `bootstrap-assets/memory-maintenance/` stub, and
@@ -92,13 +97,23 @@ export class MemoryMaintenanceConstruct extends Construct {
         DYNAMODB_PROJECTS_TABLE_NAME: projectsTable.tableName,
       },
       description:
-        'Memory maintenance worker - plans, verifies and proposes compaction changes to a project\'s shared memory',
+        'Memory maintenance worker - plans and verifies compaction changes to project memory, and proposes or applies them',
     });
 
     // Run rows, snapshots, proposals and provenance reads, and the lock release.
     memorySpacesTable.grantReadWriteData(this.workerLambda);
-    // Files are read through their content-addressed keys; nothing is written.
+    // Files are read through their content-addressed keys. A member's tidied
+    // file is a new object (2.6b); replaced objects stay, since version rows
+    // reference them, so the worker never deletes.
     memorySpacesBucket.grantRead(this.workerLambda);
+    this.workerLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'MemorySpacesObjectPut',
+        effect: iam.Effect.ALLOW,
+        actions: ['s3:PutObject'],
+        resources: [memorySpacesBucket.arnForObjects('spaces/*')],
+      }),
+    );
     // Project META and members, the COST# rollup (UpdateItem) and the inbox.
     projectsTable.grantReadWriteData(this.workerLambda);
 

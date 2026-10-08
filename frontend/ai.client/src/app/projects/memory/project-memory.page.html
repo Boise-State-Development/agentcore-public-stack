@@ -111,14 +111,13 @@
                 <ng-icon name="heroArchiveBox" class="size-4" aria-hidden="true" />
                 Archive
               </a>
-              @if (activeScope() === 'project') {
-                <app-memory-maintenance
-                  #maintenance
-                  [projectId]="p.projectId"
-                  [canRun]="canReview()"
-                  (finished)="onMaintenanceFinished()"
-                />
-              }
+              <app-memory-maintenance
+                #maintenance
+                [projectId]="p.projectId"
+                [scope]="activeScope()"
+                [canRun]="canTidy()"
+                (finished)="onMaintenanceFinished()"
+              />
             </div>
             @if (!editing() && (canEdit() || canPropose())) {
               <button
@@ -224,7 +223,7 @@
                   [limits]="limits()"
                   [canEdit]="canEdit()"
                   [canPropose]="canPropose()"
-                  [canTidy]="canReview() && activeScope() === 'project'"
+                  [canTidy]="canTidy()"
                   (edit)="startEditing('edit')"
                   (propose)="startEditing('propose')"
                   (remove)="deleteFile(entry)"

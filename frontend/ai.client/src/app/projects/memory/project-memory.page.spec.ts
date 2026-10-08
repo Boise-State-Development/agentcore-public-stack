@@ -191,9 +191,16 @@ describe('ProjectMemoryPage', () => {
     expect(el.querySelector('app-memory-editor h2')?.textContent).toContain('New file');
   });
 
-  describe('tidy up (2.6a)', () => {
+  describe('tidy up (2.6a, 2.6b)', () => {
     const tidyButtons = (el: HTMLElement) =>
       Array.from(el.querySelectorAll('button')).filter(b => /Tidy up/.test(b.textContent ?? '') || /^Tidy up /.test(b.getAttribute('aria-label') ?? ''));
+
+    async function settle(fixture: { whenStable: () => Promise<unknown> }) {
+      for (let i = 0; i < 3; i++) {
+        await fixture.whenStable();
+        await new Promise(r => setTimeout(r, 0));
+      }
+    }
 
     it('an editor tidies all of project memory or one file', async () => {
       const { el, fixture } = await render();
@@ -202,20 +209,34 @@ describe('ProjectMemoryPage', () => {
       expect(file.getAttribute('aria-label')).toBe('Tidy up rates');
 
       file.click();
-      for (let i = 0; i < 3; i++) {
-        await fixture.whenStable();
-        await new Promise(r => setTimeout(r, 0));
-      }
-      expect(api.startMaintenance).toHaveBeenCalledWith('prj_1', 'rates');
+      await settle(fixture);
+      expect(api.startMaintenance).toHaveBeenCalledWith('prj_1', 'rates', 'project');
     });
 
-    it('is not offered in your own memory or to a viewer', async () => {
-      const mine = await render({ scope: 'mine' });
-      expect(tidyButtons(mine.el)).toEqual([]);
+    it('any member tidies their own memory, and its files are re-read when it ends', async () => {
+      api.get.mockReturnValue(of({ ...PROJECT, role: 'viewer' } as Project));
+      const { el, fixture } = await render({ scope: 'mine' });
+      expect(api.maintenanceRuns).toHaveBeenCalledWith('prj_1', 'mine');
+      const [all, file] = tidyButtons(el);
+      expect(all.textContent).toContain('Tidy up');
+      expect(file.getAttribute('aria-label')).toBe('Tidy up prefs');
+      expect(file.getAttribute('title')).toContain('you can undo it');
 
+      const reads = api.memoryEntries.mock.calls.filter(([id]) => id === 'spc_m').length;
+      file.click();
+      await settle(fixture);
+      expect(api.startMaintenance).toHaveBeenCalledWith('prj_1', 'prefs', 'mine');
+      expect(api.memoryEntries.mock.calls.filter(([id]) => id === 'spc_m').length).toBe(reads + 1);
+    });
+
+    it('is not offered to a viewer of project memory, or before you have memory of your own', async () => {
       api.get.mockReturnValue(of({ ...PROJECT, role: 'viewer' } as Project));
       const viewer = await render();
       expect(tidyButtons(viewer.el)).toEqual([]);
+
+      api.memory.mockReturnValue(of({ sharedSpaceId: 'spc_p', personalSpaceId: null, role: 'editor', limits: MEMORY_LIMITS }));
+      const empty = await render({ scope: 'mine' });
+      expect(tidyButtons(empty.el)).toEqual([]);
     });
   });
 });

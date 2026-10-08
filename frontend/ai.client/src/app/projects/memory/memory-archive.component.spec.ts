@@ -47,10 +47,10 @@ describe('MemoryArchiveComponent', () => {
     });
   });
 
-  async function render(canRestore = true) {
+  async function render(canRestore = true, scope: 'project' | 'mine' = 'project') {
     const fixture = TestBed.createComponent(MemoryArchiveComponent);
     fixture.componentRef.setInput('projectId', 'prj_1');
-    fixture.componentRef.setInput('scope', 'project');
+    fixture.componentRef.setInput('scope', scope);
     fixture.componentRef.setInput('entries', [memoryEntry('sis')]);
     fixture.componentRef.setInput('canRestore', canRestore);
     const restored = vi.fn();
@@ -91,6 +91,24 @@ describe('MemoryArchiveComponent', () => {
     expect(text[0]).toContain('Merged into another item by maintenance, approved by Dana Whitfield');
     expect(text[1]).toContain('Replaced by a newer item by maintenance, approved by Dana Whitfield');
     expect(text[2]).toContain('Removed as past by maintenance, approved by Dana Whitfield');
+  });
+
+  it('says a tidy-up of your own memory took an item out, with no approval', async () => {
+    api.memoryArchive.mockReturnValue(
+      of({
+        items: [
+          ROW('a1', 'sis', { reason: 'merged', archivedBy: 'me@x.edu' }),
+          ROW('a2', 'sis', { reason: 'superseded', archivedBy: 'me@x.edu' }),
+          ROW('a3', 'sis', { reason: 'pruned', archivedBy: 'me@x.edu' }),
+        ],
+        people: {},
+      }),
+    );
+    const { rows } = await render(true, 'mine');
+    const text = rows().map(r => r.textContent?.replace(/\s+/g, ' ') ?? '');
+    expect(text[0]).toContain('Merged into another item in a tidy-up by you');
+    expect(text[1]).toContain('Replaced by a newer item in a tidy-up by you');
+    expect(text[2]).toContain('Removed as past in a tidy-up by you');
   });
 
   it('filters by file', async () => {

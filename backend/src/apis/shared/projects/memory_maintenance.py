@@ -1,15 +1,29 @@
-"""Starting and reading maintenance runs on a project's shared memory (Shared Projects 2.6).
+"""Starting, reading and undoing maintenance runs on a project's memory (Shared Projects 2.6).
 
-A member with editor access starts a run here. This layer checks what only a
-project knows (membership, role, archived), resolves the model and its prices
-from the catalog, takes the space's one maintenance slot, writes the run
-``queued`` and invokes the maintenance worker asynchronously. The worker
-(``apis/shared/memory/maintenance/runner.py``) does the rest; nothing in this
-file calls a model.
+Two scopes, as on the Memory page. ``project`` is the shared memory: the owner
+or an editor starts a run, and it ends in compaction proposals for an editor to
+review (2.6a). ``mine`` is the caller's own memory in the project (2.6b): any
+member may tidy their own, nobody else can, and the worker saves the changes
+straight away. The run row keeps what changed, and :meth:`ProjectMemoryMaintenance.undo`
+puts the files back from the run's snapshot within the personal archive
+retention (``MEMORY_PERSONAL_ARCHIVE_RETENTION_DAYS``, 30 days).
+
+This layer checks what only a project knows (membership, role, archived),
+resolves the model and its prices from the catalog, takes the space's one
+maintenance slot, writes the run ``queued`` and invokes the maintenance worker
+asynchronously. The worker (``apis/shared/memory/maintenance/runner.py``) does
+the rest; nothing in this file calls a model.
 
 The model is the catalog's default unless ``MEMORY_MAINTENANCE_MODEL_ID`` names
 another catalog row. Either way it must have a row: that is where its prices
 come from, and a run is metered to the project like any task.
+
+**Undo, per file.** A file is put back only while it is exactly what the run
+wrote (its content hash), so an edit made since the run is never thrown away;
+that file is reported as changed instead, and its History still has the version
+from before the run. A file deleted since is reported as missing. A restore is
+a new version (``reason: restore``), never a rewrite of history, and the items
+it brings back leave the archive with the provenance they had.
 """
 
 from __future__ import annotations
@@ -20,8 +34,8 @@ import os
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any, Callable, List, Optional
+from datetime import datetime, timedelta, timezone
+from typing import Any, Callable, List, Literal, Optional, Tuple
 
 from apis.shared.audit.models import AuditAction
 from apis.shared.auth.models import User
@@ -37,6 +51,10 @@ MODEL_ENV = "MEMORY_MAINTENANCE_MODEL_ID"
 # slot frees it on its own.
 LOCK_LEASE_SECONDS = 20 * 60
 RUNS_LISTED = 10
+
+# The Memory page's scopes: the project's shared memory, or the caller's own.
+MaintenanceScope = Literal["project", "mine"]
+_SPACE_SCOPES = {"project": "shared", "mine": "personal_in_project"}
 
 
 class MaintenanceRequestError(RuntimeError):
@@ -122,30 +140,46 @@ class ProjectMemoryMaintenance:
             self._memory = MemorySpaceService()
         return self._memory
 
-    def _space(self, project_id: str, user: User, *, start: bool):
+    def _space(self, project_id: str, user: User, *, start: bool, scope: MaintenanceScope = "project") -> Tuple[Any, str]:
         project, role = resolve_project_role(project_id, user.user_id, user.email, repository=self.repository)
         if project is None or role is None:
             raise MaintenanceRequestError(404, "You are not a member of this project.")
-        if role not in ("owner", "editor"):
+        if scope == "project" and role not in ("owner", "editor"):
             raise MaintenanceRequestError(403, "Only the owner and editors can run memory maintenance.")
         if start and project.status != "active":
             raise MaintenanceRequestError(409, "This project is archived, so its memory is read-only.")
+        if scope == "mine":
+            # Always the caller's own space: nobody can address another member's.
+            space_id = self.repository.get_personal_space_id(project.project_id, user.user_id)
+            if not space_id:
+                raise MaintenanceRequestError(409, "You don't have anything in your own memory here yet.")
+            return project, space_id
         if not project.shared_space_id:
             raise MaintenanceRequestError(409, "This project has no shared memory yet.")
         return project, project.shared_space_id
 
-    def start(self, project_id: str, user: User, model: MaintenanceModel, *, slug: Optional[str] = None):
+    def start(
+        self,
+        project_id: str,
+        user: User,
+        model: MaintenanceModel,
+        *,
+        slug: Optional[str] = None,
+        scope: MaintenanceScope = "project",
+    ):
         """Queue a run over every file, or one ``slug``. Returns the queued run."""
         from apis.shared.memory.maintenance.runner import run_ttl
         from apis.shared.memory.models import MaintenanceRun
 
-        project, space_id = self._space(project_id, user, start=True)
+        project, space_id = self._space(project_id, user, start=True, scope=scope)
         function_name = (os.environ.get(FUNCTION_NAME_ENV) or "").strip()
         if not function_name:
             raise MaintenanceRequestError(503, "Memory maintenance isn't set up in this deployment.")
         repo = self.memory.repository
         if slug is not None and not any(e.slug == slug for e in repo.get_index(space_id).entries):
-            raise MaintenanceRequestError(404, f"'{slug}' isn't in project memory.")
+            where = "your memory" if scope == "mine" else "project memory"
+            raise MaintenanceRequestError(404, f"'{slug}' isn't in {where}.")
+        space_scope = _SPACE_SCOPES[scope]
 
         now = self._clock()
         run = MaintenanceRun(
@@ -160,12 +194,14 @@ class ProjectMemoryMaintenance:
             input_price_per_million_tokens=model.input_price_per_million_tokens,
             output_price_per_million_tokens=model.output_price_per_million_tokens,
             created_at=now.isoformat(),
+            scope=space_scope,
         )
         if not repo.acquire_maintenance_lock(
             space_id, run.run_id, now=int(now.timestamp()), lease_seconds=LOCK_LEASE_SECONDS
         ):
-            raise MaintenanceRequestError(409, "Maintenance is already running on this project's memory.")
-        ttl = run_ttl("shared", now=now)
+            where = "your memory" if scope == "mine" else "this project's memory"
+            raise MaintenanceRequestError(409, f"Maintenance is already running on {where}.")
+        ttl = run_ttl(space_scope, now=now)
         try:
             repo.put_maintenance_run(run, ttl)
             self._invoke(function_name, {"spaceId": space_id, "runId": run.run_id})
@@ -177,20 +213,130 @@ class ProjectMemoryMaintenance:
             finally:
                 repo.release_maintenance_lock(space_id, run.run_id)
             raise MaintenanceRequestError(503, "Maintenance couldn't start. Try again in a minute.")
-        self._record(user, project, run)
+        if scope == "project":
+            # A member's own memory is theirs and isn't audited (2.8b).
+            self._record(user, project, run)
         return run
 
-    def list_runs(self, project_id: str, user: User, *, limit: int = RUNS_LISTED) -> List[Any]:
-        """The project's recent runs, newest first (owner and editors)."""
-        _, space_id = self._space(project_id, user, start=False)
+    def list_runs(
+        self, project_id: str, user: User, *, scope: MaintenanceScope = "project", limit: int = RUNS_LISTED
+    ) -> List[Any]:
+        """Recent runs on one scope, newest first (shared: owner and editors; mine: the member)."""
+        _, space_id = self._space(project_id, user, start=False, scope=scope)
         return [self._as_seen(r) for r in self.memory.repository.list_maintenance_runs(space_id, limit)]
 
-    def get_run(self, project_id: str, user: User, run_id: str):
-        _, space_id = self._space(project_id, user, start=False)
+    def get_run(self, project_id: str, user: User, run_id: str, *, scope: MaintenanceScope = "project"):
+        _, space_id = self._space(project_id, user, start=False, scope=scope)
         run = self.memory.repository.get_maintenance_run(space_id, run_id)
         if run is None:
             raise MaintenanceRequestError(404, "Not found")
         return self._as_seen(run)
+
+    def undoable_until(self, run: Any) -> Optional[str]:
+        """When an applied run stops being undoable, or None if it can't be undone at all."""
+        from apis.shared.memory.service import archive_retention_days
+
+        if run.space_scope != "personal_in_project" or run.state != "done" or run.undone_at:
+            return None
+        if not any(r.outcome == "applied" for r in run.results):
+            return None
+        try:
+            created = datetime.fromisoformat(run.created_at)
+        except ValueError:
+            return None
+        return (created + timedelta(days=archive_retention_days(run.space_scope))).isoformat()
+
+    def undo(self, project_id: str, user: User, run_id: str):
+        """Put back every file a run on the caller's own memory changed, as the rule above says.
+
+        Takes the space's maintenance slot for the duration, so an undo never
+        overlaps a run or another undo. Returns the run, with each applied
+        file's ``undo`` outcome.
+        """
+        from apis.shared.memory.maintenance.runner import run_ttl
+
+        project, space_id = self._space(project_id, user, start=True, scope="mine")
+        repo = self.memory.repository
+        run = repo.get_maintenance_run(space_id, run_id)
+        if run is None or run.requested_by != user.user_id:
+            raise MaintenanceRequestError(404, "Not found")
+        if run.undone_at:
+            raise MaintenanceRequestError(409, "This tidy-up was already undone.")
+        until = self.undoable_until(run)
+        if until is None:
+            raise MaintenanceRequestError(409, "This run didn't change anything that can be undone.")
+        now = self._clock()
+        if now.isoformat() >= until:
+            raise MaintenanceRequestError(409, "This tidy-up is too old to undo. Each file's History still has its earlier versions.")
+        lock = f"undo-{run_id}"
+        if not repo.acquire_maintenance_lock(space_id, lock, now=int(now.timestamp()), lease_seconds=LOCK_LEASE_SECONDS):
+            raise MaintenanceRequestError(409, "Maintenance is running on your memory. Undo once it has finished.")
+        try:
+            snapshot = {e.slug: e for e in (run.snapshot.entries if run.snapshot else [])}
+            for result in run.results:
+                if result.outcome == "applied":
+                    result.undo, result.undo_version = self._undo_file(space_id, user, run, result, snapshot.get(result.slug))
+            run.undone_at = now.isoformat()
+            run.undone_by = (user.email or "").strip().lower()
+            repo.put_maintenance_run(run, run_ttl(run.space_scope, now=datetime.fromisoformat(run.created_at)))
+        finally:
+            repo.release_maintenance_lock(space_id, lock)
+        logger.info(
+            "memory-maintenance: undo run=%s space=%s outcomes=%s",
+            run_id, space_id, sorted((r.slug, r.undo) for r in run.results if r.undo),
+        )
+        return run
+
+    def _undo_file(self, space_id: str, user: User, run: Any, result: Any, before: Any) -> Tuple[str, Optional[int]]:
+        """``(outcome, version)`` for one applied file."""
+        from apis.shared.memory.format import parse_file
+        from apis.shared.memory.models import ItemProvenance
+        from apis.shared.memory.service import MemorySpaceConcurrencyError, MemorySpaceError, SaveContext
+        from apis.shared.projects.memory_files import EditedItem, render_items_for_save
+
+        memory = self.memory
+        current = next((e for e in memory.repository.get_index(space_id).entries if e.slug == result.slug), None)
+        if current is None or before is None:
+            return "missing", None
+        if current.content_hash != result.content_hash:
+            return "changed", None
+        try:
+            parsed = parse_file(memory.store.get(before.s3_key).decode("utf-8"))
+            present = {i.anchor for i in memory._current_file(current, result.slug).items}
+            returning = [i.anchor for i in parsed.items if i.anchor and i.anchor not in present]
+            archived = {}
+            for row in sorted(memory.repository.list_archived_items(space_id), key=lambda a: a.archive_id):
+                if row.slug == result.slug and row.anchor in returning:
+                    archived[row.anchor] = row
+            restored = {
+                anchor: (archived[anchor].provenance or ItemProvenance(added_by=archived[anchor].archived_by))
+                if anchor in archived else ItemProvenance()
+                for anchor in returning
+            }
+            fm = parsed.frontmatter or {}
+            description, aliases = fm.get("description"), fm.get("aliases")
+            saved = memory.save_entry(
+                space_id, user.user_id, user.email, result.slug,
+                render_items_for_save([EditedItem(text=i.text, anchor=i.anchor) for i in parsed.items]),
+                description=description if isinstance(description, str) else None,
+                aliases=list(aliases) if isinstance(aliases, list) else None,
+                reason="restore",
+                run_id=run.run_id,
+                base_content_hash=current.content_hash,
+                restorable=returning,
+                context=SaveContext(restored=restored),
+            )
+        except MemorySpaceConcurrencyError:
+            return "changed", None
+        except MemorySpaceError:
+            logger.warning("memory-maintenance: could not undo %s of run %s", result.slug, run.run_id, exc_info=True)
+            return "failed", None
+        for row in archived.values():
+            try:
+                memory.repository.delete_archived_item(space_id, row.archive_id)
+            except Exception:
+                logger.warning("Could not clear archive row %s in %s", row.archive_id, space_id, exc_info=True)
+        return "restored", saved.ref.version
 
     def _as_seen(self, run: Any) -> Any:
         """A run still queued or running after its lease has expired is reported as failed.

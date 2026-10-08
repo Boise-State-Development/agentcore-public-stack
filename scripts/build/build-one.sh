@@ -260,6 +260,7 @@ case "$SERVICE" in
         MANIFESTS=(
             "backend/src/apis/shared/__init__.py"
             "backend/src/apis/shared/projects/__init__.py"
+            "backend/src/apis/shared/projects/access.py"
             "backend/src/apis/shared/projects/models.py"
             "backend/src/apis/shared/projects/repository.py"
             "backend/src/apis/shared/dynamo_errors.py"

@@ -18,6 +18,7 @@ Row shapes (see ``models.py``):
   - ``PK=SPACE#{id}  SK=ARCHIVE#{at}#{anchor}``   (items that left a file; expire on ``ttl``)
   - ``PK=SPACE#{id}  SK=SNAPSHOT#{runId}``        (a maintenance run and its snapshot; expire on ``ttl``)
   - ``PK=SPACE#{id}  SK=MAINTENANCE_LOCK``        (the one run a space may have in flight)
+  - ``PK=SPACE#{id}  SK=STATS#{slug}``            (how often tasks read a file; one ``UpdateItem`` per read)
 """
 
 from __future__ import annotations
@@ -46,6 +47,7 @@ from .models import (
     MemoryIndex,
     MemoryProposal,
     MemorySpace,
+    RetrievalStats,
     SpaceMember,
 )
 
@@ -79,6 +81,7 @@ _PROV_SK_PREFIX = "PROV#"
 _ARCHIVE_SK_PREFIX = "ARCHIVE#"
 _SNAPSHOT_SK_PREFIX = "SNAPSHOT#"
 _MAINTENANCE_LOCK_SK = "MAINTENANCE_LOCK"
+_STATS_SK_PREFIX = "STATS#"
 
 MANIFEST_MAX_BYTES = 300 * 1024
 
@@ -663,3 +666,33 @@ class MemorySpaceRepository:
         except ClientError as exc:
             if exc.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
                 raise
+
+    # ---- retrieval stats (STATS, Shared Projects 2.6b) --------------------
+
+    def record_retrieval(self, space_id: str, slug: str, at: str) -> None:
+        """Count one read of one file by a task. One ``UpdateItem``, no read first.
+
+        The attributes it touches are exactly the ones the Runtime's grant
+        allows (``dynamodb:Attributes``), so keep the two lists in step:
+        ``PK``, ``SK``, ``slug``, ``retrievalCount``, ``lastRetrievedAt``.
+        """
+        self._table.update_item(
+            Key={"PK": _space_pk(space_id), "SK": f"{_STATS_SK_PREFIX}{slug}"},
+            UpdateExpression="SET slug = :slug, lastRetrievedAt = :at ADD retrievalCount :one",
+            ExpressionAttributeValues={":slug": slug, ":at": at, ":one": 1},
+            ReturnValues="NONE",
+        )
+
+    def list_retrieval_stats(self, space_id: str) -> Dict[str, RetrievalStats]:
+        """``{slug: stats}`` for every file a task has read."""
+        items = self._query_pages(
+            KeyConditionExpression=Key("PK").eq(_space_pk(space_id)) & Key("SK").begins_with(_STATS_SK_PREFIX)
+        )
+        stats = (
+            RetrievalStats.model_validate(_from_dynamo({k: v for k, v in i.items() if k not in ("PK", "SK")}))
+            for i in items
+        )
+        return {s.slug: s for s in stats if s.slug}
+
+    def delete_retrieval_stats(self, space_id: str, slug: str) -> None:
+        self._table.delete_item(Key={"PK": _space_pk(space_id), "SK": f"{_STATS_SK_PREFIX}{slug}"})

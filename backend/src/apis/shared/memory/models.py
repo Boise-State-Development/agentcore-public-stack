@@ -329,14 +329,31 @@ class MemoryProposal(BaseModel):
 
 
 MaintenanceRunState = Literal["queued", "running", "done", "failed"]
-# ``proposed``: a compaction proposal is waiting for review. ``nothing_to_do``:
-# the planner found nothing, or the verifier dropped all of it.
-# ``pending_review``: the file already has a maintenance proposal waiting.
-# ``not_reached``: the run ran out of time first.
-MaintenanceFileOutcome = Literal["proposed", "nothing_to_do", "pending_review", "failed", "not_reached"]
+# ``proposed``: a compaction proposal is waiting for review (shared memory).
+# ``applied``: the changes were saved (a member's own memory, 2.6b).
+# ``changed``: the file was saved by someone else while the run was planning it,
+# so it was left as it is. ``nothing_to_do``: the planner found nothing, or the
+# verifier dropped all of it. ``pending_review``: the file already has a
+# maintenance proposal waiting. ``not_reached``: the run ran out of time first.
+MaintenanceFileOutcome = Literal[
+    "proposed", "applied", "changed", "nothing_to_do", "pending_review", "failed", "not_reached"
+]
+# What an undo did with one applied file (2.6b). ``restored``: put back as the
+# snapshot had it, in a new version. ``changed``: saved since the run, so left
+# alone. ``missing``: deleted since the run. ``failed``: the restore was refused.
+MaintenanceUndoOutcome = Literal["restored", "changed", "missing", "failed"]
 
 
 class MaintenanceFileResult(BaseModel):
+    """What a run did with one file.
+
+    For an applied file (a member's own memory, 2.6b), ``version`` and
+    ``content_hash`` are what the run wrote, which is what an undo checks the
+    file against, and ``ops`` are the changes it made, for the summary.
+    ``ops_omitted`` is set when a large run kept counts only, so the run row
+    stays well under DynamoDB's item limit.
+    """
+
     model_config = ConfigDict(populate_by_name=True)
 
     slug: str
@@ -346,6 +363,12 @@ class MaintenanceFileResult(BaseModel):
     kept: int = 0
     dropped: int = 0
     error: Optional[str] = None
+    version: Optional[int] = None
+    content_hash: Optional[str] = Field(None, alias="contentHash")
+    ops: Optional[List[MaintenanceOp]] = None
+    ops_omitted: bool = Field(False, alias="opsOmitted")
+    undo: Optional[MaintenanceUndoOutcome] = None
+    undo_version: Optional[int] = Field(None, alias="undoVersion")
 
 
 class MaintenanceSnapshot(BaseModel):
@@ -367,8 +390,11 @@ class MaintenanceRun(BaseModel):
     """A ``SNAPSHOT#{runId}`` row: one maintenance run and the snapshot it worked from (Shared Projects 2.6).
 
     app-api writes it ``queued`` with the model and its prices; the worker
-    takes the snapshot, plans, verifies and proposes, then marks it ``done``
-    or ``failed``. It expires with the space's archive retention.
+    takes the snapshot, plans, verifies and proposes (shared memory) or
+    applies (a member's own memory, 2.6b), then marks it ``done`` or
+    ``failed``. It expires with the space's archive retention, which is also
+    how long an applied run can be undone. ``scope`` is absent on rows
+    written before 2.6b, which are all shared.
     """
 
     model_config = ConfigDict(populate_by_name=True)
@@ -393,6 +419,29 @@ class MaintenanceRun(BaseModel):
     output_tokens: int = Field(0, alias="outputTokens")
     cost: Optional[float] = None
     error: Optional[str] = None
+    scope: Optional[MemoryScope] = None
+    undone_at: Optional[str] = Field(None, alias="undoneAt")
+    undone_by: Optional[str] = Field(None, alias="undoneBy")
+
+    @property
+    def space_scope(self) -> str:
+        return self.scope or "shared"
+
+
+class RetrievalStats(BaseModel):
+    """A ``STATS#{slug}`` row: how often tasks have read one file (Shared Projects 2.6b, §3.3).
+
+    Bumped once per file per turn when a project harness's ``memory_read``
+    returns it, off the tool's return path. A read returns the whole file, so
+    there is no per-item signal to keep: §3.3's ``byAnchor`` stays unwritten
+    until something reads items rather than files.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    slug: str = ""
+    retrieval_count: int = Field(0, alias="retrievalCount")
+    last_retrieved_at: Optional[str] = Field(None, alias="lastRetrievedAt")
 
 
 class MemoryIndex(BaseModel):

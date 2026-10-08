@@ -279,6 +279,24 @@ file since the run, the edit is kept. Any suggestion that touches an edited item
 is skipped, and the review says so. Items that leave go to the archive like any
 other removed item, labelled with how they left, so you can bring one back.
 
+#### Tidy up your own memory
+
+Anyone in the project can tidy their own memory: open **Just me** and use
+**Tidy up**, or the ✨ button on one of your files. It makes the same three kinds
+of change, checked the same way, but there's no review queue: the changes are
+saved as soon as the run ends, because nobody else's memory is affected.
+
+When it finishes, the line under the buttons says how many changes it made, and
+**What changed** lists them file by file. **Undo** puts your files back as they
+were before the run, as new versions, so nothing in their history is lost. You
+can undo for about a month (the line says until when). If you've changed a file
+since the run, Undo leaves that file alone so your edit is kept, and says so.
+Its **History** still has the version from before the tidy-up, and the archive
+still has the items it took out, so you can bring those back yourself.
+
+If you edit a file while the run is working on it, the run leaves that file
+alone too.
+
 ## Ask for a Word redline
 
 If the project has the **Word Documents** tool, the assistant can produce a

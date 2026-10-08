@@ -133,12 +133,13 @@ export class MemoryArchiveComponent {
     switch (row.reason) {
       case 'deleted':
         return 'Its file was deleted by';
+      // Project memory's tidy-ups go through review; your own are saved when you run them (2.6b).
       case 'merged':
-        return 'Merged into another item by maintenance, approved by';
+        return this.scope() === 'mine' ? 'Merged into another item in a tidy-up by' : 'Merged into another item by maintenance, approved by';
       case 'superseded':
-        return 'Replaced by a newer item by maintenance, approved by';
+        return this.scope() === 'mine' ? 'Replaced by a newer item in a tidy-up by' : 'Replaced by a newer item by maintenance, approved by';
       case 'pruned':
-        return 'Removed as past by maintenance, approved by';
+        return this.scope() === 'mine' ? 'Removed as past in a tidy-up by' : 'Removed as past by maintenance, approved by';
       default:
         return 'Removed by';
     }

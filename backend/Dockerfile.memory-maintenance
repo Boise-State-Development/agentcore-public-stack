@@ -25,6 +25,7 @@ COPY backend/src/apis/shared/memory/ ${LAMBDA_TASK_ROOT}/apis/shared/memory/
 # The run reads the project (is it still active, who are its editors) and adds
 # its cost to the project's month; the inbox lives on the same table.
 COPY backend/src/apis/shared/projects/__init__.py ${LAMBDA_TASK_ROOT}/apis/shared/projects/__init__.py
+COPY backend/src/apis/shared/projects/access.py ${LAMBDA_TASK_ROOT}/apis/shared/projects/access.py
 COPY backend/src/apis/shared/projects/models.py ${LAMBDA_TASK_ROOT}/apis/shared/projects/models.py
 COPY backend/src/apis/shared/projects/repository.py ${LAMBDA_TASK_ROOT}/apis/shared/projects/repository.py
 COPY backend/src/apis/shared/dynamo_errors.py ${LAMBDA_TASK_ROOT}/apis/shared/dynamo_errors.py

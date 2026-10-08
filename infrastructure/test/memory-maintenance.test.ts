@@ -4,8 +4,9 @@
  * What a synth can prove and a deploy would only reveal late:
  *   - one arm64 image function at Lambda's maximum timeout, with no async
  *     retries (the runner already ignores a run that isn't queued);
- *   - it reads memory files and never writes them: changes reach memory only
- *     through an editor's approval, which runs in app-api;
+ *   - it reads memory files and may add new ones (a member's tidied file,
+ *     2.6b), but never deletes or tags one: replaced objects stay, because
+ *     version rows reference them;
  *   - it can call a model and count tokens, and nothing else on Bedrock;
  *   - the deploy script can find it (SSM), it has an error alarm, and the
  *     bootstrap image carries the handler's module.
@@ -92,10 +93,12 @@ describe('MemoryMaintenanceConstruct', () => {
     expect(configs[0].Properties.MaximumRetryAttempts).toBe(0);
   });
 
-  it('reads memory files and never writes them', () => {
+  it('reads memory files and adds new ones under spaces/, and never deletes one', () => {
     const onBucket = actionsOn(workerStatements(), 'MemorySpacesBucket');
     expect(onBucket).toContain('s3:GetObject*');
-    expect(onBucket.filter((a) => /Put|Delete|Abort/.test(a))).toEqual([]);
+    expect(onBucket.filter((a) => /Put|Delete|Abort/.test(a))).toEqual(['s3:PutObject']);
+    const put = workerStatements().find((s) => s.Sid === 'MemorySpacesObjectPut');
+    expect(JSON.stringify(put?.Resource)).toContain('/spaces/*');
   });
 
   it('can call a model and count tokens, and nothing else on Bedrock', () => {

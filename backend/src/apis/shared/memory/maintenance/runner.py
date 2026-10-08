@@ -1,4 +1,4 @@
-"""One maintenance run over a project's shared memory (Shared Projects 2.6, §4.6).
+"""One maintenance run over a project's memory (Shared Projects 2.6, §4.6).
 
 app-api writes the run ``queued`` (who asked, which model, its prices) and
 invokes the maintenance worker, which calls :meth:`MaintenanceRunner.run`:
@@ -12,16 +12,23 @@ invokes the maintenance worker, which calls :meth:`MaintenanceRunner.run`:
    time, stopping before the worker's deadline.
 4. **Verify** each plan deterministically (``verify.py``); what fails is
    dropped and counted, never repaired.
-5. **Propose.** The surviving ops become one compaction proposal per file, in
-   the name of the member who started the run. The project scope never
-   changes without an editor's approval.
-6. **Tell** the owner and editors once per run, **meter** the model calls to
+5. **Propose or apply.** In a project's shared memory the surviving ops become
+   one compaction proposal per file, in the name of the member who started
+   the run: the project scope never changes without an editor's approval. In
+   a member's own memory (``personal_in_project``, 2.6b) they are saved
+   straight away, conditional on the file still being the one snapshotted,
+   and the run row keeps what changed so the member can read it and undo it
+   (``apis/shared/projects/memory_maintenance.py``).
+6. **Tell** the owner and editors once per run (shared memory only: in a
+   member's own memory the requester is the only person affected, and the
+   page that started the run shows the result), **meter** the model calls to
    the project's monthly rollup (the requester's share), and release the
    space's maintenance slot.
 
-The worker holds no user session. The requester's editor role was checked
-when the run was started; the worker re-checks only that the project is
-still active.
+The worker holds no user session. The requester's access was checked when the
+run was started; the worker re-checks that the project is still active and,
+for a member's own memory, that the space is theirs and they are still a
+member.
 """
 
 from __future__ import annotations
@@ -42,6 +49,7 @@ from ..models import (
     MaintenanceFileResult,
     MaintenanceRun,
     MaintenanceSnapshot,
+    PROJECT_SCOPES,
     MemoryEntryRef,
     MemorySpace,
 )
@@ -61,6 +69,10 @@ _DEFAULT_MAX_FILES = 50
 _DEADLINE_MARGIN_SECONDS = 150
 # Notification payloads name at most this many files.
 _NOTIFY_SLUGS = 10
+# An applied run keeps each file's changes for its summary, source texts
+# included, until they total this many bytes; later files keep counts only.
+# The run row is one DynamoDB item (400 KB), snapshot and all.
+_SUMMARY_BUDGET_BYTES = 150_000
 
 
 def _env_int(name: str, default: int) -> int:
@@ -156,13 +168,14 @@ class MaintenanceRunner:
         if run.state != "queued":
             logger.info("memory-maintenance: run %s is already %s; nothing to do", run_id, run.state)
             return run
-        ttl = run_ttl("shared", now=self._clock())
+        space = repo.get_space(space_id)
+        ttl = run_ttl(space.scope if space is not None else "shared", now=self._clock())
         run.state = "running"
         run.started_at = self._now()
         repo.put_maintenance_run(run, ttl)
         started = time.monotonic()
         try:
-            self._execute(run, ttl, remaining_seconds)
+            self._execute(run, space, ttl, remaining_seconds)
             run.state = "done"
         except MaintenanceError as exc:
             run.state, run.error = "failed", str(exc)
@@ -184,16 +197,22 @@ class MaintenanceRunner:
         )
         return run
 
-    def _execute(self, run: MaintenanceRun, ttl: int, remaining_seconds: Callable[[], float]) -> None:
+    def _execute(
+        self, run: MaintenanceRun, space: Optional[MemorySpace], ttl: int, remaining_seconds: Callable[[], float]
+    ) -> None:
         repo = self.memory.repository
-        space = repo.get_space(run.space_id)
-        if space is None or space.scope != "shared" or space.file_format != "canonical":
-            raise MaintenanceError("Maintenance works on a project's shared memory only.")
+        if space is None or space.scope not in PROJECT_SCOPES or space.file_format != "canonical":
+            raise MaintenanceError("Maintenance works on a project's memory only.")
+        personal = space.scope == "personal_in_project"
+        if personal and space.user_id != run.requested_by:
+            raise MaintenanceError("Only the member whose memory this is can tidy it up.")
         project = self.projects.get_project(space.project_id) if space.project_id else None
         if project is None:
             raise MaintenanceError("The project is gone.")
         if project.status != "active":
             raise MaintenanceError("The project is archived, so its memory is read-only.")
+        if personal and not self._still_member(project, run):
+            raise MaintenanceError("You're no longer a member of this project.")
 
         index = repo.get_index(run.space_id)
         run.snapshot = MaintenanceSnapshot(
@@ -208,10 +227,14 @@ class MaintenanceRunner:
         if run.slug:
             candidates = [e for e in candidates if e.slug == run.slug]
             if not candidates:
-                raise MaintenanceError(f"'{run.slug}' isn't in project memory anymore.")
+                where = "your memory" if personal else "project memory"
+                raise MaintenanceError(f"'{run.slug}' isn't in {where} anymore.")
         candidates.sort(key=lambda e: (-(e.tokens or 0), e.slug))
         candidates = candidates[: max_files_per_run()]
-        waiting = {p.slug for p in repo.list_proposals(run.space_id) if p.state == "pending" and p.kind == "compaction"}
+        # A member's own memory has no review queue, so nothing can be waiting.
+        waiting = set() if personal else {
+            p.slug for p in repo.list_proposals(run.space_id) if p.state == "pending" and p.kind == "compaction"
+        }
         planner = self._planner_factory(run.model_id)
         today = self._clock().date()
 
@@ -247,15 +270,32 @@ class MaintenanceRunner:
         with ThreadPoolExecutor(max_workers=self._concurrency) as pool:
             plans = list(pool.map(plan, work))
         for w, outcome in zip(work, plans):
-            results[w.ref.slug] = self._propose(run, space, w, outcome, today)
+            results[w.ref.slug] = self._settle(run, space, w, outcome, today, apply=personal)
         run.results = [results[ref.slug] for ref in candidates]
-        self._announce(run, project)
+        _bound_summaries(run.results)
+        if not personal:
+            self._announce(run, project)
 
-    def _propose(
-        self, run: MaintenanceRun, space: MemorySpace, w: "_FileWork", outcome: Union[Plan, PlannerError, None], today
+    def _still_member(self, project: Any, run: MaintenanceRun) -> bool:
+        from apis.shared.projects.access import resolve_project_role
+
+        _, role = resolve_project_role(
+            project.project_id, run.requested_by, run.requested_by_email, repository=self.projects
+        )
+        return role is not None
+
+    def _settle(
+        self,
+        run: MaintenanceRun,
+        space: MemorySpace,
+        w: "_FileWork",
+        outcome: Union[Plan, PlannerError, None],
+        today,
+        *,
+        apply: bool,
     ) -> MaintenanceFileResult:
-        """Verify one file's plan and, if anything survives, write its compaction proposal."""
-        from ..service import MemoryProposalStateError, MemoryValidationError
+        """Verify one file's plan and, if anything survives, propose it or (``apply``) save it."""
+        from ..service import MemoryProposalStateError, MemorySpaceConcurrencyError, MemoryValidationError
 
         slug = w.ref.slug
         if outcome is None:
@@ -276,6 +316,21 @@ class MaintenanceRunner:
             if not ops:
                 return MaintenanceFileResult(slug=slug, outcome="nothing_to_do", **counts)
             result = apply_ops(w.items, ops, pinned=w.ref.pinned)
+            if apply:
+                saved = self.memory.apply_maintenance(
+                    space.space_id,
+                    user_id=run.requested_by,
+                    user_email=run.requested_by_email,
+                    slug=slug,
+                    items=result.items,
+                    run_id=run.run_id,
+                    base_content_hash=w.ref.content_hash,
+                    archive_reasons=result.archive,
+                )
+                return MaintenanceFileResult(
+                    slug=slug, outcome="applied", version=saved.ref.version, content_hash=saved.ref.content_hash,
+                    ops=[ops[i] for i in result.applied], **counts,
+                )
             proposal = self.memory.create_compaction_proposal(
                 space.space_id,
                 requester_id=run.requested_by,
@@ -290,6 +345,10 @@ class MaintenanceRunner:
             return MaintenanceFileResult(slug=slug, outcome="proposed", proposal_id=proposal.proposal_id, **counts)
         except MemoryProposalStateError as exc:
             return MaintenanceFileResult(slug=slug, outcome="pending_review", error=str(exc))
+        except MemorySpaceConcurrencyError:
+            return MaintenanceFileResult(
+                slug=slug, outcome="changed", error="This file was saved while maintenance ran, so it was left as it is.",
+            )
         except MemoryValidationError as exc:
             return MaintenanceFileResult(slug=slug, outcome="failed", error=f"The changes didn't pass the save checks: {exc}")
         except Exception:  # noqa: BLE001 - one file's failure never stops the others
@@ -356,6 +415,19 @@ class MaintenanceRunner:
             )
         except Exception:
             logger.warning("memory-maintenance: could not add run %s to the project's costs", run.run_id, exc_info=True)
+
+
+def _bound_summaries(results: List[MaintenanceFileResult]) -> None:
+    """Keep applied files' change lists until they reach the run row's budget; counts after that."""
+    used = 0
+    for result in results:
+        if not result.ops:
+            continue
+        size = sum(len(op.model_dump_json(by_alias=True, exclude_none=True)) for op in result.ops)
+        if used + size > _SUMMARY_BUDGET_BYTES:
+            result.ops, result.ops_omitted = None, True
+            continue
+        used += size
 
 
 def remaining_from_lambda(context: Any) -> Callable[[], float]:
