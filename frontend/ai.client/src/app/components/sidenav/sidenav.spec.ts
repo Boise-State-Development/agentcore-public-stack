@@ -11,6 +11,18 @@ import { SessionService as BffSessionService } from '../../auth/session.service'
 import { SidenavService } from '../../services/sidenav/sidenav.service';
 import { AgentService } from '../../agents/services/agent.service';
 import { FEATURES } from '../../services/features';
+import { UserSettingsService } from '../../services/user-settings.service';
+import { Dialog } from '@angular/cdk/dialog';
+import { of } from 'rxjs';
+import { SidebarLayoutService } from './sidebar-layout.service';
+
+/** The sidebar layout's account read, answered with no saved layout. */
+function userSettingsStub() {
+  return {
+    getSettings: vi.fn().mockResolvedValue({ defaultModelId: null, sidebarItems: null }),
+    updateSettings: vi.fn().mockResolvedValue({}),
+  };
+}
 
 describe('Sidenav', () => {
   let mockRouter: any;
@@ -58,6 +70,7 @@ describe('Sidenav', () => {
         { provide: BffSessionService, useValue: mockBffSession },
         { provide: SidenavService, useValue: mockSidenavService },
         { provide: UserService, useValue: mockUserService },
+        { provide: UserSettingsService, useValue: userSettingsStub() },
       ],
     });
   });
@@ -139,8 +152,11 @@ describe('Sidenav — nav entries', () => {
 
   let mockUserService: any;
   let mockAgentService: any;
+  let mockUserSettings: ReturnType<typeof userSettingsStub>;
   beforeEach(() => {
     TestBed.resetTestingModule();
+    localStorage.removeItem('sidebar-layout');
+    mockUserSettings = userSettingsStub();
     // The overrides live on the TestBed that was just reset.
     stubsApplied = false;
     mockUserService = {
@@ -176,6 +192,7 @@ describe('Sidenav — nav entries', () => {
         // Still provided, though the component no longer injects it: that is what
         // makes the "fetches nothing at boot" assertion below a real guard.
         { provide: AgentService, useValue: mockAgentService },
+        { provide: UserSettingsService, useValue: mockUserSettings },
       ],
     });
   });
@@ -361,6 +378,89 @@ describe('Sidenav — nav entries', () => {
     const fixture = await renderSidenav();
     expect(artifactsNavLink(fixture)).not.toBeNull();
   });
+  // ── Edit sidebar ──────────────────────────────────────────────────────────────────
+  //
+  // The entries render in the order and with the visibility the user chose; a hidden
+  // one waits under More, which is always there so Edit sidebar can never be hidden.
+  function navLabels(fixture: ComponentFixture<unknown>): string[] {
+    const body = (fixture.nativeElement as HTMLElement).querySelector('.sidenav-body-enter.pb-2')!;
+    return Array.from(body.querySelectorAll(':scope > a, :scope > button')).map(el => el.textContent!.trim());
+  }
+
+  function moreButton(fixture: ComponentFixture<unknown>): HTMLButtonElement {
+    return Array.from((fixture.nativeElement as HTMLElement).querySelectorAll('button')).find(
+      b => b.textContent?.trim() === 'More',
+    )!;
+  }
+
+  it('renders the default entries, then More', async () => {
+    TestBed.overrideProvider(FEATURES, { useValue: { projects: true } });
+    const fixture = await renderSidenav();
+    expect(navLabels(fixture)).toEqual(['Agents', 'Projects', 'Artifacts', 'Customize', 'Schedules', 'More']);
+    expect((fixture.nativeElement as HTMLElement).querySelector('a[href="/schedules"]')).not.toBeNull();
+  });
+
+  it("renders the user's order and leaves hidden entries out", async () => {
+    TestBed.overrideProvider(FEATURES, { useValue: { projects: false } });
+    await applyStubs();
+    const layout = TestBed.inject(SidebarLayoutService);
+    layout.move(2, 0); // Customize to the top
+    layout.setVisible('agents', false);
+
+    const fixture = await renderSidenav();
+    expect(navLabels(fixture)).toEqual(['Customize', 'Artifacts', 'Schedules', 'More']);
+    expect(agentsNavLink(fixture)).toBeUndefined();
+  });
+
+  it('offers only Edit sidebar under More while nothing is hidden', async () => {
+    const fixture = await renderSidenav();
+    moreButton(fixture).click();
+    fixture.detectChanges();
+
+    const menu = document.querySelector('[role="menu"]') as HTMLElement;
+    const items = Array.from(menu.querySelectorAll('[role="menuitem"]')).map(el => el.textContent!.trim());
+    expect(items).toEqual(['Edit sidebar…']);
+    expect(menu.querySelector('[role="separator"]')).toBeNull();
+  });
+
+  it('lists the hidden entries under More, then Edit sidebar', async () => {
+    TestBed.overrideProvider(FEATURES, { useValue: { projects: false } });
+    await applyStubs();
+    const layout = TestBed.inject(SidebarLayoutService);
+    layout.setVisible('schedules', false);
+    layout.setVisible('agents', false);
+    const fixture = await renderSidenav();
+    moreButton(fixture).click();
+    fixture.detectChanges();
+
+    const menu = document.querySelector('[role="menu"]') as HTMLElement;
+    expect(menu).not.toBeNull();
+    const items = Array.from(menu.querySelectorAll('[role="menuitem"]')).map(el => el.textContent!.trim());
+    expect(items).toEqual(['Agents', 'Schedules', 'Edit sidebar…']);
+    expect(menu.querySelector('a[href="/schedules"]')).not.toBeNull();
+    expect(menu.querySelector('[role="separator"]')).not.toBeNull();
+  });
+
+  it('opens Edit sidebar from More and saves the layout when it closes', async () => {
+    const open = vi.fn(() => ({ closed: of(undefined) }));
+    TestBed.overrideProvider(Dialog, { useValue: { open } });
+    await applyStubs();
+    const layout = TestBed.inject(SidebarLayoutService);
+    const save = vi.spyOn(layout, 'save').mockResolvedValue(undefined);
+
+    const fixture = await renderSidenav();
+    moreButton(fixture).click();
+    fixture.detectChanges();
+    const edit = Array.from(document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')).find(
+      el => el.textContent?.trim() === 'Edit sidebar…',
+    )!;
+    edit.click();
+
+    const { EditSidebarDialogComponent } = await import('./components/edit-sidebar-dialog.component');
+    expect(open).toHaveBeenCalledWith(EditSidebarDialogComponent);
+    expect(save).toHaveBeenCalledTimes(1);
+  });
+
   // ── Admin console ─────────────────────────────────────────────────────────────────
   //
   // The console's nav used to be a second column inside the admin page, which left
