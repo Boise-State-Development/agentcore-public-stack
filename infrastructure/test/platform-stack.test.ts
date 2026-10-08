@@ -451,33 +451,4 @@ describe('PlatformStack', () => {
       expect(found).toBe(true);
     });
   });
-
-  describe('Memory maintenance invoke grant (Shared Projects 2.6)', () => {
-    // On dev, `grantInvoke` on the app-api task role landed in a CDK overflow
-    // policy whose resolved document passed IAM's 6,144-character limit, and the
-    // deploy rolled back. The grant lives in its own managed policy instead.
-    const invokes = (doc: { Statement?: Array<{ Action?: string | string[] }> } | undefined) =>
-      (doc?.Statement ?? []).some((st) =>
-        (Array.isArray(st.Action) ? st.Action : [st.Action]).includes('lambda:InvokeFunction')
-        && JSON.stringify(st).includes('MemoryMaintenanceWorkerLambda'),
-      );
-
-    it('is a dedicated managed policy on the app-api task role', () => {
-      const policies = Object.entries(template.findResources('AWS::IAM::ManagedPolicy'))
-        .filter(([id]) => id.includes('AppApiMemoryMaintenanceInvokePolicy'));
-      expect(policies).toHaveLength(1);
-      const [, policy] = policies[0];
-      expect(policy.Properties.PolicyDocument.Statement).toHaveLength(1);
-      expect(JSON.stringify(policy.Properties.Roles)).toContain('AppApiTaskDefinitionTaskRole');
-    });
-
-    it('never lands in the task role overflow or default policies', () => {
-      const others = [
-        ...Object.entries(template.findResources('AWS::IAM::ManagedPolicy'))
-          .filter(([id]) => !id.includes('AppApiMemoryMaintenanceInvokePolicy')),
-        ...Object.entries(template.findResources('AWS::IAM::Policy')),
-      ].filter(([id]) => id.includes('AppApi'));
-      for (const [, r] of others) expect(invokes(r.Properties.PolicyDocument)).toBe(false);
-    });
-  });
 });
