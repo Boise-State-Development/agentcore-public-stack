@@ -4,7 +4,7 @@ import { FEATURES } from '../../services/features';
 
 /** What the search dialog opens with. */
 export interface SearchDialogData {
-  /** A query to start from (the sidebar filter's hand-off). */
+  /** A query to start from. */
   query?: string;
 }
 

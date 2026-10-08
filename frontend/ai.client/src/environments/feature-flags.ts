@@ -22,9 +22,10 @@ export interface FeatureFlags {
   /** Shared Projects: nav item, /projects routes, notification bell. Backend: PROJECTS_ENABLED. */
   projects: boolean;
   /**
-   * Conversation search: the Cmd/Ctrl+K search dialog, the sidenav search button and
-   * the sidebar filter's Enter hand-off. Backend: CONVERSATION_SEARCH_ENABLED
-   * (`GET /sessions/search` 404s while it is off).
+   * Conversation search: the Cmd/Ctrl+K search dialog and the sidenav search button.
+   * On by default; a build that sets it false has no conversation search in the
+   * sidebar. Backend: CONVERSATION_SEARCH_ENABLED (`GET /sessions/search` 404s
+   * only when it is "false").
    */
   conversationSearch: boolean;
 }
