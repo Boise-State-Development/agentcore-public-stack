@@ -54,7 +54,7 @@ That last gap drives most of the risk in §3.
 
 ## 3. Blockers and risks found in our tree
 
-### B1. `backend.yml` would strip V2 on every image deploy (verified: the code path exists; the outcome is unverified)
+### B1. `backend.yml` would strip V2 on every image deploy (fixed in the deploy script; the service's behaviour on omission is still unverified)
 
 `scripts/build/deploy-runtime-image-if-changed.sh` rolls a new image with `update-agent-runtime`, which is a **full-replacement** API. It rebuilds the payload from `get-agent-runtime` through an `ALLOWED` allow-list, and **`platformVersion` is not on it**. `capacityProviderConfiguration` is not on it either.
 
@@ -64,12 +64,12 @@ What happens next depends on the runner's CLI:
 
 This is the same class of problem as the image-tag-in-SSM convention in CLAUDE.md: a field CFN owns that the out-of-band deploy must not revert.
 
-**Fix, before the flag goes on anywhere:**
-1. Add `platformVersion` to `ALLOWED`.
-2. Assert after the update that `get-agent-runtime`'s `platformVersion` equals its pre-update value, and fail the job if it doesn't.
-3. Fail fast if the runner's CLI doesn't know the field, for example with `aws bedrock-agentcore-control update-agent-runtime help | grep -q platformVersion`. Silently dropping it is the failure mode.
+**Fix (landed, plan step 1):**
+1. The payload now carries every field the CLI's own `update-agent-runtime --generate-cli-skeleton input` lists (minus `clientToken`), instead of a fixed `ALLOWED` set. That picks up `platformVersion` and `capacityProviderConfiguration`, and any field AWS adds to the update API later.
+2. After the update, the script re-reads `platformVersion` and fails the job (exit 8) if it differs from the pre-update value.
+3. Before the update, it fails (exit 7) if the CLI's update skeleton has no `platformVersion`. The skeleton is generated locally from the CLI's model, so this needs no pager, network or credentials. Silently dropping the field is the failure mode.
 
-`ubuntu-24.04` runner images ship a recent CLI, but "recent" is exactly what we'd be trusting without checking.
+AWS CLI 2.36.46 is the first release whose `bedrock-agentcore-control` model has `platformVersion` (2.36.45 does not; checked 2026-10-08). The `ubuntu-24.04` runner image (20260927) ships 2.37.4. A URI-unchanged run skips the update and both checks, since it changes nothing.
 
 ### B2. Snapshot-restore clones process-start state (hypothesis; verify in dev)
 
@@ -120,7 +120,7 @@ The billing basis inverts, so conclusions from V1 don't carry over:
 
 ## 5. Plan
 
-1. **Deploy script PR (B1). Lands first, and is harmless on V1.** Add `platformVersion` to `ALLOWED`, the post-update equality assertion, and the CLI capability check.
+1. **Deploy script PR (B1). Done.** Payload fields derived from the CLI's update skeleton, the post-update equality assertion, and the CLI capability check. Harmless on V1.
 2. **Infra PR (per-environment version). Done.**
    - `CDK_AGENTCORE_RUNTIME_PLATFORM_VERSION` → `config.inferenceApi.runtimePlatformVersion`, `V1` or `V2`, default `V1` (`""` falls through to it). A version value rather than a `*_V2_ENABLED` boolean, so a later version is a one-line addition to `AGENTCORE_RUNTIME_PLATFORM_VERSIONS`, not a second flag. Anything else fails synth, because the CFN schema would take any non-blank string.
    - **Always** set the property explicitly: `addPropertyOverride('PlatformVersion', version)`, V1 included. If we omit it for V1, whether removing the property reverts the runtime is up to CFN. An explicit `V1` makes rollback a deterministic in-place update.
