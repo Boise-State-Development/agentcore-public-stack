@@ -30,7 +30,7 @@ import json
 import logging
 import os
 from datetime import datetime, timezone
-from typing import AsyncGenerator, Optional
+from typing import AsyncGenerator, Callable, Optional
 
 import boto3
 from botocore.exceptions import ClientError as BotoClientError
@@ -59,6 +59,13 @@ from apis.shared.models.mantle import (
     param_map_for,
 )
 
+from .bedrock_offload import (
+    RETRY_AFTER_SECONDS,
+    CapacityExceeded,
+    get_in_flight_cap,
+    iterate_stream_in_thread,
+    run_in_thread,
+)
 from .models import ConverseRequest, ConverseResponse
 
 logger = logging.getLogger(__name__)
@@ -318,35 +325,65 @@ def _converse_event_to_sse(event: dict, state: dict) -> list[str]:
     return out
 
 
-async def _stream_converse(request: ConverseRequest, user_id: str, key_id: str) -> AsyncGenerator[str, None]:
-    """Call Bedrock converse_stream and yield SSE events."""
-    client = _get_bedrock_client()
+class _NoStreamReturned(Exception):
+    """``converse_stream`` answered without a ``stream`` key."""
+
+
+def _no_slot() -> None:
+    """Release callable for a path that holds no in-flight slot."""
+
+
+async def _stream_converse(
+    request: ConverseRequest,
+    user_id: str,
+    key_id: str,
+    release_slot: Callable[[], None] = _no_slot,
+) -> AsyncGenerator[str, None]:
+    """Call Bedrock converse_stream and yield SSE events.
+
+    The boto3 call and the iteration both run on the Bedrock worker pool
+    (``bedrock_offload``): a ``converse_stream`` blocks until Bedrock's
+    headers arrive, and every ``next()`` on its ``EventStream`` blocks on
+    the network between chunks. Run on the loop, either froze the whole
+    app-api task for the life of the call.
+
+    ``release_slot`` returns the in-flight slot the route acquired; it runs
+    in ``finally`` so a disconnect or a mid-stream error frees it too.
+    """
     params = _build_converse_params(request)
 
-    try:
-        response = client.converse_stream(**params)
-    except BotoClientError as exc:
-        error_code = exc.response["Error"]["Code"]
-        logger.error(f"Bedrock converse_stream ClientError ({error_code})", exc_info=True)
-        yield _sse("error", {"error": "Model invocation failed due to a service error."})
-        yield _sse("done", {})
-        return
-    except Exception:
-        logger.error("Bedrock converse_stream error", exc_info=True)
-        yield _sse("error", {"error": "Model invocation failed due to an internal error."})
-        yield _sse("done", {})
-        return
-
-    stream = response.get("stream")
-    if not stream:
-        yield _sse("error", {"error": "No stream returned from Bedrock"})
-        yield _sse("done", {})
-        return
+    def _open_stream():
+        # The client build runs here as well: a fresh boto3 client per
+        # request pays botocore's service-model load on first use.
+        response = _get_bedrock_client().converse_stream(**params)
+        stream = response.get("stream")
+        if not stream:
+            raise _NoStreamReturned()
+        return stream
 
     state: dict = {"in_reasoning": False, "usage": {}}
-    for event in stream:
-        for frame in _converse_event_to_sse(event, state):
-            yield frame
+    try:
+        try:
+            async for event in iterate_stream_in_thread(_open_stream):
+                for frame in _converse_event_to_sse(event, state):
+                    yield frame
+        except _NoStreamReturned:
+            yield _sse("error", {"error": "No stream returned from Bedrock"})
+            yield _sse("done", {})
+            return
+        except BotoClientError as exc:
+            error_code = exc.response["Error"]["Code"]
+            logger.error(f"Bedrock converse_stream ClientError ({error_code})", exc_info=True)
+            yield _sse("error", {"error": "Model invocation failed due to a service error."})
+            yield _sse("done", {})
+            return
+        except Exception:
+            logger.error("Bedrock converse_stream error", exc_info=True)
+            yield _sse("error", {"error": "Model invocation failed due to an internal error."})
+            yield _sse("done", {})
+            return
+    finally:
+        release_slot()
 
     yield _sse("done", {})
 
@@ -667,6 +704,28 @@ async def api_converse(
         # to an uncached Chat Completions call.
         api_mode = MantleApiMode.RESPONSES
 
+    # 2.9 In-flight cap for the Bedrock Converse paths. Those run boto3 on a
+    # bounded worker pool (``bedrock_offload``), and a call the pool cannot
+    # take is refused here, as an HTTP 429 the caller's script can act on,
+    # rather than queued against the ALB's 60s idle timeout. The OpenAI
+    # surfaces ride Strands' async client and hold no worker thread, so they
+    # are not counted. Taken before the generator is built so the streaming
+    # path can refuse with a status code instead of an SSE error frame.
+    release_slot: Callable[[], None] = _no_slot
+    if not is_openai_surface:
+        try:
+            release_slot = get_in_flight_cap().acquire()
+        except CapacityExceeded:
+            logger.warning(
+                "api-converse in-flight cap reached; refusing request "
+                f"(user={validated_key.user_id}, key={validated_key.key_id})"
+            )
+            raise HTTPException(
+                status_code=429,
+                detail="Too many model calls in flight on this server. Please retry shortly.",
+                headers={"Retry-After": RETRY_AFTER_SECONDS},
+            )
+
     # 3. Streaming path
     if request.stream:
         if is_openai_surface:
@@ -677,6 +736,7 @@ async def api_converse(
         else:
             generator = _stream_converse(
                 request, user_id=validated_key.user_id, key_id=validated_key.key_id,
+                release_slot=release_slot,
             )
         return StreamingResponse(
             generator,
@@ -694,11 +754,14 @@ async def api_converse(
             provider=normalized_provider, api_mode=api_mode, region=mantle_region,
         )
 
-    client = _get_bedrock_client()
     params = _build_converse_params(request)
 
+    def _converse():
+        # Client build and the blocking call both run on the worker pool.
+        return _get_bedrock_client().converse(**params)
+
     try:
-        response = client.converse(**params)
+        response = await run_in_thread(_converse)
     except BotoClientError as exc:
         error_code = exc.response["Error"]["Code"]
         if error_code == "ThrottlingException":
@@ -720,6 +783,8 @@ async def api_converse(
     except Exception:
         logger.error("Unexpected error during Bedrock converse call", exc_info=True)
         raise HTTPException(status_code=502, detail="Model invocation failed due to an internal error.")
+    finally:
+        release_slot()
 
     # Parse response
     output = response.get("output", {})
