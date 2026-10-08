@@ -219,6 +219,18 @@ export interface AppApiConfig {
   desiredCount: number;
   maxCapacity: number;
   additionalCorsOrigins?: string; // Extra CORS origins to append (comma-separated)
+  /**
+   * How many `POST /chat/api-converse` Bedrock calls one app-api task runs at
+   * once (API_CONVERSE_MAX_IN_FLIGHT, from CDK_APP_API_CONVERSE_MAX_IN_FLIGHT).
+   * The route runs boto3 on a worker pool of exactly this many threads; a call
+   * past the cap is refused at once with HTTP 429 + `Retry-After` rather than
+   * queued against the ALB's 60s idle timeout. The 60/min per-key rate limit
+   * measures rate; this measures concurrency, which is what exhausted the
+   * task in the 2026-10 batch-job bursts. Integer >= 1, default 16. Raise it
+   * with the task's CPU: each in-flight call holds a thread for the life of
+   * the model call (tens of seconds for a long completion).
+   */
+  apiConverseMaxInFlight: number;
 }
 
 /**
@@ -645,6 +657,14 @@ export interface TokenExchangeConfig {
 export const CONVERSATION_RETENTION_DAYS_DEFAULT = 365;
 
 /**
+ * Default for `appApi.apiConverseMaxInFlight` (CDK_APP_API_CONVERSE_MAX_IN_FLIGHT).
+ * Mirrors `DEFAULT_MAX_IN_FLIGHT` in backend/src/apis/app_api/chat/bedrock_offload.py,
+ * which is what a task falls back to when the variable is absent; keep the two
+ * in step so a CDK deploy and a bare container behave the same.
+ */
+export const API_CONVERSE_MAX_IN_FLIGHT_DEFAULT = 16;
+
+/**
  * AgentCore Memory's `EventExpiryDuration` range, in days, per the
  * `AWS::BedrockAgentCore::Memory` CloudFormation reference.
  */
@@ -969,6 +989,17 @@ export function loadConfig(scope: cdk.App): AppConfig {
       maxCapacity: parseIntEnv(process.env.CDK_APP_API_MAX_CAPACITY)
         ?? parseIntEnv(scope.node.tryGetContext('appApi.maxCapacity'))
         ?? scope.node.tryGetContext('appApi')?.maxCapacity,
+      // Same precedence as the sizing knobs, then the committed default.
+      // requireWholeNumber first: parseIntEnv would turn "8.5" into 8 and
+      // "abc" into the default, hiding a typo behind a silently different cap.
+      apiConverseMaxInFlight:
+        parseIntEnv(requireWholeNumber(
+          'CDK_APP_API_CONVERSE_MAX_IN_FLIGHT', process.env.CDK_APP_API_CONVERSE_MAX_IN_FLIGHT))
+        ?? parseIntEnv(requireWholeNumber(
+          'context appApi.apiConverseMaxInFlight', scope.node.tryGetContext('appApi.apiConverseMaxInFlight')))
+        ?? parseIntEnv(requireWholeNumber(
+          'context appApi.apiConverseMaxInFlight', scope.node.tryGetContext('appApi')?.apiConverseMaxInFlight))
+        ?? API_CONVERSE_MAX_IN_FLIGHT_DEFAULT,
       additionalCorsOrigins: process.env.CDK_APP_API_CORS_ORIGINS || scope.node.tryGetContext('appApi')?.additionalCorsOrigins,
     },
     inferenceApi: {
@@ -1642,7 +1673,7 @@ function requireWholeNumber(source: string, value: unknown): string | undefined 
   const text = String(value).trim();
   if (!/^\d+$/.test(text)) {
     throw new Error(
-      `Invalid ${source}: "${String(value)}". Expected a whole number of days.`
+      `Invalid ${source}: "${String(value)}". Expected a whole number.`
     );
   }
   return text;
@@ -1920,6 +1951,14 @@ function validateConfig(config: AppConfig): void {
   }
   if (!config.appApi.maxCapacity) {
     throw new Error('App API stack requires "maxCapacity" to be set.');
+  }
+  // 0 would make every api-converse call a 429; the backend clamps to 1 but
+  // a deploy that asks for 0 is a mistake worth failing loudly.
+  if (!Number.isInteger(config.appApi.apiConverseMaxInFlight) || config.appApi.apiConverseMaxInFlight < 1) {
+    throw new Error(
+      `Invalid appApi.apiConverseMaxInFlight: ${String(config.appApi.apiConverseMaxInFlight)}. ` +
+      'Expected a whole number >= 1 (CDK_APP_API_CONVERSE_MAX_IN_FLIGHT).'
+    );
   }
 
   if (!config.frontend.cloudFrontPriceClass) {

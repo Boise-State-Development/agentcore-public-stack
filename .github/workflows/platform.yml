@@ -146,6 +146,8 @@ jobs:
       CDK_APP_API_MEMORY: ${{ vars.CDK_APP_API_MEMORY }}
       CDK_APP_API_DESIRED_COUNT: ${{ vars.CDK_APP_API_DESIRED_COUNT }}
       CDK_APP_API_MAX_CAPACITY: ${{ vars.CDK_APP_API_MAX_CAPACITY }}
+      # Per-task cap on concurrent /chat/api-converse Bedrock calls (default 16).
+      CDK_APP_API_CONVERSE_MAX_IN_FLIGHT: ${{ vars.CDK_APP_API_CONVERSE_MAX_IN_FLIGHT }}
       CDK_ALB_SUBDOMAIN: ${{ vars.CDK_ALB_SUBDOMAIN }}
       CDK_CERTIFICATE_ARN: ${{ vars.CDK_CERTIFICATE_ARN }}
       # Shared us-east-1 CloudFront cert (wildcard covering {domain} + *.{domain}).

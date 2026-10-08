@@ -332,6 +332,9 @@ export function buildAppApiEnvironment(
     // this is dropped from results even before the reconciler deletes it.
     CONVERSATION_SEARCH_ENABLED: config.conversationSearch.enabled ? 'true' : 'false',
     CONVERSATION_RETENTION_DAYS: String(config.conversationRetentionDays),
+    // Per-task cap on concurrent api-converse Bedrock calls. Read by
+    // apis/app_api/chat/bedrock_offload.py, which sizes its worker pool from it.
+    API_CONVERSE_MAX_IN_FLIGHT: String(config.appApi.apiConverseMaxInFlight),
     BFF_SESSIONS_TABLE_NAME: params.bffSessionsTableName,
     BFF_COOKIE_SIGNING_KEY_ARN: params.bffCookieSigningKeyArn,
     BFF_COOKIE_DATA_KEY_SECRET_ARN: params.bffCookieDataKeySecretArn,
