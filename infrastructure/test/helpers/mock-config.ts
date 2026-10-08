@@ -151,7 +151,7 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
       enabled: false,
     },
     conversationSearch: {
-      enabled: false,
+      enabled: true,
     },
     platformSelfService: {
       enabled: false,

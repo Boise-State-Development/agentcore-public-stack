@@ -213,7 +213,7 @@ def two_users(tables, runtime):
 
 # ── the route ────────────────────────────────────────────────────────────────
 def test_404_while_the_flag_is_off(monkeypatch, tables):
-    monkeypatch.setenv("CONVERSATION_SEARCH_ENABLED", "")
+    monkeypatch.setenv("CONVERSATION_SEARCH_ENABLED", "false")
     assert _client_as("user-a").get("/sessions/search", params={"q": "x"}).status_code == 404
 
 
@@ -234,7 +234,7 @@ def test_401_comes_before_the_flag(monkeypatch, tables):
     """An unauthenticated caller cannot tell whether search is switched on."""
     from fastapi import HTTPException
 
-    monkeypatch.setenv("CONVERSATION_SEARCH_ENABLED", "")
+    monkeypatch.setenv("CONVERSATION_SEARCH_ENABLED", "false")
     app = FastAPI()
     app.include_router(router)
 

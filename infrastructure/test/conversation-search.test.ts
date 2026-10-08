@@ -1,6 +1,7 @@
 /**
  * Conversation search read path (docs/specs/conversation-search.md §5). Pinned:
- *   - CDK_CONVERSATION_SEARCH_ENABLED is opt-in ('' and junk are off);
+ *   - CDK_CONVERSATION_SEARCH_ENABLED is default-on ('' and junk are on; only
+ *     'false' turns it off);
  *   - app-api gets CONVERSATION_SEARCH_ENABLED, plus the retention setting the
  *     route's read-path belt uses (§3);
  *   - the AgentCore Runtime gets neither: search is app-api only, and the
@@ -91,29 +92,29 @@ describe('conversationSearch config', () => {
     warn.mockRestore();
   });
 
-  it('is off by default', () => {
-    expect(load().conversationSearch.enabled).toBe(false);
+  it('is on by default', () => {
+    expect(load().conversationSearch.enabled).toBe(true);
   });
 
-  it.each(['', 'false', 'yes'])('treats %j as off', (value) => {
-    process.env[FLAG_ENV] = value;
-    expect(load().conversationSearch.enabled).toBe(false);
-  });
-
-  it.each(['true', ' TRUE '])('turns on for %j', (value) => {
+  it.each(['', 'true', 'yes'])('treats %j as on', (value) => {
     process.env[FLAG_ENV] = value;
     expect(load().conversationSearch.enabled).toBe(true);
   });
 
+  it.each(['false', ' FALSE '])('turns off for %j', (value) => {
+    process.env[FLAG_ENV] = value;
+    expect(load().conversationSearch.enabled).toBe(false);
+  });
+
   it('falls back to context, and the variable beats it', () => {
-    expect(load({ conversationSearch: { enabled: true } }).conversationSearch.enabled).toBe(true);
-    process.env[FLAG_ENV] = 'false';
-    expect(load({ conversationSearch: { enabled: true } }).conversationSearch.enabled).toBe(false);
+    expect(load({ conversationSearch: { enabled: false } }).conversationSearch.enabled).toBe(false);
+    process.env[FLAG_ENV] = 'true';
+    expect(load({ conversationSearch: { enabled: false } }).conversationSearch.enabled).toBe(true);
   });
 
   it('is independent of the index flag', () => {
-    process.env.CDK_CONVERSATION_INDEX_ENABLED = 'true';
-    expect(load().conversationSearch.enabled).toBe(false);
+    process.env.CDK_CONVERSATION_INDEX_ENABLED = 'false';
+    expect(load().conversationSearch.enabled).toBe(true);
   });
 });
 
@@ -121,11 +122,11 @@ describe('conversation search wiring', () => {
   let off: Template;
   let on: Template;
   beforeAll(() => {
-    off = synth();
+    off = synth({ conversationSearch: { enabled: false } });
     on = synth({ conversationSearch: { enabled: true }, conversationRetentionDays: 200 });
   });
 
-  it('sets the flag on app-api, off by default', () => {
+  it('sets the flag on app-api', () => {
     expect(appApiEnv(off).CONVERSATION_SEARCH_ENABLED).toBe('false');
     expect(appApiEnv(on).CONVERSATION_SEARCH_ENABLED).toBe('true');
   });
