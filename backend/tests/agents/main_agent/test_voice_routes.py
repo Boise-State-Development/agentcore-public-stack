@@ -277,7 +277,9 @@ class TestVoiceSessionOwnership:
     @staticmethod
     def _websocket(session_id: str, user_id: str) -> MagicMock:
         ws = MagicMock()
-        ws.headers = {}
+        # The identity is the upgrade bearer's ``sub``; a connection without
+        # one is refused before the ownership check these tests exercise.
+        ws.headers = {"authorization": f"Bearer {_token(user_id)}"}
         ws.accept = AsyncMock()
         ws.send_json = AsyncMock()
         ws.close = AsyncMock()

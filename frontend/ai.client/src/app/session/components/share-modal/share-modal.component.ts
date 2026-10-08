@@ -25,7 +25,7 @@ import {
 } from '../../services/share/share.service';
 import { ProjectApiService } from '../../../projects/services/project-api.service';
 import { ProjectMember } from '../../../projects/models/project.model';
-import { DialogDismissDirective } from '../../../components/dialog/dialog-dismiss.directive';
+import { DialogShellComponent } from '../../../components/dialog/dialog-shell.component';
 import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 
 export interface ShareModalData {
@@ -69,324 +69,276 @@ const PROJECT_ACCESS_OPTION: AccessOption = {
 @Component({
   selector: 'app-share-modal',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DialogDismissDirective, FormsModule, NgIcon, SpinnerComponent],
+  imports: [DialogShellComponent, FormsModule, NgIcon, SpinnerComponent],
   providers: [
     provideIcons({ heroXMark, heroClipboard, heroArrowUpOnSquare, heroCheck }),
   ],
-  host: {
-    class: 'block',
-    '(keydown.escape)': 'onClose()',
-  },
+  host: { class: 'block' },
   template: `
-    <!-- Backdrop -->
-    <div
-      class="dialog-backdrop fixed inset-0 bg-gray-500/75 dark:bg-gray-900/80"
-      aria-hidden="true"
-    ></div>
-
-    <!-- Dialog Panel -->
-    <div class="fixed inset-0 z-10 flex min-h-full items-end justify-center p-4 sm:items-center sm:p-0"
-      appDialogDismiss
-      (dismissed)="onClose()">
+    <app-dialog-shell title="Share conversation" (closed)="onClose()">
       <div
-        class="dialog-panel relative w-full transform overflow-hidden rounded-lg bg-white px-4 pt-5 pb-4 text-left shadow-xl sm:my-8 sm:max-w-md sm:p-6 dark:bg-gray-800 dark:outline dark:-outline-offset-1 dark:outline-white/10"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="share-dialog-title"
+        dialogIcon
+        class="flex size-10 shrink-0 items-center justify-center rounded-2xl bg-gray-100 dark:bg-gray-700"
       >
-        <!-- Header -->
-        <div class="flex items-center justify-between mb-4">
-          <div class="flex items-center gap-2">
-            <ng-icon name="heroArrowUpOnSquare" class="size-5 text-gray-500 dark:text-gray-400" aria-hidden="true" />
-            <h3 id="share-dialog-title" class="text-base/7 font-semibold text-gray-900 dark:text-white">
-              Share conversation
-            </h3>
-          </div>
-          <button
-            type="button"
-            (click)="onClose()"
-            class="rounded-md text-gray-400 hover:text-gray-500 focus:outline-2 focus:outline-offset-2 focus:outline-primary-500 dark:hover:text-gray-300"
-            aria-label="Close dialog"
+        <ng-icon name="heroArrowUpOnSquare" class="size-5 text-gray-500 dark:text-gray-400" aria-hidden="true" />
+      </div>
+
+      <!-- Access level options -->
+      <fieldset class="space-y-2">
+        <legend class="sr-only">Access level</legend>
+
+        @for (option of accessOptions; track option.value) {
+          <label
+            class="flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors"
+            [class]="selectedAccess() === option.value
+              ? 'border-primary-500 bg-gray-100 dark:border-primary-400 dark:bg-gray-700'
+              : 'border-gray-200 hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-white/5'"
           >
-            <ng-icon name="heroXMark" class="size-5" aria-hidden="true" />
-          </button>
-        </div>
-
-        <!-- Access level options -->
-        <fieldset class="space-y-2">
-          <legend class="sr-only">Access level</legend>
-
-          @for (option of accessOptions; track option.value) {
-            <label
-              class="flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors"
-              [class]="selectedAccess() === option.value
-                ? 'border-primary-500 bg-gray-100 dark:border-primary-400 dark:bg-gray-700'
-                : 'border-gray-200 hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-white/5'"
-            >
-              <input
-                type="radio"
-                name="accessLevel"
-                [value]="option.value"
-                [checked]="selectedAccess() === option.value"
-                (change)="selectedAccess.set(option.value)"
-                class="mt-0.5 size-4 text-primary-600 focus:ring-primary-500"
-              />
-              <div>
-                <span class="text-sm font-medium text-gray-900 dark:text-white">{{ option.label }}</span>
-                <p class="text-xs text-gray-600 dark:text-gray-300">{{ option.description }}</p>
-              </div>
-            </label>
-          }
-        </fieldset>
-
-        <!-- Email input (specific access) -->
-        @if (selectedAccess() === 'specific') {
-          <div class="mt-4">
-            <label for="email-input" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              People with access
-            </label>
-
-            <!-- Email chips -->
-            <div class="flex flex-wrap gap-1.5 mb-2">
-              <!-- Owner chip (non-removable) -->
-              <span class="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-primary-accessible dark:bg-gray-700 dark:text-primary-50">
-                {{ data.ownerEmail }} (you)
-              </span>
-
-              @for (email of allowedEmails(); track email) {
-                <span class="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-700 dark:bg-gray-700 dark:text-gray-300">
-                  {{ email }}
-                  <button
-                    type="button"
-                    (click)="removeEmail(email)"
-                    class="ml-0.5 inline-flex size-3.5 items-center justify-center rounded-full hover:bg-gray-200 dark:hover:bg-gray-600"
-                    [attr.aria-label]="'Remove ' + email"
-                  >
-                    <ng-icon name="heroXMark" class="size-3" aria-hidden="true" />
-                  </button>
-                </span>
-              }
-            </div>
-
-            <!-- Email input -->
-            <div class="flex gap-2">
-              <input
-                id="email-input"
-                type="email"
-                placeholder="Enter email address"
-                [ngModel]="emailInput()"
-                (ngModelChange)="emailInput.set($event)"
-                (keydown.enter)="addEmail($event)"
-                class="flex-1 rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500 dark:focus:border-primary-400 dark:focus:ring-primary-400"
-              />
-              <button
-                type="button"
-                (click)="addEmail()"
-                [disabled]="!emailInput().trim()"
-                class="rounded-2xl bg-primary-accessible px-3 py-1.5 text-sm font-medium text-white hover:brightness-95 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Add
-              </button>
-            </div>
-          </div>
-        }
-
-        <!-- Let people know (project shares) -->
-        @if (selectedAccess() === 'project' && !shareResult()) {
-          <div class="mt-4 space-y-3">
-            <fieldset>
-              <legend class="text-sm font-medium text-gray-700 dark:text-gray-300">Let people know</legend>
-              <div class="mt-1.5 flex flex-wrap gap-x-5 gap-y-1.5">
-                @for (option of notifyOptions; track option.value) {
-                  <label class="inline-flex cursor-pointer items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
-                    <input
-                      type="radio"
-                      name="notifyMode"
-                      [value]="option.value"
-                      [checked]="notifyMode() === option.value"
-                      (change)="setNotifyMode(option.value)"
-                      class="size-4 text-primary-600 focus:ring-primary-500"
-                    />
-                    {{ option.label }}
-                  </label>
-                }
-              </div>
-            </fieldset>
-
-            @if (notifyMode() === 'some') {
-              <div>
-                <label for="notify-filter" class="sr-only">Find a project member</label>
-                <input
-                  id="notify-filter"
-                  type="search"
-                  autocomplete="off"
-                  placeholder="Find a project member"
-                  [value]="memberFilter()"
-                  (input)="memberFilter.set($any($event.target).value)"
-                  class="block w-full rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-900 placeholder:text-gray-500 focus:border-primary-500 focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-400"
-                />
-                @if (membersError()) {
-                  <p class="mt-2 text-xs text-state-danger-700 dark:text-state-danger-300">{{ membersError() }}</p>
-                } @else if (!members()) {
-                  <p class="mt-2 text-xs text-gray-600 dark:text-gray-400">Loading members…</p>
-                } @else {
-                  <ul
-                    aria-label="Project members to notify"
-                    class="mt-2 max-h-44 divide-y divide-gray-200 overflow-y-auto rounded-md border border-gray-200 dark:divide-gray-700 dark:border-gray-700"
-                  >
-                    @for (member of filteredMembers(); track member.email) {
-                      <li>
-                        <label class="flex cursor-pointer items-center gap-3 px-3 py-2 hover:bg-gray-50 dark:hover:bg-white/5">
-                          <input
-                            type="checkbox"
-                            [checked]="isChosen(member.email)"
-                            (change)="toggleMember(member.email)"
-                            class="size-4 rounded text-primary-600 focus:ring-primary-500"
-                          />
-                          <span class="min-w-0">
-                            <span class="block truncate text-sm font-medium text-gray-900 dark:text-white">{{ member.name || member.email }}</span>
-                            @if (member.name) {
-                              <span class="block truncate text-xs text-gray-600 dark:text-gray-400">{{ member.email }}</span>
-                            }
-                          </span>
-                        </label>
-                      </li>
-                    } @empty {
-                      <li class="px-3 py-2 text-xs text-gray-600 dark:text-gray-400">
-                        {{ others().length ? 'No members match.' : 'Nobody else is in this project yet.' }}
-                      </li>
-                    }
-                  </ul>
-                  <p class="mt-1 text-xs text-gray-600 dark:text-gray-400" aria-live="polite">
-                    {{ chosen().length }} {{ chosen().length === 1 ? 'person' : 'people' }} selected
-                  </p>
-                }
-              </div>
-            }
-
+            <input
+              type="radio"
+              name="accessLevel"
+              [value]="option.value"
+              [checked]="selectedAccess() === option.value"
+              [attr.cdkFocusInitial]="selectedAccess() === option.value ? '' : null"
+              (change)="selectedAccess.set(option.value)"
+              class="mt-0.5 size-4 text-primary-600 focus:ring-primary-500"
+            />
             <div>
-              <label for="share-note" class="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                Note (optional)
-              </label>
-              <textarea
-                id="share-note"
-                rows="2"
-                [attr.maxlength]="maxNoteChars"
-                [value]="note()"
-                (input)="note.set($any($event.target).value)"
-                aria-describedby="share-note-hint"
-                placeholder="What should they look at?"
-                class="mt-1 block w-full resize-none rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-900 placeholder:text-gray-500 focus:border-primary-500 focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-400"
-              ></textarea>
-              <p id="share-note-hint" class="mt-1 flex justify-between gap-3 text-xs text-gray-600 dark:text-gray-400">
-                <span>Shown with the task{{ notifyMode() === 'none' ? '' : ' and in the notification' }}.</span>
-                <span>{{ maxNoteChars - note().length }} left</span>
-              </p>
+              <span class="text-sm font-medium text-gray-900 dark:text-white">{{ option.label }}</span>
+              <p class="text-xs text-gray-600 dark:text-gray-300">{{ option.description }}</p>
             </div>
-          </div>
+          </label>
         }
+      </fieldset>
 
-        <!-- Existing shares info -->
-        @if (existingShares().length > 0 && !shareResult()) {
-          <div class="mt-4 rounded-md bg-state-info-50 p-3 dark:bg-state-info-500/10">
-            <p class="text-xs text-state-info-700 dark:text-state-info-300">
-              @if (replacesProjectShare()) {
-                This task is already shared with the project. Sharing again replaces the snapshot the project sees.
-              } @else {
-                This conversation has {{ existingShares().length }} existing share{{ existingShares().length > 1 ? 's' : '' }}.
-                Creating a new share will add another snapshot.
-              }
-            </p>
+      <!-- Email input (specific access) -->
+      @if (selectedAccess() === 'specific') {
+        <div class="mt-4">
+          <label for="email-input" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            People with access
+          </label>
+
+          <!-- Email chips -->
+          <div class="flex flex-wrap gap-1.5 mb-2">
+            <!-- Owner chip (non-removable) -->
+            <span class="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-primary-accessible dark:bg-gray-700 dark:text-primary-50">
+              {{ data.ownerEmail }} (you)
+            </span>
+
+            @for (email of allowedEmails(); track email) {
+              <span class="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-700 dark:bg-gray-700 dark:text-gray-300">
+                {{ email }}
+                <button
+                  type="button"
+                  (click)="removeEmail(email)"
+                  class="ml-0.5 inline-flex size-3.5 items-center justify-center rounded-full hover:bg-gray-200 dark:hover:bg-gray-600"
+                  [attr.aria-label]="'Remove ' + email"
+                >
+                  <ng-icon name="heroXMark" class="size-3" aria-hidden="true" />
+                </button>
+              </span>
+            }
           </div>
-        }
 
-        <!-- Share result -->
-        @if (shareResult()) {
-          <div class="mt-4 rounded-md bg-state-success-50 p-3 dark:bg-state-success-500/10">
-            <p class="text-sm font-medium text-state-success-800 dark:text-state-success-300 mb-2">
-              {{ shareResult()!.accessLevel === 'project' ? 'Shared with the project' : 'Chat shared' }}
-            </p>
-            <p class="text-xs text-state-success-700 dark:text-state-success-400 mb-2">
-              Future messages aren't included in the share.
-              @if (shareResult()!.accessLevel === 'project') {
-                It’s listed under Shared tasks in the project, replacing any earlier share of this task.
-                @if (notifiedSummary()) {
-                  {{ notifiedSummary() }}
-                }
-              }
-            </p>
-            <div class="flex items-center gap-2">
-              <input
-                type="text"
-                readonly
-                aria-label="Share link"
-                [value]="shareUrl()"
-                class="flex-1 rounded-md border border-state-success-200 bg-white px-2.5 py-1.5 text-xs text-gray-700 dark:border-state-success-700 dark:bg-gray-700 dark:text-gray-300"
-                (click)="$event.target"
-              />
-              <button
-                type="button"
-                (click)="copyLink()"
-                class="inline-flex items-center gap-1 rounded-2xl bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 shadow-xs ring-1 ring-gray-300 ring-inset hover:bg-gray-50 dark:bg-gray-700 dark:text-gray-300 dark:ring-gray-600 dark:hover:bg-gray-600"
-              >
-                <ng-icon [name]="copied() ? 'heroCheck' : 'heroClipboard'" class="size-3.5" aria-hidden="true" />
-                {{ copied() ? 'Copied' : 'Copy link' }}
-              </button>
-            </div>
-          </div>
-        }
-
-        <!-- Error -->
-        @if (error()) {
-          <div class="mt-4 rounded-md bg-state-danger-50 p-3 dark:bg-state-danger-500/10">
-            <p class="text-sm text-state-danger-700 dark:text-state-danger-300">{{ error() }}</p>
-          </div>
-        }
-
-        <!-- Actions -->
-        <div class="mt-5 flex justify-end gap-3">
-          <button
-            type="button"
-            (click)="onClose()"
-            class="rounded-2xl bg-white px-3 py-2 text-sm/6 font-semibold text-gray-900 shadow-xs ring-1 ring-gray-300 ring-inset hover:bg-gray-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:ring-white/5 dark:hover:bg-white/20"
-          >
-            {{ shareResult() ? 'Done' : 'Cancel' }}
-          </button>
-
-          @if (!shareResult()) {
+          <!-- Email input -->
+          <div class="flex gap-2">
+            <input
+              id="email-input"
+              type="email"
+              placeholder="Enter email address"
+              [ngModel]="emailInput()"
+              (ngModelChange)="emailInput.set($event)"
+              (keydown.enter)="addEmail($event)"
+              class="flex-1 rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-500 dark:focus:border-primary-400 dark:focus:ring-primary-400"
+            />
             <button
               type="button"
-              (click)="onShare()"
-              [disabled]="isSubmitting() || !canSubmit()"
-              class="inline-flex items-center gap-1.5 rounded-2xl bg-primary-accessible px-3 py-2 text-sm/6 font-semibold text-white shadow-xs hover:brightness-95 disabled:opacity-50 disabled:cursor-not-allowed dark:shadow-none"
+              (click)="addEmail()"
+              [disabled]="!emailInput().trim()"
+              class="rounded-2xl bg-primary-accessible px-3 py-1.5 text-sm font-medium text-white hover:brightness-95 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              @if (isSubmitting()) {
-                <app-spinner size="sm" variant="on-solid" label="Creating share link" />
-              }
-              Create share link
+              Add
             </button>
-          }
+          </div>
         </div>
-      </div>
-    </div>
-  `,
-  styles: `
-    @reference "../../../../styles/theme.css";
+      }
 
-    .dialog-backdrop {
-      animation: backdrop-fade-in 200ms ease-out;
-    }
-    @keyframes backdrop-fade-in {
-      from { opacity: 0; }
-      to { opacity: 1; }
-    }
-    .dialog-panel {
-      animation: dialog-fade-in-up 200ms ease-out;
-    }
-    @keyframes dialog-fade-in-up {
-      from { opacity: 0; transform: translateY(1rem) scale(0.95); }
-      to { opacity: 1; transform: translateY(0) scale(1); }
-    }
+      <!-- Let people know (project shares) -->
+      @if (selectedAccess() === 'project' && !shareResult()) {
+        <div class="mt-4 space-y-3">
+          <fieldset>
+            <legend class="text-sm font-medium text-gray-700 dark:text-gray-300">Let people know</legend>
+            <div class="mt-1.5 flex flex-wrap gap-x-5 gap-y-1.5">
+              @for (option of notifyOptions; track option.value) {
+                <label class="inline-flex cursor-pointer items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                  <input
+                    type="radio"
+                    name="notifyMode"
+                    [value]="option.value"
+                    [checked]="notifyMode() === option.value"
+                    (change)="setNotifyMode(option.value)"
+                    class="size-4 text-primary-600 focus:ring-primary-500"
+                  />
+                  {{ option.label }}
+                </label>
+              }
+            </div>
+          </fieldset>
+
+          @if (notifyMode() === 'some') {
+            <div>
+              <label for="notify-filter" class="sr-only">Find a project member</label>
+              <input
+                id="notify-filter"
+                type="search"
+                autocomplete="off"
+                placeholder="Find a project member"
+                [value]="memberFilter()"
+                (input)="memberFilter.set($any($event.target).value)"
+                class="block w-full rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-900 placeholder:text-gray-500 focus:border-primary-500 focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-400"
+              />
+              @if (membersError()) {
+                <p class="mt-2 text-xs text-state-danger-700 dark:text-state-danger-300">{{ membersError() }}</p>
+              } @else if (!members()) {
+                <p class="mt-2 text-xs text-gray-600 dark:text-gray-400">Loading members…</p>
+              } @else {
+                <ul
+                  aria-label="Project members to notify"
+                  class="mt-2 max-h-44 divide-y divide-gray-200 overflow-y-auto rounded-md border border-gray-200 dark:divide-gray-700 dark:border-gray-700"
+                >
+                  @for (member of filteredMembers(); track member.email) {
+                    <li>
+                      <label class="flex cursor-pointer items-center gap-3 px-3 py-2 hover:bg-gray-50 dark:hover:bg-white/5">
+                        <input
+                          type="checkbox"
+                          [checked]="isChosen(member.email)"
+                          (change)="toggleMember(member.email)"
+                          class="size-4 rounded text-primary-600 focus:ring-primary-500"
+                        />
+                        <span class="min-w-0">
+                          <span class="block truncate text-sm font-medium text-gray-900 dark:text-white">{{ member.name || member.email }}</span>
+                          @if (member.name) {
+                            <span class="block truncate text-xs text-gray-600 dark:text-gray-400">{{ member.email }}</span>
+                          }
+                        </span>
+                      </label>
+                    </li>
+                  } @empty {
+                    <li class="px-3 py-2 text-xs text-gray-600 dark:text-gray-400">
+                      {{ others().length ? 'No members match.' : 'Nobody else is in this project yet.' }}
+                    </li>
+                  }
+                </ul>
+                <p class="mt-1 text-xs text-gray-600 dark:text-gray-400" aria-live="polite">
+                  {{ chosen().length }} {{ chosen().length === 1 ? 'person' : 'people' }} selected
+                </p>
+              }
+            </div>
+          }
+
+          <div>
+            <label for="share-note" class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+              Note (optional)
+            </label>
+            <textarea
+              id="share-note"
+              rows="2"
+              [attr.maxlength]="maxNoteChars"
+              [value]="note()"
+              (input)="note.set($any($event.target).value)"
+              aria-describedby="share-note-hint"
+              placeholder="What should they look at?"
+              class="mt-1 block w-full resize-none rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-900 placeholder:text-gray-500 focus:border-primary-500 focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-400"
+            ></textarea>
+            <p id="share-note-hint" class="mt-1 flex justify-between gap-3 text-xs text-gray-600 dark:text-gray-400">
+              <span>Shown with the task{{ notifyMode() === 'none' ? '' : ' and in the notification' }}.</span>
+              <span>{{ maxNoteChars - note().length }} left</span>
+            </p>
+          </div>
+        </div>
+      }
+
+      <!-- Existing shares info -->
+      @if (existingShares().length > 0 && !shareResult()) {
+        <div class="mt-4 rounded-md bg-state-info-50 p-3 dark:bg-state-info-500/10">
+          <p class="text-xs text-state-info-700 dark:text-state-info-300">
+            @if (replacesProjectShare()) {
+              This task is already shared with the project. Sharing again replaces the snapshot the project sees.
+            } @else {
+              This conversation has {{ existingShares().length }} existing share{{ existingShares().length > 1 ? 's' : '' }}.
+              Creating a new share will add another snapshot.
+            }
+          </p>
+        </div>
+      }
+
+      <!-- Share result -->
+      @if (shareResult()) {
+        <div class="mt-4 rounded-md bg-state-success-50 p-3 dark:bg-state-success-500/10">
+          <p class="text-sm font-medium text-state-success-800 dark:text-state-success-300 mb-2">
+            {{ shareResult()!.accessLevel === 'project' ? 'Shared with the project' : 'Chat shared' }}
+          </p>
+          <p class="text-xs text-state-success-700 dark:text-state-success-400 mb-2">
+            Future messages aren't included in the share.
+            @if (shareResult()!.accessLevel === 'project') {
+              It’s listed under Shared tasks in the project, replacing any earlier share of this task.
+              @if (notifiedSummary()) {
+                {{ notifiedSummary() }}
+              }
+            }
+          </p>
+          <div class="flex items-center gap-2">
+            <input
+              type="text"
+              readonly
+              aria-label="Share link"
+              [value]="shareUrl()"
+              class="flex-1 rounded-md border border-state-success-200 bg-white px-2.5 py-1.5 text-xs text-gray-700 dark:border-state-success-700 dark:bg-gray-700 dark:text-gray-300"
+              (click)="$event.target"
+            />
+            <button
+              type="button"
+              (click)="copyLink()"
+              class="inline-flex items-center gap-1 rounded-2xl bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 shadow-xs ring-1 ring-gray-300 ring-inset hover:bg-gray-50 dark:bg-gray-700 dark:text-gray-300 dark:ring-gray-600 dark:hover:bg-gray-600"
+            >
+              <ng-icon [name]="copied() ? 'heroCheck' : 'heroClipboard'" class="size-3.5" aria-hidden="true" />
+              {{ copied() ? 'Copied' : 'Copy link' }}
+            </button>
+          </div>
+        </div>
+      }
+
+      <!-- Error -->
+      @if (error()) {
+        <div class="mt-4 rounded-md bg-state-danger-50 p-3 dark:bg-state-danger-500/10">
+          <p class="text-sm text-state-danger-700 dark:text-state-danger-300">{{ error() }}</p>
+        </div>
+      }
+
+      <div dialogFooter class="flex justify-end gap-3 border-t border-gray-200 px-6 py-4 dark:border-gray-700">
+        <button
+          type="button"
+          (click)="onClose()"
+          class="rounded-2xl bg-white px-3 py-2 text-sm/6 font-semibold text-gray-900 shadow-xs ring-1 ring-gray-300 ring-inset hover:bg-gray-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:ring-white/5 dark:hover:bg-white/20"
+        >
+          {{ shareResult() ? 'Done' : 'Cancel' }}
+        </button>
+
+        @if (!shareResult()) {
+          <button
+            type="button"
+            (click)="onShare()"
+            [disabled]="isSubmitting() || !canSubmit()"
+            class="inline-flex items-center gap-1.5 rounded-2xl bg-primary-accessible px-3 py-2 text-sm/6 font-semibold text-white shadow-xs hover:brightness-95 disabled:opacity-50 disabled:cursor-not-allowed dark:shadow-none"
+          >
+            @if (isSubmitting()) {
+              <app-spinner size="sm" variant="on-solid" label="Creating share link" />
+            }
+            Create share link
+          </button>
+        }
+      </div>
+    </app-dialog-shell>
   `,
 })
 export class ShareModalComponent implements OnInit {

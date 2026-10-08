@@ -48,6 +48,7 @@ export type ProjectModelDialogResult = ModelResponse | undefined;
                 role="radio"
                 [attr.aria-label]="m.label"
                 [attr.aria-checked]="selected() === m.ref"
+                [attr.cdkFocusInitial]="selected() === m.ref ? '' : null"
                 [disabled]="!data.canEdit"
                 (click)="selected.set(m.ref)"
                 class="flex w-full items-start gap-3 px-4 py-3 text-left hover:bg-gray-50 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-default disabled:hover:bg-transparent aria-checked:bg-gray-50 dark:hover:bg-gray-700/50 dark:aria-checked:bg-gray-700/50"

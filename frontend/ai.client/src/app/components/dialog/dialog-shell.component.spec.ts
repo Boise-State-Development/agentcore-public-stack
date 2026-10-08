@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Component, inject, signal } from '@angular/core';
 import { DIALOG_DATA, Dialog } from '@angular/cdk/dialog';
 import { TestBed } from '@angular/core/testing';
+import { DialogDescriptionDirective } from './dialog-description.directive';
 import { DialogShellComponent } from './dialog-shell.component';
 
 @Component({
@@ -28,6 +29,18 @@ class Host {
 class Opened {
   readonly description = inject<{ description: string | null }>(DIALOG_DATA).description;
 }
+
+@Component({
+  imports: [DialogShellComponent, DialogDescriptionDirective],
+  template: `
+    <app-dialog-shell title="Delete model?" dialogRole="alertdialog" [closeButton]="false" (closed)="0">
+      <span dialogIcon class="badge"></span>
+      <p appDialogDescription>Removes <strong>Haiku</strong> from the catalog.</p>
+      <button type="button">Cancel</button>
+    </app-dialog-shell>
+  `,
+})
+class Confirm {}
 
 describe('DialogShellComponent', () => {
   beforeEach(() => {
@@ -112,6 +125,22 @@ describe('DialogShellComponent', () => {
       expect(named.container.getAttribute('aria-label')).toBe('Opener name');
       expect(named.container.getAttribute('aria-labelledby')).toBeNull();
       expect(named.container.getAttribute('aria-describedby')).toBe('opener-desc');
+    });
+
+    it('takes a confirmation’s role, icon and projected description', async () => {
+      TestBed.inject(Dialog).open(Confirm);
+      await new Promise(r => setTimeout(r, 0));
+      const containers = document.querySelectorAll<HTMLElement>('.cdk-dialog-container');
+      const container = containers[containers.length - 1];
+      const title = container.querySelector('h2')!;
+      expect(container.getAttribute('role')).toBe('alertdialog');
+      expect(container.getAttribute('aria-labelledby')).toBe(title.id);
+      expect(document.getElementById(container.getAttribute('aria-describedby')!)?.textContent).toBe(
+        'Removes Haiku from the catalog.',
+      );
+      expect(container.querySelector('.badge')?.nextElementSibling?.contains(title)).toBe(true);
+      expect(container.querySelector('button[aria-label="Close dialog"]')).toBeNull();
+      expect(container.querySelectorAll('[role=dialog], [role=alertdialog]').length).toBe(0);
     });
   });
 });

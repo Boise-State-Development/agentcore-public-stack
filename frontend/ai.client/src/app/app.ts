@@ -20,8 +20,8 @@ import { FEATURES } from './services/features';
 import { SearchDialogService } from './components/search/search-dialog.service';
 import {
   isSearchShortcut,
+  keepsSearchShortcut,
   searchShortcutAria,
-  searchShortcutHandoff,
   searchShortcutLabel,
 } from './components/search/search-shortcut';
 
@@ -152,8 +152,7 @@ export class App {
    * Cmd/Ctrl+K opens conversation search: the app's one global shortcut
    * (conversation-search §6). A second press while it is up refocuses it. It
    * stays out of the way while another dialog is open and inside a rich-text
-   * editor, and carries the sidebar filter box's query over
-   * (`searchShortcutHandoff`).
+   * editor (`keepsSearchShortcut`).
    */
   onDocumentKeydown(event: KeyboardEvent): void {
     if (!this.conversationSearchOn || !isSearchShortcut(event)) return;
@@ -163,9 +162,8 @@ export class App {
       return;
     }
     if (this.dialog.openDialogs.length > 0) return;
-    const handoff = searchShortcutHandoff(event.target);
-    if (handoff === null) return;
+    if (keepsSearchShortcut(event.target)) return;
     event.preventDefault();
-    void this.searchDialog.open(handoff || undefined);
+    void this.searchDialog.open();
   }
 }

@@ -8,12 +8,13 @@ import {
 } from '@angular/core';
 import { DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroArrowUpTray, heroXMark } from '@ng-icons/heroicons/outline';
+import { heroArrowUpTray } from '@ng-icons/heroicons/outline';
 import { firstValueFrom } from 'rxjs';
 import { AgentApiService } from '../services/agent-api.service';
 import { AgentIconResponse } from '../models/store.model';
 import { AgentIconComponent } from './agent-icon.component';
-import { DialogDismissDirective } from '../../components/dialog/dialog-dismiss.directive';
+import { DialogDescriptionDirective } from '../../components/dialog/dialog-description.directive';
+import { DialogShellComponent } from '../../components/dialog/dialog-shell.component';
 
 export interface AgentIconDialogData {
   agentId: string;
@@ -51,132 +52,91 @@ const ACCEPTED = ['image/png', 'image/jpeg'];
 @Component({
   selector: 'app-agent-icon-dialog',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DialogDismissDirective, AgentIconComponent, NgIcon],
-  providers: [provideIcons({ heroArrowUpTray, heroXMark })],
-  host: {
-    class: 'block',
-    '(keydown.escape)': 'onCancel()',
-  },
+  imports: [AgentIconComponent, DialogDescriptionDirective, DialogShellComponent, NgIcon],
+  providers: [provideIcons({ heroArrowUpTray })],
+  host: { class: 'block' },
   template: `
-    <div
-      class="dialog-backdrop fixed inset-0 bg-gray-900/40 dark:bg-gray-900/70"
-      aria-hidden="true"
-    ></div>
+    <app-dialog-shell title="Icon" (closed)="onCancel()">
+      <p appDialogDescription class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">
+        A square image for <span class="font-medium">{{ data.agentName }}</span> —
+        512×512 PNG or JPEG, up to 400 KB.
+      </p>
 
-    <div
-      class="fixed inset-0 z-10 flex min-h-full items-end justify-center p-4 sm:items-center sm:p-0"
-      appDialogDismiss
-      (dismissed)="onCancel()"
-    >
+      <!-- The preview strip: every size the store renders, at true scale. -->
       <div
-        class="dialog-panel relative flex max-h-[90vh] w-full flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white text-left shadow-xl sm:my-8 sm:max-w-lg dark:border-gray-700 dark:bg-gray-800"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="agent-icon-title"
-        aria-describedby="agent-icon-description"
+        class="flex flex-wrap items-end gap-6 rounded-2xl border border-gray-200 bg-gray-50 px-5 py-5 dark:border-gray-700 dark:bg-gray-900/40"
       >
-        <div class="flex items-start justify-between gap-3 px-6 pt-5">
-          <div class="min-w-0">
-            <h2
-              id="agent-icon-title"
-              class="text-lg/7 font-semibold text-gray-900 dark:text-white"
-            >
-              Icon
-            </h2>
-            <p
-              id="agent-icon-description"
-              class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400"
-            >
-              A square image for <span class="font-medium">{{ data.agentName }}</span> —
-              512×512 PNG or JPEG, up to 400 KB.
-            </p>
+        @for (preview of previews; track preview.size) {
+          <div class="flex flex-col items-center gap-2">
+            <app-agent-icon
+              [agentId]="data.agentId"
+              [iconUrl]="previewUrl()"
+              [emoji]="data.emoji"
+              [size]="preview.size"
+            />
+            <span class="text-xs/5 text-gray-500 dark:text-gray-400">{{ preview.label }}</span>
           </div>
+        }
+      </div>
+      <p class="mt-2 text-xs/5 text-gray-500 dark:text-gray-400">
+        {{ previewUrl() ? previewCaption() : 'No icon yet — this is the default.' }}
+      </p>
+
+      <label
+        class="mt-5 flex cursor-pointer items-center justify-center gap-2 rounded-2xl border border-dashed border-gray-300 px-4 py-5 text-sm/6 font-medium text-gray-700 hover:border-primary-500 hover:text-primary-accessible focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-primary-500 dark:border-gray-600 dark:text-gray-200 dark:hover:border-primary-400 dark:hover:text-primary-accessible-dark"
+      >
+        <ng-icon name="heroArrowUpTray" class="size-5" aria-hidden="true" />
+        {{ file() ? 'Choose a different image' : 'Choose an image' }}
+        <input
+          type="file"
+          class="sr-only"
+          accept="image/png,image/jpeg"
+          cdkFocusInitial
+          (change)="onFileChosen($event)"
+        />
+      </label>
+
+      @if (error(); as message) {
+        <p role="alert" class="mt-4 text-sm/6 text-state-danger-700 dark:text-state-danger-400">
+          {{ message }}
+        </p>
+      }
+
+      <div
+        dialogFooter
+        class="flex items-center justify-between gap-2 border-t border-gray-200 px-6 py-4 dark:border-gray-700"
+      >
+        @if (data.iconUrl) {
+          <button
+            type="button"
+            (click)="onRemove()"
+            [disabled]="busy()"
+            class="rounded-2xl px-3 py-2 text-sm/6 font-medium text-gray-500 hover:bg-gray-100 hover:text-gray-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-100"
+          >
+            Remove icon
+          </button>
+        } @else {
+          <span></span>
+        }
+        <div class="flex gap-2">
           <button
             type="button"
             (click)="onCancel()"
-            aria-label="Close dialog"
-            class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+            class="rounded-2xl border border-gray-300 bg-white px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
           >
-            <ng-icon name="heroXMark" class="size-5" aria-hidden="true" />
+            Cancel
+          </button>
+          <button
+            type="button"
+            [disabled]="!canSave()"
+            (click)="onSave()"
+            class="rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 "
+          >
+            {{ busy() ? 'Saving…' : 'Save icon' }}
           </button>
         </div>
-
-        <div class="flex-1 overflow-y-auto px-6 py-4">
-          <!-- The preview strip: every size the store renders, at true scale. -->
-          <div
-            class="flex flex-wrap items-end gap-6 rounded-2xl border border-gray-200 bg-gray-50 px-5 py-5 dark:border-gray-700 dark:bg-gray-900/40"
-          >
-            @for (preview of previews; track preview.size) {
-              <div class="flex flex-col items-center gap-2">
-                <app-agent-icon
-                  [agentId]="data.agentId"
-                  [iconUrl]="previewUrl()"
-                  [emoji]="data.emoji"
-                  [size]="preview.size"
-                />
-                <span class="text-xs/5 text-gray-500 dark:text-gray-400">{{ preview.label }}</span>
-              </div>
-            }
-          </div>
-          <p class="mt-2 text-xs/5 text-gray-500 dark:text-gray-400">
-            {{ previewUrl() ? previewCaption() : 'No icon yet — this is the default.' }}
-          </p>
-
-          <label
-            class="mt-5 flex cursor-pointer items-center justify-center gap-2 rounded-2xl border border-dashed border-gray-300 px-4 py-5 text-sm/6 font-medium text-gray-700 hover:border-primary-500 hover:text-primary-accessible focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-primary-500 dark:border-gray-600 dark:text-gray-200 dark:hover:border-primary-400 dark:hover:text-primary-accessible-dark"
-          >
-            <ng-icon name="heroArrowUpTray" class="size-5" aria-hidden="true" />
-            {{ file() ? 'Choose a different image' : 'Choose an image' }}
-            <input
-              type="file"
-              class="sr-only"
-              accept="image/png,image/jpeg"
-              (change)="onFileChosen($event)"
-            />
-          </label>
-
-          @if (error(); as message) {
-            <p role="alert" class="mt-4 text-sm/6 text-state-danger-700 dark:text-state-danger-400">
-              {{ message }}
-            </p>
-          }
-        </div>
-
-        <div
-          class="flex items-center justify-between gap-2 border-t border-gray-200 px-6 py-4 dark:border-gray-700"
-        >
-          @if (data.iconUrl) {
-            <button
-              type="button"
-              (click)="onRemove()"
-              [disabled]="busy()"
-              class="rounded-2xl px-3 py-2 text-sm/6 font-medium text-gray-500 hover:bg-gray-100 hover:text-gray-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-100"
-            >
-              Remove icon
-            </button>
-          } @else {
-            <span></span>
-          }
-          <div class="flex gap-2">
-            <button
-              type="button"
-              (click)="onCancel()"
-              class="rounded-2xl border border-gray-300 bg-white px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              [disabled]="!canSave()"
-              (click)="onSave()"
-              class="rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 "
-            >
-              {{ busy() ? 'Saving…' : 'Save icon' }}
-            </button>
-          </div>
-        </div>
       </div>
-    </div>
+    </app-dialog-shell>
   `,
 })
 export class AgentIconDialogComponent implements OnDestroy {

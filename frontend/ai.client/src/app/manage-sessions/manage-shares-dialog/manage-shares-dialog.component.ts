@@ -19,7 +19,7 @@ import {
 import { ShareService, ShareResponse } from '../../session/services/share/share.service';
 import { ToastService } from '../../services/toast/toast.service';
 import { parseIso } from '../../utils/date';
-import { DialogDismissDirective } from '../../components/dialog/dialog-dismiss.directive';
+import { DialogShellComponent } from '../../components/dialog/dialog-shell.component';
 import { SpinnerComponent } from '../../components/spinner/spinner.component';
 
 export interface ManageSharesDialogData {
@@ -30,7 +30,7 @@ export interface ManageSharesDialogData {
 @Component({
   selector: 'app-manage-shares-dialog',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DialogDismissDirective, NgIcon, SpinnerComponent],
+  imports: [DialogShellComponent, NgIcon, SpinnerComponent],
   providers: [
     provideIcons({
       heroXMark,
@@ -42,165 +42,109 @@ export interface ManageSharesDialogData {
       heroChevronUp,
     }),
   ],
-  host: {
-    class: 'block',
-    '(keydown.escape)': 'onClose()',
-  },
+  host: { class: 'block' },
   template: `
-    <!-- Backdrop -->
-    <div
-      class="dialog-backdrop fixed inset-0 bg-gray-500/75 dark:bg-gray-900/80"
-      aria-hidden="true"
-    ></div>
-
-    <!-- Dialog Panel -->
-    <div class="fixed inset-0 z-10 flex min-h-full items-end justify-center p-4 sm:items-center sm:p-0"
-      appDialogDismiss
-      (dismissed)="onClose()">
-      <div
-        class="dialog-panel relative w-full transform overflow-hidden rounded-lg bg-white px-4 pt-5 pb-4 text-left shadow-xl sm:my-8 sm:max-w-lg sm:p-6 dark:bg-gray-800 dark:outline dark:-outline-offset-1 dark:outline-white/10"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="manage-shares-title"
-        (click)="$event.stopPropagation()"
-      >
-        <!-- Header -->
-        <div class="flex items-center justify-between mb-4">
-          <div>
-            <h3 id="manage-shares-title" class="text-base/7 font-semibold text-gray-900 dark:text-white">
-              Manage Shared Instances
-            </h3>
-            <p class="mt-1 text-sm/6 text-gray-500 dark:text-gray-400 truncate max-w-sm">
-              {{ data.sessionTitle || 'Untitled Conversation' }}
-            </p>
-          </div>
-          <!-- phase-3-outlier-colors: intentional indigo focus outline - shared across 4 dialogs (tool-role-dialog, delete-tool-dialog, confirmation-dialog, manage-shares-dialog); documented convention -->
-          <button
-            type="button"
-            (click)="onClose()"
-            class="rounded-md text-gray-400 hover:text-gray-500 focus:outline-2 focus:outline-offset-2 focus:outline-primary-600 dark:hover:text-gray-300"
-            aria-label="Close dialog"
-          >
-            <ng-icon name="heroXMark" class="size-5" aria-hidden="true" />
-          </button>
+    <app-dialog-shell
+      title="Manage Shared Instances"
+      [description]="data.sessionTitle || 'Untitled Conversation'"
+      (closed)="onClose()"
+    >
+      <!-- Loading -->
+      @if (isLoading()) {
+        <div class="flex items-center justify-center py-8">
+          <!-- phase-3-outlier-colors: intentional border-t-indigo-500 spinner - shared dialog convention; documented in dialog pattern -->
+          <div class="size-6 animate-spin rounded-full border-2 border-gray-300 border-t-indigo-500"></div>
         </div>
-
-        <!-- Loading -->
-        @if (isLoading()) {
-          <div class="flex items-center justify-center py-8">
-            <!-- phase-3-outlier-colors: intentional border-t-indigo-500 spinner - shared dialog convention (matches close button focus outline); documented in dialog pattern -->
-            <div class="size-6 animate-spin rounded-full border-2 border-gray-300 border-t-indigo-500"></div>
-          </div>
-        } @else if (shares().length === 0) {
-          <!-- Empty state -->
-          <div class="py-8 text-center">
-            <ng-icon name="heroUserGroup" class="mx-auto size-10 text-gray-400" />
-            <p class="mt-3 text-sm/6 text-gray-500 dark:text-gray-400">No shared instances for this conversation.</p>
-          </div>
-        } @else {
-          <!-- Shares list -->
-          <div class="max-h-96 overflow-y-auto -mx-4 px-4 sm:-mx-6 sm:px-6 divide-y divide-gray-200 dark:divide-gray-700">
-            @for (share of shares(); track share.shareId) {
-              <div class="py-3">
-                <div class="flex items-center justify-between gap-3">
-                  <div class="flex items-center gap-2 min-w-0">
-                    @if (share.accessLevel === 'public') {
-                      <ng-icon name="heroGlobeAlt" class="size-4 shrink-0 text-state-success-500" />
-                      <span class="text-sm font-medium text-gray-900 dark:text-white">Public</span>
-                    } @else if (share.accessLevel === 'project') {
-                      <ng-icon name="heroUserGroup" class="size-4 shrink-0 text-gray-500 dark:text-gray-400" />
-                      <span class="text-sm font-medium text-gray-900 dark:text-white">Project members</span>
-                    } @else {
-                      <ng-icon name="heroLockClosed" class="size-4 shrink-0 text-state-warning-500" />
-                      <span class="text-sm font-medium text-gray-900 dark:text-white">Limited Access</span>
-                    }
-                    <span class="text-xs text-gray-400 dark:text-gray-500">{{ formatDate(share.createdAt) }}</span>
-                  </div>
-                  <div class="flex items-center gap-2 shrink-0">
-                    @if (share.accessLevel === 'specific' && share.allowedEmails?.length) {
-                      <button
-                        type="button"
-                        (click)="toggleExpand(share.shareId)"
-                        class="flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700"
-                      >
-                        {{ share.allowedEmails!.length }} {{ share.allowedEmails!.length === 1 ? 'user' : 'users' }}
-                        <ng-icon [name]="expandedShareIds().has(share.shareId) ? 'heroChevronUp' : 'heroChevronDown'" class="size-3.5" />
-                      </button>
-                    }
+      } @else if (shares().length === 0) {
+        <!-- Empty state -->
+        <div class="py-8 text-center">
+          <ng-icon name="heroUserGroup" class="mx-auto size-10 text-gray-400" />
+          <p class="mt-3 text-sm/6 text-gray-500 dark:text-gray-400">No shared instances for this conversation.</p>
+        </div>
+      } @else {
+        <!-- Shares list -->
+        <div class="divide-y divide-gray-200 dark:divide-gray-700">
+          @for (share of shares(); track share.shareId) {
+            <div class="py-3">
+              <div class="flex items-center justify-between gap-3">
+                <div class="flex items-center gap-2 min-w-0">
+                  @if (share.accessLevel === 'public') {
+                    <ng-icon name="heroGlobeAlt" class="size-4 shrink-0 text-state-success-500" />
+                    <span class="text-sm font-medium text-gray-900 dark:text-white">Public</span>
+                  } @else if (share.accessLevel === 'project') {
+                    <ng-icon name="heroUserGroup" class="size-4 shrink-0 text-gray-500 dark:text-gray-400" />
+                    <span class="text-sm font-medium text-gray-900 dark:text-white">Project members</span>
+                  } @else {
+                    <ng-icon name="heroLockClosed" class="size-4 shrink-0 text-state-warning-500" />
+                    <span class="text-sm font-medium text-gray-900 dark:text-white">Limited Access</span>
+                  }
+                  <span class="text-xs text-gray-400 dark:text-gray-500">{{ formatDate(share.createdAt) }}</span>
+                </div>
+                <div class="flex items-center gap-2 shrink-0">
+                  @if (share.accessLevel === 'specific' && share.allowedEmails?.length) {
                     <button
                       type="button"
-                      (click)="revokeShare(share.shareId)"
-                      [disabled]="revokingIds().has(share.shareId)"
-                      class="rounded-md p-1.5 text-state-danger-500 hover:bg-state-danger-50 disabled:opacity-50 dark:hover:bg-state-danger-500/10"
-                      [attr.aria-label]="'Delete share'"
+                      (click)="toggleExpand(share.shareId)"
+                      class="flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700"
                     >
-                      @if (revokingIds().has(share.shareId)) {
-                        <app-spinner size="sm" variant="danger" label="Deleting share" />
-                      } @else {
-                        <ng-icon name="heroTrash" class="size-4" />
-                      }
+                      {{ share.allowedEmails!.length }} {{ share.allowedEmails!.length === 1 ? 'user' : 'users' }}
+                      <ng-icon [name]="expandedShareIds().has(share.shareId) ? 'heroChevronUp' : 'heroChevronDown'" class="size-3.5" />
                     </button>
-                  </div>
-                </div>
-
-                <!-- Expanded email list for specific shares -->
-                @if (share.accessLevel === 'specific' && expandedShareIds().has(share.shareId) && share.allowedEmails?.length) {
-                  <div class="mt-2 ml-6 space-y-1">
-                    @for (email of share.allowedEmails; track email) {
-                      <div class="flex items-center justify-between rounded-md bg-gray-50 px-3 py-1.5 dark:bg-gray-700/50">
-                        <span class="text-xs text-gray-700 dark:text-gray-300 truncate">{{ email }}</span>
-                        <button
-                          type="button"
-                          (click)="removeEmailFromShare(share.shareId, email)"
-                          [disabled]="removingEmails().has(share.shareId + ':' + email)"
-                          class="ml-2 shrink-0 rounded p-0.5 text-state-danger-400 hover:text-state-danger-600 disabled:opacity-50 dark:hover:text-state-danger-300"
-                          [attr.aria-label]="'Remove ' + email"
-                        >
-                          @if (removingEmails().has(share.shareId + ':' + email)) {
-                            <app-spinner size="sm" variant="danger" label="Removing" />
-                          } @else {
-                            <ng-icon name="heroXMark" class="size-3.5" />
-                          }
-                        </button>
-                      </div>
+                  }
+                  <button
+                    type="button"
+                    (click)="revokeShare(share.shareId)"
+                    [disabled]="revokingIds().has(share.shareId)"
+                    class="rounded-md p-1.5 text-state-danger-500 hover:bg-state-danger-50 disabled:opacity-50 dark:hover:bg-state-danger-500/10"
+                    [attr.aria-label]="'Delete share'"
+                  >
+                    @if (revokingIds().has(share.shareId)) {
+                      <app-spinner size="sm" variant="danger" label="Deleting share" />
+                    } @else {
+                      <ng-icon name="heroTrash" class="size-4" />
                     }
-                  </div>
-                }
+                  </button>
+                </div>
               </div>
-            }
-          </div>
-        }
 
-        <!-- Footer -->
-        <div class="mt-5 flex justify-end">
-          <button
-            type="button"
-            (click)="onClose()"
-            class="rounded-2xl bg-white px-3 py-2 text-sm/6 font-semibold text-gray-900 shadow-xs ring-1 ring-gray-300 ring-inset hover:bg-gray-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:ring-white/5 dark:hover:bg-white/20"
-          >
-            Done
-          </button>
+              <!-- Expanded email list for specific shares -->
+              @if (share.accessLevel === 'specific' && expandedShareIds().has(share.shareId) && share.allowedEmails?.length) {
+                <div class="mt-2 ml-6 space-y-1">
+                  @for (email of share.allowedEmails; track email) {
+                    <div class="flex items-center justify-between rounded-md bg-gray-50 px-3 py-1.5 dark:bg-gray-700/50">
+                      <span class="text-xs text-gray-700 dark:text-gray-300 truncate">{{ email }}</span>
+                      <button
+                        type="button"
+                        (click)="removeEmailFromShare(share.shareId, email)"
+                        [disabled]="removingEmails().has(share.shareId + ':' + email)"
+                        class="ml-2 shrink-0 rounded p-0.5 text-state-danger-400 hover:text-state-danger-600 disabled:opacity-50 dark:hover:text-state-danger-300"
+                        [attr.aria-label]="'Remove ' + email"
+                      >
+                        @if (removingEmails().has(share.shareId + ':' + email)) {
+                          <app-spinner size="sm" variant="danger" label="Removing" />
+                        } @else {
+                          <ng-icon name="heroXMark" class="size-3.5" />
+                        }
+                      </button>
+                    </div>
+                  }
+                </div>
+              }
+            </div>
+          }
         </div>
-      </div>
-    </div>
-  `,
-  styles: `
-    @reference "../../../styles/theme.css";
+      }
 
-    .dialog-backdrop {
-      animation: backdrop-fade-in 200ms ease-out;
-    }
-    @keyframes backdrop-fade-in {
-      from { opacity: 0; }
-      to { opacity: 1; }
-    }
-    .dialog-panel {
-      animation: dialog-fade-in-up 200ms ease-out;
-    }
-    @keyframes dialog-fade-in-up {
-      from { opacity: 0; transform: translateY(1rem) scale(0.95); }
-      to { opacity: 1; transform: translateY(0) scale(1); }
-    }
+      <div dialogFooter class="flex justify-end border-t border-gray-200 px-6 py-4 dark:border-gray-700">
+        <button
+          type="button"
+          (click)="onClose()"
+          class="rounded-2xl bg-white px-3 py-2 text-sm/6 font-semibold text-gray-900 shadow-xs ring-1 ring-gray-300 ring-inset hover:bg-gray-50 dark:bg-white/10 dark:text-white dark:shadow-none dark:ring-white/5 dark:hover:bg-white/20"
+        >
+          Done
+        </button>
+      </div>
+    </app-dialog-shell>
   `,
 })
 export class ManageSharesDialogComponent implements OnInit {

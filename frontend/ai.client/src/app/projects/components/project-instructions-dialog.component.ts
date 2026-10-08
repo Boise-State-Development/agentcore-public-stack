@@ -42,6 +42,7 @@ export type ProjectInstructionsDialogResult = InstructionsResponse | undefined;
       <textarea
         id="project-instructions"
         rows="14"
+        cdkFocusInitial
         [formControl]="control"
         [attr.maxlength]="max"
         placeholder="e.g. You support the integrations team. Be terse, and name the file you relied on."

@@ -32,7 +32,7 @@ describe('App: Cmd/Ctrl+K', () => {
       const event = press(document.body);
       App.prototype.onDocumentKeydown.call(self, event);
       expect(event.defaultPrevented).toBe(true);
-      expect(self.searchDialog.open).toHaveBeenCalledWith(undefined);
+      expect(self.searchDialog.open).toHaveBeenCalledWith();
     },
     IMPORT_TIMEOUT_MS,
   );
@@ -90,21 +90,7 @@ describe('App: Cmd/Ctrl+K', () => {
       composer.value = 'draft';
       const self = shell();
       App.prototype.onDocumentKeydown.call(self, press(composer));
-      expect(self.searchDialog.open).toHaveBeenCalledWith(undefined);
-    },
-    IMPORT_TIMEOUT_MS,
-  );
-
-  it(
-    'carries the sidebar filter box query over',
-    async () => {
-      const { App } = await import('./app');
-      const box = document.createElement('input');
-      box.setAttribute('data-search-handoff', '');
-      box.value = 'syllabus';
-      const self = shell();
-      App.prototype.onDocumentKeydown.call(self, press(box, { key: 'k', ctrlKey: true }));
-      expect(self.searchDialog.open).toHaveBeenCalledWith('syllabus');
+      expect(self.searchDialog.open).toHaveBeenCalledWith();
     },
     IMPORT_TIMEOUT_MS,
   );
