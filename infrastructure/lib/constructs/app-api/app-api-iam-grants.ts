@@ -507,7 +507,24 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
 
   // ── Memory maintenance (Shared Projects 2.6) ──
   // Starting a run async-invokes the worker (InvocationType=Event); nothing else.
-  props.refs.memoryMaintenanceWorker.grantInvoke(taskRole);
+  //
+  // Its own managed policy, NOT `grantInvoke(taskRole)`: that statement lands in
+  // the role's CDK overflow policies, which CDK packs by a size it estimates
+  // before ARNs resolve. On dev the resolved OverflowPolicy3 was already 5,921 of
+  // IAM's 6,144 characters, so the grant failed the deploy (ServiceLimitExceeded)
+  // and rolled the stack back. A role may attach 10 managed policies; it has 3.
+  new iam.ManagedPolicy(scope, 'AppApiMemoryMaintenanceInvokePolicy', {
+    roles: [taskRole],
+    description: 'app-api: async-invoke the memory maintenance worker (Shared Projects 2.6)',
+    statements: [
+      new iam.PolicyStatement({
+        sid: 'MemoryMaintenanceWorkerInvoke',
+        effect: iam.Effect.ALLOW,
+        actions: ['lambda:InvokeFunction'],
+        resources: [props.refs.memoryMaintenanceWorker.functionArn],
+      }),
+    ],
+  });
 
   // ── Fine-tuning ──
   // Sourced from typed PlatformStack refs.
