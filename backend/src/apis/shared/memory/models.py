@@ -393,6 +393,29 @@ class MaintenanceRun(BaseModel):
     output_tokens: int = Field(0, alias="outputTokens")
     cost: Optional[float] = None
     error: Optional[str] = None
+    scope: Optional[MemoryScope] = None
+    undone_at: Optional[str] = Field(None, alias="undoneAt")
+    undone_by: Optional[str] = Field(None, alias="undoneBy")
+
+    @property
+    def space_scope(self) -> str:
+        return self.scope or "shared"
+
+
+class RetrievalStats(BaseModel):
+    """A ``STATS#{slug}`` row: how often tasks have read one file (Shared Projects 2.6b, §3.3).
+
+    Bumped once per file per turn when a project harness's ``memory_read``
+    returns it, off the tool's return path. A read returns the whole file, so
+    there is no per-item signal to keep: §3.3's ``byAnchor`` stays unwritten
+    until something reads items rather than files.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    slug: str = ""
+    retrieval_count: int = Field(0, alias="retrievalCount")
+    last_retrieved_at: Optional[str] = Field(None, alias="lastRetrievedAt")
 
 
 class MemoryIndex(BaseModel):

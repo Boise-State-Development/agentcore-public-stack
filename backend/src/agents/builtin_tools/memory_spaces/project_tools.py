@@ -21,6 +21,9 @@ A save that creates a file also adds it to that scope's ``MEMORY.md``, the only 
 of a space injected into a task. Left to the model, the index line was usually
 forgotten, so teammates' assistants never saw the file (the 2026-10 team simulation, G2).
 
+``memory_read`` counts each file it returns in that file's ``STATS#`` row (2.6b),
+once per turn and off the tool's return path (``apis/shared/memory/stats.py``).
+
 ``memory_save`` also says when to save to "mine" and to make a preference's description
 the rule itself (G17): asked to "remember this just for me", Haiku 4.5 kept it in the
 conversation and never saved it, and a saved preference whose index line only named it
@@ -47,6 +50,7 @@ from apis.shared.memory.service import (
     MemoryValidationError,
     SaveContext,
 )
+from apis.shared.memory.stats import record_read
 from apis.shared.projects.service import ProjectConflictError, ProjectError, ProjectNotFoundError
 
 logger = logging.getLogger(__name__)
@@ -186,9 +190,24 @@ def _summary(entry: Any) -> dict[str, Any]:
     return row
 
 
+# Where a turn keeps the files it has already counted (Strands builds a fresh
+# ``invocation_state`` per invocation, so this is one turn's set).
+_STATS_SEEN_KEY = "memory_stats_seen"
+
+
+def _turn_reads(tool_context: Optional[ToolContext]) -> Optional[set]:
+    state = getattr(tool_context, "invocation_state", None)
+    if not isinstance(state, dict):
+        return None
+    seen = state.get(_STATS_SEEN_KEY)
+    if not isinstance(seen, set):
+        seen = state[_STATS_SEEN_KEY] = set()
+    return seen
+
+
 def make_project_memory_read_tool(scopes: ProjectMemoryScopes):
-    @tool
-    async def memory_read(scope: Scope, slug: str) -> dict[str, Any]:
+    @tool(context=True)
+    async def memory_read(scope: Scope, slug: str, tool_context: Optional[ToolContext] = None) -> dict[str, Any]:
         """Read one memory file in full.
 
         Items end with `<!-- e:… -->` anchors. Keep each anchor on its item when you
@@ -210,6 +229,8 @@ def make_project_memory_read_tool(scopes: ProjectMemoryScopes):
                 body = await asyncio.to_thread(service.read_index, space_id, user.user_id, user.email)
             else:
                 body = await asyncio.to_thread(service.read_entry, space_id, user.user_id, user.email, slug)
+                # Off the return path: hands one UpdateItem to a background thread (2.6b).
+                record_read(space_id, slug, seen=_turn_reads(tool_context))
         except MemoryEntryNotFoundError:
             return _error(f"There is no file '{slug}' in {_LABELS[scope]}.")
         except (MemorySpacePermissionError, MemorySpaceNotFoundError):

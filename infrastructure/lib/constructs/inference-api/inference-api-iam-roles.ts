@@ -53,6 +53,18 @@ export const RUNTIME_MEMORY_ACTIONS: readonly string[] = [
   'bedrock-agentcore:DeleteMemoryRecord',
 ];
 
+/**
+ * The attributes a `STATS#{slug}` update may touch (Shared Projects 2.6b): the
+ * key, plus what `MemorySpaceRepository.record_retrieval` sets.
+ */
+export const MEMORY_STATS_ATTRIBUTES: readonly string[] = [
+  'PK',
+  'SK',
+  'slug',
+  'retrievalCount',
+  'lastRetrievedAt',
+];
+
 export function createRuntimeExecutionRole(
   scope: Construct,
   config: AppConfig,
@@ -393,6 +405,34 @@ export function createRuntimeExecutionRole(
               'dynamodb:Query', 'dynamodb:BatchWriteItem'],
     resources: [memorySpacesTableArn, `${memorySpacesTableArn}/index/*`],
   }));
+  // A project harness's `memory_read` counts each file it returns in the
+  // file's `STATS#{slug}` row (Shared Projects 2.6b): one UpdateItem that adds
+  // to a counter, so no read-modify-write. `dynamodb:Attributes` pins it to
+  // the stats row's own attributes (with the key), so it can't rewrite a
+  // manifest or a file version; keep the list in step with
+  // `MemorySpaceRepository.record_retrieval`. Its own managed policy rather than
+  // another statement on the role: the role's statements already spill into
+  // CDK overflow policies, packed by a size CDK estimates before ARNs resolve,
+  // and on dev OverflowPolicy1 resolves to 5,473 of IAM's 6,144 characters.
+  // The same packing rolled back the first 2.6a deploy on app-api's role.
+  new iam.ManagedPolicy(scope, 'RuntimeMemoryStatsPolicy', {
+    roles: [role],
+    description: 'AgentCore Runtime: count memory file reads in STATS# rows (Shared Projects 2.6b)',
+    statements: [
+      new iam.PolicyStatement({
+        sid: 'MemorySpacesStatsUpdate',
+        effect: iam.Effect.ALLOW,
+        actions: ['dynamodb:UpdateItem'],
+        resources: [memorySpacesTableArn],
+        conditions: {
+          'ForAllValues:StringEquals': {
+            'dynamodb:Attributes': [...MEMORY_STATS_ATTRIBUTES],
+          },
+          StringEqualsIfExists: { 'dynamodb:ReturnValues': 'NONE' },
+        },
+      }),
+    ],
+  });
 
   // ── Shared Projects (DynamoDB) ──
   // The invocation path resolves membership (META + MEMBER#), back-fills a

@@ -1425,6 +1425,10 @@ class MemorySpaceService:
             except Exception:
                 logger.warning("Could not archive deleted file '%s' in %s", slug, space_id, exc_info=True)
         versions = self.repository.delete_file_versions(space_id, slug)
+        try:
+            self.repository.delete_retrieval_stats(space_id, slug)
+        except Exception:
+            logger.warning("Could not clear the read counts of deleted file '%s' in %s", slug, space_id, exc_info=True)
         candidates = {prev.s3_key for prev in removed}
         candidates.update(content_key(space_id, v.content_hash) for v in versions)
         still_used = self._referenced_keys(space_id, index=final_index)
