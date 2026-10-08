@@ -79,7 +79,8 @@ Under V2, anything computed at import or lifespan time is computed **once per sn
    - On a restored V2 instance the stamp is the **snapshot time**. Until the first request enters the middleware, `/ping` reports `Healthy` with a `time_of_last_update` that can be far more than 900 s old. That makes the new microVM immediately eligible for reaping.
    - Whether that bites depends on whether the platform polls `/ping` (and acts on it) before routing the first invocation. That is unknown.
    - Symptom to look for: 424s or doubled cold starts on first turns.
-   - Candidate fix: detect a wall-clock discontinuity (the gap between the last-seen poll and `now` is far larger than the ~2 s poll interval) and re-stamp. Or origin the idle clock at the first `/ping` rather than at import. Both keep V1 behaviour unchanged.
+   - **Fixed (plan step 3):** the first `/ping` after more than `RESTORE_GAP_SECONDS` (60 s) without one restarts the idle clock, at most once per process, and logs `No /ping for Ns; treating this as a snapshot restore`. The gap is measured from the last poll, or from import if there was none, so it covers a snapshot taken before or after polling began. "Origin at the first `/ping`" alone was rejected: a snapshot taken after polling starts carries that stamp too. The once-only limit is what keeps it safe on V1: if the platform's polling were ever irregular, an unbounded rule would re-arm the immortal-microVM bug, while this costs at most one extra idle period.
+   - In the dev A/B, that log line on a fresh session is the evidence that V2 restores happen after polling, and how stale the snapshot was.
 2. **Warm-up (`apis/inference_api/warmup.py`) could become free, or wasted.**
    - Today it runs on a daemon thread so `/ping` answers immediately. It covers the 3.6 s residual first-turn cost from `load-test-assessment-2026-09.md` §1.
    - If V2 snapshots after `/ping` goes healthy and **before** warm-up finishes, the work isn't in the snapshot, and each restore redoes the rest.
@@ -127,7 +128,7 @@ The billing basis inverts, so conclusions from V1 don't carry over:
    - Synth test for both values (`infrastructure/test/runtime-platform-version.test.ts`), and `platform.yml` forwards the variable.
    - This is infra-only, so there is no backend `feature_flags.py` or SPA flag.
    - `aws-cdk-lib` 2.272.0 types `platformVersion`; swap the override for the typed property when CDK is next bumped.
-3. **Runtime-health hardening (B2.1).** Make the idle-clock origin restore-safe, with a unit test that simulates a wall-clock jump. Also harmless on V1.
+3. **Runtime-health hardening (B2.1). Done.** Restore-safe idle clock (see B2.1), with tests for a restore before and after the first poll, the once-only limit, and a restored microVM still being reaped. Harmless on V1.
 4. **Dev A/B.** Set `CDK_AGENTCORE_RUNTIME_PLATFORM_VERSION=V2` in the `development` environment.
    - Verify with `get-agent-runtime` after `platform.yml`, **and again after the next `backend.yml`**. The second check is B1's real test.
    - Watch for 424s on first turns (B2.1).
