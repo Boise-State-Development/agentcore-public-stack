@@ -80,6 +80,13 @@ async def lifespan(app: FastAPI):
     # Startup
     _validate_skip_auth_or_raise()
     logger.info("=== AgentCore Public Stack API Starting ===")
+    # app-api keeps its explicit resource-name variables (ECS has no payload
+    # limit). This only compares them with what PROJECT_PREFIX derives and
+    # warns on a difference, so the Runtime's derivation (spec §7) is checked
+    # against every real deployment before the Runtime stops receiving them.
+    from apis.shared.config import audit_derived_environment, log_environment_report
+
+    log_environment_report(audit_derived_environment(), logger, service="app-api")
     logger.info("Agent execution engine initialized")
 
     yield  # Application is running

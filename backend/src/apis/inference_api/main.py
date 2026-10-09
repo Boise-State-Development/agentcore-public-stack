@@ -26,6 +26,16 @@ if env_path.exists():
 else:
     _startup_logger.warning(".env file not found at %s", env_path)
 
+# Derive the resource names the Runtime does not have to send
+# (docs/specs/agentcore-runtime-v2.md §7). This MUST run before any other
+# `apis.*` import: several modules read DYNAMODB_*/S3_* names at import time
+# (bedrock_embeddings, module-level repositories), and a name set after that
+# would be too late. It writes only variables that are absent, so the explicit
+# values a deployment still sends win; the report is logged once logging is up.
+from apis.shared.config import hydrate_derived_environment, log_environment_report
+
+_derived_environment_report = hydrate_derived_environment()
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
@@ -40,6 +50,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+log_environment_report(_derived_environment_report, logger, service="inference-api")
 
 # Lifespan event handler (replaces on_event)
 @asynccontextmanager
