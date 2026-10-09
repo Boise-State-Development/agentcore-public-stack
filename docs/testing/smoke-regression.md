@@ -203,7 +203,7 @@ confirm the conversation restores with the same content):
 | Ask-user-question | prompt as in L1 | picker renders with Other + Skip; answering resumes; Skip resumes |
 | Tool approval | call the approval-gated tool | Approve banner; one click resumes |
 | Stop | send a long prompt, click Stop mid-answer | partial text stays; interrupted chip; the next send is accepted, no "already responding" |
-| Steer | send a multi-tool prompt, type a follow-up and Enter while it streams | either the follow-up is injected at a tool boundary or sent as the next turn; never lost |
+| Steer | send a multi-tool prompt long enough to land in (e.g. three tool calls, then a 400-word answer), type a plain-text follow-up and press Enter **while the Stop button is still showing** | the composer shows the queued chip; either the follow-up is injected at a tool boundary ("Sent while responding") or sent as the next turn; never lost. An Enter after the turn ends is an ordinary send and proves nothing about steering (see the spec's "When the SPA does not steer"). A send refused before streaming shows **Not sent** with Retry on the bubble, never a silent bubble |
 | Continue after `max_tokens` | force a long answer with a low max-tokens model setting | the continuation extends, does not restart |
 | Quota exceeded | as a user on an exhausted test tier | conversational refusal, persisted, no spinner |
 | Duplicate send | double-submit quickly | the SPA queues rather than erroring; a raw second POST 409s |

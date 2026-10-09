@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { UserMessageComponent } from './user-message.component';
 import { LocalSettingsService } from '../../../../services/local-settings.service';
 import type { Message } from '../../../services/models/message.model';
+import { FailedSendService } from '../../../services/chat/failed-send.service';
 
 /**
  * The "Show more" affordance on a user bubble is driven by ONE measurement of
@@ -119,5 +120,63 @@ describe('UserMessageComponent — overflow measurement', () => {
   it('disconnects the observer on destroy', () => {
     fixture.destroy();
     expect(observed).toBeNull();
+  });
+});
+
+describe('UserMessageComponent — a message that was not sent', () => {
+  // Dev, 2026-10-09: a follow-up refused before anything streamed left a
+  // bubble that looked delivered, with no reply under it and no way to resend.
+  let failedSends: { canRetry: ReturnType<typeof vi.fn>; retry: ReturnType<typeof vi.fn> };
+
+  const notSent = (): Message => ({
+    id: 'msg-s1-6',
+    role: 'user',
+    content: [{ type: 'text', text: 'and the third one?' }],
+    sendFailure: { reason: 'Your sign-in was being renewed when this was sent.' },
+  });
+
+  async function render(message: Message, canRetry = true): Promise<HTMLElement> {
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    failedSends = { canRetry: vi.fn().mockReturnValue(canRetry), retry: vi.fn() };
+    await TestBed.configureTestingModule({
+      imports: [UserMessageComponent],
+      providers: [
+        { provide: LocalSettingsService, useValue: { showDebugOutput: signal(false) } },
+        { provide: FailedSendService, useValue: failedSends },
+      ],
+    })
+      .overrideComponent(UserMessageComponent, { set: { imports: [], schemas: [NO_ERRORS_SCHEMA] } })
+      .compileComponents();
+    const fixture = TestBed.createComponent(UserMessageComponent);
+    fixture.componentRef.setInput('message', message);
+    fixture.detectChanges();
+    return fixture.nativeElement;
+  }
+
+  it('says so on the message, with the reason, and offers a retry', async () => {
+    const el = await render(notSent());
+
+    const alert = el.querySelector('[role="alert"]');
+    expect(alert?.textContent).toContain('Not sent.');
+    expect(alert?.textContent).toContain('Your sign-in was being renewed when this was sent.');
+
+    const retry = alert?.querySelector('button') as HTMLButtonElement;
+    expect(retry.textContent?.trim()).toBe('Retry');
+    retry.click();
+    expect(failedSends.retry).toHaveBeenCalledWith('msg-s1-6');
+  });
+
+  it('hides the retry while a resend could not start a turn', async () => {
+    const el = await render(notSent(), false);
+
+    expect(el.querySelector('[role="alert"]')?.textContent).toContain('Not sent.');
+    expect(el.querySelector('[role="alert"] button')).toBeNull();
+  });
+
+  it('a delivered message carries no notice', async () => {
+    const delivered = { ...notSent(), sendFailure: undefined };
+    const el = await render(delivered);
+
+    expect(el.querySelector('[role="alert"]')).toBeNull();
   });
 });

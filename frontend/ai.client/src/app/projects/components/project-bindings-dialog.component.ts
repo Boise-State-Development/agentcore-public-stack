@@ -3,6 +3,8 @@ import { DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
 import { firstValueFrom } from 'rxjs';
 import { BindableItem } from '../../agents/models/agent.model';
 import { DialogShellComponent } from '../../components/dialog/dialog-shell.component';
+import { ToolSelectorComponent } from '../../components/tool-selector/tool-selector.component';
+import { ToolSelectorItem } from '../../components/tool-selector/tool-selector.model';
 import { ToastService } from '../../services/toast/toast.service';
 import { BindingRef, BindingsResponse } from '../models/project.model';
 import { ProjectApiService } from '../services/project-api.service';
@@ -22,22 +24,26 @@ export interface ProjectBindingsDialogData {
 /** What was saved, per kind; a kind that wasn't saved is absent. `undefined` when nothing was. */
 export type ProjectBindingsDialogResult = Partial<Record<BindingKind, BindingsResponse>> | undefined;
 
-interface Choice {
-  ref: string;
-  label: string;
-  description: string;
-  /** Bound by someone else, and not one the caller can use. Kept on save. */
-  foreign: boolean;
-}
-
-const KIND_COPY: Record<BindingKind, { heading: string; blurb: string }> = {
-  tools: { heading: 'Tools', blurb: 'What the assistant can use. Members without access to a tool get the assistant without it.' },
-  skills: { heading: 'Skills', blurb: 'Playbooks the assistant can follow. Skills run their latest version.' },
+const KIND_COPY: Record<BindingKind, { heading: string; blurb: string; noun: string; nounPlural: string }> = {
+  tools: {
+    heading: 'Tools',
+    blurb: 'What the assistant can use. Members without access to a tool get the assistant without it.',
+    noun: 'tool',
+    nounPlural: 'tools',
+  },
+  skills: {
+    heading: 'Skills',
+    blurb: 'Playbooks the assistant can follow. Skills run their latest version.',
+    noun: 'skill',
+    nounPlural: 'skills',
+  },
 };
 
-function sameRefs(a: Iterable<string>, b: string[]): boolean {
-  const list = [...a];
-  return list.length === b.length && list.every(ref => b.includes(ref));
+/** Shown on a row someone else bound, which the caller can't use and can't remove. */
+const FOREIGN_NOTE = 'Added by someone else. You don’t have access to it, but it stays.';
+
+function sameRefs(a: ReadonlySet<string>, b: string[]): boolean {
+  return a.size === b.length && b.every(ref => a.has(ref));
 }
 
 /**
@@ -50,7 +56,7 @@ function sameRefs(a: Iterable<string>, b: string[]): boolean {
 @Component({
   selector: 'app-project-bindings-dialog',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DialogShellComponent],
+  imports: [DialogShellComponent, ToolSelectorComponent],
   template: `
     <app-dialog-shell
       title="Tools & skills"
@@ -62,36 +68,20 @@ function sameRefs(a: Iterable<string>, b: string[]): boolean {
         @for (kind of kinds; track kind) {
           <section [attr.aria-labelledby]="'bindings-' + kind">
             <h3 [id]="'bindings-' + kind" class="text-sm/6 font-semibold text-gray-900 dark:text-white">{{ copy[kind].heading }}</h3>
-            <p class="mt-0.5 text-xs/5 text-gray-600 dark:text-gray-400">{{ copy[kind].blurb }}</p>
-            @let choices = kind === 'tools' ? tools : skills;
-            @let selected = kind === 'tools' ? selectedTools() : selectedSkills();
-            @if (choices.length === 0) {
-              <p class="mt-3 text-sm/6 text-gray-600 dark:text-gray-400">None are available to you.</p>
-            } @else {
-              <ul class="mt-3 divide-y divide-gray-200 overflow-hidden rounded-2xl border border-gray-200 dark:divide-gray-700 dark:border-gray-700">
-                @for (c of choices; track c.ref) {
-                  <li>
-                    <label class="flex cursor-pointer items-start gap-3 px-4 py-2.5 has-disabled:cursor-default">
-                      <input
-                        type="checkbox"
-                        [checked]="selected.has(c.ref)"
-                        [disabled]="!data.canEdit || c.foreign"
-                        (change)="toggle(kind, c.ref)"
-                        class="mt-1 size-4 rounded border-gray-300 text-primary-accessible focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700"
-                      />
-                      <span class="min-w-0">
-                        <span class="block text-sm/6 font-medium text-gray-900 dark:text-white">{{ c.label }}</span>
-                        @if (c.foreign) {
-                          <span class="block text-xs/5 text-gray-600 dark:text-gray-400">Added by someone else. You don’t have access to it, but it stays.</span>
-                        } @else if (c.description) {
-                          <span class="block text-xs/5 text-gray-600 dark:text-gray-400">{{ c.description }}</span>
-                        }
-                      </span>
-                    </label>
-                  </li>
-                }
-              </ul>
-            }
+            <p [id]="'bindings-' + kind + '-blurb'" class="mt-0.5 text-xs/5 text-gray-600 dark:text-gray-400">{{ copy[kind].blurb }}</p>
+            <app-tool-selector
+              class="mt-3"
+              [items]="kind === 'tools' ? tools : skills"
+              [selected]="kind === 'tools' ? selectedTools() : selectedSkills()"
+              (selectedChange)="onSelectionChange(kind, $event)"
+              [labelledBy]="'bindings-' + kind"
+              [describedBy]="'bindings-' + kind + '-blurb'"
+              [noun]="copy[kind].noun"
+              [nounPlural]="copy[kind].nounPlural"
+              [disabled]="!data.canEdit"
+              [emptyText]="'None are available to you.'"
+              maxHeight="sm"
+            />
           </section>
         }
       </div>
@@ -134,8 +124,8 @@ export class ProjectBindingsDialogComponent {
   protected readonly skills = choices(this.data.bound.skills, this.data.palette.skills);
   private readonly savedTools = signal(this.data.bound.tools);
   private readonly savedSkills = signal(this.data.bound.skills);
-  protected readonly selectedTools = signal(new Set(this.data.bound.tools));
-  protected readonly selectedSkills = signal(new Set(this.data.bound.skills));
+  protected readonly selectedTools = signal<ReadonlySet<string>>(new Set(this.data.bound.tools));
+  protected readonly selectedSkills = signal<ReadonlySet<string>>(new Set(this.data.bound.skills));
   protected readonly saving = signal(false);
   protected readonly error = signal<string | null>(null);
   /** Kinds already written by a Save that then failed on the other kind. */
@@ -145,14 +135,8 @@ export class ProjectBindingsDialogComponent {
   protected readonly skillsDirty = computed(() => !sameRefs(this.selectedSkills(), this.savedSkills()));
   protected readonly dirty = computed(() => this.toolsDirty() || this.skillsDirty());
 
-  protected toggle(kind: BindingKind, ref: string): void {
-    const target = kind === 'tools' ? this.selectedTools : this.selectedSkills;
-    target.update(current => {
-      const next = new Set(current);
-      if (next.has(ref)) next.delete(ref);
-      else next.add(ref);
-      return next;
-    });
+  protected onSelectionChange(kind: BindingKind, selected: ReadonlySet<string>): void {
+    (kind === 'tools' ? this.selectedTools : this.selectedSkills).set(selected);
   }
 
   protected async save(): Promise<void> {
@@ -167,7 +151,7 @@ export class ProjectBindingsDialogComponent {
         const selected = kind === 'tools' ? this.selectedTools() : this.selectedSkills();
         const choices = kind === 'tools' ? this.tools : this.skills;
         // Keep the palette's order so an unchanged selection is an unchanged list.
-        const bindings: BindingRef[] = choices.filter(c => selected.has(c.ref)).map(c => ({ ref: c.ref }));
+        const bindings: BindingRef[] = choices.filter(c => selected.has(c.id)).map(c => ({ ref: c.id }));
         result[kind] = await firstValueFrom(this.api.saveBindings(this.data.projectId, kind, bindings));
       }
       this.toast.success('Tools & skills saved');
@@ -188,10 +172,21 @@ export class ProjectBindingsDialogComponent {
   }
 }
 
-function choices(bound: string[], palette: BindableItem[]): Choice[] {
+/**
+ * The palette in its own order (a save keeps that order, so an unchanged selection is
+ * an unchanged list), then anything bound that the caller can't use, locked as it is.
+ */
+function choices(bound: string[], palette: BindableItem[]): ToolSelectorItem[] {
   const known = new Set(palette.map(p => p.ref));
   return [
-    ...palette.map(p => ({ ref: p.ref, label: p.label, description: p.description, foreign: false })),
-    ...bound.filter(ref => !known.has(ref)).map(ref => ({ ref, label: ref, description: '', foreign: true })),
+    ...palette.map(p => ({ id: p.ref, name: p.label, description: p.description, group: category(p) })),
+    ...bound
+      .filter(ref => !known.has(ref))
+      .map(ref => ({ id: ref, name: ref, note: FOREIGN_NOTE, noteTone: 'muted' as const, locked: true })),
   ];
+}
+
+function category(item: BindableItem): string | undefined {
+  const raw = item.meta?.['category'];
+  return typeof raw === 'string' && raw.trim() ? raw : undefined;
 }

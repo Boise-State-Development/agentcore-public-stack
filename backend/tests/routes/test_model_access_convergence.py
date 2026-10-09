@@ -331,3 +331,77 @@ class TestAgentModelOverride:
     async def test_retired_disabled_row_redirects(self, monkeypatch):
         svc = _role_service(["granted-model"])
         assert await self._resolve_override(monkeypatch, "old-disabled", svc) == "granted-model"
+
+
+class TestRefusedTurnWritesNothing:
+    """A turn refused on model access leaves no trace (dev, 2026-10-09).
+
+    The check used to run after `_prepare_session_state` and the title task, so a
+    refused first turn still pre-created a sidebar row and spent a Nova Micro call
+    titling a conversation that never ran.
+    """
+
+    def _post(self, model_id: str, svc: AppRoleService):
+        from apis.inference_api.chat.routes import router
+
+        app = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[get_current_user_trusted] = _user
+        # A brand-new session: the pre-create would report "created", which is
+        # what spawns the title task.
+        ensure = AsyncMock(return_value=True)
+        title = AsyncMock(return_value="A title")
+        attachments = AsyncMock(side_effect=AssertionError("refused turn must not resolve attachments"))
+        with patch("apis.inference_api.chat.routes.resolve_effective_model", _resolve), \
+             patch("apis.inference_api.chat.routes.get_app_role_service", return_value=svc), \
+             patch("apis.inference_api.chat.routes.is_quota_enforcement_enabled", return_value=False), \
+             patch("apis.inference_api.chat.routes.ensure_session_metadata_exists", ensure), \
+             patch("apis.inference_api.chat.routes.generate_conversation_title", title), \
+             patch("apis.inference_api.chat.routes._resolve_turn_attachments", attachments), \
+             patch(LOOKUP, AsyncMock(side_effect=AssertionError("turn path must reuse the resolved row"))):
+            resp = TestClient(app, raise_server_exceptions=False).post(
+                "/invocations",
+                json={"session_id": "s-new", "message": "hi", "model_id": model_id, "provider": "bedrock"},
+            )
+        return resp, ensure, title, attachments
+
+    def test_disabled_model_on_a_new_session(self):
+        resp, ensure, title, attachments = self._post("disabled-model", _role_service(["*"]))
+        assert resp.status_code == 200
+        assert "**disabled-model** has been turned off by an administrator" in resp.text
+        ensure.assert_not_awaited()
+        title.assert_not_called()
+        attachments.assert_not_awaited()
+
+    def test_ungranted_model_on_a_new_session(self):
+        resp, ensure, title, _ = self._post("ungranted-model", _role_service([]))
+        assert resp.status_code == 200
+        assert "**ungranted-model** isn't available to your account" in resp.text
+        ensure.assert_not_awaited()
+        title.assert_not_called()
+
+    def test_retired_without_successor_is_still_a_conversational_denial(self):
+        """Not moved: the denial persists a refusal turn, which needs the row."""
+        catalog = RETIREMENT_CATALOG + [_row("gone", enabled=False, status="retired")]
+
+        async def resolve(model_id):
+            return resolve_from_catalog(model_id, catalog) if model_id else None
+
+        from apis.inference_api.chat.routes import router
+
+        app = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[get_current_user_trusted] = _user
+        svc = _role_service(["*"])
+        answers = _spy(svc)
+        with patch("apis.inference_api.chat.routes.resolve_effective_model", resolve), \
+             patch("apis.inference_api.chat.routes.get_app_role_service", return_value=svc), \
+             patch("apis.inference_api.chat.routes.is_quota_enforcement_enabled", return_value=False), \
+             patch("apis.inference_api.chat.routes.generate_conversation_title", AsyncMock(return_value="t")), \
+             patch("agents.main_agent.session.persistence.persist_synthetic_messages"):
+            resp = TestClient(app, raise_server_exceptions=False).post(
+                "/invocations",
+                json={"session_id": "s-1", "message": "hi", "model_id": "gone", "provider": "bedrock"},
+            )
+        assert resp.status_code == 200
+        assert answers == []

@@ -131,7 +131,7 @@ describe('ScheduleFormPage', () => {
         hourLocal: 8,
         timezone: 'UTC',
       });
-      component.toggleTool('class_search');
+      component.onToolSelectionChange(new Set(['class_search']));
 
       await component.onSubmit();
 
@@ -157,7 +157,7 @@ describe('ScheduleFormPage', () => {
       });
       // Pick some tools first, then target an agent — the agent's bound tools
       // govern the run, so the snapshot must not be sent.
-      component.toggleTool('class_search');
+      component.onToolSelectionChange(new Set(['class_search']));
       component.form.controls.assistantId.setValue('ast-9');
 
       expect(component.agentSelected()).toBe(true);
@@ -170,7 +170,7 @@ describe('ScheduleFormPage', () => {
 
     it('run now targets the selected agent and omits the tool snapshot', () => {
       component.form.patchValue({ label: 'Test', promptText: 'Do the thing' });
-      component.toggleTool('class_search');
+      component.onToolSelectionChange(new Set(['class_search']));
       component.form.controls.assistantId.setValue('ast-9');
 
       component.runNow();
@@ -247,7 +247,7 @@ describe('ScheduleFormPage', () => {
       const router = TestBed.inject(Router);
       const navigateSpy = vi.spyOn(router, 'navigate').mockResolvedValue(true);
       component.form.patchValue({ label: 'Test', promptText: 'Do the thing' });
-      component.toggleTool('class_search');
+      component.onToolSelectionChange(new Set(['class_search']));
 
       component.runNow();
 

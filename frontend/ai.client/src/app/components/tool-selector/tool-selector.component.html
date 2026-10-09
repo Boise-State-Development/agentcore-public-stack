@@ -1,0 +1,207 @@
+<div class="flex flex-col gap-3">
+  @if (searchable() && items().length) {
+    <div class="relative">
+      <ng-icon name="heroMagnifyingGlass" class="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-gray-400 dark:text-gray-500" aria-hidden="true" />
+      <label [for]="searchId" class="sr-only">Search {{ nounPlural() }}</label>
+      <input
+        #search
+        type="search"
+        [id]="searchId"
+        [value]="query()"
+        (input)="onSearch($event)"
+        (keydown)="onSearchKeydown($event)"
+        [placeholder]="'Search ' + nounPlural() + '…'"
+        autocomplete="off"
+        class="block w-full rounded-full border border-gray-300 bg-white py-2 pr-10 pl-10 text-sm/6 text-gray-900 placeholder:text-gray-500 focus:border-primary-500 focus:ring-2 focus:ring-primary-500 focus:outline-none dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-400 [&::-webkit-search-cancel-button]:appearance-none"
+      />
+      @if (query()) {
+        <button
+          type="button"
+          (click)="clearSearch()"
+          aria-label="Clear search"
+          class="absolute top-1/2 right-2 flex size-7 -translate-y-1/2 items-center justify-center rounded-full text-gray-500 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+        >
+          <ng-icon name="heroXMark" class="size-4" aria-hidden="true" />
+        </button>
+      }
+    </div>
+  }
+
+  @if (showGroupChips()) {
+    <div role="group" aria-label="Filter by category" class="flex flex-wrap gap-2">
+      <button type="button" [attr.aria-pressed]="activeGroup() === null" (click)="setGroup(null)" class="rounded-full border border-gray-300 bg-white px-3 py-1 text-xs/5 font-medium text-gray-700 not-aria-pressed:hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 aria-pressed:border-gray-900 aria-pressed:bg-gray-900 aria-pressed:text-white dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:not-aria-pressed:hover:bg-gray-700 dark:aria-pressed:border-white dark:aria-pressed:bg-white dark:aria-pressed:text-gray-900">All</button>
+      @for (name of groupNames(); track name) {
+        <button type="button" [attr.aria-pressed]="activeGroup() === name" (click)="setGroup(name)" class="rounded-full border border-gray-300 bg-white px-3 py-1 text-xs/5 font-medium text-gray-700 not-aria-pressed:hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 aria-pressed:border-gray-900 aria-pressed:bg-gray-900 aria-pressed:text-white dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:not-aria-pressed:hover:bg-gray-700 dark:aria-pressed:border-white dark:aria-pressed:bg-white dark:aria-pressed:text-gray-900 capitalize">{{ name }}</button>
+      }
+    </div>
+  }
+
+  @if (helperText()) {
+    <p [id]="helperId" class="text-xs/5 text-gray-600 dark:text-gray-400">{{ helperText() }}</p>
+  }
+  <ng-content />
+
+  <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+    <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+      <p class="text-xs/5 text-gray-600 tabular-nums dark:text-gray-400">
+        {{ selectedCount() }} of {{ items().length }} selected
+      </p>
+      @if (filterable() && items().length) {
+        <button type="button" [attr.aria-pressed]="selectedOnly()" (click)="toggleSelectedOnly()" class="rounded-full border border-gray-300 bg-white px-3 py-1 text-xs/5 font-medium text-gray-700 not-aria-pressed:hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 aria-pressed:border-gray-900 aria-pressed:bg-gray-900 aria-pressed:text-white dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:not-aria-pressed:hover:bg-gray-700 dark:aria-pressed:border-white dark:aria-pressed:bg-white dark:aria-pressed:text-gray-900">Selected only</button>
+      }
+    </div>
+    @if (bulkActions() && !disabled() && items().length) {
+      <div class="flex gap-1">
+        <button
+          type="button"
+          (click)="selectAllShown()"
+          [disabled]="!addableCount()"
+          [attr.aria-label]="'Select all ' + addableCount() + ' shown ' + (addableCount() === 1 ? noun() : nounPlural())"
+          class="rounded-2xl px-2.5 py-1 text-xs/5 font-medium text-primary-accessible hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:text-gray-400 disabled:hover:bg-transparent dark:text-primary-50 dark:hover:bg-gray-700 dark:disabled:text-gray-500"
+        >
+          Select all
+        </button>
+        <button
+          type="button"
+          (click)="clearShown()"
+          [disabled]="!clearableCount()"
+          [attr.aria-label]="'Clear ' + clearableCount() + ' shown ' + (clearableCount() === 1 ? noun() : nounPlural())"
+          class="rounded-2xl px-2.5 py-1 text-xs/5 font-medium text-primary-accessible hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:text-gray-400 disabled:hover:bg-transparent dark:text-primary-50 dark:hover:bg-gray-700 dark:disabled:text-gray-500"
+        >
+          Clear
+        </button>
+      </div>
+    }
+  </div>
+
+  <!-- Polite, and empty until a filter is applied: the result count is spoken as
+       the user types, without the list announcing itself on load. -->
+  <p [id]="statusId" role="status" aria-live="polite" class="sr-only">{{ statusMessage() }}</p>
+
+  <!-- The labelled group is also the scroller. Read-only rows have no focusable
+       control, so the region takes a tab stop of its own to stay scrollable by keyboard. -->
+  <div
+    role="group"
+    [attr.aria-labelledby]="labelledBy()"
+    [attr.aria-label]="labelledBy() ? null : label()"
+    [attr.aria-describedby]="listDescribedBy()"
+    [attr.tabindex]="disabled() ? 0 : null"
+    class="overflow-y-auto overscroll-contain rounded-2xl border border-gray-200 bg-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-700 dark:bg-gray-800"
+    [class]="heightClass()"
+  >
+    @if (!visibleRows().length) {
+      <p class="px-4 py-6 text-center text-sm/6 text-gray-600 dark:text-gray-400">{{ emptyMessage() }}</p>
+    } @else {
+      @for (group of visibleGroups(); track group.name; let gi = $index) {
+        <div [attr.role]="group.name ? 'group' : null" [attr.aria-labelledby]="group.name ? groupId(gi) : null">
+          @if (group.name) {
+            <p [id]="groupId(gi)" class="sticky top-0 z-10 border-b border-gray-200 bg-gray-50 px-4 py-1.5 text-xs/5 font-semibold tracking-wide text-gray-600 uppercase dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300" [class.border-t]="gi > 0">{{ group.name }}</p>
+          }
+          <ul class="divide-y divide-gray-200 dark:divide-gray-700">
+            @for (item of group.rows; track item.id) {
+              <li>
+                <div class="flex items-start gap-1 pr-2 hover:bg-gray-50 dark:hover:bg-white/5">
+                  <label class="flex min-w-0 flex-1 items-start gap-3 py-2.5 pl-4" [class.cursor-pointer]="canToggle(item)">
+                    <input
+                      type="checkbox"
+                      [checked]="isSelected(item)"
+                      [disabled]="!canToggle(item)"
+                      (change)="toggle(item, $event)"
+                      [attr.aria-labelledby]="rowId(item, 'name')"
+                      [attr.aria-describedby]="rowDescribedBy(item)"
+                      class="mt-1 size-4 shrink-0 cursor-pointer rounded accent-primary-accessible focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed dark:accent-primary-500"
+                    />
+                    <span class="min-w-0 flex-1">
+                      <span class="flex items-center gap-1.5">
+                        <span [id]="rowId(item, 'name')" class="min-w-0 truncate text-sm/6 font-medium text-gray-900 dark:text-white">{{ item.name }}</span>
+                        @if (item.badge) {
+                          <span class="shrink-0 rounded-sm bg-state-warning-50 px-1.5 font-mono text-[10px]/5 font-medium text-state-warning-700 dark:bg-state-warning-900/30 dark:text-state-warning-300">{{ item.badge }}</span>
+                        }
+                      </span>
+                      @if (item.note) {
+                        <span
+                          [id]="rowId(item, 'note')"
+                          class="mt-0.5 block text-xs/5"
+                          [class]="item.noteTone === 'muted' ? 'text-gray-600 dark:text-gray-400' : 'text-state-warning-700 dark:text-state-warning-300'"
+                        >{{ item.note }}</span>
+                      }
+                      @if (item.description) {
+                        <span [id]="rowId(item, 'desc')" class="mt-0.5 line-clamp-2 block text-xs/5 text-gray-600 dark:text-gray-400">{{ item.description }}</span>
+                      }
+                      @if (canNarrow(item) && !isWhole(item)) {
+                        <span [id]="rowId(item, 'count')" class="mt-1 block text-xs/5 font-medium text-primary-accessible tabular-nums dark:text-primary-50">{{ childCount(item) }} of {{ item.children!.length }} tools</span>
+                      }
+                    </span>
+                  </label>
+                  @if (canNarrow(item)) {
+                    <button
+                      type="button"
+                      (click)="toggleExpanded(item)"
+                      [attr.aria-expanded]="isExpanded(item)"
+                      [attr.aria-controls]="rowId(item, 'children')"
+                      [attr.aria-label]="'Choose individual ' + item.name + ' tools'"
+                      class="mt-1.5 flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-500 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+                    >
+                      <ng-icon name="heroChevronDown" class="size-4 transition-transform" [class.rotate-180]="isExpanded(item)" aria-hidden="true" />
+                    </button>
+                  }
+                </div>
+
+                @if (canNarrow(item) && isExpanded(item)) {
+                  <div [id]="rowId(item, 'children')" class="border-t border-gray-100 bg-gray-50 py-2 pr-4 pl-11 dark:border-gray-700 dark:bg-gray-900/40">
+                    <p class="text-xs/5 text-gray-600 dark:text-gray-400">
+                      @if (isWhole(item)) {
+                        All {{ item.children!.length }} tools. Turn off the ones you don't need; only the tools left on are sent to the model.
+                      } @else {
+                        {{ childCount(item) }} of {{ item.children!.length }} tools. Only the tools left on are sent to the model.
+                      }
+                    </p>
+                    <ul class="mt-1 flex flex-col">
+                      @for (child of item.children!; track child.name; let ci = $index) {
+                        <li class="py-1.5">
+                          <label class="flex items-start gap-3" [class.cursor-pointer]="!disabled() && !item.locked">
+                            <input
+                              type="checkbox"
+                              [checked]="isChildOn(item, child.name)"
+                              [disabled]="disabled() || item.locked"
+                              (change)="toggleChildTool(item, child.name)"
+                              [attr.aria-labelledby]="childId(item, ci, 'name')"
+                              [attr.aria-describedby]="child.summary ? childId(item, ci, 'summary') : null"
+                              class="mt-0.5 size-4 shrink-0 cursor-pointer rounded accent-primary-accessible focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed dark:accent-primary-500"
+                            />
+                            <span class="min-w-0 flex-1">
+                              <span [id]="childId(item, ci, 'name')" class="block font-mono text-xs/5 font-medium break-all text-gray-900 dark:text-white">{{ child.name }}</span>
+                              @if (child.summary) {
+                                <span [id]="childId(item, ci, 'summary')" class="mt-0.5 block text-xs/5 text-gray-600 dark:text-gray-400">{{ child.summary }}</span>
+                              }
+                            </span>
+                          </label>
+                          @if (child.detail) {
+                            <div class="pl-7">
+                              <button
+                                type="button"
+                                (click)="toggleDetail(item, child.name)"
+                                [attr.aria-expanded]="isDetailOpen(item, child.name)"
+                                [attr.aria-controls]="childId(item, ci, 'detail')"
+                                class="mt-1 text-xs/5 font-medium text-primary-accessible hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-50"
+                              >
+                                {{ isDetailOpen(item, child.name) ? 'Hide details' : 'Show details' }}
+                              </button>
+                              @if (isDetailOpen(item, child.name)) {
+                                <pre [id]="childId(item, ci, 'detail')" class="mt-1.5 overflow-x-auto rounded-lg bg-white p-2 font-mono text-[11px]/5 whitespace-pre text-gray-700 dark:bg-gray-800 dark:text-gray-300">{{ child.detail }}</pre>
+                              }
+                            </div>
+                          }
+                        </li>
+                      }
+                    </ul>
+                  </div>
+                }
+              </li>
+            }
+          </ul>
+        </div>
+      }
+    }
+  </div>
+</div>

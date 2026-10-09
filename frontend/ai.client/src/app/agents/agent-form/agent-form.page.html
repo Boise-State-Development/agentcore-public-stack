@@ -407,7 +407,7 @@
             class="flex w-full items-center gap-2 rounded-lg text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
           >
             <ng-icon name="heroWrenchScrewdriver" class="size-5 shrink-0 text-gray-400 dark:text-gray-500" aria-hidden="true" />
-            <span class="text-sm/6 font-semibold text-gray-900 dark:text-white">Tools</span>
+            <span id="agent-tools-heading" class="text-sm/6 font-semibold text-gray-900 dark:text-white">Tools</span>
             @if (selectedToolCount()) {
               <span class="rounded-full bg-gray-100 px-2 py-0.5 text-xs/5 font-medium tabular-nums text-gray-600 dark:bg-white/10 dark:text-gray-300">{{ selectedToolCount() }}</span>
             }
@@ -445,165 +445,17 @@
         }
 
         @if (toolsOpen()) {
-          <div id="agent-tools-panel">
-            <!-- Search is what actually scales past thirty, not the scroll box. Everything
-                 is already loaded, so filtering is instant. Same idiom as customize/tools. -->
-            <div class="relative mt-4">
-              <ng-icon name="heroMagnifyingGlass" class="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-gray-400 dark:text-gray-500" aria-hidden="true" />
-              <label for="agent-tool-search" class="sr-only">Search tools</label>
-              <input
-                type="search"
-                id="agent-tool-search"
-                [value]="toolQuery()"
-                (input)="onToolSearch($event)"
-                placeholder="Search tools…"
-                class="block w-full rounded-full border border-gray-300 bg-white py-2 pr-4 pl-10 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:ring-2 focus:ring-primary-500 focus:outline-none dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
-              />
-            </div>
-
-            @if (!toolGroups().length) {
-              <p class="mt-4 rounded-xl border border-dashed border-gray-300 px-4 py-6 text-center text-sm/6 text-gray-500 dark:border-gray-700 dark:text-gray-400">
-                No tools match “{{ toolQuery() }}”.
-              </p>
-            } @else {
-              <!-- A generous ceiling, not a tight box: search and grouping do the real
-                   work, and this only stops a long catalog from burying the rest of the
-                   form. Nesting a scroller in a scrolling form is a cost, so it is set
-                   high enough that most authors never hit it. -->
-              <div class="mt-3 max-h-[28rem] space-y-4 overflow-y-auto pr-1">
-                @for (group of toolGroups(); track group.category) {
-                  <div>
-                    <h3 class="sticky top-0 z-10 bg-white/95 py-1 text-[11px]/5 font-semibold tracking-wide text-gray-500 uppercase backdrop-blur-sm dark:bg-gray-800/95 dark:text-gray-400">{{ group.category }}</h3>
-                    <ul class="mt-1 flex flex-col gap-1">
-                      @for (t of group.items; track t.ref) {
-                        <li>
-                          <!-- Selected fill is `bg-gray-100` / `dark:bg-gray-700`, NOT a
-                               primary tint: this app's `primary-*` scale keeps full chroma
-                               at every step, so `bg-primary-50` is a saturated mid-blue and
-                               `text-gray-500` on it measures 2.23:1. See the sanctioned
-                               pattern from PR #1091. The knock-on is real too — a neutral
-                               fill sits closer to its text, so the description steps to
-                               `text-gray-600` / `dark:text-gray-300` when selected. -->
-                          <div class="flex items-start rounded-xl border transition" [class.border-primary-500]="isToolSelected(t.ref)" [class.bg-gray-100]="isToolSelected(t.ref)" [class.dark:bg-gray-700]="isToolSelected(t.ref)" [class.border-transparent]="!isToolSelected(t.ref)" [class.hover:bg-gray-50]="!isToolSelected(t.ref)" [class.dark:hover:bg-white/5]="!isToolSelected(t.ref)">
-                            <!-- The caret's slot is reserved on every row, selectable or
-                                 not, so the name column stays a straight edge — which is
-                                 the entire reason for leaving chips. -->
-                            <span class="flex w-7 shrink-0 justify-center pt-3">
-                              @if (isToolSelected(t.ref) && canScopeTool(t)) {
-                                <button
-                                  type="button"
-                                  (click)="toggleToolExpanded(t.ref)"
-                                  [attr.aria-expanded]="isToolExpanded(t.ref)"
-                                  [attr.aria-controls]="'agent-server-tools-' + t.ref"
-                                  [attr.aria-label]="'Choose which ' + t.label + ' tools this agent can call'"
-                                  class="rounded text-gray-500 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:text-gray-200"
-                                >
-                                  <ng-icon name="heroChevronDown" class="size-3.5 transition-transform" [class.rotate-180]="isToolExpanded(t.ref)" />
-                                </button>
-                              }
-                            </span>
-                            <!-- One tab stop per row: the whole row is the switch, so the
-                                 target is the row rather than a 36px pill. -->
-                            <button
-                              type="button"
-                              role="switch"
-                              [attr.aria-checked]="isToolSelected(t.ref)"
-                              [disabled]="isToolRetiring(t) && !isToolSelected(t.ref)"
-                              (click)="toggleTool(t.ref)"
-                              (keydown.space)="$event.preventDefault(); toggleTool(t.ref)"
-                              class="flex min-w-0 flex-1 items-start gap-3 rounded-xl py-2.5 pr-3 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-60"
-                            >
-                              <span class="min-w-0 flex-1">
-                                <span class="flex items-center gap-1.5">
-                                  <!-- `min-w-0 truncate` so a long tool name cannot shove the
-                                       retiring badge out of the row. -->
-                                  <span class="min-w-0 truncate text-sm/6 font-medium text-gray-900 dark:text-white">{{ t.label }}</span>
-                                  <!--
-                                    Retirement is disclosed as visible text, not a tooltip — the
-                                    whole reason this section left chips behind. A retiring tool the
-                                    agent already binds stays selected and stays removable; one it
-                                    does not bind is inert in that one direction only. Neither is an
-                                    access decision (spec §7).
-                                  -->
-                                  @if (isToolRetiring(t)) {
-                                    <span class="shrink-0 rounded-sm bg-state-warning-50 px-1.5 font-mono text-[10px]/5 font-medium text-state-warning-700 dark:bg-state-warning-900/30 dark:text-state-warning-300">retiring</span>
-                                  }
-                                </span>
-                                @if (isToolRetiring(t)) {
-                                  <!-- The lead-in plus, when an admin recorded them, the
-                                       replacement and the date — composed by the same
-                                       `retirementDetail()` every other surface uses, so
-                                       the four cannot drift (spec §7). -->
-                                  <span class="mt-0.5 block text-xs/5 text-state-warning-700 dark:text-state-warning-300">{{ retiringRowText(t) }}</span>
-                                }
-                                @if (t.description) {
-                                  <!-- Out of the tooltip: hover-only text is dead on touch
-                                       and cannot be scanned at all. -->
-                                  <span class="mt-0.5 line-clamp-2 block text-xs/5" [class.text-gray-600]="isToolSelected(t.ref)" [class.dark:text-gray-300]="isToolSelected(t.ref)" [class.text-gray-500]="!isToolSelected(t.ref)" [class.dark:text-gray-400]="!isToolSelected(t.ref)">{{ t.description }}</span>
-                                }
-                                @if (isToolSelected(t.ref) && canScopeTool(t) && !isWholeServerSelected(t)) {
-                                  <!-- Always on the selected fill, so `text-primary-accessible`
-                                       / `dark:text-primary-50` is the pairing that passes. -->
-                                  <span class="mt-1 block text-xs/5 font-medium tabular-nums text-primary-accessible dark:text-primary-50">{{ selectedServerToolCount(t) }} of {{ serverTools(t).length }} tools</span>
-                                }
-                              </span>
-                              <span aria-hidden="true" class="relative mt-1 inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out" [class]="isToolSelected(t.ref) ? 'bg-primary-600 dark:bg-primary-500' : 'bg-gray-200 dark:bg-gray-700'">
-                                <span class="pointer-events-none inline-block size-4 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out" [class.translate-x-4]="isToolSelected(t.ref)" [class.translate-x-0]="!isToolSelected(t.ref)"></span>
-                              </span>
-                            </button>
-                          </div>
-
-                          <!--
-                            Per-tool selection, nested under the row that owns it. Kept
-                            deliberately quieter than the section accordion — an indent and
-                            a hairline, not a second bordered card — because this is the
-                            third level of disclosure on the page and a card here would
-                            read as a filesystem. Row shape still matches the chat tool
-                            picker: mono name, first-paragraph summary, `Show details` for
-                            the Args: block, switch on the right.
-                          -->
-                          @if (isToolSelected(t.ref) && canScopeTool(t) && isToolExpanded(t.ref)) {
-                            <div [id]="'agent-server-tools-' + t.ref" class="mt-1 mb-2 ml-7 border-l border-gray-200 pt-1 pb-1 pl-4 dark:border-white/10">
-                              <p class="text-xs/5 text-gray-500 dark:text-gray-400">
-                                @if (isWholeServerSelected(t)) {
-                                  All {{ serverTools(t).length }} tools. Turn off the ones this agent doesn't need; only the tools left on are sent to the model.
-                                } @else {
-                                  {{ selectedServerToolCount(t) }} of {{ serverTools(t).length }} tools. Only the tools left on are sent to the model.
-                                }
-                              </p>
-                              <ul class="mt-2 flex flex-col">
-                                @for (sub of serverTools(t); track sub.name) {
-                                  <li class="flex items-start justify-between gap-3 py-2">
-                                    <div class="min-w-0 flex-1">
-                                      <span [id]="'agent-subtool-' + t.ref + '-' + sub.name" class="block font-mono text-xs/5 font-medium text-gray-900 dark:text-white">{{ sub.name }}</span>
-                                      @if (sub.summary) {
-                                        <span class="mt-0.5 block text-xs/5 text-gray-500 dark:text-gray-400">{{ sub.summary }}</span>
-                                      }
-                                      @if (sub.detail) {
-                                        <button type="button" (click)="toggleToolDetail(t.ref + '::' + sub.name)" [attr.aria-expanded]="isToolDetailExpanded(t.ref + '::' + sub.name)" [attr.aria-controls]="'agent-subtool-detail-' + t.ref + '-' + sub.name" class="mt-1 text-xs/5 font-medium text-primary-accessible hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-accessible-dark">
-                                          {{ isToolDetailExpanded(t.ref + '::' + sub.name) ? 'Hide details' : 'Show details' }}
-                                        </button>
-                                        @if (isToolDetailExpanded(t.ref + '::' + sub.name)) {
-                                          <pre [id]="'agent-subtool-detail-' + t.ref + '-' + sub.name" class="mt-1.5 overflow-x-auto rounded-lg bg-gray-50 p-2 font-mono text-[11px]/5 whitespace-pre text-gray-600 dark:bg-white/5 dark:text-gray-300">{{ sub.detail }}</pre>
-                                        }
-                                      }
-                                    </div>
-                                    <button type="button" role="switch" [attr.aria-checked]="isServerToolSelected(t.ref, sub.name)" [attr.aria-labelledby]="'agent-subtool-' + t.ref + '-' + sub.name" (click)="toggleServerTool(t, sub.name)" (keydown.space)="$event.preventDefault(); toggleServerTool(t, sub.name)" class="relative mt-0.5 inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500" [class]="isServerToolSelected(t.ref, sub.name) ? 'bg-primary-600 dark:bg-primary-500' : 'bg-gray-200 dark:bg-gray-700'">
-                                      <span aria-hidden="true" class="pointer-events-none inline-block size-4 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out" [class.translate-x-4]="isServerToolSelected(t.ref, sub.name)" [class.translate-x-0]="!isServerToolSelected(t.ref, sub.name)"></span>
-                                    </button>
-                                  </li>
-                                }
-                              </ul>
-                            </div>
-                          }
-                        </li>
-                      }
-                    </ul>
-                  </div>
-                }
-              </div>
-            }
-          </div>
+          <!-- Search and grouping are what scale past thirty, not the scroll box; the
+               ceiling is generous so most authors never hit a nested scroller. -->
+          <app-tool-selector
+            id="agent-tools-panel"
+            class="mt-4"
+            [items]="toolItems()"
+            [selected]="selectedToolRefs()"
+            (selectedChange)="onToolSelectionChange($event)"
+            labelledBy="agent-tools-heading"
+            maxHeight="lg"
+          />
         }
       </section>
     }

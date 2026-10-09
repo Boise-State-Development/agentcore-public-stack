@@ -19,7 +19,7 @@ import asyncio
 import logging
 import secrets
 import time
-from typing import Optional
+from typing import Awaitable, Callable, Optional
 
 from botocore.exceptions import ClientError
 
@@ -132,6 +132,7 @@ class SessionRefreshMiddleware(BaseHTTPMiddleware):
             request.state.bff_csrf_token = CSRFHelper.derive_token(
                 record.csrf_secret, record.session_id
             )
+            request.state.bff_refresh_session = self._refresher_for(cookie_value)
             # Decide whether this request should slide the session forward.
             # `_maybe_slide` writes DDB if past the throttle window and returns
             # the cookie Max-Age to re-emit (or None to leave the existing
@@ -151,6 +152,29 @@ class SessionRefreshMiddleware(BaseHTTPMiddleware):
             )
 
         return response
+
+    def _refresher_for(
+        self, cookie_value: str
+    ) -> Callable[[int], Awaitable[Optional[SessionRecord]]]:
+        """A handle a route can call to demand more token lifetime than the
+        middleware's leeway guaranteed.
+
+        `refresh_leeway_seconds` decides what counts as fresh for *our*
+        validator, but a downstream verifier can be stricter: the AgentCore
+        Runtime's inbound JWT authorizer refused a token on dev with about
+        60s of life left, which was exactly this leeway. The chat proxy calls
+        this only after that refusal, so it costs nothing on a healthy
+        request. Returns the record to forward, or None when the session
+        could not be healed (the caller then relays the original failure).
+        """
+
+        async def refresh(min_remaining_seconds: int) -> Optional[SessionRecord]:
+            record, _clear = await self._resolve_session(
+                cookie_value, leeway_seconds=min_remaining_seconds
+            )
+            return record
+
+        return refresh
 
     async def _maybe_slide(self, record: SessionRecord) -> Optional[int]:
         """Slide the session's DDB TTL + return a fresh cookie Max-Age.
@@ -330,6 +354,7 @@ class SessionRefreshMiddleware(BaseHTTPMiddleware):
         session_id: str,
         previous: SessionRecord,
         max_wait_seconds: float,
+        leeway_seconds: int,
     ) -> Optional[SessionRecord]:
         """Poll DDB for a peer task's freshly persisted tokens.
 
@@ -359,17 +384,21 @@ class SessionRefreshMiddleware(BaseHTTPMiddleware):
             # successfully, we can use the new access token.
             if (
                 peer.cognito_access_token != previous.cognito_access_token
-                and peer.access_token_exp
-                > int(time.time()) + self._config.refresh_leeway_seconds
+                and peer.access_token_exp > int(time.time()) + leeway_seconds
             ):
                 return peer
             sleep_for = min(sleep_for * 1.5, 0.5)
         return None
 
     async def _resolve_session(
-        self, cookie_value: str
+        self, cookie_value: str, *, leeway_seconds: Optional[int] = None
     ) -> tuple[Optional[SessionRecord], bool]:
         """Return (record, should_clear_cookie).
+
+        `leeway_seconds` overrides the configured refresh leeway for this one
+        resolve (see `_refresher_for`). An override runs under its own
+        single-flight key, so it never joins an ordinary resolve already in
+        flight and inherits that resolve's not-refreshed result.
 
         `should_clear_cookie` is True when the cookie is present but
         unrecoverable — bad seal, missing row, expired TTL, or refresh failure.
@@ -396,11 +425,16 @@ class SessionRefreshMiddleware(BaseHTTPMiddleware):
             return None, True
 
         session_id = payload.session_id
+        if leeway_seconds is None:
+            leeway_seconds = self._config.refresh_leeway_seconds
+            flight_key = session_id
+        else:
+            flight_key = f"{session_id}#min-remaining={leeway_seconds}"
 
         async def _loader() -> tuple[Optional[SessionRecord], bool]:
             cached = self._cache.get(session_id) if self._cache else None
             if cached is not None and not cached.needs_refresh(
-                int(time.time()), self._config.refresh_leeway_seconds
+                int(time.time()), leeway_seconds
             ):
                 return cached, False
 
@@ -410,7 +444,7 @@ class SessionRefreshMiddleware(BaseHTTPMiddleware):
                 return None, True
 
             if not record.needs_refresh(
-                int(time.time()), self._config.refresh_leeway_seconds
+                int(time.time()), leeway_seconds
             ):
                 self._cache.set(record)
                 return record, False
@@ -437,7 +471,7 @@ class SessionRefreshMiddleware(BaseHTTPMiddleware):
                 if current is None:
                     return None, True
                 if not current.needs_refresh(
-                    int(time.time()), self._config.refresh_leeway_seconds
+                    int(time.time()), leeway_seconds
                 ):
                     self._cache.set(current)
                     return current, False
@@ -472,6 +506,7 @@ class SessionRefreshMiddleware(BaseHTTPMiddleware):
                         session_id=session_id,
                         previous=current,
                         max_wait_seconds=self._refresh_lock_ttl_seconds,
+                        leeway_seconds=leeway_seconds,
                     )
                     if peer is None:
                         # Peer never wrote — likely crashed or hit a Cognito
@@ -547,7 +582,7 @@ class SessionRefreshMiddleware(BaseHTTPMiddleware):
                         peer is not None
                         and not peer.needs_refresh(
                             int(time.time()),
-                            self._config.refresh_leeway_seconds,
+                            leeway_seconds,
                         )
                     ):
                         self._cache.set(peer)
@@ -570,7 +605,7 @@ class SessionRefreshMiddleware(BaseHTTPMiddleware):
                 self._cache.set(updated)
                 return updated, False
 
-        return await resolve_once(session_id, _loader)
+        return await resolve_once(flight_key, _loader)
 
     @staticmethod
     def _reemit_cookies(
