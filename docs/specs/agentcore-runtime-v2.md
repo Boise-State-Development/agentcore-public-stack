@@ -1,6 +1,6 @@
 # AgentCore Runtime V2 migration
 
-**Status:** plan steps 1–3 shipped. The first dev V2 attempt (2026-10-09) failed on an environment-variable size limit (B4) and was rolled back to V1; step 4 (the variable refactor in §7) must land before V2 is tried again. Tracks `docs/kaizen/review-queue.md ▸ [2026-09-25] A/B the V2 AgentCore Runtime in dev` (Proposal 1 in `reviews/2026-09-25.md`).
+**Status:** plan steps 1–3 shipped in 1.27.0. The first dev V2 attempt (2026-10-09) failed on an environment-variable size limit (B4) and was rolled back to V1. Step 4 is in progress: PR A (derived names at process start, the synth-time payload guard, the manifest test) is on branch `claude/agentcore-v2-upgrade-plan-1877c2`; PR B (drop the variables) follows. V2 must not be selected on any release before PR B ships (§8). Tracks `docs/kaizen/review-queue.md ▸ [2026-09-25] A/B the V2 AgentCore Runtime in dev` (Proposal 1 in `reviews/2026-09-25.md`).
 **Sources:**
 - The AWS ML blog post [The new AgentCore Runtime: elastic, optimized, and consistently fast starts](https://aws.amazon.com/blogs/machine-learning/the-new-agentcore-runtime-elastic-optimized-and-consistently-fast-starts/) (2026-09-18).
 - The [What's New post](https://aws.amazon.com/about-aws/whats-new/2026/09/new-agentcore-runtime-generally-available).
@@ -155,7 +155,7 @@ The billing basis inverts, so conclusions from V1 don't carry over:
    - This is infra-only, so there is no backend `feature_flags.py` or SPA flag.
    - `aws-cdk-lib` 2.272.0 types `platformVersion`; swap the override for the typed property when CDK is next bumped.
 3. **Runtime-health hardening (B2.1). Done.** Restore-safe idle clock (see B2.1), with tests for a restore before and after the first poll, the once-only limit, and a restored microVM still being reaped. Harmless on V1.
-4. **Environment-variable refactor (B4).** See §7. Two PRs: the resolver first (no behaviour change while the variables are still set), then dropping the variables from the Runtime with a payload guard in CI. Prod needs this too, because it is over the limit on its own.
+4. **Environment-variable refactor (B4). In progress.** See §7. Two PRs: **PR A** derives the names at process start and adds the synth-time payload guard and the manifest test (no behaviour change while the variables are still set); **PR B** drops the variables from the Runtime. Prod needs this too, because it is over the limit on its own. Release sequencing and what each release's notes must say are in §8.
 5. **Dev A/B.** Set `CDK_AGENTCORE_RUNTIME_PLATFORM_VERSION=V2` in the `development` environment.
    - First tried 2026-10-09, before step 4, and rolled back (B4). Retry only once the payload guard (§7.5) passes for dev's real values.
    - Verify with `get-agent-runtime` after `platform.yml`, **and again after the next `backend.yml`**. The second check is B1's real test.
@@ -216,62 +216,119 @@ A later step could also pre-build the agent for the currently selected model and
 
 ## 7. Environment-variable refactor (B4)
 
-**Goal:** the Runtime's environment fits V2's 2,560-byte limit with room to grow, whatever a deployment's prefix and domain are. The same change takes the variable count well under the 50-variable ceiling.
+**Goal:** the Runtime's environment fits V2's 2,560-byte limit with room to grow, whatever a deployment's prefix and domain are, without disrupting the deployments that build on this repository. The same change takes the variable count well under the 50-variable ceiling.
 
 ### 7.1 Inventory (dev, 2026-10-09)
 
 | Kind | Count | Examples | Treatment |
 |---|---|---|---|
-| Prefix plus a fixed suffix (and the account, for some buckets) | 28 | `DYNAMODB_SESSIONS_METADATA_TABLE_NAME` = `{prefix}-sessions-metadata`, `S3_USER_FILES_BUCKET_NAME` = `{prefix}-user-file-uploads-{account}`, `BROWSER_POLICY_S3`, `AGENTCORE_RUNTIME_WORKLOAD_NAME` | Derive in code |
-| Derivable from another variable | 3 | `MEMORY_ARN` (from `AGENTCORE_MEMORY_ID`, region, account; *retired outright by Shared Projects 2.7, since nothing but a startup log read it, and its slot now holds `MEMORY_LINT`, about 26 bytes, which the 2,000-byte guard should count*), `AGENTCORE_LOCAL_OAUTH_CALLBACK_URL` (`FRONTEND_URL` + `/oauth-complete`), `AUTH_PROVIDER_SECRETS_ARN` (Secrets Manager accepts the secret's name, `{prefix}-auth-provider-secrets`) | Derive in code |
-| Not derivable | 18 | Physical ids with a random suffix (`AGENTCORE_MEMORY_ID`, `AGENTCORE_CODE_INTERPRETER_ID`, `BROWSER_ID`), `FRONTEND_URL`, `CORS_ORIGINS`, `AGENTCORE_MCP_APPS_SANDBOX_ORIGIN`, `TOKEN_EXCHANGE_URL`/`_CLIENT_ID`, feature flags, `LOG_LEVEL`, `PROJECT_PREFIX`, `AWS_DEFAULT_REGION` | Keep |
+| Prefix plus a fixed suffix (and the account, for three buckets) | 26 | `DYNAMODB_SESSIONS_METADATA_TABLE_NAME` = `{prefix}-sessions-metadata`, `S3_USER_FILES_BUCKET_NAME` = `{prefix}-user-file-uploads-{account}`, `AGENTCORE_RUNTIME_WORKLOAD_NAME` = `{prefix}-platform-workload` | **Derive** (the manifest, §7.2). This is the whole of PR B |
+| A transform of a derivable name | 4 | `AUTH_PROVIDER_SECRETS_ARN` (an ARN; the name `{prefix}-auth-provider-secrets` would do), `BROWSER_POLICY_S3` (`s3://{prefix}-browser-policy-{account}/policies/…`), `AGENTCORE_LOCAL_OAUTH_CALLBACK_URL` (`FRONTEND_URL` + `/oauth-complete`), `TOKEN_EXCHANGE_SECRET_ID` (conditional) | **Keep for now.** Each needs its own check (IAM by name, a conditional resource, a URL rule), and together they are ~300 bytes the budget does not need. Candidates for a later PR C |
+| Not derivable | 19 | Physical ids with a random suffix (`AGENTCORE_MEMORY_ID`, `AGENTCORE_CODE_INTERPRETER_ID`, `BROWSER_ID`), `FRONTEND_URL`, `CORS_ORIGINS`, `AGENTCORE_MCP_APPS_SANDBOX_ORIGIN`, `TOKEN_EXCHANGE_URL`/`_CLIENT_ID`, feature flags, `MEMORY_LINT`, `LOG_LEVEL`, `PROJECT_PREFIX`, `AWS_DEFAULT_REGION`, `AGENTCORE_GATEWAY_INBOUND_AUTH` | Keep |
 
-| | Today | After |
+| | Today | After PR B |
 |---|---|---|
-| Dev | 49 variables, 2,938 bytes | ~19 variables, ~755 bytes |
-| Prod | 45 variables, 2,579 bytes | ~16 variables, ~581 bytes |
+| Dev | 49 variables, 2,938 bytes by our sum (3,007 by AWS) | 24 variables, roughly 1,400 bytes |
+| Prod | 45 variables, 2,579 bytes | 20 variables, roughly 1,150 bytes |
+| Worst-case synth in CI (`test-project` prefix, every conditional block on) | 49 variables, ~2,851 bytes estimated | 24 variables, ~1,280 bytes estimated |
 
-"After" includes one new variable, `AWS_ACCOUNT_ID` (~26 bytes), which the account-scoped bucket names and `MEMORY_ARN` need. The template comparison found the same `{prefix}-{suffix}` shape for every derivable value in both dev and prod, so there is no legacy-named resource to special-case today.
+"After" includes one new variable, `AWS_ACCOUNT_ID` (~28 bytes), which the three account-scoped bucket names need. The manifest test (§7.3) found the same `{prefix}-{suffix}` shape for every entry in the synthesized template, so there is no legacy-named resource to special-case.
 
-### 7.2 Mechanism: derive names in `apis.shared`, keep the variable as an override
+### 7.2 Mechanism: hydrate the environment at process start, keep the variable as an override
 
-- **One resolver in `apis/shared/config/`**, for example `resource_name("DYNAMODB_SESSIONS_METADATA_TABLE_NAME")`. It returns the environment variable when set (local `.env`, tests, app-api), otherwise `{PROJECT_PREFIX}-{suffix}` (plus `-{AWS_ACCOUNT_ID}` where the bucket carries it), otherwise whatever the read site returns today when the variable is unset. That last rule keeps tests and local runs with no prefix behaving exactly as now.
-- **One manifest** maps each variable to its suffix and whether it carries the account. The resolver reads it; nothing else holds the suffixes.
-- **Every read site migrates to the resolver.** That is about 57 files reading `DYNAMODB_*`/`S3_*` alone. `app_api`, `inference_api` and `agents` all reach it through `apis.shared`, so the import-boundary rule holds.
-- **No turn-path cost.** It is string formatting, memoized per name, and runs at import or first use. Nothing reaches the prompt or `toolConfig`.
+The first draft of this section proposed a resolver function and migrating every read site to it. The inventory made that the wrong trade: there are **~330 reads of these names across ~96 files** (`apis/shared` 55, `app_api` 26, `agents` 14, `inference_api` 1), the read idioms vary (`os.environ.get`, `os.environ[...]`, `os.getenv(..., default)`, module-level constants), and a 96-file diff is exactly the kind of change a fork cannot merge cleanly. What shipped instead (PR A):
+
+- **One manifest**, `backend/src/apis/shared/config/derived_environment.json`: each variable's suffix and whether it carries the account. Nothing else holds the suffixes; CDK's `getResourceName` calls and this file are the two places a name exists, and §7.3 pins them together.
+- **`hydrate_derived_environment()`** in `apis/shared/config/runtime_environment.py` runs **once, first thing** in `inference_api/main.py`, before any other `apis.*` import (a test parses the entrypoint's AST to keep it that way, because `bedrock_embeddings` and several repositories read these names at import). For each manifest entry it sets the variable **only if it is absent** (an empty string counts as absent: `.env` files written from `.env.example` leave blank lines, and every read site treats `""` as unset). The derived value is `{PROJECT_PREFIX}-{suffix}`, plus `-{AWS_ACCOUNT_ID}` for the account-scoped buckets. With `PROJECT_PREFIX` unset it does nothing, so tests and bare local runs are untouched.
+- **Every read site is unchanged.** They read the same `os.environ` they always did; it just has the names in it. The explicit variable stays an override for local `.env` files, tests, and any deployment that keeps sending it.
+- **Drift is reported, not guessed at.** When a variable is set *and* differs from the derived name, startup logs a `WARNING` naming it and keeps the explicit value. While the Runtime still sends every variable (between PR A and PR B), this compares the derivation against every real deployment for free. **app-api runs the comparison only** (`audit_derived_environment()` in its lifespan): ECS has no payload limit, app-api keeps its explicit variables, and writing names into app-api's environment would be a behaviour change for no gain.
+- **The account id, before PR B adds `AWS_ACCOUNT_ID`.** `resolve_account_id()` takes `AWS_ACCOUNT_ID` when set, else reads the 12-digit tail off any explicit account-scoped value that already fits the pattern. That is what lets PR A check all 26 names on today's Runtime with no new variable.
+- **No turn-path cost.** String formatting at process start, once. Nothing reaches the prompt or `toolConfig`, and under V2 the hydrated environment is simply part of the snapshot.
 
 **Rejected alternatives:**
-- **Fetch config from SSM or S3 at startup.** It adds a network call to every cold start (or to the V2 snapshot), an IAM grant and a new way to fail at boot, to carry values that are deterministic anyway.
-- **Pack the variables into one JSON value.** It saves only the key bytes, about a third, and every reader would then have to parse it.
+- **A resolver function plus a read-site migration** (the first draft). Correct but ~96 files of churn for an open-source stack with downstream forks, and it would have had to touch `app_api` as well, which gains nothing from it.
+- **Fetch config from SSM or S3 at startup.** A network call on every cold start (or baked into the V2 snapshot, stale), an IAM grant, and a new way to fail at boot, to carry values that are deterministic anyway.
+- **Pack the variables into one JSON value.** Saves only the key bytes, about a third, and every reader would then have to parse it.
 
-### 7.3 Keeping CDK and the resolver in step
+### 7.3 Keeping CDK and the manifest in step
 
-The names exist twice: CDK creates them with `getResourceName(config, suffix)`, and the resolver rebuilds them. Two checks keep that from drifting silently:
+The names exist twice: CDK creates them with `getResourceName(config, suffix)`, and the hydrator rebuilds them. Two checks keep that from drifting silently:
 
-1. **A CDK test reads the manifest** and asserts that the synthesized template has a resource with each derived physical name (a `TableName`, `BucketName` or `SecretName` equal to `{prefix}-{suffix}`). Renaming a resource in CDK without the manifest fails CI. None of these resources use `getTruncatedResourceName`, which shortens the prefix (verified 2026-10-09); the test should fail for any that starts to.
-2. **app-api keeps its explicit variables** in the first PR. ECS has no comparable limit. At app-api startup, the resolver compares each explicit value with the derived one and logs a warning on any difference, which checks the derivation against every real deployment for free. Dropping them from app-api too is optional, later.
+1. **`infrastructure/test/runtime-derived-environment-manifest.test.ts` reads the manifest** and, for every entry, resolves the Runtime's variable in the synthesized worst-case template to a literal (`Ref` → the resource's literal `TableName`/`BucketName`/`Name`, `Fn::Join` with `AWS::AccountId` → the mock account) and asserts it equals `{prefix}-{suffix}[-{account}]`. Renaming a resource in CDK without the manifest fails CI, as does a manifest entry for a resource CDK names some other way (`getTruncatedResourceName`, a physical id). All 26 entries pass today. It also prints how many bytes the manifest would remove, which is the number PR B is sized by.
+2. **The startup drift warning** (§7.2) does the same comparison against every real deployment's live values, on both services, from the first deploy of PR A.
 
 ### 7.4 Things to get right
 
-- **Conditional resources stay conditional.** CDK only sets the token-exchange variables when `config.tokenExchange` is configured. Derive `TOKEN_EXCHANGE_SECRET_ID` only when `TOKEN_EXCHANGE_URL` is set, so a deployment without token exchange doesn't suddenly look like it has a secret.
-- **Absence as a feature gate.** Some read sites treat an unset name as "feature off". For example, `apis/shared/notifications/service.py` defaults `DYNAMODB_PROJECTS_TABLE_NAME` to `""`. Once the name is always derived, that code path always runs. Audit each read site: deriving is right only where the resource exists in every deployment, and the behaviour change has to be intended.
-- **The secret by name.** Check that `auth_providers/repository.py` passes the value straight to `GetSecretValue`, and that the Runtime role's IAM statement matches the name as well as the ARN (a `{name}-*` resource pattern covers both).
-- **Don't derive domains.** `AGENTCORE_MCP_APPS_SANDBOX_ORIGIN` and `CORS_ORIGINS` follow domain and certificate rules that live in CDK; keep them explicit.
+- **Conditional resources stay conditional.** `TOKEN_EXCHANGE_SECRET_ID` is not in the manifest, so a deployment without token exchange cannot acquire a secret name it has no secret for.
+- **Absence as a feature gate.** Some read sites treat an unset name as "feature off": `UserRepository` and `UserSettingsRepository` (`_enabled = bool(table_name)`), `NotificationService` (`DYNAMODB_PROJECTS_TABLE_NAME`), the tool-result offloader (`S3_USER_FILES_BUCKET_NAME`). On the Runtime every one of these is set today, and hydration sets them to the same values, so nothing changes there. Where it *could* change is a local run with `PROJECT_PREFIX` set and a name deliberately left blank: that name is now filled in, pointing at the deployment the prefix names. That is the intended reading of "prefix set", and the applied names are logged at INFO so it is visible.
+- **The secret by name** (if `AUTH_PROVIDER_SECRETS_ARN` ever moves to the manifest): check that `auth_providers/repository.py` passes the value straight to `GetSecretValue`, and that the Runtime role's statement covers the name as well as the ARN.
+- **Don't derive domains.** `AGENTCORE_MCP_APPS_SANDBOX_ORIGIN`, `FRONTEND_URL` and `CORS_ORIGINS` follow domain and certificate rules that live in CDK; a manifest test asserts they are not listed.
+- **Keep `apis.shared.config` import-light.** The entrypoint imports it before anything else; a test asserts it pulls in no boto3, FastAPI or Strands.
 
-### 7.5 The payload guard
+### 7.5 The payload guard: a synth-time error, not a jest number
 
-A jest test beside the 50-variable guard (`infrastructure/test/runtime-env-var-limit.test.ts`):
+The first draft proposed a jest assertion. A jest test protects the GitHub workflow (`platform.yml` runs jest before deploy) but not a deployer running `cdk deploy` from a laptop, and the failure it guards against wedges a stack. So the guard is a **CDK aspect**, `RuntimeEnvironmentPayloadGuard` (`infrastructure/lib/constructs/inference-api/runtime-environment-payload-guard.ts`), attached in the inference construct:
 
-- Synthesize the worst-case config (every conditional block on, a long prefix and domain).
-- Resolve each Runtime environment value: literals as-is, a `Ref` or `Fn::GetAtt` to a resource with a literal name to that name, and anything else at a conservative maximum length.
-- Fail when `sum(len(key) + len(value))` exceeds **2,000 bytes**. That leaves about 20% under 2,560 for AWS's unexplained overhead (69 bytes on dev) and for growth.
-- It applies on V1 too, so a V1 deployment can't drift back into a payload that blocks V2.
+- It visits every `AWS::BedrockAgentCore::Runtime`, resolves its `EnvironmentVariables` and estimates the payload: `Σ(len(key) + len(value) + 2)`. A `Ref` to a resource with a literal name resolves to that name; `Fn::Join` is summed; pseudo parameters get their real widths; a `GetAtt` of a generated id is charged 64 bytes and anything else unresolvable 128, and both are named in the message. The estimate **errs high on purpose**: for dev's real values it gives more than AWS's 3,007, and a guard must never say "fits" when AWS would say "too big".
+- **`V2` and over 2,560 bytes → `addError`**: `cdk synth` fails, so `cdk deploy` and `platform.yml` stop before anything reaches CloudFormation. The message names the limit, the dev incident, the largest variables, and the two ways out (set `V1`, or shrink the payload).
+- **`V1` and over 2,560 → `addWarning`** ("this deployment cannot switch to V2 until it shrinks"), so a V1 deployment that drifts back over the limit is told so on every synth.
+- **Over the 2,000-byte budget but under the limit → `addWarning`** on either version. That leaves ~20% under 2,560 for AWS's unexplained overhead and for growth.
+- `infrastructure/test/runtime-environment-payload-guard.test.ts` covers the estimator (literals, `Ref` to a named table and bucket, `Fn::Join` with the account, the unresolved fallback, the dev data point) and each verdict on a synthetic runtime, and prints the worst-case PlatformStack's estimate on every run.
+
+The 50-variable ceiling test is unchanged and still applies; it printed 49/50 on the worst-case synth when PR A landed.
 
 ### 7.6 Rollout
 
-1. **PR A: resolver, manifest, read-site migration, CDK manifest test, app-api drift warning.** The Runtime still receives every variable, so behaviour is unchanged. Validate on dev: no drift warnings in app-api's log.
-2. **PR B: drop the derivable variables from the Runtime in CDK, add `AWS_ACCOUNT_ID`, add the payload guard.** This is the change that can break the Runtime, so it lands after A has run on dev. Rollback is reverting B; the variables come back on the next platform deploy. Validate on dev, on V1: a new conversation's first turn, the tools that touch the derived resources (files, artifacts, memory spaces, skills, browser), and `get-agent-runtime` showing the smaller payload.
-3. Then plan step 5, the dev V2 retry.
+1. **PR A (this branch): manifest, hydrator, entrypoint wiring, app-api audit, synth-time guard, manifest test.** The Runtime still receives every variable, so behaviour is unchanged; hydration sets nothing and only compares. **Validate on dev:** the inference-api and app-api startup lines read `… 0 drifted`, and a synth of dev's config on V1 prints the "cannot switch to V2" warning with the expected estimate. Harmless on prod.
+2. **PR B: drop the 26 manifest variables from the Runtime in CDK and add `AWS_ACCOUNT_ID`.** Tighten the guard's budget check from a warning to an error for the worst-case synth in jest, so a V1 deployment can never drift back over the budget unnoticed. This is the change that can break the Runtime, so it lands only after A has run on dev with no drift. **Validate on dev, still on V1:** a new conversation's first turn; the tools that touch the derived resources (files, artifacts, memory spaces, skills, browser, quota); `get-agent-runtime` showing 24 variables; the startup line reading `26 set, 0 drifted`. Rollback is reverting B; the variables come back on the next platform deploy.
+3. **Then plan step 5, the dev V2 retry**, with the guard now passing for dev's values.
+4. **PR C, optional, later:** the four transforms in §7.1, one at a time, each with its own IAM or conditional check. Not needed for V2.
 
 No rollout switch: PR B's off path would be the very variables it removes, and a revert restores them in one platform deploy.
 
+## 8. Release sequencing and what the notes must say
+
+This stack is deployed by other organisations from its releases, so the change has to be safe to take in any order a deployer takes releases, and each release's notes have to say what is true at that point. The failure mode to prevent is specific: **a deployer reads 1.27.0's notes, sets `V2`, and wedges their stack** (B4). 1.27.0 offered the variable with no mention of the limit, because B4 was found the day after it shipped.
+
+| Release | Code state | What the notes must say |
+|---|---|---|
+| **1.27.0 (shipped)** | `CDK_AGENTCORE_RUNTIME_PLATFORM_VERSION` exists; every deployment is over the V2 limit; nothing stops a V2 flip | Left as published (decided 2026-10-09: no amendments to past release descriptions). The durable warning lives on the docs-site (the Runtime V2 page and the environments table), and the next release's notes repeat it (§8.2) |
+| **Next release (carries PR A)** | Names derived at startup (no-op); synth refuses V2 over the limit; manifest test; drift warning | A **Changed** entry and a **Deployment notes** callout: V2 is still not selectable, but selecting it now fails at synth instead of wedging the stack; a startup drift `WARNING` is something to act on before the following release; no infrastructure change beyond a Runtime definition that is byte-identical |
+| **The release that carries PR B** | 26 variables gone from the Runtime; `AWS_ACCOUNT_ID` added; payload ~half the limit | A **Changed** entry with a ⚠️ and a **Deployment notes** callout: the Runtime definition changes (an in-place update); a deployment that renamed any of the 26 resources must keep sending that variable (how to tell: the drift warning from the previous release); V2 is now selectable, dev first; link to the runbook |
+| **The release after the dev A/B** | V2 proven on dev; `AGENT_BUILD_SHARED_SESSION_ENABLED` and the other V2-gated rollout switches eligible to retire (#1422) | A **Highlights** paragraph on V2 with the measured cold-start and GB-hour numbers, and the recommendation per environment |
+
+### 8.1 1.27.0: no amendment, the docs carry it
+
+Past release descriptions are not amended. A deployer on 1.27.0 who looks up the variable finds the warning on the docs-site Runtime V2 page and in the environments table, and the next release's Deployment notes (§8.2) say it again with the synth guard as the backstop. The docs-site text is the one to keep current.
+
+### 8.2 Copy for the release that carries PR A
+
+CHANGELOG, under **Changed**:
+
+> - **The inference-api derives its resource-name variables from `PROJECT_PREFIX` at startup**, for the AgentCore Runtime V2 migration. Twenty-six Runtime variables (`DYNAMODB_*`, the `S3_*` buckets and index, `AGENTCORE_RUNTIME_WORKLOAD_NAME`) are the stack prefix plus a fixed suffix; `apis/shared/config/derived_environment.json` lists them, and `hydrate_derived_environment()` fills in any that are absent before anything reads the environment. **Nothing changes yet:** CDK still sends every variable, an explicit variable always wins, and with `PROJECT_PREFIX` unset nothing happens. What is new is a startup line on both services comparing the sent names with the derived ones, and a `WARNING` naming any that differ. A CDK test checks every manifest entry against the synthesized template (`docs/specs/agentcore-runtime-v2.md` §7) (#PR-A)
+> - **`cdk synth` now refuses a V2 AgentCore Runtime whose environment exceeds V2's 2,560-byte limit**, instead of letting CloudFormation discover it at the Runtime update and leave the stack `UPDATE_ROLLBACK_FAILED` (which is what happened on dev on 2026-10-09). On V1 the same check is a warning once the payload would block a switch to V2. Every deployment through 1.27.0 is over the limit; the next release reduces the payload (`docs/specs/agentcore-runtime-v2.md` §7.5) (#PR-A)
+
+RELEASE_NOTES, in **Deployment notes**:
+
+> 🧭 **AgentCore Runtime V2: still not selectable, now safe to get wrong.** If you are on 1.27.0, do not set `CDK_AGENTCORE_RUNTIME_PLATFORM_VERSION=V2` before upgrading: 1.27.0 has no guard and the failed update leaves the stack `UPDATE_ROLLBACK_FAILED` (recovery runbook on the docs-site Runtime V2 page). V2 limits the Runtime's environment to 2,560 bytes and this release is still over it, but selecting `V2` now fails at `cdk synth` with the reason, rather than wedging the stack. Leave `CDK_AGENTCORE_RUNTIME_PLATFORM_VERSION` unset or `V1`. **After deploying, check both services' startup logs** for a line like `inference-api derived environment (prefix=…): 0 set, 26 matched, 0 drifted` and `app-api derived environment …`. A `WARNING` naming a variable means one of your resources is not named `{prefix}-{suffix}`; the following release stops sending those names to the Runtime, so a deployment with drift must either rename the resource or keep sending that variable explicitly. Nothing in the Runtime definition changes in this release.
+
+### 8.3 Copy for the release that carries PR B
+
+CHANGELOG, under **Changed** (with the ⚠️):
+
+> - ⚠️ **The AgentCore Runtime no longer receives 26 resource-name variables; the inference-api derives them from `PROJECT_PREFIX` and a new `AWS_ACCOUNT_ID`.** The Runtime's environment goes from about 2,600–3,000 bytes to about 1,200–1,400, under the V2 Runtime's 2,560-byte limit, and from 45–49 variables to 20–24. The names are the ones CDK has always built with `getResourceName`, and a CDK test holds the two in step. **A deployment that has renamed any of these resources** (the previous release's startup drift `WARNING` names them) must keep sending that variable through a CDK override, or the Runtime will address a table or bucket that does not exist. A CDK deploy updates the Runtime definition in place (`docs/specs/agentcore-runtime-v2.md` §7.6) (#PR-B)
+
+RELEASE_NOTES, in the header callout and **Deployment notes**:
+
+> 🏗️ **A CDK deploy is required.** It rewrites the AgentCore Runtime's environment (26 variables removed, `AWS_ACCOUNT_ID` added), an in-place update that keeps the runtime id. Do it with `platform.yml` before `backend.yml`, as usual.
+>
+> ✅ **AgentCore Runtime V2 can now be selected.** With the smaller payload, `CDK_AGENTCORE_RUNTIME_PLATFORM_VERSION=V2` passes the synth check and the Runtime update succeeds. Switch one environment at a time, dev first, and read *Deployment ▸ AgentCore Runtime V2* on the docs site for the prerequisites, the verification steps and the recovery runbook. V2 bills memory at a higher per-GB-hour rate in exchange for not billing idle memory; the spec's §4 says when that is a saving.
+>
+> ⚠️ **If the previous release's startup log showed a derived-environment `WARNING`**, resolve it before this deploy: the variable it names is one the Runtime will no longer be sent.
+
+### 8.4 Rules for the deployer-facing story
+
+- **Never ship a release in which `V2` is selectable and wrong.** From PR A on, that is enforced by the guard rather than by prose.
+- **Every release's notes state whether V2 is selectable on that release**, in the Deployment notes, until the dev A/B is done and the recommendation is written.
+- **The docs-site page is the durable version** of the warning, the prerequisites and the runbook; the notes link to it rather than repeating the runbook.
+- **Name the exact log line** a deployer should look for, because "check for drift" is not actionable and the line was written to be grepped.

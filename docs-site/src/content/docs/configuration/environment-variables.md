@@ -38,6 +38,30 @@ whether it costs money — has its own page:
   defaults lives in
   [`infrastructure/lib/config.ts`](https://github.com/Boise-State-Development/agentcore-public-stack/blob/main/infrastructure/lib/config.ts).
 
+## Derived resource names on the AgentCore Runtime
+
+Most of the Runtime's variables used to be resource names that CDK builds from
+the stack prefix (`{prefix}-sessions-metadata`, `{prefix}-rag-documents-{account}`).
+The inference-api now derives those itself at process start from
+`PROJECT_PREFIX` (plus `AWS_ACCOUNT_ID` for the account-scoped buckets), so the
+Runtime does not have to be sent them. The authoritative list is
+[`backend/src/apis/shared/config/derived_environment.json`](https://github.com/Boise-State-Development/agentcore-public-stack/blob/main/backend/src/apis/shared/config/derived_environment.json);
+a CDK test checks every entry against the synthesized template.
+
+Rules:
+
+- **An explicit variable always wins.** Derivation only fills in what is
+  absent, so a local `.env` or a deployment that keeps sending a name is
+  unaffected.
+- **Drift is logged, never guessed at.** When a variable is set *and* differs
+  from the derived name, startup logs a `WARNING` naming it and keeps the
+  explicit value.
+- **app-api keeps every variable.** ECS has no payload limit; app-api only runs
+  the comparison.
+
+This is what lets a deployment fit the V2 Runtime's 2,560-byte environment
+limit — see [AgentCore Runtime V2](/agentcore-public-stack/deployment/agentcore-runtime-v2/).
+
 ## Local development
 
 For local backend/frontend runs, values come from `backend/src/.env` (see
