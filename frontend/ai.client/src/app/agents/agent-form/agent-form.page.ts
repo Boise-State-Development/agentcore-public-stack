@@ -33,7 +33,6 @@ import {
   heroCheck,
   heroAdjustmentsHorizontal,
   heroChevronDown,
-  heroMagnifyingGlass,
 } from '@ng-icons/heroicons/outline';
 import { Dialog } from '@angular/cdk/dialog';
 import { PickerComponent } from '@ctrl/ngx-emoji-mart';
@@ -53,6 +52,10 @@ import { ThemeService } from '../../components/topnav/components/theme-toggle/th
 import { ToastService } from '../../services/toast/toast.service';
 import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
 import { splitToolDescription } from '../../shared/utils/tool-description';
+import { baseToolId } from '../../shared/utils/scoped-tool-id';
+import { ToolSelectorComponent } from '../../components/tool-selector/tool-selector.component';
+import { ToolSelectorItem } from '../../components/tool-selector/tool-selector.model';
+import { isItemSelected } from '../../components/tool-selector/tool-selection';
 import { AgentPreviewComponent } from './components/agent-preview.component';
 import { AgentIconComponent } from '../components/agent-icon.component';
 import {
@@ -107,19 +110,6 @@ const PARAM_LABELS: Record<string, string> = {
  */
 const AUTHOR_HIDDEN_PARAMS: ReadonlySet<string> = new Set(['max_tokens']);
 
-/** One of a server's tools with its docstring split for display, as the chat picker does. */
-interface DisplayServerTool {
-  name: string;
-  summary: string;
-  detail: string;
-}
-
-/** Tools sharing a catalog category, as one titled block of the Tools list. */
-interface ToolGroup {
-  category: string;
-  items: BindableItem[];
-}
-
 /** A memory-space selection with its per-binding config (access + alwaysLoad). */
 interface MemorySelection {
   ref: string;
@@ -149,6 +139,7 @@ interface MemorySelection {
     CdkOverlayOrigin,
     CdkConnectedOverlay,
     TooltipDirective,
+    ToolSelectorComponent,
     AgentPreviewComponent,
     AgentIconComponent,
     KnowledgeBaseSectionComponent,
@@ -168,7 +159,6 @@ interface MemorySelection {
       heroCheck,
       heroAdjustmentsHorizontal,
       heroChevronDown,
-      heroMagnifyingGlass,
     }),
   ],
 })
@@ -246,11 +236,7 @@ export class AgentFormPage implements OnInit, OnDestroy {
   /** Author-set inference params (temperature/maxTokens/effort/…), governed by the
    * selected model's `supportedParams`. Empty ⇒ omit `params` (today's default). */
   readonly modelParams = signal<Record<string, number | string>>({});
-  readonly selectedToolRefs = signal<Set<string>>(new Set());
-  /** Which servers have their per-tool list open. Presentation only — never submitted. */
-  readonly expandedToolRefs = signal<Set<string>>(new Set());
-  /** Which sub-tools have their `Args:` reference detail open, keyed `serverRef::name`. */
-  readonly expandedToolDetails = signal<Set<string>>(new Set());
+  readonly selectedToolRefs = signal<ReadonlySet<string>>(new Set());
   /**
    * Whether the Tools list is expanded.
    *
@@ -265,8 +251,6 @@ export class AgentFormPage implements OnInit, OnDestroy {
    * whose cause the author cannot see.
    */
   readonly toolsOpen = signal(true);
-  /** Free-text filter over the tool list. Presentation only — never submitted. */
-  readonly toolQuery = signal('');
   readonly selectedSkillRefs = signal<Set<string>>(new Set());
   readonly memorySelections = signal<MemorySelection[]>([]);
 
@@ -762,10 +746,6 @@ export class AgentFormPage implements OnInit, OnDestroy {
     this.toolsOpen.update((open) => !open);
   }
 
-  onToolSearch(event: Event): void {
-    this.toolQuery.set((event.target as HTMLInputElement).value);
-  }
-
   /** A tool's catalog category, normalised so an unset one still groups somewhere. */
   private toolCategory(item: BindableItem): string {
     const raw = (item.meta?.['category'] as string | undefined) ?? '';
@@ -773,38 +753,41 @@ export class AgentFormPage implements OnInit, OnDestroy {
   }
 
   /**
-   * Search-filtered tools grouped by catalog category, both levels sorted.
+   * The Tools list's rows, sorted by category then name so the selector groups them
+   * in a stable order. `meta.category` already rides on every bindable item, so
+   * grouping needs no backend change. Display order is free to be alphabetical: the
+   * determinism contract that matters is on what reaches `toolConfig`, not on what
+   * the author reads.
    *
-   * `meta.category` already rides on every bindable item, so grouping is what turns
-   * thirty-plus rows into something scannable without a backend change. Display order
-   * is free to be alphabetical: the determinism contract that matters is on what
-   * reaches `toolConfig`, not on what the author reads.
+   * A retiring tool says so in visible text and can be removed but not added
+   * (docs/specs/mcp-server-retirement.md §7). An MCP server with a discovered tool
+   * list carries its tools as children, so the author can bind some of them.
    */
-  readonly toolGroups = computed<ToolGroup[]>(() => {
-    const query = this.toolQuery().trim().toLowerCase();
-    const matches = this.tools().filter((t) => {
-      if (!query) return true;
-      return (
-        t.label.toLowerCase().includes(query) ||
-        t.description.toLowerCase().includes(query) ||
-        this.toolCategory(t).toLowerCase().includes(query)
-      );
-    });
-
-    const byCategory = new Map<string, BindableItem[]>();
-    for (const t of matches) {
-      const key = this.toolCategory(t);
-      const bucket = byCategory.get(key);
-      if (bucket) bucket.push(t);
-      else byCategory.set(key, [t]);
-    }
-    return [...byCategory.entries()]
-      .map(([category, items]) => ({
-        category,
-        items: [...items].sort((a, b) => a.label.localeCompare(b.label)),
-      }))
-      .sort((a, b) => a.category.localeCompare(b.category));
-  });
+  readonly toolItems = computed<ToolSelectorItem[]>(() =>
+    [...this.tools()]
+      .sort(
+        (a, b) =>
+          this.toolCategory(a).localeCompare(this.toolCategory(b)) ||
+          a.label.localeCompare(b.label),
+      )
+      .map((t) => {
+        const retiring = this.isToolRetiring(t);
+        const serverTools = (t.meta?.['serverTools'] as BindableServerTool[] | undefined) ?? [];
+        return {
+          id: t.ref,
+          name: t.label,
+          description: t.description,
+          group: this.toolCategory(t),
+          badge: retiring ? 'retiring' : undefined,
+          note: retiring ? this.retiringRowText(t) : undefined,
+          addBlocked: retiring,
+          children: serverTools.map((sub) => ({
+            name: sub.name,
+            ...splitToolDescription(sub.description ?? ''),
+          })),
+        };
+      }),
+  );
 
   /** How many catalog tools this agent has bound, whole or narrowed. */
   readonly selectedToolCount = computed(
@@ -825,28 +808,28 @@ export class AgentFormPage implements OnInit, OnDestroy {
     return labels.length > 3 ? `${shown} +${labels.length - 3} more` : shown;
   });
 
-  // ---- tools (server toggle + per-tool scoping) -------------------------
+  // ---- tools (selection) ------------------------------------------------
   /**
-   * `selectedToolRefs` holds `binding.ref` values verbatim, which may be a bare
-   * catalog id (the whole MCP server, and the only shape that existed before) or a
-   * scoped `serverId::toolName` selecting one of its tools. Everything below reads
-   * and writes that one set, so the refs the form submits are exactly what the
-   * backend validates — no parallel selection model to fall out of sync.
+   * `selectedToolRefs` holds `binding.ref` values verbatim: a bare catalog id (the
+   * whole MCP server) or a scoped `serverId::toolName`. `<app-tool-selector>` owns
+   * the rules for deriving one from the other (`tool-selection.ts`), so the refs the
+   * form submits are exactly what the backend validates.
    *
-   * The invariant: a server with *every* tool selected is stored as the bare ref, not
-   * as N scoped refs. That keeps an untouched agent byte-identical to what it had, and
-   * it is what `collect_tool_name_filters` means by whole-server anyway.
+   * The selector already refuses to add a retiring tool. This drops one anyway, as
+   * the backstop behind it — the same shape as the `alwaysOn` guard in
+   * ToolService.toggleTool. Deselecting stays open, because that is the action we
+   * are asking authors to take. A refused change leaves the form clean.
    */
-  toggleTool(ref: string): void {
-    // A retiring tool can be turned OFF but not ON. The chip is disabled in that
-    // direction, so this is the keyboard/programmatic backstop behind it — the
-    // same shape as the `alwaysOn` guard in ToolService.toggleTool, and the same
-    // reason. Deselecting stays open precisely because that is the action we are
-    // asking authors to take (docs/specs/mcp-server-retirement.md §7).
-    if (!this.isToolSelected(ref) && this.isToolRetiringByRef(ref)) return;
-    this.selectedToolRefs.update((set) =>
-      this.isToolSelected(ref) ? withoutServer(set, ref) : toggle(set, ref),
+  onToolSelectionChange(next: ReadonlySet<string>): void {
+    const current = this.selectedToolRefs();
+    const allowed = new Set(
+      [...next].filter((ref) => {
+        const base = baseToolId(ref);
+        return isItemSelected(current, base) || !this.isToolRetiringByRef(base);
+      }),
     );
+    if (sameRefs(allowed, current)) return;
+    this.selectedToolRefs.set(allowed);
     this.bindingsDirty.set(true);
   }
 
@@ -885,7 +868,7 @@ export class AgentFormPage implements OnInit, OnDestroy {
     return detail ? `${lead} ${detail}` : lead;
   }
 
-  /** {@link isToolRetiring} keyed by ref, for the guard inside {@link toggleTool}. */
+  /** {@link isToolRetiring} keyed by ref, for the backstop in {@link onToolSelectionChange}. */
   private isToolRetiringByRef(ref: string): boolean {
     const item = this.tools().find((t) => t.ref === ref);
     return item ? this.isToolRetiring(item) : false;
@@ -922,81 +905,7 @@ export class AgentFormPage implements OnInit, OnDestroy {
       }),
   );
   isToolSelected(ref: string): boolean {
-    for (const selected of this.selectedToolRefs()) {
-      if (baseToolId(selected) === ref) return true;
-    }
-    return false;
-  }
-
-  /** A selected server's tools, split for display like the chat tool picker's rows. */
-  serverTools(item: BindableItem): DisplayServerTool[] {
-    const subs = (item.meta?.['serverTools'] as BindableServerTool[] | undefined) ?? [];
-    return subs.map((sub) => ({ name: sub.name, ...splitToolDescription(sub.description ?? '') }));
-  }
-
-  /** Only an MCP server with a discovered tool list can be narrowed. */
-  canScopeTool(item: BindableItem): boolean {
-    return this.serverTools(item).length > 0;
-  }
-
-  isToolExpanded(ref: string): boolean {
-    return this.expandedToolRefs().has(ref);
-  }
-  toggleToolExpanded(ref: string): void {
-    this.expandedToolRefs.update((set) => toggle(set, ref));
-  }
-
-  isServerToolSelected(serverRef: string, name: string): boolean {
-    const refs = this.selectedToolRefs();
-    // The bare ref means every tool, including this one.
-    return refs.has(serverRef) || refs.has(scopedToolId(serverRef, name));
-  }
-
-  /**
-   * Turn one of a server's tools on or off, re-deriving the server's refs from the
-   * result: all on collapses to the bare ref, none on deselects the server entirely
-   * (an empty scoped set is not a thing the backend can store, and "selected but with
-   * nothing selected" is not a state worth inventing a third rendering for).
-   */
-  toggleServerTool(item: BindableItem, name: string): void {
-    const all = this.serverTools(item).map((sub) => sub.name);
-    const current = new Set(
-      all.filter((toolName) => this.isServerToolSelected(item.ref, toolName)),
-    );
-    if (current.has(name)) current.delete(name);
-    else current.add(name);
-
-    this.selectedToolRefs.update((set) => {
-      const next = withoutServer(set, item.ref);
-      if (current.size === 0) return next;
-      if (current.size === all.length) {
-        next.add(item.ref);
-        return next;
-      }
-      for (const toolName of all) {
-        if (current.has(toolName)) next.add(scopedToolId(item.ref, toolName));
-      }
-      return next;
-    });
-    this.bindingsDirty.set(true);
-  }
-
-  /** Every tool on (or the server not narrowed at all) — drives the "All" summary. */
-  isWholeServerSelected(item: BindableItem): boolean {
-    return this.selectedToolRefs().has(item.ref);
-  }
-
-  /** How many of a server's tools are on, for the chip's `5 of 44` count. */
-  selectedServerToolCount(item: BindableItem): number {
-    return this.serverTools(item).filter((sub) => this.isServerToolSelected(item.ref, sub.name))
-      .length;
-  }
-
-  isToolDetailExpanded(key: string): boolean {
-    return this.expandedToolDetails().has(key);
-  }
-  toggleToolDetail(key: string): void {
-    this.expandedToolDetails.update((set) => toggle(set, key));
+    return isItemSelected(this.selectedToolRefs(), ref);
   }
 
   // ---- skills (multi-select toggles) -----------------------------------
@@ -1251,26 +1160,8 @@ export class AgentFormPage implements OnInit, OnDestroy {
   }
 }
 
-/** The delimiter in a scoped tool id, mirroring `apis/shared/tools/scoped_ids.py`. */
-const SCOPE_DELIMITER = '::';
-
-function scopedToolId(serverRef: string, name: string): string {
-  return `${serverRef}${SCOPE_DELIMITER}${name}`;
-}
-
-/** The catalog id a (possibly scoped) ref refers to. */
-function baseToolId(ref: string): string {
-  const at = ref.indexOf(SCOPE_DELIMITER);
-  return at === -1 ? ref : ref.slice(0, at);
-}
-
-/** Drop every ref belonging to one server — the bare id and any scoped ones. */
-function withoutServer(set: Set<string>, serverRef: string): Set<string> {
-  const next = new Set<string>();
-  for (const ref of set) {
-    if (baseToolId(ref) !== serverRef) next.add(ref);
-  }
-  return next;
+function sameRefs(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
+  return a.size === b.size && [...a].every((ref) => b.has(ref));
 }
 
 function toggle(set: Set<string>, ref: string): Set<string> {
