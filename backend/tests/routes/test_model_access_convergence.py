@@ -26,7 +26,7 @@ from apis.shared.auth.dependencies import get_current_user_trusted
 from apis.shared.auth.models import User
 from apis.shared.models.models import ManagedModel
 from apis.shared.models.retirement import resolve_from_catalog
-from apis.shared.rbac.model_access import grants_model_access
+from apis.shared.rbac.model_access import grants_model_access, model_access_denied_message
 from apis.shared.rbac.service import AppRoleService
 
 NOW = datetime(2026, 10, 9, tzinfo=timezone.utc)
@@ -88,6 +88,35 @@ class TestPredicate:
         assert grants_model_access("uncurated", None, {"uncurated"}, set()) is True
         assert grants_model_access("uncurated", None, {"*"}, set()) is True
         assert grants_model_access("uncurated", None, set(), {"Faculty"}) is False
+
+
+class TestDeniedMessage:
+    """The refusal a denied turn streams: display name, and why."""
+
+    def test_names_the_model_by_its_display_name(self):
+        row = _row("us.amazon.nova-pro-v1:0")
+        row.model_name = "Nova Pro"
+        msg = model_access_denied_message(row.model_id, row)
+        assert msg.startswith("**Nova Pro** isn't available to your account.")
+        assert "us.amazon.nova-pro-v1:0" not in msg
+
+    def test_disabled_row_reads_as_turned_off(self):
+        msg = model_access_denied_message("disabled-model", DISABLED)
+        assert "has been turned off by an administrator" in msg
+        assert "your account" not in msg
+
+    def test_no_catalog_row_falls_back_to_the_id(self):
+        assert model_access_denied_message("uncurated", None).startswith(
+            "**uncurated** isn't available to your account."
+        )
+
+    def test_agent_variants(self):
+        assert model_access_denied_message("granted-model", GRANTED, agent=True).startswith(
+            "This agent runs on **granted-model**, which isn't available to your account."
+        )
+        assert "turned off by an administrator" in model_access_denied_message(
+            "disabled-model", DISABLED, agent=True
+        )
 
 
 class TestEverySurfaceAgrees:
@@ -190,27 +219,33 @@ class TestInvocations:
 
     def test_disabled_model_refused(self):
         resp = self._post("disabled-model", _role_service(["*"]))
-        assert resp.status_code == 403
-        assert resp.json()["detail"] == "Access denied to model: disabled-model"
+        assert resp.status_code == 200
+        assert '"code": "forbidden"' in resp.text
+        assert "**disabled-model** has been turned off by an administrator" in resp.text
 
     def test_legacy_grant_allowed(self):
         svc = _role_service([])
         answers = _spy(svc)
         resp = self._post("legacy-model", svc)
         assert answers == [("legacy-model", True)]
-        assert resp.status_code != 403
+        assert '"code": "forbidden"' not in resp.text
 
     def test_retired_disabled_row_still_redirects_to_its_successor(self):
         svc = _role_service(["granted-model"])
         answers = _spy(svc)
         resp = self._post("old-disabled", svc)
         assert answers == [("granted-model", True)]
-        assert resp.status_code != 403
+        assert '"code": "forbidden"' not in resp.text
 
     def test_redirect_to_a_disabled_successor_is_refused(self):
         resp = self._post("old-to-disabled", _role_service(["*"]))
-        assert resp.status_code == 403
-        assert resp.json()["detail"] == "Access denied to model: disabled-model"
+        assert resp.status_code == 200
+        assert "**disabled-model** has been turned off by an administrator" in resp.text
+
+    def test_ungranted_model_refused_as_unavailable_to_the_account(self):
+        resp = self._post("ungranted-model", _role_service([]))
+        assert resp.status_code == 200
+        assert "**ungranted-model** isn't available to your account" in resp.text
 
 
 class TestApiConverse:
@@ -296,3 +331,77 @@ class TestAgentModelOverride:
     async def test_retired_disabled_row_redirects(self, monkeypatch):
         svc = _role_service(["granted-model"])
         assert await self._resolve_override(monkeypatch, "old-disabled", svc) == "granted-model"
+
+
+class TestRefusedTurnWritesNothing:
+    """A turn refused on model access leaves no trace (dev, 2026-10-09).
+
+    The check used to run after `_prepare_session_state` and the title task, so a
+    refused first turn still pre-created a sidebar row and spent a Nova Micro call
+    titling a conversation that never ran.
+    """
+
+    def _post(self, model_id: str, svc: AppRoleService):
+        from apis.inference_api.chat.routes import router
+
+        app = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[get_current_user_trusted] = _user
+        # A brand-new session: the pre-create would report "created", which is
+        # what spawns the title task.
+        ensure = AsyncMock(return_value=True)
+        title = AsyncMock(return_value="A title")
+        attachments = AsyncMock(side_effect=AssertionError("refused turn must not resolve attachments"))
+        with patch("apis.inference_api.chat.routes.resolve_effective_model", _resolve), \
+             patch("apis.inference_api.chat.routes.get_app_role_service", return_value=svc), \
+             patch("apis.inference_api.chat.routes.is_quota_enforcement_enabled", return_value=False), \
+             patch("apis.inference_api.chat.routes.ensure_session_metadata_exists", ensure), \
+             patch("apis.inference_api.chat.routes.generate_conversation_title", title), \
+             patch("apis.inference_api.chat.routes._resolve_turn_attachments", attachments), \
+             patch(LOOKUP, AsyncMock(side_effect=AssertionError("turn path must reuse the resolved row"))):
+            resp = TestClient(app, raise_server_exceptions=False).post(
+                "/invocations",
+                json={"session_id": "s-new", "message": "hi", "model_id": model_id, "provider": "bedrock"},
+            )
+        return resp, ensure, title, attachments
+
+    def test_disabled_model_on_a_new_session(self):
+        resp, ensure, title, attachments = self._post("disabled-model", _role_service(["*"]))
+        assert resp.status_code == 200
+        assert "**disabled-model** has been turned off by an administrator" in resp.text
+        ensure.assert_not_awaited()
+        title.assert_not_called()
+        attachments.assert_not_awaited()
+
+    def test_ungranted_model_on_a_new_session(self):
+        resp, ensure, title, _ = self._post("ungranted-model", _role_service([]))
+        assert resp.status_code == 200
+        assert "**ungranted-model** isn't available to your account" in resp.text
+        ensure.assert_not_awaited()
+        title.assert_not_called()
+
+    def test_retired_without_successor_is_still_a_conversational_denial(self):
+        """Not moved: the denial persists a refusal turn, which needs the row."""
+        catalog = RETIREMENT_CATALOG + [_row("gone", enabled=False, status="retired")]
+
+        async def resolve(model_id):
+            return resolve_from_catalog(model_id, catalog) if model_id else None
+
+        from apis.inference_api.chat.routes import router
+
+        app = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[get_current_user_trusted] = _user
+        svc = _role_service(["*"])
+        answers = _spy(svc)
+        with patch("apis.inference_api.chat.routes.resolve_effective_model", resolve), \
+             patch("apis.inference_api.chat.routes.get_app_role_service", return_value=svc), \
+             patch("apis.inference_api.chat.routes.is_quota_enforcement_enabled", return_value=False), \
+             patch("apis.inference_api.chat.routes.generate_conversation_title", AsyncMock(return_value="t")), \
+             patch("agents.main_agent.session.persistence.persist_synthetic_messages"):
+            resp = TestClient(app, raise_server_exceptions=False).post(
+                "/invocations",
+                json={"session_id": "s-1", "message": "hi", "model_id": "gone", "provider": "bedrock"},
+            )
+        assert resp.status_code == 200
+        assert answers == []

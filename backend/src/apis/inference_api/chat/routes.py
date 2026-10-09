@@ -59,6 +59,7 @@ from apis.shared.quota import (
     is_quota_enforcement_enabled,
 )
 
+from apis.shared.rbac.model_access import model_access_denied_message
 from apis.shared.rbac.service import get_app_role_service
 from apis.shared.skills.bundle import slugify_skill_name
 from apis.inference_api.chat.agent_binding_resolver import (
@@ -1932,6 +1933,7 @@ async def stream_conversational_message(
     session_id: str,
     user_id: str,
     user_input: str,
+    persist: bool = True,
 ) -> AsyncGenerator[str, None]:
     """Stream a message as an assistant response with optional metadata event.
 
@@ -1945,6 +1947,7 @@ async def stream_conversational_message(
         session_id: Session ID for persistence
         user_id: User ID for persistence
         user_input: The user's original message to save
+        persist: False streams the message without writing either turn to history
     """
     # Emit message_start event (assistant response)
     yield f"event: message_start\ndata: {json.dumps({'role': 'assistant'})}\n\n"
@@ -1967,6 +1970,9 @@ async def stream_conversational_message(
 
     # Emit done event
     yield "event: done\ndata: {}\n\n"
+
+    if not persist:
+        return
 
     # Skip persistence for preview sessions
     if is_preview_session(session_id):
@@ -2129,6 +2135,7 @@ def _refuse_turn(
     message: str,
     stop_reason: str,
     metadata_event: Union[QuotaExceededEvent, ConversationalErrorEvent, None],
+    persist: bool = True,
 ) -> StreamingResponse:
     """End the turn before any model call, as one short assistant message.
 
@@ -2145,13 +2152,16 @@ def _refuse_turn(
             session_id=input_data.session_id,
             user_id=user_id,
             user_input=input_data.message,
+            persist=persist,
         ),
         media_type="text/event-stream",
         headers=_sse_headers(input_data.session_id),
     )
 
 
-def _forbidden_turn(input_data: InvocationRequest, user_id: str, message: str) -> StreamingResponse:
+def _forbidden_turn(
+    input_data: InvocationRequest, user_id: str, message: str, *, persist: bool = True
+) -> StreamingResponse:
     """A refusal the user cannot recover by retrying (``recoverable=False``)."""
     return _refuse_turn(
         input_data,
@@ -2161,6 +2171,7 @@ def _forbidden_turn(input_data: InvocationRequest, user_id: str, message: str) -
         metadata_event=ConversationalErrorEvent(
             code=ErrorCode.FORBIDDEN, message=message, recoverable=False
         ),
+        persist=persist,
     )
 
 
@@ -3283,13 +3294,15 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
        another user's.
     2. `preamble.skills`     — the turn's effective skills (opt-in; ~0 otherwise).
     3. *(no mark)*           — model retirement; the two MCP App dispatches
-       (`app_tool_call`, `app_context_update`) return here, JSON not SSE.
+       (`app_tool_call`, `app_context_update`) return here, JSON not SSE; then
+       model access (a streamed, unpersisted refusal, unless quota is
+       exceeded), before anything below writes or spends.
     4. `preamble.files`      — `_resolve_turn_attachments`.
     5. `preamble.session_state` — `_prepare_session_state`; the title task on a
        first turn.
     6. `preamble.quota`      — `_check_turn_quota`; a block streams as an
        assistant message.
-    7. *(no mark)*           — retired-model denial, model access, user settings.
+    7. *(no mark)*           — retired-model denial, user settings.
     8. `rag`                 — Agent turns: access, version, bindings, the
        knowledge-base search, prompt composition, memory, binding persistence.
     9. *(no mark)*           — custom prompt, personal instructions, the
@@ -3507,6 +3520,63 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             return JSONResponse({"error": "Internal error"}, status_code=500)
 
 
+    # Model access, decided before the turn touches anything. Everything below
+    # writes or spends: the attachment recovery pops the previous turn's
+    # unanswered-uploads marker, `_prepare_session_state` pre-creates the
+    # sidebar row, and a first turn spawns the title task (a Nova Micro call).
+    # A refused turn used to do all three — a new conversation with a generated
+    # title for a turn that never ran. Retirement resolution above already found
+    # the effective id's catalog row, so it is handed over rather than looked up
+    # again (TTFT: no second catalog read; the check only moved).
+    #
+    # Same condition as before the move, so resume, continuation and
+    # `@`-mention turns are judged exactly as they were. The one exception is a
+    # retired model with no successor on a non-resume turn: that is answered by
+    # the conversational denial after the quota check, which persists the
+    # refusal and so needs the session row. Judging the retired id here would
+    # answer it with the access refusal instead of the retirement message (the
+    # check never sees a retired id otherwise; see
+    # `apis/shared/rbac/model_access.py`). The App dispatches above stay
+    # ungated, as they were: they run no model turn.
+    #
+    # A denial streams as an assistant message, like the retirement one: the
+    # Runtime data plane wraps any non-2xx from this container as a 424, so a
+    # bare 403 reached the SPA as a generic error it could not explain. Unlike
+    # the retirement one it is not persisted: there is no session row yet (a
+    # persisted turn would be history with no sidebar entry), the turn never
+    # ran, and the user's remedy is to pick another model and resend.
+    #
+    # Quota still takes precedence over the refusal: an over-quota user is told
+    # about the quota, whatever model they picked. So a refusal consults the
+    # quota check first, and an exceeded quota falls through to the usual
+    # quota refusal below, which persists a turn and so does need the row.
+    # Only the refused path runs it early; an allowed turn's preamble is
+    # unchanged, stage for stage.
+    early_quota: Optional[TurnQuota] = None
+    if input_data.model_id and not (retired_model_denial and not is_resume):
+        app_role_service = get_app_role_service()
+        known_record = requested_model is not None and requested_model.model_id == input_data.model_id
+        access_kwargs = {"record": requested_model.record} if known_record else {}
+        if not await app_role_service.can_access_model(
+            current_user, input_data.model_id, **access_kwargs
+        ):
+            early_quota = await _check_turn_quota(
+                current_user,
+                input_data,
+                session_meta,
+                is_resume=is_resume,
+                is_continuation=is_continuation,
+            )
+            if early_quota.exceeded_event is None:
+                return _forbidden_turn(
+                    input_data,
+                    user_id,
+                    model_access_denied_message(
+                        input_data.model_id, requested_model.record if known_record else None
+                    ),
+                    persist=False,
+                )
+
     if input_data.enabled_tools:
         logger.info(f"Enabled tools ({len(input_data.enabled_tools)})")
 
@@ -3560,7 +3630,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # `asyncio.create_task`, so it contributes nothing to the number.
     prelude.mark("preamble.session_state")
 
-    quota = await _check_turn_quota(
+    quota = early_quota or await _check_turn_quota(
         current_user,
         input_data,
         session_meta,
@@ -3587,29 +3657,11 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         )
 
     # A retired model with no successor is denied for everyone, wildcard holders
-    # included — as a conversational message, not the bare 403 below. Not on a
+    # included — as a conversational message, like the access check above. Not on a
     # resume: that turn finishes on its paused snapshot's model, whatever the
     # request carries.
     if retired_model_denial and not is_resume:
         return _forbidden_turn(input_data, user_id, retired_model_denial)
-
-    # Check model access if a specific model_id is requested. Retirement
-    # resolution above already found the effective id's catalog row, so it is
-    # handed over rather than looked up again (TTFT: no second catalog read).
-    if input_data.model_id:
-        app_role_service = get_app_role_service()
-        access_kwargs = (
-            {"record": requested_model.record}
-            if requested_model is not None and requested_model.model_id == input_data.model_id
-            else {}
-        )
-        if not await app_role_service.can_access_model(
-            current_user, input_data.model_id, **access_kwargs
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Access denied to model: {input_data.model_id}",
-            )
 
     # Handle assistant RAG integration if assistant_id is provided
     # Import here to avoid circular import (app_api.assistants imports from inference_api.chat.routes)
