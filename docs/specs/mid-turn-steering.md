@@ -372,6 +372,45 @@ Four implementation notes worth carrying forward:
   SPA normalizes both on load (`normalizeSteeringMessages`) so a reloaded
   steered turn reads exactly as it did live.
 
+### When the SPA does not steer
+
+`POST /sessions/{id}/steer` goes out only from the composer's queue path
+(`queueChatRequest` → `armSteering` in `chat-input.component.ts`), and that
+path skips the request in these states. In every one the entry still sits in
+the queue and goes out on the falling edge as #916 sends it, so the text is
+never lost; it just arrives as the next turn.
+
+| State | Why no steer |
+|---|---|
+| The composer is idle (`isLoading()` false and no prompt holding the queue) | Enter is an ordinary send (`submitChatRequest`), not a queue. Loading falls when the transport **closes**, so an Enter even a moment after the stream ends is a new turn |
+| The entry carries a file | An injection is a text block on the tool-result message; it cannot carry an attachment |
+| The entry carries an `@`-mention | The mention picks the Agent that runs a *turn*; a mid-turn injection cannot change it |
+| The entry invokes a `/` skill | The skill directive rides the turn's user message, which was already sent |
+| A consent / approval / question prompt is waiting (`queueHeld()`) | The pause released the lease and its inbox; the entry rides the resume instead (see "Paused turns") |
+| A steer has already 404'd in this tab | `SteeringService` latches `unavailable` (feature off here) and stops asking until reload |
+| The composer has no session id | Nothing to address the steer to (a brand-new conversation before its first turn is created) |
+
+Not in the table, deliberately: `canSteer()` (has this turn called a tool yet)
+only chooses the placeholder's wording. It does not gate the request: an entry
+queued before the first tool call is still armed, and the hook injects it at
+whichever boundary comes first.
+
+**Observed on dev, 2026-10-09 (1.27.0 smoke pass).** The Steer row's
+follow-up produced no steer request: neither app-api's nor the Runtime's log has
+one, and app-api logged only 2 steer calls in the previous 30 days. The text
+(resent a minute later and persisted) was plain, with no file, mention or
+skill, and no prompt was pending. The timing fits the first row: turn B (three
+`calculator` calls) released its lease at 02:59:10.08Z, and the follow-up's
+`POST /chat/stream` reached app-api at 02:59:12.06Z. A falling-edge flush
+fires within milliseconds of the close; a two-second gap is an Enter on an idle
+composer. A turn that short (~6.7s) is hard for a browser-driven check to land
+inside, so the smoke checklist's Steer row now asks for a longer turn and for
+the Stop button to be visible at the moment of Enter. The same send then hit a
+Runtime 403 (a forwarded access token at the edge of its lifetime) and, before
+this fix, left a bubble that looked delivered. A send refused before streaming
+now says **Not sent** on the message with a Retry (`Message.sendFailure`,
+`FailedSendService`), and app-api retries that 403 once with a refreshed token.
+
 ## Testing
 
 - **Backend unit.** Hook injects into `event.message["content"]`; does *not*
