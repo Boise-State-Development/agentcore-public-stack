@@ -223,7 +223,7 @@ A later step could also pre-build the agent for the currently selected model and
 | Kind | Count | Examples | Treatment |
 |---|---|---|---|
 | Prefix plus a fixed suffix (and the account, for some buckets) | 28 | `DYNAMODB_SESSIONS_METADATA_TABLE_NAME` = `{prefix}-sessions-metadata`, `S3_USER_FILES_BUCKET_NAME` = `{prefix}-user-file-uploads-{account}`, `BROWSER_POLICY_S3`, `AGENTCORE_RUNTIME_WORKLOAD_NAME` | Derive in code |
-| Derivable from another variable | 3 | `MEMORY_ARN` (from `AGENTCORE_MEMORY_ID`, region, account), `AGENTCORE_LOCAL_OAUTH_CALLBACK_URL` (`FRONTEND_URL` + `/oauth-complete`), `AUTH_PROVIDER_SECRETS_ARN` (Secrets Manager accepts the secret's name, `{prefix}-auth-provider-secrets`) | Derive in code |
+| Derivable from another variable | 3 | `MEMORY_ARN` (from `AGENTCORE_MEMORY_ID`, region, account; *retired outright by Shared Projects 2.7, since nothing but a startup log read it, and its slot now holds `MEMORY_LINT`, about 26 bytes, which the 2,000-byte guard should count*), `AGENTCORE_LOCAL_OAUTH_CALLBACK_URL` (`FRONTEND_URL` + `/oauth-complete`), `AUTH_PROVIDER_SECRETS_ARN` (Secrets Manager accepts the secret's name, `{prefix}-auth-provider-secrets`) | Derive in code |
 | Not derivable | 18 | Physical ids with a random suffix (`AGENTCORE_MEMORY_ID`, `AGENTCORE_CODE_INTERPRETER_ID`, `BROWSER_ID`), `FRONTEND_URL`, `CORS_ORIGINS`, `AGENTCORE_MCP_APPS_SANDBOX_ORIGIN`, `TOKEN_EXCHANGE_URL`/`_CLIENT_ID`, feature flags, `LOG_LEVEL`, `PROJECT_PREFIX`, `AWS_DEFAULT_REGION` | Keep |
 
 | | Today | After |

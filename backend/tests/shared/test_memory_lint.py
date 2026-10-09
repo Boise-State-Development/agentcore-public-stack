@@ -31,6 +31,7 @@ BUILTIN = LintSettings(mode="warn", rules=BUILTIN_RULES)
 def _clean_env(monkeypatch):
     for name in ("MEMORY_LINT_MODE", "MEMORY_SENSITIVE_PATTERNS", "MEMORY_LINT"):
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(lint_mod, "_ssm_failed_at", None)
 
 
 def _rules(text: str, settings: LintSettings = BUILTIN) -> list:
@@ -202,6 +203,45 @@ class TestSettings:
         settings = lint_settings()
         assert settings.mode == "block" and len(settings.rules) == len(BUILTIN_RULES) + 1
         assert _rules("Student S12345678 asked for an extension.", settings) == ["sensitive:1"]
+
+    def test_the_runtime_reads_its_patterns_from_ssm_once(self, monkeypatch):
+        calls = []
+
+        class FakeSsm:
+            def get_parameter(self, Name):
+                calls.append(Name)
+                return {"Parameter": {"Value": '[{"pattern": "\\\\bS\\\\d{8}\\\\b", "label": "a student ID"}]'}}
+
+        import boto3
+
+        monkeypatch.setattr(boto3, "client", lambda service, region_name=None: FakeSsm())
+        monkeypatch.setenv("PROJECT_PREFIX", "zz-lint-ssm")
+        monkeypatch.setenv("MEMORY_LINT", json.dumps({"mode": "block", "patterns": "ssm:0123456789ab"}))
+        settings = lint_settings()
+        assert settings.mode == "block" and settings.rules[-1].label == "a student ID"
+        assert lint_settings() is settings and calls == ["/zz-lint-ssm/memory/sensitive-patterns"]
+
+    def test_an_unreadable_parameter_leaves_the_builtins_and_is_retried_later(self, monkeypatch, caplog):
+        calls = []
+
+        class Denied:
+            def get_parameter(self, Name):
+                calls.append(Name)
+                raise RuntimeError("AccessDenied")
+
+        import boto3
+
+        monkeypatch.setattr(boto3, "client", lambda service, region_name=None: Denied())
+        monkeypatch.setenv("PROJECT_PREFIX", "zz-lint-ssm-denied")
+        monkeypatch.setenv("MEMORY_LINT", json.dumps({"mode": "warn", "patterns": "ssm:ba9876543210"}))
+        with caplog.at_level(logging.ERROR):
+            assert lint_settings().rules == BUILTIN_RULES
+        assert "Could not read the memory sensitive patterns" in caplog.text
+        lint_settings()
+        assert len(calls) == 1  # inside the retry window: no second call
+        monkeypatch.setattr(lint_mod, "_ssm_failed_at", lint_mod._ssm_failed_at - lint_mod._SSM_RETRY_SECONDS - 1)
+        lint_settings()
+        assert len(calls) == 2
 
     def test_the_separate_variables_win_over_the_packed_value(self, monkeypatch):
         monkeypatch.setenv("MEMORY_LINT", json.dumps({"mode": "block", "sensitivePatterns": ["x"]}))

@@ -440,8 +440,11 @@ export type MemoryLintMode = 'off' | 'warn' | 'block';
  *   Forwarded verbatim; the backend skips (and logs) a pattern it can't compile.
  *
  * app-api and the maintenance worker get MEMORY_LINT_MODE and
- * MEMORY_SENSITIVE_PATTERNS. The AgentCore Runtime, whose 50 environment
- * variables are spent, gets both packed into one MEMORY_LINT value.
+ * MEMORY_SENSITIVE_PATTERNS. The AgentCore Runtime's environment is near both of
+ * its caps (50 variables; 2,560 bytes on V2), so it gets one small MEMORY_LINT
+ * value (the mode, and a hash of the patterns) and reads the patterns from the
+ * SSM parameter `/{prefix}/memory/sensitive-patterns`, created only when there are
+ * some (inference-agentcore-construct.ts).
  */
 export interface MemoryLintConfig {
   mode: MemoryLintMode;
@@ -450,7 +453,7 @@ export interface MemoryLintConfig {
 
 /**
  * Bounded so the patterns fit a Lambda's 4 KB environment beside the worker's
- * other variables, and the Runtime's one packed value stays small.
+ * other variables, and a standard-tier SSM parameter (4 KB).
  */
 export const MEMORY_SENSITIVE_PATTERNS_MAX_CHARS = 3000;
 

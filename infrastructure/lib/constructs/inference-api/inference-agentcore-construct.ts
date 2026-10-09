@@ -9,6 +9,7 @@ import * as sns from 'aws-cdk-lib/aws-sns';
 import * as xray from 'aws-cdk-lib/aws-xray';
 import * as bedrock from 'aws-cdk-lib/aws-bedrockagentcore';
 import * as path from 'path';
+import { createHash } from 'crypto';
 import { Construct } from 'constructs';
 import { AppConfig, getResourceName, getTruncatedResourceName, applyStandardTags, buildCorsOrigins } from '../../config';
 import { AlarmFactory } from '../observability/alarm-factory';
@@ -69,6 +70,22 @@ export interface InferenceAgentCoreConstructProps {
  *
  * IAM roles are created via inference-api-iam-roles.ts (extracted).
  */
+/** Where the Runtime reads the deployment's sensitive patterns (apis/shared/memory/lint.py `PATTERNS_SSM_SUFFIX`). */
+export const MEMORY_SENSITIVE_PATTERNS_SSM_SUFFIX = 'memory/sensitive-patterns';
+
+/**
+ * The Runtime's packed content-lint setting (Shared Projects 2.7): the mode, and when the
+ * deployment has sensitive patterns, `ssm:` plus a hash of them. The patterns themselves are in
+ * SSM, because this environment is near both of its caps (50 variables; 2,560 bytes on V2). The
+ * hash makes a pattern change a change to the Runtime, so its containers pick the new ones up.
+ */
+export function memoryLintRuntimeValue(config: AppConfig): string {
+  const { mode, sensitivePatterns } = config.memoryLint;
+  if (!sensitivePatterns) return JSON.stringify({ mode });
+  const hash = createHash('sha256').update(sensitivePatterns).digest('hex').slice(0, 12);
+  return JSON.stringify({ mode, patterns: `ssm:${hash}` });
+}
+
 export class InferenceAgentCoreConstruct extends Construct {
   public readonly runtime: bedrock.CfnRuntime;
   /**
@@ -416,12 +433,10 @@ export class InferenceAgentCoreConstruct extends Construct {
         DYNAMODB_PROJECTS_TABLE_NAME: props.refs.projectsTable.tableName,
         PROJECTS_ENABLED: config.projects.enabled ? 'true' : 'false',
         // Project-memory content lint (2.7) for memory_save / memory_propose. One
-        // packed value, not app-api's MEMORY_LINT_MODE + MEMORY_SENSITIVE_PATTERNS,
-        // because this budget is spent; apis/shared/memory/lint.py reads either.
-        MEMORY_LINT: JSON.stringify({
-          mode: config.memoryLint.mode,
-          sensitivePatterns: config.memoryLint.sensitivePatterns,
-        }),
+        // small packed value, not app-api's MEMORY_LINT_MODE + MEMORY_SENSITIVE_PATTERNS:
+        // this budget is spent, and V2 caps the payload at 2,560 bytes. The patterns
+        // live in SSM (below); their hash here rolls the Runtime when they change.
+        MEMORY_LINT: memoryLintRuntimeValue(config),
 
         // Conversation index write path (in development, default off): gates
         // the fire-and-forget archive put after `done`. One slot, not two: the
@@ -894,6 +909,18 @@ export class InferenceAgentCoreConstruct extends Construct {
       description: 'AgentCore Runtime ID',
       tier: ssm.ParameterTier.STANDARD,
     });
+
+    // The deployment's project-memory sensitive patterns (Shared Projects 2.7),
+    // for the Runtime to read once per process (its role reads `/{prefix}/*`).
+    // Only when there are some, so a deployment without patterns adds no resource.
+    if (config.memoryLint.sensitivePatterns) {
+      new ssm.StringParameter(this, 'MemorySensitivePatternsParameter', {
+        parameterName: `/${config.projectPrefix}/${MEMORY_SENSITIVE_PATTERNS_SSM_SUFFIX}`,
+        stringValue: config.memoryLint.sensitivePatterns,
+        description: 'Project-memory content lint: the deployment sensitive patterns',
+        tier: ssm.ParameterTier.STANDARD,
+      });
+    }
 
     // The runtime auto-creates its own service-linked workload identity, but
     // we don't surface it: it's only mintable from inside the runtime

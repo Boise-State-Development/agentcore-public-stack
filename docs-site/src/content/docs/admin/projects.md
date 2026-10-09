@@ -132,9 +132,12 @@ never as instructions.
   ordinary one-item edit about 0.1 ms. Nothing runs before a task's first
   token.
 - **Wiring.** CDK passes `MEMORY_LINT_MODE` and `MEMORY_SENSITIVE_PATTERNS` to
-  app-api and the maintenance worker. The AgentCore Runtime has no free
-  environment variables, so it gets both as one JSON value, `MEMORY_LINT`.
-  An unknown mode or a malformed list fails the synth.
+  app-api and the maintenance worker. The AgentCore Runtime's environment is
+  near its limits, so it gets one small value, `MEMORY_LINT` (the mode), and
+  reads the patterns from the SSM parameter
+  `/{prefix}/memory/sensitive-patterns`, once per process. CDK creates that
+  parameter only when you set patterns, and a change to them rolls the
+  Runtime. An unknown mode or a malformed list fails the synth.
 - **Per project.** There is no per-project setting yet. A project designated
   as holding regulated data (Phase 4) will force `block`.
 

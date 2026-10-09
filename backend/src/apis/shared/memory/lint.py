@@ -26,10 +26,16 @@ tool's result) and are recomputed on read for the Memory page and the review
 queue. No marker is written into the file, so the injected index and
 ``memory_read`` are byte for byte what they were.
 
-Settings come from ``MEMORY_LINT_MODE`` and ``MEMORY_SENSITIVE_PATTERNS``, or,
-on the AgentCore Runtime (whose environment is full), from the one packed
-``MEMORY_LINT`` value: ``{"mode": ..., "sensitivePatterns": [...]}``. Patterns
-are compiled once per distinct setting.
+Settings come from ``MEMORY_LINT_MODE`` and ``MEMORY_SENSITIVE_PATTERNS``
+(app-api, the maintenance worker, local runs). The AgentCore Runtime's
+environment is full, and V2 caps it at 2,560 bytes, so it gets one small
+packed value, ``MEMORY_LINT``: ``{"mode": "warn"}``, plus ``"patterns":
+"ssm:<hash>"`` when the deployment has patterns. Those are then read once per
+process from the SSM parameter ``/{PROJECT_PREFIX}/memory/sensitive-patterns``,
+which CDK creates only when there are some; the hash changes the Runtime's
+environment, and so rolls its containers, whenever the patterns change. A
+packed ``"sensitivePatterns"`` value is read inline (local runs). Patterns are
+compiled once per distinct setting.
 """
 
 from __future__ import annotations
@@ -39,6 +45,7 @@ import logging
 import os
 import re
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Literal, Mapping, Optional, Sequence, Tuple
 
@@ -274,6 +281,41 @@ def _normalize_mode(raw: Optional[str]) -> Optional[LintMode]:
 _cache_lock = threading.Lock()
 _cache: Dict[Tuple[str, str, str], LintSettings] = {}
 
+# The Runtime's patterns, from SSM (see the module docstring). A failed read is
+# retried after this long; until then the deployment's patterns don't apply.
+PATTERNS_SSM_SUFFIX = "memory/sensitive-patterns"
+_SSM_RETRY_SECONDS = 60.0
+_ssm_failed_at: Optional[float] = None
+
+
+def _patterns_from_ssm() -> Optional[str]:
+    """The deployment's patterns from ``/{PROJECT_PREFIX}/memory/sensitive-patterns``, or None if unreadable.
+
+    One ``GetParameter`` per process, on its first project-memory save (a
+    tool's call, never a turn's first token). The Runtime's role already
+    reads ``/{prefix}/*``. A failure is logged at error and retried a minute
+    later; the built-in rules still apply meanwhile.
+    """
+    global _ssm_failed_at
+    if _ssm_failed_at is not None and time.monotonic() - _ssm_failed_at < _SSM_RETRY_SECONDS:
+        return None
+    prefix = os.environ.get("PROJECT_PREFIX", "").strip()
+    if not prefix:
+        logger.error("MEMORY_LINT names patterns in SSM but PROJECT_PREFIX is unset; no deployment patterns apply")
+        _ssm_failed_at = time.monotonic()
+        return None
+    try:
+        import boto3  # lazily: only the Runtime takes this path
+
+        region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
+        response = boto3.client("ssm", region_name=region).get_parameter(Name=f"/{prefix}/{PATTERNS_SSM_SUFFIX}")
+    except Exception as exc:  # noqa: BLE001 - a lint setting never fails a save
+        logger.error("Could not read the memory sensitive patterns from SSM (%s); retrying in a minute", type(exc).__name__)
+        _ssm_failed_at = time.monotonic()
+        return None
+    _ssm_failed_at = None
+    return response["Parameter"]["Value"]
+
 
 def lint_settings() -> LintSettings:
     """The deployment's settings: ``MEMORY_LINT_MODE`` / ``MEMORY_SENSITIVE_PATTERNS``, else the packed ``MEMORY_LINT``.
@@ -303,8 +345,13 @@ def lint_settings() -> LintSettings:
                 logger.error("MEMORY_LINT is not valid JSON; using the defaults")
         mode = _normalize_mode(mode_raw) or _normalize_mode(str(packed.get("mode") or "")) or DEFAULT_MODE
         patterns: object = patterns_raw if patterns_raw.strip() else packed.get("sensitivePatterns")
+        complete = True
+        if not patterns_raw.strip() and str(packed.get("patterns") or "").startswith("ssm"):
+            patterns = _patterns_from_ssm()
+            complete = patterns is not None
         settings = LintSettings(mode=mode, rules=BUILTIN_RULES + compile_sensitive_patterns(patterns))
-        _cache[key] = settings
+        if complete:
+            _cache[key] = settings
         return settings
 
 
