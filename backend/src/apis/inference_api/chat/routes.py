@@ -1933,6 +1933,7 @@ async def stream_conversational_message(
     session_id: str,
     user_id: str,
     user_input: str,
+    persist: bool = True,
 ) -> AsyncGenerator[str, None]:
     """Stream a message as an assistant response with optional metadata event.
 
@@ -1946,6 +1947,7 @@ async def stream_conversational_message(
         session_id: Session ID for persistence
         user_id: User ID for persistence
         user_input: The user's original message to save
+        persist: False streams the message without writing either turn to history
     """
     # Emit message_start event (assistant response)
     yield f"event: message_start\ndata: {json.dumps({'role': 'assistant'})}\n\n"
@@ -1968,6 +1970,9 @@ async def stream_conversational_message(
 
     # Emit done event
     yield "event: done\ndata: {}\n\n"
+
+    if not persist:
+        return
 
     # Skip persistence for preview sessions
     if is_preview_session(session_id):
@@ -2130,6 +2135,7 @@ def _refuse_turn(
     message: str,
     stop_reason: str,
     metadata_event: Union[QuotaExceededEvent, ConversationalErrorEvent, None],
+    persist: bool = True,
 ) -> StreamingResponse:
     """End the turn before any model call, as one short assistant message.
 
@@ -2146,13 +2152,16 @@ def _refuse_turn(
             session_id=input_data.session_id,
             user_id=user_id,
             user_input=input_data.message,
+            persist=persist,
         ),
         media_type="text/event-stream",
         headers=_sse_headers(input_data.session_id),
     )
 
 
-def _forbidden_turn(input_data: InvocationRequest, user_id: str, message: str) -> StreamingResponse:
+def _forbidden_turn(
+    input_data: InvocationRequest, user_id: str, message: str, *, persist: bool = True
+) -> StreamingResponse:
     """A refusal the user cannot recover by retrying (``recoverable=False``)."""
     return _refuse_turn(
         input_data,
@@ -2162,6 +2171,7 @@ def _forbidden_turn(input_data: InvocationRequest, user_id: str, message: str) -
         metadata_event=ConversationalErrorEvent(
             code=ErrorCode.FORBIDDEN, message=message, recoverable=False
         ),
+        persist=persist,
     )
 
 
@@ -3599,7 +3609,11 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # handed over rather than looked up again (TTFT: no second catalog read).
     # A denial streams as an assistant message like the retirement one: the
     # Runtime data plane wraps any non-2xx from this container as a 424, so a
-    # bare 403 reached the SPA as a generic error it could not explain.
+    # bare 403 reached the SPA as a generic error it could not explain. Unlike
+    # the retirement one it is not persisted: the turn never ran, the user's
+    # remedy is to pick another model and resend, and the check may sit before
+    # the session row exists, where a persisted turn would be history with no
+    # sidebar entry.
     if input_data.model_id:
         app_role_service = get_app_role_service()
         known_record = requested_model is not None and requested_model.model_id == input_data.model_id
@@ -3613,6 +3627,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 model_access_denied_message(
                     input_data.model_id, requested_model.record if known_record else None
                 ),
+                persist=False,
             )
 
     # Handle assistant RAG integration if assistant_id is provided

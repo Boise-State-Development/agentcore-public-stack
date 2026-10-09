@@ -133,6 +133,32 @@ class TestInvocationsAccessDenied:
         assert '"stopReason": "error"' in resp.text
         assert "**restricted-model** isn't available to your account" in resp.text
 
+    def test_refusal_is_not_persisted(self):
+        """The refused turn never ran, so neither turn is written to history."""
+        from apis.inference_api.chat.routes import router
+
+        app = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[get_current_user_trusted] = _make_user
+
+        with patch(
+            "apis.inference_api.chat.routes.get_app_role_service",
+            return_value=_make_app_role_service(can_access=False),
+        ), patch(
+            "apis.inference_api.chat.routes.is_quota_enforcement_enabled",
+            return_value=False,
+        ), patch(
+            "apis.inference_api.chat.routes.SessionFactory.create_session_manager",
+        ) as create_manager:
+            resp = TestClient(app, raise_server_exceptions=False).post(
+                "/invocations",
+                json={"session_id": "test-session", "message": "hi", "model_id": "restricted-model"},
+            )
+
+        assert resp.status_code == 200
+        assert '"code": "forbidden"' in resp.text
+        create_manager.assert_not_called()
+
 
 class TestInvocationsAccessAllowed:
     """POST /invocations proceeds (200 streaming) when can_access_model is True.
