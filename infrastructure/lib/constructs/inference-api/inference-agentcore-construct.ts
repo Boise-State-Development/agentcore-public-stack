@@ -19,6 +19,7 @@ import {
   createRuntimeExecutionRole,
 } from './inference-api-iam-roles';
 import { RuntimeLogRetentionSweepConstruct } from './runtime-log-retention-sweep-construct';
+import { RuntimeEnvironmentPayloadGuard } from './runtime-environment-payload-guard';
 
 export interface InferenceAgentCoreConstructProps {
   config: AppConfig;
@@ -542,6 +543,13 @@ export class InferenceAgentCoreConstruct extends Construct {
     // that keeps the runtime id. aws-cdk-lib 2.265.0 has no typed
     // `platformVersion` (2.272.0 adds one), hence the override.
     this.runtime.addPropertyOverride('PlatformVersion', config.inferenceApi.runtimePlatformVersion);
+
+    // V2 caps the environment payload at 2,560 bytes and CloudFormation only
+    // finds out from UpdateAgentRuntime, after which its rollback fails the
+    // same way (spec §3 B4). The aspect turns that into a synth-time error
+    // when V2 is selected, and a warning on V1 once the payload would block
+    // a later switch. It runs at synth, so it adds nothing to the Runtime.
+    cdk.Aspects.of(this).add(new RuntimeEnvironmentPayloadGuard(config.inferenceApi.runtimePlatformVersion));
 
     this.runtime.node.addDependency(runtimeExecutionRole);
 
