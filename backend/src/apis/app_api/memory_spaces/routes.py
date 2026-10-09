@@ -17,13 +17,8 @@ identity-based ``resolve_permission`` check inside ``MemorySpaceService``.
 
 from __future__ import annotations
 
-import json
 import logging
-import re
-import zipfile
-from datetime import datetime, timezone
-from tempfile import SpooledTemporaryFile
-from typing import Dict, Iterable, Iterator, Optional
+from typing import Dict, Iterable, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
@@ -37,7 +32,6 @@ from apis.shared.memory.models import EntryType
 from apis.shared.memory.service import (
     MemorySpaceConcurrencyError,
     MemorySpaceError,
-    MemorySpaceExport,
     MemorySpaceNotFoundError,
     MemorySpacePermissionError,
     MemorySpaceService,
@@ -45,6 +39,7 @@ from apis.shared.memory.service import (
 from apis.shared.memory.store import MemorySpaceStoreError
 
 from apis.shared.security.log_sanitize import scrub_log
+from apis.app_api.memory_spaces.export_zip import build_export_zip, safe_component, stream_and_close
 from apis.app_api.memory_spaces.models import (
     ConsolidateRequest,
     ConsolidationReportResponse,
@@ -108,78 +103,6 @@ def _translate(e: Exception) -> HTTPException:
     if isinstance(e, MemorySpaceError):
         return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     raise e
-
-
-# ---- export (§9) -------------------------------------------------------
-
-# Spill the zip to disk beyond this size so a large space never pins app-api
-# memory (the entry count is bounded by the consolidation cap, so this is a
-# ceiling, not the common case).
-_ZIP_SPOOL_MAX_BYTES = 8 * 1024 * 1024
-_UNSAFE_PATH_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
-
-
-def _safe_component(value: str, fallback: str) -> str:
-    """Reduce a user string to one safe archive path segment.
-
-    Collapses separators / ``..`` / other unsafe characters so a hostile slug
-    or space name cannot escape its folder in the zip (zip-slip). Empty results
-    fall back to ``fallback``.
-    """
-    cleaned = _UNSAFE_PATH_CHARS.sub("-", (value or "").strip()).strip("-._")
-    return cleaned or fallback
-
-
-def _export_metadata_json(export: MemorySpaceExport) -> str:
-    """Serialize the space-level state the markdown files don't carry (§9)."""
-    space = export.space
-    meta = {
-        "spaceId": space.space_id,
-        "name": space.name,
-        "template": space.template,
-        "createdAt": space.created_at,
-        "updatedAt": space.updated_at,
-        "exportedAt": datetime.now(timezone.utc).isoformat(),
-        "owner": {"userId": space.owner_id, "email": space.owner_email},
-        "members": [
-            {
-                "email": m.email,
-                "permission": m.permission,
-                "createdAt": m.created_at,
-            }
-            for m in export.members
-        ],
-        "entryCount": len(export.files),
-    }
-    return json.dumps(meta, indent=2, ensure_ascii=False)
-
-
-def _build_export_zip(root: str, export: MemorySpaceExport) -> SpooledTemporaryFile:
-    """Write the space's corpus into a spooled zip mirroring the S3 layout."""
-    spool: SpooledTemporaryFile = SpooledTemporaryFile(
-        max_size=_ZIP_SPOOL_MAX_BYTES, mode="w+b"
-    )
-    with zipfile.ZipFile(spool, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr(f"{root}/MEMORY.md", export.index_text)
-        for ref, body in export.files:
-            slug = _safe_component(ref.slug, "entry")
-            entry_type = _safe_component(ref.entry_type, "fact")
-            zf.writestr(f"{root}/entries/{entry_type}/{slug}.md", body)
-        zf.writestr(f"{root}/metadata.json", _export_metadata_json(export))
-    spool.seek(0)
-    return spool
-
-
-def _stream_and_close(spool: SpooledTemporaryFile) -> Iterator[bytes]:
-    """Yield the spooled zip in chunks, closing (and unlinking) it when done."""
-    try:
-        while True:
-            chunk = spool.read(65536)
-            if not chunk:
-                break
-            yield chunk
-    finally:
-        spool.close()
 
 
 # ---- spaces ------------------------------------------------------------
@@ -266,8 +189,9 @@ def export_space(
     """Download the whole space as a `.zip` of its raw markdown (viewer+, §9).
 
     The loss-free "own your data" export: the ``MEMORY.md`` index, every entry
-    with frontmatter intact under ``entries/<type>/``, and a small
-    ``metadata.json``. Any member who can read the space may export it; the
+    with frontmatter intact under ``entries/<type>/``, a small
+    ``metadata.json`` and, for an item-format space, ``provenance.json``
+    (Shared Projects 2.7). Any member who can read the space may export it; the
     owner exports the full space. Streamed from a spooled buffer so a large
     space never pins app-api memory.
     """
@@ -283,15 +207,15 @@ def export_space(
             detail="failed to read memory space contents for export",
         )
 
-    root = _safe_component(export.space.name, export.space.space_id)
-    spool = _build_export_zip(root, export)
+    root = safe_component(export.space.name, export.space.space_id)
+    spool = build_export_zip(root, export)
     # `root` names the folder *inside* the archive, where `_safe_component`'s
     # job is zip-slip safety. The download filename is a different problem:
     # Starlette encodes headers as latin-1, so the header is built from the
     # real space name by the shared helper, which emits an ASCII `filename`
     # plus an RFC 5987 `filename*` carrying the name verbatim.
     return StreamingResponse(
-        _stream_and_close(spool),
+        stream_and_close(spool),
         media_type="application/zip",
         headers={
             "Content-Disposition": build_content_disposition(

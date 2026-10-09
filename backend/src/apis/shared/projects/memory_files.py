@@ -110,6 +110,11 @@ class ProjectMemoryFiles:
         space_id = self.space(project_id, user, scope, writable=True)
         return self.memory.set_pinned(space_id, user.user_id, user.email, slug, anchor, pinned=pinned)
 
+    def export(self, project_id: str, user: User, scope: MemoryScope):
+        """The scope's files, index and item provenance for a download (viewer+; Shared Projects 2.7)."""
+        space_id = self.space(project_id, user, scope, writable=False)
+        return self.memory.export_space(space_id, user.user_id, user.email)
+
     def archive(self, project_id: str, user: User, scope: MemoryScope):
         space_id = self.space(project_id, user, scope, writable=False)
         return self.memory.list_archived_items(space_id, user.user_id, user.email)

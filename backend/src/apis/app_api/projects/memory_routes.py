@@ -13,6 +13,7 @@ import logging
 from typing import List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from apis.shared.auth.models import User
@@ -35,8 +36,12 @@ from apis.shared.memory.service import (
     MemorySpacePermissionError,
     MemoryValidationError,
 )
+from apis.shared.files.content_disposition import build_content_disposition
+from apis.shared.memory.store import MemorySpaceStoreError
 from apis.shared.projects.memory_files import EditedItem, ProjectMemoryFiles
 from apis.shared.projects.memory_proposals import ProjectMemoryProposals, ProposalProjectError
+
+from apis.app_api.memory_spaces.export_zip import build_export_zip, safe_component, stream_and_close
 
 from .routes import _svc, require_projects_user
 
@@ -650,3 +655,30 @@ def restore_memory_version(
         raise _translate(e)
     return RestoreResponse(slug=result.ref.slug, version=result.ref.version)
 
+
+@files_router.get("/export")
+def export_memory(
+    project_id: str, scope: Scope = Query("project"), user: User = Depends(require_projects_user)
+) -> StreamingResponse:
+    """Download a scope's memory as a `.zip` (viewer+; Shared Projects 2.7).
+
+    The space export (``MEMORY.md``, each file with its frontmatter,
+    ``metadata.json``) plus ``provenance.json``: who added, changed, proposed,
+    approved, restored or moved each item, keyed by its anchor. Any member may
+    export the project's memory, as any member may read it; ``mine`` is the
+    caller's own.
+    """
+    try:
+        export = _files().export(project_id, user, scope)
+    except _ERRORS as e:
+        raise _translate(e)
+    except MemorySpaceStoreError:
+        logger.error("projects: memory export failed to read the store for project=%s", project_id)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Couldn't read the memory to export it.")
+    name = f"{export.space.name or 'project'} memory" if scope == "project" else f"{export.space.name or 'project'} my memory"
+    root = safe_component(name, "memory")
+    return StreamingResponse(
+        stream_and_close(build_export_zip(root, export)),
+        media_type="application/zip",
+        headers={"Content-Disposition": build_content_disposition("attachment", f"{name}.zip")},
+    )

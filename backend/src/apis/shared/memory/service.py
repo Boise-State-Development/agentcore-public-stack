@@ -336,6 +336,8 @@ class MemorySpaceExport:
     index_text: str
     files: List[Tuple[MemoryEntryRef, bytes]] = field(default_factory=list)
     members: List[SpaceMember] = field(default_factory=list)
+    # Item-format spaces (Shared Projects 2.7): each file's ``{anchor: provenance}``.
+    provenance: Dict[str, Dict[str, ItemProvenance]] = field(default_factory=dict)
 
 
 @dataclass
@@ -685,12 +687,19 @@ class MemorySpaceService:
             if _ROLE_RANK[role] >= _ROLE_RANK["editor"]
             else []
         )
+        # One read per file; a space holds tens of files at the per-file cap.
+        provenance = (
+            {ref.slug: self.repository.get_provenance(space_id, ref.slug) for ref in index.entries}
+            if space.file_format == "canonical"
+            else {}
+        )
         return MemorySpaceExport(
             space=space,
             role=role,
             index_text=index_text,
             files=files,
             members=members,
+            provenance=provenance,
         )
 
     def delete_space(
