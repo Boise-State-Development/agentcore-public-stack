@@ -160,11 +160,9 @@ class SessionRefreshMiddleware(BaseHTTPMiddleware):
         middleware's leeway guaranteed.
 
         `refresh_leeway_seconds` decides what counts as fresh for *our*
-        validator, but a downstream verifier can be stricter: the AgentCore
-        Runtime's inbound JWT authorizer refused a token on dev with about
-        60s of life left, which was exactly this leeway. The chat proxy calls
-        this only after that refusal, so it costs nothing on a healthy
-        request. Returns the record to forward, or None when the session
+        validator. The chat proxy calls this only after the AgentCore
+        Runtime refuses a forwarded token, preferring a fresher token for its
+        one retry, so it costs nothing on a healthy request. Returns the record to forward, or None when the session
         could not be healed (the caller then relays the original failure).
         """
 
