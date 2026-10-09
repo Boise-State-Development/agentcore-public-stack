@@ -196,10 +196,15 @@ class ToolCatalogService:
         if tool.is_public:
             granted_by.append("public")
 
-        if tool.tool_id in permissions.direct_tools:
+        # ``direct_tools`` is a trailing-default field on the permissions
+        # object, read with a default here for the same reason: a permissions
+        # value built before the field existed (a cached entry, a test stub)
+        # has no direct grant, not a missing attribute.
+        direct_tools = set(getattr(permissions, "direct_tools", None) or [])
+        if tool.tool_id in direct_tools:
             granted_by.append("direct")
 
-        role_tools = set(permissions.tools) - set(permissions.direct_tools)
+        role_tools = set(permissions.tools) - direct_tools
         if "*" in permissions.tools or tool.tool_id in role_tools:
             granted_by.extend(permissions.app_roles)
 
