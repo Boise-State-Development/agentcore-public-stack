@@ -167,6 +167,15 @@ export interface Message {
    * into two groups (and does not move the scroll reserve mid-stream).
    */
   steering?: boolean;
+  /**
+   * Set on a user message whose request was refused before any of the
+   * response streamed — the BFF or the Runtime answered non-2xx, or the
+   * connection never opened. The agent never saw it, so the bubble says so
+   * and offers a retry (`FailedSendService`) instead of looking delivered.
+   * Client-only: the backend never persisted the message, so a reload drops
+   * the bubble along with the flag.
+   */
+  sendFailure?: { reason: string };
 }
 
 // ============================================================================

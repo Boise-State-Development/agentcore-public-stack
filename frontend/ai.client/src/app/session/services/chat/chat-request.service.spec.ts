@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { TestBed } from '@angular/core/testing';
 import { Router } from '@angular/router';
 import { ChatRequestService } from './chat-request.service';
-import { ChatHttpService } from './chat-http.service';
+import { ChatHttpService, StreamNotStartedError } from './chat-http.service';
+import { FailedSendService } from './failed-send.service';
 import { ChatStateService } from './chat-state.service';
 import { MessageMapService } from '../session/message-map.service';
 import { MessageFeedbackService } from '../session/message-feedback.service';
@@ -61,8 +62,8 @@ describe('ChatRequestService', () => {
         ChatRequestService,
         { provide: ChatHttpService, useValue: mockChatHttpService },
         { provide: Router, useValue: mockRouter },
-        { provide: ChatStateService, useValue: { setChatLoading: vi.fn(), setLastTurnContinuable: vi.fn(), setLastTurnInterrupted: vi.fn(), setViewedSession: vi.fn() } },
-        { provide: MessageMapService, useValue: { addUserMessage: vi.fn(), startStreaming: vi.fn(), beginContinuationStreaming: vi.fn(), endStreaming: vi.fn(), reloadMessagesForSession: vi.fn().mockResolvedValue(undefined) } },
+        { provide: ChatStateService, useValue: { setChatLoading: vi.fn(), setLastTurnContinuable: vi.fn(), setLastTurnInterrupted: vi.fn(), setViewedSession: vi.fn(), isSessionLoading: vi.fn().mockReturnValue(false) } },
+        { provide: MessageMapService, useValue: { addUserMessage: vi.fn(), startStreaming: vi.fn(), beginContinuationStreaming: vi.fn(), endStreaming: vi.fn(), reloadMessagesForSession: vi.fn().mockResolvedValue(undefined), markSendFailed: vi.fn(), removeTrailingMessage: vi.fn().mockReturnValue(true) } },
         { provide: SessionService, useValue: { addSessionToCache: vi.fn() } },
         { provide: MessageFeedbackService, useValue: { consumePendingRetry: vi.fn() } },
         { provide: UserService, useValue: { getUser: vi.fn().mockReturnValue({ user_id: 'user1' }) } },
@@ -356,6 +357,66 @@ describe('ChatRequestService', () => {
     await expect(service.submitChatRequest('Hello', 'session1')).rejects.toThrow(
       'No model selected. Please select a model before sending a message.'
     );
+  });
+
+  describe('a send refused before anything streamed', () => {
+    // Dev, 2026-10-09: a queued follow-up flushed into a Runtime 403 left a
+    // bubble that looked delivered, with no reply and no way to resend it.
+
+    beforeEach(() => {
+      const messageMap = TestBed.inject(MessageMapService) as any;
+      messageMap.addUserMessage.mockReturnValue({ id: 'msg-session1-6', role: 'user', content: [] });
+    });
+
+    it('marks the message not sent, with the reason, and still rejects', async () => {
+      mockChatHttpService.sendChatRequest.mockRejectedValueOnce(
+        new StreamNotStartedError('Your sign-in was being renewed when this was sent.', 403),
+      );
+
+      await expect(service.submitChatRequest('Hello', 'session1')).rejects.toBeInstanceOf(
+        StreamNotStartedError,
+      );
+
+      const messageMap = TestBed.inject(MessageMapService) as any;
+      expect(messageMap.markSendFailed).toHaveBeenCalledWith(
+        'session1',
+        'msg-session1-6',
+        'Your sign-in was being renewed when this was sent.',
+      );
+      expect(TestBed.inject(FailedSendService).canRetry('msg-session1-6')).toBe(true);
+    });
+
+    it('a retry drops the failed bubble and resends the same message', async () => {
+      mockChatHttpService.sendChatRequest.mockRejectedValueOnce(
+        new StreamNotStartedError('A response was still finishing for this conversation.', 409),
+      );
+      await service
+        .submitChatRequest('Hello', 'session1', undefined, 'ast-1', undefined, ['skill-a'])
+        .catch(() => undefined);
+
+      TestBed.inject(FailedSendService).retry('msg-session1-6');
+      await vi.waitFor(() => expect(mockChatHttpService.sendChatRequest).toHaveBeenCalledTimes(2));
+
+      const messageMap = TestBed.inject(MessageMapService) as any;
+      expect(messageMap.removeTrailingMessage).toHaveBeenCalledWith('session1', 'msg-session1-6');
+      expect(mockChatHttpService.sendChatRequest.mock.calls[1][0]).toMatchObject({
+        message: 'Hello',
+        session_id: 'session1',
+        rag_assistant_id: 'ast-1',
+        invoked_skills: ['skill-a'],
+      });
+      // One retry per failure: the handle is spent.
+      expect(TestBed.inject(FailedSendService).canRetry('msg-session1-6')).toBe(false);
+    });
+
+    it('a failure after the stream opened is not marked — the agent saw the message', async () => {
+      mockChatHttpService.sendChatRequest.mockRejectedValueOnce(new Error('network dropped'));
+
+      await expect(service.submitChatRequest('Hello', 'session1')).rejects.toThrow('network dropped');
+
+      const messageMap = TestBed.inject(MessageMapService) as any;
+      expect(messageMap.markSendFailed).not.toHaveBeenCalled();
+    });
   });
 
   describe('continueTruncatedTurn', () => {

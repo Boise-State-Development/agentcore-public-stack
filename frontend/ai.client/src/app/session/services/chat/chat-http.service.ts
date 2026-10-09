@@ -59,28 +59,77 @@ class AlreadyStreamingError extends Error {
 }
 
 /**
- * Best-effort human message for a 409 from `/chat/stream`. The app-api proxy
- * relays the inference-api body verbatim inside its own `detail`, so the
- * payload can be double-encoded (`{"detail":"{\"detail\":\"…\"}"}`) — unwrap one
- * nested layer, and fall back to a fixed message if the body is unreadable.
+ * The `/chat/stream` request failed before any of the response streamed: the
+ * BFF or the Runtime refused it (403, 409, 424, …) or the connection never
+ * opened. Nothing reached the agent, so the user's message was not sent —
+ * callers render that on the message rather than leaving a bubble that looks
+ * delivered. `reason` is already user-facing.
  */
-async function parseConflictMessage(response: Response): Promise<string> {
-  const fallback =
-    'This conversation is still generating a response. Wait for it to finish before sending another message.';
+export class StreamNotStartedError extends Error {
+  // `httpStatus`, not `status`: resume callers treat any `status === 400` as an
+  // expired interrupt, and a rename keeps this type from widening that check.
+  constructor(
+    readonly reason: string,
+    readonly httpStatus?: number,
+  ) {
+    super(reason);
+    this.name = 'StreamNotStartedError';
+  }
+}
+
+/**
+ * Best-effort human message from a `/chat/stream` error body. The app-api
+ * proxy relays the upstream body verbatim inside its own `detail`, so the
+ * payload can be double-encoded (`{"detail":"{\"message\":\"…\"}"}`) — unwrap
+ * one nested layer. Null when the body carries nothing readable.
+ */
+async function readErrorDetail(response: Response): Promise<string | null> {
   try {
     const data = await response.json();
     let detail: unknown = data?.detail ?? data?.error?.message ?? data?.message;
     if (typeof detail === 'string' && detail.trim().startsWith('{')) {
       try {
-        detail = (JSON.parse(detail) as { detail?: unknown })?.detail ?? detail;
+        const nested = JSON.parse(detail) as { detail?: unknown; message?: unknown };
+        detail = nested?.detail ?? nested?.message ?? detail;
       } catch {
         // Not nested JSON after all — keep the string as-is.
       }
     }
-    return typeof detail === 'string' && detail.trim() ? detail : fallback;
+    return typeof detail === 'string' && detail.trim() ? detail : null;
   } catch {
-    return fallback;
+    return null;
   }
+}
+
+/** Best-effort human message for a 409, with a fixed fallback. */
+async function parseConflictMessage(response: Response): Promise<string> {
+  return (
+    (await readErrorDetail(response)) ??
+    'This conversation is still generating a response. Wait for it to finish before sending another message.'
+  );
+}
+
+/**
+ * What the user reads on a message that was not sent. The Runtime's own
+ * wording for a refused access token describes our plumbing, not anything the
+ * user did or can act on; the app-api proxy already retries that case once
+ * with a refreshed token, so reaching here means the retry did not land.
+ */
+function notSentReason(error: unknown): string {
+  const message = error instanceof Error ? error.message : '';
+  if (/unauthorized inbound token/i.test(message)) {
+    return 'Your sign-in was being renewed when this was sent.';
+  }
+  if (error instanceof AlreadyStreamingError) {
+    return 'A response was still finishing for this conversation.';
+  }
+  if (error instanceof RetriableError) {
+    return 'The server had a problem taking this message.';
+  }
+  if (error instanceof FatalError) {
+    return message || 'The server could not take this message.';
+  }
+  return 'The server could not be reached.';
 }
 
 /**
@@ -176,167 +225,167 @@ export class ChatHttpService {
       // object, not a closure over `this`) can reach the BFF session.
       const bffSession = this.bffSession;
 
-      return await fetchEventSource(`${baseUrl}/chat/stream`, {
-        method: 'POST',
-        // Send the BFF session cookie (`__Host-bff_session`) on cross-origin
-        // dev (localhost:4200 → localhost:8000) and on same-origin prod
-        // (CloudFront). Browsers attach same-origin cookies regardless;
-        // `include` is the explicit form that also works cross-origin
-        // when the backend's CORS allows credentials.
-        credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'text/event-stream',
-          OAuth2CallbackUrl: `${window.location.origin}/oauth-complete`,
-          ...csrfHeaders,
-        },
-        body: JSON.stringify(requestObject),
-        signal: abortController.signal,
-        // Keep the stream open when the tab is backgrounded. With the library
-        // default (`openWhenHidden: false`) fetch-event-source aborts the
-        // connection on `visibilitychange` to hidden and REOPENS it — issuing
-        // a brand-new `POST /invocations` for the SAME turn — when the tab
-        // becomes visible again. That reopen happens inside the library, reusing
-        // this request and bypassing our per-session double-submit + streamId
-        // supersession guards, so nothing here catches it. Because a client
-        // abort does NOT propagate through the AgentCore Runtime data plane, the
-        // original backend agent keeps running; the reopened one runs the same
-        // turn concurrently, and both persist tool-use/tool-result events to the
-        // same AgentCore Memory session — corrupting history (duplicate /
-        // interleaved toolResult turns) and bricking the conversation with a
-        // Bedrock "toolResult blocks exceed toolUse blocks" ValidationException.
-        // Keeping the single stream alive across tab switches is also correct for
-        // long agentic turns. See the restore-time repair in
-        // TurnBasedSessionManager for the server-side safety net.
-        openWhenHidden: true,
-        async onopen(response) {
-          if (response.ok && response.headers.get('content-type')?.includes('text/event-stream')) {
-            return; // everything's good
-          } else if (response.status === 401) {
-            // BFF session is missing or expired. Bounce to /auth/login —
-            // `handleUnauthorized` is idempotent, so a 401 here that races
-            // with one from a parallel request only navigates once.
-            bffSession.handleUnauthorized();
-            throw new UnauthorizedError();
-          } else if (response.status === 403) {
-            // Handle forbidden (e.g., usage limit exceeded)
-            let errorMessage = 'Access forbidden';
+      // Whether the response began streaming. A failure before it did means
+      // the message never reached the agent — see StreamNotStartedError.
+      let streamOpened = false;
+      let rejectedStatus: number | undefined;
 
-            try {
-              const errorData = await response.json();
-              if (errorData.error) {
-                // Structured error from backend
-                errorMessage = errorData.error.message || errorMessage;
-              } else if (errorData.message) {
-                errorMessage = errorData.message;
-              }
-            } catch {
-              // Response not JSON, use default
+      try {
+        return await fetchEventSource(`${baseUrl}/chat/stream`, {
+          method: 'POST',
+          // Send the BFF session cookie (`__Host-bff_session`) on cross-origin
+          // dev (localhost:4200 → localhost:8000) and on same-origin prod
+          // (CloudFront). Browsers attach same-origin cookies regardless;
+          // `include` is the explicit form that also works cross-origin
+          // when the backend's CORS allows credentials.
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'text/event-stream',
+            OAuth2CallbackUrl: `${window.location.origin}/oauth-complete`,
+            ...csrfHeaders,
+          },
+          body: JSON.stringify(requestObject),
+          signal: abortController.signal,
+          // Keep the stream open when the tab is backgrounded. With the library
+          // default (`openWhenHidden: false`) fetch-event-source aborts the
+          // connection on `visibilitychange` to hidden and REOPENS it — issuing
+          // a brand-new `POST /invocations` for the SAME turn — when the tab
+          // becomes visible again. That reopen happens inside the library, reusing
+          // this request and bypassing our per-session double-submit + streamId
+          // supersession guards, so nothing here catches it. Because a client
+          // abort does NOT propagate through the AgentCore Runtime data plane, the
+          // original backend agent keeps running; the reopened one runs the same
+          // turn concurrently, and both persist tool-use/tool-result events to the
+          // same AgentCore Memory session — corrupting history (duplicate /
+          // interleaved toolResult turns) and bricking the conversation with a
+          // Bedrock "toolResult blocks exceed toolUse blocks" ValidationException.
+          // Keeping the single stream alive across tab switches is also correct for
+          // long agentic turns. See the restore-time repair in
+          // TurnBasedSessionManager for the server-side safety net.
+          openWhenHidden: true,
+          async onopen(response) {
+            if (response.ok && response.headers.get('content-type')?.includes('text/event-stream')) {
+              streamOpened = true;
+              return; // everything's good
             }
+            rejectedStatus = response.status;
+            if (response.status === 401) {
+              // BFF session is missing or expired. Bounce to /auth/login —
+              // `handleUnauthorized` is idempotent, so a 401 here that races
+              // with one from a parallel request only navigates once.
+              bffSession.handleUnauthorized();
+              throw new UnauthorizedError();
+            } else if (response.status === 403) {
+              // Handle forbidden (e.g., usage limit exceeded, or the Runtime
+              // refusing the forwarded token)
+              throw new FatalError((await readErrorDetail(response)) ?? 'Access forbidden');
+            } else if (response.status === 409) {
+              // Single-flight guard: another turn for this session is still
+              // streaming server-side. This is a benign rejection, not a
+              // failure — surface a gentle notice (handled in `onerror`) and
+              // don't tear down as fatal/retriable.
+              throw new AlreadyStreamingError(await parseConflictMessage(response));
+            } else if (response.status >= 400 && response.status < 500 && response.status !== 429) {
+              // Client-side errors are usually non-retriable
+              let errorMessage = `Request failed with status ${response.status}`;
 
-            throw new FatalError(errorMessage);
-          } else if (response.status === 409) {
-            // Single-flight guard: another turn for this session is still
-            // streaming server-side. This is a benign rejection, not a
-            // failure — surface a gentle notice (handled in `onerror`) and
-            // don't tear down as fatal/retriable.
-            throw new AlreadyStreamingError(await parseConflictMessage(response));
-          } else if (response.status >= 400 && response.status < 500 && response.status !== 429) {
-            // Client-side errors are usually non-retriable
-            let errorMessage = `Request failed with status ${response.status}`;
-
-            try {
-              const errorData = await response.json();
-              if (errorData.error) {
-                // Structured error from backend
-                errorMessage = errorData.error.message || errorMessage;
-              } else if (errorData.message) {
-                errorMessage = errorData.message;
-              }
-            } catch {
-              // If response is not JSON, try to get text
               try {
-                const errorText = await response.text();
-                errorMessage = errorText || errorMessage;
+                const errorData = await response.json();
+                if (errorData.error) {
+                  // Structured error from backend
+                  errorMessage = errorData.error.message || errorMessage;
+                } else if (errorData.message) {
+                  errorMessage = errorData.message;
+                }
               } catch {
-                // Ignore if we can't read the response
+                // If response is not JSON, try to get text
+                try {
+                  const errorText = await response.text();
+                  errorMessage = errorText || errorMessage;
+                } catch {
+                  // Ignore if we can't read the response
+                }
+              }
+
+              throw new FatalError(errorMessage);
+            } else {
+              // Server errors or unexpected status codes (retriable)
+              const errorMessage = `Server error: ${response.status} ${response.statusText}`;
+              console.error('RetriableError:', errorMessage);
+              throw new RetriableError(errorMessage);
+            }
+          },
+          onmessage: (msg: EventSourceMessage) => {
+            // Parse the data if it's a string
+            let parsedData = msg.data;
+            if (typeof msg.data === 'string') {
+              try {
+                parsedData = JSON.parse(msg.data);
+              } catch (e) {
+                console.warn('Failed to parse SSE data:', msg.data);
+                parsedData = msg.data;
               }
             }
-
-            throw new FatalError(errorMessage);
-          } else {
-            // Server errors or unexpected status codes (retriable)
-            const errorMessage = `Server error: ${response.status} ${response.statusText}`;
-            console.error('RetriableError:', errorMessage);
-            throw new RetriableError(errorMessage);
-          }
-        },
-        onmessage: (msg: EventSourceMessage) => {
-          // Parse the data if it's a string
-          let parsedData = msg.data;
-          if (typeof msg.data === 'string') {
-            try {
-              parsedData = JSON.parse(msg.data);
-            } catch (e) {
-              console.warn('Failed to parse SSE data:', msg.data);
-              parsedData = msg.data;
-            }
-          }
-          this.streamParserService.parseEventSourceMessage(
-            sessionId,
-            msg.event,
-            parsedData,
-            streamId,
-          );
-        },
-        onclose: () => {
-          finalizeStream();
-
-          // Fallback only: the title normally arrives mid-stream as a
-          // `session_title` SSE event, whose handler (applyServerTitle)
-          // removes the session from newSessionIds — making this a no-op.
-          // It still fires when the stream outran title generation (fast
-          // response) or the event was lost, fetching the title Nova Micro
-          // wrote to session metadata concurrently with the stream.
-          if (this.sessionService.isNewSession(requestObject.session_id)) {
-            this.refreshTitleFromServer(requestObject.session_id);
-          }
-        },
-        onerror: (err) => {
-          finalizeStream();
-
-          // 401 already triggered the redirect — skip the toast so it
-          // doesn't flash before the page tears down.
-          if (err instanceof UnauthorizedError) {
-            throw err;
-          }
-
-          // 409 single-flight rejection is expected, not an error: the prior
-          // response is still generating. Show a soft, dismissible notice with
-          // the server's explanation rather than a "Chat Request Failed" toast.
-          if (err instanceof AlreadyStreamingError) {
-            this.errorService.addError('Already responding', err.message, undefined, undefined);
-            throw err;
-          }
-
-          // Display error message to user using ErrorService
-          if (err instanceof FatalError) {
-            this.errorService.addError('Chat Request Failed', err.message, undefined, undefined);
-          } else if (err instanceof RetriableError) {
-            // For retriable errors, show with retry suggestion
-            this.errorService.addError(
-              'Connection Error',
-              'A temporary connection error occurred. The request may be retried automatically.',
-              err.message,
+            this.streamParserService.parseEventSourceMessage(
+              sessionId,
+              msg.event,
+              parsedData,
+              streamId,
             );
-          } else {
-            // Unknown error type
-            this.errorService.handleNetworkError(err instanceof Error ? err.message : String(err));
-          }
+          },
+          onclose: () => {
+            finalizeStream();
 
-          throw err;
-        },
-      });
+            // Fallback only: the title normally arrives mid-stream as a
+            // `session_title` SSE event, whose handler (applyServerTitle)
+            // removes the session from newSessionIds — making this a no-op.
+            // It still fires when the stream outran title generation (fast
+            // response) or the event was lost, fetching the title Nova Micro
+            // wrote to session metadata concurrently with the stream.
+            if (this.sessionService.isNewSession(requestObject.session_id)) {
+              this.refreshTitleFromServer(requestObject.session_id);
+            }
+          },
+          onerror: (err) => {
+            finalizeStream();
+
+            // 401 already triggered the redirect — skip the toast so it
+            // doesn't flash before the page tears down.
+            if (err instanceof UnauthorizedError) {
+              throw err;
+            }
+
+            // 409 single-flight rejection is expected, not an error: the prior
+            // response is still generating. Show a soft, dismissible notice with
+            // the server's explanation rather than a "Chat Request Failed" toast.
+            if (err instanceof AlreadyStreamingError) {
+              this.errorService.addError('Already responding', err.message, undefined, undefined);
+              throw err;
+            }
+
+            // Display error message to user using ErrorService
+            if (err instanceof FatalError) {
+              this.errorService.addError('Chat Request Failed', err.message, undefined, undefined);
+            } else if (err instanceof RetriableError) {
+              // For retriable errors, show with retry suggestion
+              this.errorService.addError(
+                'Connection Error',
+                'A temporary connection error occurred. The request may be retried automatically.',
+                err.message,
+              );
+            } else {
+              // Unknown error type
+              this.errorService.handleNetworkError(err instanceof Error ? err.message : String(err));
+            }
+
+            throw err;
+          },
+        });
+      } catch (error) {
+        if (streamOpened || error instanceof UnauthorizedError) throw error;
+        throw new StreamNotStartedError(notSentReason(error), rejectedStatus);
+      }
     } catch (error) {
       // Guarded teardown for failures fetchEventSource surfaces as a
       // rejection (and for the pre-flight config throw above). Idempotent

@@ -180,7 +180,7 @@ describe('ChatHttpService', () => {
 
     await expect(
       service.sendChatRequest({ session_id: 's1', message: 'hi' }),
-    ).rejects.toMatchObject({ name: 'AlreadyStreamingError' });
+    ).rejects.toMatchObject({ name: 'StreamNotStartedError', httpStatus: 409 });
 
     // Gentle, dismissible notice carrying the server's explanation — NOT the
     // "Chat Request Failed" / network-error paths.
@@ -205,10 +205,39 @@ describe('ChatHttpService', () => {
 
     await expect(
       service.sendChatRequest({ session_id: 's1', message: 'hi' }),
-    ).rejects.toMatchObject({ name: 'AlreadyStreamingError' });
+    ).rejects.toMatchObject({ name: 'StreamNotStartedError', httpStatus: 409 });
 
     const [, message] = errorSvc.addError.mock.calls[0];
     expect(message).toBe('This conversation is busy generating a response.');
+    vi.restoreAllMocks();
+  });
+
+  it('rejects a Runtime token refusal as not started, in words the user can read', async () => {
+    // Dev, 2026-10-09: app-api relayed the Runtime's 403 inside its own
+    // `detail`, double-encoded, and the old parse fell back to "Access forbidden".
+    const body = JSON.stringify({ detail: JSON.stringify({ message: 'Unauthorized inbound token' }) });
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(body, { status: 403, headers: { 'content-type': 'application/json' } }),
+    );
+    const errorSvc = TestBed.inject(ErrorService) as any;
+
+    await expect(service.sendChatRequest({ session_id: 's1', message: 'hi' })).rejects.toMatchObject({
+      name: 'StreamNotStartedError',
+      httpStatus: 403,
+      reason: 'Your sign-in was being renewed when this was sent.',
+    });
+    expect(errorSvc.addError.mock.calls[0][1]).toBe('Unauthorized inbound token');
+    expect(chatStateService.setChatLoading).toHaveBeenCalledWith('s1', false);
+    vi.restoreAllMocks();
+  });
+
+  it('rejects a connection that never opened as not started', async () => {
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('Failed to fetch'));
+
+    await expect(service.sendChatRequest({ session_id: 's1', message: 'hi' })).rejects.toMatchObject({
+      name: 'StreamNotStartedError',
+      reason: 'The server could not be reached.',
+    });
     vi.restoreAllMocks();
   });
 
