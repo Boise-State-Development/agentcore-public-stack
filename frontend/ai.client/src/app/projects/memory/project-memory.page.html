@@ -111,6 +111,16 @@
                 <ng-icon name="heroArchiveBox" class="size-4" aria-hidden="true" />
                 Archive
               </a>
+              <button
+                type="button"
+                (click)="exportMemory()"
+                [disabled]="exporting()"
+                [title]="'Download ' + (activeScope() === 'mine' ? 'your memory' : 'project memory') + ' as a .zip, with who added each item'"
+                class="inline-flex items-center gap-2 rounded-2xl border border-gray-200 bg-white px-3.5 py-1.5 text-sm/6 font-medium text-gray-700 transition-colors hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-wait dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 dark:hover:bg-gray-800"
+              >
+                <ng-icon name="heroArrowDownTray" class="size-4" aria-hidden="true" />
+                {{ exporting() ? 'Exporting…' : 'Export' }}
+              </button>
               <app-memory-maintenance
                 #maintenance
                 [projectId]="p.projectId"

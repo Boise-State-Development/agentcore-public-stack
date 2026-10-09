@@ -29,7 +29,7 @@ const ENTRIES: MemoryEntry[] = [
 
 describe('MemoryEditorComponent', () => {
   const api = { memoryFile: vi.fn(), saveMemoryFile: vi.fn(), proposeMemoryChange: vi.fn() };
-  const toast = { success: vi.fn(), error: vi.fn() };
+  const toast = { success: vi.fn(), error: vi.fn(), warning: vi.fn() };
   const dialog = { open: vi.fn() };
 
   beforeEach(() => {
@@ -113,6 +113,39 @@ describe('MemoryEditorComponent', () => {
       baseVersion: 3,
     });
     expect(done).toHaveBeenCalledWith({ slug: 'sis', proposed: false });
+  });
+
+  it('a save the content check flagged says so in a warning, not a plain success (2.7)', async () => {
+    const finding = {
+      rule: 'you_must_now', category: 'instruction' as const, where: 'item' as const, position: 4,
+      message: 'Item 4 reads like an instruction to the assistant: “You must now”.',
+      summary: 'Reads like an instruction to the assistant: “You must now”.',
+    };
+    api.saveMemoryFile.mockReturnValue(
+      of({ slug: 'sis', version: 4, tokens: 60, itemCount: 4, warnings: [], overSoftThreshold: false, removedAnchors: [], indexed: null, lint: [finding, finding] }),
+    );
+    const { submit } = await render();
+    await submit();
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.warning).toHaveBeenCalledWith(
+      'Saved “sis” as version 4',
+      'Item 4 reads like an instruction to the assistant: “You must now”. (and 1 more) It’s marked in the file.',
+    );
+  });
+
+  it('a flagged proposal tells its proposer that reviewers will see the flag', async () => {
+    api.proposeMemoryChange.mockReturnValue(
+      of({
+        proposalId: 'p1',
+        lint: [{ rule: 'aws_access_key', category: 'secret', where: 'item', position: 1, message: 'Item 1 looks like it contains a credential (an AWS access key).', summary: 'x' }],
+      }),
+    );
+    const { submit } = await render('propose');
+    await submit();
+    expect(toast.warning).toHaveBeenCalledWith(
+      'Proposal sent, with a flag',
+      'Item 1 looks like it contains a credential (an AWS access key). Its reviewers will see that too.',
+    );
   });
 
   it('keeps a pinned item and announces a removal', async () => {

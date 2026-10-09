@@ -36,10 +36,12 @@ import {
   MemoryPinsResponse,
   MemoryRestoreResponse,
   CreateMemoryProposalRequest,
+  CreateMemoryProposalResponse,
   MemoryFileHistory,
   MemoryFileVersionContent,
   SaveMemoryFileRequest,
   SaveMemoryFileResponse,
+  SaveMemoryIndexResponse,
   MemoryScope,
   ProjectMemory,
   ProjectOutputsResponse,
@@ -348,17 +350,28 @@ export class ProjectApiService {
     );
   }
 
-  saveMemoryIndex(projectId: string, scope: MemoryScope, content: string): Observable<{ content: string }> {
-    return this.http.put<{ content: string }>(
+  saveMemoryIndex(projectId: string, scope: MemoryScope, content: string): Observable<SaveMemoryIndexResponse> {
+    return this.http.put<SaveMemoryIndexResponse>(
       this.url(projectId, '/memory/index'),
       { content },
       this.options(new HttpParams().set('scope', scope)),
     );
   }
 
+  /**
+   * A scope's memory as a `.zip`: the index, each file, and `provenance.json` with who added,
+   * changed, approved or restored each item (2.7). Any member, for project memory.
+   */
+  exportMemory(projectId: string, scope: MemoryScope): Observable<Blob> {
+    return this.http.get(this.url(projectId, '/memory/export'), {
+      ...this.options(new HttpParams().set('scope', scope)),
+      responseType: 'blob',
+    });
+  }
+
   /** Propose a change to the shared memory for an editor to review (any member). */
-  proposeMemoryChange(projectId: string, body: CreateMemoryProposalRequest): Observable<MemoryProposal> {
-    return this.http.post<MemoryProposal>(this.url(projectId, '/memory/proposals'), body, this.options());
+  proposeMemoryChange(projectId: string, body: CreateMemoryProposalRequest): Observable<CreateMemoryProposalResponse> {
+    return this.http.post<CreateMemoryProposalResponse>(this.url(projectId, '/memory/proposals'), body, this.options());
   }
 
   /** A file's saved versions, newest first. */

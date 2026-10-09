@@ -12,6 +12,7 @@ import { parseIso } from '../../utils/date';
 import { MemoryEntry, MemoryFile, MemoryItem, MemoryLimits, MemoryRestoreResponse, MemoryScope, ReplacedMemoryItem } from '../models/project.model';
 import { ProjectApiService } from '../services/project-api.service';
 import { projectErrorMessage } from '../services/projects.service';
+import { MemoryLintFlagsComponent } from './memory-lint-flags.component';
 import { MemoryMeterComponent } from './memory-meter.component';
 import { MemoryTextComponent } from './memory-text.component';
 import { contributors, describeProvenance, replacedLabel, resolveLink } from './memory-text';
@@ -31,11 +32,15 @@ import { contributors, describeProvenance, replacedLabel, resolveLink } from './
  * "Replaces an older item", which opens to what it replaced while the archive still has it,
  * with **Put it back** for whoever can edit. An item a tidy-up moved here says which file it
  * came from.
+ *
+ * An item the content check flags (2.7: it reads like an instruction to the assistant, or
+ * holds a credential) says so under its provenance, for everyone who reads the file. The
+ * API works the flags out on each read, so they follow the deployment's current patterns.
  */
 @Component({
   selector: 'app-memory-file-view',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DatePipe, NgIcon, RouterLink, MemoryMeterComponent, MemoryTextComponent],
+  imports: [DatePipe, NgIcon, RouterLink, MemoryLintFlagsComponent, MemoryMeterComponent, MemoryTextComponent],
   providers: [provideIcons({ heroBookmark, heroBookmarkSolid, heroClock, heroPencilSquare, heroSparkles, heroTrash })],
   host: { class: 'block' },
   template: `
@@ -89,6 +94,9 @@ import { contributors, describeProvenance, replacedLabel, resolveLink } from './
       @if (entry().description) {
         <p class="mt-0.5 text-sm/6 text-gray-600 dark:text-gray-400">{{ entry().description }}</p>
       }
+      @if (file()?.lint?.length) {
+        <app-memory-lint-flags [findings]="file()!.lint!" />
+      }
       @if (entry().aliases.length) {
         <p class="mt-2 flex flex-wrap items-center gap-1.5">
           <span class="sr-only">Also known as:</span>
@@ -134,6 +142,9 @@ import { contributors, describeProvenance, replacedLabel, resolveLink } from './
                     (<a [routerLink]="['/s', sid]" class="rounded-sm font-medium text-primary-accessible underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-50">open it</a>)}@if (provenance(item).at) { · {{ at(provenance(item).at) | date: 'MMM d, y' }}}@if (provenance(item).movedFrom; as from) { · moved here from
                     @if (fileExists(from)) {<a [routerLink]="[]" [queryParams]="{ file: from }" queryParamsHandling="merge" class="rounded-sm font-mono font-medium text-primary-accessible underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-50">{{ from }}</a>} @else {<span class="font-mono">{{ from }}</span>} in a tidy-up}
                 </p>
+                @if (item.lint?.length) {
+                  <app-memory-lint-flags [findings]="item.lint!" />
+                }
                 @if (item.replaces?.length) {
                   <details class="mt-1 text-xs/5">
                     <summary class="w-fit cursor-pointer rounded-sm font-medium text-gray-700 underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-200">

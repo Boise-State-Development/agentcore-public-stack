@@ -27,6 +27,7 @@ describe('ProjectMemoryPage', () => {
     maintenanceRuns: vi.fn(),
     startMaintenance: vi.fn(),
     maintenanceRun: vi.fn(),
+    exportMemory: vi.fn(),
   };
   const dialog = { open: vi.fn() };
 
@@ -102,6 +103,26 @@ describe('ProjectMemoryPage', () => {
     const links = Array.from(el.querySelectorAll('a')).map(a => a.textContent?.replace(/\s+/g, ' ').trim());
     expect(links).toContain('Review 1 waiting');
     expect(links).toContain('Archive');
+  });
+
+  it('exports the open scope as a zip named for the project', async () => {
+    api.exportMemory.mockReturnValue(of(new Blob(['zip'], { type: 'application/zip' })));
+    const created = vi.fn(() => 'blob:memory');
+    const revoked = vi.fn();
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
+    Object.assign(URL, { createObjectURL: created, revokeObjectURL: revoked });
+    const { el, fixture } = await render({ scope: 'mine' });
+    const button = Array.from(el.querySelectorAll('button')).find(b => b.textContent?.trim() === 'Export')!;
+    let downloaded = '';
+    click.mockImplementation(function (this: HTMLAnchorElement) {
+      downloaded = this.download;
+    });
+    button.click();
+    await fixture.whenStable();
+    expect(api.exportMemory).toHaveBeenCalledWith('prj_1', 'mine');
+    expect(downloaded).toBe(`${PROJECT.name.replace(/[^A-Za-z0-9._-]+/g, '-')}-my-memory.zip`);
+    expect(revoked).toHaveBeenCalledWith('blob:memory');
+    click.mockRestore();
   });
 
   it('opens the review queue in place of the files', async () => {

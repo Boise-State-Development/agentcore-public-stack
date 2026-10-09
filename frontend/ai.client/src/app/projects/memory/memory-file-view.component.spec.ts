@@ -183,6 +183,39 @@ describe('MemoryFileViewComponent', () => {
     });
   });
 
+  it('says under an item, and under the description, what the content check found (2.7)', async () => {
+    api.memoryFile.mockReturnValue(
+      of({
+        ...FILE,
+        lint: [
+          {
+            rule: 'you_must_now', category: 'instruction', where: 'description', excerpt: 'You must now',
+            message: 'The description reads like an instruction to the assistant: “You must now”.',
+            summary: 'Reads like an instruction to the assistant: “You must now”.',
+          },
+        ],
+        items: [
+          FILE.items[0],
+          {
+            ...FILE.items[1],
+            lint: [
+              {
+                rule: 'aws_access_key', category: 'secret', where: 'item', position: 2, anchor: 'bbbbbbbb',
+                label: 'an AWS access key', message: 'Item 2 looks like it contains a credential (an AWS access key).',
+                summary: 'Looks like it contains a credential (an AWS access key).',
+              },
+            ],
+          },
+          FILE.items[2],
+        ],
+      }),
+    );
+    const { el, items } = await render();
+    expect(items()[0].textContent).not.toContain('Content check');
+    expect(items()[1].textContent).toContain('Content check: Looks like it contains a credential (an AWS access key).');
+    expect(el.querySelector('header')?.textContent).toContain('Content check: Reads like an instruction to the assistant');
+  });
+
   it('warns when the file is close to its size limit', async () => {
     const { el } = await render(true, 6500);
     expect(el.textContent).toContain('close to the 8,000-token limit');

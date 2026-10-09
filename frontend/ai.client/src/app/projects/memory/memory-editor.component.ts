@@ -29,6 +29,7 @@ import {
   aliasProblem,
   estimateTokens,
   itemProblem,
+  lintLine,
   renderItems,
   slugProblem,
   splitAliases,
@@ -535,10 +536,15 @@ export class MemoryEditorComponent {
     this.saving.set(true);
     try {
       if (this.proposing()) {
-        await firstValueFrom(
+        const proposal = await firstValueFrom(
           this.api.proposeMemoryChange(this.projectId(), { slug, text: renderItems(items), description, aliases }),
         );
-        this.toast.success('Proposal sent', 'The project’s editors will review it. You’ll be told when they decide.');
+        const flagged = lintLine(proposal.lint);
+        if (flagged) {
+          this.toast.warning('Proposal sent, with a flag', `${flagged} Its reviewers will see that too.`);
+        } else {
+          this.toast.success('Proposal sent', 'The project’s editors will review it. You’ll be told when they decide.');
+        }
       } else {
         const result = await firstValueFrom(
           this.api.saveMemoryFile(this.projectId(), this.scope(), slug, {
@@ -548,12 +554,19 @@ export class MemoryEditorComponent {
             baseVersion: this.isNew() ? 0 : this.entry()?.version || 1,
           }),
         );
-        this.toast.success(
-          this.isNew() ? `Created “${result.slug}”` : `Saved “${result.slug}” as version ${result.version}`,
-          result.indexed === 'over_budget'
-            ? 'The index is full, so it wasn’t added there. Edit the index to make room, or the assistant won’t see it first.'
-            : result.warnings[0],
-        );
+        const title = this.isNew() ? `Created “${result.slug}”` : `Saved “${result.slug}” as version ${result.version}`;
+        const flagged = lintLine(result.lint);
+        if (flagged) {
+          // The content check (2.7) only flags: the save went through, and the file shows the flag.
+          this.toast.warning(title, `${flagged} It’s marked in the file.`);
+        } else {
+          this.toast.success(
+            title,
+            result.indexed === 'over_budget'
+              ? 'The index is full, so it wasn’t added there. Edit the index to make room, or the assistant won’t see it first.'
+              : result.warnings[0],
+          );
+        }
       }
       this.done.emit({ slug, proposed: this.proposing() });
     } catch (err) {

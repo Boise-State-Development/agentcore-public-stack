@@ -8,7 +8,7 @@ import { MaintenanceOp, MemoryEntry, MemoryProposal, MemoryProposalDetail, Proje
 import { ProjectApiService } from '../services/project-api.service';
 import { projectErrorMessage } from '../services/projects.service';
 import { MemoryTextComponent } from './memory-text.component';
-import { MAX_PROPOSAL_NOTE_CHARS, changeCounts, compareItems } from './memory-text';
+import { MAX_PROPOSAL_NOTE_CHARS, changeCounts, compareItems, parseItems } from './memory-text';
 
 /** What the page needs to hear after a decision. */
 export interface ReviewOutcome {
@@ -100,6 +100,18 @@ export interface ReviewOutcome {
                 {{ proposer(p) }}{{ p.proposerKind === 'agent' ? ', through the assistant' : p.proposerKind === 'schedule' ? ', from a scheduled run' : '' }} · {{ created(p) | date: 'MMM d, y, h:mm a' }}
               }
             </p>
+
+            @if (!detailLoading() && lintNotes().length) {
+              <div class="mt-4 rounded-xl border border-state-warning-200 bg-state-warning-50 px-3.5 py-3 text-xs/5 text-state-warning-800 dark:border-state-warning-800 dark:bg-state-warning-900/20 dark:text-state-warning-300">
+                <p class="font-semibold">The content check flagged {{ detail()?.kind === 'compaction' ? 'a change here' : 'what this adds' }}</p>
+                <ul class="mt-1 list-disc space-y-0.5 pl-4">
+                  @for (note of lintNotes(); track $index) {
+                    <li>{{ note }}</li>
+                  }
+                </ul>
+                <p class="mt-1.5">Every task reads memory as reference material. Approving saves the text as written, so check it states facts rather than telling the assistant what to do, and holds no passwords or keys.</p>
+              </div>
+            }
 
             @if (detailLoading()) {
               <div class="mt-5 h-24 animate-pulse rounded-xl bg-gray-100 dark:bg-gray-700"></div>
@@ -196,9 +208,12 @@ export interface ReviewOutcome {
                   <section [attr.aria-labelledby]="'proposed-' + p.proposalId">
                     <h4 [id]="'proposed-' + p.proposalId" class="mb-2 text-xs/5 font-semibold tracking-wide text-gray-600 uppercase dark:text-gray-400">{{ editing() ? 'Your edited version' : 'Proposed' }}</h4>
                     <ul class="flex flex-col gap-1.5">
-                      @for (line of diff().proposed; track $index) {
+                      @for (line of diff().proposed; track $index; let i = $index) {
                         <li class="rounded-lg px-2.5 py-1.5 text-sm/6 break-words" [class]="line.kind === 'added' ? 'bg-state-success-50 text-state-success-900 dark:bg-state-success-900/30 dark:text-state-success-200' : 'text-gray-700 dark:text-gray-300'">
                           @if (line.kind === 'added') {<span class="sr-only">Added: </span>}<app-memory-text [text]="line.text" [entries]="entries()" />
+                          @if (flagged().has(i + 1)) {
+                            <span class="mt-1 block text-xs/5 font-medium text-state-warning-800 dark:text-state-warning-300">Flagged by the content check (item {{ i + 1 }})</span>
+                          }
                         </li>
                       } @empty {
                         <li class="rounded-lg border border-dashed border-gray-300 px-2.5 py-3 text-sm/6 text-gray-600 dark:border-gray-600 dark:text-gray-400">Empty.</li>
@@ -313,6 +328,33 @@ export class MemoryReviewComponent {
     const d = this.detail();
     if (!d) return { current: [], proposed: [] };
     return compareItems(d.currentText, this.editing() ? this.editedText() : d.text);
+  });
+
+  /**
+   * The proposed items the content check flagged (2.7), by their 1-based position in the
+   * proposed file, which is the order the comparison lists them in. Not while the reviewer
+   * edits: the positions are the proposal's.
+   */
+  protected readonly flagged = computed<ReadonlySet<number>>(() => {
+    if (this.editing()) return new Set();
+    const lint = this.detail()?.lint ?? [];
+    return new Set(lint.filter(f => f.where === 'item' && f.position).map(f => f.position as number));
+  });
+
+  /**
+   * The banner's lines. A file proposal's numbered items line up with the comparison below,
+   * so its sentences stand as they are; a tidy-up shows changes rather than numbered items,
+   * so each line leads with the start of the item it is about instead.
+   */
+  protected readonly lintNotes = computed<string[]>(() => {
+    const d = this.detail();
+    const lint = d?.lint ?? [];
+    if (!d || d.kind !== 'compaction') return lint.map(f => f.message);
+    const items = parseItems(d.text);
+    return lint.map(f => {
+      const text = f.where === 'item' && f.position ? items[f.position - 1]?.text : null;
+      return text ? `“${clip(text)}”: ${f.summary}` : f.message;
+    });
   });
 
   protected readonly summary = computed(() => {
@@ -466,4 +508,10 @@ function count(n: number): string {
 
 function changes(n: number): string {
   return `${n} ${n === 1 ? 'change' : 'changes'}`;
+}
+
+/** The start of an item, to name it in a sentence. */
+function clip(text: string): string {
+  const line = text.replace(/\s+/g, ' ').trim();
+  return line.length > 60 ? `${line.slice(0, 59).trimEnd()}…` : line;
 }
