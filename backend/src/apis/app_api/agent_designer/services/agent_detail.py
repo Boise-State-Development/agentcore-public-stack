@@ -13,6 +13,13 @@ Two reads over one Agent record, with one thing in common: **they speak in names
   Designer's picker makes, so "what you may bind" and "what will run for you" can never
   drift apart.
 
+  **Skills are the one exception**, and they diff against the run-time predicate
+  (``resolve_invocable_skill_ids``) instead of the palette. The palette is the viewer's own
+  skills, while the runtime also resolves skills that the *Agent's owner* wrote
+  (invoke-through, Skills v2 §6). Diffing a shared Agent against the palette marked every
+  owner-authored skill "missing", so viewers were blocked from Agents that would have run
+  for them.
+
 Two rules in here are load-bearing and easy to erode:
 
 **1. ``knowledge_base`` is never gated.** ``compat.effective_bindings`` synthesizes a
@@ -32,7 +39,7 @@ preview offering an outcome the runtime cannot produce is a preview that lies. R
 """
 
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from apis.shared.assistants.categories import get_category
 from apis.shared.assistants.compat import effective_bindings
@@ -49,6 +56,8 @@ from apis.shared.auth.models import User
 from apis.shared.models.managed_models import list_all_managed_models
 from apis.shared.models.models import ModelStatus
 from apis.shared.models.retirement import resolve_effective_model, resolve_from_catalog
+from apis.shared.feature_flags import skills_enabled
+from apis.shared.skills.access import resolve_invocable_skill_ids
 from apis.shared.skills.repository import get_skill_catalog_repository
 from apis.shared.tools.scoped_ids import base_tool_id
 from apis.shared.memory.service import MemorySpaceService
@@ -312,6 +321,20 @@ async def resolve_listing_display(
 
 
 # ---------------------------------------------------------------------- runnability
+async def _available_refs(kind: str, assistant: Assistant, user: User, refs: List[str]) -> Set[str]:
+    """The refs of ``kind`` that would resolve for ``user`` when this Agent runs.
+
+    Skills go through the run-time resolver's own predicate, so an Agent owner's skills
+    count as available to anyone who can open the Agent (see the module docstring). The
+    flag check matches ``_resolve_skills``, which blocks while Skills are disabled.
+    """
+    if kind != "skill":
+        return {item.ref for item in await list_bindable(kind, user)}
+    if not skills_enabled():
+        return set()
+    return await resolve_invocable_skill_ids(user, refs, assistant.owner_id)
+
+
 async def resolve_runnability(
     assistant: Assistant,
     user: User,
@@ -352,7 +375,9 @@ async def resolve_runnability(
         # picker shows the viewer. An empty list is a legitimate answer (the primitive's
         # feature flag is off in this environment), and it correctly blocks, matching
         # the run-time resolver's behaviour in the same situation.
-        available = {item.ref for item in await list_bindable(kind, user)}
+        available = await _available_refs(
+            kind, assistant, user, [_binding_key(b) for b in of_kind]
+        )
         for binding in of_kind:
             key = _binding_key(binding)
             if key in available:

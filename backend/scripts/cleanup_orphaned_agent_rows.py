@@ -92,6 +92,8 @@ from typing import Any, Dict, List, Optional, Sequence
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
+from apis.shared.kb_backend.reserved import is_reserved_kb_id  # noqa: E402
+
 #: Row types and what --apply does with each.
 HANDLED = ("KB", "DOC", "SHARE", "CRAWL", "SYNCPOL", "VERSION", "REPORT")
 #: Owned by the knowledge-base teardown, which clears them itself.
@@ -154,6 +156,10 @@ def find_orphans(
     for pk, rows in sorted(partitions.items()):
         if any(row["SK"] == "METADATA" for row in rows):
             continue
+        # A platform knowledge base (the conversation-search index) has no agent
+        # by design; it is not an orphan.
+        if is_reserved_kb_id(pk.split("#", 1)[1]):
+            continue
         orphan = Orphan(agent_id=pk.split("#", 1)[1], rows=rows, newest=newest_timestamp(rows))
         (young if orphan.newest and orphan.newest[:19] > cutoff else ready).append(orphan)
     return ready, young
@@ -207,7 +213,7 @@ def table_index(items: Sequence[Dict[str, Any]]) -> tuple[set, set, set]:
         if pk.startswith("AST#"):
             agent_id = pk.split("#", 1)[1]
             any_rows.add(agent_id)
-            if item.get("SK") == "METADATA":
+            if item.get("SK") == "METADATA" or is_reserved_kb_id(agent_id):
                 live.add(agent_id)
     return live, any_rows, referenced
 

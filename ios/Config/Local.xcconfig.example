@@ -1,0 +1,6 @@
+// Copy to Local.xcconfig (untracked) to build for a device or distribute.
+// The simulator and CI do not need this file.
+//
+// Never commit a real team id or bundle id to the public repo.
+DEVELOPMENT_TEAM = ABCDE12345
+PRODUCT_BUNDLE_IDENTIFIER = edu.example.agentcore

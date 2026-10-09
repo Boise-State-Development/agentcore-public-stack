@@ -278,26 +278,30 @@
 
       <!-- Fixed input at bottom -->
       <div class="chat-input-footer embedded compact">
-        <app-chat-input
-          [showAnnouncements]="showAnnouncements()"
-          [announcementPlacement]="announcementPlacement()"
-          [sessionId]="sessionId()"
-          [draftKey]="draftKey()"
-          [isChatLoading]="isChatLoading()"
-          [showFileControls]="resolvedConfig().showFileControls"
-          [showVoiceControl]="resolvedConfig().showVoiceControl"
-          (messageSubmitted)="onMessageSubmitted($event)"
-          (messageCancelled)="onMessageCancelled()"
-          (fileAttached)="onFileAttached($event)"
-          [compact]="true"
->
-          <!-- Context meter (cost lives in its panel), beside the model
-               picker. Pinned to this chat's own session: an embedded chat is
-               deliberately NOT the viewed session, so an unpinned meter would
-               report whatever conversation the user last opened — a plausible
-               number belonging to something else. -->
-          <app-context-meter composerMeta [sessionId]="sessionId()" />
-        </app-chat-input>
+        @if (isArchiveServed()) {
+          <app-expired-session-notice />
+        } @else {
+          <app-chat-input
+            [showAnnouncements]="showAnnouncements()"
+            [announcementPlacement]="announcementPlacement()"
+            [sessionId]="sessionId()"
+            [draftKey]="draftKey()"
+            [isChatLoading]="isChatLoading()"
+            [showFileControls]="resolvedConfig().showFileControls"
+            [showVoiceControl]="resolvedConfig().showVoiceControl"
+            (messageSubmitted)="onMessageSubmitted($event)"
+            (messageCancelled)="onMessageCancelled()"
+            (fileAttached)="onFileAttached($event)"
+            [compact]="true"
+          >
+            <!-- Context meter (cost lives in its panel), beside the model
+                 picker. Pinned to this chat's own session: an embedded chat is
+                 deliberately NOT the viewed session, so an unpinned meter would
+                 report whatever conversation the user last opened — a plausible
+                 number belonging to something else. -->
+            <app-context-meter composerMeta [sessionId]="sessionId()" />
+          </app-chat-input>
+        }
       </div>
     </div>
   } @else {
@@ -329,23 +333,27 @@
       [class.sidenav-expanded]="!isSidenavCollapsed()"
       [class.artifact-pane-open]="artifactPanelOpen()">
       <div class="mx-auto px-4 max-w-[720px]">
-        <app-chat-input
-          [showAnnouncements]="showAnnouncements()"
-          [announcementPlacement]="announcementPlacement()"
-          [sessionId]="sessionId()"
-          [draftKey]="draftKey()"
-          [isChatLoading]="isChatLoading()"
-          [showFileControls]="resolvedConfig().showFileControls"
-          [showVoiceControl]="resolvedConfig().showVoiceControl"
-          (messageSubmitted)="onMessageSubmitted($event)"
-          (messageCancelled)="onMessageCancelled()"
-          (fileAttached)="onFileAttached($event)"
-          [compact]="true"
->
-          <!-- Context meter (cost lives in its panel), beside the model
-               picker; unpinned so it follows the viewed session. -->
-          <app-context-meter composerMeta />
-        </app-chat-input>
+        @if (isArchiveServed()) {
+          <app-expired-session-notice />
+        } @else {
+          <app-chat-input
+            [showAnnouncements]="showAnnouncements()"
+            [announcementPlacement]="announcementPlacement()"
+            [sessionId]="sessionId()"
+            [draftKey]="draftKey()"
+            [isChatLoading]="isChatLoading()"
+            [showFileControls]="resolvedConfig().showFileControls"
+            [showVoiceControl]="resolvedConfig().showVoiceControl"
+            (messageSubmitted)="onMessageSubmitted($event)"
+            (messageCancelled)="onMessageCancelled()"
+            (fileAttached)="onFileAttached($event)"
+            [compact]="true"
+          >
+            <!-- Context meter (cost lives in its panel), beside the model
+                 picker; unpinned so it follows the viewed session. -->
+            <app-context-meter composerMeta />
+          </app-chat-input>
+        }
       </div>
     </div>
   }

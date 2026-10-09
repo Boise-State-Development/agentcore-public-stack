@@ -73,6 +73,7 @@ class BaseAgent(ABC):
         skip_persistence: bool = False,
         extra_tools: Optional[List[Any]] = None,
         memory_context: Optional[str] = None,
+        text_only_model: bool = False,
     ):
         """
         Initialize base agent with shared infrastructure.
@@ -97,6 +98,8 @@ class BaseAgent(ABC):
                 (temperature, top_p, top_k, max_tokens, thinking, ...). Wins over
                 the legacy ``temperature``/``max_tokens`` kwargs when both are set.
             skip_persistence: If True, don't persist messages (for preview sessions)
+            text_only_model: The model's catalog row declares TEXT input only, so
+                it sees history with media blocks replaced by text.
         """
         # Basic state
         self.session_id = session_id
@@ -123,6 +126,7 @@ class BaseAgent(ABC):
             inference_params=resolved_params,
             mantle_api_mode=mantle_api_mode,
             mantle_region=mantle_region,
+            text_only=text_only_model,
         )
 
         # Frozen snapshot of agent-construction params, used when the turn
@@ -137,6 +141,7 @@ class BaseAgent(ABC):
             "inference_params": dict(resolved_params),
             "mantle_api_mode": mantle_api_mode,
             "mantle_region": mantle_region,
+            "text_only_model": text_only_model,
         }
 
         # Load retry configuration from environment variables

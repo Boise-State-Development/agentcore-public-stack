@@ -1,10 +1,11 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
-import { DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
+import { DIALOG_DATA, Dialog, DialogRef } from '@angular/cdk/dialog';
+import { expectNamedDialog, openInCdkDialog } from '../../../testing/cdk-dialog';
 
 import { ShareAgentDialogComponent, ShareAgentDialogData } from './share-agent-dialog.component';
 import { AssistantService } from '../../assistants/services/assistant.service';
@@ -13,14 +14,18 @@ import { ConfigService } from '../../services/config.service';
 import { AgentService } from '../services/agent.service';
 import { AgentListingService } from '../services/agent-listing.service';
 import { ShareEntry } from '../../assistants/models/assistant.model';
-import { AgentListingBlock } from '../models/store.model';
+import { AgentListingBlock, SkillExposure } from '../models/store.model';
 
 /** Network-bound doubles. None of the behaviour under test reaches them. */
 function baseProviders(overrides: {
   visibility: 'PRIVATE' | 'PUBLIC' | 'SHARED';
   updateAssistant?: () => Promise<void>;
+  userPermission?: 'owner' | 'editor' | 'viewer';
+  shares?: ShareEntry[];
+  getShareSkillExposure?: (id: string) => Promise<SkillExposure[]>;
 }) {
   const updateAssistant = overrides.updateAssistant ?? (async () => undefined);
+  const getShareSkillExposure = overrides.getShareSkillExposure ?? (async () => []);
   return [
     provideRouter([]),
     provideHttpClient(),
@@ -31,7 +36,7 @@ function baseProviders(overrides: {
     {
       provide: AssistantService,
       useValue: {
-        getAssistantShares: async () => [],
+        getAssistantShares: async () => overrides.shares ?? [],
         shareAssistant: async () => undefined,
         unshareAssistant: async () => undefined,
         updateSharePermission: async () => undefined,
@@ -42,6 +47,7 @@ function baseProviders(overrides: {
       provide: AgentService,
       useValue: {
         getAgent: async () => ({ agentId: 'ast-test', visibility: overrides.visibility }),
+        getShareSkillExposure,
       },
     },
     {
@@ -64,7 +70,7 @@ function baseProviders(overrides: {
           assistantId: 'ast-test',
           name: 'Test',
           visibility: overrides.visibility,
-          userPermission: 'owner',
+          userPermission: overrides.userPermission ?? 'owner',
         },
       } satisfies ShareAgentDialogData,
     },
@@ -350,6 +356,148 @@ describe('ShareAgentDialogComponent', () => {
 
     it('offers nothing when the agent was never submitted', () => {
       expect((component as any).canWithdraw()).toBe(false);
+    });
+  });
+
+  /**
+   * Skills v2 §6/D7 at the share boundary. Invoke-through hands the owner's own bound skills
+   * to everyone the agent reaches, and a person who can run a skill can get the model to
+   * show its instructions — so the share dialog names them, as the submit dialog does.
+   */
+  describe('skill disclosure', () => {
+    const OWN_SKILLS: SkillExposure[] = [
+      { ref: 'skill-a', label: 'Policy Citation Format' },
+      { ref: 'skill-c', label: 'Grading Rubric' },
+    ];
+
+    /** Let the constructor's loads settle. */
+    const settle = () => new Promise((resolve) => setTimeout(resolve));
+
+    async function open(overrides: Parameters<typeof baseProviders>[0]) {
+      TestBed.resetTestingModule();
+      TestBed.configureTestingModule({ providers: baseProviders(overrides) });
+      const fixture = TestBed.createComponent(ShareAgentDialogComponent);
+      await settle();
+      fixture.detectChanges();
+      return { fixture, c: fixture.componentInstance as any };
+    }
+
+    const text = (fixture: { nativeElement: HTMLElement }) => fixture.nativeElement.textContent ?? '';
+
+    it('names nothing while the agent reaches nobody', async () => {
+      const { fixture, c } = await open({
+        visibility: 'PRIVATE',
+        getShareSkillExposure: async () => OWN_SKILLS,
+      });
+
+      expect(c.showSkillDisclosure()).toBe(false);
+      expect(text(fixture)).not.toContain('Policy Citation Format');
+    });
+
+    it('names the skills as soon as the first person is added, before Save', async () => {
+      const { fixture, c } = await open({
+        visibility: 'PRIVATE',
+        getShareSkillExposure: async () => OWN_SKILLS,
+      });
+
+      c.onQueryChange('a@x.com');
+      c.addTypedEmails();
+      fixture.detectChanges();
+
+      expect(c.showSkillDisclosure()).toBe(true);
+      const rendered = text(fixture);
+      expect(rendered).toContain('2 skills you wrote come along with this agent');
+      expect(rendered).toContain('Policy Citation Format');
+      expect(rendered).toContain('Grading Rubric');
+      expect(rendered).toContain('Everyone on this list');
+    });
+
+    it('names them on an agent already shared', async () => {
+      const { c } = await open({
+        visibility: 'SHARED',
+        shares: [{ email: 'a@x.com', permission: 'viewer' }],
+        getShareSkillExposure: async () => OWN_SKILLS.slice(0, 1),
+      });
+
+      expect(c.showSkillDisclosure()).toBe(true);
+      expect(c.exposedSkillsHeading()).toBe('1 skill you wrote comes along with this agent');
+    });
+
+    it('names them on a PUBLIC agent with nobody listed, to everyone', async () => {
+      const { fixture } = await open({
+        visibility: 'PUBLIC',
+        getShareSkillExposure: async () => OWN_SKILLS,
+      });
+
+      const rendered = text(fixture);
+      expect(rendered).toContain('Policy Citation Format');
+      expect(rendered).toContain('Everyone at Boise State who opens it');
+    });
+
+    it('says nothing when the owner bound no skills of their own', async () => {
+      const { c } = await open({
+        visibility: 'SHARED',
+        shares: [{ email: 'a@x.com', permission: 'viewer' }],
+      });
+
+      expect(c.showSkillDisclosure()).toBe(false);
+    });
+
+    it('never asks on behalf of an editor', async () => {
+      const getShareSkillExposure = vi.fn().mockResolvedValue(OWN_SKILLS);
+      const { c } = await open({
+        visibility: 'SHARED',
+        userPermission: 'editor',
+        shares: [{ email: 'a@x.com', permission: 'viewer' }],
+        getShareSkillExposure,
+      });
+
+      expect(getShareSkillExposure).not.toHaveBeenCalled();
+      expect(c.showSkillDisclosure()).toBe(false);
+    });
+
+    it('keeps sharing usable when the lookup fails', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const { c } = await open({
+        visibility: 'SHARED',
+        shares: [{ email: 'a@x.com', permission: 'viewer' }],
+        getShareSkillExposure: async () => {
+          throw new Error('boom');
+        },
+      });
+
+      expect(c.showSkillDisclosure()).toBe(false);
+      expect(c.canManageShares()).toBe(true);
+    });
+  });
+
+  describe('opened through a real CDK dialog', () => {
+    afterEach(() => TestBed.inject(Dialog).closeAll());
+
+    /** `baseProviders`' stub DialogRef/DIALOG_DATA are shadowed by the ones `Dialog.open` provides. */
+    function open(userPermission: 'owner' | 'editor') {
+      TestBed.resetTestingModule();
+      TestBed.configureTestingModule({ providers: baseProviders({ visibility: 'SHARED', userPermission }) });
+      return openInCdkDialog<ShareAgentDialogComponent, ShareAgentDialogData>(ShareAgentDialogComponent, {
+        data: {
+          agent: { assistantId: 'ast-test', name: 'Policy Lookup', visibility: 'SHARED', userPermission },
+        },
+      });
+    }
+
+    it('names the dialog after the agent, describes it, and starts an owner on Add people', async () => {
+      const { container } = await open('owner');
+      expectNamedDialog(container, {
+        name: 'Share Policy Lookup',
+        description: 'Choose who can open this agent, and whether it is listed in the store.',
+      });
+      expect(container.querySelector('[cdkFocusInitial]')?.id).toBe('share-add-people');
+    });
+
+    it('leaves an editor, who cannot add anyone, on the default focus', async () => {
+      const { container } = await open('editor');
+      expectNamedDialog(container, { name: 'Share Policy Lookup' });
+      expect(container.querySelector('[cdkFocusInitial]')).toBeNull();
     });
   });
 });

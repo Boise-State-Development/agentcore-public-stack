@@ -21,7 +21,7 @@ from apis.app_api.shares.service import (
     ProjectShareError,
     ShareService,
 )
-from apis.app_api.shares.snapshot_store import ShareSnapshotStore
+from apis.shared.shares.snapshot_store import ShareSnapshotStore
 from apis.shared.auth.models import User
 from apis.shared.projects.repository import ProjectRepository
 from apis.shared.projects.service import ProjectService
@@ -105,7 +105,7 @@ def _session(session_id: str = "s1", project_id: Optional[str] = None, title: st
 def _sources(metadata: Optional[SessionMetadata]):
     return (
         patch("apis.app_api.shares.service.get_session_metadata", new=AsyncMock(return_value=metadata)),
-        patch("apis.app_api.shares.service.get_messages", new=AsyncMock(return_value=MagicMock(messages=[]))),
+        patch("apis.app_api.shares.service.get_messages", new=AsyncMock(return_value=MagicMock(messages=[], tool_summaries=[]))),
     )
 
 
@@ -299,3 +299,26 @@ class TestTheProjectsTrail:
             ("project.task_unshared", project.project_id, project_share),
         ]
         assert trail.records[0]["after"]["title"] == "Budget draft"
+
+
+class TestForkNeverReusesTheSessionId:
+    """A fork is the requester's own conversation under a NEW session id.
+
+    Reusing the original id would put two users on one session id, which is
+    the precondition for the cross-user exposure of 2026-08-31, when runtime
+    affinity hashed the session id alone and both users' turns shared one
+    container and its agent cache.
+    """
+
+    def test_fork_mints_a_fresh_session_id_owned_by_the_requester(self, shares, project):
+        share_id = _share(shares, _session("original-sid"), access="public").share_id
+        stored = AsyncMock()
+        copy = AsyncMock(return_value=0)
+        with patch.object(shares, "_copy_messages_to_memory", new=copy), \
+                patch("apis.app_api.shares.service.store_session_metadata", new=stored):
+            asyncio.run(shares.export_shared_conversation(share_id, VIEWER))
+
+        forked = stored.call_args.kwargs
+        assert forked["session_id"] != "original-sid"
+        assert forked["user_id"] == VIEWER.user_id
+        assert copy.call_args.args[:2] == (forked["session_id"], VIEWER.user_id)

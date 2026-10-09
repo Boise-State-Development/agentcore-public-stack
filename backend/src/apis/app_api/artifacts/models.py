@@ -18,6 +18,12 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from .service import MAX_ARTIFACT_TITLE_LENGTH
 
 
+
+# "project" shares one artifact version with every member of the Shared Project
+# its task belongs to (the session's ``preferences.projectId``); the read check is
+# membership, and the share is listed in the project's Outputs (Shared Projects 3.3).
+ArtifactShareAccessLevel = Literal["public", "specific", "project"]
+
 class RenderTokenRequest(BaseModel):
     version: int = Field(..., ge=1, description="Artifact version to render")
     session_id: Optional[str] = Field(
@@ -154,7 +160,7 @@ class CreateArtifactShareRequest(BaseModel):
     version: int = Field(
         ..., ge=1, description="Artifact version to share (never #HEAD)"
     )
-    access_level: Literal["public", "specific"] = Field(
+    access_level: ArtifactShareAccessLevel = Field(
         ...,
         alias="accessLevel",
         description="'public' = any authenticated tenant user; "
@@ -185,7 +191,7 @@ class UpdateArtifactShareRequest(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    access_level: Optional[Literal["public", "specific"]] = Field(
+    access_level: Optional[ArtifactShareAccessLevel] = Field(
         default=None, alias="accessLevel", description="New access level"
     )
     allowed_emails: Optional[List[str]] = Field(
@@ -216,7 +222,7 @@ class ArtifactShareResponse(BaseModel):
     artifact_id: str = Field(..., alias="artifactId")
     version: int = Field(..., description="Pinned artifact version")
     owner_id: str = Field(..., alias="ownerId")
-    access_level: Literal["public", "specific"] = Field(
+    access_level: ArtifactShareAccessLevel = Field(
         ..., alias="accessLevel"
     )
     allowed_emails: Optional[List[str]] = Field(
@@ -224,6 +230,9 @@ class ArtifactShareResponse(BaseModel):
     )
     title: str = Field(default="", description="Denormalized artifact title")
     content_type: str = Field(default="", alias="contentType")
+    project_id: Optional[str] = Field(
+        default=None, alias="projectId", description="The project shared with (accessLevel 'project' only)"
+    )
     created_at: str = Field(..., alias="createdAt")
     updated_at: Optional[str] = Field(default=None, alias="updatedAt")
     share_url: str = Field(
@@ -237,6 +246,13 @@ class ArtifactShareListResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     shares: List[ArtifactShareResponse] = Field(default_factory=list)
+    project_id: Optional[str] = Field(
+        default=None,
+        alias="projectId",
+        description="The project this artifact may be shared with (made in one of its tasks, caller a member, "
+        "project active); null when 'Project members' is not an option",
+    )
+    project_name: Optional[str] = Field(default=None, alias="projectName")
 
 
 class SharedArtifactResponse(BaseModel):

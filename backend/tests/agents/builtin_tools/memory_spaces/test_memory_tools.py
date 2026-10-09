@@ -200,7 +200,9 @@ class TestProjectHarnessSpecs:
 
     def test_every_tool_takes_a_scope_enum(self):
         specs = self._specs()
-        assert list(specs) == ["memory_list", "memory_read", "memory_query", "memory_save"]
+        assert list(specs) == ["memory_list", "memory_read", "memory_query", "memory_save", "memory_propose"]
+        # Proposals only ever target the project's shared memory (2.5a).
+        assert "scope" not in specs.pop("memory_propose")["inputSchema"]["json"]["properties"]
         for spec in specs.values():
             schema = spec["inputSchema"]["json"]
             assert "scope" in schema["required"]
@@ -212,6 +214,18 @@ class TestProjectHarnessSpecs:
         assert 'one fact per "- " line' in description
         assert "prose and headings are rejected" in description
         assert "editor" in description
+
+    def test_save_says_when_to_use_mine_and_to_write_the_rule(self):
+        """G17: asked to "remember this just for me", Haiku kept it in the conversation."""
+        description = " ".join(self._specs()["memory_save"]["description"].split())
+        assert 'save it to "mine" now' in description
+        assert "will not carry it into their next task" in description
+        assert "Make `description` the rule itself" in description
+
+    def test_save_says_a_new_file_is_indexed_for_it(self):
+        description = " ".join(self._specs()["memory_save"]["description"].split())
+        assert "A new file is added to that scope's MEMORY.md index" in description
+        assert "`memory_read` it first" in description
 
     def test_specs_are_the_same_for_every_member_and_project(self):
         from agents.builtin_tools.memory_spaces.project_tools import (

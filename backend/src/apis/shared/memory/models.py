@@ -116,6 +116,10 @@ class MemoryEntryRef(BaseModel):
         None, alias="itemCount", description="Number of items (canonical files)"
     )
     archived: bool = Field(False, description="Archived files still resolve as link targets")
+    pinned: List[str] = Field(
+        default_factory=list,
+        description="Anchors of pinned items: a save may not drop them (Shared Projects 2.5a-2)",
+    )
     version: int = Field(
         0,
         description="Number of FILEVER rows for this slug; 0 = written before history existed",
@@ -143,6 +147,322 @@ class FileVersion(BaseModel):
     reason: FileVersionReason = "edit"
     proposal_id: Optional[str] = Field(None, alias="proposalId")
     run_id: Optional[str] = Field(None, alias="runId")
+
+
+class ItemProvenance(BaseModel):
+    """Where one item came from (Shared Projects 2.5a-2). People are emails, never user ids.
+
+    ``added*`` is fixed when the item first appears; ``updated*`` moves on every
+    save that changes its text. ``source_session_id`` is the task the item was
+    saved or proposed from, when a task's assistant wrote it. ``proposal_id``,
+    ``proposed_by`` and ``approved_by`` are set when it arrived through a
+    proposal; ``restored_*`` when it came back from the archive; ``moved_*``
+    when a maintenance split moved it here from another file (2.6c), which
+    keeps everything else about where it came from.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    added_by: str = Field("", alias="addedBy")
+    added_at: str = Field("", alias="addedAt")
+    updated_by: Optional[str] = Field(None, alias="updatedBy")
+    updated_at: Optional[str] = Field(None, alias="updatedAt")
+    source_session_id: Optional[str] = Field(None, alias="sourceSessionId")
+    proposal_id: Optional[str] = Field(None, alias="proposalId")
+    proposed_by: Optional[str] = Field(None, alias="proposedBy")
+    approved_by: Optional[str] = Field(None, alias="approvedBy")
+    restored_by: Optional[str] = Field(None, alias="restoredBy")
+    restored_at: Optional[str] = Field(None, alias="restoredAt")
+    moved_from: Optional[str] = Field(None, alias="movedFrom")
+    moved_by: Optional[str] = Field(None, alias="movedBy")
+    moved_at: Optional[str] = Field(None, alias="movedAt")
+
+
+ArchiveReason = Literal["removed", "deleted", "merged", "superseded", "pruned"]
+
+
+class ArchivedItem(BaseModel):
+    """An ``ARCHIVE#{archivedAt}#{anchor}`` row: an item that left its file, restorable until ``ttl``.
+
+    ``removed``: a save left it out. ``deleted``: its whole file was deleted.
+    ``merged``, ``superseded`` and ``pruned``: an approved maintenance change
+    took it out (Shared Projects 2.6); ``superseded_by`` names the item that
+    took its place (the merged item, or the newer one). The text and
+    provenance travel with it, so a restore needs nothing else.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    archive_id: str = Field(..., alias="archiveId")
+    slug: str
+    anchor: str
+    text: str
+    reason: ArchiveReason
+    archived_by: str = Field("", alias="archivedBy")
+    archived_at: str = Field(..., alias="archivedAt")
+    restorable_until: str = Field(..., alias="restorableUntil")
+    provenance: Optional[ItemProvenance] = None
+    superseded_by: Optional[str] = Field(None, alias="supersededBy")
+
+
+# ---- maintenance (Shared Projects 2.6) ------------------------------------
+
+# ``merge``: two or more items that say the same thing become one, written only
+# from what they say. ``supersede``: a newer item replaces an older one it
+# contradicts or updates. ``prune``: an item whose dates have all passed and
+# that holds nothing lasting. ``split`` (2.6c): items about one sub-topic of a
+# file near its size limit move, unchanged, to a new file, and a pointer item
+# takes their place.
+MaintenanceOpType = Literal["merge", "supersede", "prune", "split"]
+PruneReason = Literal["expired"]
+
+
+class OpSource(BaseModel):
+    """An item an op reads, with its text when the plan was made.
+
+    An op applies only while every source still reads the same, so a file
+    edited since the run keeps the edit and loses only the ops it touched.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    anchor: str
+    text: str
+
+
+class MaintenanceOp(BaseModel):
+    """One change a maintenance run proposes to one file.
+
+    ``sources``: merge, every item merged (``keep`` takes the merged ``text``,
+    the rest leave the file); supersede, ``[old, new]`` (old leaves, new is
+    untouched); prune, the one item; split, the items that move to the new
+    file ``new_slug`` (described by ``description``), in their order, while
+    ``text`` is the pointer item that takes their place (written by the
+    verifier, never the model). ``why`` is the planner's reason, shown to the
+    reviewer.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    type: MaintenanceOpType
+    sources: List[OpSource]
+    text: Optional[str] = None
+    keep: Optional[str] = None
+    reason: Optional[PruneReason] = None
+    why: str = ""
+    new_slug: Optional[str] = Field(None, alias="newSlug")
+    description: Optional[str] = None
+
+    @property
+    def anchors(self) -> List[str]:
+        return [s.anchor for s in self.sources]
+
+    @property
+    def removed(self) -> List[str]:
+        """The anchors this op takes out of the file (a split's move to its new file)."""
+        if self.type == "merge":
+            return [a for a in self.anchors if a != self.keep]
+        if self.type == "split":
+            return self.anchors
+        return self.anchors[:1]
+
+
+class DroppedOp(BaseModel):
+    """A planned op the verifier refused, and why (``code`` is stable, for metrics)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    type: str
+    code: str
+    detail: str = ""
+
+
+class MaintenanceVerification(BaseModel):
+    """What the deterministic verifier did with one file's plan."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    planned: int = 0
+    kept: int = 0
+    dropped: List[DroppedOp] = Field(default_factory=list)
+
+
+ProposalState = Literal["pending", "approved", "rejected", "withdrawn"]
+# ``member``: through the API; ``agent``: a task's assistant on the member's behalf
+# (``memory_propose``); ``schedule``: a scheduled run (3.2); ``maintenance``: a
+# maintenance run a member started (2.6), which proposes in their name.
+ProposerKind = Literal["member", "agent", "schedule", "maintenance"]
+ProposalKind = Literal["entry", "compaction"]
+
+
+class MemoryProposal(BaseModel):
+    """A ``PROPOSAL#{proposalId}`` row: a change to a file, waiting for an editor (Shared Projects 2.5a).
+
+    ``text`` is the whole proposed file in the same form ``save_entry`` takes,
+    validated when proposed. ``base_version``/``base_content_hash`` record the
+    file it was written against (0 and "" for a new file), so an approval can
+    tell that the file has moved on since. Decided rows are kept as the review
+    record and go with the space.
+
+    A ``compaction`` proposal (2.6) comes from a maintenance run: ``ops`` are
+    its changes, addressed by anchor, and ``text`` is the file with all of them
+    applied. It is approved op by op against the file as it is by then.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    proposal_id: str = Field(..., alias="proposalId")
+    kind: ProposalKind = "entry"
+    state: ProposalState = "pending"
+    slug: str
+    text: str
+    description: Optional[str] = None
+    aliases: Optional[List[str]] = None
+    base_version: int = Field(0, alias="baseVersion")
+    base_content_hash: str = Field("", alias="baseContentHash")
+    tokens: Optional[int] = None
+    proposer_id: str = Field(..., alias="proposerId")
+    proposer_email: str = Field("", alias="proposerEmail")
+    proposer_kind: ProposerKind = Field("member", alias="proposerKind")
+    # The task it was proposed from, carried into the approved items' provenance.
+    source_session_id: Optional[str] = Field(None, alias="sourceSessionId")
+    created_at: str = Field(..., alias="createdAt")
+    decided_by: Optional[str] = Field(None, alias="decidedBy")
+    decided_by_email: Optional[str] = Field(None, alias="decidedByEmail")
+    decided_at: Optional[str] = Field(None, alias="decidedAt")
+    note: Optional[str] = None
+    # The FILEVER version an approval wrote, and whether the reviewer edited the text first.
+    result_version: Optional[int] = Field(None, alias="resultVersion")
+    edited: bool = False
+    # Compaction only: the changes, what the verifier dropped, the run that
+    # planned them, and which ops an approval applied (by index into ``ops``).
+    ops: Optional[List[MaintenanceOp]] = None
+    verification: Optional[MaintenanceVerification] = None
+    run_id: Optional[str] = Field(None, alias="runId")
+    applied_ops: Optional[List[int]] = Field(None, alias="appliedOps")
+    # The files an approved split created (2.6c).
+    created_files: Optional[List[str]] = Field(None, alias="createdFiles")
+
+
+MaintenanceRunState = Literal["queued", "running", "done", "failed"]
+# ``proposed``: a compaction proposal is waiting for review (shared memory).
+# ``applied``: the changes were saved (a member's own memory, 2.6b).
+# ``changed``: the file was saved by someone else while the run was planning it,
+# so it was left as it is. ``nothing_to_do``: the planner found nothing, or the
+# verifier dropped all of it. ``pending_review``: the file already has a
+# maintenance proposal waiting. ``not_reached``: the run ran out of time first.
+# ``created``: a new file a split in a member's own memory made (2.6c);
+# ``split_from`` names the file its items came from.
+MaintenanceFileOutcome = Literal[
+    "proposed", "applied", "changed", "nothing_to_do", "pending_review", "failed", "not_reached", "created"
+]
+# What an undo did with one applied file (2.6b). ``restored``: put back as the
+# snapshot had it, in a new version. ``changed``: saved since the run, so left
+# alone. ``missing``: deleted since the run. ``failed``: the restore was refused.
+# ``removed``: a file a split created, taken away again once its items were
+# back where they came from (2.6c).
+MaintenanceUndoOutcome = Literal["restored", "changed", "missing", "failed", "removed"]
+
+
+class MaintenanceFileResult(BaseModel):
+    """What a run did with one file.
+
+    For an applied file (a member's own memory, 2.6b), ``version`` and
+    ``content_hash`` are what the run wrote, which is what an undo checks the
+    file against, and ``ops`` are the changes it made, for the summary.
+    ``ops_omitted`` is set when a large run kept counts only, so the run row
+    stays well under DynamoDB's item limit.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    slug: str
+    outcome: MaintenanceFileOutcome
+    proposal_id: Optional[str] = Field(None, alias="proposalId")
+    planned: int = 0
+    kept: int = 0
+    dropped: int = 0
+    error: Optional[str] = None
+    version: Optional[int] = None
+    content_hash: Optional[str] = Field(None, alias="contentHash")
+    ops: Optional[List[MaintenanceOp]] = None
+    ops_omitted: bool = Field(False, alias="opsOmitted")
+    undo: Optional[MaintenanceUndoOutcome] = None
+    undo_version: Optional[int] = Field(None, alias="undoVersion")
+    split_from: Optional[str] = Field(None, alias="splitFrom")
+
+
+class MaintenanceSnapshot(BaseModel):
+    """The space as the run found it (§4.6 step 2): the manifest and ``MEMORY.md``'s hash.
+
+    Objects are content-addressed and every version row keeps its object, so
+    this is enough to put the space back as it was.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    manifest_version: int = Field(0, alias="manifestVersion")
+    index_content_hash: Optional[str] = Field(None, alias="indexContentHash")
+    entries: List[MemoryEntryRef] = Field(default_factory=list)
+    taken_at: str = Field("", alias="takenAt")
+
+
+class MaintenanceRun(BaseModel):
+    """A ``SNAPSHOT#{runId}`` row: one maintenance run and the snapshot it worked from (Shared Projects 2.6).
+
+    app-api writes it ``queued`` with the model and its prices; the worker
+    takes the snapshot, plans, verifies and proposes (shared memory) or
+    applies (a member's own memory, 2.6b), then marks it ``done`` or
+    ``failed``. It expires with the space's archive retention, which is also
+    how long an applied run can be undone. ``scope`` is absent on rows
+    written before 2.6b, which are all shared.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    run_id: str = Field(..., alias="runId")
+    space_id: str = Field(..., alias="spaceId")
+    project_id: Optional[str] = Field(None, alias="projectId")
+    state: MaintenanceRunState = "queued"
+    slug: Optional[str] = Field(None, description="The one file to maintain; None for every file")
+    requested_by: str = Field(..., alias="requestedBy")
+    requested_by_email: str = Field("", alias="requestedByEmail")
+    requested_by_name: Optional[str] = Field(None, alias="requestedByName")
+    model_id: str = Field(..., alias="modelId")
+    input_price_per_million_tokens: Optional[float] = Field(None, alias="inputPricePerMillionTokens")
+    output_price_per_million_tokens: Optional[float] = Field(None, alias="outputPricePerMillionTokens")
+    created_at: str = Field(..., alias="createdAt")
+    started_at: Optional[str] = Field(None, alias="startedAt")
+    finished_at: Optional[str] = Field(None, alias="finishedAt")
+    snapshot: Optional[MaintenanceSnapshot] = None
+    results: List[MaintenanceFileResult] = Field(default_factory=list)
+    input_tokens: int = Field(0, alias="inputTokens")
+    output_tokens: int = Field(0, alias="outputTokens")
+    cost: Optional[float] = None
+    error: Optional[str] = None
+    scope: Optional[MemoryScope] = None
+    undone_at: Optional[str] = Field(None, alias="undoneAt")
+    undone_by: Optional[str] = Field(None, alias="undoneBy")
+
+    @property
+    def space_scope(self) -> str:
+        return self.scope or "shared"
+
+
+class RetrievalStats(BaseModel):
+    """A ``STATS#{slug}`` row: how often tasks have read one file (Shared Projects 2.6b, §3.3).
+
+    Bumped once per file per turn when a project harness's ``memory_read``
+    returns it, off the tool's return path. A read returns the whole file, so
+    there is no per-item signal to keep: §3.3's ``byAnchor`` stays unwritten
+    until something reads items rather than files.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    slug: str = ""
+    retrieval_count: int = Field(0, alias="retrievalCount")
+    last_retrieved_at: Optional[str] = Field(None, alias="lastRetrievedAt")
 
 
 class MemoryIndex(BaseModel):

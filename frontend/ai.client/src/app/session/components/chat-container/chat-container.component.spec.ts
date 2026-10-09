@@ -7,6 +7,7 @@ import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { ChatContainerComponent } from './chat-container.component';
 import { Agent } from '../../../agents/models/agent.model';
 import { ListingState } from '../../../agents/models/store.model';
+import { MessageMapService } from '../../services/session/message-map.service';
 
 /**
  * The foot-of-conversation feedback link is offered for **published** marketplace agents
@@ -153,5 +154,42 @@ describe('ChatContainerComponent — agent governance for the indicator', () => 
       agentWith({ modelConfig: { modelId: 'm-1' }, bindings: [] } as Partial<Agent>),
     );
     expect(value).toEqual({ modelName: 'm-1', toolCount: null, skillCount: null });
+  });
+});
+
+/**
+ * `docs/specs/conversation-search.md` §10 q4: a conversation the messages route
+ * served from the archive gives up its composer. The agent would restore from
+ * an empty Memory, and the new turn's archive write would replace the archived
+ * first turn, so the container shows a read-only notice instead.
+ */
+describe('ChatContainerComponent — archive-served conversations', () => {
+  function archivedFor(sessionId: string | null, archived: ReadonlySet<string>): boolean {
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({
+      providers: [
+        provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        {
+          provide: MessageMapService,
+          useValue: { isArchiveServed: (id: string | null) => !!id && archived.has(id) },
+        },
+      ],
+    });
+
+    const fixture = TestBed.createComponent(ChatContainerComponent);
+    fixture.componentRef.setInput('messages', []);
+    fixture.componentRef.setInput('sessionId', sessionId);
+    return fixture.componentInstance['isArchiveServed']();
+  }
+
+  it('swaps the composer out for the viewed archived session', () => {
+    expect(archivedFor('old', new Set(['old']))).toBe(true);
+  });
+
+  it('keeps the composer for any other session, and for a new chat', () => {
+    expect(archivedFor('live', new Set(['old']))).toBe(false);
+    expect(archivedFor(null, new Set(['old']))).toBe(false);
   });
 });

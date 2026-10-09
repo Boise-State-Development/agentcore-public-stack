@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from agents.main_agent.core.model_config import ModelConfig, ModelProvider, RetryConfig
+from agents.main_agent.core.retry_strategy import TransientModelRetryStrategy
 
 
 # ---------------------------------------------------------------------------
@@ -355,8 +356,8 @@ class TestRetryStrategy:
 
     @patch("agents.main_agent.core.agent_factory.Agent")
     @patch("agents.main_agent.core.agent_factory.OpenAIModel")
-    def test_openai_retry_strategy_is_none(self, mock_openai_cls, mock_agent_cls, monkeypatch):
-        """Req 4.7 — non-Bedrock provider → retry_strategy is None even with retry_config."""
+    def test_openai_gets_the_transient_strategy(self, mock_openai_cls, mock_agent_cls, monkeypatch):
+        """Non-Bedrock providers get the same strategy: None would mean retries OFF."""
         from agents.main_agent.core.agent_factory import AgentFactory
 
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
@@ -370,12 +371,12 @@ class TestRetryStrategy:
         AgentFactory.create_agent(model_config=cfg, **_COMMON_KWARGS)
 
         agent_kwargs = mock_agent_cls.call_args.kwargs
-        assert agent_kwargs["retry_strategy"] is None
+        assert isinstance(agent_kwargs["retry_strategy"], TransientModelRetryStrategy)
 
     @patch("agents.main_agent.core.agent_factory.Agent")
     @patch("agents.main_agent.core.agent_factory.GeminiModel")
-    def test_gemini_retry_strategy_is_none(self, mock_gemini_cls, mock_agent_cls, monkeypatch):
-        """Req 4.7 — Gemini provider → retry_strategy is None."""
+    def test_gemini_gets_the_transient_strategy(self, mock_gemini_cls, mock_agent_cls, monkeypatch):
+        """Gemini too: its client never retries unless configured to."""
         from agents.main_agent.core.agent_factory import AgentFactory
 
         monkeypatch.setenv("GOOGLE_GEMINI_API_KEY", "gemini-test-key")
@@ -389,7 +390,7 @@ class TestRetryStrategy:
         AgentFactory.create_agent(model_config=cfg, **_COMMON_KWARGS)
 
         agent_kwargs = mock_agent_cls.call_args.kwargs
-        assert agent_kwargs["retry_strategy"] is None
+        assert isinstance(agent_kwargs["retry_strategy"], TransientModelRetryStrategy)
 
 
 # ---------------------------------------------------------------------------
@@ -408,3 +409,54 @@ class TestSequentialToolExecutor:
 
         agent_kwargs = mock_agent_cls.call_args.kwargs
         assert isinstance(agent_kwargs["tool_executor"], SequentialToolExecutor)
+
+
+# ---------------------------------------------------------------------------
+# A text-only model sees history with media blocks replaced by text
+# ---------------------------------------------------------------------------
+class TestTextOnlyModel:
+    """A conversation that sent an image to a vision model keeps the block in
+    history; a TEXT-only model rejects the whole request over it."""
+
+    HISTORY = [
+        {"role": "user", "content": [{"image": {"format": "png", "source": {"bytes": b"x"}}}, {"text": "look"}]},
+    ]
+
+    @pytest.mark.parametrize(
+        "patch_target,cfg",
+        [
+            ("CountTokensBedrockModel", ModelConfig(model_id="zai.glm-5", text_only=True)),
+            (
+                "build_mantle_model",
+                ModelConfig(model_id="openai.gpt-oss-120b", provider=ModelProvider.MANTLE, text_only=True),
+            ),
+        ],
+    )
+    def test_text_only_model_streams_the_projection(self, patch_target, cfg):
+        from agents.main_agent.core.agent_factory import AgentFactory
+
+        model = MagicMock()
+        inner_stream = model.stream
+        with patch(f"agents.main_agent.core.agent_factory.{patch_target}", return_value=model), \
+             patch("agents.main_agent.core.agent_factory.Agent") as mock_agent_cls:
+            AgentFactory.create_agent(model_config=cfg, **_COMMON_KWARGS)
+
+        built = mock_agent_cls.call_args.kwargs["model"]
+        assert built is model
+        built.stream(self.HISTORY, None, "system")
+        sent = inner_stream.call_args.args[0]
+        assert sent[0]["content"][0] == {"text": "[Image omitted: the current model reads text only]"}
+        assert "image" in self.HISTORY[0]["content"][0], "the shared history is untouched"
+
+    @patch("agents.main_agent.core.agent_factory.Agent")
+    @patch("agents.main_agent.core.agent_factory.CountTokensBedrockModel")
+    def test_other_models_are_left_alone(self, mock_bedrock_cls, mock_agent_cls):
+        from agents.main_agent.core.agent_factory import AgentFactory
+
+        model = MagicMock()
+        inner_stream = model.stream
+        mock_bedrock_cls.return_value = model
+
+        AgentFactory.create_agent(model_config=_bedrock_config(), **_COMMON_KWARGS)
+
+        assert mock_agent_cls.call_args.kwargs["model"].stream is inner_stream

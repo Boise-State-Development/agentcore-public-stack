@@ -146,6 +146,13 @@ jobs:
       CDK_APP_API_MEMORY: ${{ vars.CDK_APP_API_MEMORY }}
       CDK_APP_API_DESIRED_COUNT: ${{ vars.CDK_APP_API_DESIRED_COUNT }}
       CDK_APP_API_MAX_CAPACITY: ${{ vars.CDK_APP_API_MAX_CAPACITY }}
+      # Per-task cap on concurrent /chat/api-converse Bedrock calls (default 16).
+      CDK_APP_API_CONVERSE_MAX_IN_FLIGHT: ${{ vars.CDK_APP_API_CONVERSE_MAX_IN_FLIGHT }}
+      # AgentCore Runtime platform version: V1 (default) or V2. An in-place
+      # update; the runtime id is unchanged. Unset means V1, so a V2 stack
+      # reverts to V1 if this variable is deleted. See
+      # docs/specs/agentcore-runtime-v2.md.
+      CDK_AGENTCORE_RUNTIME_PLATFORM_VERSION: ${{ vars.CDK_AGENTCORE_RUNTIME_PLATFORM_VERSION }}
       CDK_ALB_SUBDOMAIN: ${{ vars.CDK_ALB_SUBDOMAIN }}
       CDK_CERTIFICATE_ARN: ${{ vars.CDK_CERTIFICATE_ARN }}
       # Shared us-east-1 CloudFront cert (wildcard covering {domain} + *.{domain}).
@@ -246,6 +253,13 @@ jobs:
       # there. Unset (empty string) or anything else means off. The SPA's
       # matching switch is `features.projects` in src/environments/*.ts.
       CDK_PROJECTS_ENABLED: ${{ vars.CDK_PROJECTS_ENABLED }}
+      # Project-memory content lint (Shared Projects 2.7). Configuration, not a
+      # flag: it applies only inside Projects. Unset (empty string) means the
+      # defaults: `warn`, and no deployment patterns. `CDK_MEMORY_LINT_MODE` is
+      # off | warn | block; `CDK_MEMORY_SENSITIVE_PATTERNS` is a JSON list of
+      # Python regexes (strings or {"pattern", "label"}) or one per line.
+      CDK_MEMORY_LINT_MODE: ${{ vars.CDK_MEMORY_LINT_MODE }}
+      CDK_MEMORY_SENSITIVE_PATTERNS: ${{ vars.CDK_MEMORY_SENSITIVE_PATTERNS }}
       # Platform self-service (account tools: whoami / quota / settings reads +
       # the confirmed set_default_model write). Opt-in while in development: set
       # the `CDK_PLATFORM_SELF_SERVICE_ENABLED` variable to "true" in an
@@ -358,6 +372,34 @@ jobs:
       # (default 100). Leave unset to take those defaults.
       CDK_MANAGED_KB_STORAGE_ALARM_GB: ${{ vars.CDK_MANAGED_KB_STORAGE_ALARM_GB }}
       CDK_MANAGED_KB_DAILY_COST_ALARM_USD: ${{ vars.CDK_MANAGED_KB_DAILY_COST_ALARM_USD }}
+      # Days a conversation's content is kept after each turn, wherever it is
+      # stored (docs/specs/conversation-search.md §3). Unset means 365. Memory
+      # events stop at 365 even if this is higher; minimum 3.
+      CDK_CONVERSATION_RETENTION_DAYS: ${{ vars.CDK_CONVERSATION_RETENTION_DAYS }}
+      # Session rows follow the retention setting too: a daily task deletes
+      # sessions whose last turn is past it, through the same cascade as a
+      # user's delete (docs/specs/conversation-search.md §3).
+      #   CDK_CONVERSATION_RETENTION_PRUNES_SESSIONS  unset means ON; "false"
+      #                                               keeps rows as title-only
+      #                                               shells and stops the task
+      #   CDK_CONVERSATION_RETENTION_PRUNE_ARMED      unset means REPORT-ONLY;
+      #                                               "true" lets the task delete.
+      #                                               Even armed, the first run in
+      #                                               an environment is a dry run.
+      CDK_CONVERSATION_RETENTION_PRUNES_SESSIONS: ${{ vars.CDK_CONVERSATION_RETENTION_PRUNES_SESSIONS }}
+      CDK_CONVERSATION_RETENTION_PRUNE_ARMED: ${{ vars.CDK_CONVERSATION_RETENTION_PRUNE_ARMED }}
+      # Conversation index write path: the per-turn transcript archive that
+      # conversation search is built from (docs/specs/conversation-search.md
+      # §4). Opt-in while in development: set the
+      # `CDK_CONVERSATION_INDEX_ENABLED` variable to "true" in an environment
+      # to turn it on there. Unset (empty string) or anything else means off.
+      CDK_CONVERSATION_INDEX_ENABLED: ${{ vars.CDK_CONVERSATION_INDEX_ENABLED }}
+      # Conversation search read path: GET /sessions/search on app-api
+      # (docs/specs/conversation-search.md §5). Default on: set the
+      # `CDK_CONVERSATION_SEARCH_ENABLED` variable to "false" in an environment
+      # to turn it off there, and set `features.conversationSearch` to false in
+      # the matching environment file to match. Unset or anything else is on.
+      CDK_CONVERSATION_SEARCH_ENABLED: ${{ vars.CDK_CONVERSATION_SEARCH_ENABLED }}
       # Observability. All optional — unset means the default in config.ts.
       # XRAY_SAMPLING_RATE is a rate (0.0-1.0), not a percentage.
       CDK_OBSERVABILITY_ALARM_TOPIC_ENABLED: ${{ vars.CDK_OBSERVABILITY_ALARM_TOPIC_ENABLED }}

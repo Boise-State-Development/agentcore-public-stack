@@ -6,6 +6,7 @@ import { heroChevronRight } from '@ng-icons/heroicons/outline';
 import { SettingsVersion, SettingsVersionSummary } from '../models/project.model';
 import { ProjectApiService } from '../services/project-api.service';
 import { projectErrorMessage } from '../services/projects.service';
+import { personLabel } from '../../shared/utils/person';
 
 const FIELD_LABELS: Record<string, string> = {
   instructions: 'Instructions',
@@ -31,7 +32,7 @@ const FIELD_LABELS: Record<string, string> = {
     @if (error()) {
       <p role="alert" class="text-sm/6 text-state-danger-600 dark:text-state-danger-400">{{ error() }}</p>
     } @else if (versions() === null) {
-      <div class="h-16 animate-pulse rounded-2xl bg-gray-100 dark:bg-gray-800" aria-busy="true"></div>
+      <div class="h-16 animate-pulse rounded-2xl bg-gray-100 dark:bg-gray-700" aria-busy="true"></div>
     } @else if (versions()!.length === 0) {
       <p class="text-sm/6 text-gray-600 dark:text-gray-400">No changes yet. Each save will be listed here.</p>
     } @else {
@@ -48,7 +49,9 @@ const FIELD_LABELS: Record<string, string> = {
               <ng-icon name="heroChevronRight" class="size-4 shrink-0 text-gray-500 transition-transform dark:text-gray-400" [class.rotate-90]="open() === v.version" aria-hidden="true" />
               <span class="font-medium text-gray-900 dark:text-white">Version {{ v.version }}</span>
               <span class="min-w-0 flex-1 truncate text-gray-600 dark:text-gray-400">
-                @if (v.createdByEmail) { {{ labels(v.changes) }} · {{ v.createdByEmail }} } @else { Starting point }
+                @if (v.createdByEmail) {
+                  {{ labels(v.changes) }} · <span [attr.title]="v.createdByName ? v.createdByEmail : null">{{ personLabel(v.createdByName, v.createdByEmail) }}</span>
+                } @else { Starting point }
               </span>
               @if (v.createdAt) {
                 <span class="shrink-0 text-xs/5 text-gray-600 dark:text-gray-400">{{ v.createdAt | date: 'MMM d, y, h:mm a' }}</span>
@@ -82,6 +85,8 @@ const FIELD_LABELS: Record<string, string> = {
 })
 export class ProjectHistoryComponent {
   private api = inject(ProjectApiService);
+
+  protected readonly personLabel = personLabel;
 
   readonly projectId = input.required<string>();
 

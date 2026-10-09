@@ -44,6 +44,10 @@ from .models import ExportReceipt, MessageMetadata, PausedTurnSnapshot, PendingI
 # is_preview_session, so a lazy import would only defer the crash.
 from .preview import is_preview_session
 
+# Stdlib-only normalizer for the conversation-search attributes written beside
+# the title (titleLower, firstPrompt).
+from .search_text import first_prompt_value, normalize_search_text
+
 logger = logging.getLogger(__name__)
 
 # How many recent call rows to read when looking for the predecessor whose cache
@@ -202,6 +206,27 @@ async def store_user_display_text(
     except Exception as e:
         # Non-critical: displayText is a UI enhancement, don't break the request
         logger.error(f"Failed to store user displayText: {e}", exc_info=True)
+
+
+def get_user_display_text(session_id: str, user_id: str, message_id: int) -> Optional[str]:
+    """The ``displayText`` stored for one user message, or None.
+
+    Synchronous (call it through ``asyncio.to_thread``). Never raises: a
+    missing table, row or attribute all read as "no display text".
+    """
+    table_name = os.environ.get('DYNAMODB_SESSIONS_METADATA_TABLE_NAME')
+    if not table_name or is_preview_session(session_id):
+        return None
+    try:
+        response = get_dynamodb_table(table_name).get_item(
+            Key={"PK": f"USER#{user_id}", "SK": f"D#{session_id}#{message_id}"},
+            ProjectionExpression="displayText",
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning("Failed to read user displayText", exc_info=True)
+        return None
+    text = (response.get("Item") or {}).get("displayText")
+    return text if isinstance(text, str) and text.strip() else None
 
 
 
@@ -1020,6 +1045,10 @@ async def _store_session_metadata_cloud(
         item = session_metadata.model_dump(by_alias=True, exclude_none=True)
         for gsi_key in _RECENCY_KEY_ATTRS:
             item.pop(gsi_key, None)
+        # The lexical search attribute follows the title on every full-row write
+        # (the rename route, the first-turn create), never a stale copy of it.
+        if isinstance(item.get('title'), str):
+            item['titleLower'] = normalize_search_text(item['title'])
 
         # Convert floats to Decimal for DynamoDB compatibility
         item = _convert_floats_to_decimal(item)
@@ -1317,8 +1346,17 @@ async def ensure_session_metadata_exists(
         return False
 
 
-async def update_session_title(session_id: str, user_id: str, title: str) -> None:
-    """Update only the title attribute on the session row.
+async def update_session_title(
+    session_id: str, user_id: str, title: str, first_prompt: Optional[str] = None
+) -> None:
+    """Update only the title attributes on the session row.
+
+    Writes ``title`` and its search form ``titleLower`` together, and, when the
+    caller has the conversation's opening prompt, ``firstPrompt`` (first 300
+    normalized characters, set only if absent so a later title can never
+    replace it). Both feed the lexical leg of conversation search
+    (``docs/specs/conversation-search.md`` §5) and ride on this one write, so a
+    title costs no extra round trip.
 
     Uses a targeted ``UpdateExpression`` so it can run concurrently with
     ``store_session_metadata`` (which does a full-row merge) without racing
@@ -1344,13 +1382,14 @@ async def update_session_title(session_id: str, user_id: str, title: str) -> Non
         from botocore.exceptions import ClientError
 
         table = get_dynamodb_table(sessions_metadata_table)
+        update_expression, values = _title_update(title, first_prompt)
 
         try:
             table.update_item(
                 Key={"PK": f"USER#{user_id}", "SK": _static_session_sk(session_id)},
-                UpdateExpression="SET title = :t",
+                UpdateExpression=update_expression,
                 ConditionExpression="attribute_exists(PK)",
-                ExpressionAttributeValues={":t": title},
+                ExpressionAttributeValues=values,
             )
             logger.info(f"💾 Updated title for session {session_id}")
             return
@@ -1369,12 +1408,23 @@ async def update_session_title(session_id: str, user_id: str, title: str) -> Non
 
         table.update_item(
             Key={"PK": f"USER#{user_id}", "SK": sk},
-            UpdateExpression="SET title = :t",
-            ExpressionAttributeValues={":t": title},
+            UpdateExpression=update_expression,
+            ExpressionAttributeValues=values,
         )
         logger.info(f"💾 Updated title for session {session_id}")
     except Exception as e:
         logger.error(f"update_session_title failed: {e}", exc_info=True)
+
+
+def _title_update(title: str, first_prompt: Optional[str]) -> Tuple[str, Dict[str, Any]]:
+    """The ``UpdateExpression`` for a title write, with its search attributes."""
+    expression = "SET title = :t, titleLower = :tl"
+    values: Dict[str, Any] = {":t": title, ":tl": normalize_search_text(title)}
+    prompt = first_prompt_value(first_prompt)
+    if prompt:
+        expression += ", firstPrompt = if_not_exists(firstPrompt, :fp)"
+        values[":fp"] = prompt
+    return expression, values
 
 
 async def set_session_unread(session_id: str, user_id: str, unread: bool) -> None:
@@ -1776,10 +1826,17 @@ async def session_owned_by_other_user(session_id: str, user_id: str) -> bool:
     the resulting duplicate META row made the original owner's session resolve
     non-deterministically afterwards (see the item-scan in `_get_session_by_gsi`).
 
-    NOT a data-disclosure fix: conversation content lives in AgentCore Memory
-    keyed by actor id, so the second user always saw an empty conversation,
-    never the owner's messages. What leaked was the id, and what broke was the
-    owner's session record.
+    It is ALSO a data-disclosure guard. An earlier version of this note said
+    the second user always saw an empty thread because Memory is keyed by
+    actor id. That was wrong. Runtime affinity then hashed the session id
+    alone, so both users' turns reached the same container, and while the owner's agent
+    was still cached there, ``_adopt_session_conversation`` matched on session
+    id alone and aliased its live message list onto the second user's agent.
+    On dev, 2026-08-31, a probe user read back the owner's content that way.
+    The prod fork described above came 34 minutes after the owner's last turn,
+    after the container had idled out, and the second user's call carried no
+    history (``prefixFingerprints.messageCount == 1``). Runtime affinity now
+    pins per ``(user, session)`` and adoption matches on the same pair.
 
     Returns True only when at least one META row exists AND none of them belong
     to `user_id` — so a session the caller legitimately owns is never blocked,

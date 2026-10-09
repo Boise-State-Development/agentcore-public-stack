@@ -15,6 +15,15 @@ import { SessionService as SessionListService } from './session/services/session
 import { DockedPaneService } from './session/services/docked-pane/docked-pane.service';
 import { isAdminChromeRoute, isMinimalChromeRoute } from './shared/utils/route-chrome';
 import { BrandingService } from '../branding/branding.service';
+import { Dialog } from '@angular/cdk/dialog';
+import { FEATURES } from './services/features';
+import { SearchDialogService } from './components/search/search-dialog.service';
+import {
+  isSearchShortcut,
+  keepsSearchShortcut,
+  searchShortcutAria,
+  searchShortcutLabel,
+} from './components/search/search-shortcut';
 
 @Component({
   selector: 'app-root',
@@ -28,6 +37,9 @@ import { BrandingService } from '../branding/branding.service';
   ],
   templateUrl: './app.html',
   styleUrl: './app.css',
+  host: {
+    '(document:keydown)': 'onDocumentKeydown($event)',
+  },
 })
 export class App {
   protected readonly title = signal('boisestate.ai');
@@ -39,6 +51,11 @@ export class App {
   private dockedPane = inject(DockedPaneService);
   private titleService = inject(Title);
   private branding = inject(BrandingService);
+  private dialog = inject(Dialog);
+  private searchDialog = inject(SearchDialogService);
+  protected readonly conversationSearchOn = inject(FEATURES).conversationSearch;
+  protected readonly searchShortcutLabel = searchShortcutLabel();
+  protected readonly searchShortcutAria = searchShortcutAria();
 
   /** Re-read on every completed navigation; the value itself is unused,
    *  it exists so `minimalChrome` recomputes when the route changes. */
@@ -123,7 +140,30 @@ export class App {
     }
   }
 
+  protected openSearch(): void {
+    void this.searchDialog.open();
+  }
+
   newChat() {
     this.router.navigate(['']);
+  }
+
+  /**
+   * Cmd/Ctrl+K opens conversation search: the app's one global shortcut
+   * (conversation-search §6). A second press while it is up refocuses it. It
+   * stays out of the way while another dialog is open and inside a rich-text
+   * editor (`keepsSearchShortcut`).
+   */
+  onDocumentKeydown(event: KeyboardEvent): void {
+    if (!this.conversationSearchOn || !isSearchShortcut(event)) return;
+    if (this.searchDialog.isOpen()) {
+      event.preventDefault();
+      void this.searchDialog.open();
+      return;
+    }
+    if (this.dialog.openDialogs.length > 0) return;
+    if (keepsSearchShortcut(event.target)) return;
+    event.preventDefault();
+    void this.searchDialog.open();
   }
 }

@@ -268,6 +268,7 @@ def validate_canonical_save(
     description: Optional[str] = None,
     aliases: Optional[Sequence[str]] = None,
     mint: Callable[[], str] = new_anchor,
+    restorable: Sequence[str] = (),
 ) -> CanonicalSave:
     """Validate one save of a canonical file (§4.3 steps 1–4).
 
@@ -275,7 +276,8 @@ def validate_canonical_save(
     raw editor sends it) or ``items`` (the structured form). ``description``
     and ``aliases`` are the form fields; frontmatter in ``text`` wins over
     them, and either wins over the current values. ``None`` keeps the current
-    value.
+    value. ``restorable`` names anchors an archived item brings back: they are
+    accepted although the current file no longer has them.
     """
     if (text is None) == (items is None):
         raise ValueError("give exactly one of text or items")
@@ -312,7 +314,7 @@ def validate_canonical_save(
 
     # Step 3: anchors are known, unique, or minted now.
     known = [i.anchor for i in (current.items if current else ()) if i.anchor]
-    known_set = set(known)
+    known_set = set(known) | {a.lower() for a in restorable}
     seen: set[str] = set()
     anchored: List[Item] = []
     minted: List[str] = []

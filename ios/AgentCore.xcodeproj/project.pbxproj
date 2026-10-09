@@ -1,0 +1,223 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		AC0000000000000000000018 /* AgentCoreKit in Frameworks */ = {isa = PBXBuildFile; productRef = AC0000000000000000000017 /* AgentCoreKit */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		AC0000000000000000000005 /* AgentCore.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AgentCore.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		AC0000000000000000000008 /* Base.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Base.xcconfig; sourceTree = "<group>"; };
+		AC0000000000000000000009 /* Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Debug.xcconfig; sourceTree = "<group>"; };
+		AC000000000000000000000A /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Release.xcconfig; sourceTree = "<group>"; };
+		AC000000000000000000000B /* Version.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Version.xcconfig; sourceTree = "<group>"; };
+		AC000000000000000000000C /* Local.xcconfig.example */ = {isa = PBXFileReference; lastKnownFileType = text; path = Local.xcconfig.example; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		AC0000000000000000000006 /* AgentCore */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			explicitFileTypes = {
+			};
+			explicitFolders = (
+			);
+			path = AgentCore;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		AC0000000000000000000014 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AC0000000000000000000018 /* AgentCoreKit in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		AC0000000000000000000002 = {
+			isa = PBXGroup;
+			children = (
+				AC0000000000000000000006 /* AgentCore */,
+				AC0000000000000000000007 /* Config */,
+				AC0000000000000000000003 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		AC0000000000000000000003 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				AC0000000000000000000005 /* AgentCore.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		AC0000000000000000000007 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				AC0000000000000000000008 /* Base.xcconfig */,
+				AC0000000000000000000009 /* Debug.xcconfig */,
+				AC000000000000000000000A /* Release.xcconfig */,
+				AC000000000000000000000B /* Version.xcconfig */,
+				AC000000000000000000000C /* Local.xcconfig.example */,
+			);
+			path = Config;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		AC0000000000000000000004 /* AgentCore */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AC0000000000000000000010 /* Build configuration list for PBXNativeTarget "AgentCore" */;
+			buildPhases = (
+				AC0000000000000000000013 /* Sources */,
+				AC0000000000000000000014 /* Frameworks */,
+				AC0000000000000000000015 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				AC0000000000000000000006 /* AgentCore */,
+			);
+			name = AgentCore;
+			packageProductDependencies = (
+				AC0000000000000000000017 /* AgentCoreKit */,
+			);
+			productName = AgentCore;
+			productReference = AC0000000000000000000005 /* AgentCore.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		AC0000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2600;
+				LastUpgradeCheck = 2600;
+				TargetAttributes = {
+					AC0000000000000000000004 = {
+						CreatedOnToolsVersion = 26.0;
+					};
+				};
+			};
+			buildConfigurationList = AC000000000000000000000D /* Build configuration list for PBXProject "AgentCore" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = AC0000000000000000000002;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				AC0000000000000000000016 /* XCLocalSwiftPackageReference "AgentCoreKit" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = AC0000000000000000000003 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				AC0000000000000000000004 /* AgentCore */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		AC0000000000000000000015 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		AC0000000000000000000013 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		AC000000000000000000000E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = AC0000000000000000000009 /* Debug.xcconfig */;
+			buildSettings = {
+			};
+			name = Debug;
+		};
+		AC000000000000000000000F /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = AC000000000000000000000A /* Release.xcconfig */;
+			buildSettings = {
+			};
+			name = Release;
+		};
+		AC0000000000000000000011 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+			};
+			name = Debug;
+		};
+		AC0000000000000000000012 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		AC000000000000000000000D /* Build configuration list for PBXProject "AgentCore" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AC000000000000000000000E /* Debug */,
+				AC000000000000000000000F /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AC0000000000000000000010 /* Build configuration list for PBXNativeTarget "AgentCore" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AC0000000000000000000011 /* Debug */,
+				AC0000000000000000000012 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		AC0000000000000000000016 /* XCLocalSwiftPackageReference "AgentCoreKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = AgentCoreKit;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		AC0000000000000000000017 /* AgentCoreKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = AgentCoreKit;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = AC0000000000000000000001 /* Project object */;
+}

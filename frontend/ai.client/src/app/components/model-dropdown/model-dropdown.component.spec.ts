@@ -1,10 +1,15 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { TestBed } from '@angular/core/testing';
 import { signal, computed } from '@angular/core';
-import { Router } from '@angular/router';
+import { ActivatedRoute, Router, convertToParamMap } from '@angular/router';
+import { BehaviorSubject } from 'rxjs';
 import { ModelDropdownComponent } from './model-dropdown.component';
 import { ModelService } from '../../session/services/model/model.service';
 import { SessionService } from '../../session/services/session/session.service';
+import { SessionPreferences } from '../../session/services/models/session-metadata.model';
+import { FEATURES } from '../../services/features';
+import { ProjectsService } from '../../projects/services/projects.service';
+import { Project } from '../../projects/models/project.model';
 import {
   EffortControl,
   ManagedModel,
@@ -44,6 +49,11 @@ function setup(options: {
   effortControl?: EffortControl | null;
   selectedEffort?: string | null;
   hasSession?: boolean;
+  /** The URL's `assistantId` — the conversation's bound Agent. */
+  assistantId?: string | null;
+  projects?: Partial<Project>[];
+  preferences?: SessionPreferences;
+  projectsEnabled?: boolean;
 } = {}) {
   const featured = signal(options.featured ?? [makeModel()]);
   const more = signal(options.more ?? []);
@@ -70,20 +80,28 @@ function setup(options: {
 
   const sessionService = {
     hasCurrentSession: () => options.hasSession ?? false,
+    currentSession: signal({ sessionId: options.hasSession ? 's1' : '', preferences: options.preferences }),
   };
+  const queryParams = new BehaviorSubject(
+    convertToParamMap(options.assistantId ? { assistantId: options.assistantId } : {}),
+  );
+  const navigate = vi.fn();
 
   TestBed.resetTestingModule();
   TestBed.configureTestingModule({
     providers: [
       { provide: ModelService, useValue: modelService },
       { provide: SessionService, useValue: sessionService },
-      { provide: Router, useValue: { navigate: vi.fn() } },
+      { provide: Router, useValue: { navigate } },
+      { provide: ActivatedRoute, useValue: { queryParamMap: queryParams } },
+      { provide: FEATURES, useValue: { projects: options.projectsEnabled ?? true } },
+      { provide: ProjectsService, useValue: { projects$: signal(options.projects ?? []) } },
     ],
   });
 
   const fixture = TestBed.createComponent(ModelDropdownComponent);
   fixture.detectChanges();
-  return { fixture, modelService, setSelectedModel, setEffort };
+  return { fixture, modelService, setSelectedModel, setEffort, navigate };
 }
 
 /** Open the picker by clicking its trigger, then flush the overlay render. */
@@ -318,5 +336,128 @@ describe('ModelDropdownComponent', () => {
 
     expect(fixture.nativeElement.querySelector('button[aria-label="Select model"]')).toBeNull();
     expect(fixture.nativeElement.textContent).toContain('Model One');
+  });
+
+  describe('switching models in an open conversation', () => {
+    const twoModels = [
+      makeModel({ id: 'a', modelId: 'a', modelName: 'Alpha' }),
+      makeModel({ id: 'b', modelId: 'b', modelName: 'Beta' }),
+    ];
+    const project = { projectId: 'p1', harnessAgentId: 'harness-1', name: 'Grant Office' };
+
+    function pick(fixture: ReturnType<typeof setup>['fixture'], name: string) {
+      openMenu(fixture);
+      itemLabelled(name)!.click();
+      fixture.detectChanges();
+    }
+
+    it('starts a plain new chat from a plain chat', () => {
+      const { fixture, navigate, setSelectedModel } = setup({ featured: twoModels, hasSession: true });
+      pick(fixture, 'Beta');
+
+      expect(setSelectedModel).toHaveBeenCalledWith(twoModels[1]);
+      expect(navigate).toHaveBeenCalledWith(['/'], { queryParams: {} });
+    });
+
+    it('starts a new task in the same project from a project task (B8)', () => {
+      // The regression: the switch used to drop the harness, landing the member
+      // in a plain chat with none of the project's instructions, files or memory.
+      const { fixture, navigate } = setup({
+        featured: twoModels,
+        hasSession: true,
+        assistantId: 'harness-1',
+        projects: [project],
+      });
+      pick(fixture, 'Beta');
+
+      expect(navigate).toHaveBeenCalledWith(['/'], { queryParams: { assistantId: 'harness-1' } });
+    });
+
+    it('starts a new session with the same agent from an agent conversation', () => {
+      const { fixture, navigate } = setup({ featured: twoModels, hasSession: true, assistantId: 'agent-7' });
+      pick(fixture, 'Beta');
+
+      expect(navigate).toHaveBeenCalledWith(['/'], { queryParams: { assistantId: 'agent-7' } });
+    });
+
+    it('stays put when re-picking the current model', () => {
+      const { fixture, navigate } = setup({ featured: twoModels, hasSession: true, assistantId: 'harness-1' });
+      pick(fixture, 'Alpha');
+
+      expect(navigate).not.toHaveBeenCalled();
+    });
+
+    it('changes the model in place on a fresh composer', () => {
+      // No conversation yet (a project's New task composer included): nothing to leave.
+      const { fixture, navigate, setSelectedModel } = setup({
+        featured: twoModels,
+        assistantId: 'harness-1',
+        projects: [project],
+      });
+      pick(fixture, 'Beta');
+
+      expect(setSelectedModel).toHaveBeenCalledWith(twoModels[1]);
+      expect(navigate).not.toHaveBeenCalled();
+    });
+
+    it('says a switch starts a new task in this project, before the choice', () => {
+      const { fixture } = setup({
+        featured: twoModels,
+        hasSession: true,
+        assistantId: 'harness-1',
+        projects: [project],
+      });
+      openMenu(fixture);
+
+      const menu = document.querySelector('[role="menu"]')!;
+      expect(menu.textContent).toContain('starts a new task in this project');
+      expect(itemLabelled('Beta')!.textContent).toContain('New task');
+      // The current model's row carries the check mark, not a hint.
+      expect(itemLabelled('Alpha')!.textContent).not.toContain('New task');
+    });
+
+    it('recognises a project task from the session preferences when the list lacks it', () => {
+      const { fixture } = setup({
+        featured: twoModels,
+        hasSession: true,
+        assistantId: 'harness-1',
+        preferences: { assistantId: 'harness-1', projectId: 'p1' },
+      });
+      openMenu(fixture);
+      expect(itemLabelled('Beta')!.textContent).toContain('New task');
+    });
+
+    it('labels an agent conversation as a new session with the agent', () => {
+      const { fixture } = setup({ featured: twoModels, hasSession: true, assistantId: 'agent-7' });
+      openMenu(fixture);
+
+      expect(document.querySelector('[role="menu"]')!.textContent).toContain('new session with this agent');
+      expect(itemLabelled('Beta')!.textContent).toContain('New session');
+    });
+
+    it('treats a harness as an ordinary agent while Projects are off', () => {
+      const { fixture } = setup({
+        featured: twoModels,
+        hasSession: true,
+        assistantId: 'harness-1',
+        projects: [project],
+        projectsEnabled: false,
+      });
+      openMenu(fixture);
+      expect(itemLabelled('Beta')!.textContent).toContain('New session');
+    });
+
+    it('labels a plain chat as a new chat', () => {
+      const { fixture } = setup({ featured: twoModels, hasSession: true });
+      openMenu(fixture);
+      expect(itemLabelled('Beta')!.textContent).toContain('New chat');
+    });
+
+    it('says nothing about a new conversation on a fresh composer', () => {
+      const { fixture } = setup({ featured: twoModels, assistantId: 'harness-1', projects: [project] });
+      openMenu(fixture);
+      expect(document.querySelector('[role="menu"]')!.textContent).not.toContain('starts a new');
+      expect(itemLabelled('Beta')!.textContent).not.toContain('New');
+    });
   });
 });

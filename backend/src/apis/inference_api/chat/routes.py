@@ -45,6 +45,7 @@ from apis.shared.files.inline_persist import get_inline_attachment_persister
 from apis.shared.files.models import (
     INLINE_ATTACHMENTS_MAX_TOTAL_BYTES,
     MAX_FILES_PER_MESSAGE,
+    TEXT_ONLY_DOCUMENTS_MAX_CHARS,
 )
 from apis.shared.models.managed_models import get_default_managed_model, list_managed_models
 from apis.shared.models.retirement import resolve_effective_model, retired_model_message
@@ -300,16 +301,33 @@ async def _find_managed_model(model_id: str | None):
     return None
 
 
+# A project harness's guidance on where teammates' work lives (shared-projects 2.5c).
+# Without it Haiku 4.5 answered "every open escalation" from project memory alone and
+# never listed the shared tasks (0 of 6 first responses on the simulation project);
+# with it, 6 of 6. Constant text, so it costs one cache write per harness, on deploy.
+PROJECT_WORKSPACE_GUIDANCE = (
+    "## Project Workspace\n\n"
+    "Teammates' work reaches you three ways: the project's files, project memory, and tasks "
+    "members have shared with the project. Before answering about the team's status, open "
+    "items, decisions or who owns what, check all three: call `shared_tasks_list` and read the "
+    "relevant shared tasks, not only memory."
+)
+
+
 def compose_agent_system_prompt(base_prompt: str, instructions: str, *, project_harness: bool) -> str:
     """The agent's system text: platform base prompt, then the agent's instructions.
 
-    A project's harness gets its own heading (shared-projects §4.5); every other agent keeps
-    ``Assistant-Specific Instructions`` byte for byte, so no existing agent's cached prefix
-    moves. Deliberately takes nothing about the invoking user: this text is the head of the
+    A project's harness gets its own heading (shared-projects §4.5), preceded by
+    :data:`PROJECT_WORKSPACE_GUIDANCE`; every other agent keeps ``Assistant-Specific
+    Instructions`` byte for byte, so no existing agent's cached prefix moves. The guidance
+    sits before the project's instructions so they stay the section directly above any
+    personal instructions, and context itemization counts it as platform text.
+    Deliberately takes nothing about the invoking user: this text is the head of the
     cacheable system block, and two members of one project must render it identically or
     each member pays a cache write for the same project (the prompt-cache contract).
     """
-    return f"{base_prompt}\n\n## {_instructions_heading(project_harness)}\n\n{instructions}"
+    guidance = f"\n\n{PROJECT_WORKSPACE_GUIDANCE}" if project_harness else ""
+    return f"{base_prompt}{guidance}\n\n## {_instructions_heading(project_harness)}\n\n{instructions}"
 
 
 def _instructions_heading(project_harness: bool) -> str:
@@ -398,7 +416,7 @@ async def _project_turn_gate(project_id: Optional[str]) -> Tuple[Optional[str], 
         return "This project no longer exists.", None
     if project.status != "active":
         return (
-            f'The project "{project.name}" is archived, so it can\'t start new conversations. '
+            f'The project "{project.name}" is archived, so it\'s read-only: no new tasks or messages. '
             "Ask the project owner to restore it."
         ), project
     return None, project
@@ -654,11 +672,14 @@ async def _resolve_model_settings(
     model_id: str | None,
     explicit_caching_enabled: bool | None,
     request_inference_params: dict | None,
-) -> tuple[bool | None, dict, str | None, str | None, str | None]:
+) -> tuple[bool | None, dict, str | None, str | None, str | None, list[str] | None]:
     """Resolve runtime model knobs from the managed-model registry.
 
     Returns ``(caching_enabled, inference_params, mantle_api_mode,
-    mantle_region, provider)``. A single registry lookup drives all of them.
+    mantle_region, provider, input_modalities)``. A single registry lookup
+    drives all of them. ``input_modalities`` is the row's declared input
+    (``["TEXT"]``, ``["TEXT", "IMAGE"]`` …), or ``None`` with no row — an
+    unknown model is never treated as text-only.
     The API-surface fields are server-authoritative (recorded on the model):
     ``mantle_api_mode`` selects Chat Completions vs the Responses API and
     ``mantle_region`` optionally pins inference to a specific region. Both are
@@ -673,7 +694,7 @@ async def _resolve_model_settings(
     request_params = dict(request_inference_params or {})
 
     if not model_id:
-        return explicit_caching_enabled, request_params, None, None, None
+        return explicit_caching_enabled, request_params, None, None, None, None
 
     managed_model = await _find_managed_model(model_id)
 
@@ -700,13 +721,19 @@ async def _resolve_model_settings(
         else None
     )
 
+    input_modalities = (
+        list(getattr(managed_model, "input_modalities", None) or []) or None
+        if managed_model is not None
+        else None
+    )
+
     inference_params = _merge_inference_params(managed_model, request_params)
-    return caching, inference_params, mantle_api_mode, mantle_region, provider
+    return caching, inference_params, mantle_api_mode, mantle_region, provider, input_modalities
 
 
 async def _resolve_caching_enabled(model_id: str | None, explicit_caching_enabled: bool | None) -> bool | None:
     """Backward-compat wrapper around :func:`_resolve_model_settings`."""
-    caching, _, _, _, _ = await _resolve_model_settings(model_id, explicit_caching_enabled, None)
+    caching, *_ = await _resolve_model_settings(model_id, explicit_caching_enabled, None)
     return caching
 
 
@@ -1134,6 +1161,7 @@ async def _build_document_tools(
     session_id: str,
     user_id: str,
     turn_has_document: bool = False,
+    text_only: bool = False,
 ) -> list:
     """Context-bound ``document_read`` for a session that has a readable attachment.
 
@@ -1147,14 +1175,16 @@ async def _build_document_tools(
     ``turn_has_document`` is this turn's *classified* answer — see
     ``_session_has_documents``. Passing "did this turn attach anything"
     injects the tool for image, spreadsheet and deck attachments, which it
-    cannot read.
+    cannot read. ``text_only`` (the turn's model reads TEXT only) makes its
+    page-range reads return text; the model is in the cache key, so the flag
+    needs no key element of its own.
     """
     if not await _document_tools_gate(session_id, user_id, turn_has_document):
         return []
 
     from agents.builtin_tools.document_read_tool import make_document_read_tool
 
-    tools = [make_document_read_tool(session_id, user_id)]
+    tools = [make_document_read_tool(session_id, user_id, text_only=text_only)]
     logger.info("Created document_read tool (session has a readable document)")
     return tools
 
@@ -1537,6 +1567,8 @@ def _build_attachment_guidance(
     dropped_over_count_total: int = 0,
     max_files: int = 0,
     unpersisted: list | None = None,
+    unreadable_images: list | None = None,
+    unreadable_documents: list | None = None,
 ) -> str:
     """Return a short markdown addendum describing how attachments will be
     handled, to append to the user's message so the agent (and the user)
@@ -1551,7 +1583,9 @@ def _build_attachment_guidance(
     ``unpersisted`` are inline spreadsheets/decks that could not be stored as
     session files (``PersistFailure`` entries); they are not diverted and the
     tools cannot see them, so the note must say so instead of the usual
-    "available through the tool" line.
+    "available through the tool" line. ``unreadable_images`` /
+    ``unreadable_documents`` were dropped because the turn's model reads text
+    only (`_adapt_attachments_for_model`); the remedy is a different model.
     """
     parts: list[str] = []
 
@@ -1616,6 +1650,23 @@ def _build_attachment_guidance(
             f"single message. Send them in a follow-up message._"
         )
 
+    if unreadable_images:
+        names = ", ".join(f"`{f.filename}`" for f in unreadable_images)
+        parts.append(
+            f"_Attached image(s) {names} were skipped because the selected model "
+            f"reads text only. To work with them, switch to a model that "
+            f"supports images._"
+        )
+
+    if unreadable_documents:
+        names = ", ".join(f"`{f.filename}`" for f in unreadable_documents)
+        parts.append(
+            f"_Attached file(s) {names} were skipped: the selected model reads "
+            f"text only, and no text could be extracted from them (a scanned "
+            f"document has none). To work with them, switch to a model that "
+            f"supports documents._"
+        )
+
     if unpersisted:
         described = "; ".join(f"`{x.file.filename}` ({x.reason})" for x in unpersisted)
         parts.append(
@@ -1643,6 +1694,49 @@ def _build_attachment_guidance(
             )
 
     return "\n\n".join(parts)
+
+
+_PROJECT_ROLE_PHRASES = {
+    "owner": "the owner of this project",
+    "editor": "an editor in this project",
+    "viewer": "a viewer in this project, who can read but not change its files or shared memory",
+}
+
+
+def _plain_attr(value: Optional[str]) -> str:
+    """A claim's value on one line, unable to open or close a tag."""
+    return " ".join(str(value or "").split()).replace("<", "").replace(">", "")[:200]
+
+
+def _build_project_member_note(user: User, role: Optional[str]) -> str:
+    """Who is speaking, prepended to every message of a project harness turn.
+
+    All of a project's members share one harness, and its system prompt and tools
+    must render identically for each of them: a per-member system prompt would make
+    every member pay a cache write for the same project (the prompt-cache contract).
+    So the speaker rides the user message, like the interruption note: persisted in
+    history, which only appends, so no cached prefix moves, and kept out of the UI
+    by the displayText split. It is sent every turn rather than once, because a
+    forked or shared task's history names a different member. About 100 tokens, read
+    from cache on every later call. Without it the harness told a member to "send
+    this to" her own name (the 2026-10 team simulation, G18); the second sentence is
+    there because, told only who was speaking, Haiku 4.5 then answered in that
+    member's voice ("send it to me") when the instructions named them.
+    """
+    name, email = _plain_attr(user.name), _plain_attr(user.email)
+    if name and email and name.casefold() != email.casefold():
+        who = f"{name} ({email})"
+    else:
+        who = email or name
+    role_phrase = _PROJECT_ROLE_PHRASES.get(role or "", "a member of this project")
+    return (
+        "<project_member>\n"
+        f"The person writing to you is {who}, {role_phrase}. They are not you: you are the "
+        "project's assistant. Where the instructions, memory or files name this person (as "
+        "someone to send or escalate something to, say), that step is theirs: tell them so, "
+        "in the second person, instead of asking them to send it to themselves.\n"
+        "</project_member>"
+    )
 
 
 def _build_interruption_note(reason: str) -> str:
@@ -2095,7 +2189,7 @@ async def _agent_for_app_dispatch(
         dispatch_model_id, dispatch_provider = await _resolve_fallback_model(
             user_id, current_user, dispatch_provider
         )
-    caching_enabled, inference_params, mantle_api_mode, mantle_region, registry_provider = await _resolve_model_settings(
+    caching_enabled, inference_params, mantle_api_mode, mantle_region, registry_provider, input_modalities = await _resolve_model_settings(
         model_id=dispatch_model_id,
         explicit_caching_enabled=input_data.caching_enabled,
         request_inference_params=request_inference_params,
@@ -2129,6 +2223,7 @@ async def _agent_for_app_dispatch(
         # with the real turns that do. Read the slot; never seed it.
         cache_write=False,
         assistant_id=input_data.rag_assistant_id,
+        text_only_model=is_text_only_model(input_modalities),
     )
 
 
@@ -2160,6 +2255,13 @@ class TurnAttachments:
     # session files — ``PersistFailure`` entries (file + user-facing reason).
     # Dropped from the turn: not diverted, not in the marker, named in the note.
     unpersisted_inline: list = field(default_factory=list)
+    # Set by `_adapt_attachments_for_model` once the model is known, and only
+    # for a model whose row declares TEXT input only: the documents converted
+    # to text (`ExtractedDocument`), and the images and documents it could not
+    # read at all. Neither of the last two is in the marker.
+    extracted_documents: list = field(default_factory=list)
+    unreadable_images: list = field(default_factory=list)
+    unreadable_documents: list = field(default_factory=list)
 
 
 async def _persist_inline_diverted(
@@ -2435,6 +2537,145 @@ async def _resolve_turn_attachments(
     )
 
 
+@dataclass
+class ExtractedDocument:
+    """One attached document's text layer, for a model that reads text only."""
+
+    filename: str
+    text: str
+    truncated: bool
+    unit: str
+    count: int
+
+
+#: Floor on one document's share of ``TEXT_ONLY_DOCUMENTS_MAX_CHARS``, so five
+#: attachments still get a useful excerpt each.
+_TEXT_ONLY_DOCUMENT_MIN_CHARS = 4_000
+
+
+def _extract_document_text(file, fmt: str, limit: int) -> Optional[ExtractedDocument]:
+    """Decode one inline file and pull its text layer. Blocking (PDF parsing)."""
+    import base64
+
+    from apis.shared.files.document_digest import document_text
+
+    extracted = document_text(fmt, base64.b64decode(file.bytes or ""), limit)
+    if not extracted.text.strip():
+        return None
+    return ExtractedDocument(
+        filename=file.filename,
+        text=extracted.text,
+        truncated=extracted.truncated,
+        unit=extracted.unit,
+        count=extracted.count,
+    )
+
+
+async def _adapt_attachments_for_model(attachments: TurnAttachments, turn_model: "TurnModel") -> None:
+    """Fit the inline set to what the turn's model can read (map stage B11).
+
+    A model whose catalog row declares TEXT input only (``zai.glm-5``, and the
+    text-only Mantle rows) rejects every document and image block with a
+    ValidationException — measured on dev 2026-10-06, "This model doesn't
+    support documents." for pdf *and* txt — so a turn that inlined one failed
+    outright. Runs after `_resolve_turn_model` because `_resolve_turn_attachments`
+    runs before the model is known. For such a model only:
+
+    - documents become text (``ExtractedDocument``), bounded by
+      ``TEXT_ONLY_DOCUMENTS_MAX_CHARS`` across the turn and rendered into the
+      user message by `_build_extracted_documents_section`;
+    - images, and documents with no text layer to extract (a scan, legacy
+      ``.doc``), are dropped and named in the attachment guidance, exactly like
+      oversized files, and leave the marker for the same reason.
+
+    Mutates ``attachments`` in place. Every other turn returns on the first
+    line, so it costs nothing before the first token there; the extraction
+    itself runs off the event loop, and only on a turn that used to fail.
+    """
+    if not attachments.files_to_send or not turn_model.text_only:
+        return
+
+    from apis.shared.files.document_read import document_format_for
+
+    images: list = []
+    documents: list = []
+    unreadable: list = []
+    for file in attachments.files_to_send:
+        if (file.content_type or "").lower().startswith("image/"):
+            images.append(file)
+            continue
+        fmt = document_format_for(file.content_type or "", file.filename or "")
+        if fmt is None:
+            unreadable.append(file)
+            continue
+        documents.append((file, fmt))
+
+    extracted: list = []
+    if documents:
+        limit = max(_TEXT_ONLY_DOCUMENT_MIN_CHARS, TEXT_ONLY_DOCUMENTS_MAX_CHARS // len(documents))
+        results = await asyncio.gather(
+            *(asyncio.to_thread(_extract_document_text, f, fmt, limit) for f, fmt in documents),
+            return_exceptions=True,
+        )
+        for (file, fmt), result in zip(documents, results):
+            if isinstance(result, ExtractedDocument):
+                extracted.append(result)
+                continue
+            if isinstance(result, BaseException):
+                logger.warning("Text extraction failed for a %s attachment: %s", fmt, result)
+            unreadable.append(file)
+
+    logger.info(
+        "Text-only model: %d document(s) converted to text (%d sampled), "
+        "%d image(s) and %d document(s) dropped",
+        len(extracted),
+        sum(1 for d in extracted if d.truncated),
+        len(images),
+        len(unreadable),
+    )
+    # Attachment order, not discovery order: the guidance naming these joins
+    # the persisted message, and so the cacheable prefix on later turns.
+    unreadable_ids = {id(f) for f in unreadable}
+    unreadable = [f for f in attachments.files_to_send if id(f) in unreadable_ids]
+    dropped_names = {f.filename for f in images + unreadable}
+    attachments.files_to_send = []
+    attachments.extracted_documents = extracted
+    attachments.unreadable_images = images
+    attachments.unreadable_documents = unreadable
+    if dropped_names:
+        attachments.marker_names = [n for n in attachments.marker_names if n not in dropped_names]
+
+
+def _build_extracted_documents_section(extracted: list, document_read_available: bool) -> str:
+    """The text a TEXT-only model reads in place of the documents it cannot.
+
+    Appended to the user message after the attachment guidance. Order follows
+    attachment order, and the text is a pure function of the files, so the
+    persisted message is byte-stable for the prefix it joins on later turns.
+    """
+    if not extracted:
+        return ""
+    parts = [
+        "_The selected model reads text only, so the attached document(s) below "
+        "were converted to text. Layout, images, charts and scanned pages are not "
+        "included._"
+    ]
+    for doc in extracted:
+        name = doc.filename.replace('"', "'")
+        body = doc.text.replace("</attached-document", "<\\/attached-document")
+        attrs = f'name="{name}" {doc.unit}s="{doc.count}"'
+        if doc.truncated:
+            attrs += ' excerpt="sampled"'
+            pointer = (
+                " Use `document_read` to search it or read specific parts."
+                if document_read_available
+                else ""
+            )
+            body = f"[Too long to include in full: what follows is an excerpt.{pointer}]\n\n{body}"
+        parts.append(f"<attached-document {attrs}>\n{body}\n</attached-document>")
+    return "\n\n".join(parts)
+
+
 async def _prepare_session_state(
     input_data: InvocationRequest,
     user_id: str,
@@ -2624,6 +2865,28 @@ class TurnModel:
     inference_params: dict
     mantle_api_mode: Optional[str]
     mantle_region: Optional[str]
+    # The catalog row's declared input, or None with no row. Read by
+    # `is_text_only_model`, which keeps documents and images off a model
+    # that rejects them.
+    input_modalities: Optional[list] = None
+
+    @property
+    def text_only(self) -> bool:
+        return is_text_only_model(self.input_modalities)
+
+
+def is_text_only_model(input_modalities: Optional[list]) -> bool:
+    """Whether a catalog row declares TEXT input and nothing else.
+
+    Keyed on TEXT-*only*, never on a missing entry: Claude rows declare
+    ``["TEXT", "IMAGE"]`` with no ``DOCUMENT`` and read PDFs natively, so "no
+    DOCUMENT" does not mean "no documents". An empty or absent list (no row,
+    or a row that predates the field) is not text-only either — the turn
+    stays exactly as it was, and the error backstop in
+    ``apis.shared.errors.unsupported_attachment_message`` covers a wrong row.
+    """
+    declared = {str(m).strip().upper() for m in (input_modalities or []) if str(m).strip()}
+    return declared == {"TEXT"}
 
 
 async def _resolve_turn_model(
@@ -2677,7 +2940,14 @@ async def _resolve_turn_model(
     # Single registry lookup resolves caching + inference params +
     # the Mantle endpoint path + provider, merging admin defaults with
     # request overrides.
-    caching_enabled, inference_params, mantle_api_mode, mantle_region, registry_provider = await _resolve_model_settings(
+    (
+        caching_enabled,
+        inference_params,
+        mantle_api_mode,
+        mantle_region,
+        registry_provider,
+        input_modalities,
+    ) = await _resolve_model_settings(
         model_id=effective_model_id,
         explicit_caching_enabled=input_data.caching_enabled,
         request_inference_params=request_inference_params,
@@ -2703,6 +2973,7 @@ async def _resolve_turn_model(
         inference_params=inference_params,
         mantle_api_mode=mantle_api_mode,
         mantle_region=mantle_region,
+        input_modalities=input_modalities,
     )
 
 
@@ -2799,6 +3070,7 @@ async def _build_turn_tools(
     agent_memory,
     project_memory,
     turn_has_document: bool,
+    text_only_model: bool = False,
 ) -> TurnTools:
     """Map stage B11 (in ``tools``): every injected tool, and the key material
     that describes them. Closures only — no IO except the ``document_read``
@@ -2835,12 +3107,19 @@ async def _build_turn_tools(
         user_id=user_id,
         user_email=current_user.email,
     )
-    # A project harness addresses its spaces by scope instead (2.4b).
+    # A project harness addresses its spaces by scope instead (2.4b), and
+    # reads the team's shared tasks (2.5c). Memory first, so the four memory
+    # specs keep their place in the cached toolConfig.
     if project_memory is not None:
-        from apis.inference_api.chat.project_memory import build_project_memory_tools
+        from apis.inference_api.chat.project_memory import (
+            build_project_memory_tools,
+            build_shared_task_tools,
+        )
 
         memory_tools = build_project_memory_tools(project_memory, current_user)
-    extra_tools = extra_tools + memory_tools
+        extra_tools = extra_tools + memory_tools + build_shared_task_tools(project_memory.project_id, current_user)
+    else:
+        extra_tools = extra_tools + memory_tools
 
     # document_read for any session that carries a readable attachment
     # (this turn's uploads count). Gated on session state, not the
@@ -2851,6 +3130,7 @@ async def _build_turn_tools(
         session_id=input_data.session_id,
         user_id=user_id,
         turn_has_document=turn_has_document,
+        text_only=text_only_model,
     )
     extra_tools = extra_tools + document_tools
 
@@ -3049,9 +3329,13 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # to both parties. In prod on 2026-08-31 that also left the original
     # owner's session resolving non-deterministically between the two rows.
     #
-    # Not a confidentiality fix — conversation content is keyed by actor id in
-    # AgentCore Memory, so the second user only ever saw an empty thread. This
-    # stops the id from being forked at all. 404 rather than 403 so the
+    # This IS a confidentiality guard. Memory scopes history by actor id, but
+    # runtime affinity used to hash the session id alone, so both users' turns
+    # landed in one container. There, `_adopt_session_conversation` aliased the
+    # second user's new agent onto the first user's live message list, and each
+    # model saw the other's turns (dev, 2026-08-31). Affinity now pins per
+    # (user, session) and adoption matches on the same pair, so neither depends
+    # on this guard; this guard stops the id being forked at all. 404 rather than 403 so the
     # response says nothing about whether the session exists, matching what
     # `GET /sessions/{id}/metadata` already returns for the same case.
     #
@@ -3354,6 +3638,9 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # dropped (§9.6) and is streamed before ``message_start``; it never reaches the prompt.
     turn_project_id: Optional[str] = None
     agent_notice_event: Optional[AgentNoticeEvent] = None
+    # Who is speaking in a harness turn, prepended to the message (never the system
+    # prompt, which every member shares); see `_build_project_member_note`.
+    project_member_note: Optional[str] = None
     # Shared Projects 2.4b: a harness turn's memory load (started once the project is
     # known) and its result, which supplies `memory_context`, the scope-addressed
     # memory tools and their cache-key element.
@@ -3670,6 +3957,8 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             if refusal:
                 return _forbidden_turn(input_data, user_id, refusal)
             turn_project_id = assistant.project_id
+            # The role the access check above resolved from the project: no extra read.
+            project_member_note = _build_project_member_note(current_user, assistant_permission)
             # Shared Projects 2.4b: the project's memory spaces, read now and awaited at
             # prompt assembly (5b), so the reads overlap binding resolution and the
             # knowledge-base search instead of adding to the time to first token.
@@ -3984,6 +4273,11 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         # `_interrupt_state` from AgentCore Memory, so the paused tool call
         # picks up where it left off. Non-resume requests use the request
         # body as before.
+        #
+        # Bound before the branch: the stream closure reads it on every turn,
+        # and only the non-resume branch (a TEXT-only model with documents
+        # attached) ever fills it.
+        extracted_documents_section = ""
         if is_resume:
             from datetime import datetime, timezone
             from apis.shared.sessions.metadata import clear_paused_turn, get_paused_turn
@@ -4048,6 +4342,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 memory_binding=snapshot.memory_binding,
                 # The memory block is hashed with the system prompt in the key.
                 memory_context=snapshot.memory_context,
+                text_only_model=bool(snapshot.text_only_model),
                 # Resume never builds injected tools, so an agent built on a
                 # resume *miss* lacks them. Writing it would put a tool-less
                 # agent in the slot the next plain turn hits (same key), and
@@ -4093,6 +4388,11 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 input_data, current_user, user_id, user_settings, agent_model_override
             )
 
+            # A model whose row declares TEXT input only rejects document and
+            # image blocks; convert or drop them now that the model is known.
+            # Returns immediately for every other model.
+            await _adapt_attachments_for_model(attachments, turn_model)
+
             # The tool ids this turn carries — one value for the cache key,
             # every builder, the attachment guidance and the paused snapshot.
             effective_enabled_tools = await _resolve_effective_tools(
@@ -4121,6 +4421,11 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 agent_memory=agent_memory,
                 project_memory=project_memory,
                 turn_has_document=attachments.turn_has_document,
+                text_only_model=turn_model.text_only,
+            )
+            extracted_documents_section = _build_extracted_documents_section(
+                attachments.extracted_documents,
+                document_read_available=bool(turn_tools.document_tools),
             )
 
             # System-prompt assembly, the single-flight lease, skill
@@ -4163,6 +4468,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                     build_detail_recorder=prelude.detail,
                     memory_binding=turn_tools.memory_binding_key,
                     memory_context=memory_context,
+                    text_only_model=turn_model.text_only,
                 )
 
             # Defer the build into the stream so it can be narrated.
@@ -4276,6 +4582,8 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 dropped_over_count_total=attachments.dropped_over_count_total,
                 max_files=MAX_FILES_PER_MESSAGE,
                 unpersisted=attachments.unpersisted_inline,
+                unreadable_images=attachments.unreadable_images,
+                unreadable_documents=attachments.unreadable_documents,
             )
             # When multiple spreadsheets are visible, ship the full inventory
             # up front so the agent can disambiguate intentionally instead of
@@ -4292,6 +4600,8 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             final_message = augmented_message
             if attachment_guidance:
                 final_message = f"{final_message}\n\n{attachment_guidance}"
+            if extracted_documents_section:
+                final_message = f"{final_message}\n\n{extracted_documents_section}"
             if tabular_inventory:
                 final_message = f"{final_message}\n\n{tabular_inventory}"
 
@@ -4324,6 +4634,9 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                     final_message = (
                         f"{_build_attachment_recovery_note(attachments.marker_names)}\n\n{final_message}"
                     )
+
+                if project_member_note:
+                    final_message = f"{project_member_note}\n\n{final_message}"
 
                 if interrupted_turn_reason:
                     final_message = (

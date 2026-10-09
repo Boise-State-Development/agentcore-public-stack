@@ -108,6 +108,13 @@ export interface MessagesListResponse {
    * Present only on the first page.
    */
   toolSummaries?: { batchId?: string; toolUseIds?: string[]; summary?: string }[];
+  /**
+   * True when Memory's events for this session have expired and these
+   * messages are the conversation archive's text-only copy. The agent cannot
+   * restore from the archive, and a new turn would overwrite the archived
+   * first turn, so the session is offered read-only. Absent on older servers.
+   */
+  fromArchive?: boolean;
 }
 
 /**

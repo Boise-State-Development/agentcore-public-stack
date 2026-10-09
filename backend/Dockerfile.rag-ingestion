@@ -169,7 +169,9 @@ COPY backend/src/apis/app_api/documents/ingestion/ ${LAMBDA_TASK_ROOT}
 #   embeddings/   — ingestion/embeddings/bedrock_embeddings.py re-exports it
 #   timestamps.py — ingestion/status.py imports utc_now_iso
 #   kb_backend/   — handler.py reads `records.resolve_engine` to skip documents
-#                   whose knowledge base has been promoted to the managed engine.
+#                   whose knowledge base has been promoted to the managed engine,
+#                   and docling_processor.py reads `docx_revisions` to write Word
+#                   tracked changes out as text before Docling converts a .docx.
 #                   Cheap to carry: the package's module-level imports are stdlib
 #                   only (enforced by tests/architecture/test_kb_backend_boundary.py),
 #                   so this adds files, not dependencies.

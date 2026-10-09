@@ -521,6 +521,12 @@ jobs:
       - name: Build kb-sync image
         run: docker build -f backend/Dockerfile.kb-sync -t kb-sync:scan .
 
+      - name: Build conversation-index image
+        run: docker build -f backend/Dockerfile.conversation-index -t conversation-index:scan .
+
+      - name: Build memory-maintenance image
+        run: docker build -f backend/Dockerfile.memory-maintenance -t memory-maintenance:scan .
+
       - name: Trivy scan app-api
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -547,6 +553,24 @@ jobs:
           exit-code: '0'
           severity: 'CRITICAL,HIGH'
           output: trivy-kb-sync.txt
+
+      - name: Trivy scan conversation-index
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: 'conversation-index:scan'
+          format: 'table'
+          exit-code: '0'
+          severity: 'CRITICAL,HIGH'
+          output: trivy-conversation-index.txt
+
+      - name: Trivy scan memory-maintenance
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: 'memory-maintenance:scan'
+          format: 'table'
+          exit-code: '0'
+          severity: 'CRITICAL,HIGH'
+          output: trivy-memory-maintenance.txt
 
       - name: Trivy scan rag-ingestion
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0

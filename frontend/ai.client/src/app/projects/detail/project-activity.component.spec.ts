@@ -11,7 +11,7 @@ import { AgentService } from '../../agents/services/agent.service';
 import { Project, ProjectAuditRecord } from '../models/project.model';
 
 const PROJECT: Project = {
-  projectId: 'prj_1', name: 'Enrollment Sync', description: '', ownerEmail: 'o@x.edu', role: 'editor',
+  projectId: 'prj_1', name: 'Enrollment Sync', description: '', ownerEmail: 'o@x.edu', ownerName: null, role: 'editor',
   status: 'active', editorsManageMembers: true, memberCount: 2, harnessAgentId: 'ast-1',
   createdAt: '2026-09-24T00:00:00Z', updatedAt: '2026-09-24T00:00:00Z',
 };
@@ -43,6 +43,23 @@ describe('describeActivity', () => {
     [rec('project.knowledge_added', { after: { url: 'https://x.edu', source: 'web' } }), 'started adding pages from https://x.edu'],
     [rec('project.knowledge_removed', { before: { filename: 'plan.pdf' } }), 'removed the file plan.pdf'],
     [rec('project.task_shared', { after: { title: 'Roster diff' } }), 'shared the task “Roster diff” with the project'],
+    [rec('project.output_shared', { after: { title: 'Roster chart' } }), 'shared the output “Roster chart” with the project'],
+    [rec('project.output_removed', { after: { title: 'Roster chart' } }), 'removed the output “Roster chart” from the project'],
+    [rec('project.memory_proposed', { after: { slug: 'sis' } }), 'proposed a change to the memory file “sis”'],
+    [rec('project.memory_proposal_approved', { after: { slug: 'sis', edited: true } }), 'approved a change to the memory file “sis” with edits'],
+    [rec('project.memory_proposal_approved', { after: { slug: 'sis', kind: 'compaction', appliedOps: 2, totalOps: 2 } }), 'applied 2 maintenance changes to the memory file “sis”'],
+    [rec('project.memory_proposal_approved', { after: { slug: 'sis', kind: 'compaction', appliedOps: '1', totalOps: '3' } }), 'applied 1 of 3 maintenance changes to the memory file “sis”'],
+    [
+      rec('project.memory_proposal_approved', { after: { slug: 'canvas', kind: 'compaction', appliedOps: '4', totalOps: '4', createdFiles: ['lti-tools'] } }),
+      'applied 4 maintenance changes to the memory file “canvas”, moving items into “lti-tools”',
+    ],
+    [rec('project.memory_maintenance_started', { after: { runId: 'r1' } }), 'ran maintenance on project memory'],
+    [rec('project.memory_maintenance_started', { after: { runId: 'r1', slug: 'sis' } }), 'ran maintenance on the memory file “sis”'],
+    [rec('project.memory_proposal_rejected', { after: { slug: 'sis' } }), 'declined a change to the memory file “sis”'],
+    [rec('project.memory_edited', { after: { slug: 'sis', created: 'True' } }), 'created the memory file “sis”'],
+    [rec('project.memory_edited', { after: { slug: 'sis' } }), 'edited the memory file “sis”'],
+    [rec('project.memory_edited', { after: { slug: 'MEMORY.md' } }), 'edited the memory index'],
+    [rec('project.memory_deleted', { before: { slug: 'sis' } }), 'deleted the memory file “sis”'],
     [rec('project.task_unshared', { after: { title: 'Roster diff' } }), 'stopped sharing the task “Roster diff”'],
     [rec('project.something_new'), 'something new'],
   ])('%#: %s', (record, text) => {
@@ -117,7 +134,30 @@ describe('ProjectActivityComponent', () => {
     const rows = Array.from(el.querySelectorAll('li')).map(li => li.textContent?.replace(/\s+/g, ' ').trim());
     expect(rows[0]).toContain('You updated the instructions. Version 2');
     expect(rows[1]).toContain('ann@x.edu added bo@x.edu as an editor.');
-    expect(el.querySelector('a')?.getAttribute('href')).toBe('/projects/prj_1/settings');
+    expect(el.querySelector('a')?.getAttribute('href')).toBe('/projects/prj_1/history');
+  });
+
+  it('names people from the page’s directory names, with the email on hover', async () => {
+    api.audit.mockReturnValueOnce(of({
+      records: [
+        rec('project.member_added', { after: { email: 'bo@x.edu', role: 'editor' } }),
+        rec('project.transferred', { actorEmail: 'Cy@x.edu', after: { ownerEmail: 'dee@x.edu' } }),
+      ],
+      people: { 'ann@x.edu': 'Ann Lee', 'bo@x.edu': 'Bo Diaz', 'cy@x.edu': 'Cy Ng' },
+      nextCursor: 'c1',
+    }));
+    const { fixture, el } = await render();
+    const rows = () => Array.from(el.querySelectorAll('li')).map(li => li.textContent?.replace(/\s+/g, ' ').trim());
+    expect(rows()[0]).toContain('Ann Lee added Bo Diaz as an editor.');
+    expect(rows()[1]).toContain('Cy Ng made dee@x.edu the owner.'); // no name for dee: the email
+    expect(el.querySelector('li span[title]')?.getAttribute('title')).toBe('ann@x.edu');
+
+    // Names from earlier pages still apply to later ones.
+    api.audit.mockReturnValueOnce(of({ records: [rec('project.created')], nextCursor: null }));
+    Array.from(el.querySelectorAll('button')).find(b => b.textContent?.includes('Show older'))!.click();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(rows()[2]).toContain('Ann Lee created the project.');
   });
 
   it('shows display names from the bindable palettes Settings loads', async () => {

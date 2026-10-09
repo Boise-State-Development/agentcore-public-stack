@@ -1,4 +1,4 @@
-# Reusable test gates (pytest / vitest / jest). Callers pick suites via the
+# Reusable test gates (pytest / vitest / jest / xcodebuild). Callers pick suites via the
 # run_* inputs; unselected jobs are skipped.
 
 name: Tests
@@ -33,6 +33,11 @@ on:
         type: boolean
       run_infra:
         description: 'Run infrastructure jest suite'
+        required: false
+        default: false
+        type: boolean
+      run_ios:
+        description: 'Run the iOS client suite (swift format lint + xcodebuild test in the simulator, unsigned) on a macOS runner'
         required: false
         default: false
         type: boolean
@@ -228,6 +233,55 @@ jobs:
   # fail here rather than silently produce a load test that reports every turn
   # as never finishing. Running the actual load test needs provisioned Cognito
   # users and spends real Bedrock tokens — that is never done in CI.
+  test-ios:
+    if: ${{ inputs.run_ios }}
+    name: Test iOS client (xcodebuild)
+    # GitHub's Xcode-specific arm64 image, pinned by major version (not the
+    # floating macos-latest; see test_runner_pinning.py). The project needs
+    # Xcode 26 or newer (swift-tools-version 6.2).
+    runs-on: xcode-27
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: ios
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+      - name: Lint (swift format, ships with Xcode)
+        run: swift format lint --strict --recursive --parallel AgentCore AgentCoreKit
+      - name: Pick the newest iPhone simulator on the image
+        id: sim
+        run: |
+          udid="$(xcrun simctl list devices available --json \
+            | jq -r '[.devices | to_entries[] | select(.key | contains("iOS")) | .value[] | select(.name | startswith("iPhone"))] | sort_by(.name) | last | .udid')"
+          if [ -z "$udid" ] || [ "$udid" = "null" ]; then
+            echo "::error::no available iPhone simulator on this image"
+            xcrun simctl list devices available
+            exit 1
+          fi
+          echo "udid=$udid" >> "$GITHUB_OUTPUT"
+      - name: Build and test (simulator, unsigned)
+        env:
+          SIM_UDID: ${{ steps.sim.outputs.udid }}
+        # CODE_SIGNING_ALLOWED=NO: the simulator needs no identity and the
+        # runner has none. The scheme's test action runs the AgentCoreKit
+        # package tests (Swift Testing). The WORKSPACE, not the project: a
+        # local package's test target is only a testable when the package is
+        # a workspace member; `-project` reports "no test bundles available".
+        run: |
+          xcodebuild test \
+            -workspace AgentCore.xcworkspace \
+            -scheme AgentCore \
+            -destination "platform=iOS Simulator,id=$SIM_UDID" \
+            CODE_SIGNING_ALLOWED=NO
+
   test-load-unit:
     if: ${{ inputs.run_load_unit }}
     name: Test load suite (pytest)

@@ -18,7 +18,6 @@ import {
   heroExclamationTriangle,
   heroFolder,
   heroLink,
-  heroXMark,
 } from '@ng-icons/heroicons/outline';
 import { ExportError, ExportService } from '../../services/export/export.service';
 import {
@@ -39,7 +38,7 @@ import {
   FolderSelection,
 } from '../../../assistants/components/file-source-browser-dialog.component';
 import { FileSourceConnector } from '../../../assistants/models/file-source.model';
-import { DialogDismissDirective } from '../../../components/dialog/dialog-dismiss.directive';
+import { DialogShellComponent } from '../../../components/dialog/dialog-shell.component';
 
 /** Data passed in when the session list opens the export dialog. */
 export interface ExportDialogData {
@@ -77,7 +76,7 @@ const FORMAT_LABELS: Record<ExportFormat, string> = {
 @Component({
   selector: 'app-export-dialog',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DialogDismissDirective, NgIcon, SpinnerComponent],
+  imports: [DialogShellComponent, NgIcon, SpinnerComponent],
   providers: [
     provideIcons({
       heroArrowPath,
@@ -87,245 +86,192 @@ const FORMAT_LABELS: Record<ExportFormat, string> = {
       heroExclamationTriangle,
       heroFolder,
       heroLink,
-      heroXMark,
     }),
   ],
-  host: {
-    class: 'block',
-    '(keydown.escape)': 'cancel()',
-  },
+  host: { class: 'block' },
   template: `
-    <!-- Backdrop -->
-    <div
-      class="dialog-backdrop fixed inset-0 bg-gray-500/75 dark:bg-gray-900/80"
-      aria-hidden="true"
-    ></div>
-
-    <!-- Centering wrapper -->
-    <div class="fixed inset-0 z-10 flex min-h-full items-center justify-center p-4"
-      appDialogDismiss
-      (dismissed)="cancel()">
+    <app-dialog-shell title="Save conversation" (closed)="cancel()">
       <div
-        class="dialog-panel relative flex max-h-[85vh] w-full max-w-md flex-col overflow-hidden rounded-2xl bg-white shadow-xl dark:bg-gray-800 dark:outline dark:-outline-offset-1 dark:outline-white/10"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="export-dialog-title"
-        (click)="$event.stopPropagation()"
+        dialogIcon
+        class="flex size-10 shrink-0 items-center justify-center rounded-2xl bg-gray-100 dark:bg-gray-700"
       >
-        <!-- Header -->
-        <div class="flex items-center justify-between gap-4 border-b border-gray-200 px-5 py-4 dark:border-gray-700">
-          <div class="flex items-center gap-2">
-            <ng-icon name="heroCloudArrowUp" class="size-5 text-gray-500 dark:text-gray-400" aria-hidden="true" />
-            <h2 id="export-dialog-title" class="text-base/7 font-semibold text-gray-900 dark:text-white">
-              Save conversation
-            </h2>
-          </div>
-          <button
-            type="button"
-            (click)="cancel()"
-            aria-label="Close"
-            class="-mr-1 rounded-2xl p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
-          >
-            <ng-icon name="heroXMark" class="size-5" />
-          </button>
-        </div>
+        <ng-icon name="heroCloudArrowUp" class="size-5 text-gray-500 dark:text-gray-400" aria-hidden="true" />
+      </div>
 
-        <div class="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-          @if (result(); as saved) {
-            <!-- ─────────────── Success ─────────────── -->
-            <div class="flex flex-col items-center gap-3 py-4 text-center">
-              <ng-icon name="heroCheckCircle" class="size-10 text-state-success-600 dark:text-state-success-400" aria-hidden="true" />
-              <p class="text-sm/6 font-medium text-gray-900 dark:text-white">
-                Saved to {{ selectedTargetName() }}
-              </p>
-              <p class="text-sm/6 text-gray-500 dark:text-gray-400">{{ saved.name }}</p>
-              @if (saved.webViewLink) {
-                <a
-                  [href]="saved.webViewLink"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  class="inline-flex items-center gap-1.5 rounded-2xl bg-primary-accessible px-3.5 py-2 text-sm/6 font-semibold text-white shadow-xs transition-[filter] hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
-                >
-                  <ng-icon name="heroArrowTopRightOnSquare" class="size-4" aria-hidden="true" />
-                  Open in {{ selectedTargetName() }}
-                </a>
-              }
-            </div>
-          } @else if (loading()) {
-            <div class="flex items-center gap-3 text-sm/6 text-gray-500 dark:text-gray-400">
-              <app-spinner size="sm" label="Loading destinations" />
-              Loading destinations…
-            </div>
-          } @else if (loadError(); as err) {
-            <div class="flex items-start gap-3 rounded-2xl border border-state-danger-200 bg-state-danger-50 p-4 dark:border-state-danger-800 dark:bg-state-danger-900/20">
-              <ng-icon name="heroExclamationTriangle" class="size-5 shrink-0 text-state-danger-600 dark:text-state-danger-400" aria-hidden="true" />
-              <div>
-                <p class="text-sm/6 text-state-danger-700 dark:text-state-danger-300">{{ err }}</p>
-                <button
-                  type="button"
-                  (click)="loadTargets()"
-                  class="mt-2 text-sm/6 font-medium text-state-danger-700 underline hover:text-state-danger-800 dark:text-state-danger-200"
-                >
-                  Retry
-                </button>
-              </div>
-            </div>
-          } @else if (targets().length === 0) {
-            <div class="rounded-2xl border border-dashed border-gray-300 bg-white p-8 text-center dark:border-gray-700 dark:bg-gray-800">
-              <ng-icon name="heroLink" class="mx-auto size-8 text-gray-400" aria-hidden="true" />
-              <p class="mt-3 text-sm/6 font-medium text-gray-700 dark:text-gray-300">No destinations available</p>
-              <p class="mt-1 text-sm/6 text-gray-500 dark:text-gray-400">
-                Ask an administrator to connect an app you can save conversations to.
-              </p>
-            </div>
-          } @else {
-            <!-- ─────────────── Destination ─────────────── -->
-            <fieldset class="space-y-2">
-              <legend class="mb-1.5 text-sm/6 font-medium text-gray-700 dark:text-gray-300">Destination</legend>
-              @for (target of targets(); track target.providerId) {
-                <label
-                  class="flex cursor-pointer items-center gap-3 rounded-2xl border p-3 transition-colors"
-                  [class]="selectedConnectorId() === target.providerId
-                    ? 'border-primary-500 bg-gray-100 dark:border-primary-400 dark:bg-gray-700'
-                    : 'border-gray-200 hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-white/5'"
-                >
-                  <input
-                    type="radio"
-                    name="exportDestination"
-                    class="size-4 text-primary-600 focus:ring-primary-500"
-                    [value]="target.providerId"
-                    [checked]="selectedConnectorId() === target.providerId"
-                    (change)="selectConnector(target)"
-                  />
-                  <span class="flex-1 text-sm/6 font-medium text-gray-900 dark:text-white">{{ target.displayName }}</span>
-                  @if (!target.connected) {
-                    <span class="rounded-full bg-gray-200 px-2 py-0.5 text-xs/5 font-medium text-gray-700 dark:bg-gray-600 dark:text-gray-200">
-                      Not connected
-                    </span>
-                  }
-                </label>
-              }
-            </fieldset>
-
-            <!-- ─────────────── Format ─────────────── -->
-            @if (availableFormats().length > 0) {
-              <div class="mt-4">
-                <label for="export-format" class="mb-1.5 block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Format</label>
-                <select
-                  id="export-format"
-                  class="block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-hidden focus:ring-2 focus:ring-primary-500/40 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
-                  [value]="selectedFormat()"
-                  (change)="onFormatChange($event)"
-                >
-                  @for (fmt of availableFormats(); track fmt) {
-                    <option [value]="fmt">{{ formatLabel(fmt) }}</option>
-                  }
-                </select>
-              </div>
-            }
-
-            <!-- ─────────────── Folder ─────────────── -->
-            @if (canChooseFolder()) {
-              <div class="mt-4">
-                <span class="mb-1.5 block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Folder</span>
-                <div class="flex items-center gap-2 rounded-2xl border border-gray-300 bg-white px-3 py-2 dark:border-gray-600 dark:bg-gray-700">
-                  <ng-icon name="heroFolder" class="size-4 shrink-0 text-gray-400" aria-hidden="true" />
-                  <span class="min-w-0 flex-1 truncate text-sm/6 text-gray-900 dark:text-white">{{ destinationLabel() }}</span>
-                  @if (destinationFolderName()) {
-                    <button
-                      type="button"
-                      (click)="resetDestinationFolder()"
-                      class="shrink-0 rounded-2xl px-2 py-1 text-sm/6 font-medium text-gray-500 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:bg-gray-600 dark:hover:text-gray-200"
-                    >
-                      Default
-                    </button>
-                  }
-                  <button
-                    type="button"
-                    (click)="chooseFolder()"
-                    class="shrink-0 rounded-2xl px-2 py-1 text-sm/6 font-medium text-primary-accessible hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-accessible-dark dark:hover:bg-gray-700 dark:hover:text-primary-50"
-                  >
-                    Choose…
-                  </button>
-                </div>
-              </div>
-            }
-
-            <!-- ─────────────── Include ─────────────── -->
-            <fieldset class="mt-4">
-              <legend class="mb-1.5 text-sm/6 font-medium text-gray-700 dark:text-gray-300">Include</legend>
-              <div class="space-y-1.5">
-                <!-- Messages are the transcript itself: always on, shown disabled. -->
-                <label class="flex items-center gap-2.5 text-sm/6 text-gray-500 dark:text-gray-400">
-                  <input type="checkbox" checked disabled class="size-4 rounded-sm text-primary-600" />
-                  Messages
-                </label>
-                @for (opt of includeOptions; track opt.key) {
-                  <label class="flex cursor-pointer items-center gap-2.5 text-sm/6 text-gray-700 dark:text-gray-300">
-                    <input
-                      type="checkbox"
-                      class="size-4 rounded-sm text-primary-600 focus:ring-primary-500"
-                      [checked]="include()[opt.key]"
-                      (change)="toggleInclude(opt.key)"
-                    />
-                    {{ opt.label }}
-                  </label>
-                }
-              </div>
-            </fieldset>
-
-            @if (error(); as err) {
-              <div class="mt-4 flex items-start gap-2.5 rounded-2xl border border-state-danger-200 bg-state-danger-50 p-3 dark:border-state-danger-800 dark:bg-state-danger-900/20">
-                <ng-icon name="heroExclamationTriangle" class="size-5 shrink-0 text-state-danger-600 dark:text-state-danger-400" aria-hidden="true" />
-                <p class="text-sm/6 text-state-danger-700 dark:text-state-danger-300">{{ err }}</p>
-              </div>
-            }
+      @if (result(); as saved) {
+        <!-- ─────────────── Success ─────────────── -->
+        <div class="flex flex-col items-center gap-3 py-4 text-center">
+          <ng-icon name="heroCheckCircle" class="size-10 text-state-success-600 dark:text-state-success-400" aria-hidden="true" />
+          <p class="text-sm/6 font-medium text-gray-900 dark:text-white">
+            Saved to {{ selectedTargetName() }}
+          </p>
+          <p class="text-sm/6 text-gray-500 dark:text-gray-400">{{ saved.name }}</p>
+          @if (saved.webViewLink) {
+            <a
+              [href]="saved.webViewLink"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="inline-flex items-center gap-1.5 rounded-2xl bg-primary-accessible px-3.5 py-2 text-sm/6 font-semibold text-white shadow-xs transition-[filter] hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
+            >
+              <ng-icon name="heroArrowTopRightOnSquare" class="size-4" aria-hidden="true" />
+              Open in {{ selectedTargetName() }}
+            </a>
           }
         </div>
-
-        <!-- Footer -->
-        <div class="flex justify-end gap-3 border-t border-gray-200 px-5 py-4 dark:border-gray-700">
-          <button
-            type="button"
-            (click)="cancel()"
-            class="rounded-2xl bg-white px-3.5 py-2 text-sm/6 font-semibold text-gray-900 shadow-xs ring-1 ring-gray-300 ring-inset hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:bg-white/10 dark:text-white dark:ring-white/10 dark:hover:bg-white/20"
-          >
-            {{ result() ? 'Done' : 'Cancel' }}
-          </button>
-          @if (!result()) {
+      } @else if (loading()) {
+        <div class="flex items-center gap-3 text-sm/6 text-gray-500 dark:text-gray-400">
+          <app-spinner size="sm" label="Loading destinations" />
+          Loading destinations…
+        </div>
+      } @else if (loadError(); as err) {
+        <div class="flex items-start gap-3 rounded-2xl border border-state-danger-200 bg-state-danger-50 p-4 dark:border-state-danger-800 dark:bg-state-danger-900/20">
+          <ng-icon name="heroExclamationTriangle" class="size-5 shrink-0 text-state-danger-600 dark:text-state-danger-400" aria-hidden="true" />
+          <div>
+            <p class="text-sm/6 text-state-danger-700 dark:text-state-danger-300">{{ err }}</p>
             <button
               type="button"
-              (click)="save()"
-              [disabled]="!canSubmit()"
-              class="inline-flex items-center gap-1.5 rounded-2xl bg-primary-accessible px-3.5 py-2 text-sm/6 font-semibold text-white shadow-xs transition-[filter] hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
+              (click)="loadTargets()"
+              class="mt-2 text-sm/6 font-medium text-state-danger-700 underline hover:text-state-danger-800 dark:text-state-danger-200"
             >
-              @if (busy()) {
-                <ng-icon name="heroArrowPath" class="size-4 animate-spin" aria-hidden="true" />
-              }
-              {{ busyLabel() }}
+              Retry
             </button>
-          }
+          </div>
         </div>
-      </div>
-    </div>
-  `,
-  styles: `
-    @reference "../../../../styles/theme.css";
+      } @else if (targets().length === 0) {
+        <div class="rounded-2xl border border-dashed border-gray-300 bg-white p-8 text-center dark:border-gray-700 dark:bg-gray-800">
+          <ng-icon name="heroLink" class="mx-auto size-8 text-gray-400" aria-hidden="true" />
+          <p class="mt-3 text-sm/6 font-medium text-gray-700 dark:text-gray-300">No destinations available</p>
+          <p class="mt-1 text-sm/6 text-gray-500 dark:text-gray-400">
+            Ask an administrator to connect an app you can save conversations to.
+          </p>
+        </div>
+      } @else {
+        <!-- ─────────────── Destination ─────────────── -->
+        <fieldset class="space-y-2">
+          <legend class="mb-1.5 text-sm/6 font-medium text-gray-700 dark:text-gray-300">Destination</legend>
+          @for (target of targets(); track target.providerId) {
+            <label
+              class="flex cursor-pointer items-center gap-3 rounded-2xl border p-3 transition-colors"
+              [class]="selectedConnectorId() === target.providerId
+                ? 'border-primary-500 bg-gray-100 dark:border-primary-400 dark:bg-gray-700'
+                : 'border-gray-200 hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-white/5'"
+            >
+              <input
+                type="radio"
+                name="exportDestination"
+                class="size-4 text-primary-600 focus:ring-primary-500"
+                [value]="target.providerId"
+                [checked]="selectedConnectorId() === target.providerId"
+                (change)="selectConnector(target)"
+              />
+              <span class="flex-1 text-sm/6 font-medium text-gray-900 dark:text-white">{{ target.displayName }}</span>
+              @if (!target.connected) {
+                <span class="rounded-full bg-gray-200 px-2 py-0.5 text-xs/5 font-medium text-gray-700 dark:bg-gray-600 dark:text-gray-200">
+                  Not connected
+                </span>
+              }
+            </label>
+          }
+        </fieldset>
 
-    .dialog-backdrop {
-      animation: backdrop-fade-in 200ms ease-out;
-    }
-    @keyframes backdrop-fade-in {
-      from { opacity: 0; }
-      to { opacity: 1; }
-    }
-    .dialog-panel {
-      animation: dialog-fade-in-up 200ms ease-out;
-    }
-    @keyframes dialog-fade-in-up {
-      from { opacity: 0; transform: translateY(1rem) scale(0.95); }
-      to { opacity: 1; transform: translateY(0) scale(1); }
-    }
+        <!-- ─────────────── Format ─────────────── -->
+        @if (availableFormats().length > 0) {
+          <div class="mt-4">
+            <label for="export-format" class="mb-1.5 block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Format</label>
+            <select
+              id="export-format"
+              class="block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-hidden focus:ring-2 focus:ring-primary-500/40 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+              [value]="selectedFormat()"
+              (change)="onFormatChange($event)"
+            >
+              @for (fmt of availableFormats(); track fmt) {
+                <option [value]="fmt">{{ formatLabel(fmt) }}</option>
+              }
+            </select>
+          </div>
+        }
+
+        <!-- ─────────────── Folder ─────────────── -->
+        @if (canChooseFolder()) {
+          <div class="mt-4">
+            <span class="mb-1.5 block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Folder</span>
+            <div class="flex items-center gap-2 rounded-2xl border border-gray-300 bg-white px-3 py-2 dark:border-gray-600 dark:bg-gray-700">
+              <ng-icon name="heroFolder" class="size-4 shrink-0 text-gray-400" aria-hidden="true" />
+              <span class="min-w-0 flex-1 truncate text-sm/6 text-gray-900 dark:text-white">{{ destinationLabel() }}</span>
+              @if (destinationFolderName()) {
+                <button
+                  type="button"
+                  (click)="resetDestinationFolder()"
+                  class="shrink-0 rounded-2xl px-2 py-1 text-sm/6 font-medium text-gray-500 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:bg-gray-600 dark:hover:text-gray-200"
+                >
+                  Default
+                </button>
+              }
+              <button
+                type="button"
+                (click)="chooseFolder()"
+                class="shrink-0 rounded-2xl px-2 py-1 text-sm/6 font-medium text-primary-accessible hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-accessible-dark dark:hover:bg-gray-700 dark:hover:text-primary-50"
+              >
+                Choose…
+              </button>
+            </div>
+          </div>
+        }
+
+        <!-- ─────────────── Include ─────────────── -->
+        <fieldset class="mt-4">
+          <legend class="mb-1.5 text-sm/6 font-medium text-gray-700 dark:text-gray-300">Include</legend>
+          <div class="space-y-1.5">
+            <!-- Messages are the transcript itself: always on, shown disabled. -->
+            <label class="flex items-center gap-2.5 text-sm/6 text-gray-500 dark:text-gray-400">
+              <input type="checkbox" checked disabled class="size-4 rounded-sm text-primary-600" />
+              Messages
+            </label>
+            @for (opt of includeOptions; track opt.key) {
+              <label class="flex cursor-pointer items-center gap-2.5 text-sm/6 text-gray-700 dark:text-gray-300">
+                <input
+                  type="checkbox"
+                  class="size-4 rounded-sm text-primary-600 focus:ring-primary-500"
+                  [checked]="include()[opt.key]"
+                  (change)="toggleInclude(opt.key)"
+                />
+                {{ opt.label }}
+              </label>
+            }
+          </div>
+        </fieldset>
+
+        @if (error(); as err) {
+          <div class="mt-4 flex items-start gap-2.5 rounded-2xl border border-state-danger-200 bg-state-danger-50 p-3 dark:border-state-danger-800 dark:bg-state-danger-900/20">
+            <ng-icon name="heroExclamationTriangle" class="size-5 shrink-0 text-state-danger-600 dark:text-state-danger-400" aria-hidden="true" />
+            <p class="text-sm/6 text-state-danger-700 dark:text-state-danger-300">{{ err }}</p>
+          </div>
+        }
+      }
+
+      <div dialogFooter class="flex justify-end gap-3 border-t border-gray-200 px-6 py-4 dark:border-gray-700">
+        <button
+          type="button"
+          (click)="cancel()"
+          class="rounded-2xl bg-white px-3.5 py-2 text-sm/6 font-semibold text-gray-900 shadow-xs ring-1 ring-gray-300 ring-inset hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:bg-white/10 dark:text-white dark:ring-white/10 dark:hover:bg-white/20"
+        >
+          {{ result() ? 'Done' : 'Cancel' }}
+        </button>
+        @if (!result()) {
+          <button
+            type="button"
+            (click)="save()"
+            [disabled]="!canSubmit()"
+            class="inline-flex items-center gap-1.5 rounded-2xl bg-primary-accessible px-3.5 py-2 text-sm/6 font-semibold text-white shadow-xs transition-[filter] hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            @if (busy()) {
+              <ng-icon name="heroArrowPath" class="size-4 animate-spin" aria-hidden="true" />
+            }
+            {{ busyLabel() }}
+          </button>
+        }
+      </div>
+    </app-dialog-shell>
   `,
 })
 export class ExportDialogComponent implements OnInit {

@@ -85,6 +85,10 @@ what you get if you set nothing.
 | Feedback → Evaluations sampling | `CDK_FEEDBACK_EVAL_SAMPLING_ENABLED` | **OFF** | **yes — per eval run + PII** | Admin batch sends down-thumbed conversations to AgentCore Evaluations |
 | MCP token enrichment | `CDK_MCP_TOKEN_ENRICHMENT_ENABLED` | **OFF** | **yes — Cognito plan** | Pre-token Lambda that copies pool attributes into access-token claims; forces Cognito **Essentials** feature plan (per-MAU cost) |
 | MCP Apps host renderer | `AGENTCORE_MCP_APPS_HOST_ENABLED` | **ON** | none | Renders third-party MCP-server UI in the sandbox iframe (needs `mcp-sandbox` deployed) |
+| Conversation index (archive writes) | `CDK_CONVERSATION_INDEX_ENABLED` | **OFF** (in development) | **yes — S3, KB storage** | Feature switch. Writes each finished turn's user and assistant text to the conversation-archive bucket that conversation search is built from, and enables the two EventBridge rules that index those turns into a shared managed knowledge base (created on the first indexed turn). Off stops new writes and indexing; deleting a conversation still removes its archived turns, but its index documents stay until the daily reconciler removes them (it runs whatever this flag says). See `docs/specs/conversation-search.md` |
+| Conversation search | `CDK_CONVERSATION_SEARCH_ENABLED` (SPA: `features.conversationSearch`) | **ON** | only with the conversation index — KB retrievals | Feature switch, permanent. Serves `GET /sessions/search` on app-api and, with the SPA flag, the Cmd/Ctrl+K search dialog and the search button in the sidebar header. Searches the user's own conversations by title and opening prompt (DynamoDB) and, when the conversation index is on, on Enter or a pause by the full text of every turn ($0.001 per full-text search, at most 20 a minute per user). With the index off it matches titles and opening prompts only and makes no knowledge-base calls. Conversations created before this shipped are found by title only after `backend/scripts/backfill_session_search_attributes.py --apply` has run. `false` makes the route 404 and, with the SPA flag also `false`, leaves the sidebar with no conversation search. Set the backend variable and the SPA flag together. See `docs/specs/conversation-search.md` §5–§6 |
+| Conversation retention — prune sessions | `CDK_CONVERSATION_RETENTION_PRUNES_SESSIONS` | **ON** | a few minutes of one Fargate task a day | Feature switch, permanent. Lets `CDK_CONVERSATION_RETENTION_DAYS` remove session rows too: a daily task deletes conversations whose last turn is older than the retention period, through the same cleanup as a user's delete, so they leave the sidebar instead of opening empty. Nothing is deleted until the next flag arms it. `false` keeps them as title-only rows and stops the task |
+| Conversation retention — pruner armed | `CDK_CONVERSATION_RETENTION_PRUNE_ARMED` | **OFF** | none (report-only until armed) | Pruner *deletes* sessions past retention vs only logging how many it would (with the oldest and newest last-message time). Even armed, the first run in an environment, and the first run after the retention period changes, is a dry run |
 | Token exchange (RFC 8693) | `CDK_TOKEN_EXCHANGE_URL` (+ `_CLIENT_ID`) | **absent** | none | Optional external token-service exchange. Unset ⇒ no resources created |
 
 ## Runtime-only flags (on by default, no `CDK_*` variable)
@@ -152,6 +156,8 @@ Every default-on flag is one of two kinds:
 A rollout switch normally retires after it has shipped in a production release
 and run there for at least two weeks with no one needing to flip it. Some
 switches wait for a stricter condition, which the Kind column states.
+Switches waiting to be retired are tracked in
+[issue #1422](https://github.com/Boise-State-Development/agentcore-public-stack/issues/1422).
 Retirements are batched into one cleanup per release cycle, and each removed
 variable is listed under **Removed** in the
 [CHANGELOG](https://github.com/Boise-State-Development/agentcore-public-stack/blob/main/CHANGELOG.md).
@@ -174,6 +180,17 @@ If you care about the bill, these are the only flags that move it:
 - **`CDK_MCP_TOKEN_ENRICHMENT_ENABLED`** — turning it on forces the Cognito user
   pool onto the **Essentials** feature plan, which bills per monthly active
   user. Default **OFF**.
+- **`CDK_CONVERSATION_INDEX_ENABLED`** — default **OFF** while in development.
+  Writes one small S3 object per finished turn (cents a month at today's scale)
+  and indexes it into a managed knowledge base billed at ~$5/GB-month, through
+  an SQS queue and a container Lambda (cents). Estimated ~$4/month for ~13k sessions, ~$45 at 30k users
+  (`docs/specs/conversation-search.md` §8).
+- **`CDK_CONVERSATION_SEARCH_ENABLED`** — default **ON**. Title and
+  opening-prompt searches are DynamoDB queries (cents). Full-text search runs
+  only when `CDK_CONVERSATION_INDEX_ENABLED` is also on, at one knowledge-base
+  retrieval ($0.001) per search. Capped at 20 full-text searches a
+  minute per user; estimated ~$1/month today, ~$18 at 30k users
+  (`docs/specs/conversation-search.md` §8).
 - **`CDK_KB_SYNC_ENABLED`** — default **ON**. Runs a scheduled Lambda that
   re-embeds assistant KB sources; cost is the embedding calls + Lambda time on
   the schedule. Turn off if you do not use assistant knowledge bases.
@@ -221,6 +238,15 @@ for the authoritative list and defaults:
   alarm thresholds, per-model Bedrock TPM quotas — all `CDK_OBSERVABILITY_*`.
 - **App-API sizing**: `CDK_APP_API_CPU` / `_MEMORY` / `_DESIRED_COUNT` /
   `_MAX_CAPACITY`.
+- **Conversation retention**: `CDK_CONVERSATION_RETENTION_DAYS` (365). A
+  conversation's content is kept for this many days after each turn, wherever it
+  is stored; nothing about a user's long-term memory records (facts,
+  preferences) changes. Whole days, at least 3. Today it sets AgentCore Memory's
+  event expiry, which stops at 365 even if the value is higher, and the
+  conversation archive's lifecycle rule; a daily reconciler deletes archive
+  objects and search-index documents past it, and, once armed, sessions whose
+  last turn is past it (`CDK_CONVERSATION_RETENTION_PRUNES_SESSIONS`,
+  `CDK_CONVERSATION_RETENTION_PRUNE_ARMED` above). Unset or empty means 365.
 
 ## Source of truth
 

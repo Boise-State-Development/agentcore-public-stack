@@ -110,7 +110,7 @@
                   <span class="mt-auto flex items-center justify-between gap-3 pt-5 text-xs/5 text-gray-600 dark:text-gray-400">
                     <span>{{ people(project) }}</span>
                     @if (project.role !== 'owner') {
-                      <span class="truncate">Owner: {{ project.ownerEmail }}</span>
+                      <span class="truncate" [attr.title]="project.ownerName ? project.ownerEmail : null">Owner: {{ personLabel(project.ownerName, project.ownerEmail) }}</span>
                     }
                   </span>
                 </a>

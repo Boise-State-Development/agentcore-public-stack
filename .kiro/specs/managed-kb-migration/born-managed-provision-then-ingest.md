@@ -158,17 +158,32 @@ writes already resolves to managed, so the existing `_reserve_managed_upload` pa
 covers it unchanged. The failure path returns those reservations via
 `settle_once`.
 
-**Ingestion reuses `ingestion_consumer.handle_object` outright** rather than
-reimplementing ingest → wait-indexed → wait-retrievable → terminal. That function
-is where §5.37, §5.38 and §5.39 are encoded, plus the Requirement 12.3 S3-HEAD
-reconcile; a second copy would be a second place to forget them. The job moves the
-row `provisioning → uploading` first, then calls it, so by the time it reads the
-record `provisioningState` is `active` and it takes the ordinary managed path.
+**Ingestion reuses the ingestion consumer outright** rather than reimplementing
+ingest → wait-indexed → wait-retrievable → terminal. That function is where §5.37,
+§5.38 and §5.39 are encoded, plus the Requirement 12.3 S3-HEAD reconcile; a second
+copy would be a second place to forget them.
 
-**One document per invocation.** The worker's timeout is 15 min and one document's
-indexing budget is already 10.5, so a second could not finish. Anything left over
-re-arms the work key. More than one pending document only happens when the author
-uploaded again during the provisioning window.
+**Every waiting document is handed off at once.** Once the knowledge base exists,
+the job async-invokes the ingestion consumer Lambda once per waiting document, with
+the same bucket and key the deferred S3 event carried, then moves the row
+`provisioning → uploading` (guarded on it still being `provisioning`). Each
+document gets the consumer's own 15-minute budget, retries and DLQ, exactly like an
+ordinary upload, and the job goes terminal in seconds. Invoke-then-mark is the safe
+order: a crash between the two leaves the row `provisioning` and the re-armed job
+sends it again, which the consumer tolerates.
+
+This replaced **one document per invocation**, which assumed more than one pending
+document was rare. Shared Projects seed several files at once: on dev (2026-10-05,
+B5) four files became ready at +2.5 min, +31 min and ~+60/+90 min. The in-process
+path (`handle_object` called inside the worker, one document per invocation, the
+rest re-armed) survives only as the fallback for a document the consumer could not
+be invoked for, or when `KB_MIGRATION_INGESTION_CONSUMER_FUNCTION_NAME` is unset.
+
+**The lease is released when a step ends.** It is 15 minutes, the same as the
+dispatcher interval, and is taken about a second after the tick. Before release
+existed, a re-armed job's next tick found the lease still live and stepped aside,
+so every re-queue cost 30 minutes (B11). This applies to every work state, not just
+born-managed.
 
 **Failure ordering is documents → engine → terminal state.** Documents are failed
 while the record still says managed (the state in which they are unambiguously this

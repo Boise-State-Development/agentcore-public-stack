@@ -6,10 +6,18 @@ created a SECOND metadata row on the same session id under the second user —
 `ensure_session_metadata_exists`'s `attribute_not_exists(PK)` guard cannot see
 it, because the new row has a different PK.
 
-Not a confidentiality bug: conversation content is keyed by actor id in
-AgentCore Memory, so the second user only ever saw an empty thread. The damage
-was the duplicate row, the billing attached to it, and the original owner's
-session resolving non-deterministically between the two rows afterwards.
+The damage there was the duplicate row, the billing attached to it, and the
+original owner's session resolving non-deterministically between the two rows
+afterwards. In prod the second user's call carried no history: it came 34
+minutes after the owner's last turn, so the owner's container had already idled
+out.
+
+This was also a confidentiality bug, though the original note here said it was
+not. Memory scopes history by actor id, but runtime affinity sends both users to
+one container. There the agent cache's conversation adoption matched on session
+id alone, so a second user arriving while the owner's agent was warm shared the
+owner's live message list (dev, 2026-08-31). That half is pinned in
+`tests/apis/inference_api/test_chat_service.py::test_adoption_never_crosses_users_on_one_session_id`.
 """
 
 import pytest

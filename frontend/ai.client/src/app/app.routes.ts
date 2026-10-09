@@ -142,6 +142,15 @@ export const routes: Routes = [
         canActivate: [authGuard],
     },
     {
+        // The project's Memory tab (shared-projects 2.8): a page of its own, not a dialog,
+        // because it is a browser beside a file. Declared before `:tab` so it wins.
+        // `scope`, `file` and `view` ride the query string.
+        path: 'projects/:id/memory',
+        loadComponent: () => import('./projects/memory/project-memory.page').then(m => m.ProjectMemoryPage),
+        canMatch: [projectsEnabled],
+        canActivate: [authGuard],
+    },
+    {
         // Shared Projects (shared-projects §6). The tab is part of the URL so a link can
         // land on Members or Settings; the bare project URL opens its Overview.
         // `projectsEnabled` keeps every /projects URL unmatched (→ not found) in a build

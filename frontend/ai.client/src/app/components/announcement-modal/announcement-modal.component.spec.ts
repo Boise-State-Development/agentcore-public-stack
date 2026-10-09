@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { TestBed } from '@angular/core/testing';
-import { DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
+import { DIALOG_DATA, Dialog, DialogRef } from '@angular/cdk/dialog';
 import { provideMarkdown } from 'ngx-markdown';
+import { expectNamedDialog, openInCdkDialog } from '../../../testing/cdk-dialog';
 import { AnnouncementsService } from '../../services/announcements/announcements.service';
 import {
   Announcement,
@@ -69,6 +70,20 @@ describe('AnnouncementModalComponent', () => {
     return fixture.nativeElement as HTMLElement;
   }
 
+  /** Escape, as the user presses it inside the dialog. */
+  function pressEscape(fixture: ReturnType<typeof setup>) {
+    el(fixture)
+      .querySelector('app-dialog-shell')!
+      .dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  }
+
+  /** A press and release on the area outside the panel. */
+  function clickOutside(fixture: ReturnType<typeof setup>) {
+    const outside = el(fixture).querySelector('[appDialogDismiss]')!;
+    outside.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    outside.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  }
+
   function confirmButton(fixture: ReturnType<typeof setup>) {
     const buttons = [...el(fixture).querySelectorAll('button')];
     return buttons.find(b => /Got it|I understand/.test(b.textContent ?? ''))!;
@@ -117,15 +132,11 @@ describe('AnnouncementModalComponent', () => {
 
     it('closes on Escape and on a backdrop click', () => {
       const fixture = setup(makeAnnouncement());
-      const component = fixture.componentInstance as unknown as {
-        onEscape(): void;
-        onBackdropDismiss(): void;
-      };
 
-      component.onEscape();
+      pressEscape(fixture);
       expect(close).toHaveBeenCalledTimes(1);
 
-      component.onBackdropDismiss();
+      clickOutside(fixture);
       expect(close).toHaveBeenCalledTimes(2);
     });
   });
@@ -153,13 +164,9 @@ describe('AnnouncementModalComponent', () => {
     it('ignores Escape and backdrop clicks, writing no ack', () => {
       const fixture = setup(makeAnnouncement({ requires_ack: true }));
       ack.mockClear();
-      const component = fixture.componentInstance as unknown as {
-        onEscape(): void;
-        onBackdropDismiss(): void;
-      };
 
-      component.onEscape();
-      component.onBackdropDismiss();
+      pressEscape(fixture);
+      clickOutside(fixture);
 
       expect(close).not.toHaveBeenCalled();
       expect(ack).not.toHaveBeenCalled();
@@ -208,15 +215,38 @@ describe('AnnouncementModalComponent', () => {
     });
   });
 
-  it('is a labelled modal dialog', () => {
-    const fixture = setup(makeAnnouncement());
-    const panel = el(fixture).querySelector('[role="dialog"]')!;
-    expect(panel.getAttribute('aria-modal')).toBe('true');
-    const labelledBy = panel.getAttribute('aria-labelledby')!;
-    // Attribute selector, not `#id`: the id is a UUID that can start with a
-    // digit, and jsdom has no `CSS.escape` to fix that up.
-    expect(
-      el(fixture).querySelector(`[id="${labelledBy}"]`)?.textContent,
-    ).toContain('Acceptable use policy update');
+  describe('opened through CDK Dialog', () => {
+    function open(announcement: Announcement) {
+      TestBed.resetTestingModule();
+      ack = vi.fn(async () => true);
+      TestBed.configureTestingModule({
+        providers: [provideMarkdown(), { provide: AnnouncementsService, useValue: { ack } }],
+      });
+      return openInCdkDialog<AnnouncementModalComponent, AnnouncementModalData>(AnnouncementModalComponent, {
+        data: { announcement },
+        disableClose: announcement.requires_ack,
+      });
+    }
+
+    afterEach(() => TestBed.inject(Dialog).closeAll());
+
+    it('names the dialog from the announcement title', async () => {
+      const { container } = await open(makeAnnouncement());
+      expectNamedDialog(container, { name: 'Acceptable use policy update' });
+      expect(container.querySelector('button[aria-label="Close announcement"]')).not.toBeNull();
+    });
+
+    it('stays open on Escape when it must be acknowledged, and is still named', async () => {
+      const { ref, container } = await open(makeAnnouncement({ requires_ack: true }));
+      expectNamedDialog(container, { name: 'Acceptable use policy update' });
+      expect(container.querySelector('button[aria-label="Close announcement"]')).toBeNull();
+
+      let closed = false;
+      ref.closed.subscribe(() => (closed = true));
+      container
+        .querySelector('app-dialog-shell')!
+        .dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      expect(closed).toBe(false);
+    });
   });
 });

@@ -30,6 +30,7 @@ import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import * as kms from 'aws-cdk-lib/aws-kms';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 
@@ -89,6 +90,8 @@ export interface PlatformComputeRefs {
   agentTemplatesTable: dynamodb.ITable;
   sharedConversationsTable: dynamodb.ITable;
   sharedConversationsBucket: s3.IBucket;
+  /** Per-turn transcript archive (conversation search). */
+  conversationArchiveBucket: s3.IBucket;
   fileUploadBucket: s3.IBucket;
   fileUploadTable: dynamodb.ITable;
 
@@ -121,6 +124,8 @@ export interface PlatformComputeRefs {
 
   // ── Shared Projects — single-table (META, MEMBER#, pointers, COST#, NOTIF#)
   projectsTable: dynamodb.ITable;
+  /** Memory maintenance worker (2.6): app-api async-invokes it to start a run. */
+  memoryMaintenanceWorker: lambda.IFunction;
 
   // ── Fine-tuning
   fineTuningJobsTable: dynamodb.ITable;

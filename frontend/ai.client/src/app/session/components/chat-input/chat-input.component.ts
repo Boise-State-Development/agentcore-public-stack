@@ -48,6 +48,7 @@ import {
 } from '../../../services/file-upload';
 import { ToastService } from '../../../services/toast/toast.service';
 import { ToolService } from '../../../services/tool/tool.service';
+import { ModelService, isTextOnlyModel } from '../../services/model/model.service';
 import {
   AudioRecorderService,
   VoiceChatService,
@@ -144,6 +145,16 @@ const HINT_ROTATION_MS = 4500;
  * seconds of an empty composer, and the first keystroke ends it early.
  */
 const HINT_PASSES = 3;
+
+/** Attachments a TEXT-only model never sees: the backend drops them. */
+const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.webp'];
+
+/**
+ * Attachments a TEXT-only model reads as extracted text instead of a native
+ * document block. Spreadsheets and decks are absent on purpose: they go to
+ * their tools whatever the model, so nothing changes for them.
+ */
+const TEXT_EXTRACTED_EXTENSIONS = ['.pdf', '.docx', '.txt', '.html', '.md'];
 
 interface Message {
   content: string;
@@ -285,6 +296,7 @@ export class ChatInputComponent {
   private readonly composerDraft = inject(ComposerDraftService);
   private readonly draftStorage = inject(ComposerDraftStorageService);
   private readonly toolService = inject(ToolService);
+  private readonly modelService = inject(ModelService);
   private readonly voiceChatService = inject(VoiceChatService);
   private readonly audioRecorder = inject(AudioRecorderService);
   private readonly dictation = inject(DictationService);
@@ -2282,6 +2294,17 @@ export class ChatInputComponent {
     // so the user needs the tool enabled to get answers about the data.
     let tabularNudgeShown = false;
 
+    // Likewise once per batch, per kind, when the turn's model reads text only:
+    // the backend drops its images and hands it a document's extracted text
+    // (`_adapt_attachments_for_model`), so say so before the user sends rather
+    // than after the reply. The picker's model is the turn's model, including
+    // an Agent-pinned one (the session page locks the picker to it). What it
+    // cannot know is an `@`-mentioned agent's model, which the backend picks
+    // for that turn alone — the model's own note about dropped files covers it.
+    const textOnly = isTextOnlyModel(this.modelService.selectedModel());
+    let imageNoticeShown = false;
+    let documentNoticeShown = false;
+
     // Validate and upload each file
     for (const file of newFiles) {
       // Check file size (pptx has its own, larger cap — see maxFileSizeFor)
@@ -2315,6 +2338,20 @@ export class ChatInputComponent {
           );
           tabularNudgeShown = true;
         }
+      }
+
+      if (textOnly && !imageNoticeShown && IMAGE_EXTENSIONS.includes(ext)) {
+        this.toastService.info(
+          'Images will be skipped',
+          "This model can't see images, so they won't be sent to it. Switch models to ask about an image."
+        );
+        imageNoticeShown = true;
+      } else if (textOnly && !documentNoticeShown && TEXT_EXTRACTED_EXTENSIONS.includes(ext)) {
+        this.toastService.info(
+          'This model reads text only',
+          "The document's text will be extracted and sent instead. Layout and images are lost."
+        );
+        documentNoticeShown = true;
       }
 
       // Upload file

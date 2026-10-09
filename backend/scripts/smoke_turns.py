@@ -496,6 +496,7 @@ class RuntimeTransport:
         headers = self._apply_header(
             {"Content-Type": "application/json", "Authorization": f"Bearer {bearer}"},
             payload.get("session_id"),
+            self.user_id,
         )
         started = time.monotonic()
         try:

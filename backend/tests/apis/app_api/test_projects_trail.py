@@ -167,6 +167,56 @@ def test_the_people_affected_are_told_and_the_actor_is_not(service, pid):
     assert inbox(OWNER)["notifications"] == []
 
 
+def test_archive_and_restore_tell_every_member_but_the_owner(service, pid):
+    service.add_members(pid, OWNER, ["Pending@Example.edu"], "viewer")  # never signed in
+    asyncio.run(service.update_project(pid, OWNER, status="archived"))
+    asyncio.run(service.update_project(pid, OWNER, status="active"))
+
+    pending = User(user_id="u-pending", email="pending@example.edu", name="P", roles=["default"])
+    for member in (EDITOR, VIEWER, pending):
+        kinds = [n["kind"] for n in inbox(member)["notifications"]]
+        assert kinds[:2] == ["project_restored", "project_archived"], member.email
+    archived = inbox(VIEWER)["notifications"][1]
+    assert (archived["projectName"], archived["actorEmail"]) == ("Budget", OWNER.email)
+    assert inbox(OWNER)["notifications"] == []
+
+
+def test_an_edit_that_is_not_an_archive_tells_nobody(service, pid):
+    asyncio.run(service.update_project(pid, OWNER, name="Budget FY27"))
+    assert [n["kind"] for n in inbox(VIEWER)["notifications"]] == ["project_invited"]
+
+
+def test_a_failed_member_read_does_not_fail_the_archive(service, pid, monkeypatch):
+    def boom(_project_id):
+        raise RuntimeError("dynamodb unavailable")
+
+    monkeypatch.setattr(service.repository, "list_members", boom)
+    project, _ = asyncio.run(service.update_project(pid, OWNER, status="archived"))
+    assert project.status == "archived"
+
+
+def test_leaving_tells_the_owner_only(service, pid):
+    service.leave(pid, VIEWER)
+
+    left = inbox(OWNER)["notifications"]
+    assert [(n["kind"], n["payload"], n["actorEmail"]) for n in left] == [
+        ("project_member_left", {"role": "viewer"}, VIEWER.email)
+    ]
+    assert [n["kind"] for n in inbox(EDITOR)["notifications"]] == ["project_invited"]
+
+
+def test_notify_many_writes_past_one_batch_and_skips_duplicates_and_the_actor(env):
+    notifications = NotificationService(table_name=TABLE)
+    recipients = [f"m{i}@example.edu" for i in range(30)] + ["M0@Example.edu", OWNER.email]
+
+    written = notifications.notify_many(recipients, kind="project_archived", actor=OWNER, project_id="p1")
+
+    assert written == 30
+    assert len(notifications.list("m29@example.edu")[0]) == 1
+    assert len(notifications.list("m0@example.edu")[0]) == 1
+    assert notifications.list(OWNER.email)[0] == []
+
+
 def test_an_invitation_waits_for_someone_who_has_never_signed_in(service, pid):
     service.add_members(pid, OWNER, ["New.Person@Example.edu"], "viewer")
     newcomer = User(user_id="u-new", email="new.person@example.edu", name="N", roles=["default"])
@@ -206,6 +256,21 @@ def test_notifications_page_newest_first(service, pid):
     assert len(seen) == 6 and seen == sorted(seen, reverse=True)
 
 
+def test_notifications_name_the_actor_from_the_directory(service, pid, monkeypatch):
+    from apis.shared.directory import adapter
+
+    from tests.shared.test_projects import FakeDirectory
+
+    directory = FakeDirectory()
+    directory.sign_in(User(user_id=OWNER.user_id, email=OWNER.email, name="Olive Owner", roles=["default"]))
+    monkeypatch.setattr(adapter, "_directory", directory)
+    service.remove_member(pid, EDITOR, VIEWER.email)  # EDITOR is not in the directory
+
+    newest, invited = inbox(VIEWER)["notifications"]
+    assert (newest["actorEmail"], newest["actorName"]) == (EDITOR.email, None)
+    assert (invited["actorEmail"], invited["actorName"]) == (OWNER.email, "Olive Owner")
+
+
 # ---- the readers ---------------------------------------------------------
 
 
@@ -214,6 +279,21 @@ def test_editors_read_the_trail_without_user_ids(pid):
     assert [r["action"] for r in body["records"]][-1] == "project.created"
     assert body["records"][-1]["actorEmail"] == OWNER.email
     assert not any("actorUserId" in r or "targetId" in r for r in body["records"])
+    assert body["people"] == {}  # nobody in the directory
+
+
+def test_the_trail_names_its_actors_and_the_members_it_is_about(service, pid, monkeypatch):
+    from apis.shared.directory import adapter
+
+    from tests.shared.test_projects import FakeDirectory
+
+    directory = FakeDirectory()
+    for user, name in ((OWNER, "Olive Owner"), (VIEWER, "Vi Viewer")):
+        directory.sign_in(User(user_id=user.user_id, email=user.email, name=name, roles=["default"]))
+    monkeypatch.setattr(adapter, "_directory", directory)
+
+    body = client(EDITOR).get(f"/projects/{pid}/audit").json()
+    assert body["people"] == {OWNER.email: "Olive Owner", VIEWER.email: "Vi Viewer"}
 
     assert client(VIEWER).get(f"/projects/{pid}/audit").status_code == 403
     assert client(STRANGER).get(f"/projects/{pid}/audit").status_code == 404

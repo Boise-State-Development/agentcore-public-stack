@@ -1,6 +1,7 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
+import { Dialog, DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
+import { expectNamedDialog, openInCdkDialog } from '../../../../../../testing/cdk-dialog';
 import {
   ArtifactShareModalComponent,
   type ArtifactShareModalData,
@@ -34,7 +35,7 @@ describe('ArtifactShareModalComponent', () => {
   let fixture: ComponentFixture<ArtifactShareModalComponent>;
   let shareService: {
     createShare: ReturnType<typeof vi.fn>;
-    listShares: ReturnType<typeof vi.fn>;
+    shareOptions: ReturnType<typeof vi.fn>;
     updateShare: ReturnType<typeof vi.fn>;
     revokeShare: ReturnType<typeof vi.fn>;
   };
@@ -52,7 +53,7 @@ describe('ArtifactShareModalComponent', () => {
 
     shareService = {
       createShare: vi.fn(),
-      listShares: vi.fn().mockResolvedValue([]),
+      shareOptions: vi.fn().mockResolvedValue({ shares: [], project: null }),
       updateShare: vi.fn(),
       revokeShare: vi.fn().mockResolvedValue(undefined),
     };
@@ -133,15 +134,15 @@ describe('ArtifactShareModalComponent', () => {
   });
 
   it('loads existing links on open', async () => {
-    shareService.listShares.mockResolvedValue([{ ...SHARE, version: 1 }]);
+    shareService.shareOptions.mockResolvedValue({ shares: [{ ...SHARE, version: 1 }], project: null });
     await init();
-    expect(shareService.listShares).toHaveBeenCalledWith('art-1');
+    expect(shareService.shareOptions).toHaveBeenCalledWith('art-1');
     expect(text()).toContain('Existing links');
     expect(text()).toContain('Version 1');
   });
 
   it('still opens when the existing-links call fails', async () => {
-    shareService.listShares.mockRejectedValue(new Error('boom'));
+    shareService.shareOptions.mockRejectedValue(new Error('boom'));
     await init();
     // The list is a convenience; failing it must not block sharing.
     expect(text()).toContain('Create share link');
@@ -199,7 +200,7 @@ describe('ArtifactShareModalComponent', () => {
   });
 
   it('does not list the just-created link twice', async () => {
-    shareService.listShares.mockResolvedValue([]);
+    shareService.shareOptions.mockResolvedValue({ shares: [], project: null });
     shareService.createShare.mockResolvedValue(SHARE);
     await init();
 
@@ -258,7 +259,7 @@ describe('ArtifactShareModalComponent', () => {
   // ----------------------------------------------------------------
 
   it('revokes a link and drops it from the list', async () => {
-    shareService.listShares.mockResolvedValue([SHARE]);
+    shareService.shareOptions.mockResolvedValue({ shares: [SHARE], project: null });
     await init();
 
     await api()['revoke'](SHARE);
@@ -293,7 +294,7 @@ describe('ArtifactShareModalComponent', () => {
   });
 
   it('copies the absolute link and flags which link was copied', async () => {
-    shareService.listShares.mockResolvedValue([SHARE]);
+    shareService.shareOptions.mockResolvedValue({ shares: [SHARE], project: null });
     await init();
 
     await api()['copyLink'](SHARE);
@@ -378,7 +379,7 @@ describe('ArtifactShareModalComponent', () => {
   });
 
   it('closes with a result after a revoke, even with nothing created', async () => {
-    shareService.listShares.mockResolvedValue([SHARE]);
+    shareService.shareOptions.mockResolvedValue({ shares: [SHARE], project: null });
     await init();
 
     await api()['revoke'](SHARE);
@@ -386,5 +387,82 @@ describe('ArtifactShareModalComponent', () => {
 
     // A revoke is a commit too — the opener needs to know something moved.
     expect(dialogRef.close).toHaveBeenCalledWith([]);
+  });
+
+  describe('an artifact made in a project task (3.3)', () => {
+    const PROJECT = { projectId: 'prj_1', name: 'Enrollment Sync' };
+
+    it('offers "Project members" first and selects it', async () => {
+      shareService.shareOptions.mockResolvedValue({ shares: [], project: PROJECT });
+      await init();
+      const labels = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll('fieldset label'))
+        .map((l) => l.querySelector('span span')?.textContent?.trim());
+      expect(labels).toEqual(['Project members', 'Public link', 'Limited share']);
+      expect(text()).toContain('Everyone in Enrollment Sync can open it');
+      expect(api()['selectedAccess']()).toBe('project');
+    });
+
+    it('keeps the choice the person already made', async () => {
+      let resolve: (v: unknown) => void = () => undefined;
+      shareService.shareOptions.mockReturnValue(new Promise((r) => (resolve = r)));
+      fixture.detectChanges();
+      api()['choose']('specific');
+      resolve({ shares: [], project: PROJECT });
+      await fixture.whenStable();
+      expect(api()['selectedAccess']()).toBe('specific');
+    });
+
+    it('shares with the project and says where it is listed', async () => {
+      shareService.shareOptions.mockResolvedValue({ shares: [], project: PROJECT });
+      shareService.createShare.mockResolvedValue({ ...SHARE, accessLevel: 'project', projectId: 'prj_1' });
+      await init();
+      await api()['onShare']();
+      fixture.detectChanges();
+      expect(shareService.createShare).toHaveBeenCalledWith('art-1', 2, 'project', undefined);
+      expect(text()).toContain('listed under Outputs on the project page');
+    });
+
+    it('shows the API sentence when the person left the project', async () => {
+      shareService.shareOptions.mockResolvedValue({ shares: [], project: PROJECT });
+      shareService.createShare.mockRejectedValue({ status: 403, error: { detail: "You are not a member of this artifact's project" } });
+      await init();
+      await api()['onShare']();
+      fixture.detectChanges();
+      expect(text()).toContain("You are not a member of this artifact's project");
+    });
+
+    it('labels an existing project link', async () => {
+      shareService.shareOptions.mockResolvedValue({ shares: [{ ...SHARE, accessLevel: 'project' }], project: PROJECT });
+      await init();
+      expect(text()).toContain('Project members');
+      expect(api()['audienceLabel']({ ...SHARE, accessLevel: 'project' })).toBe('Project members');
+    });
+  });
+});
+
+describe('ArtifactShareModalComponent in a CDK dialog', () => {
+  beforeEach(() => {
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({
+      providers: [
+        {
+          provide: ArtifactShareService,
+          useValue: { shareOptions: vi.fn().mockResolvedValue({ shares: [], project: null }) },
+        },
+      ],
+    });
+  });
+
+  afterEach(() => TestBed.inject(Dialog).closeAll());
+
+  it('names the dialog from its title, describes it with the version, and starts on the chosen access level', async () => {
+    const { container } = await openInCdkDialog<ArtifactShareModalComponent, ArtifactShareModalData>(
+      ArtifactShareModalComponent,
+      { data: DATA },
+    );
+    expectNamedDialog(container, { name: 'Share artifact', description: 'Quarterly Chart · version 2' });
+    const initial = container.querySelector<HTMLInputElement>('[cdkFocusInitial]');
+    expect(initial?.type).toBe('radio');
+    expect(initial?.value).toBe('public');
   });
 });

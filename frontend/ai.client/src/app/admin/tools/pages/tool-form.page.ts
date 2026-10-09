@@ -327,7 +327,7 @@ import {
                     </p>
                   } @else {
                     <div class="space-y-2">
-                      @for (row of mcpToolsArray.controls; track $index) {
+                      @for (row of mcpToolsArray.controls; track row) {
                         <div [formGroupName]="$index" class="flex items-start gap-2 rounded-2xl border border-gray-200 bg-white p-2 dark:border-gray-700 dark:bg-gray-800">
                           <div class="flex-1">
                             <input
@@ -746,7 +746,7 @@ import {
                     </p>
                   } @else {
                     <div class="space-y-2">
-                      @for (row of gwToolsArray.controls; track $index) {
+                      @for (row of gwToolsArray.controls; track row) {
                         <div [formGroupName]="$index" class="flex items-start gap-2 rounded-2xl border border-gray-200 bg-white p-2 dark:border-gray-700 dark:bg-gray-800">
                           <div class="flex-1">
                             <input

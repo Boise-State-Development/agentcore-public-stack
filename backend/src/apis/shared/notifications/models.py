@@ -25,6 +25,13 @@ NotificationKind = Literal[
     "project_role_changed",
     "project_removed",
     "project_ownership_transferred",
+    "project_archived",
+    "project_restored",
+    "project_member_left",
+    "project_task_shared",
+    "project_proposal_pending",
+    "project_proposal_decided",
+    "project_memory_maintenance",
 ]
 
 

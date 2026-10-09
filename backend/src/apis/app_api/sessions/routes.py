@@ -42,8 +42,10 @@ from apis.shared.sessions.metadata import (
     store_session_metadata,
 )
 from .services.session_service import SessionService
+from .services.delete_cascade import SessionDeleteCascade
 from apis.app_api.shares.service import get_share_service
 from apis.app_api.artifacts.service import get_artifact_share_service
+from apis.shared.conversation_archive import delete_session_archive
 from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.feature_flags import (
     response_feedback_enabled,
@@ -448,39 +450,16 @@ async def delete_session_endpoint(
                 detail=f"Session not found: {session_id}"
             )
 
-        # Queue cleanup tasks as background tasks (fire-and-forget)
-        # These don't block the response - cleanup happens after 204 is sent
-
-        # 1. Delete AgentCore Memory content
-        background_tasks.add_task(
-            service.delete_agentcore_memory,
-            session_id,
-            user_id
-        )
-
-        # 2. Cascade delete associated files (S3 objects + metadata)
-        background_tasks.add_task(
-            service.delete_session_files,
-            session_id
-        )
-
-        # 3. Delete share snapshots so share links stop working
-        share_service = get_share_service()
-        background_tasks.add_task(
-            share_service.delete_shares_for_session,
-            session_id
-        )
-
-        # 4. Revoke artifact shares from this session. Artifacts outlive
-        # the chat that produced them, so without this a deleted
-        # conversation leaves live links to its artifacts. Best-effort
-        # and never-raising, like the conversation cascade above — and a
-        # no-op when artifacts aren't enabled for this environment.
-        background_tasks.add_task(
-            get_artifact_share_service().delete_for_session,
-            session_id,
-            user_id
-        )
+        # The cleanups (Memory, files, shares, artifact shares, archived
+        # turns) run as background tasks after the 204 is sent. One cascade
+        # serves this route, bulk delete and the retention pruner, so they
+        # cannot drift apart (services/delete_cascade.py).
+        SessionDeleteCascade(
+            session_service=service,
+            share_service=get_share_service(),
+            artifact_share_service=get_artifact_share_service(),
+            delete_archive=delete_session_archive,
+        ).queue(background_tasks, user_id, session_id)
 
         logger.info("Successfully deleted session")
 
@@ -541,8 +520,12 @@ async def bulk_delete_sessions_endpoint(
 
     try:
         service = SessionService()
-        share_service = get_share_service()
-        artifact_share_service = get_artifact_share_service()
+        cascade = SessionDeleteCascade(
+            session_service=service,
+            share_service=get_share_service(),
+            artifact_share_service=get_artifact_share_service(),
+            delete_archive=delete_session_archive,
+        )
 
         for session_id in session_ids:
             try:
@@ -552,25 +535,7 @@ async def bulk_delete_sessions_endpoint(
                 )
 
                 if deleted:
-                    # Queue cleanup tasks as background tasks
-                    background_tasks.add_task(
-                        service.delete_agentcore_memory,
-                        session_id,
-                        user_id
-                    )
-                    background_tasks.add_task(
-                        service.delete_session_files,
-                        session_id
-                    )
-                    background_tasks.add_task(
-                        share_service.delete_shares_for_session,
-                        session_id
-                    )
-                    background_tasks.add_task(
-                        artifact_share_service.delete_for_session,
-                        session_id,
-                        user_id
-                    )
+                    cascade.queue(background_tasks, user_id, session_id)
                     results.append(BulkDeleteSessionResult(
                         session_id=session_id,
                         success=True,

@@ -219,9 +219,10 @@ models. It keeps the name because the record is still an Assistant *on the wire*
 folder would drag the API contract's vocabulary with it. Its `README.md` says so, with the
 consumer map. Anything new and user-facing goes under `agents/`.
 
-**The backend `/assistants/*` surface is unchanged and not deprecated.** `test-chat` and the
-document sub-routes deliberately live there and are called by the Designer's own preview pane and
-knowledge-base section.
+**The backend `/assistants/*` surface is unchanged and not deprecated.** The document sub-routes
+deliberately live there and are called by the Designer's knowledge-base section. (The Designer's
+preview pane streams through the main chat's `/invocations` path; the old
+`POST /assistants/{id}/test-chat` endpoint had no caller and was removed.)
 
 ---
 

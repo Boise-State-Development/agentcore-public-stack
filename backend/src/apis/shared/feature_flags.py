@@ -626,6 +626,78 @@ def projects_enabled() -> bool:
     return os.environ.get("PROJECTS_ENABLED", "").strip().lower() == "true"
 
 
+def conversation_index_enabled() -> bool:
+    """Whether finished turns are written to the conversation archive.
+
+    The write path of conversation search (``docs/specs/conversation-search.md``
+    §4): the runtime's fire-and-forget put of each turn's user and assistant
+    text after ``done``, and app-api's put of each copied turn when a shared
+    conversation is forked. **Opt-in while the feature is in development**
+    (CLAUDE.md "Feature flags"): only ``"true"`` (case-insensitive) enables it;
+    unset or anything else is off. CDK sets it on app-api and the AgentCore
+    Runtime from ``config.conversationIndex.enabled``.
+
+    A feature switch, not a rollout switch: a deployment may legitimately not
+    want a second copy of its transcripts. It gates writes only. Deleting a
+    session's archived turns does not consult it, so a deployment that turns
+    indexing off can still remove what it already wrote.
+    """
+    return os.environ.get("CONVERSATION_INDEX_ENABLED", "").strip().lower() == "true"
+
+
+def conversation_search_enabled() -> bool:
+    """Whether ``GET /sessions/search`` is served.
+
+    The read path of conversation search (``docs/specs/conversation-search.md``
+    §5): a lexical leg over the user's own session rows and a text leg over the
+    shared ``conversations`` knowledge base. **Default ON with a kill switch**
+    (CLAUDE.md "Feature flags"): unset or empty resolves to enabled; only the
+    literal ``"false"`` (case-insensitive) disables it, and then the route
+    404s. CDK sets it on app-api from ``config.conversationSearch.enabled``; the
+    SPA's ``features.conversationSearch`` decides whether the modal is offered.
+
+    A feature switch, not a rollout switch: a deployment may not want search at
+    all. It is separate from :func:`conversation_index_enabled`, which stays
+    opt-in because it keeps a second copy of every transcript and spends
+    knowledge-base calls. With the index off and this on, the text leg is never
+    called and search is title and opening-prompt matches only, at no
+    knowledge-base cost. Rows written before ``titleLower`` existed match only
+    once ``backend/scripts/backfill_session_search_attributes.py`` has run.
+    """
+    return os.environ.get("CONVERSATION_SEARCH_ENABLED", "").strip().lower() != "false"
+
+
+def conversation_retention_prunes_sessions() -> bool:
+    """Whether the retention setting also removes session rows.
+
+    ``docs/specs/conversation-search.md`` §3: once a conversation's last turn is
+    older than ``CONVERSATION_RETENTION_DAYS``, every copy of its content has
+    expired, and the daily pruner deletes the row too (through the same cascade
+    as a user's delete) so it leaves the sidebar instead of opening empty.
+    **Default ON with a kill switch**: unset or empty is on, only the literal
+    ``"false"`` (case-insensitive) turns it off. A feature switch, permanent: a
+    deployment may prefer title-only shells to deletions.
+
+    On is not the same as deleting. The pruner reports what it would delete and
+    deletes nothing until :func:`conversation_retention_prune_armed` is set in
+    that environment, and even then not before a dry run has been recorded
+    there. Off, the pruner does not run its scan at all.
+    """
+    return os.environ.get("CONVERSATION_RETENTION_PRUNES_SESSIONS", "").strip().lower() != "false"
+
+
+def conversation_retention_prune_armed() -> bool:
+    """Whether the retention pruner may delete session rows, rather than only report.
+
+    **Opt-in per environment, default off**, like ``MANAGED_KB_RECONCILER_ARMED``:
+    the pruner deletes rows users can see, so every environment starts with
+    report-only runs whose counts can be checked against real data first. Only
+    an affirmative value arms it (``1``/``true``/``yes``/``on``); unset, empty and
+    anything else are off, because an unset GitHub variable arrives as ``""``.
+    """
+    return os.environ.get("CONVERSATION_RETENTION_PRUNE_ARMED", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def compaction_summary_extract_enabled() -> bool:
     """Whether a compaction cut pins verbatim facts ahead of its summary.
 

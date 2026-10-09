@@ -568,14 +568,20 @@ def parse_items(body: str) -> Tuple[Item, ...]:
     return tuple(items)
 
 
-def render_items(items: Sequence[Item]) -> str:
+def render_items(items: Sequence[Item], *, allow_new: bool = False) -> str:
     """Render anchored items as a markdown list (one trailing newline).
 
     Every item must already carry an anchor; minting is the save pipeline's
-    job, so a render can never invent identities.
+    job, so a render can never invent identities. ``allow_new`` renders an
+    item without one as a new item, for a save to mint its anchor (a
+    maintenance split's pointer, 2.6c).
     """
     out: List[str] = []
     for item in items:
+        if allow_new and not item.anchor:
+            lines = item.text.split("\n")
+            out.extend([f"- {lines[0]}"] + [f"  {line}" if line else "" for line in lines[1:]])
+            continue
         if not item.anchor or not is_valid_anchor(item.anchor):
             raise MemoryFormatError("Every item must have an anchor before it is rendered.", code="missing_anchor")
         lines = item.text.split("\n")

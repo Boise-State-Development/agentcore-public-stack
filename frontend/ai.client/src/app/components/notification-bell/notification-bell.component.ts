@@ -9,6 +9,7 @@ import { NotificationsService } from '../../services/notifications/notifications
 import { AppNotification } from '../../services/notifications/notification.model';
 import { SidenavService } from '../../services/sidenav/sidenav.service';
 import { parseIso } from '../../utils/date';
+import { personLabel } from '../../shared/utils/person';
 
 /** Re-read on returning to the tab at most this often. */
 const REFRESH_ON_FOCUS_MS = 60_000;
@@ -17,7 +18,7 @@ const ROLE_PHRASES: Record<string, string> = { editor: 'an editor', viewer: 'a v
 
 /** The sentence a notification reads as. Actor and project fall back to neutral words. */
 export function describeNotification(n: AppNotification): string {
-  const who = n.actorEmail || 'Someone';
+  const who = personLabel(n.actorName, n.actorEmail) || 'Someone';
   const project = n.projectName || 'a project';
   const role = ROLE_PHRASES[n.payload?.role ?? ''] ?? (n.payload?.role ? `a ${n.payload.role}` : null);
   switch (n.kind) {
@@ -29,6 +30,29 @@ export function describeNotification(n: AppNotification): string {
       return `${who} removed you from ${project}.`;
     case 'project_ownership_transferred':
       return `${who} made you the owner of ${project}.`;
+    case 'project_archived':
+      return `${who} archived ${project}. It’s read-only until it’s restored.`;
+    case 'project_restored':
+      return `${who} restored ${project}.`;
+    case 'project_member_left':
+      return `${who} left ${project}.`;
+    case 'project_proposal_pending':
+      return `${who} proposed a change to “${n.payload?.slug || 'a memory file'}” in ${project}’s memory.`;
+    case 'project_proposal_decided': {
+      const file = n.payload?.slug || 'a memory file';
+      return n.payload?.decision === 'approved'
+        ? `${who} approved your change to “${file}” in ${project}.`
+        : `${who} declined your change to “${file}” in ${project}.`;
+    }
+    case 'project_memory_maintenance': {
+      const count = typeof n.payload?.fileCount === 'number' ? n.payload.fileCount : 0;
+      const files = count === 1 ? '1 file' : count > 1 ? `${count} files` : 'some files';
+      return `Memory maintenance that ${who} ran suggests changes to ${files} in ${project}’s memory.`;
+    }
+    case 'project_task_shared': {
+      const title = typeof n.payload?.title === 'string' && n.payload.title ? n.payload.title : 'a task';
+      return `${who} shared “${title}” with you in ${project}.`;
+    }
     default:
       return 'You have a new notification.';
   }
@@ -56,7 +80,7 @@ export function relativeTime(iso: string, now = Date.now()): string {
  * invitation sent while the tab sat in the background shows up.
  *
  * Opening a notification marks it read and, unless it says you were removed,
- * takes you to the project. The panel shows the newest 20; the inbox keeps 90
+ * takes you to the project (its Members tab when someone left). The panel shows the newest 20; the inbox keeps 90
  * days, and older entries are not worth a pager in a menu.
  */
 @Component({
@@ -144,6 +168,9 @@ export function relativeTime(iso: string, now = Date.now()): string {
                       <span class="sr-only">(unread)</span>
                     }
                   </span>
+                  @if (noteOf(n); as note) {
+                    <span class="mt-0.5 line-clamp-2 block text-xs/5 text-gray-700 italic dark:text-gray-300">“{{ note }}”</span>
+                  }
                   <span class="block text-xs/5 text-gray-600 dark:text-gray-300">{{ when(n) }}</span>
                 </span>
               </button>
@@ -223,6 +250,12 @@ export class NotificationBellComponent {
     return describeNotification(n);
   }
 
+  /** The sharer's note on a shared task, or the reviewer's on a decision, if they left one. */
+  protected noteOf(n: AppNotification): string | null {
+    const noted = n.kind === 'project_task_shared' || n.kind === 'project_proposal_decided';
+    return noted && typeof n.payload?.note === 'string' ? n.payload.note : null;
+  }
+
   protected when(n: AppNotification): string {
     return relativeTime(n.createdAt);
   }
@@ -260,8 +293,28 @@ export class NotificationBellComponent {
 
   protected open(n: AppNotification): void {
     void this.service.markRead(n);
+    // A revoked share lands on /shared's "no longer shared" state, not an error.
+    if (n.kind === 'project_task_shared' && typeof n.payload?.shareId === 'string') {
+      void this.router.navigate(['/shared', n.payload.shareId]);
+      this.sidenav.close();
+      return;
+    }
+    // A pending proposal (or a maintenance run's) opens the Memory tab's review
+    // queue; a decision, the file it was about.
+    if ((n.kind === 'project_proposal_pending' || n.kind === 'project_memory_maintenance') && n.projectId) {
+      void this.router.navigate(['/projects', n.projectId, 'memory'], { queryParams: { view: 'review' } });
+      this.sidenav.close();
+      return;
+    }
+    if (n.kind === 'project_proposal_decided' && n.projectId) {
+      const file = typeof n.payload?.slug === 'string' ? n.payload.slug : undefined;
+      void this.router.navigate(['/projects', n.projectId, 'memory'], { queryParams: file ? { file } : {} });
+      this.sidenav.close();
+      return;
+    }
     if (n.kind !== 'project_removed' && n.projectId) {
-      void this.router.navigate(['/projects', n.projectId]);
+      const path = n.kind === 'project_member_left' ? ['/projects', n.projectId, 'members'] : ['/projects', n.projectId];
+      void this.router.navigate(path);
       this.sidenav.close();
     }
   }

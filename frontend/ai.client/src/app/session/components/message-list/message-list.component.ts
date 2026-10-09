@@ -211,6 +211,9 @@ export class MessageListComponent {
   sharedArtifacts = input<SharedConversationArtifact[] | null>(null);
   sharedArtifactShareId = input<string | null>(null);
 
+  /** Passed to each assistant message; see `AssistantMessageComponent.insightSessionId`. */
+  insightSessionId = input<string | null>(null);
+
   /**
    * The published marketplace agent behind this conversation, when there is one — the
    * foot-of-conversation feedback link, and nothing else. Null for plain chat, a legacy
@@ -916,14 +919,16 @@ export class MessageListComponent {
    * @param behavior 'smooth' for user-visible animation (submit affordance),
    *   'auto' for instant positioning (navigation restore — animating a jump
    *   across a whole conversation would be noise).
+   * @returns whether the message was rendered and scrolled to.
    */
-  scrollToMessage(messageId: string, behavior: ScrollBehavior = 'smooth'): void {
-    if (!this.isBrowser) return;
+  scrollToMessage(messageId: string, behavior: ScrollBehavior = 'smooth'): boolean {
+    if (!this.isBrowser) return false;
 
     const element = document.getElementById(`message-${messageId}`);
-    if (!element) return;
+    if (!element) return false;
 
     element.scrollIntoView({ behavior, block: 'start' });
+    return true;
   }
 
   /**

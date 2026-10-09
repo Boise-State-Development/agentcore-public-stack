@@ -71,6 +71,7 @@ import os
 import weakref
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
+from apis.shared.kb_backend.docx_revisions import annotated_text
 from apis.shared.kb_backend.protocol import DEFAULT_TOP_K, Chunk, DocumentSource
 
 logger = logging.getLogger(__name__)
@@ -88,6 +89,16 @@ RERANKING_MODEL_TYPE = "MANAGED"
 
 #: The connector all of this platform's managed documents arrive through.
 CONTENT_DATA_SOURCE_TYPE = "CUSTOM"
+
+#: ``TextContentDoc.data`` is capped at 5,242,880 characters. A tracked-changes
+#: document whose annotated text is longer ingests from its S3 location as
+#: before, unannotated.
+MAX_INLINE_TEXT_CHARS = 5_242_880
+
+#: The largest ``.docx`` read to look for tracked changes. Its text is what counts
+#: against the inline cap, and a Word file's size is mostly images, so this only
+#: bounds the memory one read can take.
+MAX_ANNOTATE_SOURCE_BYTES = 25 * 1024 * 1024
 
 #: Requirement 11.5. Isolation-critical filters are restricted to exact-match
 #: operators. ``startsWith`` and ``stringContains`` are prefix/substring matches:
@@ -138,6 +149,24 @@ def bedrock_agent_client():
     import boto3
 
     return boto3.client("bedrock-agent", region_name=_region())
+
+
+def read_s3_object(bucket: str, key: str, max_bytes: int) -> Optional[bytes]:
+    """An object's bytes, or ``None`` when it is larger than ``max_bytes``.
+
+    The size is checked from the response headers before the body is read, so an
+    object too large to send inline is never pulled into memory.
+    """
+    import boto3
+
+    response = boto3.client("s3", region_name=_region()).get_object(Bucket=bucket, Key=key)
+    body = response["Body"]
+    try:
+        if response.get("ContentLength", 0) > max_bytes:
+            return None
+        return body.read()
+    finally:
+        body.close()
 
 
 # ── Concurrency bound ────────────────────────────────────────────────────────
@@ -268,10 +297,21 @@ def _inline_attributes(metadata: Mapping[str, Any]) -> List[Dict[str, Any]]:
     ]
 
 
+def _documents_bucket(source: DocumentSource, bucket: Optional[str]) -> str:
+    resolved = bucket or os.environ.get("S3_ASSISTANTS_DOCUMENTS_BUCKET_NAME")
+    if not resolved:
+        raise ManagedKbError(
+            f"document {source.document_id} has an S3 key but no bucket: pass "
+            f"bucket= or set S3_ASSISTANTS_DOCUMENTS_BUCKET_NAME"
+        )
+    return resolved
+
+
 def document_payload(
     source: DocumentSource,
     *,
     bucket: Optional[str] = None,
+    inline_text: Optional[str] = None,
 ) -> Dict[str, Any]:
     """One entry of the ``documents`` array.
 
@@ -285,19 +325,23 @@ def document_payload(
     through this process. Falls back to inline text for a source that only has
     chunks, joining them back into a document because managed ingestion does its
     own chunking and pre-chunked input would be re-chunked anyway.
+
+    ``inline_text`` overrides both: a Word document whose tracked changes have
+    been written out (:func:`~apis.shared.kb_backend.docx_revisions.annotated_text`)
+    is sent as that text. Bedrock reading the original from S3 flattens deletions
+    and insertions together, and reading an annotated ``.docx`` rewrites what is
+    inside the markers.
     """
     identifier = {"id": source.document_id}
     custom: Dict[str, Any] = {
         "customDocumentIdentifier": identifier,
     }
 
-    if source.s3_key:
-        resolved = bucket or os.environ.get("S3_ASSISTANTS_DOCUMENTS_BUCKET_NAME")
-        if not resolved:
-            raise ManagedKbError(
-                f"document {source.document_id} has an S3 key but no bucket: pass "
-                f"bucket= or set S3_ASSISTANTS_DOCUMENTS_BUCKET_NAME"
-            )
+    if inline_text is not None:
+        custom["sourceType"] = "IN_LINE"
+        custom["inlineContent"] = {"type": "TEXT", "textContent": {"data": inline_text}}
+    elif source.s3_key:
+        resolved = _documents_bucket(source, bucket)
         custom["sourceType"] = "S3_LOCATION"
         custom["s3Location"] = {"uri": f"s3://{resolved}/{source.s3_key}"}
     elif source.chunks:
@@ -381,11 +425,13 @@ class ManagedKbBackend:
         agent_client=None,
         locator=None,
         bucket: Optional[str] = None,
+        object_reader=None,
     ) -> None:
         self._runtime_client = runtime_client
         self._agent_client = agent_client
         self._locator = locator
         self._bucket = bucket
+        self._object_reader = object_reader or read_s3_object
 
     # ── plumbing ────────────────────────────────────────────────────────────
     def _runtime(self):
@@ -545,7 +591,13 @@ class ManagedKbBackend:
             )
 
         client = self._agent()
-        payloads = [document_payload(source, bucket=self._bucket) for source in documents]
+        annotated = await asyncio.gather(
+            *(asyncio.to_thread(self._annotated_word_document, source) for source in documents)
+        )
+        payloads = [
+            document_payload(source, bucket=self._bucket, inline_text=inline)
+            for source, inline in zip(documents, annotated)
+        ]
 
         await self._run_bounded(
             [
@@ -559,6 +611,49 @@ class ManagedKbBackend:
             client.ingest_knowledge_base_documents,
             what="IngestKnowledgeBaseDocuments",
         )
+
+    def _annotated_word_document(self, source: DocumentSource) -> Optional[str]:
+        """The source's Word document as text with tracked changes written out.
+
+        ``None`` — ingest from S3 exactly as before — for anything that is not a
+        ``.docx`` in S3, a document with no tracked changes, annotated text too
+        long to send inline, and any failure along the way: losing the markers
+        is the pre-existing behaviour, while failing the ingestion would lose the
+        document.
+        """
+        if not source.s3_key or not source.filename.lower().endswith(".docx"):
+            return None
+        try:
+            bucket = _documents_bucket(source, self._bucket)
+            original = self._object_reader(bucket, source.s3_key, MAX_ANNOTATE_SOURCE_BYTES)
+            if original is None:
+                logger.warning(
+                    f"document {source.document_id} is too large to check for tracked "
+                    f"changes; ingesting it from S3, where any are flattened"
+                )
+                return None
+            annotated = annotated_text(original)
+        except Exception as exc:
+            logger.warning(
+                f"could not check document {source.document_id} for tracked changes "
+                f"({exc}); ingesting it from S3 unannotated",
+                exc_info=True,
+            )
+            return None
+        if annotated is None:
+            return None
+        if not annotated or len(annotated) > MAX_INLINE_TEXT_CHARS:
+            logger.warning(
+                f"document {source.document_id} has tracked changes but its annotated "
+                f"text ({len(annotated)} chars) cannot be sent inline; ingesting it "
+                f"from S3, where they are flattened"
+            )
+            return None
+        logger.info(
+            f"document {source.document_id} has tracked changes; ingesting its "
+            f"annotated text inline ({len(annotated)} chars)"
+        )
+        return annotated
 
     # ── deletion ────────────────────────────────────────────────────────────
     async def delete_document(self, kb_ref: str, document_id: str) -> None:
@@ -630,6 +725,8 @@ __all__ = [
     "ISOLATION_SAFE_FILTER_OPERATORS",
     "MAX_CONCURRENT_DOCUMENT_OPERATIONS",
     "MAX_DOCUMENTS_PER_CALL",
+    "MAX_ANNOTATE_SOURCE_BYTES",
+    "MAX_INLINE_TEXT_CHARS",
     "RERANKING_MODEL_TYPE",
     "ManagedKbBackend",
     "ManagedKbError",

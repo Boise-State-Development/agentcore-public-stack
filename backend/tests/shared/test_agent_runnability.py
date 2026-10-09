@@ -364,3 +364,94 @@ async def test_publisher_is_never_consulted_when_deciding_runnability():
             results.append(await resolve_runnability(agent, _user(), tool_service=tools))
 
     assert [r.state for r in results] == ["ready", "ready"]
+
+
+# ── runnability: skills follow the run-time invoke-through rule ──────────────────────
+def _skill_records(owners: dict, labels: dict):
+    """One fake skill repo serving both the label lookup and the invoke-through lookup."""
+    repo = SimpleNamespace(
+        batch_get_skills=AsyncMock(
+            side_effect=lambda refs: [
+                SimpleNamespace(skill_id=ref, owner_id=owners[ref], display_name=labels[ref])
+                for ref in refs
+                if ref in owners
+            ]
+        )
+    )
+    return (
+        patch(f"{MODULE}.get_skill_catalog_repository", return_value=repo),
+        patch("apis.shared.skills.repository.get_skill_catalog_repository", return_value=repo),
+    )
+
+
+def _viewer_skills(*skill_ids):
+    return patch(
+        "apis.shared.skills.access.resolve_accessible_skill_ids",
+        new_callable=AsyncMock,
+        return_value=list(skill_ids),
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_skill_the_agents_owner_wrote_is_ready_for_a_viewer_without_it():
+    """The reported bug: an author binds their own private skill and shares the Agent.
+
+    The viewer holds no grant to it, but ``agent_binding_resolver`` resolves it through
+    invoke-through, so the turn runs. The preview must say so instead of disabling Launch.
+    """
+    agent = _agent(bindings=[AgentBinding(kind="skill", ref="skl_mine")])
+    label_patch, access_patch = _skill_records(
+        {"skl_mine": "user-author"}, {"skl_mine": "Grading Rubric"}
+    )
+    with label_patch, access_patch, _viewer_skills(), patch(
+        f"{MODULE}.skills_enabled", return_value=True
+    ), _models():
+        result = await resolve_runnability(agent, _user())
+
+    assert result.state == "ready"
+    assert result.missing == []
+
+
+@pytest.mark.asyncio
+async def test_a_skill_someone_else_wrote_still_blocks_a_viewer_without_it():
+    """Invoke-through extends the owner's *own* skills only, never one shared to them."""
+    agent = _agent(bindings=[AgentBinding(kind="skill", ref="skl_theirs")])
+    label_patch, access_patch = _skill_records(
+        {"skl_theirs": "user-third-party"}, {"skl_theirs": "Lab Safety"}
+    )
+    with label_patch, access_patch, _viewer_skills(), patch(
+        f"{MODULE}.skills_enabled", return_value=True
+    ), _models():
+        result = await resolve_runnability(agent, _user())
+
+    assert result.state == "blocked"
+    assert [(m.label, m.kind) for m in result.missing] == [("Lab Safety", "skill")]
+
+
+@pytest.mark.asyncio
+async def test_a_granted_catalog_skill_is_ready():
+    agent = _agent(bindings=[AgentBinding(kind="skill", ref="skl_catalog")])
+    label_patch, access_patch = _skill_records(
+        {"skl_catalog": "system"}, {"skl_catalog": "Citation Format"}
+    )
+    with label_patch, access_patch, _viewer_skills("skl_catalog"), patch(
+        f"{MODULE}.skills_enabled", return_value=True
+    ), _models():
+        result = await resolve_runnability(agent, _user())
+
+    assert result.state == "ready"
+
+
+@pytest.mark.asyncio
+async def test_skills_disabled_blocks_even_the_owners_own_skill():
+    """Matches ``_resolve_skills``, which blocks the turn while the Skills flag is off."""
+    agent = _agent(bindings=[AgentBinding(kind="skill", ref="skl_mine")])
+    label_patch, access_patch = _skill_records(
+        {"skl_mine": "user-author"}, {"skl_mine": "Grading Rubric"}
+    )
+    with label_patch, access_patch, _viewer_skills("skl_mine"), patch(
+        f"{MODULE}.skills_enabled", return_value=False
+    ), _models():
+        result = await resolve_runnability(agent, _user("user-author"))
+
+    assert result.state == "blocked"

@@ -60,8 +60,8 @@ def runtime_session_affinity_enabled() -> bool:
     return os.environ.get(AGENTCORE_SESSION_AFFINITY_ENABLED_ENV, "").lower() != "false"
 
 
-def runtime_session_id_for(session_id: str) -> str:
-    """Deterministic AgentCore runtime session id for one conversation.
+def runtime_session_id_for(session_id: str, user_id: str) -> str:
+    """Deterministic AgentCore runtime session id for one user's conversation.
 
     Hashed rather than passed through because the runtime session id has a
     charset and a **33-character minimum**, and our session ids meet neither
@@ -69,23 +69,45 @@ def runtime_session_id_for(session_id: str) -> str:
     always valid, always the same for a given conversation — which is the
     whole point, since affinity requires byte-identical values across turns —
     and keeps our identifiers out of an AWS-side one.
+
+    ⚠️ The user is part of the hash. A session id alone does not name a
+    conversation: AgentCore Memory scopes history by actor, so two users can
+    hold separate threads under one session id. Hashing the session id alone
+    sent both users' turns to the same container and its in-process agent
+    cache, which is how one user read another's live conversation on dev
+    (2026-08-31). Per-user pinning means two users never share a container,
+    whatever the session-id guards upstream do. The NUL separator keeps
+    ``("ab", "c")`` and ``("a", "bc")`` apart.
     """
-    digest = hashlib.sha256(session_id.encode("utf-8")).hexdigest()
+    digest = hashlib.sha256(f"{user_id}\x00{session_id}".encode("utf-8")).hexdigest()
     return f"sid-{digest}"  # 68 chars, [a-z0-9-] — inside the 33..128 window
 
 
+def legacy_runtime_session_id_for(session_id: str) -> str:
+    """The pre-per-user runtime session id, ``sid-<sha256(session_id)>``.
+
+    Only for finding spans written before per-user pinning shipped (the
+    feedback-eval judge's look-back). Never send it as a header. Delete it
+    once every deployment has run per-user pinning for longer than that
+    look-back (7 days).
+    """
+    digest = hashlib.sha256(session_id.encode("utf-8")).hexdigest()
+    return f"sid-{digest}"
+
+
 def apply_runtime_session_header(
-    headers: Dict[str, str], session_id: Optional[str]
+    headers: Dict[str, str], session_id: Optional[str], user_id: Optional[str]
 ) -> Dict[str, str]:
     """Add the affinity header to ``headers`` when we know the conversation.
 
     Mutates and returns ``headers`` so callers stay one-liners. A missing
-    ``session_id`` or a disabled kill switch is a no-op, which degrades to
-    exactly the pre-affinity behavior rather than failing the turn.
+    ``session_id`` or ``user_id``, or a disabled kill switch, is a no-op. That
+    degrades to exactly the pre-affinity behavior (a fresh runtime session per
+    call) rather than failing the turn, and never pins a turn without its user.
     """
-    if not session_id or not runtime_session_affinity_enabled():
+    if not session_id or not user_id or not runtime_session_affinity_enabled():
         return headers
-    headers[RUNTIME_SESSION_ID_HEADER] = runtime_session_id_for(session_id)
+    headers[RUNTIME_SESSION_ID_HEADER] = runtime_session_id_for(session_id, user_id)
     return headers
 
 
@@ -233,6 +255,7 @@ async def run_agent_headless(
                         "Authorization": f"Bearer {bearer}",
                     },
                     session_id,
+                    user_id,
                 ),
                 json=payload,
             ) as response:

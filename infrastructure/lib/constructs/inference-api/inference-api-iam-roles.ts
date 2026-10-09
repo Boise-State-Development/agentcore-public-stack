@@ -53,6 +53,18 @@ export const RUNTIME_MEMORY_ACTIONS: readonly string[] = [
   'bedrock-agentcore:DeleteMemoryRecord',
 ];
 
+/**
+ * The attributes a `STATS#{slug}` update may touch (Shared Projects 2.6b): the
+ * key, plus what `MemorySpaceRepository.record_retrieval` sets.
+ */
+export const MEMORY_STATS_ATTRIBUTES: readonly string[] = [
+  'PK',
+  'SK',
+  'slug',
+  'retrievalCount',
+  'lastRetrievedAt',
+];
+
 export function createRuntimeExecutionRole(
   scope: Construct,
   config: AppConfig,
@@ -364,6 +376,17 @@ export function createRuntimeExecutionRole(
     resources: [skillResourcesBucketArn, `${skillResourcesBucketArn}/*`],
   }));
 
+  // ── Conversation archive (write-only) ──
+  // The after-`done` put of each turn's transcript (conversation search). The
+  // runtime only ever writes; reading, listing and deleting are app-api's.
+  const conversationArchiveBucketArn = refs.conversationArchiveBucket.bucketArn;
+  role.addToPolicy(new iam.PolicyStatement({
+    sid: 'ConversationArchivePut',
+    effect: iam.Effect.ALLOW,
+    actions: ['s3:PutObject'],
+    resources: [`${conversationArchiveBucketArn}/conversations/*`],
+  }));
+
   // ── Memory Spaces (S3 + DynamoDB, readwrite) ──
   // The runtime writes memory in a later PR; provisioned readwrite now so
   // that PR needs no infra change (apis/shared/memory/*).
@@ -382,6 +405,34 @@ export function createRuntimeExecutionRole(
               'dynamodb:Query', 'dynamodb:BatchWriteItem'],
     resources: [memorySpacesTableArn, `${memorySpacesTableArn}/index/*`],
   }));
+  // A project harness's `memory_read` counts each file it returns in the
+  // file's `STATS#{slug}` row (Shared Projects 2.6b): one UpdateItem that adds
+  // to a counter, so no read-modify-write. `dynamodb:Attributes` pins it to
+  // the stats row's own attributes (with the key), so it can't rewrite a
+  // manifest or a file version; keep the list in step with
+  // `MemorySpaceRepository.record_retrieval`. Its own managed policy rather than
+  // another statement on the role: the role's statements already spill into
+  // CDK overflow policies, packed by a size CDK estimates before ARNs resolve,
+  // and on dev OverflowPolicy1 resolves to 5,473 of IAM's 6,144 characters.
+  // The same packing rolled back the first 2.6a deploy on app-api's role.
+  new iam.ManagedPolicy(scope, 'RuntimeMemoryStatsPolicy', {
+    roles: [role],
+    description: 'AgentCore Runtime: count memory file reads in STATS# rows (Shared Projects 2.6b)',
+    statements: [
+      new iam.PolicyStatement({
+        sid: 'MemorySpacesStatsUpdate',
+        effect: iam.Effect.ALLOW,
+        actions: ['dynamodb:UpdateItem'],
+        resources: [memorySpacesTableArn],
+        conditions: {
+          'ForAllValues:StringEquals': {
+            'dynamodb:Attributes': [...MEMORY_STATS_ATTRIBUTES],
+          },
+          StringEqualsIfExists: { 'dynamodb:ReturnValues': 'NONE' },
+        },
+      }),
+    ],
+  });
 
   // ── Shared Projects (DynamoDB) ──
   // The invocation path resolves membership (META + MEMBER#), back-fills a
@@ -394,6 +445,38 @@ export function createRuntimeExecutionRole(
     actions: ['dynamodb:GetItem', 'dynamodb:BatchGetItem', 'dynamodb:Query',
               'dynamodb:UpdateItem'],
     resources: [projectsTableArn, `${projectsTableArn}/index/*`],
+  }));
+  // A member's `memory_propose` tells the project's editors (Shared Projects
+  // 2.5a). Notifications are `INBOX#{email}` rows on this table, so the
+  // Runtime may put rows under that key prefix and no other.
+  role.addToPolicy(new iam.PolicyStatement({
+    sid: 'ProjectsInboxWrite',
+    effect: iam.Effect.ALLOW,
+    actions: ['dynamodb:PutItem', 'dynamodb:BatchWriteItem'],
+    resources: [projectsTableArn],
+    conditions: {
+      'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['INBOX#*'] },
+    },
+  }));
+
+  // ── Shared tasks, read-only (Shared Projects 2.5c) ──
+  // A project harness's `shared_task_read` tool reads one project share by id:
+  // a GetItem on its row and a GetObject on its snapshot body. The Runtime
+  // never lists, writes or deletes shares; app-api owns that surface. Names are
+  // derived from PROJECT_PREFIX in the container (apis/shared/shares/snapshots.py)
+  // because the Runtime's environment has no room for two more variables.
+  const sharedConversationsTableArn = refs.sharedConversationsTable.tableArn;
+  role.addToPolicy(new iam.PolicyStatement({
+    sid: 'SharedConversationsTableRead',
+    effect: iam.Effect.ALLOW,
+    actions: ['dynamodb:GetItem'],
+    resources: [sharedConversationsTableArn],
+  }));
+  role.addToPolicy(new iam.PolicyStatement({
+    sid: 'SharedConversationsBodyRead',
+    effect: iam.Effect.ALLOW,
+    actions: ['s3:GetObject'],
+    resources: [`${refs.sharedConversationsBucket.bucketArn}/shares/*`],
   }));
 
   // ── S3 Vectors (RAG query) ──

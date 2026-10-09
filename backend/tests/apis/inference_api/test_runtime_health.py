@@ -17,6 +17,7 @@ from starlette.routing import Route, WebSocketRoute
 from starlette.testclient import TestClient
 
 from apis.inference_api.runtime_health import (
+    RESTORE_GAP_SECONDS,
     STATUS_HEALTHY,
     STATUS_HEALTHY_BUSY,
     InvocationActivityMiddleware,
@@ -45,8 +46,8 @@ class TestIdleReporting:
         tracker = RuntimeActivityTracker()
 
         _, first = tracker.snapshot()
-        clock["t"] += 3_600.0
-        status, later = tracker.snapshot()
+        later = _poll_for(tracker, clock, 3_600.0)
+        status = tracker.snapshot()[0]
 
         assert status == STATUS_HEALTHY
         assert later == first, "idle timestamp must not advance"
@@ -54,16 +55,116 @@ class TestIdleReporting:
         assert clock["t"] - later == pytest.approx(3_600.0)
 
     def test_process_start_is_the_idle_origin(self, monkeypatch):
-        """A microVM that boots and never serves a turn must still be reaped."""
+        """A microVM that boots and never serves a turn must still be reaped.
+
+        Polled every 2s as the platform does: a single poll after a long
+        silence is what a snapshot restore looks like (see below).
+        """
         clock = {"t": 500.0}
         monkeypatch.setattr(
             "apis.inference_api.runtime_health.time.time", lambda: clock["t"]
         )
         tracker = RuntimeActivityTracker()
-        clock["t"] += 901.0
-
-        _, stamp = tracker.snapshot()
+        stamp = _poll_for(tracker, clock, 901.0)
         assert clock["t"] - stamp > 900
+
+
+def _poll_for(tracker: RuntimeActivityTracker, clock: dict, seconds: float, every: float = 2.0) -> int:
+    """Advance the clock, polling every `every` seconds; return the last stamp."""
+    stamp = tracker.snapshot()[1]
+    elapsed = 0.0
+    while elapsed < seconds:
+        clock["t"] += every
+        elapsed += every
+        stamp = tracker.snapshot()[1]
+    return stamp
+
+
+class TestSnapshotRestore:
+    """AgentCore Runtime V2 restores a snapshot of a booted container.
+
+    The idle origin in that snapshot is restored into every session, however
+    old the snapshot is. The first poll after the restore must not report a
+    microVM that has served nothing as already past the idle timeout.
+    """
+
+    def test_restore_after_polling_restarts_the_idle_clock(self, monkeypatch):
+        clock = {"t": 1_000.0}
+        monkeypatch.setattr(
+            "apis.inference_api.runtime_health.time.time", lambda: clock["t"]
+        )
+        tracker = RuntimeActivityTracker()
+        _poll_for(tracker, clock, 30.0)  # polled, then snapshotted
+
+        clock["t"] += 7_200.0  # restored two hours later
+        status, stamp = tracker.snapshot()
+
+        assert status == STATUS_HEALTHY
+        assert stamp == clock["t"], "first poll after a restore must not look idle"
+
+    def test_restore_before_the_first_poll_restarts_the_idle_clock(self, monkeypatch):
+        clock = {"t": 1_000.0}
+        monkeypatch.setattr(
+            "apis.inference_api.runtime_health.time.time", lambda: clock["t"]
+        )
+        tracker = RuntimeActivityTracker()  # snapshotted straight after import
+
+        clock["t"] += 7_200.0
+        _, stamp = tracker.snapshot()
+        assert stamp == clock["t"]
+
+    def test_restored_microvm_is_still_reaped_when_idle(self, monkeypatch):
+        """Restarting the clock must not make the restored microVM immortal."""
+        clock = {"t": 1_000.0}
+        monkeypatch.setattr(
+            "apis.inference_api.runtime_health.time.time", lambda: clock["t"]
+        )
+        tracker = RuntimeActivityTracker()
+        clock["t"] += 7_200.0
+        restored_at = tracker.snapshot()[1]
+
+        stamp = _poll_for(tracker, clock, 901.0)
+        assert stamp == restored_at, "idle timestamp must freeze after the restart"
+        assert clock["t"] - stamp > 900
+
+    def test_restart_happens_at_most_once(self, monkeypatch):
+        """Irregular polling on V1 must cost at most one extra idle period."""
+        clock = {"t": 1_000.0}
+        monkeypatch.setattr(
+            "apis.inference_api.runtime_health.time.time", lambda: clock["t"]
+        )
+        tracker = RuntimeActivityTracker()
+        clock["t"] += 7_200.0
+        first = tracker.snapshot()[1]
+
+        clock["t"] += 7_200.0
+        _, stamp = tracker.snapshot()
+        assert stamp == first
+        assert clock["t"] - stamp > 900
+
+    def test_ordinary_poll_jitter_is_not_a_restore(self, monkeypatch):
+        clock = {"t": 1_000.0}
+        monkeypatch.setattr(
+            "apis.inference_api.runtime_health.time.time", lambda: clock["t"]
+        )
+        tracker = RuntimeActivityTracker()
+        _, origin = tracker.snapshot()
+
+        stamp = _poll_for(tracker, clock, 1_200.0, every=RESTORE_GAP_SECONDS)
+        assert stamp == origin, "a gap of exactly the threshold must not restart the clock"
+
+    def test_busy_reporting_is_unchanged_by_a_restore(self, monkeypatch):
+        clock = {"t": 1_000.0}
+        monkeypatch.setattr(
+            "apis.inference_api.runtime_health.time.time", lambda: clock["t"]
+        )
+        tracker = RuntimeActivityTracker()
+        clock["t"] += 7_200.0
+        tracker.enter()
+
+        status, stamp = tracker.snapshot()
+        assert status == STATUS_HEALTHY_BUSY
+        assert stamp == clock["t"]
 
 
 class TestBusyReporting:
@@ -112,8 +213,7 @@ class TestBusyReporting:
         # Idle is measured from when the turn ended, not from process start.
         assert clock["t"] - stamp == pytest.approx(10.0)
 
-        clock["t"] += 3_000.0
-        _, later = tracker.snapshot()
+        later = _poll_for(tracker, clock, 3_000.0)
         assert later == stamp, "timestamp must freeze again once idle"
 
     def test_concurrent_turns_stay_busy_until_the_last_one_ends(self):
@@ -245,10 +345,12 @@ class TestReaperEndToEnd:
         tracker = RuntimeActivityTracker()
 
         tracker.enter()
-        clock["t"] += 13.0  # a representative turn
+        _poll_for(tracker, clock, 13.0)  # a representative turn
         tracker.exit()
 
-        clock["t"] += self.IDLE_TIMEOUT - 1
+        # Polled every 2s while idle, as the platform does.
+        _poll_for(tracker, clock, self.IDLE_TIMEOUT - 2)
+        clock["t"] += 1
         assert self._idle_seconds(tracker, clock["t"]) < self.IDLE_TIMEOUT
 
         clock["t"] += 2

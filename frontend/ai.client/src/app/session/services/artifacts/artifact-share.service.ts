@@ -14,7 +14,8 @@ import type {
 
 /** Who may open a share. `public` means any *authenticated* tenant user
  *  — never anonymous, matching conversation sharing. */
-export type ArtifactShareAccessLevel = 'public' | 'specific';
+/** `project`: every member of the Shared Project the artifact's task belongs to (3.3). */
+export type ArtifactShareAccessLevel = 'public' | 'specific' | 'project';
 
 /** One artifact share, as its owner sees it. */
 export interface ArtifactShare {
@@ -31,10 +32,21 @@ export interface ArtifactShare {
   updatedAt?: string;
   /** SPA-relative recipient route, e.g. `/shared-artifact/{id}`. */
   shareUrl: string;
+  /** The project shared with, for a `project` share. */
+  projectId?: string | null;
 }
 
 interface ArtifactShareListResponse {
   shares: ArtifactShare[];
+  projectId?: string | null;
+  projectName?: string | null;
+}
+
+/** The caller's shares of one artifact, and the project it may be shared with, if any. */
+export interface ArtifactShareOptions {
+  shares: ArtifactShare[];
+  /** Set when "Project members" is an option: made in a task of an active project the caller is in. */
+  project: { projectId: string; name: string } | null;
 }
 
 /**
@@ -179,6 +191,19 @@ export class ArtifactShareService {
       ),
     );
     return res.shares ?? [];
+  }
+
+  /** `listShares` plus whether this artifact may be shared with a project (3.3). */
+  async shareOptions(artifactId: string): Promise<ArtifactShareOptions> {
+    const res = await firstValueFrom(
+      this.http.get<ArtifactShareListResponse>(
+        `${this.artifactsUrl()}/${encodeURIComponent(artifactId)}/shares`,
+      ),
+    );
+    return {
+      shares: res.shares ?? [],
+      project: res.projectId ? { projectId: res.projectId, name: res.projectName ?? 'this project' } : null,
+    };
   }
 
   /** Change who may view an existing share. The pinned version is

@@ -1,14 +1,19 @@
 """Request/response models for the ``/projects`` surface (shared-projects §5).
 
 camelCase on the wire via explicit aliases + ``populate_by_name``, matching the
-memory-spaces and agents API models. Internal user ids never leave the API: a
-project shows its owner by email, and a member row reports only whether that
-person has signed in (``hasSignedIn``), which is what transfer depends on.
+memory-spaces and agents API models. Internal user ids never leave the API:
+people are identified by email, which stays the stable key, and a member row
+reports only whether that person has signed in (``hasSignedIn``), which is what
+transfer depends on.
+
+Beside each email is the person's display name from the directory (the users
+table), or null when it has none for them: someone who has never signed in, or
+an account with no name. Clients show the name and fall back to the email.
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -20,6 +25,7 @@ from apis.app_api.documents.models import (
 )
 from apis.app_api.web_sources.models import StartCrawlResponse
 from apis.shared.assistants.models import MAX_AGENT_INSTRUCTIONS_CHARS, AgentModelConfig, VersionFieldChange
+from apis.shared.directory import DirectoryPerson
 from apis.shared.projects.models import (
     MemberRole,
     Project,
@@ -72,6 +78,23 @@ class TransferOwnershipRequest(BaseModel):
 # ---- responses ---------------------------------------------------------
 
 
+class MemoryLimitsResponse(BaseModel):
+    """The size limits the Memory tab's meters measure against (Shared Projects 2.8).
+
+    A file over ``fileHardCapTokens`` can't be saved; one at
+    ``fileSoftThresholdTokens`` is close. The index budgets are how much of
+    each scope's ``MEMORY.md`` reaches a task, in tokens estimated at four
+    characters each, the way the harness cuts it.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    file_hard_cap_tokens: int = Field(..., alias="fileHardCapTokens")
+    file_soft_threshold_tokens: int = Field(..., alias="fileSoftThresholdTokens")
+    project_index_budget_tokens: int = Field(..., alias="projectIndexBudgetTokens")
+    personal_index_budget_tokens: int = Field(..., alias="personalIndexBudgetTokens")
+
+
 class ProjectMemoryResponse(BaseModel):
     """A project's memory spaces, as the caller sees them (Phase 2.4).
 
@@ -87,6 +110,7 @@ class ProjectMemoryResponse(BaseModel):
     shared_space_id: Optional[str] = Field(None, alias="sharedSpaceId")
     personal_space_id: Optional[str] = Field(None, alias="personalSpaceId")
     role: ProjectRole = Field(..., description="The caller's role on this project")
+    limits: Optional[MemoryLimitsResponse] = None
 
 
 class PersonalSpaceResponse(BaseModel):
@@ -102,6 +126,7 @@ class ProjectResponse(BaseModel):
     name: str
     description: str
     owner_email: str = Field(..., alias="ownerEmail")
+    owner_name: Optional[str] = Field(None, alias="ownerName")
     role: ProjectRole = Field(..., description="The caller's role on this project")
     status: ProjectStatus
     editors_manage_members: bool = Field(..., alias="editorsManageMembers")
@@ -111,12 +136,13 @@ class ProjectResponse(BaseModel):
     updated_at: str = Field(..., alias="updatedAt")
 
     @classmethod
-    def from_project(cls, project: Project, role: ProjectRole) -> "ProjectResponse":
+    def from_project(cls, project: Project, role: ProjectRole, names: Mapping[str, str]) -> "ProjectResponse":
         return cls(
             project_id=project.project_id,
             name=project.name,
             description=project.description,
             owner_email=project.owner_email,
+            owner_name=names.get(project.owner_email),
             role=role,
             status=project.status,
             editors_manage_members=project.settings.editors_manage_members,
@@ -135,16 +161,25 @@ class MemberResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     email: str
+    name: Optional[str] = None
     role: ProjectRole
-    has_signed_in: bool = Field(..., alias="hasSignedIn")
+    has_signed_in: bool = Field(
+        ...,
+        alias="hasSignedIn",
+        description="Whether they have signed in to the platform, which is what makes them able to own the project. "
+        "Not whether they have opened this project.",
+    )
     created_at: Optional[str] = Field(None, alias="createdAt")
 
     @classmethod
-    def from_member(cls, member: ProjectMember) -> "MemberResponse":
+    def from_member(cls, member: ProjectMember, people: Mapping[str, DirectoryPerson]) -> "MemberResponse":
+        """``people``: the directory's people by email (``ProjectService.known_people``)."""
+        person = people.get(member.email)
         return cls(
             email=member.email,
+            name=(person.name or None) if person else None,
             role=member.role,
-            has_signed_in=member.user_id is not None,
+            has_signed_in=member.user_id is not None or person is not None,
             created_at=member.created_at,
         )
 
@@ -156,14 +191,27 @@ class MembersResponse(BaseModel):
     can_manage: bool = Field(..., alias="canManage", description="Whether the caller may add or remove people")
 
     @classmethod
-    def build(cls, project: Project, role: ProjectRole, members: List[ProjectMember]) -> "MembersResponse":
+    def build(
+        cls,
+        project: Project,
+        role: ProjectRole,
+        members: List[ProjectMember],
+        people: Mapping[str, DirectoryPerson],
+    ) -> "MembersResponse":
+        owner_person = people.get(project.owner_email)
         owner = MemberResponse(
-            email=project.owner_email, role="owner", has_signed_in=True, created_at=project.created_at
+            email=project.owner_email,
+            name=(owner_person.name or None) if owner_person else None,
+            role="owner",
+            has_signed_in=True,
+            created_at=project.created_at,
         )
         can_manage = project.status == "active" and (
             role == "owner" or (role == "editor" and project.settings.editors_manage_members)
         )
-        return cls(members=[owner, *(MemberResponse.from_member(m) for m in members)], can_manage=can_manage)
+        return cls(
+            members=[owner, *(MemberResponse.from_member(m, people) for m in members)], can_manage=can_manage
+        )
 
 
 class AddMembersResponse(BaseModel):
@@ -177,9 +225,9 @@ class AddMembersResponse(BaseModel):
     )
 
     @classmethod
-    def from_result(cls, result: AddMembersResult) -> "AddMembersResponse":
+    def from_result(cls, result: AddMembersResult, people: Mapping[str, DirectoryPerson]) -> "AddMembersResponse":
         return cls(
-            added=[MemberResponse.from_member(m) for m in result.added],
+            added=[MemberResponse.from_member(m, people) for m in result.added],
             already_members=result.already_members,
             invalid=result.invalid,
             over_capacity=result.over_capacity,
@@ -195,19 +243,23 @@ class SharedTaskResponse(BaseModel):
     share_id: str = Field(..., alias="shareId")
     title: str
     shared_by_email: str = Field(..., alias="sharedByEmail")
+    shared_by_name: Optional[str] = Field(None, alias="sharedByName")
     shared_at: str = Field(..., alias="sharedAt")
     share_url: str = Field(..., alias="shareUrl")
     is_mine: bool = Field(..., alias="isMine", description="Whether the caller shared it (and so may revoke it)")
+    note: Optional[str] = Field(None, description="The sharer's note, when they left one")
 
     @classmethod
-    def from_pointer(cls, pointer: SharedTask, caller_id: str) -> "SharedTaskResponse":
+    def from_pointer(cls, pointer: SharedTask, caller_id: str, names: Mapping[str, str]) -> "SharedTaskResponse":
         return cls(
             share_id=pointer.share_id,
             title=pointer.title,
             shared_by_email=pointer.owner_email,
+            shared_by_name=names.get(pointer.owner_email),
             shared_at=pointer.shared_at,
             share_url=f"/shared/{pointer.share_id}",
             is_mine=pointer.owner_id == caller_id,
+            note=pointer.note,
         )
 
 
@@ -296,6 +348,7 @@ class SettingsVersionSummary(BaseModel):
     created_by_email: Optional[str] = Field(
         None, alias="createdByEmail", description="Null for the state the project was created with"
     )
+    created_by_name: Optional[str] = Field(None, alias="createdByName")
     changes: List[str] = Field(..., description="Fields changed from the previous version")
 
 
@@ -323,6 +376,7 @@ class ProjectDocumentResponse(DocumentResponse):
     added_by_email: Optional[str] = Field(
         None, alias="addedByEmail", description="Null if unknown: added before this was recorded, or by a former member"
     )
+    added_by_name: Optional[str] = Field(None, alias="addedByName")
 
 
 class ProjectDocumentsResponse(BaseModel):

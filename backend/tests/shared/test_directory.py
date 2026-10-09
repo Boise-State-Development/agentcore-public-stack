@@ -107,3 +107,72 @@ def test_unknown_provider_falls_back_to_the_users_table(monkeypatch):
     monkeypatch.setattr(directory_adapter, "_directory", None)
     assert isinstance(directory_adapter.get_directory(), UsersTableDirectory)
     monkeypatch.setattr(directory_adapter, "_directory", None)
+
+
+@pytest.mark.asyncio
+async def test_finds_people_by_email_and_by_user_id(user_repository):
+    await _add(user_repository, 1, "Ada@Example.edu", "Ada Lovelace")
+    await _add(user_repository, 2, "grace@example.edu", "")
+
+    directory = UsersTableDirectory(user_repository)
+    found = directory.find_by_emails(["ADA@example.edu", "grace@example.edu", "nobody@example.edu"])
+    assert {e: (p.name, p.user_id) for e, p in found.items()} == {
+        "ada@example.edu": ("Ada Lovelace", "u1"),
+        "grace@example.edu": ("", "u2"),
+    }
+    assert {u: p.email for u, p in directory.find_by_user_ids(["u2", "u9"]).items()} == {"u2": "grace@example.edu"}
+
+
+@pytest.mark.asyncio
+async def test_an_email_with_two_accounts_resolves_to_the_latest_sign_in(user_repository):
+    """The users table can hold a stale row beside the live one for the same email."""
+    await _add(user_repository, 1, "kim@example.edu", "Kim Old")
+    await _add(user_repository, 2, "kim@example.edu", "Kim Lee")  # signed in since
+
+    directory = UsersTableDirectory(user_repository)
+    assert directory.find_by_emails(["kim@example.edu"])["kim@example.edu"].user_id == "u2"
+    # Either account's id still names the person, by the current name.
+    assert {u: (p.email, p.name) for u, p in directory.find_by_user_ids(["u1", "u2"]).items()} == {
+        "u1": ("kim@example.edu", "Kim Lee"),
+        "u2": ("kim@example.edu", "Kim Lee"),
+    }
+
+
+@pytest.mark.asyncio
+async def test_the_user_id_never_serializes(user_repository):
+    await _add(user_repository, 1, "ada@example.edu", "Ada")
+    person = UsersTableDirectory(user_repository).find_by_emails(["ada@example.edu"])["ada@example.edu"]
+    assert person.user_id == "u1"
+    assert "user_id" not in person.model_dump() and "u1" not in person.model_dump_json()
+
+
+@pytest.mark.asyncio
+async def test_a_failed_refresh_keeps_the_held_snapshot(user_repository, monkeypatch):
+    clock = _Clock()
+    directory = UsersTableDirectory(user_repository, clock=clock)
+    await _add(user_repository, 1, "ada@example.edu", "Ada")
+    assert directory.find_by_emails(["ada@example.edu"])
+
+    # The repository reads a failed page as an empty one.
+    monkeypatch.setattr(user_repository, "query_users_by_status", lambda **kwargs: ([], None))
+    clock.now += SNAPSHOT_TTL_SECONDS
+    assert directory.find_by_emails(["ada@example.edu"])["ada@example.edu"].name == "Ada"
+
+
+def test_display_names_skip_the_nameless_and_survive_a_failure(monkeypatch):
+    from apis.shared.directory import DirectoryPerson, display_names
+
+    class Directory:
+        fail = False
+
+        def find_by_emails(self, emails):
+            if self.fail:
+                raise RuntimeError("users table unavailable")
+            return {"a@example.edu": DirectoryPerson(email="a@example.edu", name="Ada"),
+                    "b@example.edu": DirectoryPerson(email="b@example.edu", name="")}
+
+    directory = Directory()
+    monkeypatch.setattr(directory_adapter, "_directory", directory)
+    assert display_names(["a@example.edu", "b@example.edu"]) == {"a@example.edu": "Ada"}
+    directory.fail = True
+    assert display_names(["a@example.edu"]) == {}

@@ -74,6 +74,17 @@ IMAGES: Dict[str, Tuple[str, List[str], List[str]]] = {
         ],
         [],
     ),
+    # The conversation-search index consumer and its daily reconciler (one
+    # image, handler per function). The consumer borrows `extract_records`
+    # from the kb-migration ingestion consumer, so that closure is walked too.
+    "conversation-index": (
+        "backend/Dockerfile.conversation-index",
+        [
+            "apis/app_api/conversation_index/consumer.py",
+            "apis/app_api/conversation_index/reconciler.py",
+        ],
+        [],
+    ),
     "scheduled-runs": (
         "backend/Dockerfile.scheduled-runs",
         [
@@ -81,6 +92,12 @@ IMAGES: Dict[str, Tuple[str, List[str], List[str]]] = {
             "lambdas/scheduled_runs_worker/worker.py",
         ],
         ["lambdas/scheduled_runs_dispatcher", "lambdas/scheduled_runs_worker"],
+    ),
+    # Shared Projects 2.6: one maintenance run over a project's shared memory.
+    "memory-maintenance": (
+        "backend/Dockerfile.memory-maintenance",
+        ["lambdas/memory_maintenance_worker/worker.py"],
+        ["lambdas/memory_maintenance_worker"],
     ),
 }
 

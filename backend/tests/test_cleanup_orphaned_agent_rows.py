@@ -155,6 +155,22 @@ def test_apply_requires_the_prefix_confirmation(capsys):
 GONE = "ast-0000000000a1"
 
 
+class TestReservedKnowledgeBase:
+    """The conversation-search index keeps its KB_Record at ``AST#conversations``,
+    a partition with no METADATA row by design. It is not an orphan, and tearing
+    it down would delete every user's search index."""
+
+    def test_the_conversations_partition_is_never_an_orphan(self):
+        items = [_row("conversations", "KB#conversations", updatedAt="2026-01-01T00:00:00Z")]
+        ready, young = cleanup.find_orphans(items, NOW, min_age_hours=24)
+        assert ready == [] and young == []
+
+    def test_its_s3_prefix_counts_as_live(self):
+        items = [_row("conversations", "KB#conversations")]
+        groups = cleanup.classify_prefixes(["conversations"], items)
+        assert groups["live"] == ["conversations"]
+
+
 class TestS3PrefixMode:
     def test_prefixes_are_sorted_by_what_the_table_still_has(self):
         items = [

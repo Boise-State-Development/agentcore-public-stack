@@ -617,3 +617,50 @@ class TestSavePipelineAndHistory:
         stranger = _client(service, monkeypatch, user=STRANGER)
         assert stranger.get(f"/memory/spaces/{sid}/history", params={"slug": "a"}).status_code == 403
         assert stranger.get(f"/memory/spaces/{sid}/history/1", params={"slug": "a"}).status_code == 403
+
+
+class TestWhoChangedIt:
+    """G12: who saved a file is answered by email and name, never by internal user id."""
+
+    def test_updated_by_is_an_email_and_a_name(self, service, monkeypatch):
+        from apis.shared.directory import DirectoryPerson, adapter
+
+        class Directory:
+            def find_by_user_ids(self, user_ids):
+                known = {OWNER.user_id: DirectoryPerson(email=OWNER.email, name="Olive Owner", user_id=OWNER.user_id)}
+                return {u: known[u] for u in user_ids if u in known}
+
+        monkeypatch.setattr(adapter, "_directory", Directory())
+        owner = _client(service, monkeypatch, user=OWNER)
+        sid = owner.post("/memory/spaces", json={"name": "Shared"}).json()["spaceId"]
+        owner.post(f"/memory/spaces/{sid}/shares", json={"email": STRANGER.email, "permission": "editor"})
+        owner.put(f"/memory/spaces/{sid}/entries/a", json={"body": "v1"})
+
+        # A teammate the directory doesn't know yet is named from their own session.
+        member = _client(service, monkeypatch, user=STRANGER)
+        saved = member.put(f"/memory/spaces/{sid}/entries/b", json={"body": "hi"}).json()
+        assert (saved["updatedBy"], saved["updatedByName"]) == (STRANGER.email, None)
+
+        # Reading back as the owner: the owner is named by the directory; the
+        # teammate is neither the caller nor in the directory, so is unknown.
+        entries = {e["slug"]: e for e in owner.get(f"/memory/spaces/{sid}/entries").json()["entries"]}
+        assert (entries["a"]["updatedBy"], entries["a"]["updatedByName"]) == (OWNER.email, "Olive Owner")
+        assert (entries["b"]["updatedBy"], entries["b"]["updatedByName"]) == ("", None)
+        detail = owner.get(f"/memory/spaces/{sid}").json()
+        assert {e["slug"]: e["updatedBy"] for e in detail["entries"]} == {"a": OWNER.email, "b": ""}
+
+        versions = owner.get(f"/memory/spaces/{sid}/history", params={"slug": "a"}).json()["versions"]
+        assert [(v["updatedBy"], v["updatedByName"]) for v in versions] == [(OWNER.email, "Olive Owner")]
+        one = owner.get(f"/memory/spaces/{sid}/history/1", params={"slug": "a"}).json()
+        assert one["updatedBy"] == OWNER.email
+
+        for body in (saved, entries, detail["entries"], versions, one):
+            assert OWNER.user_id not in json.dumps(body) and STRANGER.user_id not in json.dumps(body)
+
+    def test_a_project_space_hides_its_owner_id(self, service):
+        from apis.app_api.memory_spaces.models import visible_owner_id
+
+        personal = service.create_space(owner_id=OWNER.user_id, owner_email=OWNER.email, name="Mine")
+        assert visible_owner_id(personal) == OWNER.user_id
+        project = personal.model_copy(update={"project_id": "prj_x", "scope": "shared"})
+        assert visible_owner_id(project) is None

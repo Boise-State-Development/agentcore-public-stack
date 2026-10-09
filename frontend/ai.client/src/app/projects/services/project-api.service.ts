@@ -25,6 +25,26 @@ import {
   SettingsVersion,
   SettingsVersionsResponse,
   SharedTasksResponse,
+  MaintenanceRun,
+  MaintenanceRunsResponse,
+  MemoryProposal,
+  MemoryProposalDetail,
+  MemoryProposalsResponse,
+  MemoryArchiveResponse,
+  MemoryEntriesResponse,
+  MemoryFile,
+  MemoryPinsResponse,
+  MemoryRestoreResponse,
+  CreateMemoryProposalRequest,
+  CreateMemoryProposalResponse,
+  MemoryFileHistory,
+  MemoryFileVersionContent,
+  SaveMemoryFileRequest,
+  SaveMemoryFileResponse,
+  SaveMemoryIndexResponse,
+  MemoryScope,
+  ProjectMemory,
+  ProjectOutputsResponse,
   UpdateProjectRequest,
 } from '../models/project.model';
 import { CreateDocumentRequest, DownloadUrlResponse } from '../../assistants/models/document.model';
@@ -165,6 +185,220 @@ export class ProjectApiService {
   }
 
   /** Tasks members shared with the project, newest first. */
+  // ---- outputs (3.3) -----------------------------------------------------
+
+  outputs(projectId: string): Observable<ProjectOutputsResponse> {
+    return this.http.get<ProjectOutputsResponse>(this.url(projectId, '/outputs'), this.options());
+  }
+
+  /** Stop sharing an artifact with the project: revokes its project share. */
+  removeOutput(projectId: string, artifactId: string): Observable<void> {
+    return this.http.delete<void>(this.url(projectId, `/outputs/${encodeURIComponent(artifactId)}`), this.options());
+  }
+
+  // ---- memory proposals (2.5a) -------------------------------------------
+
+  /** Editors and the owner get every proposal; anyone else gets their own. */
+  proposals(projectId: string, state?: MemoryProposal['state']): Observable<MemoryProposalsResponse> {
+    const params = state ? new HttpParams().set('state', state) : undefined;
+    return this.http.get<MemoryProposalsResponse>(this.url(projectId, '/memory/proposals'), this.options(params));
+  }
+
+  proposal(projectId: string, proposalId: string): Observable<MemoryProposalDetail> {
+    return this.http.get<MemoryProposalDetail>(
+      this.url(projectId, `/memory/proposals/${encodeURIComponent(proposalId)}`),
+      this.options(),
+    );
+  }
+
+  /**
+   * `text` is the reviewer's edited version; omit it to apply the proposal as written.
+   * `ops` picks a maintenance proposal's changes by index; omit it to apply them all.
+   */
+  approveProposal(
+    projectId: string,
+    proposalId: string,
+    body: { text?: string; note?: string; ops?: number[] },
+  ): Observable<MemoryProposal> {
+    return this.http.post<MemoryProposal>(
+      this.url(projectId, `/memory/proposals/${encodeURIComponent(proposalId)}/approve`),
+      body,
+      this.options(),
+    );
+  }
+
+  rejectProposal(projectId: string, proposalId: string, note?: string): Observable<MemoryProposal> {
+    return this.http.post<MemoryProposal>(
+      this.url(projectId, `/memory/proposals/${encodeURIComponent(proposalId)}/reject`),
+      note ? { note } : {},
+      this.options(),
+    );
+  }
+
+  withdrawProposal(projectId: string, proposalId: string): Observable<MemoryProposal> {
+    return this.http.post<MemoryProposal>(
+      this.url(projectId, `/memory/proposals/${encodeURIComponent(proposalId)}/withdraw`),
+      {},
+      this.options(),
+    );
+  }
+
+  // ---- maintenance (2.6a, 2.6b) -------------------------------------------
+
+  /**
+   * Queue a maintenance run, every file or one. `project`: owner or editor, ends in proposals.
+   * `mine`: your own memory, saved straight away. 409 while one runs on that memory.
+   */
+  startMaintenance(projectId: string, slug?: string, scope: MemoryScope = 'project'): Observable<MaintenanceRun> {
+    return this.http.post<MaintenanceRun>(
+      this.url(projectId, '/memory/maintenance'),
+      slug ? { slug } : {},
+      this.options(new HttpParams().set('scope', scope)),
+    );
+  }
+
+  /** Recent runs on one scope, newest first (project: owner and editors; mine: your own). */
+  maintenanceRuns(projectId: string, scope: MemoryScope = 'project'): Observable<MaintenanceRunsResponse> {
+    return this.http.get<MaintenanceRunsResponse>(
+      this.url(projectId, '/memory/maintenance'),
+      this.options(new HttpParams().set('scope', scope)),
+    );
+  }
+
+  maintenanceRun(projectId: string, runId: string, scope: MemoryScope = 'project'): Observable<MaintenanceRun> {
+    return this.http.get<MaintenanceRun>(
+      this.url(projectId, `/memory/maintenance/${encodeURIComponent(runId)}`),
+      this.options(new HttpParams().set('scope', scope)),
+    );
+  }
+
+  /** Undo a tidy-up of your own memory (2.6b). Files saved since the run are left alone. */
+  undoMaintenance(projectId: string, runId: string): Observable<MaintenanceRun> {
+    return this.http.post<MaintenanceRun>(
+      this.url(projectId, `/memory/maintenance/${encodeURIComponent(runId)}/undo`),
+      {},
+      this.options(),
+    );
+  }
+
+  // ---- the Memory tab (2.8) ----------------------------------------------
+
+  /** The project's shared space, the caller's own (null until they keep something) and the size limits. */
+  memory(projectId: string): Observable<ProjectMemory> {
+    return this.http.get<ProjectMemory>(this.url(projectId, '/memory'), this.options());
+  }
+
+  /** The caller's own memory in this project, created on first call. */
+  createMyMemory(projectId: string): Observable<{ spaceId: string }> {
+    return this.http.post<{ spaceId: string }>(this.url(projectId, '/memory/mine'), {}, this.options());
+  }
+
+  /** A space's files (its manifest). Project spaces take their roles from the project. */
+  memoryEntries(spaceId: string): Observable<MemoryEntriesResponse> {
+    return this.http.get<MemoryEntriesResponse>(this.spaceUrl(spaceId, '/entries'), this.options());
+  }
+
+  /** A space's MEMORY.md, the index that loads into every task. */
+  memoryIndex(spaceId: string): Observable<{ content: string }> {
+    return this.http.get<{ content: string }>(this.spaceUrl(spaceId, '/index'), this.options());
+  }
+
+  memoryFile(projectId: string, scope: MemoryScope, slug: string): Observable<MemoryFile> {
+    return this.http.get<MemoryFile>(
+      this.url(projectId, `/memory/files/${encodeSlug(slug)}`),
+      this.options(new HttpParams().set('scope', scope)),
+    );
+  }
+
+  pinMemoryItem(projectId: string, scope: MemoryScope, slug: string, anchor: string): Observable<MemoryPinsResponse> {
+    return this.http.post<MemoryPinsResponse>(this.url(projectId, '/memory/pins'), { scope, slug, anchor }, this.options());
+  }
+
+  unpinMemoryItem(projectId: string, scope: MemoryScope, slug: string, anchor: string): Observable<MemoryPinsResponse> {
+    const params = new HttpParams().set('scope', scope).set('slug', slug).set('anchor', anchor);
+    return this.http.delete<MemoryPinsResponse>(this.url(projectId, '/memory/pins'), this.options(params));
+  }
+
+  memoryArchive(projectId: string, scope: MemoryScope): Observable<MemoryArchiveResponse> {
+    return this.http.get<MemoryArchiveResponse>(
+      this.url(projectId, '/memory/archive'),
+      this.options(new HttpParams().set('scope', scope)),
+    );
+  }
+
+  restoreMemoryItem(projectId: string, scope: MemoryScope, archiveId: string): Observable<MemoryRestoreResponse> {
+    return this.http.post<MemoryRestoreResponse>(
+      this.url(projectId, `/memory/archive/${encodeURIComponent(archiveId)}/restore`),
+      {},
+      this.options(new HttpParams().set('scope', scope)),
+    );
+  }
+
+  saveMemoryFile(projectId: string, scope: MemoryScope, slug: string, body: SaveMemoryFileRequest): Observable<SaveMemoryFileResponse> {
+    return this.http.put<SaveMemoryFileResponse>(
+      this.url(projectId, `/memory/files/${encodeSlug(slug)}`),
+      body,
+      this.options(new HttpParams().set('scope', scope)),
+    );
+  }
+
+  /** Its items go to the archive, and its line leaves the index. */
+  deleteMemoryFile(projectId: string, scope: MemoryScope, slug: string): Observable<void> {
+    return this.http.delete<void>(
+      this.url(projectId, `/memory/files/${encodeSlug(slug)}`),
+      this.options(new HttpParams().set('scope', scope)),
+    );
+  }
+
+  saveMemoryIndex(projectId: string, scope: MemoryScope, content: string): Observable<SaveMemoryIndexResponse> {
+    return this.http.put<SaveMemoryIndexResponse>(
+      this.url(projectId, '/memory/index'),
+      { content },
+      this.options(new HttpParams().set('scope', scope)),
+    );
+  }
+
+  /**
+   * A scope's memory as a `.zip`: the index, each file, and `provenance.json` with who added,
+   * changed, approved or restored each item (2.7). Any member, for project memory.
+   */
+  exportMemory(projectId: string, scope: MemoryScope): Observable<Blob> {
+    return this.http.get(this.url(projectId, '/memory/export'), {
+      ...this.options(new HttpParams().set('scope', scope)),
+      responseType: 'blob',
+    });
+  }
+
+  /** Propose a change to the shared memory for an editor to review (any member). */
+  proposeMemoryChange(projectId: string, body: CreateMemoryProposalRequest): Observable<CreateMemoryProposalResponse> {
+    return this.http.post<CreateMemoryProposalResponse>(this.url(projectId, '/memory/proposals'), body, this.options());
+  }
+
+  /** A file's saved versions, newest first. */
+  memoryHistory(spaceId: string, slug: string): Observable<MemoryFileHistory> {
+    return this.http.get<MemoryFileHistory>(this.spaceUrl(spaceId, '/history'), this.options(new HttpParams().set('slug', slug)));
+  }
+
+  memoryVersion(spaceId: string, slug: string, version: number): Observable<MemoryFileVersionContent> {
+    return this.http.get<MemoryFileVersionContent>(
+      this.spaceUrl(spaceId, `/history/${version}`),
+      this.options(new HttpParams().set('slug', slug)),
+    );
+  }
+
+  /** Make an earlier version current again, as a new version. */
+  restoreMemoryVersion(projectId: string, scope: MemoryScope, slug: string, version: number): Observable<MemoryRestoreResponse> {
+    return this.http.post<MemoryRestoreResponse>(
+      this.url(projectId, '/memory/history/restore'),
+      { slug, version },
+      this.options(new HttpParams().set('scope', scope)),
+    );
+  }
+
+  private spaceUrl(spaceId: string, suffix: string): string {
+    return `${this.config.appApiUrl()}/memory/spaces/${encodeURIComponent(spaceId)}${suffix}`;
+  }
+
   sharedTasks(projectId: string): Observable<SharedTasksResponse> {
     return this.http.get<SharedTasksResponse>(this.url(projectId, '/shared-tasks'), this.options());
   }
@@ -206,4 +440,9 @@ export class ProjectApiService {
   private fileUrl(projectId: string, documentId: string, suffix = ''): string {
     return this.url(projectId, `/knowledge/${encodeURIComponent(documentId)}${suffix}`);
   }
+}
+
+/** A memory file name in a path: each `/`-separated part encoded, the separators kept (the route takes `{slug:path}`). */
+function encodeSlug(slug: string): string {
+  return slug.split('/').map(encodeURIComponent).join('/');
 }

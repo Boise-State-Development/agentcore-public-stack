@@ -43,6 +43,7 @@ import { AuditLogConstruct } from './constructs/data/audit-log-construct';
 import { ProjectsConstruct } from './constructs/data/projects-construct';
 import { QuotaTablesConstruct } from './constructs/data/quota-tables-construct';
 import { SharedConversationsConstruct } from './constructs/data/shared-conversations-construct';
+import { ConversationArchiveConstruct } from './constructs/data/conversation-archive-construct';
 
 // RAG (data half lives in Platform)
 import { RagDataConstruct } from './constructs/rag/rag-data-construct';
@@ -50,6 +51,8 @@ import { RagIngestionLambdaConstruct } from './constructs/rag-ingestion/rag-inge
 import { KbSyncConstruct } from './constructs/kb-sync/kb-sync-construct';
 import { ManagedKbRoleConstruct } from './constructs/managed-kb/managed-kb-role-construct';
 import { KbMigrationConstruct } from './constructs/managed-kb/kb-migration-construct';
+import { ConversationIndexConstruct } from './constructs/conversation-index/conversation-index-construct';
+import { SessionRetentionPruneConstruct } from './constructs/conversation-index/session-retention-prune-construct';
 import { PlatformCostSyncConstruct } from './constructs/costs/platform-cost-sync-construct';
 import { ScheduledRunsConstruct } from './constructs/scheduled-runs/scheduled-runs-construct';
 
@@ -63,6 +66,7 @@ import { ArtifactRenderLambdaConstruct } from './constructs/artifacts/artifact-r
 import { ArtifactsDistributionConstruct } from './constructs/artifacts/artifacts-distribution-construct';
 import { SkillResourcesConstruct } from './constructs/skills/skill-resources-construct';
 import { MemorySpacesConstruct } from './constructs/memory/memory-spaces-construct';
+import { MemoryMaintenanceConstruct } from './constructs/memory/memory-maintenance-construct';
 
 // AgentCore (Memory, Code Interpreter, Browser, Gateway).
 // Pure infrastructure — no code, no out-of-band updates needed.
@@ -192,6 +196,7 @@ export class PlatformStack extends cdk.Stack {
   public readonly agentTemplatesTable: dynamodb.ITable;
   public readonly sharedConversationsTable: dynamodb.ITable;
   public readonly sharedConversationsBucket: s3.IBucket;
+  public readonly conversationArchiveBucket: s3.IBucket;
   public readonly fileUploadBucket: s3.IBucket;
   public readonly fileUploadTable: dynamodb.ITable;
 
@@ -275,6 +280,8 @@ export class PlatformStack extends cdk.Stack {
   private _artifactRenderFunction!: lambda.IFunction;
   private _ragIngestionFunction!: lambda.IFunction;
   private _kbMigration?: KbMigrationConstruct;
+  private _conversationIndex?: ConversationIndexConstruct;
+  private _memoryMaintenance!: MemoryMaintenanceConstruct;
   private _tokenEnrichment?: TokenEnrichmentConstruct;
   private _platformCostSync?: PlatformCostSyncConstruct;
   private readonly _spaBucketConstruct: SpaBucketConstruct;
@@ -462,6 +469,15 @@ export class PlatformStack extends cdk.Stack {
     this.sharedConversationsTable = sharedConversations.table;
     this.sharedConversationsBucket = sharedConversations.bucket;
 
+    // Per-turn transcript archive for conversation search (always provisioned;
+    // writes are gated by config.conversationIndex.enabled at runtime).
+    const conversationArchive = new ConversationArchiveConstruct(
+      this,
+      'ConversationArchive',
+      { config },
+    );
+    this.conversationArchiveBucket = conversationArchive.bucket;
+
     // ============================================================
     // RAG data
     // ============================================================
@@ -573,6 +589,26 @@ export class PlatformStack extends cdk.Stack {
     ragData.documentsBucket.enableEventBridgeNotification();
 
     // ============================================================
+    // Conversation-search index consumer (docs/specs/conversation-search.md
+    // §4, PR-2b). Archive Object Created / Object Deleted → EventBridge →
+    // SQS → consumer Lambda → the shared `conversations` managed knowledge
+    // base, which the consumer provisions lazily on first ingest. Both rules
+    // are created DISABLED unless config.conversationIndex.enabled.
+    //
+    // EventBridge delivery is switched on here rather than in either
+    // construct, for the same reason as the documents bucket above: a
+    // construct never mutates a bucket handed to it. The archive bucket has
+    // no other notification, and delivery with no enabled rule costs nothing.
+    // ============================================================
+    this._conversationIndex = new ConversationIndexConstruct(this, 'ConversationIndex', {
+      config,
+      archiveBucket: conversationArchive.bucket,
+      assistantsTable: this.ragAssistantsTable,
+      managedKbRole,
+    });
+    conversationArchive.bucket.enableEventBridgeNotification();
+
+    // ============================================================
     // Fine-tuning data
     // ============================================================
     const fineTuningData = new FineTuningDataConstruct(
@@ -631,6 +667,20 @@ export class PlatformStack extends cdk.Stack {
     this.projectsTable = new ProjectsConstruct(this, 'Projects', {
       config,
     }).projectsTable;
+
+    // ============================================================
+    // Memory maintenance (Shared Projects 2.6) — the worker app-api
+    // async-invokes when an editor starts a run on a project's shared
+    // memory. Threaded to app-api via PlatformComputeRefs
+    // .memoryMaintenanceWorker below (function name + invoke grant).
+    // ============================================================
+    this._memoryMaintenance = new MemoryMaintenanceConstruct(this, 'MemoryMaintenance', {
+      config,
+      memorySpacesTable: this.memorySpacesTable,
+      memorySpacesBucket: this.memorySpacesBucket,
+      projectsTable: this.projectsTable,
+      alarmTopic: this.alarmTopic,
+    });
 
     const artifactsDomainName = config.domainName!;
     this.artifactsFrameAncestors = [
@@ -881,6 +931,7 @@ export class PlatformStack extends cdk.Stack {
       agentTemplatesTable: this.agentTemplatesTable,
       sharedConversationsTable: this.sharedConversationsTable,
       sharedConversationsBucket: this.sharedConversationsBucket,
+      conversationArchiveBucket: this.conversationArchiveBucket,
       fileUploadBucket: this.fileUploadBucket,
       fileUploadTable: this.fileUploadTable,
       ragDocumentsBucket: this.ragDocumentsBucket,
@@ -897,6 +948,7 @@ export class PlatformStack extends cdk.Stack {
       memorySpacesBucket: this.memorySpacesBucket,
       memorySpacesTable: this.memorySpacesTable,
       projectsTable: this.projectsTable,
+      memoryMaintenanceWorker: this._memoryMaintenance.workerLambda,
       fineTuningJobsTable: this.fineTuningJobsTable,
       fineTuningAccessTable: this.fineTuningAccessTable,
       fineTuningDataBucket: this.fineTuningDataBucket,
@@ -970,6 +1022,19 @@ export class PlatformStack extends cdk.Stack {
       sagemakerPrivateSubnetIds,
     });
 
+    // Session retention pruning (docs/specs/conversation-search.md §3): a
+    // daily one-off task on app-api's own task definition, so a session past
+    // retention is deleted by the same cascade as a user's delete. Report-only
+    // until config.conversationRetentionPruneArmed; disabled when
+    // config.conversationRetentionPrunesSessions is false.
+    new SessionRetentionPruneConstruct(this, 'SessionRetentionPrune', {
+      config: this._config,
+      vpc: this.vpc,
+      cluster: refs.ecsCluster,
+      taskDefinition: appApi.taskDefinition,
+      securityGroup: appApi.securityGroup,
+    });
+
     // After AppApiServiceConstruct: these bind to its target group and service.
     new AlbAlarmsConstruct(this, 'AlbAlarms', {
       config: this._config,
@@ -1024,6 +1089,12 @@ export class PlatformStack extends cdk.Stack {
               { name: 'kb-ingestion-consumer', fn: this._kbMigration.ingestionConsumerLambda },
             ]
           : []),
+        ...(this._conversationIndex
+          ? [
+              { name: 'conversation-index-consumer', fn: this._conversationIndex.consumerLambda },
+              { name: 'conversation-index-reconciler', fn: this._conversationIndex.reconcilerLambda },
+            ]
+          : []),
         ...(this._kbSync
           ? [
               { name: 'kb-sync-dispatcher', fn: this._kbSync.dispatcherLambda, throttleOnly: true },
@@ -1032,10 +1103,17 @@ export class PlatformStack extends cdk.Stack {
           : []),
         { name: 'scheduled-runs-dispatcher', fn: scheduledRuns.dispatcherLambda, throttleOnly: true },
         { name: 'scheduled-runs-worker', fn: scheduledRuns.workerLambda, throttleOnly: true },
+        // Its own error alarm lives in MemoryMaintenanceConstruct.
+        { name: 'memory-maintenance-worker', fn: this._memoryMaintenance.workerLambda, throttleOnly: true },
       ],
-      dlqs: this._kbMigration
-        ? [{ name: 'kb-ingestion', queue: this._kbMigration.ingestionConsumerDlq }]
-        : [],
+      dlqs: [
+        ...(this._kbMigration
+          ? [{ name: 'kb-ingestion', queue: this._kbMigration.ingestionConsumerDlq }]
+          : []),
+        ...(this._conversationIndex
+          ? [{ name: 'conversation-index', queue: this._conversationIndex.deadLetterQueue }]
+          : []),
+      ],
     });
 
     // Code Interpreter takes an ID while the others take ARNs — that asymmetry

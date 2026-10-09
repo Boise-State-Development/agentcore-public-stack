@@ -168,3 +168,21 @@ def _project_memory_tools(
     member = User(email=email, user_id=user_id, name=name, roles=[])
     scopes = ProjectMemoryScopes.for_member(project_id, shared_space_id, personal_space_id, member)
     return tuple(make_project_memory_tools(scopes))
+
+
+def build_shared_task_tools(project_id: str, user: User) -> List[Any]:
+    """The harness's ``shared_tasks_list`` and ``shared_task_read`` (2.5c), closed over the project and member.
+
+    Memoized like the memory tools, for the same reason: they are built on
+    every harness turn before the agent-cache lookup. They close over values
+    the cache key already carries (the project id, in ``binding_key``, and the
+    member's user id), so they need no key element of their own.
+    """
+    return list(_shared_task_tools(project_id, user.user_id, user.email, user.name))
+
+
+@functools.lru_cache(maxsize=512)
+def _shared_task_tools(project_id: str, user_id: str, email: str, name: str) -> Tuple[Any, ...]:
+    from agents.builtin_tools.project_shared_tasks import make_shared_task_tools
+
+    return tuple(make_shared_task_tools(project_id, User(email=email, user_id=user_id, name=name, roles=[])))

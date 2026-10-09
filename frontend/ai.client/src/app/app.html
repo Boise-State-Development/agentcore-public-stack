@@ -13,6 +13,7 @@
         <!-- Sidenav panel -->
         <div
           [class]="sidenavService.isOpen() ? 'sidenav-panel-enter' : 'sidenav-panel-exit'"
+          [attr.inert]="sidenavService.isOpen() ? null : ''"
           class="relative mr-16 flex w-full max-w-xs flex-1">
           <!-- Close button -->
           <div class="absolute left-full top-0 flex w-16 justify-center pt-5">
@@ -29,11 +30,14 @@
     </div>
   }
 
-  <!-- Static sidebar for desktop -->
+  <!-- Static sidebar for desktop. Collapsing only slides it off-screen, so
+       `inert` takes the hidden panel (its buttons, links and row menus)
+       out of the tab order and the accessibility tree until it is expanded. -->
   @if (!chromeHidden()) {
     <div
       class="hidden lg:fixed lg:inset-y-0 lg:z-50 lg:flex size-auto transition-transform duration-300"
-      [class.-translate-x-full]="sidenavService.isCollapsed()">
+      [class.-translate-x-full]="sidenavService.isCollapsed()"
+      [attr.inert]="sidenavService.isCollapsed() ? '' : null">
       <!-- Sidenav component -->
       <app-sidenav></app-sidenav>
     </div>
@@ -67,6 +71,22 @@
           <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
         </svg>
       </button>
+      <!-- Search: the collapsed sidebar takes its header (and the search
+           button there) off screen, so the button rides along here. -->
+      @if (conversationSearchOn) {
+        <button
+          type="button"
+          [appTooltip]="'Search (' + searchShortcutLabel + ')'"
+          appTooltipPosition="right"
+          (click)="openSearch()"
+          class="flex items-center justify-center size-10 rounded-md bg-gray-100 text-gray-500 shadow-xs hover:bg-gray-200 hover:text-gray-700 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white"
+          aria-label="Search"
+          [attr.aria-keyshortcuts]="searchShortcutAria">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="size-6" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
+          </svg>
+        </button>
+      }
     </div>
   }
 

@@ -21,7 +21,18 @@ describe('describeNotification', () => {
     [notif({ kind: 'project_role_changed', payload: { role: 'viewer' } }), 'ann@x.edu made you a viewer in Enrollment Sync.'],
     [notif({ kind: 'project_removed', payload: {} }), 'ann@x.edu removed you from Enrollment Sync.'],
     [notif({ kind: 'project_ownership_transferred', payload: {} }), 'ann@x.edu made you the owner of Enrollment Sync.'],
+    [notif({ kind: 'project_archived', payload: {} }), 'ann@x.edu archived Enrollment Sync. It’s read-only until it’s restored.'],
+    [notif({ kind: 'project_restored', payload: {} }), 'ann@x.edu restored Enrollment Sync.'],
+    [notif({ kind: 'project_member_left', payload: { role: 'viewer' } }), 'ann@x.edu left Enrollment Sync.'],
+    [notif({ kind: 'project_task_shared', payload: { shareId: 'sh-1', title: 'Vendor reply' } }), 'ann@x.edu shared “Vendor reply” with you in Enrollment Sync.'],
+    [notif({ kind: 'project_task_shared', payload: { shareId: 'sh-1' } }), 'ann@x.edu shared “a task” with you in Enrollment Sync.'],
+    [notif({ kind: 'project_proposal_pending', payload: { proposalId: 'p1', slug: 'sis' } }), 'ann@x.edu proposed a change to “sis” in Enrollment Sync’s memory.'],
+    [notif({ kind: 'project_proposal_decided', payload: { slug: 'sis', decision: 'approved' } }), 'ann@x.edu approved your change to “sis” in Enrollment Sync.'],
+    [notif({ kind: 'project_proposal_decided', payload: { slug: 'sis', decision: 'rejected' } }), 'ann@x.edu declined your change to “sis” in Enrollment Sync.'],
+    [notif({ kind: 'project_memory_maintenance', payload: { runId: 'r1', fileCount: 3 } }), 'Memory maintenance that ann@x.edu ran suggests changes to 3 files in Enrollment Sync’s memory.'],
+    [notif({ kind: 'project_memory_maintenance', payload: { runId: 'r1', fileCount: 1 } }), 'Memory maintenance that ann@x.edu ran suggests changes to 1 file in Enrollment Sync’s memory.'],
     [notif({ actorEmail: null, projectName: null, payload: {} }), 'Someone added you to a project.'],
+    [notif({ actorName: 'Ann Lee' }), 'Ann Lee added you to Enrollment Sync as an editor.'],
   ])('%#: reads as a sentence', (n, text) => {
     expect(describeNotification(n)).toBe(text);
   });
@@ -164,6 +175,38 @@ describe('NotificationBellComponent', () => {
     expect(service.markRead).toHaveBeenCalledWith(n);
     expect(navigate).toHaveBeenCalledWith(['/projects', 'prj_1']);
     expect(sidenav.close).toHaveBeenCalled();
+  });
+
+  it('someone leaving opens the project on its Members tab', () => {
+    const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+    const { component } = render();
+    component.open(notif({ kind: 'project_member_left' }));
+    expect(navigate).toHaveBeenCalledWith(['/projects', 'prj_1', 'members']);
+  });
+
+  it('a proposal opens the Memory tab: the review queue, or the file a decision was about', () => {
+    const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+    const { component } = render();
+    component.open(notif({ kind: 'project_proposal_pending', payload: { proposalId: 'p1', slug: 'sis' } }));
+    expect(navigate).toHaveBeenCalledWith(['/projects', 'prj_1', 'memory'], { queryParams: { view: 'review' } });
+    component.open(notif({ kind: 'project_proposal_decided', payload: { slug: 'sis', decision: 'approved' } }));
+    expect(navigate).toHaveBeenLastCalledWith(['/projects', 'prj_1', 'memory'], { queryParams: { file: 'sis' } });
+    component.open(notif({ kind: 'project_memory_maintenance', payload: { runId: 'r1', fileCount: 2 } }));
+    expect(navigate).toHaveBeenLastCalledWith(['/projects', 'prj_1', 'memory'], { queryParams: { view: 'review' } });
+  });
+
+  it('a shared task opens the shared view, revoked or not', () => {
+    const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+    const { component } = render();
+    component.open(notif({ kind: 'project_task_shared', payload: { shareId: 'sh-1', title: 'T' } }));
+    expect(navigate).toHaveBeenCalledWith(['/shared', 'sh-1']);
+    expect(sidenav.close).toHaveBeenCalled();
+  });
+
+  it('shows a shared task’s note under the sentence', () => {
+    const { component } = render();
+    expect(component.noteOf(notif({ kind: 'project_task_shared', payload: { shareId: 's', note: 'Over to you' } }))).toBe('Over to you');
+    expect(component.noteOf(notif({ payload: { note: 'ignored' } }))).toBeNull();
   });
 
   it('a removal is only marked read: there is no project to open', () => {

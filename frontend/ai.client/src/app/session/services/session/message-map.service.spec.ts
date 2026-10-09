@@ -345,6 +345,44 @@ describe('MessageMapService', () => {
     expect(() => service.endStreaming('never-streamed')).not.toThrow();
   });
 
+  describe('archive-served sessions', () => {
+    const archivedMessages = [
+      { id: 'msg-old-0', role: 'user', content: [{ type: 'text', text: 'From last year' }] },
+    ];
+
+    it('marks a session archive-served when the messages came from the archive', async () => {
+      mockSessionService.getMessages.mockResolvedValue({ messages: archivedMessages, fromArchive: true });
+
+      await service.loadMessagesForSession('old');
+
+      expect(service.isArchiveServed('old')).toBe(true);
+      expect(service.isArchiveServed('other')).toBe(false);
+      expect(service.isArchiveServed(null)).toBe(false);
+    });
+
+    it('treats a response without the flag (an older server) as live', async () => {
+      mockSessionService.getMessages.mockResolvedValue({ messages: archivedMessages });
+
+      await service.loadMessagesForSession('live');
+
+      expect(service.isArchiveServed('live')).toBe(false);
+    });
+
+    it('drops the mark when a re-fetch comes back from Memory, and on clearSession', async () => {
+      mockSessionService.getMessages.mockResolvedValue({ messages: archivedMessages, fromArchive: true });
+      await service.loadMessagesForSession('old');
+
+      mockSessionService.getMessages.mockResolvedValue({ messages: archivedMessages, fromArchive: false });
+      await service.reloadMessagesForSession('old');
+      expect(service.isArchiveServed('old')).toBe(false);
+
+      mockSessionService.getMessages.mockResolvedValue({ messages: archivedMessages, fromArchive: true });
+      await service.reloadMessagesForSession('old');
+      service.clearSession('old');
+      expect(service.isArchiveServed('old')).toBe(false);
+    });
+  });
+
   it('should clear session', () => {
     service.addUserMessage('session-1', 'Hello');
     service.clearSession('session-1');

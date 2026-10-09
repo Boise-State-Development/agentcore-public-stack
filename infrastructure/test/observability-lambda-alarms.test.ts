@@ -66,6 +66,7 @@ describe('Lambda and DLQ alarms', () => {
     'kb-migration-worker',
     'kb-migration-reconciler',
     'kb-ingestion-consumer',
+    'conversation-index-consumer',
   ];
 
   /**
@@ -77,6 +78,7 @@ describe('Lambda and DLQ alarms', () => {
     'kb-sync-worker',
     'scheduled-runs-dispatcher',
     'scheduled-runs-worker',
+    'memory-maintenance-worker',
   ];
 
   it('creates error and throttle alarms for the previously unmonitored functions', () => {
@@ -98,6 +100,7 @@ describe('Lambda and DLQ alarms', () => {
     expect(byName('kb-sync-worker-errors').Properties.Threshold).toBe(3);
     expect(byName('scheduled-runs-dispatcher-errors').Properties.Threshold).toBe(1);
     expect(byName('scheduled-runs-worker-errors').Properties.Threshold).toBe(3);
+    expect(byName('memory-maintenance-worker-errors').Properties.Threshold).toBe(1);
   });
 
   // Deploy-time machinery is excluded: its failure fails the deploy directly.
@@ -149,6 +152,12 @@ describe('Lambda and DLQ alarms', () => {
       expect(alarm.Properties.EvaluationPeriods).toBe(1);
       const dims = alarm.Properties.Dimensions;
       expect(dims[0].Name).toBe('QueueName');
+    });
+
+    it('alarms when the conversation-index DLQ is not empty', () => {
+      const alarm = byName('dlq-conversation-index-not-empty');
+      expect(alarm.Properties.Namespace).toBe('AWS/SQS');
+      expect(alarm.Properties.Threshold).toBe(0);
     });
   });
 

@@ -9,6 +9,7 @@ import * as sns from 'aws-cdk-lib/aws-sns';
 import * as xray from 'aws-cdk-lib/aws-xray';
 import * as bedrock from 'aws-cdk-lib/aws-bedrockagentcore';
 import * as path from 'path';
+import { createHash } from 'crypto';
 import { Construct } from 'constructs';
 import { AppConfig, getResourceName, getTruncatedResourceName, applyStandardTags, buildCorsOrigins } from '../../config';
 import { AlarmFactory } from '../observability/alarm-factory';
@@ -69,6 +70,22 @@ export interface InferenceAgentCoreConstructProps {
  *
  * IAM roles are created via inference-api-iam-roles.ts (extracted).
  */
+/** Where the Runtime reads the deployment's sensitive patterns (apis/shared/memory/lint.py `PATTERNS_SSM_SUFFIX`). */
+export const MEMORY_SENSITIVE_PATTERNS_SSM_SUFFIX = 'memory/sensitive-patterns';
+
+/**
+ * The Runtime's packed content-lint setting (Shared Projects 2.7): the mode, and when the
+ * deployment has sensitive patterns, `ssm:` plus a hash of them. The patterns themselves are in
+ * SSM, because this environment is near both of its caps (50 variables; 2,560 bytes on V2). The
+ * hash makes a pattern change a change to the Runtime, so its containers pick the new ones up.
+ */
+export function memoryLintRuntimeValue(config: AppConfig): string {
+  const { mode, sensitivePatterns } = config.memoryLint;
+  if (!sensitivePatterns) return JSON.stringify({ mode });
+  const hash = createHash('sha256').update(sensitivePatterns).digest('hex').slice(0, 12);
+  return JSON.stringify({ mode, patterns: `ssm:${hash}` });
+}
+
 export class InferenceAgentCoreConstruct extends Construct {
   public readonly runtime: bedrock.CfnRuntime;
   /**
@@ -353,9 +370,10 @@ export class InferenceAgentCoreConstruct extends Construct {
         DYNAMODB_AUTH_PROVIDERS_TABLE_NAME: authProvidersTableName,
         AUTH_PROVIDER_SECRETS_ARN: authProviderSecretsArn,
 
-        // AgentCore resources
+        // AgentCore resources. MEMORY_ARN was retired in Shared Projects 2.7: the
+        // runtime only logged it at startup (AGENTCORE_MEMORY_ID is what code
+        // reads), and its slot went to MEMORY_LINT below.
         AGENTCORE_MEMORY_ID: props.memoryId,
-        MEMORY_ARN: props.memoryArn,
         AGENTCORE_CODE_INTERPRETER_ID: props.codeInterpreterId,
         BROWSER_ID: props.browserId,
         // The Chromium MANAGED policy passed on every StartBrowserSession.
@@ -414,6 +432,18 @@ export class InferenceAgentCoreConstruct extends Construct {
         // grant in inference-api-iam-roles.ts).
         DYNAMODB_PROJECTS_TABLE_NAME: props.refs.projectsTable.tableName,
         PROJECTS_ENABLED: config.projects.enabled ? 'true' : 'false',
+        // Project-memory content lint (2.7) for memory_save / memory_propose. One
+        // small packed value, not app-api's MEMORY_LINT_MODE + MEMORY_SENSITIVE_PATTERNS:
+        // this budget is spent, and V2 caps the payload at 2,560 bytes. The patterns
+        // live in SSM (below); their hash here rolls the Runtime when they change.
+        MEMORY_LINT: memoryLintRuntimeValue(config),
+
+        // Conversation index write path (in development, default off): gates
+        // the fire-and-forget archive put after `done`. One slot, not two: the
+        // archive bucket name is resolved from SSM under PROJECT_PREFIX
+        // (`/{prefix}/conversations/archive-bucket-name`), as the artifacts
+        // tools do, because this budget is nearly spent.
+        CONVERSATION_INDEX_ENABLED: config.conversationIndex.enabled ? 'true' : 'false',
 
         // Skills v2 (default ON with a kill switch, mirroring the app-api flag).
         // Gates skill resolution on the invocation path — the AgentSkills plugin's
@@ -505,6 +535,14 @@ export class InferenceAgentCoreConstruct extends Construct {
         AGENTCORE_MCP_APPS_SANDBOX_ORIGIN: props.refs.mcpSandboxProxyOrigin,
       },
     });
+
+    // Set on every synth, V1 included. Leaving it off for V1 would make a
+    // V2 -> V1 rollback a property removal, and whether removing it reverts
+    // the Runtime is the service's call; an explicit V1 is an in-place update
+    // that keeps the runtime id. aws-cdk-lib 2.265.0 has no typed
+    // `platformVersion` (2.272.0 adds one), hence the override.
+    this.runtime.addPropertyOverride('PlatformVersion', config.inferenceApi.runtimePlatformVersion);
+
     this.runtime.node.addDependency(runtimeExecutionRole);
 
     // ============================================================
@@ -871,6 +909,18 @@ export class InferenceAgentCoreConstruct extends Construct {
       description: 'AgentCore Runtime ID',
       tier: ssm.ParameterTier.STANDARD,
     });
+
+    // The deployment's project-memory sensitive patterns (Shared Projects 2.7),
+    // for the Runtime to read once per process (its role reads `/{prefix}/*`).
+    // Only when there are some, so a deployment without patterns adds no resource.
+    if (config.memoryLint.sensitivePatterns) {
+      new ssm.StringParameter(this, 'MemorySensitivePatternsParameter', {
+        parameterName: `/${config.projectPrefix}/${MEMORY_SENSITIVE_PATTERNS_SSM_SUFFIX}`,
+        stringValue: config.memoryLint.sensitivePatterns,
+        description: 'Project-memory content lint: the deployment sensitive patterns',
+        tier: ssm.ParameterTier.STANDARD,
+      });
+    }
 
     // The runtime auto-creates its own service-linked workload identity, but
     // we don't surface it: it's only mintable from inside the runtime

@@ -195,6 +195,30 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
     }),
   );
 
+  // ── Conversation archive bucket ──
+  // app-api writes a forked conversation's turns (shares export), deletes a
+  // session's turns when the session is deleted, and reads them back for the
+  // messages route when Memory's events have expired; deleting and reading both
+  // list the session's prefix first. Scoped to the `conversations/` prefix.
+  const conversationArchiveBucketArn = props.refs.conversationArchiveBucket.bucketArn;
+  taskRole.addToPrincipalPolicy(
+    new iam.PolicyStatement({
+      sid: 'ConversationArchiveObjects',
+      effect: iam.Effect.ALLOW,
+      actions: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject'],
+      resources: [`${conversationArchiveBucketArn}/conversations/*`],
+    }),
+  );
+  taskRole.addToPrincipalPolicy(
+    new iam.PolicyStatement({
+      sid: 'ConversationArchiveList',
+      effect: iam.Effect.ALLOW,
+      actions: ['s3:ListBucket'],
+      resources: [conversationArchiveBucketArn],
+      conditions: { StringLike: { 's3:prefix': ['conversations/*'] } },
+    }),
+  );
+
   // ── Core tables (OIDC, Users, Roles, API Keys, OAuth) ──
   const coreTables = [
     { sid: 'OidcStateAccess', arn: props.refs.oidcStateTable.tableArn },
@@ -480,6 +504,27 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
       resources: [memorySpacesTableArn, `${memorySpacesTableArn}/index/*`],
     }),
   );
+
+  // ── Memory maintenance (Shared Projects 2.6) ──
+  // Starting a run async-invokes the worker (InvocationType=Event); nothing else.
+  //
+  // Its own managed policy, NOT `grantInvoke(taskRole)`: that statement lands in
+  // the role's CDK overflow policies, which CDK packs by a size it estimates
+  // before ARNs resolve. On dev the resolved OverflowPolicy3 was already 5,921 of
+  // IAM's 6,144 characters, so the grant failed the deploy (ServiceLimitExceeded)
+  // and rolled the stack back. A role may attach 10 managed policies; it has 3.
+  new iam.ManagedPolicy(scope, 'AppApiMemoryMaintenanceInvokePolicy', {
+    roles: [taskRole],
+    description: 'app-api: async-invoke the memory maintenance worker (Shared Projects 2.6)',
+    statements: [
+      new iam.PolicyStatement({
+        sid: 'MemoryMaintenanceWorkerInvoke',
+        effect: iam.Effect.ALLOW,
+        actions: ['lambda:InvokeFunction'],
+        resources: [props.refs.memoryMaintenanceWorker.functionArn],
+      }),
+    ],
+  });
 
   // ── Fine-tuning ──
   // Sourced from typed PlatformStack refs.

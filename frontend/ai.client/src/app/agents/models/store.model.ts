@@ -143,10 +143,20 @@ export interface SubmitListingRequest {
   tagline?: string;
 }
 
-/** One skill that publication would make readable (D7.1). */
+/** One skill that publishing or sharing an agent would make readable (D7.1). */
 export interface SkillExposure {
   ref: string;
   label: string;
+}
+
+/**
+ * What sharing an agent hands over (§6/D7): the skills its owner wrote and bound, which
+ * anyone with access can use — and get the agent to show the instructions of. The same
+ * rule as {@link ListingPreflight.exposedSkills}, applied to what a share recipient runs.
+ */
+export interface ShareSkillExposure {
+  agentId: string;
+  exposedSkills: SkillExposure[];
 }
 
 /**

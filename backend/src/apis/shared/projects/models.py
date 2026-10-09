@@ -70,13 +70,36 @@ class ProjectMember(BaseModel):
     project_id: str = Field(..., alias="projectId")
     email: str
     role: MemberRole
-    # Unknown until the invitee first resolves a permission on the project
-    # (membership is email-keyed, so people who have never signed in can be
-    # added). Back-filled then; required for transfer and cost attribution.
+    # The account the email signs in as. Unknown until the invitee first resolves
+    # a permission on the project (membership is email-keyed, so people who have
+    # never signed in can be added), and back-filled then, or bound from the
+    # directory when ownership is transferred to them. Required for transfer.
     user_id: Optional[str] = Field(None, alias="userId")
     invited_by: str = Field(..., alias="invitedBy")
     created_at: str = Field(..., alias="createdAt")
     updated_at: str = Field(..., alias="updatedAt")
+
+
+class ProjectOutput(BaseModel):
+    """A ``PROJECT#{id}`` / ``OUTPUT#{artifactId}`` pointer (Shared Projects 3.3).
+
+    Written when a member shares an artifact with "Project members"
+    (``access_level: "project"`` on an artifact share). One per artifact: sharing
+    another version moves the pointer, newest wins. The artifact share row is
+    the grant, checked against membership at read time; this row only lists it.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    project_id: str = Field(..., alias="projectId")
+    artifact_id: str = Field(..., alias="artifactId")
+    share_id: str = Field(..., alias="shareId")
+    version: int
+    title: str = ""
+    content_type: str = Field("", alias="contentType")
+    owner_id: str = Field(..., alias="ownerId")
+    owner_email: str = Field(..., alias="ownerEmail")
+    shared_at: str = Field(..., alias="sharedAt")
 
 
 class SharedTask(BaseModel):
@@ -97,3 +120,5 @@ class SharedTask(BaseModel):
     owner_email: str = Field(..., alias="ownerEmail")
     title: str = ""
     shared_at: str = Field(..., alias="sharedAt")
+    # The sharer's hand-off line (2.5b). Re-sharing replaces it with the pointer.
+    note: Optional[str] = None

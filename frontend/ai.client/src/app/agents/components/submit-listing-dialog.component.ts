@@ -1,7 +1,7 @@
 import { Component, ChangeDetectionStrategy, OnInit, computed, inject, signal } from '@angular/core';
 import { DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroXMark, heroExclamationTriangle, heroEye, heroEyeSlash, heroGlobeAlt } from '@ng-icons/heroicons/outline';
+import { heroExclamationTriangle, heroEye, heroEyeSlash, heroGlobeAlt } from '@ng-icons/heroicons/outline';
 import { AgentListingService } from '../services/agent-listing.service';
 import { ListingReachability } from '../models/reachability';
 import {
@@ -11,7 +11,8 @@ import {
   TAGLINE_MAX,
   deriveTagline,
 } from '../models/store.model';
-import { DialogDismissDirective } from '../../components/dialog/dialog-dismiss.directive';
+import { DialogDescriptionDirective } from '../../components/dialog/dialog-description.directive';
+import { DialogShellComponent } from '../../components/dialog/dialog-shell.component';
 
 export interface SubmitListingDialogData {
   agentId: string;
@@ -61,243 +62,204 @@ export type SubmitListingDialogResult = AgentListingBlock | undefined;
 @Component({
   selector: 'app-submit-listing-dialog',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DialogDismissDirective, NgIcon],
-  providers: [provideIcons({ heroXMark, heroExclamationTriangle, heroEye, heroEyeSlash, heroGlobeAlt })],
-  host: {
-    class: 'block',
-    '(keydown.escape)': 'onCancel()',
-  },
+  imports: [DialogDescriptionDirective, DialogShellComponent, NgIcon],
+  providers: [provideIcons({ heroExclamationTriangle, heroEye, heroEyeSlash, heroGlobeAlt })],
+  host: { class: 'block' },
   template: `
-    <div
-      class="dialog-backdrop fixed inset-0 bg-gray-900/40 dark:bg-gray-900/70"
-      aria-hidden="true"
-    ></div>
+    <app-dialog-shell [title]="title()" (closed)="onCancel()">
+      <p appDialogDescription class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">
+        @if (isUpdate()) {
+          An admin reviews your changes before they reach anyone. The version of
+          <span class="font-medium">{{ data.agentName }}</span> in the store stays live and
+          unchanged until they approve.
+        } @else {
+          An admin reviews <span class="font-medium">{{ data.agentName }}</span> before it
+          appears in the store. You'll see their decision here.
+        }
+      </p>
 
-    <div class="fixed inset-0 z-10 flex min-h-full items-end justify-center p-4 sm:items-center sm:p-0"
-      appDialogDismiss
-      (dismissed)="onCancel()">
-      <div
-        class="dialog-panel relative flex max-h-[90vh] w-full flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white text-left shadow-xl sm:my-8 sm:max-w-lg dark:border-gray-700 dark:bg-gray-800"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="submit-listing-title"
-        aria-describedby="submit-listing-description"
-      >
-        <div class="flex items-start justify-between gap-3 px-6 pt-5">
-          <div class="min-w-0">
-            <h2 id="submit-listing-title" class="text-lg/7 font-semibold text-gray-900 dark:text-white">
-              @if (isUpdate()) {
-                Submit an update
-              } @else {
-                {{ isResubmission() ? 'Submit again for review' : 'Submit to the marketplace' }}
-              }
-            </h2>
-            <p id="submit-listing-description" class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">
-              @if (isUpdate()) {
-                An admin reviews your changes before they reach anyone. The version of
-                <span class="font-medium">{{ data.agentName }}</span> in the store stays live and
-                unchanged until they approve.
-              } @else {
-                An admin reviews <span class="font-medium">{{ data.agentName }}</span> before it
-                appears in the store. You'll see their decision here.
-              }
-            </p>
-          </div>
-          <button
-            type="button"
-            (click)="onCancel()"
-            aria-label="Close dialog"
-            class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
-          >
-            <ng-icon name="heroXMark" class="size-5" aria-hidden="true" />
-          </button>
+      @if (loading()) {
+        <div class="space-y-3" aria-live="polite">
+          <div class="h-4 w-1/3 animate-pulse rounded bg-gray-100 dark:bg-gray-700"></div>
+          <div class="h-9 animate-pulse rounded-2xl bg-gray-100 dark:bg-gray-700"></div>
+          <span class="sr-only">Checking what publishing this agent would share…</span>
         </div>
+      } @else if (blockReason(); as reason) {
+        <!-- D7.2 — not a warning. Nothing below it would help. -->
+        <div
+          role="alert"
+          class="flex gap-3 rounded-2xl border border-state-danger-200 bg-state-danger-50 px-4 py-3 text-sm/6 text-state-danger-800 dark:border-state-danger-900 dark:bg-state-danger-900/20 dark:text-state-danger-200"
+        >
+          <ng-icon name="heroExclamationTriangle" class="mt-0.5 size-5 shrink-0" aria-hidden="true" />
+          <p>{{ reason }}</p>
+        </div>
+      } @else {
+        <!-- Going public. Above the form because it is the one thing here that
+             changes who can reach the agent, and first because a consequence
+             disclosed after the form is one the author reads after deciding.
 
-        <div class="flex-1 overflow-y-auto px-6 py-4">
-          @if (loading()) {
-            <div class="space-y-3" aria-live="polite">
-              <div class="h-4 w-1/3 animate-pulse rounded bg-gray-100 dark:bg-gray-700"></div>
-              <div class="h-9 animate-pulse rounded-2xl bg-gray-100 dark:bg-gray-700"></div>
-              <span class="sr-only">Checking what publishing this agent would share…</span>
-            </div>
-          } @else if (blockReason(); as reason) {
-            <!-- D7.2 — not a warning. Nothing below it would help. -->
-            <div
-              role="alert"
-              class="flex gap-3 rounded-2xl border border-state-danger-200 bg-state-danger-50 px-4 py-3 text-sm/6 text-state-danger-800 dark:border-state-danger-900 dark:bg-state-danger-900/20 dark:text-state-danger-200"
-            >
-              <ng-icon name="heroExclamationTriangle" class="mt-0.5 size-5 shrink-0" aria-hidden="true" />
-              <p>{{ reason }}</p>
-            </div>
-          } @else {
-            <!-- Going public. Above the form because it is the one thing here that
-                 changes who can reach the agent, and first because a consequence
-                 disclosed after the form is one the author reads after deciding.
-
-                 A statement, not a control: submitting is what makes it public, so the
-                 notice says so plainly and the Submit button carries the consent. -->
-            @if (requiresPublic()) {
-              <div
-                class="rounded-2xl border border-state-warning-200 bg-state-warning-50 px-4 py-3 dark:border-state-warning-900 dark:bg-state-warning-900/20"
-              >
-                <div class="flex gap-3">
-                  <ng-icon
-                    name="heroGlobeAlt"
-                    class="mt-0.5 size-5 shrink-0 text-state-warning-700 dark:text-state-warning-400"
-                    aria-hidden="true"
-                  />
-                  <div class="min-w-0">
-                    <p class="text-sm/6 font-medium text-state-warning-900 dark:text-state-warning-200">
-                      Submitting makes this agent public
-                    </p>
-                    <p class="text-sm/6 text-state-warning-900 dark:text-state-warning-200">
-                      {{ goingPublicNotice() }}
-                    </p>
-                  </div>
-                </div>
-              </div>
-            }
-
-            <div>
-              <label for="listing-category" class="block text-sm/6 font-medium text-gray-900 dark:text-white">
-                Category
-              </label>
-              <p class="text-xs/5 text-gray-500 dark:text-gray-400">
-                Where it appears in Discover. An admin may move it.
-              </p>
-              <!--
-                ⚠️ The selection lives on the options ([selected]), NOT as [value] on the
-                select. The category list arrives from an await in ngOnInit, so on the first
-                render the preselected category names an option that does not exist yet:
-                setting select.value matches nothing, the browser silently resets to index 0,
-                and when the options finally render it displays the first one. The author then
-                sees a category they never chose — reading as though submitting had moved
-                their listing — while the signal still holds the right value underneath.
-                Binding on the option instead resolves as each one renders, which is exactly
-                when the value becomes matchable.
-              -->
-              <select
-                id="listing-category"
-                (change)="onCategoryChange($event)"
-                class="mt-2 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
-              >
-                <option value="" disabled [selected]="!category()">Choose a category…</option>
-                @for (option of categories(); track option.id) {
-                  <option [value]="option.id" [selected]="option.id === category()">
-                    {{ option.label }}
-                  </option>
-                }
-              </select>
-              @if (!categories().length) {
-                <p class="mt-2 text-xs/5 text-state-warning-700 dark:text-state-warning-400">
-                  No categories are open for new listings yet. An admin adds these under
-                  Admin → Marketplace → Categories.
-                </p>
-              }
-            </div>
-
-            <!--
-              Tagline (D4). Prefilled from the description's first clause for the many
-              Agents that predate the field — the author edits rather than invents, and
-              sees what the listing will say at the one moment they are looking at it.
-            -->
-            <div class="mt-5">
-              <label for="listing-tagline" class="block text-sm/6 font-medium text-gray-900 dark:text-white">
-                Tagline
-              </label>
-              <p class="text-xs/5 text-gray-500 dark:text-gray-400">
-                The one line under the name in Discover. We started it from your
-                description — make it read like a subtitle.
-              </p>
-              <input
-                id="listing-tagline"
-                type="text"
-                [value]="tagline()"
-                (input)="onTaglineInput($event)"
-                [attr.maxlength]="taglineMax"
-                class="mt-2 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white dark:placeholder:text-gray-500"
+             A statement, not a control: submitting is what makes it public, so the
+             notice says so plainly and the Submit button carries the consent. -->
+        @if (requiresPublic()) {
+          <div
+            class="rounded-2xl border border-state-warning-200 bg-state-warning-50 px-4 py-3 dark:border-state-warning-900 dark:bg-state-warning-900/20"
+          >
+            <div class="flex gap-3">
+              <ng-icon
+                name="heroGlobeAlt"
+                class="mt-0.5 size-5 shrink-0 text-state-warning-700 dark:text-state-warning-400"
+                aria-hidden="true"
               />
-              <p class="mt-1 text-right text-xs/5 text-gray-400 dark:text-gray-500">
-                {{ tagline().length }}/{{ taglineMax }}
-              </p>
-            </div>
-
-            <div class="mt-5">
-              <label for="listing-note" class="block text-sm/6 font-medium text-gray-900 dark:text-white">
-                Note to the admin <span class="font-normal text-gray-500 dark:text-gray-400">(optional)</span>
-              </label>
-              <textarea
-                id="listing-note"
-                rows="3"
-                [value]="note()"
-                (input)="onNoteInput($event)"
-                [placeholder]="notePlaceholder()"
-                class="mt-2 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white dark:placeholder:text-gray-500"
-              ></textarea>
-            </div>
-
-            <!-- D7.1 — enumerate, don't count. -->
-            @if (exposedSkills().length; as count) {
-              <div class="mt-5 rounded-2xl border border-state-warning-200 bg-state-warning-50 px-4 py-3 dark:border-state-warning-900 dark:bg-state-warning-900/20">
-                <div class="flex gap-3">
-                  <ng-icon
-                    name="heroEye"
-                    class="mt-0.5 size-5 shrink-0 text-state-warning-700 dark:text-state-warning-400"
-                    aria-hidden="true"
-                  />
-                  <div class="min-w-0">
-                    <p class="text-sm/6 font-medium text-state-warning-900 dark:text-state-warning-200">
-                      {{ count === 1 ? '1 skill you wrote becomes' : count + ' skills you wrote become' }}
-                      readable by anyone who runs this agent
-                    </p>
-                    <ul class="mt-1.5 space-y-0.5">
-                      @for (skill of exposedSkills(); track skill.ref) {
-                        <li class="text-sm/6 text-state-warning-900 dark:text-state-warning-200">· {{ skill.label }}</li>
-                      }
-                    </ul>
-                  </div>
-                </div>
+              <div class="min-w-0">
+                <p class="text-sm/6 font-medium text-state-warning-900 dark:text-state-warning-200">
+                  Submitting makes this agent public
+                </p>
+                <p class="text-sm/6 text-state-warning-900 dark:text-state-warning-200">
+                  {{ goingPublicNotice() }}
+                </p>
               </div>
-            }
+            </div>
+          </div>
+        }
 
-            <p class="mt-5 text-xs/5 text-gray-500 dark:text-gray-400">
-              @if (data.listing) {
-                This keeps whoever the listing is already credited to.
-              } @else {
-                You'll be credited as the publisher.
-              }
-              An admin may reattribute the listing to a department or the university at
-              approval — that changes the name shown with it in Discover and nothing about who
-              can run it.
+        <div>
+          <label for="listing-category" class="block text-sm/6 font-medium text-gray-900 dark:text-white">
+            Category
+          </label>
+          <p class="text-xs/5 text-gray-500 dark:text-gray-400">
+            Where it appears in Discover. An admin may move it.
+          </p>
+          <!--
+            ⚠️ The selection lives on the options ([selected]), NOT as [value] on the
+            select. The category list arrives from an await in ngOnInit, so on the first
+            render the preselected category names an option that does not exist yet:
+            setting select.value matches nothing, the browser silently resets to index 0,
+            and when the options finally render it displays the first one. The author then
+            sees a category they never chose — reading as though submitting had moved
+            their listing — while the signal still holds the right value underneath.
+            Binding on the option instead resolves as each one renders, which is exactly
+            when the value becomes matchable.
+          -->
+          <select
+            id="listing-category"
+            (change)="onCategoryChange($event)"
+            class="mt-2 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
+          >
+            <option value="" disabled [selected]="!category()">Choose a category…</option>
+            @for (option of categories(); track option.id) {
+              <option [value]="option.id" [selected]="option.id === category()">
+                {{ option.label }}
+              </option>
+            }
+          </select>
+          @if (!categories().length) {
+            <p class="mt-2 text-xs/5 text-state-warning-700 dark:text-state-warning-400">
+              No categories are open for new listings yet. An admin adds these under
+              Admin → Marketplace → Categories.
             </p>
-
-            @if (error(); as message) {
-              <p role="alert" class="mt-4 text-sm/6 text-state-danger-700 dark:text-state-danger-400">{{ message }}</p>
-            }
           }
         </div>
 
-        <div class="flex justify-end gap-2 border-t border-gray-200 px-6 py-4 dark:border-gray-700">
+        <!--
+          Tagline (D4). Prefilled from the description's first clause for the many
+          Agents that predate the field — the author edits rather than invents, and
+          sees what the listing will say at the one moment they are looking at it.
+        -->
+        <div class="mt-5">
+          <label for="listing-tagline" class="block text-sm/6 font-medium text-gray-900 dark:text-white">
+            Tagline
+          </label>
+          <p class="text-xs/5 text-gray-500 dark:text-gray-400">
+            The one line under the name in Discover. We started it from your
+            description — make it read like a subtitle.
+          </p>
+          <input
+            id="listing-tagline"
+            type="text"
+            [value]="tagline()"
+            (input)="onTaglineInput($event)"
+            [attr.maxlength]="taglineMax"
+            class="mt-2 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white dark:placeholder:text-gray-500"
+          />
+          <p class="mt-1 text-right text-xs/5 text-gray-400 dark:text-gray-500">
+            {{ tagline().length }}/{{ taglineMax }}
+          </p>
+        </div>
+
+        <div class="mt-5">
+          <label for="listing-note" class="block text-sm/6 font-medium text-gray-900 dark:text-white">
+            Note to the admin <span class="font-normal text-gray-500 dark:text-gray-400">(optional)</span>
+          </label>
+          <textarea
+            id="listing-note"
+            rows="3"
+            [value]="note()"
+            (input)="onNoteInput($event)"
+            [placeholder]="notePlaceholder()"
+            class="mt-2 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white dark:placeholder:text-gray-500"
+          ></textarea>
+        </div>
+
+        <!-- D7.1 — enumerate, don't count. -->
+        @if (exposedSkills().length; as count) {
+          <div class="mt-5 rounded-2xl border border-state-warning-200 bg-state-warning-50 px-4 py-3 dark:border-state-warning-900 dark:bg-state-warning-900/20">
+            <div class="flex gap-3">
+              <ng-icon
+                name="heroEye"
+                class="mt-0.5 size-5 shrink-0 text-state-warning-700 dark:text-state-warning-400"
+                aria-hidden="true"
+              />
+              <div class="min-w-0">
+                <p class="text-sm/6 font-medium text-state-warning-900 dark:text-state-warning-200">
+                  {{ count === 1 ? '1 skill you wrote becomes' : count + ' skills you wrote become' }}
+                  readable by anyone who runs this agent
+                </p>
+                <ul class="mt-1.5 space-y-0.5">
+                  @for (skill of exposedSkills(); track skill.ref) {
+                    <li class="text-sm/6 text-state-warning-900 dark:text-state-warning-200">· {{ skill.label }}</li>
+                  }
+                </ul>
+              </div>
+            </div>
+          </div>
+        }
+
+        <p class="mt-5 text-xs/5 text-gray-500 dark:text-gray-400">
+          @if (data.listing) {
+            This keeps whoever the listing is already credited to.
+          } @else {
+            You'll be credited as the publisher.
+          }
+          An admin may reattribute the listing to a department or the university at
+          approval — that changes the name shown with it in Discover and nothing about who
+          can run it.
+        </p>
+
+        @if (error(); as message) {
+          <p role="alert" class="mt-4 text-sm/6 text-state-danger-700 dark:text-state-danger-400">{{ message }}</p>
+        }
+      }
+
+      <div dialogFooter class="flex justify-end gap-2 border-t border-gray-200 px-6 py-4 dark:border-gray-700">
+        <button
+          type="button"
+          (click)="onCancel()"
+          class="rounded-2xl border border-gray-300 bg-white px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+        >
+          {{ blockReason() ? 'Close' : 'Cancel' }}
+        </button>
+        @if (!blockReason()) {
           <button
             type="button"
-            (click)="onCancel()"
-            class="rounded-2xl border border-gray-300 bg-white px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+            [disabled]="!canSubmit()"
+            (click)="onSubmit()"
+            class="rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 "
           >
-            {{ blockReason() ? 'Close' : 'Cancel' }}
+            {{ submitting() ? 'Submitting…' : 'Submit for review' }}
           </button>
-          @if (!blockReason()) {
-            <button
-              type="button"
-              [disabled]="!canSubmit()"
-              (click)="onSubmit()"
-              class="rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 "
-            >
-              {{ submitting() ? 'Submitting…' : 'Submit for review' }}
-            </button>
-          }
-        </div>
+        }
       </div>
-    </div>
+    </app-dialog-shell>
   `,
 })
 export class SubmitListingDialogComponent implements OnInit {
@@ -337,6 +299,11 @@ export class SubmitListingDialogComponent implements OnInit {
    * changes keeps serving while the author revises it.
    */
   readonly isUpdate = computed(() => !!this.data.listing?.publishedVersion);
+
+  readonly title = computed(() => {
+    if (this.isUpdate()) return 'Submit an update';
+    return this.isResubmission() ? 'Submit again for review' : 'Submit to the marketplace';
+  });
 
   /**
    * ⚠️ `requiresPublic` is deliberately **not** a term here any more. Needing to go public

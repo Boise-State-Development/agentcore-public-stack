@@ -6,7 +6,7 @@ This module contains all share-related data models including:
 - SharedConversationResponse for full shared conversation data
 """
 
-from typing import List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 # "project" shares with every member of the Shared Project the task belongs to
 # (its session's ``preferences.projectId``); the read check is membership.
@@ -15,6 +15,30 @@ ShareAccessLevel = Literal["public", "specific", "project"]
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from apis.shared.sessions.models import MessageResponse
+
+
+# A share's note is a one-line hand-off ("can you pick up the vendor reply?"),
+# shown under the task and in the bell, not a comment thread.
+MAX_SHARE_NOTE_CHARS = 280
+
+
+class ShareNotify(BaseModel):
+    """Who a project share tells: everyone, or the members named.
+
+    Exactly one of the two. With no ``notify`` on the request nobody is told,
+    so a large project doesn't get a bell for every share by default.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    all: bool = False
+    emails: Optional[List[str]] = None
+
+    @model_validator(mode="after")
+    def exactly_one_audience(self) -> "ShareNotify":
+        if self.all == bool(self.emails):
+            raise ValueError("notify takes either all: true or a non-empty emails list")
+        return self
 
 
 class CreateShareRequest(BaseModel):
@@ -30,6 +54,15 @@ class CreateShareRequest(BaseModel):
         alias="allowedEmails",
         description="Email addresses allowed to view (required when accessLevel is 'specific')",
     )
+    notify: Optional[ShareNotify] = Field(
+        default=None,
+        description="Project shares only: members to notify. Omitted means nobody is notified",
+    )
+    note: Optional[str] = Field(
+        default=None,
+        max_length=MAX_SHARE_NOTE_CHARS,
+        description="Project shares only: a plain-text note shown with the task and in notifications",
+    )
 
     @model_validator(mode="after")
     def validate_allowed_emails(self) -> "CreateShareRequest":
@@ -39,6 +72,13 @@ class CreateShareRequest(BaseModel):
             raise ValueError(
                 "allowed_emails is required when access_level is 'specific'"
             )
+        return self
+
+    @model_validator(mode="after")
+    def validate_project_extras(self) -> "CreateShareRequest":
+        self.note = (self.note or "").strip() or None
+        if self.access_level != "project" and (self.notify is not None or self.note is not None):
+            raise ValueError("notify and note apply only when access_level is 'project'")
         return self
 
 
@@ -145,4 +185,12 @@ class SharedConversationResponse(BaseModel):
         "created before artifacts were captured, and for conversations "
         "that produced none — the two are indistinguishable and neither "
         "is an error.",
+    )
+    tool_summaries: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        alias="toolSummaries",
+        description="Model-written one-line summaries of tool batches, "
+        "`{batchId, toolUseIds, summary}`, as on `GET /sessions/{id}/messages`. "
+        "Frozen when the share was created; empty for shares made before "
+        "they were captured.",
     )

@@ -12,6 +12,7 @@ const project = (id: string, role: ProjectRole, status: ProjectStatus = 'active'
   name: `Project ${id}`,
   description: '',
   ownerEmail: 'o@x.edu',
+  ownerName: null,
   role,
   status,
   editorsManageMembers: true,

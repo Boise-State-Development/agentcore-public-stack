@@ -8,11 +8,7 @@ import {
 import { DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
 import { FormsModule } from '@angular/forms';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import {
-  heroExclamationTriangle,
-  heroGlobeAlt,
-  heroXMark,
-} from '@ng-icons/heroicons/outline';
+import { heroExclamationTriangle, heroGlobeAlt } from '@ng-icons/heroicons/outline';
 
 import { Document } from '../models/document.model';
 import {
@@ -22,7 +18,7 @@ import {
 } from '../models/web-source.model';
 import { WebSourceError, WebSourceService } from '../services/web-source.service';
 import { ToastService } from '../../services/toast/toast.service';
-import { DialogDismissDirective } from '../../components/dialog/dialog-dismiss.directive';
+import { DialogShellComponent } from '../../components/dialog/dialog-shell.component';
 import { SpinnerComponent } from '../../components/spinner/spinner.component';
 
 /** Data passed in when the assistant editor opens the dialog. */
@@ -45,51 +41,10 @@ export interface WebSourceDialogData {
 @Component({
   selector: 'app-web-source-dialog',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DialogDismissDirective, FormsModule, NgIcon, SpinnerComponent],
-  providers: [
-    provideIcons({
-      heroExclamationTriangle,
-      heroGlobeAlt,
-      heroXMark,
-    }),
-  ],
-  host: {
-    class: 'block',
-    '(keydown.escape)': 'cancel()',
-  },
+  imports: [DialogShellComponent, FormsModule, NgIcon, SpinnerComponent],
+  providers: [provideIcons({ heroExclamationTriangle, heroGlobeAlt })],
+  host: { class: 'block' },
   templateUrl: './web-source-dialog.component.html',
-  styles: `
-    @reference "../../../styles/theme.css";
-
-
-    .dialog-backdrop {
-      animation: backdrop-fade-in 200ms ease-out;
-    }
-
-    @keyframes backdrop-fade-in {
-      from {
-        opacity: 0;
-      }
-      to {
-        opacity: 1;
-      }
-    }
-
-    .dialog-panel {
-      animation: dialog-fade-in-up 200ms ease-out;
-    }
-
-    @keyframes dialog-fade-in-up {
-      from {
-        opacity: 0;
-        transform: translateY(1rem) scale(0.95);
-      }
-      to {
-        opacity: 1;
-        transform: translateY(0) scale(1);
-      }
-    }
-  `,
 })
 export class WebSourceDialogComponent {
   private readonly dialogRef = inject<DialogRef<Document[]>>(DialogRef);

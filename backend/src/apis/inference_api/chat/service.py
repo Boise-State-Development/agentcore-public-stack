@@ -123,8 +123,7 @@ def _create_cache_key(
         prompt_hash = hashlib.md5(prompt_material.encode()).hexdigest()[:8]
 
     return (
-        session_id,
-        user_id or session_id,
+        *_conversation_owner_key(session_id, user_id),  # [0], [1]: whose conversation
         tools_hash,
         model_id or "default",
         _hash_inference_params(inference_params),
@@ -138,6 +137,21 @@ def _create_cache_key(
         assistant_id or "",
         skills_hash,  # stays the trailing element; tests index it as [-1]
     )
+
+
+def _conversation_owner_key(session_id: str, user_id: Optional[str]) -> Tuple[str, str]:
+    """The ``(session, user)`` pair that opens every agent cache key.
+
+    A session id alone does not name a conversation. AgentCore Memory scopes
+    history by actor id, so two users can hold separate threads under one
+    session id. Anything here that finds "this conversation's" live state must
+    match on this pair. Runtime affinity (``runtime_session_id_for``) now pins
+    per user too, so two users should never share this process. Do not rely on
+    that: the cache must be safe on its own. When affinity hashed the session
+    id alone, ``_adopt_session_conversation`` matched on it alone and handed one
+    user's live history to another (dev, 2026-08-31).
+    """
+    return (session_id, user_id or session_id)
 
 
 def memory_binding_digest(binding: Optional[Dict[str, Any]]) -> str:
@@ -205,7 +219,9 @@ def _is_paused_on_interrupt(agent: BaseAgent) -> bool:
     return bool(state is not None and getattr(state, "activated", False))
 
 
-def _adopt_session_conversation(agent: BaseAgent, session_id: str) -> None:
+def _adopt_session_conversation(
+    agent: BaseAgent, session_id: str, user_id: Optional[str]
+) -> None:
     """Point a newly built agent at the conversation its session is already having.
 
     The cache key varies with an agent's *configuration* — system prompt, tools,
@@ -240,6 +256,19 @@ def _adopt_session_conversation(agent: BaseAgent, session_id: str) -> None:
     that produced it — a prefix-byte change on an arbitrary turn, which is exactly
     what the prompt-cache contract forbids. Aliasing never re-serializes anything.
 
+    ⚠️ The match is on ``(session, user)``, never the session id alone. The
+    same session id can belong to two users (AgentCore Memory scopes history by
+    actor; a pre-#906 fork created exactly that), and runtime affinity sends
+    both users to the same container. Matching on session alone made a second
+    user's freshly built agent, which restored an empty thread from its own
+    actor, alias the first user's live list, so the model answered from another
+    person's conversation (dev, 2026-08-31: a probe user got the owner's
+    earlier message read back to them). The invocations route now 404s that
+    case before it gets here.
+    This match is what keeps the cache safe without depending on that guard,
+    which fails open. ``test_adoption_never_crosses_users_on_one_session_id``
+    pins it.
+
     Safe against concurrent turns because the single-flight session lease admits
     one turn per session at a time. Cross-replica divergence is not our problem
     either way — separate processes share no cache — but the length guard below
@@ -250,10 +279,11 @@ def _adopt_session_conversation(agent: BaseAgent, session_id: str) -> None:
     if inner is None or not isinstance(getattr(inner, "messages", None), list):
         return
 
+    owner = _conversation_owner_key(session_id, user_id)
     live = None
     live_wrapper = None
     for key, cached in _agent_cache.items():
-        if key[0] != session_id:
+        if key[:2] != owner:
             continue
         cached_inner = getattr(cached, "agent", None)
         if isinstance(getattr(cached_inner, "messages", None), list):
@@ -331,6 +361,7 @@ async def get_agent(
     build_detail_recorder: Optional[Callable[[str, Any], None]] = None,
     memory_binding: Optional[Dict[str, Any]] = None,
     memory_context: Optional[str] = None,
+    text_only_model: bool = False,
 ) -> BaseAgent:
     """
     Get or create agent instance with current configuration for session
@@ -368,6 +399,10 @@ async def get_agent(
         memory_context: The rendered Memory-Space block, sent after the system
             prompt behind its own cache point. Hashed with the prompt in the
             key and snapshotted by ``BaseAgent`` for resume.
+        text_only_model: The model's catalog row declares TEXT input only
+            (``is_text_only_model``), so the agent's model sees history with
+            image, document and video blocks replaced by text. Not a key
+            element: it follows from ``model_id``, which already is one.
         cache_write: Whether this caller may *populate* the cache. Read stays
             allowed either way. Set False by callers that build a partial
             toolset for a session whose real turns build more — otherwise they
@@ -487,6 +522,8 @@ async def get_agent(
     )
     if memory_context:
         create_kwargs["memory_context"] = memory_context
+    if text_only_model:
+        create_kwargs["text_only_model"] = True
     # Skills v2: ChatAgent (now the target of both "chat" and "skill" types)
     # accepts accessible_skill_ids and conditionally adds the AgentSkills
     # plugin. Pass it through whenever resolved — VoiceAgent does not take the
@@ -517,7 +554,7 @@ async def get_agent(
     # configuration (an `@`-mention, a different toolset). Runs before the
     # extra_tools early return below, because an uncached agent still takes a
     # turn in the thread and must not fork it. See #741.
-    _adopt_session_conversation(agent, session_id)
+    _adopt_session_conversation(agent, session_id, user_id)
 
     # Stamp the type onto the construction snapshot so a paused turn can
     # resume on the same factory variant after cache eviction. A turn carrying
@@ -641,9 +678,9 @@ def _converse_for_title(**kwargs: Any) -> Dict[str, Any]:
     return _get_title_bedrock_client().converse(**kwargs)
 
 
-def _schedule_title_write(session_id: str, user_id: str, title: str) -> None:
+def _schedule_title_write(session_id: str, user_id: str, title: str, first_prompt: Optional[str] = None) -> None:
     task = asyncio.create_task(
-        update_session_title(session_id=session_id, user_id=user_id, title=title)
+        update_session_title(session_id=session_id, user_id=user_id, title=title, first_prompt=first_prompt)
     )
     _pending_title_writes.add(task)
     task.add_done_callback(_pending_title_writes.discard)
@@ -736,7 +773,9 @@ async def generate_conversation_title(
         # seeing the name. Targeted update — only writes the title attribute.
         # The post-stream update_session_activity write is also targeted and
         # disjoint, so the two cannot clobber each other on overlapping turns.
-        _schedule_title_write(session_id, user_id, title)
+        # The same write carries the opening prompt's search form (firstPrompt,
+        # conversation search's lexical leg), so it costs no round trip of its own.
+        _schedule_title_write(session_id, user_id, title, first_prompt=user_input)
 
         return title
 

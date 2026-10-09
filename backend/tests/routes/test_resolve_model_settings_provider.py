@@ -44,6 +44,7 @@ async def test_returns_provider_for_mantle_model():
             mantle_api_mode,
             mantle_region,
             provider,
+            _modalities,
         ) = await routes._resolve_model_settings(
             model_id="openai.gpt-5.4",
             explicit_caching_enabled=None,
@@ -59,7 +60,7 @@ async def test_returns_provider_for_mantle_model():
 @pytest.mark.asyncio
 async def test_provider_none_when_model_unknown():
     with patch.object(routes, "_find_managed_model", AsyncMock(return_value=None)):
-        _, _, _, _, provider = await routes._resolve_model_settings(
+        _, _, _, _, provider, _ = await routes._resolve_model_settings(
             model_id="openai.gpt-5.4",
             explicit_caching_enabled=None,
             request_inference_params=None,
@@ -71,7 +72,7 @@ async def test_provider_none_when_model_unknown():
 async def test_provider_none_when_no_model_id():
     # No registry lookup happens without a model id; provider stays None.
     with patch.object(routes, "_find_managed_model", AsyncMock()) as find:
-        _, _, _, _, provider = await routes._resolve_model_settings(
+        _, _, _, _, provider, _ = await routes._resolve_model_settings(
             model_id=None,
             explicit_caching_enabled=None,
             request_inference_params=None,

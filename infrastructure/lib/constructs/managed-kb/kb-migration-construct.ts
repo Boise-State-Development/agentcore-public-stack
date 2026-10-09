@@ -261,6 +261,54 @@ export class KbMigrationConstruct extends Construct {
       MANAGED_KB_TAG_VALUE_ENVIRONMENT: managedKbEnvironmentTagValue(config),
     };
 
+    // ── Ingestion consumer + its dead-letter queue (task 2.2) ──
+    //
+    // The DLQ is the "durable retry anchor" half of Requirement 10.1/10.7.
+    // The trigger is asynchronous, so a function that exhausts its retries
+    // has nowhere to report failure to: the caller is EventBridge, which
+    // does not care. Without a DLQ the document simply never becomes
+    // searchable and nobody finds out — the exact silent-failure mode this
+    // Lambda exists to remove from the old in-process orchestration.
+    this.ingestionConsumerDlq = new sqs.Queue(this, 'KbIngestionConsumerDlq', {
+      queueName: getResourceName(config, 'kb-ingestion-consumer-dlq'),
+      // Long enough that a failure over a holiday weekend is still there
+      // to triage on the Tuesday. 14 days is the SQS maximum.
+      retentionPeriod: cdk.Duration.days(14),
+      encryption: sqs.QueueEncryption.SQS_MANAGED,
+      enforceSSL: true,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    const ingestionConsumerLogGroup = new logs.LogGroup(this, 'KbIngestionConsumerLogGroup', {
+      retention: logRetentionFor(config),
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    this.ingestionConsumerLambda = new lambda.DockerImageFunction(this, 'KbIngestionConsumerLambda', {
+      code: lambda.DockerImageCode.fromImageAsset(bootstrapDir, {
+        cmd: ['apis.app_api.kb_migration.ingestion_consumer.lambda_handler'],
+      }),
+      architecture: lambda.Architecture.ARM_64,
+      // Requirement 10.9 sets the floor at 300 s, and that floor is
+      // measured, not guessed: §5.1 found a fixed ~68 s per-knowledge-base
+      // warm-up plus a long tail to 264 s for a single 50 KiB PDF, and
+      // this function polls until the document is ACTUALLY RETRIEVABLE
+      // (Requirement 10.6) rather than merely reported indexed. 15 min —
+      // Lambda's maximum — leaves headroom above the measured tail. A
+      // timeout under 300 s would turn a slow-but-succeeding ingestion
+      // into a dead-lettered document.
+      timeout: cdk.Duration.minutes(15),
+      memorySize: 1024,
+      logGroup: ingestionConsumerLogGroup,
+      // Async-invocation DLQ. `retryAttempts` is Lambda's own bounded
+      // retry (Requirement 10.7) before the event lands in the queue.
+      deadLetterQueue: this.ingestionConsumerDlq,
+      retryAttempts: 2,
+      environment: sharedEnvironment,
+      description:
+        'Managed_KB ingestion consumer - routes an uploaded document to the legacy pipeline or to Direct_Ingestion',
+    });
+
     // ── Worker ──
     const workerLogGroup = new logs.LogGroup(this, 'KbMigrationWorkerLogGroup', {
       retention: logRetentionFor(config),
@@ -283,7 +331,14 @@ export class KbMigrationConstruct extends Construct {
       timeout: cdk.Duration.minutes(15),
       memorySize: 1024,
       logGroup: workerLogGroup,
-      environment: sharedEnvironment,
+      environment: {
+        ...sharedEnvironment,
+        // Born-managed handoff: once the knowledge base exists, the worker
+        // async-invokes the consumer once per document that was waiting on
+        // it, rather than ingesting them one per dispatcher tick. That is why
+        // the consumer is defined above the worker.
+        KB_MIGRATION_INGESTION_CONSUMER_FUNCTION_NAME: this.ingestionConsumerLambda.functionName,
+      },
       description:
         'Managed_KB migration worker - runs one knowledge base through shadow/verify/promote/retain under a lease',
     });
@@ -374,54 +429,6 @@ export class KbMigrationConstruct extends Construct {
         'Managed_KB dead-letter document reconciler - drives stranded DOC# rows to their true state (report-only until armed)',
     });
 
-    // ── Ingestion consumer + its dead-letter queue (task 2.2) ──
-    //
-    // The DLQ is the "durable retry anchor" half of Requirement 10.1/10.7.
-    // The trigger is asynchronous, so a function that exhausts its retries
-    // has nowhere to report failure to: the caller is EventBridge, which
-    // does not care. Without a DLQ the document simply never becomes
-    // searchable and nobody finds out — the exact silent-failure mode this
-    // Lambda exists to remove from the old in-process orchestration.
-    this.ingestionConsumerDlq = new sqs.Queue(this, 'KbIngestionConsumerDlq', {
-      queueName: getResourceName(config, 'kb-ingestion-consumer-dlq'),
-      // Long enough that a failure over a holiday weekend is still there
-      // to triage on the Tuesday. 14 days is the SQS maximum.
-      retentionPeriod: cdk.Duration.days(14),
-      encryption: sqs.QueueEncryption.SQS_MANAGED,
-      enforceSSL: true,
-      removalPolicy: cdk.RemovalPolicy.DESTROY,
-    });
-
-    const ingestionConsumerLogGroup = new logs.LogGroup(this, 'KbIngestionConsumerLogGroup', {
-      retention: logRetentionFor(config),
-      removalPolicy: cdk.RemovalPolicy.DESTROY,
-    });
-
-    this.ingestionConsumerLambda = new lambda.DockerImageFunction(this, 'KbIngestionConsumerLambda', {
-      code: lambda.DockerImageCode.fromImageAsset(bootstrapDir, {
-        cmd: ['apis.app_api.kb_migration.ingestion_consumer.lambda_handler'],
-      }),
-      architecture: lambda.Architecture.ARM_64,
-      // Requirement 10.9 sets the floor at 300 s, and that floor is
-      // measured, not guessed: §5.1 found a fixed ~68 s per-knowledge-base
-      // warm-up plus a long tail to 264 s for a single 50 KiB PDF, and
-      // this function polls until the document is ACTUALLY RETRIEVABLE
-      // (Requirement 10.6) rather than merely reported indexed. 15 min —
-      // Lambda's maximum — leaves headroom above the measured tail. A
-      // timeout under 300 s would turn a slow-but-succeeding ingestion
-      // into a dead-lettered document.
-      timeout: cdk.Duration.minutes(15),
-      memorySize: 1024,
-      logGroup: ingestionConsumerLogGroup,
-      // Async-invocation DLQ. `retryAttempts` is Lambda's own bounded
-      // retry (Requirement 10.7) before the event lands in the queue.
-      deadLetterQueue: this.ingestionConsumerDlq,
-      retryAttempts: 2,
-      environment: sharedEnvironment,
-      description:
-        'Managed_KB ingestion consumer - routes an uploaded document to the legacy pipeline or to Direct_Ingestion',
-    });
-
     const allFunctions = [
       this.dispatcherLambda,
       this.workerLambda,
@@ -456,6 +463,9 @@ export class KbMigrationConstruct extends Construct {
     documentsBucket.grantRead(this.reconcilerLambda, 'assistants/*');
 
     this.workerLambda.grantInvoke(this.dispatcherLambda);
+    // The born-managed handoff above. Async invocations still get the
+    // consumer's own retries and dead-letter queue.
+    this.ingestionConsumerLambda.grantInvoke(this.workerLambda);
 
     // ── Managed_KB grants from task 1.2 ──
     //

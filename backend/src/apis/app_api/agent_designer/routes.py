@@ -10,9 +10,8 @@ Gating: the router is mounted unconditionally but every route depends on
 behaves as if unmounted while the feature ships incrementally. Auth is the standard SPA
 cookie dependency per the CLAUDE.md app-api rule.
 
-Deliberately excluded in Phase 1: ``test-chat`` (the only reason the assistants router is
-on the architecture import-boundary allow-list — aliasing it would force a second
-exception) and document sub-routes. Those stay on ``/assistants/*``. ``GET /agents`` lists
+Deliberately excluded in Phase 1: the document sub-routes, which stay on
+``/assistants/*``. ``GET /agents`` lists
 the caller's own + shared-with-them agents; ``include_public``/pagination parity is a
 Phase-4 concern when the Designer consumes it.
 """
@@ -58,6 +57,7 @@ from apis.shared.assistants.models import (
     CreateAssistantRequest,
     ShareAssistantRequest,
     ShareEntry,
+    ShareSkillExposureResponse,
     UnshareAssistantRequest,
     UpdateAssistantRequest,
     UpdateSharePermissionRequest,
@@ -102,6 +102,7 @@ from apis.app_api.agent_designer.services.pin_service import (
     unpin_agent,
 )
 from apis.app_api.agent_designer.services.report_service import ReportError, file_report
+from apis.app_api.agent_designer.services.share_disclosure import skills_exposed_by_sharing
 from apis.app_api.agent_designer.services.store_service import (
     browse_all,
     browse_category,
@@ -603,6 +604,37 @@ async def get_agent_shares_endpoint(agent_id: str, current_user: User = Depends(
     except Exception as e:
         logger.error(f"Error getting agent shares: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to get agent shares: {str(e)}")
+
+
+@router.get("/{agent_id}/shares/exposed-skills", response_model=ShareSkillExposureResponse)
+async def get_agent_share_exposure_endpoint(
+    agent_id: str, current_user: User = Depends(require_agents_enabled)
+):
+    """The skills the owner wrote that sharing this Agent hands over (§6/D7, owner only).
+
+    The share dialog's disclosure: invoke-through lets anyone with access use — and read —
+    the owner's own bound skills. Owner-only like the share mutations it accompanies; an
+    editor cannot widen who has the Agent, so there is nothing for them to be warned about.
+    Gated on the Agent surface alone, not the marketplace flag: sharing works without it.
+    """
+    try:
+        assistant, permission = await resolve_assistant_permission(
+            assistant_id=agent_id, user_id=current_user.user_id, user_email=current_user.email
+        )
+        if not assistant:
+            raise HTTPException(status_code=404, detail=f"Agent not found: {agent_id}")
+        if permission != "owner":
+            raise HTTPException(
+                status_code=403, detail="Only the owner can see what sharing this agent exposes"
+            )
+        return ShareSkillExposureResponse(
+            agent_id=agent_id, exposed_skills=await skills_exposed_by_sharing(assistant)
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error resolving agent share exposure: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to resolve share exposure: {str(e)}")
 
 
 # ------------------------------------------------------------------- marketplace (D2)

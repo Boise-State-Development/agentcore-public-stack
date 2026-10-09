@@ -30,6 +30,7 @@ from typing import List, Optional, Tuple
 
 from apis.shared.audit import TARGET_PROJECT, AuditAction, AuditRecord, AuditService, get_audit_service
 from apis.shared.auth.models import User
+from apis.shared.directory import DirectoryAdapter, DirectoryPerson, get_directory
 from apis.shared.notifications import NotificationKind, NotificationService
 from apis.shared.timestamps import utc_now_iso
 
@@ -139,12 +140,29 @@ class ProjectService:
         audit: Optional[AuditService] = None,
         notifications: Optional[NotificationService] = None,
         memory: Optional[ProjectMemoryGateway] = None,
+        directory: Optional[DirectoryAdapter] = None,
     ):
         self.repository = repository or ProjectRepository()
+        self._directory = directory
         self.harness = harness or AssistantsHarnessGateway()
         self.memory = memory or MemorySpacesGateway()
         self.audit = audit or get_audit_service()
         self.notifications = notifications or NotificationService(table_name=self.repository.table_name)
+
+    # ── people ──────────────────────────────────────────────────────────
+
+    def known_people(self, emails: List[str]) -> dict[str, DirectoryPerson]:
+        """The people among ``emails`` who have signed in, by email. Best-effort: ``{}`` on failure.
+
+        A member counts as signed in if their row is bound to an account (they
+        have opened the project) *or* the directory knows their email, because
+        :meth:`transfer_ownership` can bind them from the directory.
+        """
+        try:
+            return (self._directory or get_directory()).find_by_emails(emails)
+        except Exception:
+            logger.warning("Directory lookup failed", exc_info=True)
+            return {}
 
     # ── trail ───────────────────────────────────────────────────────────
 
@@ -160,6 +178,22 @@ class ProjectService:
             project_id=project.project_id,
             project_name=project.name,
             payload=payload,
+        )
+
+    def _notify_members(self, kind: NotificationKind, actor: User, project: Project) -> None:
+        """Tell every member (pending invitees too) except the actor. Archive and restore
+        are rare, so they reach everyone with no preference to opt out of (G20)."""
+        try:
+            members = self.repository.list_members(project.project_id)
+        except Exception:
+            logger.warning("Could not list members of %s to send %s", project.project_id, kind, exc_info=True)
+            return
+        self.notifications.notify_many(
+            (m.email for m in members),
+            kind=kind,
+            actor=actor,
+            project_id=project.project_id,
+            project_name=project.name,
         )
 
     def list_audit(
@@ -366,6 +400,8 @@ class ProjectService:
         except ProjectWriteConflict as e:
             raise ProjectConflictError("The project changed while you were editing it. Reload and try again.") from e
         self._record_update(user, project, saved)
+        if project.status != saved.status:
+            self._notify_members("project_archived" if saved.status == "archived" else "project_restored", user, saved)
         await self._sync_harness_identity(project, saved)
         return saved, role
 
@@ -609,12 +645,27 @@ class ProjectService:
         self.record(
             AuditAction.PROJECT_MEMBER_REMOVED, user, project_id, before={"email": email, "role": role}, reason="left"
         )
+        self._notify("project_member_left", project.owner_email, user, project, role=role)
 
     def _delete_member(self, project_id: str, email: str) -> None:
         try:
             self.repository.remove_member(project_id, email, utc_now_iso())
         except ProjectWriteConflict as e:
             raise ProjectNotFoundError("That person is not a member of this project") from e
+
+    def _bind_member(self, project_id: str, member: ProjectMember) -> ProjectMember:
+        """Bind an unbound member to the account their email signs in as, if the directory knows it.
+
+        A member is otherwise bound the first time they open the project
+        (:func:`resolve_project_role`); this covers someone who has signed in but
+        not opened it yet. When the users table holds more than one account for an
+        email, the directory answers with the one that signed in most recently.
+        """
+        person = self.known_people([member.email]).get(member.email)
+        if person is None or not person.user_id:
+            return member
+        self.repository.set_member_user_id(project_id, member.email, person.user_id)
+        return member.model_copy(update={"user_id": person.user_id})
 
     def transfer_ownership(self, project_id: str, user: User, new_owner_email: str) -> Project:
         """Hand the project to an existing editor; the old owner becomes an editor."""
@@ -626,8 +677,10 @@ class ProjectService:
         if member.role != "editor":
             raise ProjectConflictError("Ownership can only go to an editor. Make them an editor first.")
         if not member.user_id:
+            member = self._bind_member(project_id, member)
+        if not member.user_id:
             raise ProjectConflictError(
-                "They haven't opened this project yet. Ownership can be transferred once they have."
+                "They haven't signed in yet. Ownership can be transferred once they have."
             )
         try:
             self.repository.transfer_ownership(project, member, utc_now_iso())

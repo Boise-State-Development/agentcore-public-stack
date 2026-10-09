@@ -337,8 +337,9 @@ class SessionService:
             client = boto3.client('bedrock-agentcore', region_name=config.region)
 
             self._delete_session_events(client, config.memory_id, session_id, user_id)
-            # Events expire after 90 days; the summaries extracted from them do
-            # not, so purge runs whether or not any events were left.
+            # Events expire (CDK_CONVERSATION_RETENTION_DAYS, default 365); the
+            # summaries extracted from them do not, so purge runs whether or
+            # not any events were left.
             self._purge_session_summaries(client, config.memory_id, session_id, user_id)
 
         except ImportError:

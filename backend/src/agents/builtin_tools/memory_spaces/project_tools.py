@@ -16,6 +16,18 @@ these. The agent cache key carries a digest of the ids closed over here
 A member's own space is created by their first ``memory_save(scope="mine")``, not
 when the turn starts (2.4a): three writes before the first token of every member's
 first turn would cost more than they buy.
+
+A save that creates a file also adds it to that scope's ``MEMORY.md``, the only part
+of a space injected into a task. Left to the model, the index line was usually
+forgotten, so teammates' assistants never saw the file (the 2026-10 team simulation, G2).
+
+``memory_read`` counts each file it returns in that file's ``STATS#`` row (2.6b),
+once per turn and off the tool's return path (``apis/shared/memory/stats.py``).
+
+``memory_save`` also says when to save to "mine" and to make a preference's description
+the rule itself (G17): asked to "remember this just for me", Haiku 4.5 kept it in the
+conversation and never saved it, and a saved preference whose index line only named it
+("My status-check reply format") was not read in the next task.
 """
 
 from __future__ import annotations
@@ -25,9 +37,10 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Literal, Optional
 
-from strands import tool
+from strands import ToolContext, tool
 
 from apis.shared.auth.models import User
+from apis.shared.memory.hydration import MINE_MEMORY_MAX_TOKENS, PROJECT_MEMORY_MAX_TOKENS
 from apis.shared.memory.service import (
     MemoryEntryNotFoundError,
     MemorySpaceError,
@@ -35,7 +48,9 @@ from apis.shared.memory.service import (
     MemorySpacePermissionError,
     MemorySpaceService,
     MemoryValidationError,
+    SaveContext,
 )
+from apis.shared.memory.stats import record_read
 from apis.shared.projects.service import ProjectConflictError, ProjectError, ProjectNotFoundError
 
 logger = logging.getLogger(__name__)
@@ -43,9 +58,23 @@ logger = logging.getLogger(__name__)
 Scope = Literal["project", "mine"]
 SCOPES = ("project", "mine")
 _LABELS = {"project": "project memory", "mine": "your memory in this project"}
+# Each scope's index is injected under its own budget; a line past it would be cut off.
+_INDEX_BUDGETS = {"project": PROJECT_MEMORY_MAX_TOKENS, "mine": MINE_MEMORY_MAX_TOKENS}
 _INDEX_SLUG = "MEMORY.md"
 _ARCHIVED = "This project is archived, so its memory is read-only."
 _NOT_A_MEMBER = "You are no longer a member of this project, so its memory is unavailable."
+
+
+def _session_of(tool_context: Optional[ToolContext]) -> Optional[str]:
+    """The task this call runs in, for item provenance (2.5a-2), or None.
+
+    Read at call time from the agent's session manager (``config.session_id``),
+    as the context ledger does, so the tools stay memoized per member rather
+    than per session.
+    """
+    manager = getattr(getattr(tool_context, "agent", None), "_session_manager", None)
+    session_id = getattr(getattr(manager, "config", None), "session_id", None)
+    return session_id if isinstance(session_id, str) and session_id else None
 
 
 def _is_index_slug(slug: str) -> bool:
@@ -161,9 +190,24 @@ def _summary(entry: Any) -> dict[str, Any]:
     return row
 
 
+# Where a turn keeps the files it has already counted (Strands builds a fresh
+# ``invocation_state`` per invocation, so this is one turn's set).
+_STATS_SEEN_KEY = "memory_stats_seen"
+
+
+def _turn_reads(tool_context: Optional[ToolContext]) -> Optional[set]:
+    state = getattr(tool_context, "invocation_state", None)
+    if not isinstance(state, dict):
+        return None
+    seen = state.get(_STATS_SEEN_KEY)
+    if not isinstance(seen, set):
+        seen = state[_STATS_SEEN_KEY] = set()
+    return seen
+
+
 def make_project_memory_read_tool(scopes: ProjectMemoryScopes):
-    @tool
-    async def memory_read(scope: Scope, slug: str) -> dict[str, Any]:
+    @tool(context=True)
+    async def memory_read(scope: Scope, slug: str, tool_context: Optional[ToolContext] = None) -> dict[str, Any]:
         """Read one memory file in full.
 
         Items end with `<!-- e:… -->` anchors. Keep each anchor on its item when you
@@ -185,6 +229,8 @@ def make_project_memory_read_tool(scopes: ProjectMemoryScopes):
                 body = await asyncio.to_thread(service.read_index, space_id, user.user_id, user.email)
             else:
                 body = await asyncio.to_thread(service.read_entry, space_id, user.user_id, user.email, slug)
+                # Off the return path: hands one UpdateItem to a background thread (2.6b).
+                record_read(space_id, slug, seen=_turn_reads(tool_context))
         except MemoryEntryNotFoundError:
             return _error(f"There is no file '{slug}' in {_LABELS[scope]}.")
         except (MemorySpacePermissionError, MemorySpaceNotFoundError):
@@ -244,9 +290,17 @@ def make_project_memory_query_tool(scopes: ProjectMemoryScopes):
 
 
 def make_project_memory_save_tool(scopes: ProjectMemoryScopes):
-    @tool
-    async def memory_save(scope: Scope, slug: str, text: str, description: str = "") -> dict[str, Any]:
+    @tool(context=True)
+    async def memory_save(
+        scope: Scope, slug: str, text: str, description: str = "", tool_context: Optional[ToolContext] = None
+    ) -> dict[str, Any]:
         """Save a memory file, creating it or replacing it whole. It persists across conversations.
+
+        When the member asks you to remember something for them alone (a preference, how
+        they want answers, a standing request), save it to "mine" now: this conversation
+        alone will not carry it into their next task. Make `description` the rule itself,
+        such as "Status checks: reply 'STATUS-OK:' plus one sentence", because that line
+        is what their later tasks see.
 
         A file is a list with one fact per "- " line, such as "- The pilot starts
         March 3."; prose and headings are rejected. To change a file, `memory_read` it
@@ -254,17 +308,20 @@ def make_project_memory_save_tool(scopes: ProjectMemoryScopes):
         new items without one, and leave out items to remove them. Link other files
         with `[[name]]`.
 
-        "mine" is always yours to write. "project" is shared with every member and needs
-        the editor role; a viewer can save to "mine" instead or ask an editor. The slug
-        "MEMORY.md" replaces that scope's index, which appears in every conversation:
-        keep it to one short line per file, such as "- [[vendor]] — vendor decisions".
+        "mine" is the member's own and always writable. "project" is shared with every
+        member and needs the editor role; a viewer can save to "mine" instead, or use `memory_propose`. A new file
+        is added to that scope's MEMORY.md index, which appears in every conversation, as
+        one line built from `description`, so give a new file one. The slug "MEMORY.md"
+        replaces the index: `memory_read` it first and keep one short line per file, such
+        as "- [[vendor]] — vendor decisions".
 
         Args:
             scope: "project" or "mine".
             slug: The file name: lowercase words joined by "-", optionally grouped
                 with "/" (e.g. "decisions/vendor"), or "MEMORY.md" for the index.
             text: The file's items, one "- " line each.
-            description: Optional one-line summary shown in listings.
+            description: One line, shown in listings and in a new file's index line. For a
+                preference or rule, the rule itself.
         """
         if (bad := _bad_scope(scope)) is not None:
             return bad
@@ -279,12 +336,16 @@ def make_project_memory_save_tool(scopes: ProjectMemoryScopes):
                     return _error(f'{_missing(scope)} Save it to "mine" instead.')
             service = MemorySpaceService()
             if _is_index_slug(slug):
-                await asyncio.to_thread(service.update_index, space_id, user.user_id, user.email, text)
-                return {"content": [{"text": f"Updated the MEMORY.md index of {label}."}], "status": "success"}
+                saved = await asyncio.to_thread(service.save_index, space_id, user.user_id, user.email, text)
+                out = f"Updated the MEMORY.md index of {label}."
+                if saved.warnings:
+                    out += " Notes: " + " ".join(saved.warnings)
+                return {"content": [{"text": out}], "status": "success"}
+            context = SaveContext(source_session_id=_session_of(tool_context))
             result = await asyncio.to_thread(
                 lambda: service.save_entry(
                     space_id, user.user_id, user.email, slug, text,
-                    description=description or None, reason="save",
+                    description=description or None, reason="save", context=context,
                 )
             )
         except MemoryValidationError as exc:
@@ -297,9 +358,82 @@ def make_project_memory_save_tool(scopes: ProjectMemoryScopes):
             return _error(f"Could not save '{slug}': {exc}")
         except ProjectError as exc:  # the first save to "mine" creates the space
             return _error(_project_error(exc))
-        return {"content": [{"text": _saved(result, label)}], "status": "success"}
+        indexed = await _index_new_file(service, space_id, scopes, scope, result.ref)
+        return {"content": [{"text": _saved(result, label, indexed, _INDEX_BUDGETS[scope])}], "status": "success"}
 
     return memory_save
+
+
+def make_project_memory_propose_tool(scopes: ProjectMemoryScopes):
+    @tool(context=True)
+    async def memory_propose(
+        slug: str, text: str, description: str = "", tool_context: Optional[ToolContext] = None
+    ) -> dict[str, Any]:
+        """Propose a change to project memory for an editor to review.
+
+        Use it when the member can't save to "project" (a viewer), or asks for a
+        change to be reviewed first. The proposal is checked like `memory_save` and
+        then waits; nothing changes until an owner or editor approves it, and they
+        are notified. Write `text` exactly as for `memory_save`: the whole file, one
+        "- " item per line, keeping existing items' anchors.
+
+        Args:
+            slug: The project file to create or change, as in `memory_save`.
+            text: The whole proposed file, one "- " item per line.
+            description: One line describing the file.
+        """
+        from apis.shared.projects.memory_proposals import ProjectMemoryProposals, ProposalProjectError
+
+        user = scopes.user
+        session_id = _session_of(tool_context)
+        try:
+            proposal, warnings = await asyncio.to_thread(
+                lambda: ProjectMemoryProposals().propose(
+                    scopes.project_id, user, slug, text,
+                    description=description or None, proposer_kind="agent", source_session_id=session_id,
+                )
+            )
+        except MemoryValidationError as exc:
+            return _error(f"Not proposed: {exc}")
+        except ProposalProjectError as exc:
+            return _error(str(exc))
+        except (MemorySpacePermissionError, MemorySpaceNotFoundError):
+            return _error(_NOT_A_MEMBER)
+        except MemorySpaceError as exc:
+            return _error(f"Could not propose '{slug}': {exc}")
+        verb = "a change to" if proposal.base_version else "a new file,"
+        text_out = (
+            f'Proposed {verb} "{proposal.slug}" for review. The project\'s editors have been notified; '
+            "it takes effect only if one of them approves it."
+        )
+        if warnings:
+            text_out += " Notes: " + " ".join(warnings)
+        return {"content": [{"text": text_out}], "status": "success"}
+
+    return memory_propose
+
+
+async def _index_new_file(
+    service: MemorySpaceService, space_id: str, scopes: ProjectMemoryScopes, scope: str, ref: Any
+) -> Optional[str]:
+    """Add a just-created file to its scope's index; the outcome, or None if not tried or it failed.
+
+    An update is left alone: the file is either indexed already or was taken out
+    on purpose. A failure never fails the save, which has committed; the result
+    falls back to asking the model to add the line.
+    """
+    if ref.version != 1:
+        return None
+    user = scopes.user
+    try:
+        return await asyncio.to_thread(
+            lambda: service.add_index_link(
+                space_id, user.user_id, user.email, ref, max_tokens=_INDEX_BUDGETS[scope]
+            )
+        )
+    except Exception:
+        logger.warning("Could not index new memory file in space %s", space_id, exc_info=True)
+        return None
 
 
 async def _refusal(scopes: ProjectMemoryScopes, scope: str) -> str:
@@ -312,7 +446,7 @@ async def _refusal(scopes: ProjectMemoryScopes, scope: str) -> str:
     if scope == "project":
         return (
             'Only project editors can save to project memory. Save it to "mine" instead, '
-            "or ask an editor to add it."
+            "or use memory_propose so an editor can review and add it."
         )
     return _NOT_A_MEMBER
 
@@ -325,22 +459,34 @@ def _project_error(exc: ProjectError) -> str:
     return f"Could not set up your memory in this project: {exc}"
 
 
-def _saved(result: Any, label: str) -> str:
+def _saved(result: Any, label: str, indexed: Optional[str], budget: int) -> str:
     ref = result.ref
     text = f'Saved "{ref.slug}" to {label} (version {ref.version}'
     text += f", about {ref.tokens:,} tokens)." if ref.tokens is not None else ")."
-    if ref.version == 1:
-        text += f' To show it in every conversation, add a line like "- [[{ref.slug}]] — what it holds" to MEMORY.md.'
+    suggested = f'"- [[{ref.slug}]] — what it holds"'
+    if indexed == "added":
+        line = f"- [[{ref.slug}]] — {ref.description}" if ref.description else f"- [[{ref.slug}]]"
+        text += f' Added "{line}" to the MEMORY.md index, so it shows in every conversation.'
+        if not ref.description:
+            text += f" Replace that line with one like {suggested}."
+    elif indexed == "over_budget":
+        text += (
+            f" MEMORY.md is at its {budget:,}-token limit, so it was not indexed. Shorten the index "
+            f"(merge or drop lines), then add a line like {suggested}."
+        )
+    elif indexed is None and ref.version == 1:
+        text += f" To show it in every conversation, add a line like {suggested} to MEMORY.md."
     if result.warnings:
         text += " Notes: " + " ".join(result.warnings)
     return text
 
 
 def make_project_memory_tools(scopes: ProjectMemoryScopes) -> list:
-    """The harness's four memory tools, in a fixed order (their specs are prompt-cached)."""
+    """The harness's five memory tools, in a fixed order (their specs are prompt-cached)."""
     return [
         make_project_memory_list_tool(scopes),
         make_project_memory_read_tool(scopes),
         make_project_memory_query_tool(scopes),
         make_project_memory_save_tool(scopes),
+        make_project_memory_propose_tool(scopes),
     ]

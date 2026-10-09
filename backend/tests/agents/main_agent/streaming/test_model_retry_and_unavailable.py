@@ -131,3 +131,44 @@ class TestServiceUnavailableCopy:
         message, _ = _format_force_stop_message("ThrottlingException: too many requests")
         assert "too many requests" in message
         assert "temporarily unavailable" not in message
+
+
+class TestOpenAIResponsesFaultCopy:
+    """GPT-6 on bedrock-runtime words its outages in OpenAI's vocabulary, which
+    the Bedrock-shaped markers missed: both texts below reached prod users raw
+    as "Agent force-stopped: ..." (2026-09/10)."""
+
+    @pytest.mark.parametrize(
+        "reason",
+        [
+            "The service is temporarily unavailable.",
+            "The server had an error while processing your request. Sorry about that!",
+        ],
+    )
+    def test_force_stop_explains_the_outage(self, reason):
+        message, recoverable = _format_force_stop_message(reason)
+        assert "Agent force-stopped" not in message
+        assert "temporarily unavailable" in message
+        assert recoverable is True
+
+    def test_conversational_event_recognizes_openai_wording(self):
+        event = build_conversational_error_event(
+            code=ErrorCode.STREAM_ERROR,
+            error=Exception("The server had an error while processing your request."),
+        )
+        assert "temporarily unavailable" in event.message
+        assert event.recoverable is True
+
+
+class TestForceStopIsLogged:
+    def test_reason_reaches_the_runtime_log(self, caplog):
+        """The reason used to live only in the persisted chat message and the
+        OTel span, so a support ticket could not be traced from the logs."""
+        from agents.main_agent.streaming.stream_processor import _handle_completion_events
+
+        with caplog.at_level("WARNING"):
+            _handle_completion_events(
+                {"force_stop": True, "force_stop_reason": "The service is temporarily unavailable."}
+            )
+
+        assert "Agent force-stopped: The service is temporarily unavailable." in caplog.text

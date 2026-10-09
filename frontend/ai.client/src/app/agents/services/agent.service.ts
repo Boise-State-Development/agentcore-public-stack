@@ -10,6 +10,7 @@ import {
   CreateAgentRequest,
   UpdateAgentRequest,
 } from '../models/agent.model';
+import { SkillExposure } from '../models/store.model';
 
 /**
  * Signal-based state for the Agent Designer. Mirrors the assistants / memory-spaces
@@ -69,6 +70,12 @@ export class AgentService {
    * rather than as an error worth showing. */
   getRunnability(id: string): Promise<AgentRunnability> {
     return firstValueFrom(this.api.getRunnability(id));
+  }
+
+  /** The skills the owner wrote that sharing this Agent hands over (§6/D7). Owner only. */
+  async getShareSkillExposure(id: string): Promise<SkillExposure[]> {
+    const response = await firstValueFrom(this.api.getShareSkillExposure(id));
+    return response.exposedSkills ?? [];
   }
 
   createDraft(request: CreateAgentDraftRequest = {}): Promise<Agent> {

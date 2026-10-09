@@ -21,6 +21,7 @@ import { parseIso } from '../../../../utils/date';
 import { InViewDirective } from './in-view.directive';
 import { ProjectsService } from '../../../../projects/services/projects.service';
 import { FEATURES } from '../../../../services/features';
+import { UNTITLED_SESSION_TITLE } from './session-title-filter';
 
 /**
  * One row of a time bucket: a plain conversation, or the tasks of one project
@@ -385,7 +386,7 @@ export class SessionList {
    * @returns Display title
    */
   protected getSessionTitle(session: SessionMetadata): string {
-    return session.title || 'Untitled Session';
+    return session.title || UNTITLED_SESSION_TITLE;
   }
 
   /**

@@ -1,0 +1,49 @@
+// Build settings shared by every configuration. The project file carries no
+// settings of its own: anything a contributor would reach for lives here, in
+// Debug.xcconfig / Release.xcconfig, or in the two files below.
+//
+//   Version.xcconfig        MARKETING_VERSION, generated from the repo-root
+//                           VERSION file by scripts/common/sync-version.sh.
+//   Local.xcconfig          Signing team and bundle id. Untracked; copy
+//                           Local.xcconfig.example to create it. Not needed
+//                           for the simulator or CI.
+
+// Platform
+SDKROOT = iphoneos
+SUPPORTED_PLATFORMS = iphoneos iphonesimulator
+TARGETED_DEVICE_FAMILY = 1,2
+IPHONEOS_DEPLOYMENT_TARGET = 18.0
+
+// Swift: language mode 6 with complete concurrency checking, and every
+// warning is an error so a public repo never accumulates them.
+SWIFT_VERSION = 6.0
+SWIFT_STRICT_CONCURRENCY = complete
+SWIFT_TREAT_WARNINGS_AS_ERRORS = YES
+GCC_TREAT_WARNINGS_AS_ERRORS = YES
+SWIFT_EMIT_LOC_STRINGS = YES
+CLANG_ENABLE_MODULES = YES
+ALWAYS_SEARCH_USER_PATHS = NO
+ENABLE_USER_SCRIPT_SANDBOXING = YES
+ENABLE_PREVIEWS = YES
+LOCALIZATION_PREFERS_STRING_CATALOGS = YES
+DEAD_CODE_STRIPPING = YES
+
+// Identity. The bundle id below is a placeholder so an unsigned simulator
+// build works out of the box; a real id and DEVELOPMENT_TEAM come from
+// Local.xcconfig and are never committed.
+PRODUCT_NAME = $(TARGET_NAME)
+PRODUCT_BUNDLE_IDENTIFIER = org.example.agentcore
+CODE_SIGN_STYLE = Automatic
+DEVELOPMENT_TEAM =
+CURRENT_PROJECT_VERSION = 1
+
+// Generated Info.plist (no Info.plist file in the tree to merge-conflict on).
+GENERATE_INFOPLIST_FILE = YES
+INFOPLIST_KEY_CFBundleDisplayName = AgentCore
+INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES
+INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES
+INFOPLIST_KEY_UILaunchScreen_Generation = YES
+INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon
+ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor

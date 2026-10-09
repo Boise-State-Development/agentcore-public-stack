@@ -13,5 +13,6 @@ export const environment = {
     // with the development GitHub environment's CDK_*_ENABLED variables.
     features: {
         projects: true,
+        conversationSearch: true,
     } satisfies FeatureFlags,
 };

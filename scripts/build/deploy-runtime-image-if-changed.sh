@@ -32,6 +32,14 @@
 #   CREATE_FAILED | UPDATE_FAILED | DELETING — terminal/error
 # This script waits up to ~10 minutes for READY before issuing the
 # update, and then waits up to ~10 more for the update to settle.
+#
+# Fields CloudFormation owns (platformVersion, capacityProvider-
+# Configuration, ...) must survive the image roll unchanged. The
+# update payload therefore carries every field the CLI's own update
+# skeleton accepts, the script refuses to run on a CLI too old to
+# know platformVersion, and it fails the job if platformVersion
+# differs after the update. See docs/specs/agentcore-runtime-v2.md
+# §3 B1.
 #============================================================
 set -euo pipefail
 
@@ -132,9 +140,12 @@ CURRENT_URI="$(printf '%s' "$STATE_JSON" \
     | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d.get("agentRuntimeArtifact",{}).get("containerConfiguration",{}).get("containerUri","unknown"))')"
 CURRENT_STATUS="$(printf '%s' "$STATE_JSON" \
     | python3 -c 'import json,sys;print(json.load(sys.stdin).get("status","unknown"))')"
+CURRENT_PLATFORM_VERSION="$(printf '%s' "$STATE_JSON" \
+    | python3 -c 'import json,sys;print(json.load(sys.stdin).get("platformVersion",""))')"
 
 log "Current container URI: $CURRENT_URI"
 log "Current status: $CURRENT_STATUS"
+log "Current platform version: ${CURRENT_PLATFORM_VERSION:-<not reported>}"
 
 if [[ "$CURRENT_URI" == "$NEW_CONTAINER_URI" ]]; then
     log "Runtime already on $NEW_CONTAINER_URI — skipping update-agent-runtime."
@@ -142,7 +153,25 @@ if [[ "$CURRENT_URI" == "$NEW_CONTAINER_URI" ]]; then
     exit 0
 fi
 
-# 4. Wait for READY. Poll up to ~10 minutes (60 attempts × 10 sec).
+# 4. Confirm this CLI can carry platformVersion through the update.
+# A CLI whose service model predates the field never parses it out
+# of get-agent-runtime, so the full-replace update below would omit
+# it and could silently return a V2 runtime to the service default.
+# The update skeleton is generated locally from the CLI's own model,
+# and its top-level keys are exactly the fields the update accepts.
+UPDATE_SKELETON="$(aws bedrock-agentcore-control update-agent-runtime \
+    --generate-cli-skeleton input 2>/dev/null)" || {
+        log "This AWS CLI cannot generate an update-agent-runtime skeleton — is bedrock-agentcore-control available?"
+        exit 7
+    }
+if ! printf '%s' "$UPDATE_SKELETON" \
+    | python3 -c 'import json,sys;sys.exit(0 if "platformVersion" in json.load(sys.stdin) else 1)'; then
+    log "This AWS CLI ($(aws --version 2>&1)) does not know update-agent-runtime's platformVersion."
+    log "Updating with it would drop the runtime's platform version. Upgrade the CLI on this runner."
+    exit 7
+fi
+
+# 5. Wait for READY. Poll up to ~10 minutes (60 attempts × 10 sec).
 wait_for_ready() {
     local label="$1"
     local attempts=60
@@ -180,52 +209,44 @@ if [[ "$CURRENT_STATUS" != "READY" ]]; then
     wait_for_ready "pre-update" || exit 4
 fi
 
-# 5. Update. update-agent-runtime is a FULL replacement API — it
+# 6. Update. update-agent-runtime is a FULL replacement API — it
 # requires roleArn, networkConfiguration, and every other config
-# field, not just the new artifact. We rebuild the payload from
-# get-agent-runtime by allow-listing the fields the update API
-# accepts (the get response includes read-only fields like
+# field, not just the new artifact, and a field left out may reset
+# to the service default. We rebuild the payload from
+# get-agent-runtime, keeping every field the CLI's update skeleton
+# accepts (the get response also carries read-only fields like
 # agentRuntimeArn, agentRuntimeVersion, status, createdAt,
 # lastUpdatedAt, and workloadIdentityDetails that the update API
-# rejects). The container URI is the only field we mutate.
+# rejects). Deriving the set from the skeleton rather than a fixed
+# list means a field AWS adds later is carried, not dropped. The
+# container URI is the only field we mutate.
 log "Building update payload from current runtime state..."
 STATE_TMP="$(mktemp)"
+SKELETON_TMP="$(mktemp)"
 PAYLOAD_TMP="$(mktemp)"
-trap 'rm -f "$STATE_TMP" "$PAYLOAD_TMP"' EXIT
+trap 'rm -f "$STATE_TMP" "$SKELETON_TMP" "$PAYLOAD_TMP"' EXIT
 printf '%s' "$STATE_JSON" > "$STATE_TMP"
+printf '%s' "$UPDATE_SKELETON" > "$SKELETON_TMP"
 
-# Pass state as a tmpfile path (not stdin) so the heredoc owns stdin
+# Pass inputs as tmpfile paths (not stdin) so the heredoc owns stdin
 # for the python script body. python3 - SCRIPT_FROM_STDIN ARGV...
-python3 - "$STATE_TMP" "$NEW_CONTAINER_URI" "$PAYLOAD_TMP" <<'PYEOF'
+python3 - "$STATE_TMP" "$SKELETON_TMP" "$NEW_CONTAINER_URI" "$PAYLOAD_TMP" <<'PYEOF'
 import json
 import sys
 
 state_path = sys.argv[1]
-new_uri = sys.argv[2]
-out_path = sys.argv[3]
+skeleton_path = sys.argv[2]
+new_uri = sys.argv[3]
+out_path = sys.argv[4]
 
 with open(state_path) as fh:
     state = json.load(fh)
+with open(skeleton_path) as fh:
+    skeleton = json.load(fh)
 
-# Allow-list of fields update-agent-runtime accepts. Anything not in
-# this set is either read-only (agentRuntimeArn, agentRuntimeVersion,
-# status, createdAt, lastUpdatedAt, workloadIdentityDetails) or just
-# absent from the update API surface. Pulled from
-# `aws bedrock-agentcore-control update-agent-runtime --generate-cli-skeleton`.
-ALLOWED = {
-    "agentRuntimeId",
-    "agentRuntimeArtifact",
-    "roleArn",
-    "networkConfiguration",
-    "description",
-    "authorizerConfiguration",
-    "requestHeaderConfiguration",
-    "protocolConfiguration",
-    "lifecycleConfiguration",
-    "metadataConfiguration",
-    "environmentVariables",
-    "filesystemConfigurations",
-}
+# clientToken is an idempotency token, not runtime state; let the CLI
+# generate a fresh one.
+ALLOWED = set(skeleton) - {"clientToken"}
 
 payload = {k: v for k, v in state.items() if k in ALLOWED}
 
@@ -247,8 +268,28 @@ aws bedrock-agentcore-control update-agent-runtime \
     --output text \
     --query 'agentRuntimeArn' >/dev/null
 
-# 6. Wait for the update to settle.
+# 7. Wait for the update to settle.
 wait_for_ready "post-update" || exit 5
+
+# 8. The platform version is CloudFormation's to set, never this
+# script's. If the update changed it, fail loudly: a runtime that
+# flips between V1 and V2 on every backend deploy is otherwise
+# invisible until the cost or latency numbers stop making sense.
+if [[ -n "$CURRENT_PLATFORM_VERSION" ]]; then
+    POST_PLATFORM_VERSION="$(aws bedrock-agentcore-control get-agent-runtime \
+        --region "$AWS_REGION" \
+        --agent-runtime-id "$RUNTIME_ID" \
+        --output json \
+        | python3 -c 'import json,sys;print(json.load(sys.stdin).get("platformVersion",""))')"
+    if [[ "$POST_PLATFORM_VERSION" != "$CURRENT_PLATFORM_VERSION" ]]; then
+        log "Platform version changed during the image update: '${CURRENT_PLATFORM_VERSION}' -> '${POST_PLATFORM_VERSION:-<not reported>}'."
+        log "Re-run platform.yml to restore the version CloudFormation declares, and fix this script before the next backend deploy."
+        exit 8
+    fi
+    log "Platform version unchanged: $POST_PLATFORM_VERSION"
+else
+    log "WARNING: get-agent-runtime reported no platformVersion before the update; nothing to verify."
+fi
 
 log "Done. Runtime now at $NEW_CONTAINER_URI"
 echo "$IMAGE_TAG"

@@ -10,13 +10,11 @@
   (dismissed)="cancel()">
   <div
     class="dialog-panel relative flex max-h-[85vh] w-full max-w-xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl dark:bg-gray-800 dark:outline dark:-outline-offset-1 dark:outline-white/10"
-    role="dialog"
-    aria-modal="true"
-    aria-labelledby="fsb-title"
     (click)="$event.stopPropagation()"
   >
     <div class="flex items-center justify-between gap-4 border-b border-gray-200 px-5 py-4 dark:border-gray-700">
-      <h2 id="fsb-title" class="text-base/7 font-semibold text-gray-900 dark:text-white">
+      <!-- One heading whose text follows the view: it names CDK's dialog container. -->
+      <h2 appDialogTitle class="text-base/7 font-semibold text-gray-900 dark:text-white">
         @if (isPicker) {
           Choose a destination folder
         } @else if (view() === 'browser' && connector(); as conn) {

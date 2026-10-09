@@ -12,6 +12,13 @@ Row shapes (see ``models.py``):
   - ``PK=SPACE#{id}  SK=INDEX``
   - ``PK=SPACE#{id}  SK=MEMBER#{email}``  + ``GSI2PK=MEMBER#{email}``
   - ``PK=SPACE#{id}  SK=FILEVER#{slug}#{n:06d}``  (per-file history, no index)
+  - ``PK=SPACE#{id}  SK=PROPOSAL#{proposalId}``    (review queue, no index: a space's
+    proposals are one ``Query``, filtered on ``state``)
+  - ``PK=SPACE#{id}  SK=PROV#{slug}``             (each item's provenance, by anchor)
+  - ``PK=SPACE#{id}  SK=ARCHIVE#{at}#{anchor}``   (items that left a file; expire on ``ttl``)
+  - ``PK=SPACE#{id}  SK=SNAPSHOT#{runId}``        (a maintenance run and its snapshot; expire on ``ttl``)
+  - ``PK=SPACE#{id}  SK=MAINTENANCE_LOCK``        (the one run a space may have in flight)
+  - ``PK=SPACE#{id}  SK=STATS#{slug}``            (how often tasks read a file; one ``UpdateItem`` per read)
 """
 
 from __future__ import annotations
@@ -31,7 +38,18 @@ except ImportError:  # pragma: no cover - exercised only without boto3
     Key = None  # type: ignore[assignment]
     ClientError = Exception  # type: ignore[assignment, misc]
 
-from .models import FileVersion, MemoryEntryRef, MemoryIndex, MemorySpace, SpaceMember
+from .models import (
+    ArchivedItem,
+    FileVersion,
+    ItemProvenance,
+    MaintenanceRun,
+    MemoryEntryRef,
+    MemoryIndex,
+    MemoryProposal,
+    MemorySpace,
+    RetrievalStats,
+    SpaceMember,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +76,12 @@ _META_SK = "META"
 _INDEX_SK = "INDEX"
 _MEMBER_SK_PREFIX = "MEMBER#"
 _FILEVER_SK_PREFIX = "FILEVER#"
+_PROPOSAL_SK_PREFIX = "PROPOSAL#"
+_PROV_SK_PREFIX = "PROV#"
+_ARCHIVE_SK_PREFIX = "ARCHIVE#"
+_SNAPSHOT_SK_PREFIX = "SNAPSHOT#"
+_MAINTENANCE_LOCK_SK = "MAINTENANCE_LOCK"
+_STATS_SK_PREFIX = "STATS#"
 
 MANIFEST_MAX_BYTES = 300 * 1024
 
@@ -186,6 +210,8 @@ class MemorySpaceRepository:
             entry["itemCount"] = int(r.item_count)
         if r.archived:
             entry["archived"] = True
+        if r.pinned:
+            entry["pinned"] = list(r.pinned)
         if r.version:
             entry["version"] = int(r.version)
         return entry
@@ -219,6 +245,7 @@ class MemorySpaceRepository:
                 tokens_method=r.get("tokensMethod"),
                 item_count=int(r["itemCount"]) if r.get("itemCount") is not None else None,
                 archived=bool(r.get("archived", False)),
+                pinned=list(r.get("pinned") or []),
                 version=int(r.get("version", 0)),
             )
             for r in (item.get("entries") or [])
@@ -255,6 +282,33 @@ class MemorySpaceRepository:
 
     def put_space(self, space: MemorySpace) -> None:
         self._table.put_item(Item=self._space_to_item(space))
+
+    def put_space_if_index_unchanged(self, space: MemorySpace, expected_index_hash: Optional[str]) -> None:
+        """Persist META only if its ``MEMORY.md`` is still the one the caller read.
+
+        For a read-modify-write of the index (an automatic index line), where two
+        members saving at once must not drop each other's line. ``None`` expects
+        a space with no index yet. Raises :class:`OptimisticLockError` on a mismatch.
+        """
+        if expected_index_hash is None:
+            condition = "attribute_exists(PK) AND attribute_not_exists(#h)"
+            values: Optional[dict] = None
+        else:
+            condition = "#h = :expected"
+            values = {":expected": expected_index_hash}
+        kwargs: dict = {
+            "Item": self._space_to_item(space),
+            "ConditionExpression": condition,
+            "ExpressionAttributeNames": {"#h": "indexContentHash"},
+        }
+        if values is not None:
+            kwargs["ExpressionAttributeValues"] = values
+        try:
+            self._table.put_item(**kwargs)
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code", "") == "ConditionalCheckFailedException":
+                raise OptimisticLockError(f"index of space '{space.space_id}' changed concurrently") from e
+            raise
 
     def get_space(self, space_id: str) -> Optional[MemorySpace]:
         resp = self._table.get_item(
@@ -442,6 +496,102 @@ class MemorySpaceRepository:
             versions = [v for v in versions if v.slug == slug]
         return versions
 
+    # ---- proposals (PROPOSAL) --------------------------------------------
+
+    @staticmethod
+    def _proposal_key(space_id: str, proposal_id: str) -> dict:
+        return {"PK": _space_pk(space_id), "SK": f"{_PROPOSAL_SK_PREFIX}{proposal_id}"}
+
+    def put_proposal(self, space_id: str, proposal: MemoryProposal, *, expected_state: Optional[str] = None) -> None:
+        """Write a proposal. ``expected_state`` makes it a conditional transition.
+
+        Raises :class:`OptimisticLockError` when the stored row is no longer in
+        ``expected_state`` (another reviewer decided it first). A ``PutItem``
+        rather than an ``UpdateItem``: the Runtime role, which creates proposals,
+        has no ``UpdateItem`` on this table.
+        """
+        item = {**self._proposal_key(space_id, proposal.proposal_id),
+                **_to_dynamo(proposal.model_dump(by_alias=True, exclude_none=True))}
+        kwargs: Dict[str, Any] = {"Item": item}
+        if expected_state is not None:
+            kwargs["ConditionExpression"] = "#s = :expected"
+            kwargs["ExpressionAttributeNames"] = {"#s": "state"}
+            kwargs["ExpressionAttributeValues"] = {":expected": expected_state}
+        try:
+            self._table.put_item(**kwargs)
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+                raise OptimisticLockError(f"proposal {proposal.proposal_id} is no longer {expected_state}") from exc
+            raise
+
+    def get_proposal(self, space_id: str, proposal_id: str) -> Optional[MemoryProposal]:
+        item = self._table.get_item(Key=self._proposal_key(space_id, proposal_id)).get("Item")
+        if not item:
+            return None
+        return MemoryProposal.model_validate(_from_dynamo({k: v for k, v in item.items() if k not in ("PK", "SK")}))
+
+    def list_proposals(self, space_id: str) -> List[MemoryProposal]:
+        """Every proposal in a space, oldest first (ids sort by creation time)."""
+        items = self._query_pages(
+            KeyConditionExpression=Key("PK").eq(_space_pk(space_id)) & Key("SK").begins_with(_PROPOSAL_SK_PREFIX)
+        )
+        return [
+            MemoryProposal.model_validate(_from_dynamo({k: v for k, v in i.items() if k not in ("PK", "SK")}))
+            for i in items
+        ]
+
+    # ---- item provenance (PROV) and archive (ARCHIVE) -------------------
+
+    def get_provenance(self, space_id: str, slug: str) -> Dict[str, ItemProvenance]:
+        """``{anchor: provenance}`` for one file; empty for a file saved before 2.5a-2."""
+        item = self._table.get_item(Key={"PK": _space_pk(space_id), "SK": f"{_PROV_SK_PREFIX}{slug}"}).get("Item")
+        if not item:
+            return {}
+        return {a: ItemProvenance.model_validate(v) for a, v in _from_dynamo(item.get("items") or {}).items()}
+
+    def put_provenance(self, space_id: str, slug: str, provenance: Dict[str, ItemProvenance]) -> None:
+        self._table.put_item(Item={
+            "PK": _space_pk(space_id),
+            "SK": f"{_PROV_SK_PREFIX}{slug}",
+            "slug": slug,
+            "items": {a: p.model_dump(by_alias=True, exclude_none=True) for a, p in provenance.items()},
+        })
+
+    def delete_provenance(self, space_id: str, slug: str) -> None:
+        self._table.delete_item(Key={"PK": _space_pk(space_id), "SK": f"{_PROV_SK_PREFIX}{slug}"})
+
+    @staticmethod
+    def _archive_key(space_id: str, archive_id: str) -> dict:
+        return {"PK": _space_pk(space_id), "SK": f"{_ARCHIVE_SK_PREFIX}{archive_id}"}
+
+    def put_archived_items(self, space_id: str, items: List[ArchivedItem], ttl: int) -> None:
+        with self._table.batch_writer() as batch:
+            for a in items:
+                batch.put_item(Item={
+                    **self._archive_key(space_id, a.archive_id),
+                    **a.model_dump(by_alias=True, exclude_none=True),
+                    "ttl": int(ttl),
+                })
+
+    def get_archived_item(self, space_id: str, archive_id: str) -> Optional[ArchivedItem]:
+        item = self._table.get_item(Key=self._archive_key(space_id, archive_id)).get("Item")
+        if not item:
+            return None
+        return ArchivedItem.model_validate(_from_dynamo({k: v for k, v in item.items() if k not in ("PK", "SK", "ttl")}))
+
+    def list_archived_items(self, space_id: str) -> List[ArchivedItem]:
+        """Oldest first. DynamoDB deletes expired rows lazily, so callers drop those past ``restorableUntil``."""
+        items = self._query_pages(
+            KeyConditionExpression=Key("PK").eq(_space_pk(space_id)) & Key("SK").begins_with(_ARCHIVE_SK_PREFIX)
+        )
+        return [
+            ArchivedItem.model_validate(_from_dynamo({k: v for k, v in i.items() if k not in ("PK", "SK", "ttl")}))
+            for i in items
+        ]
+
+    def delete_archived_item(self, space_id: str, archive_id: str) -> None:
+        self._table.delete_item(Key=self._archive_key(space_id, archive_id))
+
     def delete_file_versions(self, space_id: str, slug: str) -> List[FileVersion]:
         """Delete every version row of one file; return what was deleted."""
         versions = self.list_file_versions(space_id, slug)
@@ -449,3 +599,100 @@ class MemorySpaceRepository:
             for v in versions:
                 batch.delete_item(Key={"PK": _space_pk(space_id), "SK": _file_version_sk(v.slug, v.version)})
         return versions
+
+    # ---- maintenance runs (SNAPSHOT) and their lock (Shared Projects 2.6) -----
+
+    @staticmethod
+    def _run_key(space_id: str, run_id: str) -> dict:
+        return {"PK": _space_pk(space_id), "SK": f"{_SNAPSHOT_SK_PREFIX}{run_id}"}
+
+    def put_maintenance_run(self, run: MaintenanceRun, ttl: int) -> None:
+        self._table.put_item(Item={
+            **self._run_key(run.space_id, run.run_id),
+            **_to_dynamo(run.model_dump(by_alias=True, exclude_none=True)),
+            "ttl": int(ttl),
+        })
+
+    def get_maintenance_run(self, space_id: str, run_id: str) -> Optional[MaintenanceRun]:
+        item = self._table.get_item(Key=self._run_key(space_id, run_id)).get("Item")
+        if not item:
+            return None
+        return MaintenanceRun.model_validate(_from_dynamo({k: v for k, v in item.items() if k not in ("PK", "SK", "ttl")}))
+
+    def list_maintenance_runs(self, space_id: str, limit: int) -> List[MaintenanceRun]:
+        """Newest first (run ids sort by creation time)."""
+        resp = self._table.query(
+            KeyConditionExpression=Key("PK").eq(_space_pk(space_id)) & Key("SK").begins_with(_SNAPSHOT_SK_PREFIX),
+            ScanIndexForward=False,
+            Limit=limit,
+        )
+        return [
+            MaintenanceRun.model_validate(_from_dynamo({k: v for k, v in i.items() if k not in ("PK", "SK", "ttl")}))
+            for i in resp.get("Items", [])
+        ]
+
+    def acquire_maintenance_lock(self, space_id: str, run_id: str, *, now: int, lease_seconds: int) -> bool:
+        """Claim the space's one maintenance slot. False while another run holds an unexpired lease.
+
+        The lease outlives the worker's 15-minute ceiling, so a worker that died
+        without releasing it frees the slot on its own.
+        """
+        try:
+            self._table.put_item(
+                Item={
+                    "PK": _space_pk(space_id),
+                    "SK": _MAINTENANCE_LOCK_SK,
+                    "runId": run_id,
+                    "expiresAt": now + lease_seconds,
+                    "ttl": now + lease_seconds,
+                },
+                ConditionExpression="attribute_not_exists(PK) OR expiresAt < :now",
+                ExpressionAttributeValues={":now": now},
+            )
+            return True
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+                return False
+            raise
+
+    def release_maintenance_lock(self, space_id: str, run_id: str) -> None:
+        """Free the slot if this run still holds it."""
+        try:
+            self._table.delete_item(
+                Key={"PK": _space_pk(space_id), "SK": _MAINTENANCE_LOCK_SK},
+                ConditionExpression="runId = :run",
+                ExpressionAttributeValues={":run": run_id},
+            )
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+                raise
+
+    # ---- retrieval stats (STATS, Shared Projects 2.6b) --------------------
+
+    def record_retrieval(self, space_id: str, slug: str, at: str) -> None:
+        """Count one read of one file by a task. One ``UpdateItem``, no read first.
+
+        The attributes it touches are exactly the ones the Runtime's grant
+        allows (``dynamodb:Attributes``), so keep the two lists in step:
+        ``PK``, ``SK``, ``slug``, ``retrievalCount``, ``lastRetrievedAt``.
+        """
+        self._table.update_item(
+            Key={"PK": _space_pk(space_id), "SK": f"{_STATS_SK_PREFIX}{slug}"},
+            UpdateExpression="SET slug = :slug, lastRetrievedAt = :at ADD retrievalCount :one",
+            ExpressionAttributeValues={":slug": slug, ":at": at, ":one": 1},
+            ReturnValues="NONE",
+        )
+
+    def list_retrieval_stats(self, space_id: str) -> Dict[str, RetrievalStats]:
+        """``{slug: stats}`` for every file a task has read."""
+        items = self._query_pages(
+            KeyConditionExpression=Key("PK").eq(_space_pk(space_id)) & Key("SK").begins_with(_STATS_SK_PREFIX)
+        )
+        stats = (
+            RetrievalStats.model_validate(_from_dynamo({k: v for k, v in i.items() if k not in ("PK", "SK")}))
+            for i in items
+        )
+        return {s.slug: s for s in stats if s.slug}
+
+    def delete_retrieval_stats(self, space_id: str, slug: str) -> None:
+        self._table.delete_item(Key={"PK": _space_pk(space_id), "SK": f"{_STATS_SK_PREFIX}{slug}"})

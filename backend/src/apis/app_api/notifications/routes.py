@@ -1,7 +1,9 @@
 """``/notifications`` — the signed-in user's in-app inbox (shared-projects §5, PR-1.7).
 
 Addressed by the caller's email, the same identity project membership uses, so
-an invitation sent before someone ever signed in is waiting when they do.
+an invitation sent before someone ever signed in is waiting when they do. Who
+did it is stored as an email and named on read (``actorName``, from the
+directory), so a name is never older than the directory's.
 Not behind ``PROJECTS_ENABLED``: the inbox is generic, and while projects are
 off it is simply empty rather than a 404 the SPA's badge would have to handle.
 """
@@ -16,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.models import User
+from apis.shared.directory import display_names
 from apis.shared.notifications import Notification, NotificationService
 
 logger = logging.getLogger(__name__)
@@ -32,10 +35,14 @@ def _svc() -> NotificationService:
     return _service
 
 
+class NotificationResponse(Notification):
+    actor_name: Optional[str] = Field(None, alias="actorName", description="Null when the directory has no name")
+
+
 class NotificationsResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    notifications: List[Notification] = Field(..., description="Newest first")
+    notifications: List[NotificationResponse] = Field(..., description="Newest first")
     unread_count: int = Field(..., alias="unreadCount")
     next_cursor: Optional[str] = Field(None, alias="nextCursor")
 
@@ -57,7 +64,14 @@ def list_notifications(
     except Exception:
         logger.exception("Failed to read notifications")
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Notifications are unavailable.")
-    return NotificationsResponse(notifications=items, unread_count=unread, next_cursor=next_cursor)
+    names = display_names({n.actor_email for n in items if n.actor_email})
+    return NotificationsResponse(
+        notifications=[
+            NotificationResponse(**n.model_dump(), actor_name=names.get(n.actor_email or "")) for n in items
+        ],
+        unread_count=unread,
+        next_cursor=next_cursor,
+    )
 
 
 @router.post("/read-all", response_model=MarkAllReadResponse)

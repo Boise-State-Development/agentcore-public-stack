@@ -22,10 +22,8 @@ import { PreviewSessionService } from '../../../shared/preview/preview-session.s
  *
  * **The gap this closes.** A reviewer could read a name and a category and, once the
  * submission review page arrived, a system prompt — but had no way to find out what the
- * agent actually *does*. `/assistants/{id}/test-chat` is not that harness: it is
- * owner/editor-only, needs processed documents, and passes `enabled_tools=None`, so it
- * exercises none of the agent's bindings. Chatting with the agent normally is not it
- * either, for a subtler reason — `resolve_invocation_agent` hands a non-owner the
+ * agent actually *does*. Chatting with the agent normally is not that harness, for a
+ * subtle reason — `resolve_invocation_agent` hands a non-owner the
  * *published* snapshot or the live draft, so a reviewer would be test-driving anything
  * except the version they are about to approve.
  *

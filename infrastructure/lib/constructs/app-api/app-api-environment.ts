@@ -98,6 +98,7 @@ export interface AppApiSsmParams {
   sharedConversationsTableName: string;
   sharedConversationsTableArn: string;
   sharedConversationsBucketName: string;
+  conversationArchiveBucketName: string;
   memoryId: string;
   // Memory Spaces
   memorySpacesTableName: string;
@@ -221,6 +222,7 @@ export function resolveAppApiParams(
     sharedConversationsTableName: refs.sharedConversationsTable.tableName,
     sharedConversationsTableArn: refs.sharedConversationsTable.tableArn,
     sharedConversationsBucketName: refs.sharedConversationsBucket.bucketName,
+    conversationArchiveBucketName: refs.conversationArchiveBucket.bucketName,
     memoryId: overrides.memoryId,
     // Memory Spaces
     memorySpacesTableName: refs.memorySpacesTable.tableName,
@@ -319,6 +321,20 @@ export function buildAppApiEnvironment(
     COGNITO_REGION: config.awsRegion,
     SHARED_CONVERSATIONS_TABLE_NAME: params.sharedConversationsTableName,
     SHARED_CONVERSATIONS_BUCKET_NAME: params.sharedConversationsBucketName,
+    // Conversation archive (docs/specs/conversation-search.md §4). The bucket is
+    // always wired so a session delete removes its archived turns even after a
+    // deployment turns indexing off; CONVERSATION_INDEX_ENABLED gates writes
+    // only (the fork copy path here, the after-`done` put on the runtime).
+    CONVERSATION_ARCHIVE_BUCKET_NAME: params.conversationArchiveBucketName,
+    CONVERSATION_INDEX_ENABLED: config.conversationIndex.enabled ? 'true' : 'false',
+    // Conversation search (§5): GET /sessions/search 404s while this is off. The
+    // retention setting is the search's read-path belt (§3): a turn older than
+    // this is dropped from results even before the reconciler deletes it.
+    CONVERSATION_SEARCH_ENABLED: config.conversationSearch.enabled ? 'true' : 'false',
+    CONVERSATION_RETENTION_DAYS: String(config.conversationRetentionDays),
+    // Per-task cap on concurrent api-converse Bedrock calls. Read by
+    // apis/app_api/chat/bedrock_offload.py, which sizes its worker pool from it.
+    API_CONVERSE_MAX_IN_FLIGHT: String(config.appApi.apiConverseMaxInFlight),
     BFF_SESSIONS_TABLE_NAME: params.bffSessionsTableName,
     BFF_COOKIE_SIGNING_KEY_ARN: params.bffCookieSigningKeyArn,
     BFF_COOKIE_DATA_KEY_SECRET_ARN: params.bffCookieDataKeySecretArn,
@@ -357,6 +373,12 @@ export function buildAppApiEnvironment(
     // is always wired; only PROJECTS_ENABLED gates whether the routes mount.
     PROJECTS_ENABLED: config.projects.enabled ? 'true' : 'false',
     DYNAMODB_PROJECTS_TABLE_NAME: params.projectsTableName,
+    // Project-memory content lint (Shared Projects 2.7): the Memory page's saves,
+    // proposals and restores, and the flags it shows on read.
+    MEMORY_LINT_MODE: config.memoryLint.mode,
+    ...(config.memoryLint.sensitivePatterns
+      ? { MEMORY_SENSITIVE_PATTERNS: config.memoryLint.sensitivePatterns }
+      : {}),
     // Skills v2 (default ON with a kill switch per env). Skills live in the
     // shared app-roles table, which is already wired, so this only gates route
     // mounting. Cohort access is the separate `skills` RBAC capability — this

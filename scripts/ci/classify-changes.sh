@@ -4,7 +4,7 @@
 # stdin:  one repository-relative path per line (the PR's changed files; a
 #         rename is listed under both its old and new name).
 # stdout: `key=true|false` lines for $GITHUB_OUTPUT, one per tests.yml suite:
-#         backend, backend_contracts, frontend, infra, load, scripts.
+#         backend, backend_contracts, frontend, infra, ios, load, scripts.
 #
 # Called by the `changes` job in .github/workflows/ci.yml. Before it existed
 # the PR gate ran every suite on every pull request, so a two-line docs change
@@ -24,6 +24,7 @@ backend=false
 backend_contracts=false
 frontend=false
 infra=false
+ios=false
 load=false
 scripts=false
 all=false
@@ -47,6 +48,9 @@ while IFS= read -r path; do
     # fail there rather than produce a load test that never sees a turn end.
     backend/*) backend=true; load=true ;;
     frontend/*) frontend=true ;;
+    # The iOS job runs on a macOS runner (about ten times the per-minute
+    # cost of Ubuntu), so it runs only for changes under ios/.
+    ios/*) ios=true ;;
     # The backend supply-chain suite reads the CDK tree side by side with the
     # env-var readers; pending-backfills.test.ts reads RELEASE_NOTES.md.
     infrastructure/*|RELEASE_NOTES.md) infra=true; backend_contracts=true ;;
@@ -71,6 +75,7 @@ if [ "$seen" -eq 0 ] || [ "$all" = true ]; then
   backend_contracts=true
   frontend=true
   infra=true
+  ios=true
   load=true
   scripts=true
 fi
@@ -79,5 +84,6 @@ printf 'backend=%s\n' "$backend"
 printf 'backend_contracts=%s\n' "$backend_contracts"
 printf 'frontend=%s\n' "$frontend"
 printf 'infra=%s\n' "$infra"
+printf 'ios=%s\n' "$ios"
 printf 'load=%s\n' "$load"
 printf 'scripts=%s\n' "$scripts"

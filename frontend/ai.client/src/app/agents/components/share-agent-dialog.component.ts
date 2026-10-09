@@ -4,7 +4,6 @@ import { FormsModule } from '@angular/forms';
 import { Dialog, DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
-  heroXMark,
   heroLink,
   heroMagnifyingGlass,
   heroPlus,
@@ -14,6 +13,7 @@ import {
   heroUsers,
   heroGlobeAlt,
   heroBuildingStorefront,
+  heroEye,
 } from '@ng-icons/heroicons/outline';
 import { Subject, debounceTime, distinctUntilChanged, switchMap, catchError, of, firstValueFrom } from 'rxjs';
 import {
@@ -31,7 +31,7 @@ import {
 import { AgentService } from '../services/agent.service';
 import { AgentListingService } from '../services/agent-listing.service';
 import { AgentListingBlock } from '../models/agent.model';
-import { ListingState } from '../models/store.model';
+import { ListingState, SkillExposure } from '../models/store.model';
 import { AgentIconComponent } from './agent-icon.component';
 import { ListingStatusComponent } from './listing-status.component';
 import {
@@ -39,7 +39,7 @@ import {
   SubmitListingDialogData,
   SubmitListingDialogResult,
 } from './submit-listing-dialog.component';
-import { DialogDismissDirective } from '../../components/dialog/dialog-dismiss.directive';
+import { DialogShellComponent } from '../../components/dialog/dialog-shell.component';
 
 /** Good enough to tell an address from a half-typed name — the backend is the authority. */
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -88,10 +88,9 @@ export type ShareAgentDialogResult = { action: 'shared' } | undefined;
 @Component({
   selector: 'app-share-agent-dialog',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DialogDismissDirective, FormsModule, NgIcon, AgentIconComponent, ListingStatusComponent],
+  imports: [DialogShellComponent, FormsModule, NgIcon, AgentIconComponent, ListingStatusComponent],
   providers: [
     provideIcons({
-      heroXMark,
       heroLink,
       heroMagnifyingGlass,
       heroPlus,
@@ -101,415 +100,389 @@ export type ShareAgentDialogResult = { action: 'shared' } | undefined;
       heroUsers,
       heroGlobeAlt,
       heroBuildingStorefront,
+      heroEye,
     }),
   ],
-  host: {
-    class: 'block',
-    '(keydown.escape)': 'onCancel()',
-  },
+  host: { class: 'block' },
   template: `
-    <div
-      class="dialog-backdrop fixed inset-0 bg-gray-900/40 dark:bg-gray-900/70"
-      aria-hidden="true"
-    ></div>
+    <app-dialog-shell
+      [title]="'Share ' + data.agent.name"
+      description="Choose who can open this agent, and whether it is listed in the store."
+      (closed)="onCancel()"
+    >
+      <app-agent-icon
+        dialogIcon
+        [agentId]="data.agent.assistantId"
+        [iconUrl]="data.agent.iconUrl"
+        [emoji]="data.agent.emoji"
+        [size]="40"
+      />
 
-    <div class="fixed inset-0 z-10 flex min-h-full items-end justify-center p-4 sm:items-center sm:p-0"
-      appDialogDismiss
-      (dismissed)="onCancel()">
-      <div
-        class="dialog-panel relative flex max-h-[90vh] w-full flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white text-left shadow-xl sm:my-8 sm:max-w-lg dark:border-gray-700 dark:bg-gray-800"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="share-agent-title"
-        aria-describedby="share-agent-description"
-      >
-        <!-- Header -->
-        <div class="flex items-start gap-3 px-6 pt-5">
-          <app-agent-icon
-            [agentId]="data.agent.assistantId"
-            [iconUrl]="data.agent.iconUrl"
-            [emoji]="data.agent.emoji"
-            [size]="40"
-          />
-          <div class="min-w-0 flex-1">
-            <h2 id="share-agent-title" class="truncate text-lg/7 font-semibold text-gray-900 dark:text-white">
-              Share {{ data.agent.name }}
-            </h2>
-            <p id="share-agent-description" class="mt-0.5 text-sm/6 text-gray-600 dark:text-gray-400">
-              Choose who can open this agent, and whether it is listed in the store.
-            </p>
-          </div>
-          <button
-            type="button"
-            (click)="onCancel()"
-            aria-label="Close dialog"
-            class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
-          >
-            <ng-icon name="heroXMark" class="size-5" aria-hidden="true" />
-          </button>
-        </div>
+      @if (!canManageShares()) {
+        <p class="rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm/6 text-gray-600 dark:border-gray-700 dark:bg-white/5 dark:text-gray-400">
+          Only the owner can change who this agent is shared with. You can still copy
+          the link below.
+        </p>
+      }
 
-        <div class="flex-1 overflow-y-auto px-6 py-5">
-          @if (!canManageShares()) {
-            <p class="rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm/6 text-gray-600 dark:border-gray-700 dark:bg-white/5 dark:text-gray-400">
-              Only the owner can change who this agent is shared with. You can still copy
-              the link below.
-            </p>
-          }
-
-          @if (canManageShares()) {
-            <!--
-              One field, not two modes. This was a "Search users" / "Add by email" tab
-              pair, which asked the user to classify what they were about to type before
-              typing it. The field resolves that itself: names and partial emails hit the
-              directory, and anything that already parses as an address (or a
-              comma-separated run of them) can be added outright — so someone who has not
-              signed in yet is reachable without switching anything.
-            -->
-            <section>
-              <h3 class="text-sm/6 font-semibold text-gray-900 dark:text-white">Add people</h3>
-              <div class="mt-2 flex gap-2">
-                <div class="relative min-w-0 flex-1">
-                  <ng-icon
-                    name="heroMagnifyingGlass"
-                    class="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-gray-400 dark:text-gray-500"
-                    aria-hidden="true"
-                  />
-                  <label for="share-add-people" class="sr-only">Add people by name or email</label>
-                  <input
-                    id="share-add-people"
-                    type="text"
-                    autocomplete="off"
-                    [ngModel]="query()"
-                    (ngModelChange)="onQueryChange($event)"
-                    (keydown.enter)="addTypedEmails()"
-                    placeholder="Name or email address"
-                    class="block w-full rounded-2xl border border-gray-300 bg-white py-2 pl-9 pr-3 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white dark:placeholder:text-gray-500"
-                  />
-                </div>
-                <div class="relative inline-flex shrink-0">
-                  <label for="share-new-permission" class="sr-only">Permission for people you add</label>
-                  <select
-                    id="share-new-permission"
-                    [ngModel]="newPermission()"
-                    (ngModelChange)="newPermission.set($event)"
-                    class="appearance-none rounded-2xl border border-gray-300 bg-white py-2 pl-3 pr-9 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
-                  >
-                    <option value="viewer">Can view</option>
-                    <option value="editor">Can edit</option>
-                  </select>
-                  <ng-icon
-                    name="heroChevronDown"
-                    class="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-gray-400 dark:text-gray-500"
-                    aria-hidden="true"
-                  />
-                </div>
-              </div>
-
-              @if (query().trim().length > 0) {
-                <div class="mt-2 overflow-hidden rounded-2xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900">
-                  <!-- Typed addresses come first: someone who pasted a full address is
-                       telling us who they mean, and making them wait on a directory
-                       round trip to act on it is the tab bar all over again. -->
-                  @if (typedEmails().length; as count) {
-                    <button
-                      type="button"
-                      (click)="addTypedEmails()"
-                      class="flex w-full items-center gap-2.5 px-4 py-2.5 text-left text-sm/6 text-gray-900 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-primary-500 dark:text-white dark:hover:bg-gray-800"
-                    >
-                      <ng-icon name="heroPlus" class="size-4 shrink-0 text-primary-accessible dark:text-primary-accessible-dark" aria-hidden="true" />
-                      <span class="truncate">
-                        Add
-                        {{ count === 1 ? typedEmails()[0] : count + ' email addresses' }}
-                      </span>
-                    </button>
-                  }
-
-                  @if (searching()) {
-                    <ul aria-hidden="true" class="divide-y divide-gray-200 dark:divide-gray-700">
-                      @for (row of skeletonRows; track row) {
-                        <li class="space-y-1.5 px-4 py-2.5">
-                          <div class="h-3 w-32 animate-pulse rounded bg-gray-200 dark:bg-gray-700"></div>
-                          <div class="h-2.5 w-48 animate-pulse rounded bg-gray-100 dark:bg-gray-800"></div>
-                        </li>
-                      }
-                    </ul>
-                    <span class="sr-only" role="status">Searching for people…</span>
-                  } @else if (searchResults().length) {
-                    <ul class="max-h-48 divide-y divide-gray-200 overflow-y-auto dark:divide-gray-700" role="listbox" aria-label="Matching people">
-                      @for (user of searchResults(); track user.userId) {
-                        <li>
-                          <button
-                            type="button"
-                            role="option"
-                            [attr.aria-selected]="isEmailShared(user.email)"
-                            [disabled]="isEmailShared(user.email)"
-                            (click)="addUserFromSearch(user)"
-                            class="flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left text-sm/6 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-60 dark:hover:bg-gray-800"
-                          >
-                            <span class="min-w-0 flex-1">
-                              <span class="block truncate font-medium text-gray-900 dark:text-white">{{ user.name }}</span>
-                              <span class="block truncate text-xs/5 text-gray-500 dark:text-gray-400">{{ user.email }}</span>
-                            </span>
-                            @if (isEmailShared(user.email)) {
-                              <span class="shrink-0 text-xs/5 text-gray-500 dark:text-gray-400">Already added</span>
-                            }
-                          </button>
-                        </li>
-                      }
-                    </ul>
-                  } @else if (!typedEmails().length && query().trim().length >= 2) {
-                    <p class="px-4 py-3 text-sm/6 text-gray-500 dark:text-gray-400">
-                      Nobody by that name. Type a full email address to add someone who
-                      has not signed in yet.
-                    </p>
-                  }
-                </div>
-              }
-            </section>
-          }
-
-          <!-- People with access -->
-          <section [class]="canManageShares() ? 'mt-6' : 'mt-0'">
-            <div class="flex items-baseline justify-between gap-3">
-              <h3 class="text-sm/6 font-semibold text-gray-900 dark:text-white">People with access</h3>
-              @if (!loadingShares()) {
-                <span class="text-xs/5 tabular-nums text-gray-500 dark:text-gray-400">{{ shares().length }}</span>
-              }
+      @if (canManageShares()) {
+        <!--
+          One field, not two modes. This was a "Search users" / "Add by email" tab
+          pair, which asked the user to classify what they were about to type before
+          typing it. The field resolves that itself: names and partial emails hit the
+          directory, and anything that already parses as an address (or a
+          comma-separated run of them) can be added outright — so someone who has not
+          signed in yet is reachable without switching anything.
+        -->
+        <section>
+          <h3 class="text-sm/6 font-semibold text-gray-900 dark:text-white">Add people</h3>
+          <div class="mt-2 flex gap-2">
+            <div class="relative min-w-0 flex-1">
+              <ng-icon
+                name="heroMagnifyingGlass"
+                class="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-gray-400 dark:text-gray-500"
+                aria-hidden="true"
+              />
+              <label for="share-add-people" class="sr-only">Add people by name or email</label>
+              <input
+                id="share-add-people"
+                type="text"
+                cdkFocusInitial
+                autocomplete="off"
+                [ngModel]="query()"
+                (ngModelChange)="onQueryChange($event)"
+                (keydown.enter)="addTypedEmails()"
+                placeholder="Name or email address"
+                class="block w-full rounded-2xl border border-gray-300 bg-white py-2 pl-9 pr-3 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white dark:placeholder:text-gray-500"
+              />
             </div>
+            <div class="relative inline-flex shrink-0">
+              <label for="share-new-permission" class="sr-only">Permission for people you add</label>
+              <select
+                id="share-new-permission"
+                [ngModel]="newPermission()"
+                (ngModelChange)="newPermission.set($event)"
+                class="appearance-none rounded-2xl border border-gray-300 bg-white py-2 pl-3 pr-9 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
+              >
+                <option value="viewer">Can view</option>
+                <option value="editor">Can edit</option>
+              </select>
+              <ng-icon
+                name="heroChevronDown"
+                class="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-gray-400 dark:text-gray-500"
+                aria-hidden="true"
+              />
+            </div>
+          </div>
 
-            @if (loadingShares()) {
-              <ul aria-hidden="true" class="mt-2 overflow-hidden rounded-2xl border border-gray-200 dark:border-gray-700">
-                <li class="flex items-center gap-3 px-4 py-2.5">
-                  <div class="h-3 flex-1 animate-pulse rounded bg-gray-200 dark:bg-gray-700"></div>
-                  <div class="h-7 w-24 shrink-0 animate-pulse rounded-2xl bg-gray-100 dark:bg-gray-800"></div>
-                </li>
-              </ul>
-              <span class="sr-only" role="status">Loading who this agent is shared with…</span>
-            } @else if (!shares().length) {
-              <p class="mt-2 rounded-2xl border border-dashed border-gray-300 px-4 py-5 text-center text-sm/6 text-gray-500 dark:border-gray-700 dark:text-gray-400">
-                Not shared with anyone yet.
-              </p>
-            } @else {
-              <ul class="mt-2 max-h-56 divide-y divide-gray-200 overflow-y-auto rounded-2xl border border-gray-200 dark:divide-gray-700 dark:border-gray-700">
-                @for (entry of shares(); track entry.email) {
-                  <li class="flex items-center gap-3 px-4 py-2.5">
-                    <p class="min-w-0 flex-1 truncate text-sm/6 text-gray-900 dark:text-white">{{ entry.email }}</p>
-                    @if (canManageShares()) {
-                      <div class="relative inline-flex shrink-0">
-                        <label class="sr-only" [attr.for]="'share-perm-' + entry.email">
-                          Permission for {{ entry.email }}
-                        </label>
-                        <select
-                          [id]="'share-perm-' + entry.email"
-                          [ngModel]="entry.permission"
-                          (ngModelChange)="setPermission(entry.email, $event)"
-                          class="appearance-none rounded-2xl border border-gray-300 bg-white py-1 pl-2.5 pr-8 text-xs/5 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
-                        >
-                          <option value="viewer">Can view</option>
-                          <option value="editor">Can edit</option>
-                        </select>
-                        <ng-icon
-                          name="heroChevronDown"
-                          class="pointer-events-none absolute right-2.5 top-1/2 size-3.5 -translate-y-1/2 text-gray-400 dark:text-gray-500"
-                          aria-hidden="true"
-                        />
-                      </div>
+          @if (query().trim().length > 0) {
+            <div class="mt-2 overflow-hidden rounded-2xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900">
+              <!-- Typed addresses come first: someone who pasted a full address is
+                   telling us who they mean, and making them wait on a directory
+                   round trip to act on it is the tab bar all over again. -->
+              @if (typedEmails().length; as count) {
+                <button
+                  type="button"
+                  (click)="addTypedEmails()"
+                  class="flex w-full items-center gap-2.5 px-4 py-2.5 text-left text-sm/6 text-gray-900 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-primary-500 dark:text-white dark:hover:bg-gray-800"
+                >
+                  <ng-icon name="heroPlus" class="size-4 shrink-0 text-primary-accessible dark:text-primary-accessible-dark" aria-hidden="true" />
+                  <span class="truncate">
+                    Add
+                    {{ count === 1 ? typedEmails()[0] : count + ' email addresses' }}
+                  </span>
+                </button>
+              }
+
+              @if (searching()) {
+                <ul aria-hidden="true" class="divide-y divide-gray-200 dark:divide-gray-700">
+                  @for (row of skeletonRows; track row) {
+                    <li class="space-y-1.5 px-4 py-2.5">
+                      <div class="h-3 w-32 animate-pulse rounded bg-gray-200 dark:bg-gray-700"></div>
+                      <div class="h-2.5 w-48 animate-pulse rounded bg-gray-100 dark:bg-gray-800"></div>
+                    </li>
+                  }
+                </ul>
+                <span class="sr-only" role="status">Searching for people…</span>
+              } @else if (searchResults().length) {
+                <ul class="max-h-48 divide-y divide-gray-200 overflow-y-auto dark:divide-gray-700" role="listbox" aria-label="Matching people">
+                  @for (user of searchResults(); track user.userId) {
+                    <li>
                       <button
                         type="button"
-                        (click)="removeEmail(entry.email)"
-                        [attr.aria-label]="'Remove ' + entry.email"
-                        class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-state-danger-50 hover:text-state-danger-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500 dark:text-gray-500 dark:hover:bg-state-danger-900/20 dark:hover:text-state-danger-400"
+                        role="option"
+                        [attr.aria-selected]="isEmailShared(user.email)"
+                        [disabled]="isEmailShared(user.email)"
+                        (click)="addUserFromSearch(user)"
+                        class="flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left text-sm/6 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-60 dark:hover:bg-gray-800"
                       >
-                        <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
+                        <span class="min-w-0 flex-1">
+                          <span class="block truncate font-medium text-gray-900 dark:text-white">{{ user.name }}</span>
+                          <span class="block truncate text-xs/5 text-gray-500 dark:text-gray-400">{{ user.email }}</span>
+                        </span>
+                        @if (isEmailShared(user.email)) {
+                          <span class="shrink-0 text-xs/5 text-gray-500 dark:text-gray-400">Already added</span>
+                        }
                       </button>
-                    } @else {
-                      <span class="shrink-0 text-xs/5 text-gray-500 dark:text-gray-400">
-                        {{ entry.permission === 'editor' ? 'Can edit' : 'Can view' }}
-                      </span>
-                    }
-                  </li>
-                }
-              </ul>
-            }
-
-            <!--
-              Skills v2 §6/D7. Sharing is the grant boundary for everything welded to this
-              agent: invited people can invoke its bound skills and search its knowledge
-              base whether or not they hold a grant on either. Said next to the list that
-              does the granting, not buried in the header.
-            -->
-            <p class="mt-2 text-xs/5 text-gray-500 dark:text-gray-400">
-              Anyone with access can use this agent's skills and knowledge.
-            </p>
-          </section>
-
-          <!-- General access — what the reach is now, and what the link does about it -->
-          <section class="mt-6">
-            <h3 class="text-sm/6 font-semibold text-gray-900 dark:text-white">General access</h3>
-            <div class="mt-2 flex gap-3 rounded-2xl border border-gray-200 px-4 py-3 dark:border-gray-700">
-              <span
-                class="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-2xl"
-                [class]="accessIconClass()"
-              >
-                <ng-icon [name]="accessIcon()" class="size-4" aria-hidden="true" />
-              </span>
-              <div class="min-w-0">
-                <p class="text-sm/6 font-medium text-gray-900 dark:text-white">{{ accessLabel() }}</p>
-                <p class="text-xs/5 text-gray-500 dark:text-gray-400">{{ accessHelp() }}</p>
-              </div>
-            </div>
-
-            <div class="mt-2 flex gap-2">
-              <label for="share-link" class="sr-only">Link to this agent</label>
-              <input
-                id="share-link"
-                type="text"
-                readonly
-                [value]="shareableUrl()"
-                class="min-w-0 flex-1 rounded-2xl border border-gray-300 bg-gray-50 px-3 py-2 text-sm/6 text-gray-600 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-300"
-              />
-              <button
-                type="button"
-                (click)="copyUrl()"
-                class="inline-flex shrink-0 items-center gap-2 rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
-              >
-                <ng-icon name="heroLink" class="size-4" aria-hidden="true" />
-                {{ copied() ? 'Copied' : 'Copy' }}
-              </button>
-            </div>
-          </section>
-
-          <!--
-            Marketplace — the widest rung. Owner-only: an editor may change what the agent
-            does but not put it on a shelf. Hidden entirely when the routes are unmounted
-            so nothing offers a dead click; a listing that already exists keeps the section
-            on regardless, because its state is worth reading whether or not new
-            submissions are being taken.
-          -->
-          @if (showMarketplace()) {
-            <section class="mt-6">
-              <h3 class="text-sm/6 font-semibold text-gray-900 dark:text-white">Marketplace</h3>
-              <p class="mt-0.5 text-xs/5 text-gray-500 dark:text-gray-400">
-                A listing is how people find this agent without a link. An admin reviews it
-                first, and their decision shows up here.
-              </p>
-
-              @if (listingError(); as message) {
-                <p role="alert" class="mt-2 rounded-2xl border border-state-danger-200 bg-state-danger-50 px-4 py-2.5 text-sm/6 text-state-danger-800 dark:border-state-danger-900 dark:bg-state-danger-900/20 dark:text-state-danger-300">
-                  {{ message }}
+                    </li>
+                  }
+                </ul>
+              } @else if (!typedEmails().length && query().trim().length >= 2) {
+                <p class="px-4 py-3 text-sm/6 text-gray-500 dark:text-gray-400">
+                  Nobody by that name. Type a full email address to add someone who
+                  has not signed in yet.
                 </p>
               }
+            </div>
+          }
+        </section>
+      }
 
-              <div class="mt-3 flex gap-3 rounded-2xl border border-gray-200 px-4 py-3 dark:border-gray-700">
-                <span class="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-2xl bg-gray-100 text-gray-500 dark:bg-white/5 dark:text-gray-400">
-                  <ng-icon name="heroBuildingStorefront" class="size-4" aria-hidden="true" />
-                </span>
-                <div class="min-w-0 flex-1">
-                  @if (listing(); as l) {
-                    <app-listing-status [listing]="l" />
-                  } @else {
-                    <p class="text-sm/6 font-medium text-gray-900 dark:text-white">Not listed</p>
-                    <p class="text-xs/5 text-gray-500 dark:text-gray-400">
-                      Only people you share it with can find it.
-                    </p>
-                  }
+      <!-- People with access -->
+      <section [class]="canManageShares() ? 'mt-6' : 'mt-0'">
+        <div class="flex items-baseline justify-between gap-3">
+          <h3 class="text-sm/6 font-semibold text-gray-900 dark:text-white">People with access</h3>
+          @if (!loadingShares()) {
+            <span class="text-xs/5 tabular-nums text-gray-500 dark:text-gray-400">{{ shares().length }}</span>
+          }
+        </div>
 
-                  @if (marketplaceAvailable()) {
-                    <div class="mt-3 flex flex-wrap items-center gap-2">
-                      @if (canSubmit()) {
-                        <button
-                          type="button"
-                          (click)="onSubmitListing()"
-                          [disabled]="listingBusy()"
-                          class="rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-xs/5 font-medium text-gray-700 transition hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
-                        >
-                          {{ submitLabel() }}
-                        </button>
-                      }
-                      @if (isInStore()) {
-                        <button
-                          type="button"
-                          (click)="onViewInStore()"
-                          class="rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-xs/5 font-medium text-gray-700 transition hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
-                        >
-                          View in store
-                        </button>
-                      }
-                      @if (canWithdraw()) {
-                        <button
-                          type="button"
-                          (click)="onWithdrawListing()"
-                          [disabled]="listingBusy()"
-                          class="rounded-2xl px-3 py-1.5 text-xs/5 font-medium text-gray-500 transition hover:bg-gray-100 hover:text-gray-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-100"
-                        >
-                          {{ listingBusy() ? 'Working…' : withdrawLabel() }}
-                        </button>
-                      }
-                    </div>
-                  }
+        @if (loadingShares()) {
+          <ul aria-hidden="true" class="mt-2 overflow-hidden rounded-2xl border border-gray-200 dark:border-gray-700">
+            <li class="flex items-center gap-3 px-4 py-2.5">
+              <div class="h-3 flex-1 animate-pulse rounded bg-gray-200 dark:bg-gray-700"></div>
+              <div class="h-7 w-24 shrink-0 animate-pulse rounded-2xl bg-gray-100 dark:bg-gray-800"></div>
+            </li>
+          </ul>
+          <span class="sr-only" role="status">Loading who this agent is shared with…</span>
+        } @else if (!shares().length) {
+          <p class="mt-2 rounded-2xl border border-dashed border-gray-300 px-4 py-5 text-center text-sm/6 text-gray-500 dark:border-gray-700 dark:text-gray-400">
+            Not shared with anyone yet.
+          </p>
+        } @else {
+          <ul class="mt-2 max-h-56 divide-y divide-gray-200 overflow-y-auto rounded-2xl border border-gray-200 dark:divide-gray-700 dark:border-gray-700">
+            @for (entry of shares(); track entry.email) {
+              <li class="flex items-center gap-3 px-4 py-2.5">
+                <p class="min-w-0 flex-1 truncate text-sm/6 text-gray-900 dark:text-white">{{ entry.email }}</p>
+                @if (canManageShares()) {
+                  <div class="relative inline-flex shrink-0">
+                    <label class="sr-only" [attr.for]="'share-perm-' + entry.email">
+                      Permission for {{ entry.email }}
+                    </label>
+                    <select
+                      [id]="'share-perm-' + entry.email"
+                      [ngModel]="entry.permission"
+                      (ngModelChange)="setPermission(entry.email, $event)"
+                      class="appearance-none rounded-2xl border border-gray-300 bg-white py-1 pl-2.5 pr-8 text-xs/5 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
+                    >
+                      <option value="viewer">Can view</option>
+                      <option value="editor">Can edit</option>
+                    </select>
+                    <ng-icon
+                      name="heroChevronDown"
+                      class="pointer-events-none absolute right-2.5 top-1/2 size-3.5 -translate-y-1/2 text-gray-400 dark:text-gray-500"
+                      aria-hidden="true"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    (click)="removeEmail(entry.email)"
+                    [attr.aria-label]="'Remove ' + entry.email"
+                    class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-state-danger-50 hover:text-state-danger-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500 dark:text-gray-500 dark:hover:bg-state-danger-900/20 dark:hover:text-state-danger-400"
+                  >
+                    <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
+                  </button>
+                } @else {
+                  <span class="shrink-0 text-xs/5 text-gray-500 dark:text-gray-400">
+                    {{ entry.permission === 'editor' ? 'Can edit' : 'Can view' }}
+                  </span>
+                }
+              </li>
+            }
+          </ul>
+        }
+
+        <!--
+          Skills v2 §6/D7. Sharing is the grant boundary for everything welded to this
+          agent: invited people can invoke its bound skills and search its knowledge
+          base whether or not they hold a grant on either. Said next to the list that
+          does the granting, not buried in the header.
+        -->
+        <p class="mt-2 text-xs/5 text-gray-500 dark:text-gray-400">
+          Anyone with access can use this agent's skills and knowledge.
+        </p>
+
+        <!--
+          D7.1, at the share boundary: name the skills the owner wrote, not just say
+          "skills". The same list the marketplace submit dialog shows, from the same
+          backend helper. It appears the moment the agent reaches anyone — including
+          when the first person is added, before Save — so the live region announces it
+          at the point the author is deciding.
+        -->
+        <div aria-live="polite">
+          @if (showSkillDisclosure()) {
+            <div class="mt-3 rounded-2xl border border-state-warning-200 bg-state-warning-50 px-4 py-3 dark:border-state-warning-900 dark:bg-state-warning-900/20">
+              <div class="flex gap-3">
+                <ng-icon
+                  name="heroEye"
+                  class="mt-0.5 size-5 shrink-0 text-state-warning-700 dark:text-state-warning-400"
+                  aria-hidden="true"
+                />
+                <div class="min-w-0">
+                  <p class="text-sm/6 font-medium text-state-warning-900 dark:text-state-warning-200">
+                    {{ exposedSkillsHeading() }}
+                  </p>
+                  <p class="mt-0.5 text-xs/5 text-state-warning-900 dark:text-state-warning-200">
+                    {{ skillAudience() }} can use them, and can get the agent to show
+                    their instructions.
+                  </p>
+                  <ul class="mt-1.5 space-y-0.5" aria-label="Your skills that come along with this agent">
+                    @for (skill of exposedSkills(); track skill.ref) {
+                      <li class="text-sm/6 text-state-warning-900 dark:text-state-warning-200">· {{ skill.label }}</li>
+                    }
+                  </ul>
                 </div>
               </div>
-            </section>
+            </div>
           }
+        </div>
+      </section>
 
-          @if (error(); as message) {
-            <p role="alert" class="mt-4 rounded-2xl bg-state-danger-50 px-4 py-2.5 text-sm/6 text-state-danger-800 dark:bg-state-danger-900/20 dark:text-state-danger-400">
+      <!-- General access — what the reach is now, and what the link does about it -->
+      <section class="mt-6">
+        <h3 class="text-sm/6 font-semibold text-gray-900 dark:text-white">General access</h3>
+        <div class="mt-2 flex gap-3 rounded-2xl border border-gray-200 px-4 py-3 dark:border-gray-700">
+          <span
+            class="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-2xl"
+            [class]="accessIconClass()"
+          >
+            <ng-icon [name]="accessIcon()" class="size-4" aria-hidden="true" />
+          </span>
+          <div class="min-w-0">
+            <p class="text-sm/6 font-medium text-gray-900 dark:text-white">{{ accessLabel() }}</p>
+            <p class="text-xs/5 text-gray-500 dark:text-gray-400">{{ accessHelp() }}</p>
+          </div>
+        </div>
+
+        <div class="mt-2 flex gap-2">
+          <label for="share-link" class="sr-only">Link to this agent</label>
+          <input
+            id="share-link"
+            type="text"
+            readonly
+            [value]="shareableUrl()"
+            class="min-w-0 flex-1 rounded-2xl border border-gray-300 bg-gray-50 px-3 py-2 text-sm/6 text-gray-600 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-300"
+          />
+          <button
+            type="button"
+            (click)="copyUrl()"
+            class="inline-flex shrink-0 items-center gap-2 rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+          >
+            <ng-icon name="heroLink" class="size-4" aria-hidden="true" />
+            {{ copied() ? 'Copied' : 'Copy' }}
+          </button>
+        </div>
+      </section>
+
+      <!--
+        Marketplace — the widest rung. Owner-only: an editor may change what the agent
+        does but not put it on a shelf. Hidden entirely when the routes are unmounted
+        so nothing offers a dead click; a listing that already exists keeps the section
+        on regardless, because its state is worth reading whether or not new
+        submissions are being taken.
+      -->
+      @if (showMarketplace()) {
+        <section class="mt-6">
+          <h3 class="text-sm/6 font-semibold text-gray-900 dark:text-white">Marketplace</h3>
+          <p class="mt-0.5 text-xs/5 text-gray-500 dark:text-gray-400">
+            A listing is how people find this agent without a link. An admin reviews it
+            first, and their decision shows up here.
+          </p>
+
+          @if (listingError(); as message) {
+            <p role="alert" class="mt-2 rounded-2xl border border-state-danger-200 bg-state-danger-50 px-4 py-2.5 text-sm/6 text-state-danger-800 dark:border-state-danger-900 dark:bg-state-danger-900/20 dark:text-state-danger-300">
               {{ message }}
             </p>
           }
-        </div>
 
-        <!-- Actions -->
-        <div class="flex items-center justify-end gap-2 border-t border-gray-200 px-6 py-3 dark:border-gray-700">
+          <div class="mt-3 flex gap-3 rounded-2xl border border-gray-200 px-4 py-3 dark:border-gray-700">
+            <span class="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-2xl bg-gray-100 text-gray-500 dark:bg-white/5 dark:text-gray-400">
+              <ng-icon name="heroBuildingStorefront" class="size-4" aria-hidden="true" />
+            </span>
+            <div class="min-w-0 flex-1">
+              @if (listing(); as l) {
+                <app-listing-status [listing]="l" />
+              } @else {
+                <p class="text-sm/6 font-medium text-gray-900 dark:text-white">Not listed</p>
+                <p class="text-xs/5 text-gray-500 dark:text-gray-400">
+                  Only people you share it with can find it.
+                </p>
+              }
+
+              @if (marketplaceAvailable()) {
+                <div class="mt-3 flex flex-wrap items-center gap-2">
+                  @if (canSubmit()) {
+                    <button
+                      type="button"
+                      (click)="onSubmitListing()"
+                      [disabled]="listingBusy()"
+                      class="rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-xs/5 font-medium text-gray-700 transition hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+                    >
+                      {{ submitLabel() }}
+                    </button>
+                  }
+                  @if (isInStore()) {
+                    <button
+                      type="button"
+                      (click)="onViewInStore()"
+                      class="rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-xs/5 font-medium text-gray-700 transition hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+                    >
+                      View in store
+                    </button>
+                  }
+                  @if (canWithdraw()) {
+                    <button
+                      type="button"
+                      (click)="onWithdrawListing()"
+                      [disabled]="listingBusy()"
+                      class="rounded-2xl px-3 py-1.5 text-xs/5 font-medium text-gray-500 transition hover:bg-gray-100 hover:text-gray-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-100"
+                    >
+                      {{ listingBusy() ? 'Working…' : withdrawLabel() }}
+                    </button>
+                  }
+                </div>
+              }
+            </div>
+          </div>
+        </section>
+      }
+
+      @if (error(); as message) {
+        <p role="alert" class="mt-4 rounded-2xl bg-state-danger-50 px-4 py-2.5 text-sm/6 text-state-danger-800 dark:bg-state-danger-900/20 dark:text-state-danger-400">
+          {{ message }}
+        </p>
+      }
+
+      <div dialogFooter class="flex items-center justify-end gap-2 border-t border-gray-200 px-6 py-3 dark:border-gray-700">
+        <button
+          type="button"
+          (click)="onCancel()"
+          class="rounded-2xl px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-500 dark:text-gray-200 dark:hover:bg-gray-700"
+        >
+          {{ hasPendingChanges() ? 'Cancel' : 'Done' }}
+        </button>
+        @if (canManageShares()) {
           <button
             type="button"
-            (click)="onCancel()"
-            class="rounded-2xl px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-500 dark:text-gray-200 dark:hover:bg-gray-700"
+            (click)="onSave()"
+            [disabled]="saving() || !hasPendingChanges()"
+            class="rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 "
           >
-            {{ hasPendingChanges() ? 'Cancel' : 'Done' }}
+            {{ saving() ? 'Saving…' : 'Save changes' }}
           </button>
-          @if (canManageShares()) {
-            <button
-              type="button"
-              (click)="onSave()"
-              [disabled]="saving() || !hasPendingChanges()"
-              class="rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 "
-            >
-              {{ saving() ? 'Saving…' : 'Save changes' }}
-            </button>
-          }
-        </div>
+        }
       </div>
-    </div>
-  `,
-  styles: `
-    @reference "../../../styles/theme.css";
-
-
-    .dialog-backdrop {
-      animation: backdrop-fade-in 200ms ease-out;
-    }
-
-    @keyframes backdrop-fade-in {
-      from { opacity: 0; }
-      to { opacity: 1; }
-    }
-
-    .dialog-panel {
-      animation: dialog-fade-in-up 200ms ease-out;
-    }
-
-    @keyframes dialog-fade-in-up {
-      from {
-        opacity: 0;
-        transform: translateY(1rem) scale(0.95);
-      }
-      to {
-        opacity: 1;
-        transform: translateY(0) scale(1);
-      }
-    }
+    </app-dialog-shell>
   `,
 })
 export class ShareAgentDialogComponent {
@@ -576,6 +549,37 @@ export class ShareAgentDialogComponent {
       deltas.adds.length > 0 || deltas.removes.length > 0 || deltas.permissionChanges.length > 0
     );
   });
+
+  // ---- skill disclosure (§6/D7) ------------------------------------------
+  /**
+   * The skills the owner wrote and bound, which invoke-through hands to anyone with
+   * access. Owner-only on the backend, like sharing itself; empty until loaded, and on
+   * failure — the generic line above still says skills come along.
+   */
+  protected readonly exposedSkills = signal<SkillExposure[]>([]);
+
+  /**
+   * Shown once the agent reaches anyone: PUBLIC, or at least one person on the working
+   * list. The working list, not the saved one, so the warning lands as the author adds
+   * the first person — before Save, which is when it can still change their mind.
+   */
+  protected readonly showSkillDisclosure = computed(
+    () =>
+      this.canManageShares() &&
+      this.exposedSkills().length > 0 &&
+      (this.visibility() === 'PUBLIC' || this.shares().length > 0),
+  );
+
+  protected readonly exposedSkillsHeading = computed(() => {
+    const count = this.exposedSkills().length;
+    return count === 1
+      ? '1 skill you wrote comes along with this agent'
+      : `${count} skills you wrote come along with this agent`;
+  });
+
+  protected readonly skillAudience = computed(() =>
+    this.visibility() === 'PUBLIC' ? 'Everyone at Boise State who opens it' : 'Everyone on this list',
+  );
 
   // ---- general access (a read-out; the editor owns the field) -----------
   protected readonly accessIcon = computed(() => {
@@ -759,6 +763,7 @@ export class ShareAgentDialogComponent {
   constructor() {
     void this.loadShares();
     void this.loadListing();
+    void this.loadSkillExposure();
 
     this.querySubject
       .pipe(
@@ -828,6 +833,19 @@ export class ShareAgentDialogComponent {
       // `AGENTS_API_ENABLED=false` 404s this route. Sharing still works; the marketplace
       // section simply stays closed.
       console.error('Error loading agent listing:', err);
+    }
+  }
+
+  private async loadSkillExposure(): Promise<void> {
+    if (!this.canManageShares()) return;
+    try {
+      this.exposedSkills.set(
+        await this.agentService.getShareSkillExposure(this.data.agent.assistantId),
+      );
+    } catch (err) {
+      // Advisory: sharing still works, and the generic line still names skills as coming
+      // along. A 404 here is the `AGENTS_API_ENABLED` kill switch, same as `loadListing`.
+      console.error('Error loading the skills sharing exposes:', err);
     }
   }
 

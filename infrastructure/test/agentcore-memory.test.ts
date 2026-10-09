@@ -92,8 +92,10 @@ describe('AgentCore Memory', () => {
     }
   });
 
-  it('keeps events for 90 days', () => {
-    expect(memoryProps().EventExpiryDuration).toBe(90);
+  // Was a hard-coded 90 until CDK_CONVERSATION_RETENTION_DAYS; the setting,
+  // its clamp and its validation are covered in conversation-retention.test.ts.
+  it('keeps events for the default conversation retention, 365 days', () => {
+    expect(memoryProps().EventExpiryDuration).toBe(365);
   });
 
   it('grants the Runtime role the same memory actions in both statements, including GetMemory', () => {

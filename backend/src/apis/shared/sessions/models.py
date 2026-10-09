@@ -197,6 +197,13 @@ class PausedTurnSnapshot(BaseModel):
                     "Hashed with the system prompt in the agent cache key, so resume "
                     "replays it or the paused agent is orphaned.",
     )
+    text_only_model: Optional[bool] = Field(
+        default=None,
+        alias="textOnlyModel",
+        description="The paused turn's model reads TEXT only, so a rebuilt agent "
+                    "keeps media blocks in history away from it. None on snapshots "
+                    "written before the field existed (treated as False).",
+    )
     captured_at: str = Field(..., alias="capturedAt", description="ISO 8601 timestamp when the turn paused")
     expires_at: str = Field(..., alias="expiresAt", description="ISO 8601 timestamp after which the snapshot is no longer valid for resume")
 
@@ -879,4 +886,9 @@ class MessagesListResponse(BaseModel):
         default_factory=list,
         alias="toolSummaries",
         description="Persisted model-generated tool-batch summaries for this session, each shaped like the live `tool_group_summary` SSE event ({batchId, toolUseIds, summary}). Replayed on load so a reloaded conversation keeps the prose line the user saw live instead of downgrading to the client-side deterministic formatter. Returned only on the first page.",
+    )
+    from_archive: bool = Field(
+        False,
+        alias="fromArchive",
+        description="True when Memory's events for this session have expired and these messages are the conversation archive's text-only copy. The agent cannot restore from the archive, and a new turn would be numbered from 0 and overwrite the archived first turn, so the SPA offers such a session read-only. Set on every page of an archive-served session.",
     )

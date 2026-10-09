@@ -162,6 +162,52 @@ export function grantManagedKbProvisioning(
 }
 
 /**
+ * Create-only provisioning grant: everything `provision_managed_kb` calls to
+ * CREATE a knowledge base and its CUSTOM connector, and nothing that deletes
+ * one. For a caller that provisions lazily on first write but never tears
+ * anything down — the conversation-search index consumer
+ * (`ConversationIndexConstruct`). The full `grantManagedKbProvisioning` adds
+ * `DeleteKnowledgeBase` / `DeleteDataSource`, which only the migration worker
+ * (teardown) and the reconciler (orphans) need; a consumer driven by
+ * user-triggered S3 events has no business holding them.
+ *
+ * `ListKnowledgeBases` stays: the saga's adopt-by-name path lists knowledge
+ * bases when a retried create collides on the name. `TagResource` stays for
+ * the same reason as in the full grant — `CreateKnowledgeBase` is called with
+ * tags and AWS authorises the tagging separately.
+ */
+export function grantManagedKbCreation(
+  config: AppConfig,
+  role: iam.IRole,
+  serviceRoleArn: string,
+): void {
+  role.addToPrincipalPolicy(new iam.PolicyStatement({
+    sid: 'ManagedKbCreateList',
+    effect: iam.Effect.ALLOW,
+    actions: ['bedrock:CreateKnowledgeBase', 'bedrock:ListKnowledgeBases'],
+    resources: ['*'],
+  }));
+  role.addToPrincipalPolicy(new iam.PolicyStatement({
+    sid: 'ManagedKbCreateDataSource',
+    effect: iam.Effect.ALLOW,
+    actions: [
+      'bedrock:GetKnowledgeBase',
+      'bedrock:CreateDataSource',
+      'bedrock:TagResource',
+    ],
+    resources: [knowledgeBaseArnWildcard(config)],
+  }));
+  role.addToPrincipalPolicy(new iam.PolicyStatement({
+    sid: 'ManagedKbCreatePassServiceRole',
+    effect: iam.Effect.ALLOW,
+    actions: ['iam:PassRole'],
+    resources: [serviceRoleArn],
+    conditions: { StringEquals: { 'iam:PassedToService': 'bedrock.amazonaws.com' } },
+  }));
+  role.addToPrincipalPolicy(putMetricDataStatement(config, 'ManagedKbCreateMetrics'));
+}
+
+/**
  * Direct-ingestion grant: push document bytes straight at a Managed_KB
  * without an S3 data-source crawl (Requirement 20.6). Kept separate
  * from CRUD so an ingestion-only caller can never delete a knowledge
@@ -193,8 +239,9 @@ export function grantManagedKbProvisioning(
  * SSO identity had been masking it.
  *
  * `bedrock:ListKnowledgeBaseDocuments` is in AWS's example policy and
- * deliberately omitted: no code path calls it, and the docs permit
- * omitting actions. A future caller fails loudly rather than silently.
+ * deliberately omitted: ingestion never lists, and the docs permit
+ * omitting actions. Its one caller, the conversation-index reconciler,
+ * holds it through `grantManagedKbDocumentReconciliation`.
  *
  * Also intentionally unattached for now — wired in task 2.1 alongside
  * the migration Lambdas, via
@@ -250,6 +297,31 @@ export function grantManagedKbDocumentDeletion(config: AppConfig, role: iam.IRol
       // See the docblock: the IAM action AWS actually checks for the
       // document-plane operations, not an invocation of the 0.1 RPS
       // ingestion-job API that Requirement 9.2 forbids calling.
+      'bedrock:StartIngestionJob',
+    ],
+    resources: [knowledgeBaseArnWildcard(config)],
+  }));
+}
+
+/**
+ * Document-reconciliation grant: list a managed knowledge base's documents
+ * and delete the ones whose source is gone. Held by the conversation-index
+ * daily reconciler (docs/specs/conversation-search.md §3), which compares the
+ * `conversations` knowledge base with the archive it is built from.
+ *
+ * List + delete only, like `grantManagedKbDocumentDeletion` plus the listing
+ * the comparison needs: a reconciler that removes stale documents has no
+ * business adding any. `bedrock:StartIngestionJob` is included for the same
+ * reason as in the deletion grant (AWS's direct-ingestion prerequisites put
+ * the whole document family in one statement with it).
+ */
+export function grantManagedKbDocumentReconciliation(config: AppConfig, role: iam.IRole): void {
+  role.addToPrincipalPolicy(new iam.PolicyStatement({
+    sid: 'ManagedKbDocumentReconciliation',
+    effect: iam.Effect.ALLOW,
+    actions: [
+      'bedrock:ListKnowledgeBaseDocuments',
+      'bedrock:DeleteKnowledgeBaseDocuments',
       'bedrock:StartIngestionJob',
     ],
     resources: [knowledgeBaseArnWildcard(config)],
@@ -443,11 +515,24 @@ export class ManagedKbRoleConstruct extends Construct {
   }
 
   /**
+   * Attach the create-only provisioning grant (no delete actions) to a
+   * caller role. See `grantManagedKbCreation`.
+   */
+  public grantCreation(role: iam.IRole): void {
+    grantManagedKbCreation(this.config, role, this.serviceRoleArn);
+  }
+
+  /**
    * Attach the direct-ingestion grant to a caller role. Called by the
    * migration construct in task 2.1; no caller today, by design.
    */
   public grantDirectIngestion(role: iam.IRole): void {
     grantManagedKbDirectIngestion(this.config, role);
+  }
+
+  /** Attach the list + delete document grant (the conversation-index reconciler). */
+  public grantDocumentReconciliation(role: iam.IRole): void {
+    grantManagedKbDocumentReconciliation(this.config, role);
   }
 
   /** Attach the inference-side `bedrock:Retrieve` grant to a caller role. */

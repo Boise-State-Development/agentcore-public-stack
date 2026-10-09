@@ -266,8 +266,14 @@ async def read_document(
     pattern: Optional[str] = None,
     max_pages: Any = None,
     offset: int = 0,
+    text_only: bool = False,
 ) -> DocumentReadResult:
-    """Read part of one document. See the module docstring for the modes."""
+    """Read part of one document. See the module docstring for the modes.
+
+    ``text_only`` is for a model whose catalog row declares TEXT input only:
+    a PDF page range comes back as those pages' text layer instead of a
+    native ``document`` block, which such a model rejects outright.
+    """
     _require_identity(user_id, session_id)
     if not upload_id:
         raise WorkspaceValidationError("upload_id is required (call with no arguments to list documents)")
@@ -300,6 +306,8 @@ async def read_document(
         raw = await _fetch_bytes(meta)
         if pattern_text:
             return await asyncio.to_thread(_pdf_pattern, raw, pattern_text, base)
+        if pages and text_only:
+            return await asyncio.to_thread(_pdf_pages_text, raw, pages, limit, base)
         if pages:
             return await asyncio.to_thread(_pdf_pages, raw, pages, limit, base, meta.filename)
         return await asyncio.to_thread(_pdf_index, raw, base)
@@ -417,6 +425,45 @@ def _pdf_pages(raw: bytes, pages: Tuple[int, int], limit: int, base: Dict[str, A
     return DocumentReadResult(
         mode="pages", payload=payload, document_block=block,
         pages_returned=returned, bytes_returned=len(sliced), format="pdf",
+    )
+
+
+def _pdf_pages_text(raw: bytes, pages: Tuple[int, int], limit: int, base: Dict[str, Any]) -> DocumentReadResult:
+    """``_pdf_pages`` for a text-only model: the same range and the same
+    ``max_pages`` cap, returned as each page's text layer in the payload."""
+    start, end = pages
+    pdf = _open_pdf(raw)
+    try:
+        count = len(pdf)
+        if start > count:
+            raise WorkspaceValidationError(f"page_range starts at {start} but the document has {count} pages.")
+        end = min(end, count)
+        truncated = False
+        if end - start + 1 > limit:
+            end = start + limit - 1
+            truncated = True
+        texts = [{"page": i + 1, "text": _pdf_page_text(pdf, i)} for i in range(start - 1, end)]
+    finally:
+        pdf.close()
+
+    returned = end - start + 1
+    payload = {
+        **base,
+        "mode": "pages_text",
+        "page_count": count,
+        "pages": {"start": start, "end": end},
+        "pages_returned": returned,
+        "truncated_to_max_pages": truncated,
+        "next_start": end + 1 if (truncated and end < count) else None,
+        "note": (
+            "The current model reads text only, so these are the pages' text layers; "
+            "page images, charts and scanned pages are not included."
+        ),
+        "page_texts": texts,
+    }
+    return DocumentReadResult(
+        mode="pages_text", payload=payload, pages_returned=returned,
+        bytes_returned=sum(len(t["text"].encode("utf-8")) for t in texts), format="pdf",
     )
 
 

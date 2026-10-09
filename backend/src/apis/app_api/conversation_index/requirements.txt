@@ -1,0 +1,11 @@
+# conversation-index Lambda image dependencies (backend/Dockerfile.conversation-index).
+# Exact pins per repo policy; versions match backend/uv.lock and the
+# kb-migration image, whose requirements file explains why the boto3 pin is
+# load-bearing: the Lambda base image's bundled boto3 predates the managed
+# knowledge base API (`CreateKnowledgeBase` type MANAGED, and the
+# Ingest/DeleteKnowledgeBaseDocuments operations).
+boto3==1.43.103
+botocore==1.43.103
+
+# Nothing else. The handler reaches only `kb_backend` (stdlib-only module
+# scope), the archive's pure document modules and the feature-flag reader.

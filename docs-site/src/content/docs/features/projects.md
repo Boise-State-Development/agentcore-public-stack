@@ -16,8 +16,11 @@ the person who started it until they choose to share it with the project.
 
 Design and as-built notes live in
 [`docs/specs/shared-projects.md`](https://github.com/Boise-State-Development/agentcore-public-stack/blob/main/docs/specs/shared-projects.md).
-This page describes what ships today (Phase 1). Project memory is Phase 2;
-schedules and outputs are Phase 3. Projects are still in development, so a
+This page is the feature reference. For a task-oriented guide written for the
+people who use projects, with an illustrated walkthrough, see
+[User Guide › Projects](/agentcore-public-stack/user-guide/projects/overview/).
+Project memory (shared and "just for me" spaces the assistant reads and writes)
+ships with Phase 2; schedules and outputs are Phase 3. Projects are still in development, so a
 deployment has to turn them on; see
 [Admin › Projects](/agentcore-public-stack/admin/projects/#turning-projects-on).
 
@@ -43,22 +46,32 @@ waiting when they do.
   the project to an editor who has signed in at least once; the old owner
   becomes an editor.
 - **Editors manage members by default.** The owner can limit that to
-  themselves in Settings.
+  themselves in the Members dialog.
 - **Anyone but the owner can leave.**
 
 ## The project page
 
 `/projects` lists your projects: everything you belong to, filtered by All,
 Mine, Shared with me, or Archived. It's in the sidebar menu when your deployment
-has Projects turned on. Each project has these tabs:
+has Projects turned on.
 
-- **Overview**: a composer that starts a task in the project, plus a summary
-  of the instructions and the people.
-- **Tasks**: your own tasks in the project, and the tasks others shared with it.
+A project's page is a composer that starts a task in the project, with your
+**Recents** (your own tasks, newest first) and the tasks others **shared with
+the project** beneath it. Beside them, a rail lists the project's settings as
+one-line summaries. Each row opens a dialog:
+
+- **Instructions**: what the assistant is told in every task.
 - **Files**: the documents the assistant works from.
-- **Members**: people, roles, invitations.
-- **Settings**: details, instructions, model, tools, skills and their history.
+- **Model**: the model every task runs on.
+- **Tools & skills**: what the assistant can use and follow.
+- **Members**: people, roles, invitations, and (for the owner) whether editors
+  may manage members.
 - **Activity** (editors and the owner): who changed what, newest first.
+- **History**: every saved settings version and its diff.
+
+The menu on the project's name in the breadcrumb renames the project, archives
+or restores it, deletes it (once archived), or lets you leave it. Links that
+name a section, such as `/projects/{id}/members`, open that dialog.
 
 The sidebar lists project tasks in their usual Today / Yesterday / … groups,
 under a small heading with the project's name.
@@ -66,7 +79,7 @@ under a small heading with the project's name.
 ## Tasks and sharing
 
 A task is an ordinary conversation bound to the project's assistant. Only the
-person who started it can see it in **Your tasks**.
+person who started it can see it in **Recents**.
 
 To show a task to the project, open its **Share** dialog and choose
 **Project members**. This option appears only for a task in a project. The share
@@ -108,9 +121,10 @@ saved, so it shows on the live turn only.
 ## Notifications
 
 The bell next to your name in the sidebar shows notifications about projects:
-being added, a role change, being removed, and becoming owner. Opening one marks
-it read and takes you to the project. Notifications expire after 90 days. You
-are never notified of your own actions.
+being added, a role change, being removed, becoming owner, a project being
+archived or restored (sent to every member), and, for the owner, someone
+leaving. Opening one marks it read and takes you to the project. Notifications
+expire after 90 days. You are never notified of your own actions.
 
 ## Personal instructions
 

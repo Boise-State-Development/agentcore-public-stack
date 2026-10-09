@@ -21,12 +21,11 @@ const WEEKDAY_LABELS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 
  * delete, and the grant-enablement UX (docs/specs/scheduled-runs-phase-b-brief.md
  * §2 B3).
  *
- * Visibility gating: this page (and the nav entry that links to it) is only
- * meaningful for users with the `scheduled-runs` RBAC capability. There is
- * no client-side capability signal yet (see UserPermissions), so gating
- * rides the `/schedules` list call itself — a 403/404 (kill switch off or
- * capability missing) flips `ScheduleService.accessible$` to false and this
- * page renders a graceful "not available" state instead of an error.
+ * Open to every signed-in user, and reached from the sidebar's Schedules
+ * entry. The only control is the environment's `SCHEDULED_RUNS_ENABLED` kill
+ * switch: with it off the `/schedules` list call 404s, which flips
+ * `ScheduleService.accessible$` to false and this page renders a graceful
+ * "not available" state instead of an error.
  */
 @Component({
   selector: 'app-schedules-page',

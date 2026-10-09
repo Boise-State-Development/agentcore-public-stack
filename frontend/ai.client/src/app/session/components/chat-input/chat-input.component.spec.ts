@@ -8,6 +8,7 @@ import { FileMetadata, FileUploadService } from '../../../services/file-upload';
 import { SystemPromptsService } from '../../../services/system-prompts/system-prompts.service';
 import { ToastService } from '../../../services/toast/toast.service';
 import { ToolService } from '../../../services/tool/tool.service';
+import { ModelService } from '../../services/model/model.service';
 import { AudioRecorderService, NOVA_SONIC_VOICES, VoiceChatService, findVoice } from '../../services/voice';
 import { CdkMenu, CdkMenuItem, CdkMenuTrigger } from '@angular/cdk/menu';
 import {
@@ -100,6 +101,17 @@ class SkillCommandServiceStub {
   }
 }
 
+/**
+ * Stand-in for ModelService. Required rather than optional: the real one loads
+ * `/models` from its constructor, and Angular 21 root-provides a live HttpClient.
+ */
+class ModelServiceStub {
+  readonly selectedModel = signal<{ modelId: string; inputModalities: string[] }>({
+    modelId: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+    inputModalities: ['TEXT', 'IMAGE'],
+  });
+}
+
 class MentionServiceStub {
   readonly mentionable = signal<MentionableAgent[]>(AGENTS);
   readonly loading = signal(false);
@@ -135,6 +147,7 @@ describe('ChatInputComponent — the `@` menu keyboard path (D11)', () => {
         },
         { provide: ToastService, useValue: { error: () => undefined, warning: () => undefined, info: () => undefined } },
         { provide: ToolService, useValue: {} },
+        { provide: ModelService, useClass: ModelServiceStub },
         {
           provide: VoiceChatService,
           useValue: {
@@ -279,6 +292,7 @@ describe('ChatInputComponent — the `/` skill-command menu', () => {
         },
         { provide: ToastService, useValue: { error: () => undefined, warning: () => undefined, info: () => undefined } },
         { provide: ToolService, useValue: {} },
+        { provide: ModelService, useClass: ModelServiceStub },
         {
           provide: VoiceChatService,
           useValue: {
@@ -447,6 +461,7 @@ describe('ChatInputComponent — queueing a follow-up mid-stream', () => {
         },
         { provide: ToastService, useValue: { error: () => undefined, warning: () => undefined, info: () => undefined } },
         { provide: ToolService, useValue: {} },
+        { provide: ModelService, useClass: ModelServiceStub },
         {
           provide: VoiceChatService,
           useValue: {
@@ -706,6 +721,7 @@ describe('ChatInputComponent — mid-turn steering (PR-5)', () => {
         },
         { provide: ToastService, useValue: { error: () => undefined, warning: () => undefined, info: () => undefined } },
         { provide: ToolService, useValue: {} },
+        { provide: ModelService, useClass: ModelServiceStub },
         {
           provide: VoiceChatService,
           useValue: {
@@ -940,6 +956,7 @@ describe('ChatInputComponent — a queue held behind a paused turn (PR-6)', () =
         },
         { provide: ToastService, useValue: { error: () => undefined, warning: () => undefined, info: () => undefined } },
         { provide: ToolService, useValue: {} },
+        { provide: ModelService, useClass: ModelServiceStub },
         {
           provide: VoiceChatService,
           useValue: {
@@ -1184,6 +1201,7 @@ describe('ChatInputComponent — rotating discovery hints', () => {
         },
         { provide: ToastService, useValue: { error: () => undefined, warning: () => undefined, info: () => undefined } },
         { provide: ToolService, useValue: {} },
+        { provide: ModelService, useClass: ModelServiceStub },
         {
           provide: VoiceChatService,
           useValue: {
@@ -1348,6 +1366,7 @@ describe('ChatInputComponent — composer drafts (feedback retry-with-correction
         },
         { provide: ToastService, useValue: { error: () => undefined, warning: () => undefined, info: () => undefined } },
         { provide: ToolService, useValue: {} },
+        { provide: ModelService, useClass: ModelServiceStub },
         {
           provide: VoiceChatService,
           useValue: { status: signal('idle'), isVoiceActive: signal(false), agentTranscript: signal('') },
@@ -1453,6 +1472,7 @@ describe('ChatInputComponent — unsent text survives leaving the conversation',
         },
         { provide: ToastService, useValue: { error: () => undefined, warning: () => undefined, info: () => undefined } },
         { provide: ToolService, useValue: {} },
+        { provide: ModelService, useClass: ModelServiceStub },
         {
           provide: VoiceChatService,
           useValue: { status: signal('idle'), isVoiceActive: signal(false), agentTranscript: signal('') },
@@ -1838,6 +1858,7 @@ describe('ChatInputComponent — compact layout, touch and first-send handoff', 
         },
         { provide: ToastService, useValue: { error: () => undefined, warning: () => undefined, info: () => undefined } },
         { provide: ToolService, useValue: {} },
+        { provide: ModelService, useClass: ModelServiceStub },
         {
           provide: VoiceChatService,
           useValue: { status: signal('idle'), isVoiceActive: signal(false), agentTranscript: signal('') },
@@ -2061,6 +2082,7 @@ describe('ChatInputComponent — dictation', () => {
         },
         { provide: ToastService, useValue: toast },
         { provide: ToolService, useValue: {} },
+        { provide: ModelService, useClass: ModelServiceStub },
         {
           provide: VoiceChatService,
           useValue: { status: signal('idle'), isVoiceActive: voiceActive, agentTranscript: signal('') },
@@ -2274,6 +2296,7 @@ describe('ChatInputComponent voice mode options', () => {
         },
         { provide: ToastService, useValue: { error: () => undefined, warning: () => undefined, info: () => undefined } },
         { provide: ToolService, useValue: {} },
+        { provide: ModelService, useClass: ModelServiceStub },
         {
           provide: VoiceChatService,
           useValue: {
@@ -2411,5 +2434,130 @@ describe('ChatInputComponent voice mode options', () => {
     await openMenu();
     (menu()!.querySelector('[data-testid="voice-menu-start"]') as HTMLButtonElement).click();
     expect(voice.connect).toHaveBeenCalledWith('s1');
+  });
+});
+
+describe('ChatInputComponent — attaching to a text-only model', () => {
+  let fixture: ComponentFixture<ChatInputComponent>;
+  let component: ChatInputComponent;
+  let model: ModelServiceStub;
+  let infos: { title: string; message: string }[];
+  let uploaded: string[];
+
+  beforeEach(async () => {
+    infos = [];
+    uploaded = [];
+    await TestBed.configureTestingModule({
+      imports: [ChatInputComponent],
+      providers: [
+        { provide: AgentMentionService, useClass: MentionServiceStub },
+        { provide: SkillCommandService, useClass: SkillCommandServiceStub },
+        {
+          provide: FileUploadService,
+          useValue: {
+            pendingUploadsList: signal([]),
+            hasActivePendingUploads: signal(false),
+            readyUploadIds: signal([]),
+            readyUploads: signal([]),
+            clearReadyUploads: () => undefined,
+            clearPendingUpload: () => undefined,
+            listSessionFiles: async () => [],
+            uploadFile: async (_sessionId: string, file: File) => {
+              uploaded.push(file.name);
+            },
+          },
+        },
+        {
+          provide: ToastService,
+          useValue: {
+            error: () => undefined,
+            warning: () => undefined,
+            info: (title: string, message: string) => infos.push({ title, message }),
+          },
+        },
+        // Spreadsheet Analysis enabled, so the tabular nudge stays out of the way.
+        { provide: ToolService, useValue: { enabledToolIds: () => ['analyze_spreadsheet'] } },
+        { provide: ModelService, useClass: ModelServiceStub },
+        {
+          provide: VoiceChatService,
+          useValue: { status: signal('idle'), isVoiceActive: signal(false), agentTranscript: signal('') },
+        },
+        { provide: SystemPromptsService, useValue: { activePrompt: signal(null) } },
+        { provide: Router, useValue: { navigate: () => Promise.resolve(true) } },
+        { provide: SteeringService, useClass: SteeringServiceStub },
+      ],
+    })
+      .overrideComponent(ChatInputComponent, { set: { imports: [], schemas: [NO_ERRORS_SCHEMA] } })
+      .compileComponents();
+
+    fixture = TestBed.createComponent(ChatInputComponent);
+    component = fixture.componentInstance;
+    model = TestBed.inject(ModelService) as unknown as ModelServiceStub;
+    fixture.componentRef.setInput('showVoiceControl', false);
+    fixture.componentRef.setInput('autoFocus', false);
+    fixture.componentRef.setInput('sessionId', 's1');
+    fixture.detectChanges();
+  });
+
+  function file(name: string, type: string): File {
+    return new File(['x'], name, { type });
+  }
+
+  async function drop(...files: File[]): Promise<void> {
+    const event = {
+      preventDefault: () => undefined,
+      stopPropagation: () => undefined,
+      dataTransfer: { files },
+    } as unknown as DragEvent;
+    await component.onDrop(event);
+  }
+
+  function useTextOnlyModel(): void {
+    model.selectedModel.set({ modelId: 'zai.glm-5', inputModalities: ['TEXT'] });
+  }
+
+  it('says nothing for a model that reads images and documents', async () => {
+    await drop(file('photo.png', 'image/png'), file('report.pdf', 'application/pdf'));
+    expect(infos).toEqual([]);
+    expect(uploaded).toEqual(['photo.png', 'report.pdf']);
+  });
+
+  it('warns once per batch that images will be skipped, and still uploads them', async () => {
+    useTextOnlyModel();
+    await drop(file('a.png', 'image/png'), file('b.jpg', 'image/jpeg'));
+    expect(infos.map((i) => i.title)).toEqual(['Images will be skipped']);
+    expect(uploaded).toEqual(['a.png', 'b.jpg']);
+  });
+
+  it('warns once per batch that documents arrive as extracted text', async () => {
+    useTextOnlyModel();
+    await drop(file('a.pdf', 'application/pdf'), file('b.md', 'text/markdown'), file('c.docx', ''));
+    expect(infos.map((i) => i.title)).toEqual(['This model reads text only']);
+    expect(infos[0].message).toContain('Layout and images are lost');
+  });
+
+  it('gives a mixed batch one notice per kind', async () => {
+    useTextOnlyModel();
+    await drop(file('a.pdf', 'application/pdf'), file('b.png', 'image/png'), file('c.txt', 'text/plain'));
+    expect(infos.map((i) => i.title)).toEqual(['This model reads text only', 'Images will be skipped']);
+  });
+
+  it('says nothing about spreadsheets or decks, which go to their tools whatever the model', async () => {
+    useTextOnlyModel();
+    await drop(file('a.csv', 'text/csv'), file('b.xlsx', ''), file('c.pptx', ''));
+    expect(infos).toEqual([]);
+  });
+
+  it('warns again on the next batch', async () => {
+    useTextOnlyModel();
+    await drop(file('a.png', 'image/png'));
+    await drop(file('b.png', 'image/png'));
+    expect(infos.map((i) => i.title)).toEqual(['Images will be skipped', 'Images will be skipped']);
+  });
+
+  it('treats a row that also declares DOCUMENT or IMAGE as not text-only', async () => {
+    model.selectedModel.set({ modelId: 'x', inputModalities: ['TEXT', 'DOCUMENT'] });
+    await drop(file('a.pdf', 'application/pdf'));
+    expect(infos).toEqual([]);
   });
 });

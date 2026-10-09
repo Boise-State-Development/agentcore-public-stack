@@ -47,7 +47,12 @@ from uuid import UUID
 
 from strands.types.exceptions import MaxTokensReachedException
 
-from apis.shared.errors import StreamErrorEvent, ErrorCode, is_service_unavailable_error
+from apis.shared.errors import (
+    ErrorCode,
+    StreamErrorEvent,
+    is_service_unavailable_error,
+    unsupported_attachment_message,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -301,6 +306,10 @@ def _handle_completion_events(event: RawEvent) -> Tuple[List[ProcessedEvent], bo
     # We also break because processing should stop on error
     if event.get("force_stop", False):
         reason = event.get("force_stop_reason", "unknown reason")
+        # The only record of the reason outside the persisted chat message
+        # and the OTel span; without it a support ticket can't be traced
+        # from the runtime logs.
+        logger.warning("Agent force-stopped: %s", reason)
 
         error_message, recoverable = _format_force_stop_message(reason)
 
@@ -325,7 +334,7 @@ def _handle_retry_events(event: RawEvent, retry_state: Dict[str, int]) -> List[P
     on every retried model call. Nothing consumed it, so a retry was
     indistinguishable from a hang: the response simply went quiet. That got
     worse when we widened the retryable set to Bedrock's transient service
-    faults (see ``BedrockTransientRetryStrategy``) — a 503 now buys several
+    faults (see ``TransientModelRetryStrategy``) — a 503 now buys several
     seconds of extra silence that the user has no way to interpret.
 
     TIMING, HONESTLY: Strands sleeps for the backoff delay INSIDE the hook and
@@ -394,31 +403,14 @@ def _format_force_stop_message(reason: Any) -> tuple[str, bool]:
             True,
         )
 
-    # Some Bedrock-hosted models (e.g. gpt-oss-120b) reject any document or
-    # image content block outright with "This model doesn't support
-    # documents." Check this BEFORE the size-limit branch — the AWS message
-    # contains "ValidationException" + "documents" and would otherwise be
-    # misclassified as a 4.5 MB overflow.
-    #
-    # Copy notes: keep the actionable advice deployment-agnostic — no brand
-    # names (model lineups change), no UI affordance names (might drift),
-    # no references to optional tools like Spreadsheet Analysis (not
-    # guaranteed enabled across forks/deployments).
-    if "doesn't support document" in reason_lower or "does not support document" in reason_lower:
-        return (
-            "⚠️ The selected model can't read attached files.\n\n"
-            "To work with this file, switch to a model that supports "
-            "documents.",
-            True,
-        )
-
-    if "doesn't support image" in reason_lower or "does not support image" in reason_lower:
-        return (
-            "⚠️ The selected model can't read attached images.\n\n"
-            "To work with this image, switch to a model that supports "
-            "images.",
-            True,
-        )
+    # Some Bedrock-hosted models (e.g. gpt-oss-120b, zai.glm-5) reject any
+    # document or image content block outright. Check this BEFORE the
+    # size-limit branch — the AWS message contains "ValidationException" +
+    # "documents" and would otherwise be misclassified as a 4.5 MB overflow.
+    # The matcher and copy are shared with the raised-exception path.
+    unsupported = unsupported_attachment_message(reason_lower)
+    if unsupported:
+        return unsupported, True
 
     # Bedrock ConverseStream rejects document content blocks over ~4.5 MB
     # internal size. Triggered most often by XLSX files that inflate
@@ -453,7 +445,7 @@ def _format_force_stop_message(reason: Any) -> tuple[str, bool]:
         )
 
     # Bedrock's transient server-side faults. Reaching this point means the
-    # automatic retries (BedrockTransientRetryStrategy) were already spent, so
+    # automatic retries (TransientModelRetryStrategy) were already spent, so
     # the copy says so — otherwise "try again" reads as if nothing was tried.
     # Prod session `5f34d2b0` is why this branch exists: a 503 fell through to
     # the generic "I ran into a problem" text, which gave the user no signal

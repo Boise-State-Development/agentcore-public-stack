@@ -121,9 +121,9 @@ async def test_conversation_title_returns_before_its_write_lands(monkeypatch):
     write_may_finish = asyncio.Event()
     written: list = []
 
-    async def slow_write(session_id, user_id, title):
+    async def slow_write(session_id, user_id, title, first_prompt=None):
         await write_may_finish.wait()
-        written.append(title)
+        written.append((title, first_prompt))
 
     monkeypatch.setattr(chat_service, "update_session_title", slow_write)
 
@@ -133,7 +133,9 @@ async def test_conversation_title_returns_before_its_write_lands(monkeypatch):
     assert written == []
     write_may_finish.set()
     await _drain_title_writes()
-    assert written == ["Planning a biology syllabus"]
+    # The opening prompt rides on the same write, for conversation search's
+    # lexical leg (firstPrompt).
+    assert written == [("Planning a biology syllabus", "hi")]
 
 
 @pytest.mark.asyncio

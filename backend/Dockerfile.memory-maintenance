@@ -1,0 +1,46 @@
+# memory-maintenance Lambda image: the worker for Shared Projects 2.6
+# (docs/specs/shared-projects.md §4.6). One function: app-api async-invokes it
+# with {spaceId, runId}; it plans, verifies and proposes compaction changes to
+# a project's shared memory. Mirrors backend/Dockerfile.scheduled-runs: the
+# handler is a plain top-level module, since standalone Lambda code stays out
+# of apis/ (CLAUDE.md).
+#
+# Base image digest-pinned, same pin as the other Lambda images (see
+# backend/Dockerfile.kb-sync and the supply-chain dockerfile-pinning test).
+
+FROM public.ecr.aws/lambda/python:3.12@sha256:745b0eb8a9787e9c4bfd4fc4cae942399a2225831c96394ae70c0c2a7c7c6168
+
+# Dependencies (exact pins)
+COPY backend/src/lambdas/memory_maintenance_worker/requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+
+# Application code: the namespace-package layout mirrors backend/src for the
+# apis.shared modules the handler imports. This must cover the handler's whole
+# import closure, including function-local imports (those still run on
+# invocation); backend/tests/supply_chain/test_lambda_image_imports.py enforces
+# it. When adding a COPY here, also add the path to the memory-maintenance
+# SOURCE_DIRS in scripts/build/build-one.sh so the content-hash tag notices.
+COPY backend/src/apis/shared/__init__.py ${LAMBDA_TASK_ROOT}/apis/shared/__init__.py
+COPY backend/src/apis/shared/memory/ ${LAMBDA_TASK_ROOT}/apis/shared/memory/
+# The run reads the project (is it still active, who are its editors) and adds
+# its cost to the project's month; the inbox lives on the same table.
+COPY backend/src/apis/shared/projects/__init__.py ${LAMBDA_TASK_ROOT}/apis/shared/projects/__init__.py
+COPY backend/src/apis/shared/projects/access.py ${LAMBDA_TASK_ROOT}/apis/shared/projects/access.py
+COPY backend/src/apis/shared/projects/models.py ${LAMBDA_TASK_ROOT}/apis/shared/projects/models.py
+COPY backend/src/apis/shared/projects/repository.py ${LAMBDA_TASK_ROOT}/apis/shared/projects/repository.py
+COPY backend/src/apis/shared/dynamo_errors.py ${LAMBDA_TASK_ROOT}/apis/shared/dynamo_errors.py
+COPY backend/src/apis/shared/notifications/ ${LAMBDA_TASK_ROOT}/apis/shared/notifications/
+COPY backend/src/apis/shared/timestamps.py ${LAMBDA_TASK_ROOT}/apis/shared/timestamps.py
+# The User dataclass the inbox records an actor with. Only the module: without
+# auth/__init__.py, apis.shared.auth is a namespace package, so its FastAPI-only
+# re-exports never load here.
+COPY backend/src/apis/shared/auth/models.py ${LAMBDA_TASK_ROOT}/apis/shared/auth/models.py
+
+# The handler itself, as a plain top-level module.
+COPY backend/src/lambdas/memory_maintenance_worker/worker.py ${LAMBDA_TASK_ROOT}/worker.py
+
+# Precompile the copied source: /var/task is read-only at runtime, so a cold
+# start could never cache the .pyc it produces (see Dockerfile.scheduled-runs).
+RUN python -m compileall -q ${LAMBDA_TASK_ROOT}
+
+CMD ["worker.lambda_handler"]

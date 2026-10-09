@@ -224,10 +224,7 @@ def extract_outline(fmt: str, raw: bytes) -> DocumentDigest:
     )
 
 
-def text_sample(fmt: str, raw: bytes, limit: int = DOCUMENT_DIGEST_SAMPLE_CHARS) -> str:
-    """Up to ``limit`` characters spread across the document (not just its
-    head), so the abstract sees the middle and the end of a long file."""
-    _, texts = _units_for(fmt, raw)
+def _sample_units(fmt: str, texts: List[str], limit: int) -> str:
     if not texts:
         return ""
     if fmt == "pdf":
@@ -235,6 +232,42 @@ def text_sample(fmt: str, raw: bytes, limit: int = DOCUMENT_DIGEST_SAMPLE_CHARS)
         pieces = [t.strip()[:per_page] for t in texts if t.strip()]
         return "\n\n".join(pieces)[:limit]
     return "\n".join(t for t in texts if t.strip())[:limit]
+
+
+def text_sample(fmt: str, raw: bytes, limit: int = DOCUMENT_DIGEST_SAMPLE_CHARS) -> str:
+    """Up to ``limit`` characters spread across the document (not just its
+    head), so the abstract sees the middle and the end of a long file."""
+    _, texts = _units_for(fmt, raw)
+    return _sample_units(fmt, texts, limit)
+
+
+class DocumentText(BaseModel):
+    """A document's text layer, bounded. ``truncated`` means ``text`` is
+    ``text_sample``'s excerpt, not all of it."""
+
+    text: str
+    truncated: bool
+    unit: str
+    count: int
+
+
+def document_text(fmt: str, raw: bytes, limit: int) -> DocumentText:
+    """The whole text layer when it fits in ``limit`` characters, else
+    ``text_sample``'s ``limit``-character excerpt (spread across a PDF's
+    pages, the head of anything else).
+
+    For a model that reads text only (the attachment fallback in
+    ``inference_api/chat/routes.py``): a short document goes over complete,
+    and a long one as an excerpt, with ``document_read`` left to fetch the
+    exact part. Text only — a scanned PDF has no text layer and comes back
+    empty. Blocking; run it off the loop.
+    """
+    unit, texts = _units_for(fmt, raw)
+    separator = "\n\n" if fmt == "pdf" else "\n"
+    full = separator.join(t.strip() if fmt == "pdf" else t for t in texts if t.strip())
+    if len(full) <= limit:
+        return DocumentText(text=full, truncated=False, unit=unit, count=len(texts))
+    return DocumentText(text=_sample_units(fmt, texts, limit), truncated=True, unit=unit, count=len(texts))
 
 
 # ---------------------------------------------------------------------------

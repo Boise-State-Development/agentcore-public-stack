@@ -29,7 +29,8 @@ export interface MemorySpaceSummary {
   name: string;
   template: string;
   role: MemoryRole;
-  ownerId: string;
+  /** Null for a project's space: project members see people by email, never by user id. */
+  ownerId: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -47,7 +48,9 @@ export interface MemoryEntryRef {
   description: string;
   size: number;
   updated: string;
+  /** Email of who last saved it; empty when unknown. */
   updatedBy: string;
+  updatedByName: string | null;
   indexed: Record<string, unknown>;
 }
 
