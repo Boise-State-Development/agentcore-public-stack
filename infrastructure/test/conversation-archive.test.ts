@@ -188,10 +188,10 @@ describe('conversation archive wiring', () => {
     expect(env.CONVERSATION_ARCHIVE_BUCKET_NAME).toBeDefined();
   });
 
-  it('lets the runtime only put, and only under conversations/', () => {
+  it('lets the runtime put and read objects, only under conversations/, and never list or delete', () => {
     const template = synth();
     const [stmt] = statementsWithSid(template, 'ConversationArchivePut');
-    expect(stmt.Action).toBe('s3:PutObject');
+    expect(stmt.Action).toEqual(['s3:PutObject', 's3:GetObject']);
     expect(JSON.stringify(stmt.Resource)).toContain('/conversations/*');
   });
 

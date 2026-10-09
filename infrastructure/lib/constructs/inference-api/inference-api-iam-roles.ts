@@ -376,14 +376,17 @@ export function createRuntimeExecutionRole(
     resources: [skillResourcesBucketArn, `${skillResourcesBucketArn}/*`],
   }));
 
-  // ── Conversation archive (write-only) ──
-  // The after-`done` put of each turn's transcript (conversation search). The
-  // runtime only ever writes; reading, listing and deleting are app-api's.
+  // ── Conversation archive (put, plus the read that guards a re-archive) ──
+  // The after-`done` put of each turn's transcript (conversation search). A
+  // resumed turn re-archives its paused copy, and reads that object first so
+  // it never replaces a different turn's (`put_turn_guarded`). No ListBucket:
+  // a missing key then reads as 403, which the guard treats as "write
+  // create-only". Listing and deleting stay app-api's.
   const conversationArchiveBucketArn = refs.conversationArchiveBucket.bucketArn;
   role.addToPolicy(new iam.PolicyStatement({
     sid: 'ConversationArchivePut',
     effect: iam.Effect.ALLOW,
-    actions: ['s3:PutObject'],
+    actions: ['s3:PutObject', 's3:GetObject'],
     resources: [`${conversationArchiveBucketArn}/conversations/*`],
   }));
 
