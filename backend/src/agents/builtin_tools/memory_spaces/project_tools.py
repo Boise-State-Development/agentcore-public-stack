@@ -336,8 +336,11 @@ def make_project_memory_save_tool(scopes: ProjectMemoryScopes):
                     return _error(f'{_missing(scope)} Save it to "mine" instead.')
             service = MemorySpaceService()
             if _is_index_slug(slug):
-                await asyncio.to_thread(service.update_index, space_id, user.user_id, user.email, text)
-                return {"content": [{"text": f"Updated the MEMORY.md index of {label}."}], "status": "success"}
+                saved = await asyncio.to_thread(service.save_index, space_id, user.user_id, user.email, text)
+                out = f"Updated the MEMORY.md index of {label}."
+                if saved.warnings:
+                    out += " Notes: " + " ".join(saved.warnings)
+                return {"content": [{"text": out}], "status": "success"}
             context = SaveContext(source_session_id=_session_of(tool_context))
             result = await asyncio.to_thread(
                 lambda: service.save_entry(

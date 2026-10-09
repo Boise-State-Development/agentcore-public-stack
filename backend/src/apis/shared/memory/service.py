@@ -22,7 +22,7 @@ import re
 import uuid
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Dict, List, Literal, Optional, Sequence, Set, Tuple, TypeVar
+from typing import Any, Callable, Collection, Dict, List, Literal, Optional, Sequence, Set, Tuple, TypeVar
 
 from .format import (
     Frontmatter,
@@ -57,6 +57,7 @@ from .models import (
     ShareRole,
     SpaceMember,
 )
+from .lint import LintFinding, block_message, lint_description, lint_index, lint_items, lint_mode_for, lint_settings, warning_messages
 from .maintenance.ops import CompactionResult, NewFile, apply_ops
 from .repository import ManifestTooLargeError, MemorySpaceRepository, OptimisticLockError
 from .store import (
@@ -292,6 +293,17 @@ class SaveResult:
     # index line went (``added``, ``already_linked``, ``over_budget``, or absent).
     created: List[MemoryEntryRef] = field(default_factory=list)
     created_indexed: Dict[str, str] = field(default_factory=dict)
+    # Content lint (2.7): what the check found in the text this save added or changed.
+    lint: List[LintFinding] = field(default_factory=list)
+
+
+@dataclass
+class IndexSaveResult:
+    """An index save, plus what the caller should hear about it (warnings, content lint)."""
+
+    space: MemorySpace
+    warnings: List[str] = field(default_factory=list)
+    lint: List[LintFinding] = field(default_factory=list)
 
 
 @dataclass
@@ -306,6 +318,7 @@ class PreparedSave:
     warnings: List[str]
     count: TokenCount
     over_soft: bool
+    lint: List[LintFinding] = field(default_factory=list)
 
 
 @dataclass
@@ -953,18 +966,38 @@ class MemorySpaceService:
         user_email: Optional[str],
         body: str,
     ) -> MemorySpace:
-        """Replace the MEMORY.md index text (editor+).
+        """Replace the MEMORY.md index text (editor+); see :meth:`save_index`."""
+        return self.save_index(space_id, user_id, user_email, body).space
+
+    def save_index(
+        self,
+        space_id: str,
+        user_id: str,
+        user_email: Optional[str],
+        body: str,
+    ) -> IndexSaveResult:
+        """Replace the MEMORY.md index text (editor+), with what the caller should hear about it.
 
         In a canonical space the index's links are checked like a file's: a
-        new link to nothing fails, one it already had is tolerated.
+        new link to nothing fails, one it already had is tolerated. In a
+        project's spaces the lines it didn't have before go through the content
+        check (2.7), since the index is what every task loads.
         """
         space, _ = self._require(space_id, user_id, user_email, "editor")
-        if space.file_format == "canonical":
+        lint: List[LintFinding] = []
+        settings = lint_settings()
+        mode = lint_mode_for(space.scope, settings)
+        if space.file_format == "canonical" or mode != "off":
             previous = self.store.get(space.index_s3_key).decode("utf-8") if space.index_s3_key else ""
-            try:
-                validate_index_links(body, self.repository.get_index(space_id).entries, previous_text=previous)
-            except MemoryFormatError as exc:
-                raise MemoryValidationError.from_format_error(exc) from exc
+            if space.file_format == "canonical":
+                try:
+                    validate_index_links(body, self.repository.get_index(space_id).entries, previous_text=previous)
+                except MemoryFormatError as exc:
+                    raise MemoryValidationError.from_format_error(exc) from exc
+            if mode != "off":
+                lint = lint_index(body, previous, settings)
+                if mode == "block" and lint:
+                    raise MemoryValidationError(block_message(lint), code="lint_blocked")
         content = self._encode(body)
         old_key = space.index_s3_key
         new_key = self.store.put(
@@ -976,7 +1009,7 @@ class MemorySpaceService:
         self.repository.put_space(space)
         if old_key and old_key != new_key and not self._key_in_use(space_id, old_key):
             self.store.delete(old_key)
-        return space
+        return IndexSaveResult(space=space, warnings=warning_messages(lint), lint=lint)
 
     def add_index_link(
         self,
@@ -1395,7 +1428,9 @@ class MemorySpaceService:
             if base is None or base.content_hash != base_content_hash:
                 raise moved
         prepared = self._prepare_save(
-            space, slug, body, description=description, aliases=aliases, now=now, restorable=restorable
+            space, slug, body, description=description, aliases=aliases, now=now, restorable=restorable,
+            # Items a split moves keep their text: they were checked when they were written.
+            lint_skip=set(context.moved) if context else (),
         )
         if base_content_hash is not None and (
             prepared.current_ref is None or prepared.current_ref.content_hash != base_content_hash
@@ -1421,12 +1456,19 @@ class MemorySpaceService:
         now: str,
         restorable: Sequence[str] = (),
         extra_files: Sequence[FileTarget] = (),
+        lint_skip: Collection[str] = (),
     ) -> PreparedSave:
-        """§4.3 steps 1–5 against the current manifest: validate, render, count. Writes nothing.
+        """§4.3 steps 1–6 against the current manifest: validate, lint, render, count. Writes nothing.
 
         A save may not drop a pinned item (2.5a-2): the pin is how a member says
         "keep this", so dropping it takes an unpin first. ``extra_files`` are
         files a pending split would create (2.6c), so a pointer to one resolves.
+
+        Content lint (step 6, 2.7) runs in a project's spaces only, before the
+        token count, so a refused save never pays for one. It reads the items
+        whose text this save adds or changes (``lint_skip`` names anchors that
+        keep text checked elsewhere) and a changed description; ``block`` refuses
+        a new finding, and every finding is a warning otherwise.
         """
         space_id = space.space_id
         canonical = space.file_format == "canonical"
@@ -1457,6 +1499,7 @@ class MemorySpaceService:
             except MemoryFormatError as exc:
                 raise MemoryValidationError.from_format_error(exc) from exc
             _check_pins_kept(current_ref, validated)
+            lint = self._lint_save(space, validated, current, skip=lint_skip)
             version = _next_version(current_ref)
             created = (current.frontmatter.created if current else "") or now
             text = render_file(
@@ -1470,8 +1513,9 @@ class MemorySpaceService:
                 ),
                 validated.items,
             )
-            warnings = list(validated.warnings)
+            warnings = list(validated.warnings) + warning_messages(lint)
         else:
+            lint = []
             if aliases:
                 raise MemoryValidationError(
                     "Aliases need a space that uses the item format.", code="aliases_unsupported"
@@ -1494,8 +1538,31 @@ class MemorySpaceService:
             warnings.append(f"This file is about {count.tokens:,} tokens, close to the {hard_cap:,}-token limit.")
         return PreparedSave(
             slug=slug, text=text, current_ref=current_ref, validated=validated, current_items=current_items,
-            warnings=warnings, count=count, over_soft=over_soft,
+            warnings=warnings, count=count, over_soft=over_soft, lint=lint,
         )
+
+    @staticmethod
+    def _lint_save(
+        space: MemorySpace, validated: CanonicalSave, current: Optional[CurrentFile], *, skip: Collection[str]
+    ) -> List[LintFinding]:
+        """Step 6: the content check over what this save adds or changes. Raises in ``block`` mode."""
+        settings = lint_settings()
+        mode = lint_mode_for(space.scope, settings)
+        if mode == "off":
+            return []
+        previous = {i.anchor: i.text for i in (current.items if current else ()) if i.anchor}
+        findings = lint_description(
+            validated.description, current.frontmatter.description if current else "", settings
+        ) + lint_items(validated.items, settings, previous=previous, skip=skip)
+        new = [f for f in findings if not f.pre_existing]
+        if mode == "block" and new:
+            raise MemoryValidationError(block_message(new), code="lint_blocked")
+        if findings:
+            logger.info(
+                "memory-lint: space=%s mode=%s findings=%s", space.space_id, mode,
+                ",".join(sorted({f.rule for f in findings})),
+            )
+        return findings
 
     def _commit_save(
         self,
@@ -1598,6 +1665,7 @@ class MemorySpaceService:
             removed_anchors=list(validated.removed_anchors) if validated else [],
             archived_links=list(validated.archived_links) if validated else [],
             over_soft_threshold=over_soft,
+            lint=list(prepared.lint),
         )
 
     def delete_entry(
@@ -2076,9 +2144,10 @@ class MemorySpaceService:
         for new in new_files:
             if self._find_ref(space_id, new.slug) is not None:
                 raise MemoryValidationError(f"A file named '{new.slug}' already exists.", code="name_collision")
+            moved = [i.anchor for i in new.items if i.anchor]
             self._prepare_save(
                 space, new.slug, render_items(new.items), description=new.description, aliases=None, now=now,
-                restorable=[i.anchor for i in new.items if i.anchor],
+                restorable=moved, lint_skip=moved,
             )
         prepared = self._prepare_save(
             space, slug, body, description=None, aliases=None, now=now,

@@ -176,12 +176,17 @@ class ProjectMemoryFiles:
         if scope == "project":
             self._record(AuditAction.PROJECT_MEMORY_DELETED, user, project, before={"slug": slug})
 
-    def save_index(self, project_id: str, user: User, scope: MemoryScope, content: str) -> None:
-        """Replace a scope's ``MEMORY.md`` (editor+ for ``project``; anyone in ``mine``)."""
+    def save_index(self, project_id: str, user: User, scope: MemoryScope, content: str) -> Any:
+        """Replace a scope's ``MEMORY.md`` (editor+ for ``project``; anyone in ``mine``).
+
+        Returns the service's ``IndexSaveResult``: its warnings carry what the
+        content check (2.7) found in the lines the index didn't have before.
+        """
         project, space_id = self._resolve(project_id, user, scope, writable=True)
-        self.memory.update_index(space_id, user.user_id, user.email, content)
+        result = self.memory.save_index(space_id, user.user_id, user.email, content)
         if scope == "project":
             self._record(AuditAction.PROJECT_MEMORY_EDITED, user, project, after={"slug": "MEMORY.md"})
+        return result
 
     def restore_version(self, project_id: str, user: User, scope: MemoryScope, slug: str, version: int):
         """Make an earlier version of a file the current one, as a new version (2.8c; editor+ / your own).
