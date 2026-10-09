@@ -88,6 +88,15 @@ USER bedrock_agentcore
 ARG APP_VERSION=unknown
 ENV APP_VERSION=${APP_VERSION}
 
+# Runtime environment contract (docs/specs/agentcore-runtime-v2.md §7). This
+# image derives the resource-name variables listed in
+# apis/shared/config/derived_environment.json from PROJECT_PREFIX at startup,
+# so the Runtime does not have to be sent them. scripts/platform/deploy.sh
+# reads this label off the LIVE image before a CDK deploy that stops sending
+# them, and refuses if it is missing: an older image would start without its
+# table and bucket names. Bump the value only with a matching change there.
+LABEL org.agentcore-public-stack.runtime-env-contract="derived-names-v1"
+
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app/src
