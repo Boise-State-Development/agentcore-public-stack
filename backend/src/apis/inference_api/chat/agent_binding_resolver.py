@@ -60,6 +60,7 @@ from apis.shared.models.retirement import (
     resolve_effective_model,
     retired_model_message,
 )
+from apis.shared.rbac.model_access import model_access_denied_message
 from apis.shared.rbac.service import get_app_role_service
 from apis.shared.skills.access import resolve_invocable_skill_ids
 from apis.shared.tools.scoped_ids import base_tool_id
@@ -272,8 +273,7 @@ async def resolve_agent_invocation(
             plan.unavailable.model_id = model_id
         else:
             raise AgentBindingBlockedError(
-                f"This agent runs on **{model_id}**, which isn't available "
-                "to your account. Ask an administrator for access, or use a different agent."
+                model_access_denied_message(model_id, effective.record, agent=True)
             )
 
     plan.memory = await _resolve_memory(assistant, invoker, plan.unavailable if degrade else None)
