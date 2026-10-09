@@ -10,7 +10,7 @@ import { ProjectApiService } from '../services/project-api.service';
 import { projectErrorMessage } from '../services/projects.service';
 import { MemoryLinkPickerDialogComponent, MemoryLinkPickerData, MemoryLinkPickerResult } from './memory-link-picker-dialog.component';
 import { MemoryMeterComponent } from './memory-meter.component';
-import { estimateTokens, itemProblem } from './memory-text';
+import { estimateTokens, itemProblem, lintLine } from './memory-text';
 
 /**
  * Edit a scope's `MEMORY.md` (shared-projects 2.8b). Unlike a file, the index may hold any
@@ -139,8 +139,13 @@ export class MemoryIndexEditorComponent {
     this.saving.set(true);
     this.serverError.set(null);
     try {
-      await firstValueFrom(this.api.saveMemoryIndex(this.projectId(), this.scope(), this.text()));
-      this.toast.success('Saved the index');
+      const result = await firstValueFrom(this.api.saveMemoryIndex(this.projectId(), this.scope(), this.text()));
+      const flagged = lintLine(result.lint);
+      if (flagged) {
+        this.toast.warning('Saved the index', `${flagged} Every task loads the index, so check it before moving on.`);
+      } else {
+        this.toast.success('Saved the index');
+      }
       this.done.emit();
     } catch (err) {
       this.serverError.set(projectErrorMessage(err, 'The index didn’t save. Try again.'));

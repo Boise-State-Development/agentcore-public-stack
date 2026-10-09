@@ -67,6 +67,22 @@ describe('buildAppApiEnvironment — Shared Projects', () => {
   });
 });
 
+describe('buildAppApiEnvironment — project-memory content lint (2.7)', () => {
+  it('always sets the mode and sets the patterns only when there are some', () => {
+    const plain = buildAppApiEnvironment(createMockConfig(), stubParams());
+    expect(plain.MEMORY_LINT_MODE).toBe('warn');
+    expect(plain).not.toHaveProperty('MEMORY_SENSITIVE_PATTERNS');
+
+    const patterns = '["\\\\bS\\\\d{8}\\\\b"]';
+    const set = buildAppApiEnvironment(
+      createMockConfig({ memoryLint: { mode: 'block', sensitivePatterns: patterns } }),
+      stubParams(),
+    );
+    expect(set.MEMORY_LINT_MODE).toBe('block');
+    expect(set.MEMORY_SENSITIVE_PATTERNS).toBe(patterns);
+  });
+});
+
 describe('buildAppApiEnvironment — dictation', () => {
   it('threads the kill switch and the language list', () => {
     const env = buildAppApiEnvironment(createMockConfig(), stubParams());

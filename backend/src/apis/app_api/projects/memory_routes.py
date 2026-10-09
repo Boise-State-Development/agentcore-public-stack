@@ -13,10 +13,13 @@ import logging
 from typing import List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from apis.shared.auth.models import User
 from apis.shared.directory import display_names
+from apis.shared.memory.format import MemoryFormatError, parse_file, parse_items
+from apis.shared.memory.lint import LintFinding, lint_for_read
 from apis.shared.memory.models import (
     ArchivedItem,
     ItemProvenance,
@@ -33,8 +36,12 @@ from apis.shared.memory.service import (
     MemorySpacePermissionError,
     MemoryValidationError,
 )
+from apis.shared.files.content_disposition import build_content_disposition
+from apis.shared.memory.store import MemorySpaceStoreError
 from apis.shared.projects.memory_files import EditedItem, ProjectMemoryFiles
 from apis.shared.projects.memory_proposals import ProjectMemoryProposals, ProposalProjectError
+
+from apis.app_api.memory_spaces.export_zip import build_export_zip, safe_component, stream_and_close
 
 from .routes import _svc, require_projects_user
 
@@ -44,6 +51,34 @@ router = APIRouter(prefix="/projects/{project_id}/memory/proposals", tags=["proj
 
 
 # ── models ──────────────────────────────────────────────────────────────
+
+
+class LintFindingResponse(BaseModel):
+    """One thing the content check found (2.7). ``message`` is the sentence to show; never stored."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    rule: str
+    category: str = Field(..., description="instruction | markup | secret | sensitive")
+    where: str = Field(..., description="item | description | index")
+    position: Optional[int] = Field(None, description="1-based item number, or index line number")
+    anchor: Optional[str] = None
+    label: Optional[str] = None
+    excerpt: Optional[str] = Field(None, description="The matched words; never given for a credential or a deployment pattern")
+    message: str = Field(..., description="The sentence, with where: \"Item 2 reads like …\"")
+    summary: str = Field(..., description="The sentence without where, for showing beside the item: \"Reads like …\"")
+
+    @classmethod
+    def of(cls, finding: LintFinding) -> "LintFindingResponse":
+        return cls(**finding.to_dict())
+
+
+def _lint(findings: List[LintFinding]) -> List[LintFindingResponse]:
+    return [LintFindingResponse.of(f) for f in findings]
+
+
+# A project's scopes, as the memory service names them.
+_SPACE_SCOPE = {"project": "shared", "mine": "personal_in_project"}
 
 
 class CreateProposalRequest(BaseModel):
@@ -121,10 +156,38 @@ class ProposalResponse(BaseModel):
         )
 
 
+def _proposal_lint(p: MemoryProposal, current: Optional[tuple]) -> List[LintFindingResponse]:
+    """What the content check finds in what a pending proposal adds or changes (2.7), for its reviewer.
+
+    The rule a save applies: items the file already holds word for word aren't
+    read, so a proposal is never blamed for text it didn't bring. Proposals
+    target the shared space. A text that no longer parses has nothing to show;
+    its approval would be refused anyway.
+    """
+    if p.state != "pending":
+        return []
+    body, description = current if current is not None else ("", "")
+    try:
+        items = parse_file(p.text).items
+        previous = {i.anchor: i.text for i in parse_items(body) if i.anchor}
+    except MemoryFormatError:
+        return []
+    return _lint(
+        lint_for_read(
+            "shared", items, p.description if p.description is not None else description,
+            previous=previous, previous_description=description,
+        )
+    )
+
+
 class ProposalDetailResponse(ProposalResponse):
     current_text: Optional[str] = Field(
         None, alias="currentText",
         description="Pending only: the file as it is now, items without frontmatter; null for a new file",
+    )
+    lint: List[LintFindingResponse] = Field(
+        default_factory=list,
+        description="Pending only: what the content check finds in the items it adds or changes (item numbers count the proposed file)",
     )
 
 
@@ -136,6 +199,9 @@ class ProposalsResponse(BaseModel):
 
 class CreateProposalResponse(ProposalResponse):
     warnings: List[str] = Field(default_factory=list)
+    lint: List[LintFindingResponse] = Field(
+        default_factory=list, description="What the content check found in what it adds or changes; its reviewers see it too"
+    )
 
 
 class ApproveProposalResponse(ProposalResponse):
@@ -195,14 +261,19 @@ def create_proposal(
     project_id: str, body: CreateProposalRequest, user: User = Depends(require_projects_user)
 ) -> CreateProposalResponse:
     """Propose a change for an editor to review. Checked like a save, so a bad file is a 400 now."""
+    proposals = _proposals()
     try:
-        proposal, warnings = _proposals().propose(
+        proposal, warnings = proposals.propose(
             project_id, user, body.slug, body.text, description=body.description, aliases=body.aliases,
         )
     except _ERRORS as e:
         raise _translate(e)
+    try:
+        lint = _proposal_lint(proposal, proposals.current_file(project_id, user, proposal.slug)) if warnings else []
+    except _ERRORS:
+        lint = []  # the proposal is made; its findings are a courtesy, and its reviewer re-reads them
     base = ProposalResponse.build(proposal, user, _names(proposal), stale=False)
-    return CreateProposalResponse(**base.model_dump(), warnings=warnings)
+    return CreateProposalResponse(**base.model_dump(), warnings=warnings, lint=lint)
 
 
 @router.get("/{proposal_id}", response_model=ProposalDetailResponse, response_model_by_alias=True)
@@ -211,13 +282,17 @@ def get_proposal(project_id: str, proposal_id: str, user: User = Depends(require
     proposals = _proposals()
     try:
         proposal, stale = proposals.get(project_id, user, proposal_id)
-        current = proposals.current_text(project_id, user, proposal.slug) if proposal.state == "pending" else None
+        current = proposals.current_file(project_id, user, proposal.slug) if proposal.state == "pending" else None
     except _ERRORS as e:
         raise _translate(e)
     base = ProposalResponse.build(
         proposal, user, _names(proposal), stale=stale if proposal.state == "pending" else None
     )
-    return ProposalDetailResponse(**base.model_dump(), current_text=current)
+    return ProposalDetailResponse(
+        **base.model_dump(),
+        current_text=current[0] if current is not None else None,
+        lint=_proposal_lint(proposal, current),
+    )
 
 
 @router.post("/{proposal_id}/approve", response_model=ApproveProposalResponse, response_model_by_alias=True)
@@ -288,6 +363,7 @@ class MemoryFileItem(BaseModel):
     pinned: bool = False
     provenance: Optional[ItemProvenance] = None
     replaces: List[ReplacedItem] = Field(default_factory=list, description="The supersede marker's items, oldest first")
+    lint: List[LintFindingResponse] = Field(default_factory=list, description="What the content check finds in this item")
 
 
 class MemoryFileResponse(BaseModel):
@@ -301,6 +377,9 @@ class MemoryFileResponse(BaseModel):
     tokens: Optional[int] = None
     items: List[MemoryFileItem]
     people: dict = Field(default_factory=dict, description="Display names for the emails in provenance")
+    lint: List[LintFindingResponse] = Field(
+        default_factory=list, description="What the content check finds in the description (items carry their own)"
+    )
 
 
 class PinRequest(BaseModel):
@@ -365,6 +444,9 @@ class SaveFileResponse(BaseModel):
     indexed: Optional[str] = Field(
         None, description="A new file's index line: added, already_linked or over_budget; null for an existing file"
     )
+    lint: List[LintFindingResponse] = Field(
+        default_factory=list, description="What the content check found in the items this save added or changed"
+    )
 
 
 class RestoreVersionRequest(BaseModel):
@@ -380,6 +462,8 @@ class IndexRequest(BaseModel):
 
 class IndexResponse(BaseModel):
     content: str
+    warnings: List[str] = Field(default_factory=list)
+    lint: List[LintFindingResponse] = Field(default_factory=list, description="What the content check found in new lines")
 
 
 def _files() -> ProjectMemoryFiles:
@@ -413,11 +497,17 @@ def read_memory_file(
         logger.warning("Could not read what the items of %s replaced", slug, exc_info=True)
         replaced = {}
     pinned = set(ref.pinned)
+    findings = lint_for_read(_SPACE_SCOPE[scope], items, ref.description)
+    by_anchor: dict = {}
+    for f in findings:
+        if f.where == "item":
+            by_anchor.setdefault(f.anchor, []).append(f)
     return MemoryFileResponse(
         slug=ref.slug,
         description=ref.description,
         version=ref.version,
         tokens=ref.tokens,
+        lint=_lint([f for f in findings if f.where == "description"]),
         items=[
             MemoryFileItem(
                 anchor=i.anchor, text=i.text, pinned=i.anchor in pinned, provenance=provenance.get(i.anchor),
@@ -428,6 +518,7 @@ def read_memory_file(
                     )
                     for a in replaced.get(i.anchor, [])
                 ],
+                lint=_lint(by_anchor.get(i.anchor, [])),
             )
             for i in items
         ],
@@ -519,6 +610,7 @@ def save_memory_file(
         over_soft_threshold=result.over_soft_threshold,
         removed_anchors=result.removed_anchors,
         indexed=indexed,
+        lint=_lint(result.lint),
     )
 
 
@@ -539,10 +631,10 @@ def save_memory_index(
 ) -> IndexResponse:
     """Replace a scope's MEMORY.md, its links checked (editor+ / your own)."""
     try:
-        _files().save_index(project_id, user, scope, body.content)
+        result = _files().save_index(project_id, user, scope, body.content)
     except _ERRORS as e:
         raise _translate(e)
-    return IndexResponse(content=body.content)
+    return IndexResponse(content=body.content, warnings=result.warnings, lint=_lint(result.lint))
 
 
 @files_router.post("/history/restore", response_model=RestoreResponse, response_model_by_alias=True)
@@ -562,3 +654,31 @@ def restore_memory_version(
     except _ERRORS as e:
         raise _translate(e)
     return RestoreResponse(slug=result.ref.slug, version=result.ref.version)
+
+
+@files_router.get("/export")
+def export_memory(
+    project_id: str, scope: Scope = Query("project"), user: User = Depends(require_projects_user)
+) -> StreamingResponse:
+    """Download a scope's memory as a `.zip` (viewer+; Shared Projects 2.7).
+
+    The space export (``MEMORY.md``, each file with its frontmatter,
+    ``metadata.json``) plus ``provenance.json``: who added, changed, proposed,
+    approved, restored or moved each item, keyed by its anchor. Any member may
+    export the project's memory, as any member may read it; ``mine`` is the
+    caller's own.
+    """
+    try:
+        export = _files().export(project_id, user, scope)
+    except _ERRORS as e:
+        raise _translate(e)
+    except MemorySpaceStoreError:
+        logger.error("projects: memory export failed to read the store for project=%s", project_id)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Couldn't read the memory to export it.")
+    name = f"{export.space.name or 'project'} memory" if scope == "project" else f"{export.space.name or 'project'} my memory"
+    root = safe_component(name, "memory")
+    return StreamingResponse(
+        stream_and_close(build_export_zip(root, export)),
+        media_type="application/zip",
+        headers={"Content-Disposition": build_content_disposition("attachment", f"{name}.zip")},
+    )

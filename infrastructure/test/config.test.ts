@@ -1,5 +1,5 @@
 import * as cdk from 'aws-cdk-lib';
-import { loadConfig, buildCorsOrigins, AppConfig,
+import { loadConfig, buildCorsOrigins, AppConfig, MEMORY_SENSITIVE_PATTERNS_MAX_CHARS,
   OBSERVABILITY_DEFAULT_AGENTCORE_ACTIVE_SESSION_THRESHOLD,
   OBSERVABILITY_DEFAULT_AGENTCORE_ERROR_THRESHOLD,
   OBSERVABILITY_DEFAULT_ALB_TARGET_5XX_THRESHOLD,
@@ -661,6 +661,62 @@ describe('RAG Ingestion Configuration', () => {
       app.node.setContext('projects', { enabled: true });
 
       expect(loadConfig(app).projects.enabled).toBe(true);
+    });
+  });
+
+  // ============================================================
+  // Project-memory content lint (Shared Projects 2.7): configuration,
+  // defaulting to warn with no deployment patterns
+  // ============================================================
+
+  describe('Project-memory content lint', () => {
+    afterEach(() => {
+      delete process.env.CDK_MEMORY_LINT_MODE;
+      delete process.env.CDK_MEMORY_SENSITIVE_PATTERNS;
+    });
+
+    test('defaults to warn with no patterns, unset or empty (an unset GitHub variable)', () => {
+      delete process.env.CDK_MEMORY_LINT_MODE;
+      process.env.CDK_MEMORY_SENSITIVE_PATTERNS = '';
+
+      expect(loadConfig(app).memoryLint).toEqual({ mode: 'warn', sensitivePatterns: '' });
+    });
+
+    test('takes the mode and patterns from the environment', () => {
+      process.env.CDK_MEMORY_LINT_MODE = 'BLOCK';
+      process.env.CDK_MEMORY_SENSITIVE_PATTERNS = '[{"pattern": "\\\\bS\\\\d{8}\\\\b", "label": "a student ID"}]';
+
+      const { memoryLint } = loadConfig(app);
+      expect(memoryLint.mode).toBe('block');
+      expect(JSON.parse(memoryLint.sensitivePatterns)[0].label).toBe('a student ID');
+    });
+
+    test('a cdk.json context may give the list as JSON', () => {
+      app.node.setContext('memoryLint', { mode: 'off', sensitivePatterns: ['a', 'b'] });
+
+      expect(loadConfig(app).memoryLint).toEqual({ mode: 'off', sensitivePatterns: '["a","b"]' });
+    });
+
+    test('an unknown mode fails the synth', () => {
+      process.env.CDK_MEMORY_LINT_MODE = 'strict';
+
+      expect(() => loadConfig(app)).toThrow(/off, warn or block/);
+    });
+
+    test('a list that is not JSON, or not a list of patterns, fails the synth', () => {
+      process.env.CDK_MEMORY_SENSITIVE_PATTERNS = '["unterminated';
+      expect(() => loadConfig(app)).toThrow(/not valid JSON/);
+
+      process.env.CDK_MEMORY_SENSITIVE_PATTERNS = '[1, 2]';
+      expect(() => loadConfig(app)).toThrow(/JSON list of pattern strings/);
+    });
+
+    test('one pattern per line is accepted as written, and the size is bounded', () => {
+      process.env.CDK_MEMORY_SENSITIVE_PATTERNS = 'confidential\nS\\d{8}';
+      expect(loadConfig(app).memoryLint.sensitivePatterns).toBe('confidential\nS\\d{8}');
+
+      process.env.CDK_MEMORY_SENSITIVE_PATTERNS = 'x'.repeat(MEMORY_SENSITIVE_PATTERNS_MAX_CHARS + 1);
+      expect(() => loadConfig(app)).toThrow(/fits a Lambda environment/);
     });
   });
 

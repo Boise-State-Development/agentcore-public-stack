@@ -124,6 +124,32 @@ describe('MemoryReviewComponent', () => {
     expect(el.querySelector('section a')?.getAttribute('href')).toContain('file=rates');
   });
 
+  it('flags what the content check found in what a proposal adds, beside the item (2.7)', async () => {
+    api.proposal.mockReturnValue(
+      of({
+        ...DETAIL,
+        lint: [
+          {
+            rule: 'you_must_now', category: 'instruction', where: 'item', position: 2, excerpt: 'You must now',
+            message: 'Item 2 reads like an instruction to the assistant: “You must now”.',
+            summary: 'Reads like an instruction to the assistant: “You must now”.',
+          },
+        ],
+      }),
+    );
+    const { el, column } = await render();
+    expect(el.textContent).toContain('The content check flagged what this adds');
+    expect(el.textContent).toContain('Item 2 reads like an instruction to the assistant: “You must now”.');
+    const proposed = Array.from(column('Proposed'));
+    expect(proposed[0].textContent).not.toContain('Flagged');
+    expect(proposed[1].textContent).toContain('Flagged by the content check (item 2)');
+  });
+
+  it('shows no flag when the content check found nothing', async () => {
+    const { el } = await render();
+    expect(el.textContent).not.toContain('content check');
+  });
+
   it('approves with a note and tells the page the file changed', async () => {
     const { el, button, settle, decided } = await render();
     const note = el.querySelector<HTMLInputElement>('#proposal-note-p1')!;
@@ -213,6 +239,25 @@ describe('MemoryReviewComponent', () => {
       expect(Array.from(boxes).map(b => b.checked)).toEqual([true, true, true]);
       expect(button(/Apply 3 changes/)).toBeDefined();
       expect(button(/Edit before approving/)).toBeUndefined();
+    });
+
+    it('names a flagged change by the start of its item, since a tidy-up has no numbered list', async () => {
+      api.proposal.mockReturnValue(
+        of({
+          ...COMPACTION,
+          currentText: null,
+          lint: [
+            {
+              rule: 'aws_access_key', category: 'secret', where: 'item', position: 1, label: 'an AWS access key',
+              message: 'Item 1 looks like it contains a credential (an AWS access key).',
+              summary: 'Looks like it contains a credential (an AWS access key).',
+            },
+          ],
+        }),
+      );
+      const { el } = await render();
+      expect(el.textContent).toContain('The content check flagged a change here');
+      expect(el.textContent).toContain('“Batch calls in groups of 50.”: Looks like it contains a credential (an AWS access key).');
     });
 
     it('applies every change with no ops list, or only the ones left ticked', async () => {

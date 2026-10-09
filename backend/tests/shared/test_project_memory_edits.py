@@ -185,7 +185,7 @@ class TestRoutes:
         assert bad.status_code == 400 and "nowhere" in bad.json()["detail"]
 
         index = client_for(EDITOR).put(f"{base}/index", json={"content": "# Project\n- [[people/sis]]\n"})
-        assert index.json() == {"content": "# Project\n- [[people/sis]]\n"}
+        assert index.json() == {"content": "# Project\n- [[people/sis]]\n", "warnings": [], "lint": []}
         assert client_for(VIEWER).put(f"{base}/index", json={"content": ""}).status_code == 403
 
         assert client_for(VIEWER).delete(f"{base}/files/people/sis").status_code == 403

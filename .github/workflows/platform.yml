@@ -253,6 +253,13 @@ jobs:
       # there. Unset (empty string) or anything else means off. The SPA's
       # matching switch is `features.projects` in src/environments/*.ts.
       CDK_PROJECTS_ENABLED: ${{ vars.CDK_PROJECTS_ENABLED }}
+      # Project-memory content lint (Shared Projects 2.7). Configuration, not a
+      # flag: it applies only inside Projects. Unset (empty string) means the
+      # defaults: `warn`, and no deployment patterns. `CDK_MEMORY_LINT_MODE` is
+      # off | warn | block; `CDK_MEMORY_SENSITIVE_PATTERNS` is a JSON list of
+      # Python regexes (strings or {"pattern", "label"}) or one per line.
+      CDK_MEMORY_LINT_MODE: ${{ vars.CDK_MEMORY_LINT_MODE }}
+      CDK_MEMORY_SENSITIVE_PATTERNS: ${{ vars.CDK_MEMORY_SENSITIVE_PATTERNS }}
       # Platform self-service (account tools: whoami / quota / settings reads +
       # the confirmed set_default_model write). Opt-in while in development: set
       # the `CDK_PLATFORM_SELF_SERVICE_ENABLED` variable to "true" in an

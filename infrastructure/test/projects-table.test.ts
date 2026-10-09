@@ -9,7 +9,7 @@ import * as cdk from 'aws-cdk-lib';
 import { Template, Match } from 'aws-cdk-lib/assertions';
 import { PlatformStack } from '../lib/platform-stack';
 import { ProjectsConstruct } from '../lib/constructs/data/projects-construct';
-import { createMockConfig, mockSsmContext, MOCK_ACCOUNT, MOCK_REGION } from './helpers/mock-config';
+import { createMockConfig, mockSsmContext, MOCK_ACCOUNT, MOCK_PREFIX, MOCK_REGION } from './helpers/mock-config';
 
 describe('ProjectsConstruct', () => {
   const config = createMockConfig();
@@ -89,6 +89,18 @@ describe('Shared Projects compute wiring', () => {
   it('gives the Runtime the table name and the kill switch', () => {
     expect(runtimeEnv.PROJECTS_ENABLED).toBe('true');
     expect(runtimeEnv).toHaveProperty('DYNAMODB_PROJECTS_TABLE_NAME');
+  });
+
+  it('gives the Runtime the content-lint settings packed into one variable, in MEMORY_ARN\'s slot', () => {
+    // Shared Projects 2.7: the Runtime is at 49 of 50 variables, so the lint's
+    // two settings travel as one JSON value, and MEMORY_ARN (only ever logged at
+    // startup; AGENTCORE_MEMORY_ID is what code reads) was retired to make room.
+    expect(JSON.parse(runtimeEnv.MEMORY_LINT as string)).toEqual({ mode: 'warn' });
+    expect(runtimeEnv).not.toHaveProperty('MEMORY_ARN');
+    expect(runtimeEnv).not.toHaveProperty('MEMORY_LINT_MODE');
+    // No patterns, no parameter: a deployment without them adds no resource.
+    const params = Object.values(template.findResources('AWS::SSM::Parameter')).map((p: any) => p.Properties.Name);
+    expect(params).not.toContain(`/${MOCK_PREFIX}/memory/sensitive-patterns`);
   });
 
   it('no longer sets the OAuth variables nothing on the Runtime reads', () => {

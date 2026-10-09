@@ -219,6 +219,27 @@ export interface MaintenanceOp {
   description?: string | null;
 }
 
+/**
+ * One thing the content check found (2.7): text that reads like an instruction to the
+ * assistant, prompt or tool-call markup, a credential, or one of the deployment's own
+ * sensitive patterns. Computed on read and never stored; nothing of it reaches a task.
+ */
+export interface MemoryLintFinding {
+  rule: string;
+  category: 'instruction' | 'markup' | 'secret' | 'sensitive';
+  where: 'item' | 'description' | 'index';
+  /** 1-based: the item's number in its file, or the index line's. */
+  position?: number | null;
+  anchor?: string | null;
+  label?: string | null;
+  /** The words that tripped it; never given for a credential or a deployment pattern. */
+  excerpt?: string | null;
+  /** The sentence, with where: "Item 2 reads like an instruction to the assistant: “…”." */
+  message: string;
+  /** The sentence without where, to show beside the item: "Reads like an instruction …". */
+  summary: string;
+}
+
 /** A proposed change to the project's shared memory (2.5a), as `/memory/proposals` returns it. */
 export interface MemoryProposal {
   proposalId: string;
@@ -259,6 +280,11 @@ export interface MemoryProposal {
 export interface MemoryProposalDetail extends MemoryProposal {
   /** Pending only: the file now, items without frontmatter; null for a new file. */
   currentText?: string | null;
+  /**
+   * Pending only: what the content check finds in what it adds or changes (2.7). Positions
+   * count the proposed file's items.
+   */
+  lint?: MemoryLintFinding[];
 }
 
 export interface MemoryProposalsResponse {
@@ -347,6 +373,8 @@ export interface MemoryItem {
   provenance?: ItemProvenance | null;
   /** What it replaced, oldest first; absent or empty when nothing. */
   replaces?: ReplacedMemoryItem[];
+  /** What the content check finds in it (2.7); absent or empty when nothing. */
+  lint?: MemoryLintFinding[];
 }
 
 /** `GET /projects/{id}/memory/files/{slug}`: one file as items. */
@@ -358,6 +386,8 @@ export interface MemoryFile {
   items: MemoryItem[];
   /** Display names by email, for the people in `provenance`. */
   people: Record<string, string>;
+  /** What the content check finds in the description (items carry their own). */
+  lint?: MemoryLintFinding[];
 }
 
 export interface MemoryPinsResponse {
@@ -444,6 +474,23 @@ export interface SaveMemoryFileResponse {
   removedAnchors: string[];
   /** A new file's index line: `added`, `already_linked` or `over_budget`; null for an existing file. */
   indexed: string | null;
+  /** What the content check found in the items this save added or changed (2.7). */
+  lint?: MemoryLintFinding[];
+}
+
+/** `POST /projects/{id}/memory/proposals`. */
+export interface CreateMemoryProposalResponse extends MemoryProposal {
+  warnings?: string[];
+  /** What the content check found in what it adds or changes (2.7); its reviewers see it too. */
+  lint?: MemoryLintFinding[];
+}
+
+/** `PUT /projects/{id}/memory/index`. */
+export interface SaveMemoryIndexResponse {
+  content: string;
+  warnings?: string[];
+  /** What the content check found in the lines the index didn't have before (2.7). */
+  lint?: MemoryLintFinding[];
 }
 
 /** `POST /projects/{id}/memory/proposals`: a whole file, in the form a save takes. */

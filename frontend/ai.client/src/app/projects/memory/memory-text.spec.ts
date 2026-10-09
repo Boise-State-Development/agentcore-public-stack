@@ -9,6 +9,7 @@ import {
   inlineRuns,
   itemProblem,
   linkParts,
+  lintLine,
   parseItems,
   replacedLabel,
   aliasProblem,
@@ -206,5 +207,16 @@ describe('inlineRuns', () => {
       { kind: 'plain', text: '; 2 * 3 * 4' },
     ]);
     expect(inlineRuns('plain')).toEqual([{ kind: 'plain', text: 'plain' }]);
+  });
+});
+
+describe('lintLine', () => {
+  const finding = (message: string) => ({ rule: 'r', category: 'instruction' as const, where: 'item' as const, message, summary: message });
+
+  it('is the first sentence, then how many more, or null for none', () => {
+    expect(lintLine(undefined)).toBeNull();
+    expect(lintLine([])).toBeNull();
+    expect(lintLine([finding('Item 1 reads like an instruction.')])).toBe('Item 1 reads like an instruction.');
+    expect(lintLine([finding('A.'), finding('B.'), finding('C.')])).toBe('A. (and 2 more)');
   });
 });

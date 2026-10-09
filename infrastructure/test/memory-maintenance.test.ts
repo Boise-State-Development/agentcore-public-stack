@@ -83,8 +83,11 @@ describe('MemoryMaintenanceConstruct', () => {
     expect(Object.keys(props.Environment.Variables).sort()).toEqual([
       'DYNAMODB_MEMORY_SPACES_TABLE_NAME',
       'DYNAMODB_PROJECTS_TABLE_NAME',
+      'MEMORY_LINT_MODE',
       'S3_MEMORY_SPACES_BUCKET_NAME',
     ]);
+    // A run's merges and split descriptions are checked like any save (2.7).
+    expect(props.Environment.Variables.MEMORY_LINT_MODE).toBe('warn');
   });
 
   it('never retries an async invoke', () => {

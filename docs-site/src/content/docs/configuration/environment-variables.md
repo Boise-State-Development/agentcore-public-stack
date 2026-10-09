@@ -31,6 +31,9 @@ whether it costs money — has its own page:
   see [Authentication](/agentcore-public-stack/configuration/authentication/).
 - **AgentCore services** (Memory, Gateway, Code Interpreter, Browser) — see
   [AgentCore Services](/agentcore-public-stack/configuration/agentcore-services/).
+- **Project memory content check** (`CDK_MEMORY_LINT_MODE`,
+  `CDK_MEMORY_SENSITIVE_PATTERNS`) — see
+  [Projects](/agentcore-public-stack/admin/projects/#memory-content-check).
 - **Sizing, observability, and tuning knobs** — the authoritative list with
   defaults lives in
   [`infrastructure/lib/config.ts`](https://github.com/Boise-State-Development/agentcore-public-stack/blob/main/infrastructure/lib/config.ts).

@@ -95,6 +95,12 @@ export class MemoryMaintenanceConstruct extends Construct {
         DYNAMODB_MEMORY_SPACES_TABLE_NAME: memorySpacesTable.tableName,
         S3_MEMORY_SPACES_BUCKET_NAME: memorySpacesBucket.bucketName,
         DYNAMODB_PROJECTS_TABLE_NAME: projectsTable.tableName,
+        // Content lint (Shared Projects 2.7): a run's merges, split descriptions
+        // and pointer items are checked like any save.
+        MEMORY_LINT_MODE: config.memoryLint.mode,
+        ...(config.memoryLint.sensitivePatterns
+          ? { MEMORY_SENSITIVE_PATTERNS: config.memoryLint.sensitivePatterns }
+          : {}),
       },
       description:
         'Memory maintenance worker - plans and verifies compaction changes to project memory, and proposes or applies them',

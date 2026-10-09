@@ -5,7 +5,7 @@ import { Router, RouterLink } from '@angular/router';
 import { Dialog } from '@angular/cdk/dialog';
 import { firstValueFrom } from 'rxjs';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroArchiveBox, heroChevronLeft, heroInboxArrowDown, heroPlus } from '@ng-icons/heroicons/outline';
+import { heroArchiveBox, heroArrowDownTray, heroChevronLeft, heroInboxArrowDown, heroPlus } from '@ng-icons/heroicons/outline';
 import { ConfirmationDialogComponent, ConfirmationDialogData } from '../../components/confirmation-dialog/confirmation-dialog.component';
 import { ToastService } from '../../services/toast/toast.service';
 import { parseIso } from '../../utils/date';
@@ -51,6 +51,9 @@ const EMPTY: ScopeState = { entries: [], index: '' };
  *
  * Where you are lives in the query string (`scope`, `file`, `view`), so a notification or a
  * `[[link]]` can land on one file and the back button walks back through what was opened.
+ *
+ * **Export** downloads the open scope as a `.zip` with `provenance.json` beside the files
+ * (2.7), for any member.
  */
 @Component({
   selector: 'app-project-memory',
@@ -69,7 +72,7 @@ const EMPTY: ScopeState = { entries: [], index: '' };
     MemoryMeterComponent,
     MemoryReviewComponent,
   ],
-  providers: [provideIcons({ heroArchiveBox, heroChevronLeft, heroInboxArrowDown, heroPlus })],
+  providers: [provideIcons({ heroArchiveBox, heroArrowDownTray, heroChevronLeft, heroInboxArrowDown, heroPlus })],
   templateUrl: './project-memory.page.html',
 })
 export class ProjectMemoryPage {
@@ -98,6 +101,7 @@ export class ProjectMemoryPage {
   /** The editor open in place of the file view, if any (2.8b). */
   protected readonly editing = signal<MemoryEditorMode | 'index' | null>(null);
   protected readonly starting = signal(false);
+  protected readonly exporting = signal(false);
   /** The Tidy up control, which a file's own Tidy up starts a one-file run through (2.6a, 2.6b). */
   private readonly maintenance = viewChild<MemoryMaintenanceComponent>('maintenance');
 
@@ -195,6 +199,25 @@ export class ProjectMemoryPage {
       this.toast.error('Your memory couldn’t be started', projectErrorMessage(err));
     } finally {
       this.starting.set(false);
+    }
+  }
+
+  /**
+   * Download this scope's memory as a `.zip` (2.7): the index, each file, and `provenance.json`,
+   * which says who added, changed, approved or restored each item.
+   */
+  protected async exportMemory(): Promise<void> {
+    const project = this.project();
+    if (!project || this.exporting()) return;
+    this.exporting.set(true);
+    try {
+      const blob = await firstValueFrom(this.api.exportMemory(project.projectId, this.activeScope()));
+      const name = `${project.name} ${this.activeScope() === 'mine' ? 'my memory' : 'memory'}`;
+      downloadBlob(blob, `${safeFileName(name)}.zip`);
+    } catch (err) {
+      this.toast.error('The memory couldn’t be exported', projectErrorMessage(err));
+    } finally {
+      this.exporting.set(false);
     }
   }
 
@@ -327,4 +350,21 @@ export class ProjectMemoryPage {
   protected onRestored(): void {
     void this.loadScope(this.activeScope());
   }
+}
+
+function downloadBlob(blob: Blob, fileName: string): void {
+  if (typeof document === 'undefined') return;
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = fileName;
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  URL.revokeObjectURL(url);
+}
+
+function safeFileName(name: string): string {
+  const cleaned = name.trim().replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[-._]+|[-._]+$/g, '');
+  return cleaned || 'memory';
 }

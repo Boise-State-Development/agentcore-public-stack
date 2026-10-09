@@ -1,4 +1,4 @@
-import { ItemProvenance, MemoryEntry, ReplacedMemoryItem } from '../models/project.model';
+import { ItemProvenance, MemoryEntry, MemoryLintFinding, ReplacedMemoryItem } from '../models/project.model';
 
 /**
  * Plain helpers for the Memory tab (shared-projects 2.8): reading memory files as items,
@@ -290,4 +290,14 @@ export function itemProblem(text: string, original: string, names: readonly Memo
     .map(p => `[[${p.name}]]`);
   if (dead.length) return `${dead.join(', ')} ${dead.length === 1 ? 'doesn’t match' : 'don’t match'} a file name or alias.`;
   return null;
+}
+
+/**
+ * A save's content-check findings as a toast's line (2.7): the first sentence, and how many
+ * more. Null when there are none.
+ */
+export function lintLine(findings: readonly MemoryLintFinding[] | null | undefined): string | null {
+  if (!findings?.length) return null;
+  const more = findings.length > 1 ? ` (and ${findings.length - 1} more)` : '';
+  return `${findings[0].message}${more}`;
 }

@@ -78,6 +78,7 @@ export interface AppConfig {
   platformCosts: PlatformCostsConfig;
   memorySpaces: MemorySpacesConfig;
   projects: ProjectsConfig;
+  memoryLint: MemoryLintConfig;
   conversationIndex: ConversationIndexConfig;
   conversationSearch: ConversationSearchConfig;
   platformSelfService: PlatformSelfServiceConfig;
@@ -420,6 +421,86 @@ export interface MemorySpacesConfig {
  */
 export interface ProjectsConfig {
   enabled: boolean;
+}
+
+/** What the project-memory content lint does with a finding. */
+export type MemoryLintMode = 'off' | 'warn' | 'block';
+
+/**
+ * Content lint for project memory (Shared Projects 2.7, docs/specs/shared-projects.md
+ * §9.3). A deterministic pattern check on text entering a project's memory; it
+ * applies only inside Shared Projects, so PROJECTS_ENABLED is its gate and this is
+ * configuration, not a feature flag.
+ *
+ * - `mode` (CDK_MEMORY_LINT_MODE): `warn` (default, decided 2026-09-22) saves and
+ *   reports a finding, `block` refuses the save, `off` skips the check.
+ * - `sensitivePatterns` (CDK_MEMORY_SENSITIVE_PATTERNS): the deployment's own
+ *   patterns, Python regular expressions, as a JSON list of strings or
+ *   `{"pattern", "label"}` objects, or one pattern per line. Empty = none.
+ *   Forwarded verbatim; the backend skips (and logs) a pattern it can't compile.
+ *
+ * app-api and the maintenance worker get MEMORY_LINT_MODE and
+ * MEMORY_SENSITIVE_PATTERNS. The AgentCore Runtime's environment is near both of
+ * its caps (50 variables; 2,560 bytes on V2), so it gets one small MEMORY_LINT
+ * value (the mode, and a hash of the patterns) and reads the patterns from the
+ * SSM parameter `/{prefix}/memory/sensitive-patterns`, created only when there are
+ * some (inference-agentcore-construct.ts).
+ */
+export interface MemoryLintConfig {
+  mode: MemoryLintMode;
+  sensitivePatterns: string;
+}
+
+/**
+ * Bounded so the patterns fit a Lambda's 4 KB environment beside the worker's
+ * other variables, and a standard-tier SSM parameter (4 KB).
+ */
+export const MEMORY_SENSITIVE_PATTERNS_MAX_CHARS = 3000;
+
+const MEMORY_LINT_MODES: readonly MemoryLintMode[] = ['off', 'warn', 'block'];
+
+/** Parse and check the lint settings at synth, so a typo fails the deploy rather than every save. */
+export function parseMemoryLintConfig(rawMode: string | undefined, rawPatterns: unknown): MemoryLintConfig {
+  const modeText = (rawMode ?? '').trim().toLowerCase();
+  const mode = (modeText || 'warn') as MemoryLintMode;
+  if (!MEMORY_LINT_MODES.includes(mode)) {
+    throw new Error(`CDK_MEMORY_LINT_MODE must be off, warn or block (got "${rawMode}").`);
+  }
+  // A cdk.json context may give the list as JSON rather than as a string.
+  const sensitivePatterns = (
+    Array.isArray(rawPatterns) ? JSON.stringify(rawPatterns) : typeof rawPatterns === 'string' ? rawPatterns : ''
+  ).trim();
+  if (sensitivePatterns.length > MEMORY_SENSITIVE_PATTERNS_MAX_CHARS) {
+    throw new Error(
+      `CDK_MEMORY_SENSITIVE_PATTERNS is ${sensitivePatterns.length} characters; the limit is ` +
+        `${MEMORY_SENSITIVE_PATTERNS_MAX_CHARS}, so it fits a Lambda environment.`,
+    );
+  }
+  if (sensitivePatterns.startsWith('[')) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(sensitivePatterns);
+    } catch {
+      throw new Error('CDK_MEMORY_SENSITIVE_PATTERNS starts with "[" but is not valid JSON.');
+    }
+    const ok =
+      Array.isArray(parsed) &&
+      parsed.every(
+        (entry) =>
+          (typeof entry === 'string' && entry.trim() !== '') ||
+          (typeof entry === 'object' &&
+            entry !== null &&
+            typeof (entry as { pattern?: unknown }).pattern === 'string' &&
+            ((entry as { label?: unknown }).label === undefined ||
+              typeof (entry as { label?: unknown }).label === 'string')),
+      );
+    if (!ok) {
+      throw new Error(
+        'CDK_MEMORY_SENSITIVE_PATTERNS must be a JSON list of pattern strings or {"pattern", "label"} objects.',
+      );
+    }
+  }
+  return { mode, sensitivePatterns };
 }
 
 /**
@@ -1206,6 +1287,13 @@ export function loadConfig(scope: cdk.App): AppConfig {
         ? process.env.CDK_PROJECTS_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('projects')?.enabled ?? false,
     },
+    // Project-memory content lint: configuration of Shared Projects, not a flag.
+    // The workflow forwards an EMPTY STRING when a variable is unset, which falls
+    // through to the context and then to the defaults (warn, no patterns).
+    memoryLint: parseMemoryLintConfig(
+      process.env.CDK_MEMORY_LINT_MODE || scope.node.tryGetContext('memoryLint')?.mode,
+      process.env.CDK_MEMORY_SENSITIVE_PATTERNS || scope.node.tryGetContext('memoryLint')?.sensitivePatterns,
+    ),
     conversationIndex: {
       // Opt-in while in development, same parsing as projects above.
       enabled: process.env.CDK_CONVERSATION_INDEX_ENABLED

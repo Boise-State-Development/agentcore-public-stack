@@ -164,7 +164,12 @@ class ProjectMemoryProposals:
 
     def current_text(self, project_id: str, user: User, slug: str) -> Optional[str]:
         """The file a proposal would change, as its items (no frontmatter), or None for a new file."""
-        from apis.shared.memory.format import split_frontmatter
+        current = self.current_file(project_id, user, slug)
+        return current[0] if current is not None else None
+
+    def current_file(self, project_id: str, user: User, slug: str) -> Optional[Tuple[str, str]]:
+        """``(items text, description)`` of the file a proposal would change, or None for a new file."""
+        from apis.shared.memory.format import MemoryFormatError, parse_frontmatter, split_frontmatter
         from apis.shared.memory.service import MemoryEntryNotFoundError
 
         _, space_id = self._space(project_id, user, writable=False)
@@ -172,7 +177,12 @@ class ProjectMemoryProposals:
             text = self.memory.read_entry(space_id, user.user_id, user.email, slug)
         except MemoryEntryNotFoundError:
             return None
-        return split_frontmatter(text, strict=False)[1]
+        header, body = split_frontmatter(text, strict=False)
+        try:
+            description = (parse_frontmatter(header) if header is not None else {}).get("description")
+        except MemoryFormatError:
+            description = None
+        return body, description if isinstance(description, str) else ""
 
     def get(self, project_id: str, user: User, proposal_id: str):
         """``(proposal, stale)``: stale means the file changed since it was proposed."""
