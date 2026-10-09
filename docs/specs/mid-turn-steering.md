@@ -406,10 +406,13 @@ fires within milliseconds of the close; a two-second gap is an Enter on an idle
 composer. A turn that short (~6.7s) is hard for a browser-driven check to land
 inside, so the smoke checklist's Steer row now asks for a longer turn and for
 the Stop button to be visible at the moment of Enter. The same send then hit a
-Runtime 403 (a forwarded access token at the edge of its lifetime) and, before
+Runtime 403 ("Unauthorized inbound token") and, before
 this fix, left a bubble that looked delivered. A send refused before streaming
 now says **Not sent** on the message with a Retry (`Message.sendFailure`,
-`FailedSendService`), and app-api retries that 403 once with a refreshed token.
+`FailedSendService`), and app-api retries that 403 once (with a refreshed
+token when the refresh yields one). Timed tests on dev afterwards had the
+Runtime accept tokens with 61.8s and 60.6s left, so the refusal looks transient
+rather than tied to the token's age.
 
 ## Testing
 
