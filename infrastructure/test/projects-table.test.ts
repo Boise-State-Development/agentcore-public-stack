@@ -5,6 +5,8 @@
  * deleted by app-api's CRUD surface; the invocation path resolves membership,
  * back-fills a member's userId and bumps COST# rollups.
  */
+import * as fs from 'fs';
+import * as path from 'path';
 import * as cdk from 'aws-cdk-lib';
 import { Template, Match } from 'aws-cdk-lib/assertions';
 import { PlatformStack } from '../lib/platform-stack';
@@ -86,9 +88,16 @@ describe('Shared Projects compute wiring', () => {
     runtimeEnv = (Object.values(runtimes)[0] as any).Properties.EnvironmentVariables;
   });
 
-  it('gives the Runtime the table name and the kill switch', () => {
+  it('gives the Runtime the kill switch, and derives the table name rather than sending it', () => {
     expect(runtimeEnv.PROJECTS_ENABLED).toBe('true');
-    expect(runtimeEnv).toHaveProperty('DYNAMODB_PROJECTS_TABLE_NAME');
+    // The inference-api rebuilds `{prefix}-projects` from PROJECT_PREFIX
+    // (backend/src/apis/shared/config/derived_environment.json, held to the
+    // template by runtime-derived-environment-manifest.test.ts).
+    expect(runtimeEnv).not.toHaveProperty('DYNAMODB_PROJECTS_TABLE_NAME');
+    const manifest = JSON.parse(fs.readFileSync(
+      path.resolve(__dirname, '../../backend/src/apis/shared/config/derived_environment.json'), 'utf8',
+    )) as { variables: Array<{ name: string; suffix: string }> };
+    expect(manifest.variables).toContainEqual(expect.objectContaining({ name: 'DYNAMODB_PROJECTS_TABLE_NAME', suffix: 'projects' }));
   });
 
   it('gives the Runtime the content-lint settings packed into one variable, in MEMORY_ARN\'s slot', () => {

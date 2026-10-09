@@ -276,31 +276,13 @@ export class InferenceAgentCoreConstruct extends Construct {
     const cognitoDiscoveryUrl = `https://cognito-idp.${config.awsRegion}.amazonaws.com/${cognitoUserPoolId}/.well-known/openid-configuration`;
 
     // ============================================================
-    // Import SSM Parameters for Runtime Environment Variables
+    // Runtime environment
     // ============================================================
-
-    // DynamoDB table names (the ARNs are already imported above for IAM)
-    const usersTableName = props.refs.usersTable.tableName;
-    const appRolesTableName = props.refs.appRolesTable.tableName;
-    const oidcStateTableName = props.refs.oidcStateTable.tableName;
-    const apiKeysTableName = props.refs.apiKeysTable.tableName;
-    const oauthProvidersTableName = props.refs.oauthProvidersTable.tableName;
-    const oauthUserTokensTableName = props.refs.oauthUserTokensTable.tableName;
-    const assistantsTableName = props.refs.ragAssistantsTable.tableName;
-    const userQuotasTableName = props.refs.userQuotasTable.tableName;
-    const quotaEventsTableName = props.refs.quotaEventsTable.tableName;
-    const sessionsMetadataTableName = props.refs.sessionsMetadataTable.tableName;
-    const userCostSummaryTableName = props.refs.userCostSummaryTable.tableName;
-    const systemCostRollupTableName = props.refs.systemCostRollupTable.tableName;
-    const managedModelsTableName = props.refs.managedModelsTable.tableName;
-    const userSettingsTableName = props.refs.userSettingsTable.tableName;
-    const authProvidersTableName = props.refs.authProvidersTable.tableName;
-    const userFilesTableName = props.refs.fileUploadTable.tableName;
-    const systemPromptsTableName = props.refs.systemPromptsTable.tableName;
-
-    // S3 / RAG
-    const vectorBucketName = props.refs.ragVectorBucketName;
-    const vectorIndexName = props.refs.ragVectorIndexName;
+    // Table, bucket, vector-index and workload-identity names are NOT sent:
+    // the inference-api derives them from PROJECT_PREFIX (+ AWS_ACCOUNT_ID)
+    // at startup, from backend/src/apis/shared/config/derived_environment.json.
+    // test/runtime-derived-environment-manifest.test.ts holds that manifest to
+    // the names CDK gives the resources here.
 
     // Frontend CORS origins — single source: buildCorsOrigins (from CDK_DOMAIN_NAME)
     const corsOrigins = buildCorsOrigins(config, config.inferenceApi.additionalCorsOrigins).join(',');
@@ -336,54 +318,44 @@ export class InferenceAgentCoreConstruct extends Construct {
         requestHeaderAllowlist: ['Authorization'],
       },
       environmentVariables: {
-        // Basic configuration
+        // ⚠️ THIS IS A BYTE BUDGET, not just a count. The V2 AgentCore Runtime
+        // rejects an environment over 2,560 bytes, and CloudFormation only
+        // finds out at UpdateAgentRuntime; its rollback then fails the same way
+        // and leaves the stack UPDATE_ROLLBACK_FAILED (dev, 2026-10-09).
+        // RuntimeEnvironmentPayloadGuard fails synth for V2 over the limit, and
+        // test/runtime-environment-payload-guard.test.ts fails CI for the
+        // worst-case config over the 2,000-byte budget. Separately, CloudFormation
+        // caps the count at 50 (test/runtime-env-var-limit.test.ts).
+        //
+        // Before adding a variable here:
+        //   - a `{prefix}-{suffix}` resource name belongs in
+        //     backend/src/apis/shared/config/derived_environment.json, not here;
+        //   - a flag that defaults ON in code needs no entry at all;
+        //   - otherwise, spend the bytes deliberately.
+        // Spec: docs/specs/agentcore-runtime-v2.md §7.
+
+        // Basic configuration. PROJECT_PREFIX and AWS_ACCOUNT_ID are what the
+        // derived names are built from; without them the Runtime has no tables.
         LOG_LEVEL: 'INFO',
         PROJECT_PREFIX: config.projectPrefix,
         AWS_DEFAULT_REGION: config.awsRegion,
+        AWS_ACCOUNT_ID: config.awsAccount,
 
-        // DynamoDB tables
-        DYNAMODB_USERS_TABLE_NAME: usersTableName,
-        DYNAMODB_APP_ROLES_TABLE_NAME: appRolesTableName,
-        DYNAMODB_OIDC_STATE_TABLE_NAME: oidcStateTableName,
-        DYNAMODB_API_KEYS_TABLE_NAME: apiKeysTableName,
-        DYNAMODB_OAUTH_PROVIDERS_TABLE_NAME: oauthProvidersTableName,
-        DYNAMODB_OAUTH_USER_TOKENS_TABLE_NAME: oauthUserTokensTableName,
-        DYNAMODB_ASSISTANTS_TABLE_NAME: assistantsTableName,
-
-        // Quota & cost tracking tables
-        DYNAMODB_QUOTA_TABLE: userQuotasTableName,
-        DYNAMODB_QUOTA_EVENTS_TABLE: quotaEventsTableName,
-        DYNAMODB_SESSIONS_METADATA_TABLE_NAME: sessionsMetadataTableName,
-        DYNAMODB_COST_SUMMARY_TABLE_NAME: userCostSummaryTableName,
-        DYNAMODB_SYSTEM_ROLLUP_TABLE_NAME: systemCostRollupTableName,
-        DYNAMODB_MANAGED_MODELS_TABLE_NAME: managedModelsTableName,
-        DYNAMODB_USER_SETTINGS_TABLE_NAME: userSettingsTableName,
-        DYNAMODB_USER_FILES_TABLE_NAME: userFilesTableName,
-        // Bucket the runtime writes generated Word docs to (create/modify
-        // word-document tools). Without this the tool falls back to the
-        // literal "user-files" default and PutObject is AccessDenied. The
-        // runtime role's UserFilesBucketAccess statement already grants
-        // Get/Put/Delete/List on this bucket.
-        S3_USER_FILES_BUCKET_NAME: props.refs.fileUploadBucket.bucketName,
-        DYNAMODB_SYSTEM_PROMPTS_TABLE_NAME: systemPromptsTableName,
-
-        // Auth providers
-        DYNAMODB_AUTH_PROVIDERS_TABLE_NAME: authProvidersTableName,
+        // Auth providers. An ARN, not derivable as a bare name without
+        // checking the IAM statement and GetSecretValue call (spec §7.1).
         AUTH_PROVIDER_SECRETS_ARN: authProviderSecretsArn,
 
-        // AgentCore resources. MEMORY_ARN was retired in Shared Projects 2.7: the
-        // runtime only logged it at startup (AGENTCORE_MEMORY_ID is what code
-        // reads), and its slot went to MEMORY_LINT below.
+        // AgentCore resources: physical ids with a service-generated suffix,
+        // so they cannot be derived. MEMORY_ARN was retired in Shared Projects
+        // 2.7 (only a startup log read it).
         AGENTCORE_MEMORY_ID: props.memoryId,
         AGENTCORE_CODE_INTERPRETER_ID: props.codeInterpreterId,
         BROWSER_ID: props.browserId,
         // The Chromium MANAGED policy passed on every StartBrowserSession.
         // This is the control that stops a human in a takeover navigating to
         // the LMS — no check in our code can, because it only ever sees the
-        // page the takeover started on. Spec D6.
-        //
-        // One variable, not a bucket/key pair, because the runtime's env-var
-        // budget is full (see the ceiling note below).
+        // page the takeover started on. Spec D6. One variable, not a
+        // bucket/key pair, to save bytes.
         BROWSER_POLICY_S3: `s3://${props.browserPolicyBucketName}/${props.browserPolicyKey}`,
 
         // Gateway inbound auth mode. Sourced from the SAME config value that
@@ -406,104 +378,33 @@ export class InferenceAgentCoreConstruct extends Construct {
             }
           : {}),
 
-        // S3 storage
-        S3_ASSISTANTS_VECTOR_STORE_BUCKET_NAME: vectorBucketName,
-        S3_ASSISTANTS_VECTOR_STORE_INDEX_NAME: vectorIndexName,
-        // Assistants KB documents bucket — needed by the agent's spreadsheet
-        // analysis tool to download files from S3 before pushing them into
-        // the Code Interpreter sandbox. Imported from RagIngestionStack via
-        // SSM (same parameter app-api uses). Without this the agent fails
-        // with "S3_ASSISTANTS_DOCUMENTS_BUCKET_NAME not configured".
-        S3_ASSISTANTS_DOCUMENTS_BUCKET_NAME: props.refs.ragDocumentsBucket.bucketName,
-
-        // Skill reference-file bucket (admin-managed Skills). Provisioned now
-        // (read grant below) so the PR-6 runtime can read a skill's reference
-        // files at dispatch time; no code consumes it yet.
-        S3_SKILL_RESOURCES_BUCKET_NAME: props.refs.skillResourcesBucket.bucketName,
-
-        // Memory Spaces storage. The runtime writes memory in a later PR
-        // (readwrite grant below); read by apis/shared/memory/*.
-        S3_MEMORY_SPACES_BUCKET_NAME: props.refs.memorySpacesBucket.bucketName,
-        DYNAMODB_MEMORY_SPACES_TABLE_NAME: props.refs.memorySpacesTable.tableName,
+        // Feature switches the runtime reads. Each mirrors the app-api flag.
         MEMORY_SPACES_ENABLED: config.memorySpaces.enabled ? 'true' : 'false',
-
-        // Shared Projects (default ON with a kill switch, mirroring app-api).
-        // The invocation path resolves project membership and bumps COST#
-        // rollups; creates and deletes are app-api's (see the read+update
-        // grant in inference-api-iam-roles.ts).
-        DYNAMODB_PROJECTS_TABLE_NAME: props.refs.projectsTable.tableName,
         PROJECTS_ENABLED: config.projects.enabled ? 'true' : 'false',
         // Project-memory content lint (2.7) for memory_save / memory_propose. One
-        // small packed value, not app-api's MEMORY_LINT_MODE + MEMORY_SENSITIVE_PATTERNS:
-        // this budget is spent, and V2 caps the payload at 2,560 bytes. The patterns
-        // live in SSM (below); their hash here rolls the Runtime when they change.
+        // small packed value, not app-api's MEMORY_LINT_MODE + MEMORY_SENSITIVE_PATTERNS.
+        // The patterns live in SSM; their hash here rolls the Runtime when they change.
         MEMORY_LINT: memoryLintRuntimeValue(config),
-
         // Conversation index write path (in development, default off): gates
-        // the fire-and-forget archive put after `done`. One slot, not two: the
-        // archive bucket name is resolved from SSM under PROJECT_PREFIX
-        // (`/{prefix}/conversations/archive-bucket-name`), as the artifacts
-        // tools do, because this budget is nearly spent.
+        // the fire-and-forget archive put after `done`. The archive bucket name
+        // is resolved from SSM under PROJECT_PREFIX, as the artifacts tools do.
         CONVERSATION_INDEX_ENABLED: config.conversationIndex.enabled ? 'true' : 'false',
-
-        // Skills v2 (default ON with a kill switch, mirroring the app-api flag).
-        // Gates skill resolution on the invocation path — the AgentSkills plugin's
-        // <available_skills> block, the `skills` activation tool, and
-        // `read_skill_file`. Must stay in step with app-api: design-time refuses to
-        // bind a skill while the flag is off there, so a mismatch would let an Agent
-        // be built with skills the runtime then blocks.
+        // Skills v2 (default ON with a kill switch). Must stay in step with
+        // app-api: design-time refuses to bind a skill while the flag is off
+        // there, so a mismatch would let an Agent be built with skills the
+        // runtime then blocks.
         SKILLS_ENABLED: config.skills.enabled ? 'true' : 'false',
-
-        // Agent Designer harness resolution (Phase 3): the runtime resolves an
-        // Agent's bindings + modelConfig at invocation. Gates that resolution;
-        // default off, mirrors the app-api flag. Without it the harness ignores
-        // bindings entirely (today's behavior).
+        // Agent Designer harness resolution: the runtime resolves an Agent's
+        // bindings + modelConfig at invocation. Default off, mirrors app-api.
         AGENTS_API_ENABLED: config.agents.enabled ? 'true' : 'false',
-
-        // Platform self-service (opt-in per env; default off). Read ONLY here on
-        // the invocation path (inference_api/chat/routes.py) — with it off,
-        // _build_account_tools returns [] so no account tool schema or system
-        // text reaches the model. Costs one of the 50 runtime env slots; see the
-        // ceiling warning below. app-api does not read this flag, so it is not
-        // wired there.
+        // Platform self-service (opt-in per env; default off). Read ONLY on the
+        // invocation path — with it off, _build_account_tools returns [] so no
+        // account tool schema or system text reaches the model.
         PLATFORM_SELF_SERVICE_ENABLED: config.platformSelfService.enabled ? 'true' : 'false',
 
-        // ENABLE_QUOTA_ENFORCEMENT is deliberately NOT set. `quota.py` reads
-        // it with a 'true' default, and this was hardcoded to 'true' — so the
-        // entry only ever restated the default while consuming one of the 50
-        // slots. Removing it leaves enforcement ON and frees a slot, which is
-        // exactly the remedy runtime-env-var-limit.test.ts recommends. If
-        // enforcement ever needs to be switchable, make it config-driven
-        // rather than re-adding a constant.
-
-        // Authentication
-
-        // ⚠️ ALMOST NO ROOM HERE — see the assertion in
-        // test/runtime-env-var-limit.test.ts, which prints the live headroom.
-        // `AWS::BedrockAgentCore::Runtime` caps EnvironmentVariables at 50.
-        // This construct sat AT the cap until retiring the three dead
-        // directory variables above took it to 47/50; treat those 3 as a
-        // one-off reprieve, not permission to spend them casually.
-        // Adding one more fails CloudFormation's *changeset validation* — after
-        // synth, after tsc, after jest, after CI is green. It broke the dev
-        // Platform Stack deploy on 2026-08-05 (`maximum size: [50], found: [51]`,
-        // adding QUOTA_RUNWAY_ENABLED for #833 PR-5).
-        //
-        // To add a flag you must first free a slot: retire a dead variable, or
-        // fold several booleans into one delimited FEATURE_FLAGS value. A
-        // code-level flag that reads `os.environ` and defaults ON needs no entry
-        // here at all — that is why QUOTA_RUNWAY_ENABLED is absent and the quota
-        // runway is still on. Setting such a flag to a non-default value in a
-        // deployed environment requires an out-of-band Runtime update until a
-        // slot is freed.
-
-        // NOTE: UPLOAD_DIR / OUTPUT_DIR / GENERATED_IMAGES_DIR used to be set
-        // here to /tmp/*. The runtime never read them for anything but a log
-        // line — the directories actually resolved from __file__, inside the
-        // source tree — so they pointed operators at paths nothing used. The
-        // whole local-output mechanism has since been deleted (output goes to
-        // S3), so there is nothing left to configure. Retiring them freed three
-        // of the 50 slots called out below.
+        // ENABLE_QUOTA_ENFORCEMENT and QUOTA_RUNWAY_ENABLED are deliberately not
+        // set: both default on in code, so an entry would only restate the
+        // default. Setting such a flag off in one environment needs an entry here.
 
         // URLs
         FRONTEND_URL: config.domainName ? `https://${config.domainName}` : 'http://localhost:4200',
@@ -519,20 +420,10 @@ export class InferenceAgentCoreConstruct extends Construct {
           ? `https://${config.domainName}/oauth-complete`
           : 'http://localhost:4200/oauth-complete',
 
-        // Shared platform workload identity (created in InfrastructureStack).
-        // Both inference-api and app-api mint user-scoped workload tokens
-        // against this identity so they share a single OAuth token vault.
-        // The runtime auto-creates its own service-linked identity, but it
-        // cannot be shared cross-service — see PlatformStack and
-        // `_resolve_workload_token` in apis/shared/oauth/agentcore_identity.py.
-        AGENTCORE_RUNTIME_WORKLOAD_NAME: props.refs.platformWorkloadIdentity.name,
-
-        // MCP Apps sandbox-proxy origin (PR #7 of
-        // docs/kaizen/scoping/mcp-apps-host-renderer.md). The agent emits
-        // it on the `ui_resource` SSE event as `sandboxOrigin` — the
-        // cross-origin shell the SPA frames a hosted App in. The
-        // mcp-sandbox stack is always provisioned, so the value is always
-        // available via the platform refs.
+        // MCP Apps sandbox-proxy origin. The agent emits it on the
+        // `ui_resource` SSE event as `sandboxOrigin` — the cross-origin shell
+        // the SPA frames a hosted App in. Domain rules live in CDK, so it is
+        // never derived.
         AGENTCORE_MCP_APPS_SANDBOX_ORIGIN: props.refs.mcpSandboxProxyOrigin,
       },
     });
