@@ -105,22 +105,39 @@ async def test_rejection_does_not_leak_resolved_address_in_message() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _mock_async_client(response_payload):
-    """Build a context-manager AsyncMock that yields a client whose .get
-    returns the given response."""
+def _mock_response(response_payload, peer: str | None = None):
+    """A streamed response; ``peer`` is the address the connection reached."""
     response = MagicMock()
     response.status_code = response_payload.get("status_code", 200)
     response.text = response_payload.get("text", "<html><title>Hi</title><body>ok</body></html>")
     response.headers = response_payload.get("headers", {"content-type": "text/html"})
     response.raise_for_status = MagicMock()
+    response.aread = AsyncMock(return_value=b"")
+    response.aclose = AsyncMock(return_value=None)
+    if peer is None:
+        response.extensions = {}
+    else:
+        stream = MagicMock()
+        stream.get_extra_info = MagicMock(side_effect=lambda key: (peer, 443) if key == "server_addr" else None)
+        response.extensions = {"network_stream": stream}
+    return response
 
+
+def _mock_client(*responses):
+    """Build a context-manager AsyncMock that yields a client whose .send
+    returns the given responses in order."""
     client = MagicMock()
-    client.get = AsyncMock(return_value=response)
+    client.build_request = MagicMock(side_effect=lambda method, url, headers=None: (method, url))
+    client.send = AsyncMock(side_effect=list(responses))
 
     cm = MagicMock()
     cm.__aenter__ = AsyncMock(return_value=client)
     cm.__aexit__ = AsyncMock(return_value=None)
     return cm, client
+
+
+def _mock_async_client(response_payload, peer: str | None = None):
+    return _mock_client(_mock_response(response_payload, peer))
 
 
 @pytest.mark.asyncio
@@ -133,7 +150,7 @@ async def test_public_url_passes_validator_and_is_fetched() -> None:
         result = await impl(url="https://example.com/")
 
     assert result["status"] == "success"
-    client.get.assert_awaited_once()
+    client.send.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
@@ -164,26 +181,23 @@ async def test_redirect_to_private_address_is_not_followed() -> None:
     impl = _underlying(fetch_url_content)
     fake = _fake_getaddrinfo({"redirect.example.com": ["93.184.216.34"]})
 
-    response = MagicMock()
-    response.status_code = 302
-    response.text = ""
-    response.headers = {
-        "content-type": "text/html",
-        "location": "http://169.254.169.254/latest/meta-data/",
-    }
-    response.raise_for_status = MagicMock()
-
-    client = MagicMock()
-    client.get = AsyncMock(return_value=response)
-    cm = MagicMock()
-    cm.__aenter__ = AsyncMock(return_value=client)
-    cm.__aexit__ = AsyncMock(return_value=None)
+    response = _mock_response(
+        {
+            "status_code": 302,
+            "text": "",
+            "headers": {
+                "content-type": "text/html",
+                "location": "http://169.254.169.254/latest/meta-data/",
+            },
+        }
+    )
+    cm, client = _mock_client(response)
 
     with patch("apis.shared.security.url_validator.socket.getaddrinfo", fake), patch("httpx.AsyncClient", return_value=cm):
         result = await impl(url="https://redirect.example.com/")
 
-    # The single .get is the only call — no follow-up to the metadata IP.
-    assert client.get.await_count == 1
+    # The single request is the only call — no follow-up to the metadata IP.
+    assert client.send.await_count == 1
     # Either: surface a redirect that was not followed, or fail closed.
     # Neither path calls out to the private target.
     if result["status"] == "success":
@@ -191,3 +205,67 @@ async def test_redirect_to_private_address_is_not_followed() -> None:
         # If we surfaced the 302 itself, it must be the original URL's
         # response, not a follow-up fetch's body.
         assert body["status_code"] == 302
+
+
+# ---------------------------------------------------------------------------
+# Connected-peer check (DNS rebinding between validation and connect)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("peer", ["169.254.169.254", "10.0.0.7", "127.0.0.1", "::ffff:169.254.169.254"])
+@pytest.mark.asyncio
+async def test_response_from_forbidden_peer_is_discarded(peer: str) -> None:
+    """A host that validated as public but connected somewhere forbidden
+    (a rebinding DNS answer on the client's own lookup) must not return
+    its body to the model."""
+    impl = _underlying(fetch_url_content)
+    fake = _fake_getaddrinfo({"rebind.example.com": ["93.184.216.34"]})
+    response = _mock_response({"text": "AccessKeyId SecretAccessKey Token"}, peer=peer)
+    cm, _ = _mock_client(response)
+
+    with (
+        patch("apis.shared.security.url_validator.socket.getaddrinfo", fake),
+        patch("httpx.AsyncClient", return_value=cm),
+        patch("agents.local_tools.url_fetcher.urllib.request.getproxies", return_value={}),
+    ):
+        result = await impl(url="https://rebind.example.com/")
+
+    assert result["status"] == "error"
+    assert "SecretAccessKey" not in str(result)
+    # Body is never read from the forbidden connection, which is closed.
+    response.aread.assert_not_awaited()
+    response.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_response_from_public_peer_is_returned() -> None:
+    impl = _underlying(fetch_url_content)
+    fake = _fake_getaddrinfo({"example.com": ["93.184.216.34"]})
+    cm, _ = _mock_async_client({}, peer="93.184.216.34")
+
+    with (
+        patch("apis.shared.security.url_validator.socket.getaddrinfo", fake),
+        patch("httpx.AsyncClient", return_value=cm),
+        patch("agents.local_tools.url_fetcher.urllib.request.getproxies", return_value={}),
+    ):
+        result = await impl(url="https://example.com/")
+
+    assert result["status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_peer_check_is_skipped_behind_a_forward_proxy() -> None:
+    """Behind a configured proxy the peer is the proxy itself, which is
+    commonly a private address; the proxy is then the egress boundary."""
+    impl = _underlying(fetch_url_content)
+    fake = _fake_getaddrinfo({"example.com": ["93.184.216.34"]})
+    cm, _ = _mock_async_client({}, peer="10.0.0.3")
+
+    with (
+        patch("apis.shared.security.url_validator.socket.getaddrinfo", fake),
+        patch("httpx.AsyncClient", return_value=cm),
+        patch("agents.local_tools.url_fetcher.urllib.request.getproxies", return_value={"https": "http://10.0.0.3:3128"}),
+    ):
+        result = await impl(url="https://example.com/")
+
+    assert result["status"] == "success"

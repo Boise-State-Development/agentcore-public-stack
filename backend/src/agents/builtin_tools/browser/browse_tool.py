@@ -27,6 +27,7 @@ import os
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
 
+from apis.shared.security import is_forbidden_ip_literal
 from strands import tool
 from strands.types.tools import ToolContext
 
@@ -41,6 +42,7 @@ MAX_EVAL_CHARS = int(os.environ.get("BROWSER_MAX_EVAL_CHARS", 4000))
 MAX_LINKS = int(os.environ.get("BROWSER_MAX_LINKS", 50))
 
 _ALLOWED_SCHEMES = ("http", "https")
+_BLOCKED_HOSTNAMES = frozenset({"localhost", "metadata.google.internal", "instance-data", "instance-data.ec2.internal"})
 
 # Page text, preferring the main content region over site chrome.
 _EXTRACT_TEXT_JS = """
@@ -102,10 +104,17 @@ def _validate_url(url: str) -> Optional[str]:
     if not host:
         return "❌ URL has no host."
     # The browser runs in AWS with PUBLIC network mode, so it cannot reach our
-    # VPC — but blocking the obvious loopback/metadata targets keeps the tool
-    # honest if the network mode ever changes.
-    if host in ("localhost", "127.0.0.1", "::1", "169.254.169.254", "metadata.google.internal"):
-        return "❌ Refusing to browse loopback or instance-metadata addresses."
+    # VPC, and its execution role can only write logs. Blocking loopback,
+    # link-local (instance metadata) and private targets still matters: a
+    # prompt-injected page should not be able to point the browser at the
+    # sandbox's own metadata endpoint. The browser resolves DNS in AWS's
+    # network, not ours, so only IP literals are checked here (in every
+    # spelling Chromium accepts). This does not cover a hostname that
+    # resolves to a blocked address, or a page or `script` that navigates
+    # on its own; the session URL policy (`session_pool`) is RECOMMENDED,
+    # not mandated, so it does not close those either.
+    if host in _BLOCKED_HOSTNAMES or host.endswith(".localhost") or is_forbidden_ip_literal(host):
+        return "❌ Refusing to browse loopback, private or instance-metadata addresses."
     return None
 
 

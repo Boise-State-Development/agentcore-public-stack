@@ -5,6 +5,56 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 ## Open
 <!-- Newest at top. -->
 
+### [2026-10-08] ⚠️ URGENT Ops: find any AgentCore agent in our accounts that still runs on a default execution role (AgentCorruption)
+- **Source**: Phil-initiated, from Zenity Labs' AgentCorruption disclosure (2026-10-08, SecTor). A prompt-injected agent used a web-request tool to read the instance metadata endpoint, returned its execution role's credentials, and used them from outside AWS. The **default** AgentCore execution role was account- and region-wide, so the credentials reached every agent in the account: `InvokeAgentRuntime`, `ListEvents` (other users' conversations), `CreateEvent` (planted memories), `GetResourceApiKey`, `secretsmanager:GetSecretValue`, and ECR pulls. AWS made new agents IMDSv2-only on 2026-02-14 and narrowed the default role on 2026-09-29. AWS calls it documented behavior, and there is no CVE.
+- **Our exposure**: the attack as disclosed doesn't land on our platform. `fetch_url_content` refuses metadata, link-local and private targets, and as of this PR also checks the address it actually connected to. Our runtime uses its own CDK role, not the default one. The Code Interpreter and Browser sandboxes' roles can only write logs. **The real risk is a neighbour.** Any agent, runtime, Code Interpreter or Browser created by hand (console, starter toolkit, a spike or an experiment) in the same account and region may still carry the old default role, and our resources have no resource policies to keep it out.
+- **Surface**: ops only.
+  - (1) In the dev and prod accounts, list every AgentCore runtime, Code Interpreter and Browser in each region we use, and the role behind each. Treat any `AmazonBedrockAgentCoreSDKRuntime-*` or console-created role as suspect. Delete the resource, or give it a least-privilege role.
+  - (2) Confirm our own Runtime is on IMDSv2-only. `backend.yml` updates it on every deploy, so it should be, but confirm it.
+  - (3) Search CloudTrail since 2025-12 for the runtime, app-api, scheduled-runs and KB-sync role sessions being used from outside AWS (source IP or user agent), focusing on `GetResourceOauth2Token`, `GetWorkloadAccessTokenForUserId`, `GetSecretValue`, `ListEvents` and `CreateEvent`.
+- **Effort × Impact**: S × H
+- **Subtracts**: yes, if (1) finds leftovers to delete.
+- **Status**: open, **urgent**. The prod read-only hook means Phil runs the prod side, or it runs read-only. Record the counts here (no ids or account numbers).
+
+### [2026-10-08] Security: scope the runtime, app-api and worker IAM roles to this deployment's own AgentCore resources
+- **Source**: Phil-initiated, AgentCorruption follow-up (see the entry above). Our roles are custom, but several statements are as broad as the default role was. Whoever holds the credentials of any of these roles reaches every AgentCore deployment in the account and region, not just ours.
+- **Surface**: infrastructure. `constructs/inference-api/inference-api-iam-roles.ts`, `constructs/app-api/app-api-iam-grants.ts`, `scheduled-runs/scheduled-runs-construct.ts`, `kb-sync/kb-sync-construct.ts`, and the Code Interpreter, Browser and Gateway constructs.
+  - Drop the runtime's `AgentCoreMemoryAccess` statement on `memory/*`. The Runtime construct already grants the same actions on our own memory.
+  - Narrow the vault grants (`token-vault/*`, `workload-identity-directory/*`) to `token-vault/default` and the `platform-workload` identity, in all four roles.
+  - Narrow `gateway/*`, `code-interpreter-custom/*` and `browser-custom/*` to this stack's ARNs. app-api's gateway-target CRUD on `gateway/*` would let a stolen credential add an MCP target to any gateway in the region.
+  - Tighten the runtime trust policy's `aws:SourceArn` from `…:*` to our runtime. Add `SourceAccount` and `SourceArn` conditions to the Code Interpreter, Browser and Gateway trust policies, which have none.
+  - Review `aws-marketplace:Subscribe` on `*`.
+- **Known limit**: IAM can't scope `GetWorkloadAccessTokenForUserId` by user. The runtime mints tokens for every user by design, so its credentials always mean every user's vaulted OAuth tokens. That is why keeping metadata out of every tool's reach matters most.
+- **Effort × Impact**: M × H
+- **Subtracts**: yes. A redundant account-wide statement and several wildcards.
+- **Risk**: a trust-policy change rolls the Runtime. A too-narrow ARN fails at call time, so deploy to dev and run the smoke matrix plus an OAuth MCP tool, scheduled runs and KB sync before prod. IAM statements are not CloudFormation resources, so the stack's resource budget is unaffected.
+- **Status**: open.
+
+### [2026-10-08] Security: decide the Code Interpreter's network mode, and gate the Office tools' generated code
+- **Source**: Phil-initiated, AgentCorruption follow-up. The custom Code Interpreter runs in `PUBLIC` network mode (`constructs/agentcore/code-interpreter-construct.ts`). `python_ast_policy.py` used to say it had no outbound network; this PR corrects that. The diagram and spreadsheet tools run model-written code through the AST allowlist (`validate_diagram_code`). The Word, PowerPoint and Excel tools wrap `python_code` in a template and run it with no check, so a prompt-injected document can send the session's files to another host.
+- **Surface**: infrastructure + backend (`builtin_tools/word_document_tool.py`, `powerpoint_presentation_tool.py`, `excel_spreadsheet_tool.py`)
+- **Options**: (a) `SANDBOX` network mode, if none of the tools needs internet (to be checked: package installs, remote fonts, image fetches). (b) Run the Office tools' code through an AST policy too. (c) Both.
+- **Effort × Impact**: M × M
+- **Subtracts**: no.
+- **Status**: open.
+
+### [2026-10-08] Security: close browse_web's remaining paths to internal addresses
+- **Source**: Phil-initiated, AgentCorruption follow-up. This PR makes `_validate_url` refuse loopback, link-local, private and metadata IP literals in every spelling Chromium accepts (decimal, hex, octal, IPv4-mapped). Two gaps remain. (1) A hostname whose DNS answer is internal: the browser resolves DNS in AWS's network, so our runtime can't check it. (2) A page or a `script` action that navigates by itself never goes through `_validate_url`. The session URL policy can't close either, because AgentCore accepts only `RECOMMENDED` at session level, and `CDK_BROWSER_URL_BLOCKLIST` defaults to empty.
+- **Exposure today**: low. The Browser's role can only write logs, so even a reachable metadata endpoint yields almost nothing.
+- **Surface**: infrastructure (`config.ts` browser blocklist default, `browser-policy-construct.ts`) + backend (`browser/session_pool.py`)
+- **Options**: ship a default `URLBlocklist` baseline (`169.254.169.254`, `169.254.170.2`, `[fd00:ec2::254]`, `metadata.google.internal`, `localhost`) that per-environment lists add to. Move to a `MANAGED` policy on the custom Browser resource if AgentCore supports it there; `request_user_login` is already waiting on that.
+- **Effort × Impact**: S × M
+- **Subtracts**: no.
+- **Status**: open.
+
+### [2026-10-08] Security: review Memory Spaces as a persistent prompt-injection channel
+- **Source**: Phil-initiated, AgentCorruption follow-up. The disclosure's persistence step planted memories that steered every later conversation. Our version is Memory Spaces. `memory_write` lets the model replace `MEMORY.md`, and project tools add `memory_save` and `memory_propose`. `MEMORY.md` and every `alwaysLoad` entry are put into the prompt each session (`apis/shared/memory/hydration.py`, up to ~6k tokens), including for other members of a shared project. One injected page or document in one turn can therefore persist instructions into every later session of that space. Space scoping limits it to the user or the project, but it never expires on its own. AgentCore LTM has no direct write tool. Its records come from the service's extraction of conversation turns, which an injected turn can still steer.
+- **Surface**: backend (`builtin_tools/memory_spaces/`, `apis/shared/memory/hydration.py`) + frontend (memory review UI)
+- **Options**: write-time screening for instruction-shaped content. An "added by the agent while reading external content" provenance mark that the hydration framing exposes to the model. Require `memory_propose` (human-accepted) instead of `memory_save` in shared projects. A visible diff or notification when the agent edits `MEMORY.md`.
+- **Effort × Impact**: M × M
+- **Subtracts**: no.
+- **Status**: open.
+
 ### [2026-10-07] ⚠️ URGENT Chore: run the conversation-archive backfill on production as soon as #1450 is there, before the cliff prune
 - **Source**: Phil-initiated, from #1475 (conversation search PR-3) and the q1 answer below. Raising Memory's `eventExpiryDuration` to 365 days (#1450) does **not** extend events already written, so every prod session written before #1450's prod deploy still loses its messages at 90 days, and keeps doing so for 90 days after that deploy. Copying a session's still-live events into the conversation archive is the only way to keep them. Each day of delay loses the sessions that cross 90 days that day; sessions already past it cannot be recovered.
 - **Surface**: ops only. `backend/scripts/backfill_conversation_archive.py` (dry-run default, `--out`, `--user`, `--limit`, `--sleep`, `--apply --confirm-prefix`). It copies every live session's Memory history into `{prefix}-conversation-archive`, oldest first, never overwriting a key that exists. Prod has `CONVERSATION_INDEX_ENABLED` off, so the apply needs **`--archive-without-index`**: archive only, nothing indexed. Those objects are not indexed later by themselves either, if prod ever turns search on. The script runs from a local checkout and reads app-api's environment from the task definition, so the run itself needs no deploy. What users see does: `GET /sessions/{id}/messages` reads the archive only once #1475 is in prod. Until then a rescued session whose events expire still opens empty, but its turns are kept.
