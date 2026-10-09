@@ -1,10 +1,11 @@
 """Model retirement: resolve a requested model id to the one that actually runs.
 
 docs/specs/model-retirement.md §7. The runtime model check
-(``AppRoleService.can_access_model``) reads role grants only, never the catalog,
-so a retired model has to be caught *before* that check, at every entry point
-that turns an id into a model call. This module is the one place that decision
-is made:
+(``AppRoleService.can_access_model``, i.e. ``apis.shared.rbac.model_access``)
+knows nothing of lifecycle status — it reads role grants plus the row's
+``enabled`` flag and legacy ``availableToRoles`` — so a retired model has to be
+caught *before* that check, at every entry point that turns an id into a model
+call. This module is the one place that decision is made:
 
 * ``active`` / ``deprecated`` / no catalog row → the id runs as requested.
   Deprecation is a picker concern; the runtime never sees it.
@@ -15,6 +16,10 @@ is made:
 
 Callers access-check the **effective** id, so a redirect never grants a model
 the invoker could not otherwise use, and cost is priced on the model invoked.
+They pass ``EffectiveModel.record`` to the access check, so the row resolved here
+is the one it judges and the turn path reads the catalog once. A retired row's
+own ``enabled`` flag is therefore never consulted on a redirect — only the
+successor's, which the admin write path requires to be enabled.
 """
 
 import logging

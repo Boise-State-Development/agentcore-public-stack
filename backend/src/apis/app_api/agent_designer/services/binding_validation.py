@@ -104,10 +104,10 @@ async def _validate_model(user: User, cfg: AgentModelConfig, svc: ModelAccessSer
     if model is None:
         raise BindingValidationError(f"Model '{cfg.model_id}' is not available.", status_code=400)
     # Use the SAME predicate the ``/agents/bindable`` catalog uses, so "if the palette
-    # offers it, the write accepts it". ``can_access_model`` is now equivalent (both
-    # delegate to one ``_grants_access`` rule); this once had to avoid it because it
-    # additionally gated on the model's ``allowed_app_roles``, rejecting models the
-    # palette had just listed.
+    # offers it, the write accepts it". Every model check — this one, the palette and
+    # the run-time ``AppRoleService.can_access_model`` the invoker is later held to —
+    # reads ``apis.shared.rbac.model_access.grants_model_access``, so the author cannot
+    # compose a model the run-time check would refuse on the same grants (#798).
     if not await svc.filter_accessible_models(user, [model]):
         raise BindingValidationError(
             f"You do not have access to model '{cfg.model_id}'.", status_code=403

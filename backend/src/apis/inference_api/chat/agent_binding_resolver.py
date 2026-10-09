@@ -261,7 +261,7 @@ async def resolve_agent_invocation(
                 plan.unavailable.model_id = model_settings.model_id
             else:
                 raise AgentBindingBlockedError(retired_model_message(effective.retired, agent=True))
-        elif await app_role_service.can_access_model(invoker, model_id):
+        elif await app_role_service.can_access_model(invoker, model_id, record=effective.record):
             plan.model_override = ResolvedModel(
                 model_id=model_id,
                 provider=provider,

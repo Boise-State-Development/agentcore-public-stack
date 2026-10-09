@@ -9,8 +9,9 @@ role ``grantedTools`` alone, so a public-but-ungranted tool listed for
 everyone and then failed at use — silently dropped from a scheduled run,
 and a hard block on any Agent that bound it. Non-admins hit it; anyone
 holding ``"*"`` never did. Keep the two sides reading the same flag; this
-is the tools-axis twin of the ``_grants_access`` consolidation in
-``admin/services/model_access.py``.
+is the tools-axis twin of the model-axis consolidation in
+:mod:`.model_access`, which every model check (here, the ``/models`` catalog
+and ``account_tools``) reads.
 
 The public set is *not* merged into ``UserEffectivePermissions``. That
 object is per-user cached and its ``tools`` list is order-sensitive
@@ -21,18 +22,45 @@ toggle and leaves the cached permission object untouched.
 """
 
 import logging
-from typing import List, Set, Optional
+from typing import List, Set, Optional, Union
 
 from apis.shared.auth.models import User
+from apis.shared.models.models import ManagedModel
 from apis.shared.tools.freshness import get_public_tool_ids
 from apis.shared.tools.scoped_ids import base_tool_id
 
 from .models import AppRole, UserEffectivePermissions
 from .repository import AppRoleRepository
 from .cache import AppRoleCache, get_app_role_cache, roles_fingerprint
+from .model_access import grants_model_access
 from apis.shared.timestamps import utc_now_iso
 
 logger = logging.getLogger(__name__)
+
+
+class _LookupRecord:
+    """Sentinel type: ``can_access_model`` should find the catalog row itself."""
+
+
+LOOKUP_RECORD = _LookupRecord()
+
+
+async def _lookup_model_record(model_id: str) -> Optional[ManagedModel]:
+    """The catalog row for ``model_id``; ``None`` for no row or an unreadable catalog.
+
+    Fails open to the role grants, like ``resolve_effective_model``: a catalog
+    outage must not refuse every model call.
+    """
+    from apis.shared.models.managed_models import find_managed_model_by_model_id
+
+    try:
+        return await find_managed_model_by_model_id(model_id)
+    except Exception:
+        logger.warning(
+            "Model catalog unavailable; checking model access on role grants only",
+            exc_info=True,
+        )
+        return None
 
 
 class AppRoleService:
@@ -282,15 +310,40 @@ class AppRoleService:
 
         return tool_id in allowed or base_tool_id(tool_id) in allowed
 
-    async def can_access_model(self, user: User, model_id: str) -> bool:
-        """Check if user can access a specific model."""
+    async def can_access_model(
+        self,
+        user: User,
+        model_id: str,
+        *,
+        record: Union[Optional[ManagedModel], _LookupRecord] = LOOKUP_RECORD,
+    ) -> bool:
+        """Check if user can run ``model_id``, by the one shared rule.
+
+        See :mod:`.model_access` for the rule, including what an id with no
+        catalog row gets. Pass ``record`` when the caller already holds the
+        catalog row (``EffectiveModel.record`` from retirement resolution —
+        ``None`` meaning "no row"), so the turn path pays no second lookup;
+        otherwise the row is found in the cached catalog.
+        """
         permissions = await self.resolve_user_permissions(user)
+        if isinstance(record, _LookupRecord):
+            record = await _lookup_model_record(model_id)
+        return grants_model_access(
+            model_id, record, set(permissions.models), set(user.roles or [])
+        )
 
-        # Wildcard grants access to all
-        if "*" in permissions.models:
-            return True
-
-        return model_id in permissions.models
+    async def filter_accessible_models(
+        self, user: User, models: List[ManagedModel]
+    ) -> List[ManagedModel]:
+        """The catalog rows ``user`` may run, by the same rule as ``can_access_model``."""
+        permissions = await self.resolve_user_permissions(user)
+        model_permissions = set(permissions.models)
+        user_roles = set(user.roles or [])
+        return [
+            model
+            for model in models
+            if grants_model_access(model.model_id, model, model_permissions, user_roles)
+        ]
 
     async def get_accessible_tools(self, user: User) -> List[str]:
         """Get list of tool IDs user can access (role grant ∪ public tools).

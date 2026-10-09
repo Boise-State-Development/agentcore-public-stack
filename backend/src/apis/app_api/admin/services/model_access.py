@@ -13,14 +13,20 @@ Once migration is complete, the legacy JWT role check can be removed.
 Note ``ManagedModel.allowed_app_roles`` is NOT an input to either check: it is a
 field derived *from* the role records for display (see :mod:`.model_roles`).
 Access is decided by the roles alone. Both entry points below funnel through
-``_grants_access`` so a single-model check and a catalog filter can never
-disagree about the same model.
+``_grants_access``, which is the shared ``grants_model_access`` rule in
+``apis.shared.rbac.model_access`` — the one the chat and api-converse paths read
+too — so no two surfaces can disagree about the same model.
+
+The one difference left is on failure: this service treats an AppRole resolve
+error as "no role grants" and still honours the legacy list, so the catalog
+renders during a role-store outage. The same rule is applied to what it resolves.
 """
 
 import logging
 from typing import List, Optional, Set
 
 from apis.shared.auth.models import User
+from apis.shared.rbac.model_access import grants_model_access
 from apis.shared.rbac.service import AppRoleService, get_app_role_service
 from apis.shared.models.models import ManagedModel
 
@@ -72,24 +78,15 @@ class ModelAccessService:
     def _grants_access(
         model: ManagedModel, model_permissions: Set[str], user_roles: Set[str]
     ) -> bool:
+        """Decide whether a user may use a catalog model.
+
+        Delegates to the platform's single rule,
+        :func:`apis.shared.rbac.model_access.grants_model_access` — the same one
+        the chat turn, api-converse and the Agent model override read through
+        ``AppRoleService.can_access_model`` — so a model is never listed here and
+        denied there (#798).
         """
-        Decide whether a user may use a model. The single access rule.
-
-        Both ``can_access_model`` and ``filter_accessible_models`` delegate here,
-        so a model is never listed by one and denied by the other.
-        """
-        if not model.enabled:
-            return False
-
-        # AppRole-based access: a role of the user's grants this model (or all models).
-        if "*" in model_permissions or model.model_id in model_permissions:
-            return True
-
-        # Legacy JWT role-based access (deprecated).
-        if model.available_to_roles and user_roles.intersection(model.available_to_roles):
-            return True
-
-        return False
+        return grants_model_access(model.model_id, model, model_permissions, user_roles)
 
     async def can_access_model(self, user: User, model: ManagedModel) -> bool:
         """
