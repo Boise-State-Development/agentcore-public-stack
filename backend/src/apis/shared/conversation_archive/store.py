@@ -110,6 +110,88 @@ def put_turns(turns: Sequence[ArchivedTurn]) -> int:
     return written
 
 
+def _status(exc: Exception) -> Optional[int]:
+    response = getattr(exc, "response", None) or {}
+    return response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+
+
+def _normalized(text: str) -> str:
+    return " ".join(text.split())
+
+
+def is_same_turn(existing: ArchivedTurn, turn: ArchivedTurn) -> bool:
+    """Whether ``turn`` is a later copy of ``existing``, not a different turn.
+
+    A turn re-archived after it resumes has the same user words and an
+    assistant reply that extends the one archived at the pause. Anything else
+    at the key is another turn's object.
+    """
+    return (
+        (existing.user_id, existing.session_id, existing.message_index)
+        == (turn.user_id, turn.session_id, turn.message_index)
+        and _normalized(existing.user_text) == _normalized(turn.user_text)
+        and _normalized(turn.assistant_text).startswith(_normalized(existing.assistant_text))
+    )
+
+
+def put_turn_guarded(turn: ArchivedTurn, *, expect_existing: bool) -> bool:
+    """Write the live turn's object without ever replacing a different turn's.
+
+    ``expect_existing`` is False for a turn this request started: its key must
+    be new, so the put is conditional on no object being there (S3
+    ``If-None-Match: *``). It is True for a turn that began in an earlier
+    request (a resume after a pause, a continuation), whose key the earlier
+    request may already have written: the object is read first and replaced
+    only if it is the same turn (:func:`is_same_turn`), conditional on its ETag.
+    A read that fails or finds nothing falls back to the create-only put, so
+    the guard never overwrites an object it has not read. Returns True if the
+    object was written. Never raises.
+    """
+    bucket = archive_bucket_name()
+    if not bucket:
+        return False
+    s3 = get_client("s3", _region())
+    condition = {"IfNoneMatch": "*"}
+    if expect_existing:
+        try:
+            current = s3.get_object(Bucket=bucket, Key=turn.key)
+            existing = ArchivedTurn.from_json(current["Body"].read())
+        except Exception as exc:  # noqa: BLE001 — a failed read only narrows the write to create-only
+            if _status(exc) not in (403, 404):
+                logger.warning(
+                    "Conversation archive read before re-archive failed for message %s (%s)",
+                    turn.message_index, type(exc).__name__,
+                )
+        else:
+            if not is_same_turn(existing, turn):
+                logger.warning(
+                    "Conversation archive key for message %s holds a different turn; not overwritten",
+                    turn.message_index,
+                )
+                return False
+            condition = {"IfMatch": current["ETag"]}
+    try:
+        s3.put_object(
+            Bucket=bucket,
+            Key=turn.key,
+            Body=turn.to_json(),
+            ContentType="application/json",
+            **condition,
+        )
+        return True
+    except Exception as exc:  # noqa: BLE001 — best-effort; see module docstring
+        if _status(exc) == 412:
+            logger.warning(
+                "Conversation archive key for message %s is already taken; not overwritten",
+                turn.message_index,
+            )
+        else:
+            logger.warning(
+                "Conversation archive put failed for message %s", turn.message_index, exc_info=True
+            )
+        return False
+
+
 def delete_session_archive(user_id: str, session_id: str) -> int:
     """Delete every archived turn of one session; returns how many went.
 
@@ -199,6 +281,11 @@ def read_session_turns(user_id: str, session_id: str) -> List[ArchivedTurn]:
 async def write_turns(turns: Sequence[ArchivedTurn]) -> int:
     """``put_turns`` off the event loop."""
     return await asyncio.to_thread(put_turns, turns)
+
+
+async def write_turn_guarded(turn: ArchivedTurn, *, expect_existing: bool) -> bool:
+    """``put_turn_guarded`` off the event loop."""
+    return await asyncio.to_thread(put_turn_guarded, turn, expect_existing=expect_existing)
 
 
 def schedule(job: Callable[[], Awaitable[Any]]) -> None:

@@ -9,6 +9,7 @@ from apis.shared.conversation_archive import (
     archive_bucket_name,
     build_turn,
     delete_session_archive,
+    put_turn_guarded,
     put_turns,
     read_session_turns,
     reset_bucket_cache,
@@ -105,6 +106,108 @@ def test_put_writes_one_json_object_per_turn_and_rewrites_idempotently(s3, monke
 def test_put_failure_is_swallowed(aws, monkeypatch):
     monkeypatch.setenv("CONVERSATION_ARCHIVE_BUCKET_NAME", "no-such-bucket")
     assert put_turns([_turn()]) == 0
+
+
+# ── the live path's guarded put ───────────────────────────────────────────
+
+
+def _live_turn(index=24, user_text="plan my week", assistant_text="One question first."):
+    return build_turn(
+        user_id="u1",
+        session_id="s1",
+        message_index=index,
+        user_text=user_text,
+        assistant_messages=[{"role": "assistant", "content": [{"text": assistant_text}]}],
+        created_at="2026-10-09T00:00:00+00:00",
+    )
+
+
+def _body(s3, index):
+    return json.loads(s3.get_object(Bucket=BUCKET, Key=f"conversations/u1/s1/{index:06d}.json")["Body"].read())
+
+
+def test_a_new_turn_is_written_create_only(s3, monkeypatch):
+    monkeypatch.setenv("CONVERSATION_ARCHIVE_BUCKET_NAME", BUCKET)
+    assert put_turn_guarded(_live_turn(22, "previous", "previous answer"), expect_existing=False)
+    assert _body(s3, 22)["userText"] == "previous"
+
+    # A misplaced turn aimed at that key must not replace it.
+    assert not put_turn_guarded(_live_turn(22), expect_existing=False)
+    assert _body(s3, 22)["userText"] == "previous"
+
+
+def test_a_resumed_turn_replaces_its_paused_copy(s3, monkeypatch):
+    monkeypatch.setenv("CONVERSATION_ARCHIVE_BUCKET_NAME", BUCKET)
+    assert put_turn_guarded(_live_turn(24), expect_existing=False)
+
+    resumed = _live_turn(24, assistant_text="One question first.\n\nHere is the plan.")
+    assert put_turn_guarded(resumed, expect_existing=True)
+    assert _body(s3, 24)["assistantText"] == "One question first.\n\nHere is the plan."
+
+
+def test_a_resumed_turn_that_added_no_text_still_rewrites_its_own_key(s3, monkeypatch):
+    monkeypatch.setenv("CONVERSATION_ARCHIVE_BUCKET_NAME", BUCKET)
+    assert put_turn_guarded(_live_turn(24), expect_existing=False)
+    assert put_turn_guarded(_live_turn(24), expect_existing=True)
+
+
+@pytest.mark.parametrize(
+    "user_text,assistant_text",
+    [
+        ("a different question", "One question first."),  # another turn's words
+        ("plan my week", "Something else entirely."),       # same words, a reply that is not an extension
+    ],
+)
+def test_a_re_archive_never_replaces_a_different_turn(s3, monkeypatch, user_text, assistant_text):
+    monkeypatch.setenv("CONVERSATION_ARCHIVE_BUCKET_NAME", BUCKET)
+    assert put_turn_guarded(_live_turn(22), expect_existing=False)
+
+    assert not put_turn_guarded(_live_turn(22, user_text, assistant_text), expect_existing=True)
+    assert _body(s3, 22)["userText"] == "plan my week"
+    assert _body(s3, 22)["assistantText"] == "One question first."
+
+
+def test_a_re_archive_with_nothing_there_creates_the_object(s3, monkeypatch):
+    """The pause's own write may have failed; the resume still lands."""
+    monkeypatch.setenv("CONVERSATION_ARCHIVE_BUCKET_NAME", BUCKET)
+    assert put_turn_guarded(_live_turn(24), expect_existing=True)
+    assert _body(s3, 24)["userText"] == "plan my week"
+
+
+def test_a_re_archive_whose_read_fails_falls_back_to_create_only(s3, monkeypatch):
+    """Without a successful read the guard never overwrites (e.g. before the
+    Runtime role gains s3:GetObject, every read is a 403)."""
+    from botocore.exceptions import ClientError
+
+    from apis.shared.conversation_archive import store
+
+    monkeypatch.setenv("CONVERSATION_ARCHIVE_BUCKET_NAME", BUCKET)
+    assert put_turn_guarded(_live_turn(24), expect_existing=False)
+
+    real_get_client = store.get_client
+
+    class _DeniedReads:
+        def __init__(self, client):
+            self._client = client
+
+        def get_object(self, **kwargs):
+            raise ClientError({"Error": {"Code": "AccessDenied"}, "ResponseMetadata": {"HTTPStatusCode": 403}}, "GetObject")
+
+        def __getattr__(self, name):
+            return getattr(self._client, name)
+
+    monkeypatch.setattr(store, "get_client", lambda *a, **k: _DeniedReads(real_get_client(*a, **k)))
+    resumed = _live_turn(24, assistant_text="One question first.\n\nHere is the plan.")
+    assert not put_turn_guarded(resumed, expect_existing=True)
+    assert _body(s3, 24)["assistantText"] == "One question first."
+
+    assert put_turn_guarded(_live_turn(26), expect_existing=True), "a missing key is still created"
+
+
+def test_guarded_put_failure_is_swallowed(aws, monkeypatch):
+    monkeypatch.setenv("CONVERSATION_ARCHIVE_BUCKET_NAME", "no-such-bucket")
+    assert not put_turn_guarded(_live_turn(), expect_existing=False)
+    assert not put_turn_guarded(_live_turn(), expect_existing=True)
 
 
 # ── delete ────────────────────────────────────────────────────────────────

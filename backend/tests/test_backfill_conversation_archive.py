@@ -382,21 +382,21 @@ async def test_objects_are_byte_identical_to_what_the_runtime_writes(world, monk
     monkeypatch.setenv("CONVERSATION_INDEX_ENABLED", "true")
     runtime: Dict[str, bytes] = {}
 
-    async def capture(turns):
-        runtime.update({t.key: t.to_json() for t in turns})
-        return len(turns)
+    async def capture(turn, *, expect_existing):
+        runtime[turn.key] = turn.to_json()
+        return True
 
     for start, end in [(0, 4), (4, 6), (6, 10)]:
         ended_at = datetime.fromisoformat(history[end - 1][1])
         clock = MagicMock(wraps=datetime)
         clock.now.return_value = ended_at
-        with patch.object(live, "write_turns", capture), patch.object(live, "datetime", clock):
+        with patch.object(live, "write_turn_guarded", capture), patch.object(live, "datetime", clock):
             assert live.schedule_turn_archive(
                 messages=messages[:end],
                 user_id="user-a",
                 session_id="s1",
-                last_message_index=end - 1,
                 turn_first_index=start,
+                appended_count=end - start,
                 original_message=display.get(start),
                 project_id="proj-1",
                 assistant_id=agents[start],

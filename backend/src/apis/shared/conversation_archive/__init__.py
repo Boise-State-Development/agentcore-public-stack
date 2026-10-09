@@ -25,10 +25,13 @@ from apis.shared.conversation_archive.store import (
     archive_bucket_name,
     delete_session_archive,
     drain_pending,
+    is_same_turn,
+    put_turn_guarded,
     put_turns,
     read_session_turns,
     reset_bucket_cache,
     schedule,
+    write_turn_guarded,
     write_turns,
 )
 
@@ -43,10 +46,12 @@ __all__ = [
     "clean_user_text",
     "delete_session_archive",
     "drain_pending",
+    "is_same_turn",
     "is_turn_start",
     "last_turn_start",
     "message_text",
     "parse_archive_key",
+    "put_turn_guarded",
     "put_turns",
     "read_session_turns",
     "reset_bucket_cache",
@@ -54,5 +59,6 @@ __all__ = [
     "session_prefix",
     "split_turns",
     "with_user_text",
+    "write_turn_guarded",
     "write_turns",
 ]
