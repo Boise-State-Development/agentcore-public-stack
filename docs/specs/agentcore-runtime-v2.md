@@ -1,6 +1,6 @@
 # AgentCore Runtime V2 migration
 
-**Status:** plan steps 1–3 shipped in 1.27.0. The first dev V2 attempt (2026-10-09) failed on an environment-variable size limit (B4) and was rolled back to V1. Step 4 is in progress: PR A (derived names at process start, the synth-time payload guard, the manifest test) is on branch `claude/agentcore-v2-upgrade-plan-1877c2`; PR B (drop the variables) follows. V2 must not be selected on any release before PR B ships (§8). Tracks `docs/kaizen/review-queue.md ▸ [2026-09-25] A/B the V2 AgentCore Runtime in dev` (Proposal 1 in `reviews/2026-09-25.md`).
+**Status:** plan steps 1–3 shipped in 1.27.0. The first dev V2 attempt (2026-10-09) failed on an environment-variable size limit (B4) and was rolled back to V1. Step 4: **PR A** (derived names at startup, synth-time payload guard, manifest test, image label) is open as #1533; **PR B** (drop the 26 variables, deploy-order preflight) is a draft stacked on it, to merge only after PR A is validated on dev. V2 must not be selected on any release before PR B ships (§8). Tracks `docs/kaizen/review-queue.md ▸ [2026-09-25] A/B the V2 AgentCore Runtime in dev`.
 **Sources:**
 - The AWS ML blog post [The new AgentCore Runtime: elastic, optimized, and consistently fast starts](https://aws.amazon.com/blogs/machine-learning/the-new-agentcore-runtime-elastic-optimized-and-consistently-fast-starts/) (2026-09-18).
 - The [What's New post](https://aws.amazon.com/about-aws/whats-new/2026/09/new-agentcore-runtime-generally-available).
@@ -280,7 +280,7 @@ The 50-variable ceiling test is unchanged and still applies; it printed 49/50 on
 ### 7.6 Rollout
 
 1. **PR A (this branch): manifest, hydrator, entrypoint wiring, app-api audit, synth-time guard, manifest test.** The Runtime still receives every variable, so behaviour is unchanged; hydration sets nothing and only compares. **Validate on dev:** the inference-api and app-api startup lines read `… 0 drifted`, and a synth of dev's config on V1 prints the "cannot switch to V2" warning with the expected estimate. Harmless on prod.
-2. **PR B: drop the 26 manifest variables from the Runtime in CDK and add `AWS_ACCOUNT_ID`.** Tighten the guard's budget check from a warning to an error for the worst-case synth in jest, so a V1 deployment can never drift back over the budget unnoticed. This is the change that can break the Runtime, so it lands only after A has run on dev with no drift. **Validate on dev, still on V1:** a new conversation's first turn; the tools that touch the derived resources (files, artifacts, memory spaces, skills, browser, quota); `get-agent-runtime` showing 24 variables; the startup line reading `26 set, 0 drifted`. Rollback is reverting B; the variables come back on the next platform deploy.
+2. **PR B: drop the 26 manifest variables from the Runtime in CDK and add `AWS_ACCOUNT_ID`.** *Pre-checked 2026-10-09, read-only:* running `audit_derived_environment()` over the live dev and prod Runtime environments found all 26 names matching the derivation and zero drift on both; after PR B dev goes from 49 variables and 2,851 bytes (our sum) to 24 and about 1,150, and prod from 46 and 2,526 to 21 and about 925. PR B also adds the deploy-order preflight (§8.4). Tighten the budget check to a jest assertion for the worst-case synth (about 1,280 estimated bytes after the change), so a V1 deployment can never drift back over the budget unnoticed. This is the change that can break the Runtime, so it lands only after A has run on dev with no drift. **Validate on dev, still on V1:** a new conversation's first turn; the tools that touch the derived resources (files, artifacts, memory spaces, skills, browser, quota); `get-agent-runtime` showing 24 variables; the startup line reading `26 set, 0 drifted`. Rollback is reverting B; the variables come back on the next platform deploy.
 3. **Then plan step 5, the dev V2 retry**, with the guard now passing for dev's values.
 4. **PR C, optional, later:** the four transforms in §7.1, one at a time, each with its own IAM or conditional check. Not needed for V2.
 
@@ -325,8 +325,21 @@ RELEASE_NOTES, in the header callout and **Deployment notes**:
 > ✅ **AgentCore Runtime V2 can now be selected.** With the smaller payload, `CDK_AGENTCORE_RUNTIME_PLATFORM_VERSION=V2` passes the synth check and the Runtime update succeeds. Switch one environment at a time, dev first, and read *Deployment ▸ AgentCore Runtime V2* on the docs site for the prerequisites, the verification steps and the recovery runbook. V2 bills memory at a higher per-GB-hour rate in exchange for not billing idle memory; the spec's §4 says when that is a saving.
 >
 > ⚠️ **If the previous release's startup log showed a derived-environment `WARNING`**, resolve it before this deploy: the variable it names is one the Runtime will no longer be sent.
+>
+> 🔀 **Deploy order matters once, and the pipeline enforces it.** The Runtime can only run without the removed variables on an inference-api image from the previous release or later. If the Platform Stack deploy runs while an older image is live (for example when upgrading straight from 1.27.0), it now stops before changing anything and says to run the Backend Deploy first. Do that, then re-run the Platform Stack deploy.
 
-### 8.4 Rules for the deployer-facing story
+### 8.4 Deploy order across the change (the preflight)
+
+PR B is the first change in this stack where **infrastructure removes something old application code requires**. CloudFormation re-registers the Runtime with whatever image is live (it reads `/<prefix>/inference-api/image-tag` at deploy time), so a platform deploy of PR B over an image older than PR A starts a Runtime with no table names, and every turn fails until `backend.yml` rolls a newer image. Nothing makes the documented platform→backend order hold: both workflows fire on the same push and race for one concurrency slot, and a deployer who skips a release takes PR A and PR B together.
+
+The documented order would be the dangerous one here, so prose is not enough:
+
+- **The image declares what it can do.** PR A adds `LABEL org.agentcore-public-stack.runtime-env-contract="derived-names-v1"` to `backend/Dockerfile.inference-api`.
+- **The platform deploy checks the live image.** `scripts/platform/check-runtime-env-contract.sh` runs in `scripts/platform/deploy.sh` after synth and before `cdk deploy`. When the template no longer sends the names, it reads the live image's config from ECR (resolving a multi-arch index to arm64) and fails with "run backend.yml first, then re-run this deploy; nothing has been changed" if the label is missing. Verified against dev's live image (pre-label): it reads the config and refuses.
+- **It skips what it can't judge:** a template that still sends the names, a first deploy (no image-tag parameter, or the CDK bootstrap image in the assets repository), and a custom image in another repository (with a note that it must derive the names itself). `SKIP_RUNTIME_ENV_CONTRACT_CHECK=true`, forwarded by `platform.yml`, is the escape hatch for a deploy role without ECR read.
+- **Result:** in the backend-first race order everything just works; in the platform-first order the platform run fails safely, the backend deploy lands, and a re-run of the platform deploy succeeds. No outage either way. The preflight is permanent, not a rollout switch: it guards every future upgrade from a pre-PR-A image, and costs two ECR reads per platform deploy.
+
+### 8.5 Rules for the deployer-facing story
 
 - **Never ship a release in which `V2` is selectable and wrong.** From PR A on, that is enforced by the guard rather than by prose.
 - **Every release's notes state whether V2 is selectable on that release**, in the Deployment notes, until the dev A/B is done and the recommendation is written.
