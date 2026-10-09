@@ -515,14 +515,16 @@ def test_non_424_errors_skip_the_lease_lookup(
     assert response.status_code == 500
 
 
-# ── Runtime token refusal: one retry with a refreshed token ───────────────
+# ── Runtime token refusal: exactly one retry ──────────────────────────────
 #
 # Dev, 2026-10-09: the Runtime's inbound JWT authorizer refused a token with
-# ~60s of life left, which the session middleware's 60s leeway still counted
-# as fresh. The 403 comes from the data plane before the container runs, so
-# one retry with a refreshed token cannot run a turn twice.
+# ~61s left, then accepted tokens with 61.8s and 60.6s left in timed tests, so
+# the refusal looks transient rather than age-based. The 403 comes from the
+# data plane before the container runs, so one retry cannot run a turn twice.
+# It uses a refreshed token when the refresh yields one, else the same token.
 
 _TOKEN_REFUSED = b'{"message":"Unauthorized inbound token"}'
+_SSE_DONE = b"event: done\ndata: {}\n\n"
 
 
 class _AttachRefresher(BaseHTTPMiddleware):
@@ -549,27 +551,41 @@ def _refresher_returning(token: Optional[str], calls: list[int]):
     return refresh
 
 
+def _failing_refresher():
+    async def refresh(min_remaining_seconds: int) -> Optional[SessionRecord]:
+        raise RuntimeError("cognito unreachable")
+
+    return refresh
+
+
 def _build_app_with_refresher(refresher) -> FastAPI:
     app = _build_app(record=_record(), user_override=_user())
     app.add_middleware(_AttachRefresher, refresher=refresher)
     return app
 
 
-def test_runtime_token_refusal_retries_once_with_a_refreshed_token(
-    monkeypatch: pytest.MonkeyPatch, chat_path: str
-) -> None:
-    seen: list[str] = []
+def _refuse_then(second_status: int, seen: list[str]):
+    """Upstream that refuses the first call and answers the second."""
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request.headers["authorization"])
         if len(seen) == 1:
             return httpx.Response(403, content=_TOKEN_REFUSED)
+        if second_status == 403:
+            return httpx.Response(403, content=_TOKEN_REFUSED)
         return httpx.Response(
-            200, content=b"event: done\ndata: {}\n\n",
+            second_status, content=_SSE_DONE,
             headers={"content-type": "text/event-stream"},
         )
 
-    _patch_upstream(monkeypatch, handler)
+    return handler
+
+
+def test_runtime_token_refusal_retries_once_with_a_refreshed_token(
+    monkeypatch: pytest.MonkeyPatch, chat_path: str
+) -> None:
+    seen: list[str] = []
+    _patch_upstream(monkeypatch, _refuse_then(200, seen))
     calls: list[int] = []
     app = _build_app_with_refresher(_refresher_returning("access.fresh", calls))
 
@@ -580,48 +596,54 @@ def test_runtime_token_refusal_retries_once_with_a_refreshed_token(
     assert calls == [proxy_routes._RUNTIME_RETRY_MIN_TOKEN_SECONDS]
 
 
-def test_runtime_token_refusal_relays_403_when_the_refresh_changes_nothing(
+@pytest.mark.parametrize(
+    "refresher",
+    [
+        pytest.param(_refresher_returning("access.token.value", []), id="refresh-same-token"),
+        pytest.param(_refresher_returning(None, []), id="session-cannot-heal"),
+        pytest.param(_failing_refresher(), id="refresh-raises"),
+        pytest.param(None, id="no-refresh-handle"),
+    ],
+)
+def test_runtime_token_refusal_retries_once_with_the_same_token(
+    monkeypatch: pytest.MonkeyPatch, chat_path: str, refresher
+) -> None:
+    """No fresher token is still worth one retry: the refusal looks transient."""
+    seen: list[str] = []
+    _patch_upstream(monkeypatch, _refuse_then(200, seen))
+    app = (
+        _build_app(record=_record(), user_override=_user())
+        if refresher is None
+        else _build_app_with_refresher(refresher)
+    )
+
+    response = TestClient(app).post(chat_path, json={"message": "hi"})
+
+    assert response.status_code == 200
+    assert seen == ["Bearer access.token.value", "Bearer access.token.value"]
+
+
+def test_runtime_token_refusal_is_retried_only_once(
     monkeypatch: pytest.MonkeyPatch, chat_path: str
 ) -> None:
-    """Same token back means its age was not the cause — a retry would 403 too."""
     seen: list[str] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        seen.append(request.headers["authorization"])
-        return httpx.Response(403, content=_TOKEN_REFUSED)
-
-    _patch_upstream(monkeypatch, handler)
-    app = _build_app_with_refresher(_refresher_returning("access.token.value", []))
+    _patch_upstream(monkeypatch, _refuse_then(403, seen))
+    app = _build_app_with_refresher(_refresher_returning("access.fresh", []))
 
     response = TestClient(app).post(chat_path, json={"message": "hi"})
 
     assert response.status_code == 403
     assert "Unauthorized inbound token" in response.text
-    assert len(seen) == 1
+    assert len(seen) == 2
 
 
-def test_runtime_token_refusal_relays_403_when_the_session_cannot_heal(
+def test_other_403s_are_relayed_without_a_retry(
     monkeypatch: pytest.MonkeyPatch, chat_path: str
 ) -> None:
     seen: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request.headers["authorization"])
-        return httpx.Response(403, content=_TOKEN_REFUSED)
-
-    _patch_upstream(monkeypatch, handler)
-    app = _build_app_with_refresher(_refresher_returning(None, []))
-
-    response = TestClient(app).post(chat_path, json={"message": "hi"})
-
-    assert response.status_code == 403
-    assert len(seen) == 1
-
-
-def test_other_403s_are_relayed_without_a_refresh(
-    monkeypatch: pytest.MonkeyPatch, chat_path: str
-) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(403, content=b'{"message":"Access denied"}')
 
     _patch_upstream(monkeypatch, handler)
@@ -632,17 +654,4 @@ def test_other_403s_are_relayed_without_a_refresh(
 
     assert response.status_code == 403
     assert calls == []
-
-
-def test_runtime_token_refusal_without_a_refresh_handle_relays_403(
-    monkeypatch: pytest.MonkeyPatch, chat_path: str
-) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(403, content=_TOKEN_REFUSED)
-
-    _patch_upstream(monkeypatch, handler)
-    app = _build_app(record=_record(), user_override=_user())
-
-    response = TestClient(app).post(chat_path, json={"message": "hi"})
-
-    assert response.status_code == 403
+    assert len(seen) == 1

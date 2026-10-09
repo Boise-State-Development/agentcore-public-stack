@@ -122,37 +122,38 @@ async def _resolve_upstream_error_status(
 # request, so retrying it cannot run a turn twice.
 _RUNTIME_TOKEN_REFUSED_MARKER = b"Unauthorized inbound token"
 
-# Lifetime to demand of a re-minted token before the one retry. The session
-# middleware only guarantees `BFF_SESSION_REFRESH_LEEWAY_SECONDS` (60s), and the
-# Runtime refused a token on dev (2026-10-09) that had about that much left: its
-# previous refresh was at 02:00:12Z, so it expired ~03:00:12Z, and the 403 came
-# at 02:59:12Z. Five minutes clears that edge with room for clock skew, and a
-# token a peer task has just refreshed (~an hour left) is adopted rather than
-# refreshed again.
+# Lifetime to demand of the token before the one retry. Not a known Runtime
+# margin: on dev (2026-10-09) the Runtime refused a token with ~61s left, then
+# accepted ones with 61.8s and 60.6s left in timed tests, so the refusal looks
+# transient rather than age-based. Refreshing a token this close to expiry is
+# still the cheaper bet for the retry, and a token a peer task just refreshed
+# (~an hour left) is adopted rather than refreshed again.
 _RUNTIME_RETRY_MIN_TOKEN_SECONDS = 300
 
 
-async def _refreshed_token_for_retry(
+async def _token_for_retry(
     request: Request, error_body: bytes, forwarded_token: str
 ) -> Optional[str]:
-    """A fresher access token to retry a Runtime token refusal with, or None.
+    """The access token to retry a Runtime token refusal with, or None.
 
-    None means "relay the original failure": the refusal was something else,
-    there is no session handle to refresh through, or the refresh produced the
-    same token (so the cause is not its age and a retry would 403 again).
+    None only when the 403 is not a token refusal, which is relayed as-is.
+    For a refusal, a refreshed token is preferred; when the refresh yields the
+    same token, fails, or has no session handle to go through, the forwarded
+    token is retried as-is, since a refusal that does not track the token's
+    age is most likely transient.
     """
     if _RUNTIME_TOKEN_REFUSED_MARKER not in error_body:
         return None
     refresh = getattr(request.state, "bff_refresh_session", None)
     if refresh is None:
-        return None
+        return forwarded_token
     try:
         record = await refresh(_RUNTIME_RETRY_MIN_TOKEN_SECONDS)
-    except Exception:  # noqa: BLE001 - a failed heal relays the original 403
+    except Exception:  # noqa: BLE001 - a failed refresh still gets the one retry
         logger.warning("Could not refresh the session after a Runtime 403", exc_info=True)
-        return None
-    if record is None or record.cognito_access_token == forwarded_token:
-        return None
+        return forwarded_token
+    if record is None:
+        return forwarded_token
     return record.cognito_access_token
 
 
@@ -248,14 +249,13 @@ async def chat_stream(
             # Only a request that has already failed reaches this branch, so
             # the healthy turn path pays nothing for it.
             error_body = await response.aread()
-            retry_token = await _refreshed_token_for_retry(
+            retry_token = await _token_for_retry(
                 request, error_body, current_user.raw_token
             )
             if retry_token is not None:
                 await response.aclose()
-                logger.info(
-                    "Runtime refused the forwarded access token; "
-                    "retrying once with a refreshed one"
+                token_kind = (
+                    "same" if retry_token == current_user.raw_token else "refreshed"
                 )
                 headers["Authorization"] = f"Bearer {retry_token}"
                 response = await client.send(
@@ -263,6 +263,14 @@ async def chat_stream(
                         "POST", target_url, headers=headers, content=body
                     ),
                     stream=True,
+                )
+                # One line per refusal, so the logs answer whether a retry
+                # recovers and whether a refreshed token was what it took.
+                logger.info(
+                    "Runtime refused the forwarded access token; retried once "
+                    "with the %s token -> %s",
+                    token_kind,
+                    response.status_code,
                 )
     except httpx.ConnectError:
         await client.aclose()
