@@ -5,6 +5,50 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 ## Open
 <!-- Newest at top. -->
 
+### [2026-10-09] Run the preserved-thinking compaction probe on Bedrock, then curate Claude Haiku 5.5 behind it
+- **Source**: research/2026-10-09.md ▸ Top 5 #1 (supersedes part (a) of [2026-10-02] "Verify compaction and offload on preserved-thinking models")
+- **Surface**: cross-cutting (`session/turn_based_session_manager.py`, `session/compaction_summary.py`, `core/model_config.py:132-137`, `curated-models.ts`)
+- **Effort × Impact**: M × H
+- **Subtracts**: partly — a measured default switch starts Haiku 4.5's retirement path (never a hard delete); the probe itself is an addition, justified because Opus 5.5 is already in prod with the same exposure
+- **Unlocks**:
+  - a cheaper default (vendor claim ~75% below Haiku 4.5) with 1M context and effort control
+  - higher model-relative compaction thresholds for most sessions
+- **Notes**: preserved-thinking models 400 by default when anything before a thinking block changes; client-side compaction that keeps recent turns is named as failing. Bedrock enforcement unverified. A Haiku 5.5 row must declare no `thinking` param (it rejects `budget_tokens`). Check for a `us.*` id; the dev SCP blocks `global.*`. Don't flip the default in the curation PR.
+- **Status**: open
+
+### [2026-10-09] Take Strands 1.59 with voice ported to the new Bidi usage shape, and delete our Nova speech/text split
+- **Source**: research/2026-10-09.md ▸ Top 5 #2
+- **Surface**: backend (`pyproject.toml`, `voice_agent.py:42-48,542,600`, `voice_routes.py:222,277`, `usage_normalization.py`)
+- **Effort × Impact**: M × M
+- **Subtracts**: yes — `_convert_nova_event`, `usage_modality_details()`, the cache-write shim in `usage_normalization.py`, and the silent voice-off failure class (add a test that fails when `BIDI_AVAILABLE` is False)
+- **Unlocks**: #4499 (no hang on MCP drop mid-tool-call), #4813/#4603 (Bidi session save + snapshots), #3675 (nested interrupt resume)
+- **Notes**: 1.58.0 removed `ModalityUsage`, which `voice_agent.py:45` imports inside an `except ImportError` → voice turns off silently on bump. #4618 has not shipped; Bedrock usage is still disjoint at 1.59.0.
+- **Status**: open
+
+### [2026-10-09] One synth-time budget test for every platform ceiling (IAM policy size, Runtime env count + V2 payload, stack resources)
+- **Source**: research/2026-10-09.md ▸ Top 5 #3; Platform Stack failure 10-08 (`PolicySize: 6144`); V2 rollback 10-09 (3,007 / 2,560 B)
+- **Surface**: infrastructure (`infrastructure/test/`)
+- **Effort × Impact**: L × H
+- **Subtracts**: yes — folds the per-grant size tests and the hand counts kept in notes into one CI output; it is the V2 plan's §7.5 payload guard, widened
+- **Unlocks**: the V2 retry with a measured margin; PR-time headroom instead of deploy-time rollbacks
+- **Status**: open
+
+### [2026-10-09] Ignore IME-composition Enter in every Enter handler, and restore focus after a question/approval prompt settles
+- **Source**: research/2026-10-09.md ▸ Top 5 #4 (assistant-ui #9155, #9141)
+- **Surface**: frontend (`chat-input.component.ts:2084,2163`, `session-list.ts:496`, `topnav.ts:188`, `user-question-prompt.component.ts:164,622-650`, `project-overview.component.ts:137`)
+- **Effort × Impact**: L × M
+- **Subtracts**: consolidates — one `isImeEnter()` helper replaces one partial guard and five missing ones
+- **Unlocks**: correct sends for Japanese, Chinese and Korean typists on desktop
+- **Status**: open
+
+### [2026-10-09] Make the Gateway MCP client honour the tools/list pagination cursor, and drop tool names over Bedrock's limit
+- **Source**: research/2026-10-09.md ▸ Top 5 #5 (Claude Code 2.1.295, 2.1.292)
+- **Surface**: backend (`integrations/gateway_mcp_client.py:136-160`)
+- **Effort × Impact**: L × M
+- **Subtracts**: yes — removes the override's swallowed-arguments behaviour that returns page 1's cursor into Strands' uncapped loop
+- **Notes**: latent; whether the Gateway paginates today is unverified.
+- **Status**: open
+
 ### [2026-10-08] ⚠️ URGENT Ops: find any AgentCore agent in our accounts that still runs on a default execution role (AgentCorruption)
 - **Source**: Phil-initiated, from Zenity Labs' AgentCorruption disclosure (2026-10-08, SecTor). A prompt-injected agent used a web-request tool to read the instance metadata endpoint, returned its execution role's credentials, and used them from outside AWS. The **default** AgentCore execution role was account- and region-wide, so the credentials reached every agent in the account: `InvokeAgentRuntime`, `ListEvents` (other users' conversations), `CreateEvent` (planted memories), `GetResourceApiKey`, `secretsmanager:GetSecretValue`, and ECR pulls. AWS made new agents IMDSv2-only on 2026-02-14 and narrowed the default role on 2026-09-29. AWS calls it documented behavior, and there is no CVE.
 - **Our exposure**: the attack as disclosed doesn't land on our platform. `fetch_url_content` refuses metadata, link-local and private targets, and as of this PR also checks the address it actually connected to. Our runtime uses its own CDK role, not the default one. The Code Interpreter and Browser sandboxes' roles can only write logs. **The real risk is a neighbour.** Any agent, runtime, Code Interpreter or Browser created by hand (console, starter toolkit, a spike or an experiment) in the same account and region may still carry the old default role, and our resources have no resource policies to keep it out.
