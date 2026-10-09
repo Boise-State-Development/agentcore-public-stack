@@ -112,7 +112,7 @@ describe('ChatHttpService', () => {
     // The refresh is delayed to let the teardown write land, then awaits the fetch.
     await vi.runAllTimersAsync();
 
-    expect(sessionSvc.getSessionMetadata).toHaveBeenCalledWith('s1');
+    expect(sessionSvc.getSessionMetadata).toHaveBeenCalledWith('s1', { quiet: true });
     expect(chatStateService.seedSessionAggregates).toHaveBeenCalledWith('s1', {
       totalCost: 0.0123,
       lastContextTokens: 4200,

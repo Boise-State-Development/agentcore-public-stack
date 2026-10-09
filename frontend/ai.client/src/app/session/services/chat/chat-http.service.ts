@@ -477,7 +477,7 @@ export class ChatHttpService {
    */
   private async refreshAggregatesAfterStop(sessionId: string, retried = false): Promise<void> {
     try {
-      const metadata = await this.sessionService.getSessionMetadata(sessionId);
+      const metadata = await this.sessionService.getSessionMetadata(sessionId, { quiet: true });
       const hasAggregates =
         (metadata.totalCost ?? 0) > 0 ||
         (metadata.lastContextTokens ?? 0) > 0 ||
@@ -578,7 +578,7 @@ export class ChatHttpService {
    */
   private async refreshTitleFromServer(sessionId: string, attempt = 0): Promise<void> {
     try {
-      const metadata = await this.sessionService.getSessionMetadata(sessionId);
+      const metadata = await this.sessionService.getSessionMetadata(sessionId, { quiet: true });
       if (metadata.title && metadata.title !== 'New Conversation') {
         this.sessionService.applyServerTitle(sessionId, metadata.title);
         return;
