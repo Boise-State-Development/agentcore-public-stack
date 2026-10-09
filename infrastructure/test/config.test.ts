@@ -665,6 +665,47 @@ describe('RAG Ingestion Configuration', () => {
   });
 
   // ============================================================
+  // Direct user grants feature flag — opt-in while in development
+  // ============================================================
+
+  describe('Direct user grants feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_USER_GRANTS_ENABLED;
+    });
+
+    test('defaults to disabled when CDK_USER_GRANTS_ENABLED is unset', () => {
+      delete process.env.CDK_USER_GRANTS_ENABLED;
+
+      expect(loadConfig(app).userGrants.enabled).toBe(false);
+    });
+
+    test('treats empty string (unset GitHub Actions variable) as disabled', () => {
+      process.env.CDK_USER_GRANTS_ENABLED = '';
+
+      expect(loadConfig(app).userGrants.enabled).toBe(false);
+    });
+
+    test('CDK_USER_GRANTS_ENABLED="true" turns it on', () => {
+      process.env.CDK_USER_GRANTS_ENABLED = 'true';
+
+      expect(loadConfig(app).userGrants.enabled).toBe(true);
+    });
+
+    test('anything but "true" leaves it off', () => {
+      process.env.CDK_USER_GRANTS_ENABLED = 'yes';
+
+      expect(loadConfig(app).userGrants.enabled).toBe(false);
+    });
+
+    test('cdk.json context userGrants.enabled=true enables when env is unset', () => {
+      delete process.env.CDK_USER_GRANTS_ENABLED;
+      app.node.setContext('userGrants', { enabled: true });
+
+      expect(loadConfig(app).userGrants.enabled).toBe(true);
+    });
+  });
+
+  // ============================================================
   // Project-memory content lint (Shared Projects 2.7): configuration,
   // defaulting to warn with no deployment patterns
   // ============================================================

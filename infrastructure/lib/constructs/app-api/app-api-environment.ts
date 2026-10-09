@@ -373,6 +373,10 @@ export function buildAppApiEnvironment(
     // is always wired; only PROJECTS_ENABLED gates whether the routes mount.
     PROJECTS_ENABLED: config.projects.enabled ? 'true' : 'false',
     DYNAMODB_PROJECTS_TABLE_NAME: params.projectsTableName,
+    // Direct user grants (opt-in while in development). app-api only: it gates
+    // the admin write surface; resolution reads grant rows everywhere without a
+    // switch, so the Runtime (at its env-var cap) deliberately gets no copy.
+    USER_GRANTS_ENABLED: config.userGrants.enabled ? 'true' : 'false',
     // Project-memory content lint (Shared Projects 2.7): the Memory page's saves,
     // proposals and restores, and the flags it shows on read.
     MEMORY_LINT_MODE: config.memoryLint.mode,

@@ -67,6 +67,16 @@ describe('buildAppApiEnvironment — Shared Projects', () => {
   });
 });
 
+describe('buildAppApiEnvironment — direct user grants', () => {
+  it('forwards the flag, off by default', () => {
+    const off = buildAppApiEnvironment(createMockConfig(), stubParams());
+    expect(off.USER_GRANTS_ENABLED).toBe('false');
+
+    const on = buildAppApiEnvironment(createMockConfig({ userGrants: { enabled: true } }), stubParams());
+    expect(on.USER_GRANTS_ENABLED).toBe('true');
+  });
+});
+
 describe('buildAppApiEnvironment — project-memory content lint (2.7)', () => {
   it('always sets the mode and sets the patterns only when there are some', () => {
     const plain = buildAppApiEnvironment(createMockConfig(), stubParams());

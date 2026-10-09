@@ -626,6 +626,29 @@ def projects_enabled() -> bool:
     return os.environ.get("PROJECTS_ENABLED", "").strip().lower() == "true"
 
 
+def user_grants_enabled() -> bool:
+    """Whether the admin surface for direct user grants is mounted on app-api.
+
+    A direct grant (``apis.shared.rbac.models.UserGrant``) hands tools, models
+    and skills to one user beside their roles. **Opt-in while the feature is
+    in development** (CLAUDE.md "Feature flags"): only ``"true"``
+    (case-insensitive) enables it. CDK sets it on app-api from
+    ``config.userGrants.enabled``. The SPA's matching switch is
+    ``features.userGrants``.
+
+    **This gates the write surface only.** Permission resolution reads a
+    user's grant row wherever it runs — app-api and the AgentCore Runtime —
+    without consulting this flag, for two reasons. The Runtime is at its
+    environment-variable cap (and Runtime V2 caps the whole payload), so a
+    second copy of the switch there would cost a slot the turn path needs
+    more. And an absent row *is* the off state: a grant can only exist where
+    an admin wrote one through these routes. Turning the flag off therefore
+    stops new grants and edits but does not revoke what was granted — delete
+    the grant to revoke it.
+    """
+    return os.environ.get("USER_GRANTS_ENABLED", "").strip().lower() == "true"
+
+
 def conversation_index_enabled() -> bool:
     """Whether finished turns are written to the conversation archive.
 

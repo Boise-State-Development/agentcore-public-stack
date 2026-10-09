@@ -28,4 +28,10 @@ export interface FeatureFlags {
    * only when it is "false").
    */
   conversationSearch: boolean;
+  /**
+   * Direct user grants: the Access section on the admin user detail page, where a
+   * system admin grants tools, models and skills to one user beside their roles.
+   * Backend: USER_GRANTS_ENABLED (app-api; `/admin/user-grants` 404s while off).
+   */
+  userGrants: boolean;
 }
