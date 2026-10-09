@@ -53,6 +53,7 @@ import {
   AudioRecorderService,
   VoiceChatService,
   VOICE_GROUPS,
+  describeAudioError,
   voiceDescription,
   type AudioInputDevice,
   type VoiceStatus,
@@ -1659,8 +1660,7 @@ export class ChatInputComponent {
         this.toastService.info('Dictation', 'Dictation is not available here.');
         return;
       }
-      const message = err instanceof Error ? err.message : 'Could not start dictation.';
-      this.toastService.error('Dictation', message);
+      this.toastService.error('Dictation', describeAudioError(err, 'Could not start dictation.'));
     }
   }
 
@@ -1721,8 +1721,7 @@ export class ChatInputComponent {
       try {
         await this.voiceChatService.connect(this.sessionId() || undefined);
       } catch (err) {
-        const msg = err instanceof Error ? err.message : 'Failed to start voice';
-        this.toastService.error('Voice Error', msg);
+        this.toastService.error('Voice Error', describeAudioError(err, 'Failed to start voice'));
       }
     }
   }

@@ -1,4 +1,5 @@
 import { Injectable, signal } from '@angular/core';
+import { createAudioContext } from './audio-context';
 import { base64ToSamples } from './pcm-utils';
 
 /**
@@ -90,8 +91,7 @@ export class AudioPlayerService {
   private ensureContext(sampleRate: number): void {
     if (this.audioContext) return;
 
-    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-    this.audioContext = new AudioContextClass({ sampleRate });
+    this.audioContext = createAudioContext(sampleRate);
     this.gainNode = this.audioContext.createGain();
     this.gainNode.connect(this.audioContext.destination);
     this.scheduledTime = 0;
