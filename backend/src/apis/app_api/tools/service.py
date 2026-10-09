@@ -183,13 +183,24 @@ class ToolCatalogService:
     def _compute_granted_by(
         self, tool: ToolDefinition, permissions: UserEffectivePermissions
     ) -> List[str]:
-        """Compute which sources grant access to this tool."""
+        """Compute which sources grant access to this tool.
+
+        ``"public"`` for the catalog flag, ``"direct"`` for the user's own
+        grant, and the user's role ids when a *role* grants it.
+        ``permissions.tools`` is the union of roles and direct grant, so a
+        tool that is in it only because of the grant is not attributed to
+        the roles.
+        """
         granted_by = []
 
         if tool.is_public:
             granted_by.append("public")
 
-        if "*" in permissions.tools or tool.tool_id in permissions.tools:
+        if tool.tool_id in permissions.direct_tools:
+            granted_by.append("direct")
+
+        role_tools = set(permissions.tools) - set(permissions.direct_tools)
+        if "*" in permissions.tools or tool.tool_id in role_tools:
             granted_by.extend(permissions.app_roles)
 
         return list(set(granted_by))

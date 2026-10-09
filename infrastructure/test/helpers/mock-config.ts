@@ -148,6 +148,9 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     projects: {
       enabled: false,
     },
+    userGrants: {
+      enabled: false,
+    },
     memoryLint: {
       mode: 'warn',
       sensitivePatterns: '',

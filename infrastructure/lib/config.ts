@@ -78,6 +78,7 @@ export interface AppConfig {
   platformCosts: PlatformCostsConfig;
   memorySpaces: MemorySpacesConfig;
   projects: ProjectsConfig;
+  userGrants: UserGrantsConfig;
   memoryLint: MemoryLintConfig;
   conversationIndex: ConversationIndexConfig;
   conversationSearch: ConversationSearchConfig;
@@ -420,6 +421,20 @@ export interface MemorySpacesConfig {
  * the invocation path at runtime.
  */
 export interface ProjectsConfig {
+  enabled: boolean;
+}
+
+/**
+ * Direct user grants (tools, models and skills granted to one user beside their
+ * roles). **Opt-in while the feature is in development**: off unless
+ * CDK_USER_GRANTS_ENABLED=true (or a `userGrants.enabled: true` cdk.json context).
+ * See CLAUDE.md "Feature flags". Sets USER_GRANTS_ENABLED on **app-api only**: it
+ * gates the admin write surface (`/admin/user-grants`), and permission resolution
+ * reads an existing grant row wherever it runs without a switch — the AgentCore
+ * Runtime is at its environment-variable cap, and an absent row is the off state
+ * (see `user_grants_enabled` in `apis/shared/feature_flags.py`).
+ */
+export interface UserGrantsConfig {
   enabled: boolean;
 }
 
@@ -1286,6 +1301,13 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_PROJECTS_ENABLED
         ? process.env.CDK_PROJECTS_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('projects')?.enabled ?? false,
+    },
+    userGrants: {
+      // Opt-in while in development (CLAUDE.md "Feature flags"): only the literal
+      // "true" turns it on; an unset workflow variable arrives as "" and is off.
+      enabled: process.env.CDK_USER_GRANTS_ENABLED
+        ? process.env.CDK_USER_GRANTS_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('userGrants')?.enabled ?? false,
     },
     // Project-memory content lint: configuration of Shared Projects, not a flag.
     // The workflow forwards an EMPTY STRING when a variable is unset, which falls

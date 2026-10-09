@@ -92,6 +92,13 @@ class AuditAction:
     PROJECT_OUTPUT_REMOVED = "project.output_removed"
     PROJECT_MEMORY_MAINTENANCE_STARTED = "project.memory_maintenance_started"
 
+    # Direct user grants (``apis/shared/rbac/user_grant_admin_service.py``),
+    # target ``user_grant`` keyed by the user id. One record per PUT with the
+    # three lists' before/after, one per DELETE — the grant is its own record,
+    # not a role edit, so the no-double-count note above does not apply.
+    USER_GRANT_UPDATED = "user_grant.updated"
+    USER_GRANT_DELETED = "user_grant.deleted"
+
 
 ALL_ACTIONS: frozenset[str] = frozenset(
     v for k, v in vars(AuditAction).items() if not k.startswith("_") and isinstance(v, str)
@@ -105,6 +112,7 @@ class AuditOutcome:
 
 TARGET_APP_ROLE = "app_role"
 TARGET_PROJECT = "project"
+TARGET_USER_GRANT = "user_grant"
 
 
 @dataclass

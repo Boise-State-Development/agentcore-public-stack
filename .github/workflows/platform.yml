@@ -253,6 +253,12 @@ jobs:
       # there. Unset (empty string) or anything else means off. The SPA's
       # matching switch is `features.projects` in src/environments/*.ts.
       CDK_PROJECTS_ENABLED: ${{ vars.CDK_PROJECTS_ENABLED }}
+      # Direct user grants (tools/models/skills granted to one user beside their
+      # roles; the admin surface at /admin/user-grants). Opt-in while in
+      # development: set `CDK_USER_GRANTS_ENABLED` to "true" in an environment to
+      # turn it on there. app-api only. The SPA's matching switch is
+      # `features.userGrants` in src/environments/*.ts.
+      CDK_USER_GRANTS_ENABLED: ${{ vars.CDK_USER_GRANTS_ENABLED }}
       # Project-memory content lint (Shared Projects 2.7). Configuration, not a
       # flag: it applies only inside Projects. Unset (empty string) means the
       # defaults: `warn`, and no deployment patterns. `CDK_MEMORY_LINT_MODE` is

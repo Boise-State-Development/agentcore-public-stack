@@ -151,6 +151,14 @@ class UserEffectivePermissions:
     # predate these axes keep working (they resolve to none of them).
     skills: List[str] = field(default_factory=list)
     admin_scopes: List[str] = field(default_factory=list)
+    # The subset of ``tools`` / ``models`` / ``skills`` that came from the
+    # user's own :class:`UserGrant` rather than a role. Already unioned into
+    # the main lists (which every gate reads); these exist so a display
+    # surface (the tool picker's ``grantedBy``) can say *why* without a
+    # second lookup. Never hold ``"*"`` — a direct grant has no wildcard.
+    direct_tools: List[str] = field(default_factory=list)
+    direct_models: List[str] = field(default_factory=list)
+    direct_skills: List[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         """Convert to dictionary."""
@@ -163,7 +171,102 @@ class UserEffectivePermissions:
             "adminScopes": self.admin_scopes,
             "quotaTier": self.quota_tier,
             "resolvedAt": self.resolved_at,
+            "directTools": self.direct_tools,
+            "directModels": self.direct_models,
+            "directSkills": self.direct_skills,
         }
+
+
+@dataclass
+class UserGrant:
+    """Tools, models and skills granted to **one user** directly, beside their roles.
+
+    A role is the normal way access is handed out, and stays so. A direct
+    grant is for the cases a role fits badly: one person piloting a tool
+    before their cohort gets it, a researcher who needs a model nobody else
+    in their role does, a temporary exception with an end date. It is
+    **additive only** — it can widen what the user's roles give, never
+    narrow it. A deny lives on the resource (a catalog row's ``enabled``),
+    not here.
+
+    Resolution unions these lists into ``UserEffectivePermissions`` beside the
+    role grants (``AppRoleService._merge_permissions``), so every gate that
+    reads the resolved object honours them without knowing they exist. The
+    ids are the same catalog ids a role grants: **base** tool ids (an MCP
+    server as a whole, not a ``server::tool`` scoped ref), provider model
+    ids, skill ids. There is no ``"*"``: a wildcard is a role concept, and a
+    per-person superuser is a role assignment, not a grant.
+
+    ``expires_at`` (ISO 8601, UTC) makes the grant lapse by itself — the
+    resolver treats an expired grant as absent, and the per-user permission
+    cache (5 min) bounds how late that lands. The row is left in place for
+    the admin to see and clean up; nothing deletes it for them.
+    """
+
+    user_id: str
+    granted_tools: List[str] = field(default_factory=list)
+    granted_models: List[str] = field(default_factory=list)
+    granted_skills: List[str] = field(default_factory=list)
+    expires_at: Optional[str] = None
+    note: str = ""
+
+    # Audit fields
+    granted_by: Optional[str] = None
+    created_at: str = ""
+    updated_at: str = ""
+
+    def is_empty(self) -> bool:
+        """True when the grant hands out nothing at all."""
+        return not (self.granted_tools or self.granted_models or self.granted_skills)
+
+    def is_active(self, now_iso: str) -> bool:
+        """Whether the grant is in force at ``now_iso`` (ISO 8601 UTC).
+
+        A missing ``expires_at`` never lapses. Both sides are the one
+        canonical spelling ``apis.shared.timestamps`` produces, so a string
+        comparison is a time comparison; an unparseable stored value is
+        treated as expired rather than as open-ended, because the failure
+        mode of "a typo grants forever" is the worse one.
+        """
+        if not self.expires_at:
+            return True
+        try:
+            from datetime import datetime
+
+            expires = datetime.fromisoformat(self.expires_at.replace("Z", "+00:00"))
+            now = datetime.fromisoformat(now_iso.replace("Z", "+00:00"))
+        except ValueError:
+            return False
+        return expires > now
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for DynamoDB storage."""
+        return {
+            "userId": self.user_id,
+            "grantedTools": self.granted_tools,
+            "grantedModels": self.granted_models,
+            "grantedSkills": self.granted_skills,
+            "expiresAt": self.expires_at,
+            "note": self.note,
+            "grantedBy": self.granted_by,
+            "createdAt": self.created_at,
+            "updatedAt": self.updated_at,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "UserGrant":
+        """Create from dictionary (DynamoDB item)."""
+        return cls(
+            user_id=data.get("userId", ""),
+            granted_tools=list(data.get("grantedTools", []) or []),
+            granted_models=list(data.get("grantedModels", []) or []),
+            granted_skills=list(data.get("grantedSkills", []) or []),
+            expires_at=data.get("expiresAt") or None,
+            note=data.get("note", "") or "",
+            granted_by=data.get("grantedBy"),
+            created_at=data.get("createdAt", ""),
+            updated_at=data.get("updatedAt", ""),
+        )
 
 
 # =============================================================================
@@ -312,6 +415,79 @@ class AdminScopeListResponse(BaseModel):
 
     scopes: List[AdminScopeResponse]
     total: int
+
+
+class UserGrantUpdate(BaseModel):
+    """Request body for ``PUT /admin/user-grants/{user_id}`` — a full replace.
+
+    The form posts every list on every save, so a partial-update shape would
+    only invite a client to drop a list by omission. Replace semantics make
+    the stored grant exactly what the admin last saw on screen.
+    """
+
+    granted_tools: List[str] = Field(default_factory=list, alias="grantedTools")
+    granted_models: List[str] = Field(default_factory=list, alias="grantedModels")
+    granted_skills: List[str] = Field(default_factory=list, alias="grantedSkills")
+    expires_at: Optional[str] = Field(None, alias="expiresAt")
+    note: str = Field("", max_length=500)
+
+    model_config = {"populate_by_name": True}
+
+
+class UserGrantResponse(BaseModel):
+    """One user's direct grant. An absent grant is served as the empty shape."""
+
+    user_id: str = Field(..., alias="userId")
+    granted_tools: List[str] = Field(default_factory=list, alias="grantedTools")
+    granted_models: List[str] = Field(default_factory=list, alias="grantedModels")
+    granted_skills: List[str] = Field(default_factory=list, alias="grantedSkills")
+    expires_at: Optional[str] = Field(None, alias="expiresAt")
+    note: str = ""
+    granted_by: Optional[str] = Field(None, alias="grantedBy")
+    created_at: str = Field("", alias="createdAt")
+    updated_at: str = Field("", alias="updatedAt")
+    # Derived on read so the SPA does not have to compare clocks.
+    active: bool = True
+
+    model_config = {"populate_by_name": True}
+
+    @classmethod
+    def from_user_grant(cls, grant: "UserGrant", now_iso: str) -> "UserGrantResponse":
+        """Create response from UserGrant dataclass."""
+        return cls(
+            user_id=grant.user_id,
+            granted_tools=grant.granted_tools,
+            granted_models=grant.granted_models,
+            granted_skills=grant.granted_skills,
+            expires_at=grant.expires_at,
+            note=grant.note,
+            granted_by=grant.granted_by,
+            created_at=grant.created_at,
+            updated_at=grant.updated_at,
+            active=grant.is_active(now_iso),
+        )
+
+    @classmethod
+    def empty(cls, user_id: str) -> "UserGrantResponse":
+        """The shape of "this user has no direct grant"."""
+        return cls(user_id=user_id)
+
+
+class UserGrantListResponse(BaseModel):
+    """Every user holding a direct grant."""
+
+    grants: List[UserGrantResponse]
+    total: int
+
+
+class UserGrantHoldersResponse(BaseModel):
+    """The users directly granted one resource (reverse lookup)."""
+
+    kind: str
+    resource_id: str = Field(..., alias="resourceId")
+    user_ids: List[str] = Field(default_factory=list, alias="userIds")
+
+    model_config = {"populate_by_name": True}
 
 
 class CacheStatsResponse(BaseModel):
