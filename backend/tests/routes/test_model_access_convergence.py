@@ -26,7 +26,7 @@ from apis.shared.auth.dependencies import get_current_user_trusted
 from apis.shared.auth.models import User
 from apis.shared.models.models import ManagedModel
 from apis.shared.models.retirement import resolve_from_catalog
-from apis.shared.rbac.model_access import grants_model_access
+from apis.shared.rbac.model_access import grants_model_access, model_access_denied_message
 from apis.shared.rbac.service import AppRoleService
 
 NOW = datetime(2026, 10, 9, tzinfo=timezone.utc)
@@ -88,6 +88,35 @@ class TestPredicate:
         assert grants_model_access("uncurated", None, {"uncurated"}, set()) is True
         assert grants_model_access("uncurated", None, {"*"}, set()) is True
         assert grants_model_access("uncurated", None, set(), {"Faculty"}) is False
+
+
+class TestDeniedMessage:
+    """The refusal a denied turn streams: display name, and why."""
+
+    def test_names_the_model_by_its_display_name(self):
+        row = _row("us.amazon.nova-pro-v1:0")
+        row.model_name = "Nova Pro"
+        msg = model_access_denied_message(row.model_id, row)
+        assert msg.startswith("**Nova Pro** isn't available to your account.")
+        assert "us.amazon.nova-pro-v1:0" not in msg
+
+    def test_disabled_row_reads_as_turned_off(self):
+        msg = model_access_denied_message("disabled-model", DISABLED)
+        assert "has been turned off by an administrator" in msg
+        assert "your account" not in msg
+
+    def test_no_catalog_row_falls_back_to_the_id(self):
+        assert model_access_denied_message("uncurated", None).startswith(
+            "**uncurated** isn't available to your account."
+        )
+
+    def test_agent_variants(self):
+        assert model_access_denied_message("granted-model", GRANTED, agent=True).startswith(
+            "This agent runs on **granted-model**, which isn't available to your account."
+        )
+        assert "turned off by an administrator" in model_access_denied_message(
+            "disabled-model", DISABLED, agent=True
+        )
 
 
 class TestEverySurfaceAgrees:
@@ -190,27 +219,33 @@ class TestInvocations:
 
     def test_disabled_model_refused(self):
         resp = self._post("disabled-model", _role_service(["*"]))
-        assert resp.status_code == 403
-        assert resp.json()["detail"] == "Access denied to model: disabled-model"
+        assert resp.status_code == 200
+        assert '"code": "forbidden"' in resp.text
+        assert "**disabled-model** has been turned off by an administrator" in resp.text
 
     def test_legacy_grant_allowed(self):
         svc = _role_service([])
         answers = _spy(svc)
         resp = self._post("legacy-model", svc)
         assert answers == [("legacy-model", True)]
-        assert resp.status_code != 403
+        assert '"code": "forbidden"' not in resp.text
 
     def test_retired_disabled_row_still_redirects_to_its_successor(self):
         svc = _role_service(["granted-model"])
         answers = _spy(svc)
         resp = self._post("old-disabled", svc)
         assert answers == [("granted-model", True)]
-        assert resp.status_code != 403
+        assert '"code": "forbidden"' not in resp.text
 
     def test_redirect_to_a_disabled_successor_is_refused(self):
         resp = self._post("old-to-disabled", _role_service(["*"]))
-        assert resp.status_code == 403
-        assert resp.json()["detail"] == "Access denied to model: disabled-model"
+        assert resp.status_code == 200
+        assert "**disabled-model** has been turned off by an administrator" in resp.text
+
+    def test_ungranted_model_refused_as_unavailable_to_the_account(self):
+        resp = self._post("ungranted-model", _role_service([]))
+        assert resp.status_code == 200
+        assert "**ungranted-model** isn't available to your account" in resp.text
 
 
 class TestApiConverse:

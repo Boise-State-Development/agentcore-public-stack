@@ -59,6 +59,7 @@ from apis.shared.quota import (
     is_quota_enforcement_enabled,
 )
 
+from apis.shared.rbac.model_access import model_access_denied_message
 from apis.shared.rbac.service import get_app_role_service
 from apis.shared.skills.bundle import slugify_skill_name
 from apis.inference_api.chat.agent_binding_resolver import (
@@ -3587,7 +3588,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         )
 
     # A retired model with no successor is denied for everyone, wildcard holders
-    # included — as a conversational message, not the bare 403 below. Not on a
+    # included — as a conversational message, like the access check below. Not on a
     # resume: that turn finishes on its paused snapshot's model, whatever the
     # request carries.
     if retired_model_denial and not is_resume:
@@ -3596,19 +3597,22 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # Check model access if a specific model_id is requested. Retirement
     # resolution above already found the effective id's catalog row, so it is
     # handed over rather than looked up again (TTFT: no second catalog read).
+    # A denial streams as an assistant message like the retirement one: the
+    # Runtime data plane wraps any non-2xx from this container as a 424, so a
+    # bare 403 reached the SPA as a generic error it could not explain.
     if input_data.model_id:
         app_role_service = get_app_role_service()
-        access_kwargs = (
-            {"record": requested_model.record}
-            if requested_model is not None and requested_model.model_id == input_data.model_id
-            else {}
-        )
+        known_record = requested_model is not None and requested_model.model_id == input_data.model_id
+        access_kwargs = {"record": requested_model.record} if known_record else {}
         if not await app_role_service.can_access_model(
             current_user, input_data.model_id, **access_kwargs
         ):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Access denied to model: {input_data.model_id}",
+            return _forbidden_turn(
+                input_data,
+                user_id,
+                model_access_denied_message(
+                    input_data.model_id, requested_model.record if known_record else None
+                ),
             )
 
     # Handle assistant RAG integration if assistant_id is provided
