@@ -373,6 +373,12 @@ export function buildAppApiEnvironment(
     // is always wired; only PROJECTS_ENABLED gates whether the routes mount.
     PROJECTS_ENABLED: config.projects.enabled ? 'true' : 'false',
     DYNAMODB_PROJECTS_TABLE_NAME: params.projectsTableName,
+    // Project-memory content lint (Shared Projects 2.7): the Memory page's saves,
+    // proposals and restores, and the flags it shows on read.
+    MEMORY_LINT_MODE: config.memoryLint.mode,
+    ...(config.memoryLint.sensitivePatterns
+      ? { MEMORY_SENSITIVE_PATTERNS: config.memoryLint.sensitivePatterns }
+      : {}),
     // Skills v2 (default ON with a kill switch per env). Skills live in the
     // shared app-roles table, which is already wired, so this only gates route
     // mounting. Cohort access is the separate `skills` RBAC capability — this

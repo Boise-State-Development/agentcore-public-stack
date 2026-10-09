@@ -91,6 +91,15 @@ describe('Shared Projects compute wiring', () => {
     expect(runtimeEnv).toHaveProperty('DYNAMODB_PROJECTS_TABLE_NAME');
   });
 
+  it('gives the Runtime the content-lint settings packed into one variable, in MEMORY_ARN\'s slot', () => {
+    // Shared Projects 2.7: the Runtime is at 49 of 50 variables, so the lint's
+    // two settings travel as one JSON value, and MEMORY_ARN (only ever logged at
+    // startup; AGENTCORE_MEMORY_ID is what code reads) was retired to make room.
+    expect(JSON.parse(runtimeEnv.MEMORY_LINT as string)).toEqual({ mode: 'warn', sensitivePatterns: '' });
+    expect(runtimeEnv).not.toHaveProperty('MEMORY_ARN');
+    expect(runtimeEnv).not.toHaveProperty('MEMORY_LINT_MODE');
+  });
+
   it('no longer sets the OAuth variables nothing on the Runtime reads', () => {
     // Retired to make room: no Python has read either since OAuth tokens moved
     // to the AgentCore Identity vault (1.0.0-beta.23). The KMS key and secret

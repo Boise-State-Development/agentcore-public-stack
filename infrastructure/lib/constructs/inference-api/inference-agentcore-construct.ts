@@ -353,9 +353,10 @@ export class InferenceAgentCoreConstruct extends Construct {
         DYNAMODB_AUTH_PROVIDERS_TABLE_NAME: authProvidersTableName,
         AUTH_PROVIDER_SECRETS_ARN: authProviderSecretsArn,
 
-        // AgentCore resources
+        // AgentCore resources. MEMORY_ARN was retired in Shared Projects 2.7: the
+        // runtime only logged it at startup (AGENTCORE_MEMORY_ID is what code
+        // reads), and its slot went to MEMORY_LINT below.
         AGENTCORE_MEMORY_ID: props.memoryId,
-        MEMORY_ARN: props.memoryArn,
         AGENTCORE_CODE_INTERPRETER_ID: props.codeInterpreterId,
         BROWSER_ID: props.browserId,
         // The Chromium MANAGED policy passed on every StartBrowserSession.
@@ -414,6 +415,13 @@ export class InferenceAgentCoreConstruct extends Construct {
         // grant in inference-api-iam-roles.ts).
         DYNAMODB_PROJECTS_TABLE_NAME: props.refs.projectsTable.tableName,
         PROJECTS_ENABLED: config.projects.enabled ? 'true' : 'false',
+        // Project-memory content lint (2.7) for memory_save / memory_propose. One
+        // packed value, not app-api's MEMORY_LINT_MODE + MEMORY_SENSITIVE_PATTERNS,
+        // because this budget is spent; apis/shared/memory/lint.py reads either.
+        MEMORY_LINT: JSON.stringify({
+          mode: config.memoryLint.mode,
+          sensitivePatterns: config.memoryLint.sensitivePatterns,
+        }),
 
         // Conversation index write path (in development, default off): gates
         // the fire-and-forget archive put after `done`. One slot, not two: the
