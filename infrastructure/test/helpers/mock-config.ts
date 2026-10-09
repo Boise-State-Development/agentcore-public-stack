@@ -7,6 +7,7 @@
  */
 import * as cdk from 'aws-cdk-lib';
 import { AppConfig,
+  AGENTCORE_RUNTIME_PLATFORM_VERSION_DEFAULT,
   API_CONVERSE_MAX_IN_FLIGHT_DEFAULT,
   CONVERSATION_RETENTION_DAYS_DEFAULT,
   MANAGED_KB_DEFAULT_PER_OWNER_BYTES,
@@ -64,7 +65,7 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
       maxCapacity: 2,
       apiConverseMaxInFlight: API_CONVERSE_MAX_IN_FLIGHT_DEFAULT,
     },
-    inferenceApi: {},
+    inferenceApi: { runtimePlatformVersion: AGENTCORE_RUNTIME_PLATFORM_VERSION_DEFAULT },
     // Observability mirrors the shipped OSS defaults rather than hardcoded
     // literals, so a change to a default is exercised by every existing test
     // instead of silently diverging from what a fork actually deploys.

@@ -122,14 +122,14 @@ The billing basis inverts, so conclusions from V1 don't carry over:
 ## 5. Plan
 
 1. **Deploy script PR (B1). Done.** Payload fields derived from the CLI's update skeleton, the post-update equality assertion, and the CLI capability check. Harmless on V1.
-2. **Infra PR (flag).**
-   - Add `CDK_AGENTCORE_RUNTIME_V2_ENABLED` → `config.inferenceApi.runtimeV2Enabled`. It is in-development, so only `"true"` enables it and `""` means off.
-   - **Always** set the property explicitly: `addPropertyOverride('PlatformVersion', enabled ? 'V2' : 'V1')`. If we omit it when the flag is off, whether removing the property reverts the runtime is up to CFN. An explicit `V1` makes rollback a deterministic in-place update.
-   - Add a synth test for both values, and forward the variable in `platform.yml`.
+2. **Infra PR (per-environment version). Done.**
+   - `CDK_AGENTCORE_RUNTIME_PLATFORM_VERSION` → `config.inferenceApi.runtimePlatformVersion`, `V1` or `V2`, default `V1` (`""` falls through to it). A version value rather than a `*_V2_ENABLED` boolean, so a later version is a one-line addition to `AGENTCORE_RUNTIME_PLATFORM_VERSIONS`, not a second flag. Anything else fails synth, because the CFN schema would take any non-blank string.
+   - **Always** set the property explicitly: `addPropertyOverride('PlatformVersion', version)`, V1 included. If we omit it for V1, whether removing the property reverts the runtime is up to CFN. An explicit `V1` makes rollback a deterministic in-place update.
+   - Synth test for both values (`infrastructure/test/runtime-platform-version.test.ts`), and `platform.yml` forwards the variable.
    - This is infra-only, so there is no backend `feature_flags.py` or SPA flag.
-   - A branch `feature/agentcore-runtime-v2-flag` already exists in another worktree at the `develop` tip with no commits. Reuse it or delete it; don't fork a second one.
+   - `aws-cdk-lib` 2.272.0 types `platformVersion`; swap the override for the typed property when CDK is next bumped.
 3. **Runtime-health hardening (B2.1). Done.** Restore-safe idle clock (see B2.1), with tests for a restore before and after the first poll, the once-only limit, and a restored microVM still being reaped. Harmless on V1.
-4. **Dev A/B.** Turn on `CDK_AGENTCORE_RUNTIME_V2_ENABLED=true` in the `development` environment.
+4. **Dev A/B.** Set `CDK_AGENTCORE_RUNTIME_PLATFORM_VERSION=V2` in the `development` environment.
    - Verify with `get-agent-runtime` after `platform.yml`, **and again after the next `backend.yml`**. The second check is B1's real test.
    - Watch for 424s on first turns (B2.1).
    - Measure the client-side cold first-token gap with `tests/load` (B3), `PreludeTotalMs` split by cold vs warm, agent-cache-hit turn latency (§4), and Runtime GB-hours from the Cost Explorer sync.

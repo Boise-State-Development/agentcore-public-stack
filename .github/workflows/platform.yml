@@ -148,6 +148,11 @@ jobs:
       CDK_APP_API_MAX_CAPACITY: ${{ vars.CDK_APP_API_MAX_CAPACITY }}
       # Per-task cap on concurrent /chat/api-converse Bedrock calls (default 16).
       CDK_APP_API_CONVERSE_MAX_IN_FLIGHT: ${{ vars.CDK_APP_API_CONVERSE_MAX_IN_FLIGHT }}
+      # AgentCore Runtime platform version: V1 (default) or V2. An in-place
+      # update; the runtime id is unchanged. Unset means V1, so a V2 stack
+      # reverts to V1 if this variable is deleted. See
+      # docs/specs/agentcore-runtime-v2.md.
+      CDK_AGENTCORE_RUNTIME_PLATFORM_VERSION: ${{ vars.CDK_AGENTCORE_RUNTIME_PLATFORM_VERSION }}
       CDK_ALB_SUBDOMAIN: ${{ vars.CDK_ALB_SUBDOMAIN }}
       CDK_CERTIFICATE_ARN: ${{ vars.CDK_CERTIFICATE_ARN }}
       # Shared us-east-1 CloudFront cert (wildcard covering {domain} + *.{domain}).

@@ -24,6 +24,7 @@ GitHub provides two mechanisms for storing configuration values:
 | AWS_REGION | Variable | Yes | `us-west-2` | All | AWS region for resource deployment |
 | AWS_ROLE_ARN | Secret | No | None | All | AWS IAM role ARN for OIDC authentication (recommended over access keys) |
 | AWS_SECRET_ACCESS_KEY | Secret | No | None | All | AWS secret access key for authentication (alternative to role-based auth) |
+| CDK_AGENTCORE_RUNTIME_PLATFORM_VERSION | Variable | No | `V1` | Inference API | AgentCore Runtime platform version, `V1` or `V2` (sets `PlatformVersion` on the Runtime). V2 reclaims idle memory mid-session and starts sessions from a snapshot, at a higher per-GB-hour rate. Changing it is an in-place update that keeps the runtime id. Any other value fails synth. See `docs/specs/agentcore-runtime-v2.md` |
 | CDK_ALB_SUBDOMAIN | Variable | No | None | Platform | Subdomain for ALB (e.g., 'api' for api.yourdomain.com) |
 | CDK_APP_API_CPU | Variable | No | `512` | App API | CPU units for App API ECS task (256, 512, 1024, 2048, 4096) |
 | CDK_APP_API_CORS_ORIGINS | Variable | No | None | App API | Additional CORS origins for the app API only (appended to global CORS origins) |

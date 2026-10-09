@@ -242,6 +242,16 @@ export interface AppApiConfig {
  */
 export interface InferenceApiConfig {
   additionalCorsOrigins?: string; // Extra CORS origins to append (comma-separated)
+  /**
+   * AgentCore Runtime platform version (`PlatformVersion` on the Runtime,
+   * from CDK_AGENTCORE_RUNTIME_PLATFORM_VERSION). `V1` (the default) or `V2`,
+   * the Runtime that reclaims idle memory mid-session and restores sessions
+   * from a snapshot. Always written explicitly, never omitted, so switching
+   * back to V1 is an in-place update CloudFormation is told about rather than
+   * a property removal whose effect is up to the service. See
+   * docs/specs/agentcore-runtime-v2.md.
+   */
+  runtimePlatformVersion: string;
 }
 
 export interface RagIngestionConfig {
@@ -657,6 +667,21 @@ export interface TokenExchangeConfig {
 export const CONVERSATION_RETENTION_DAYS_DEFAULT = 365;
 
 /**
+ * Default for `inferenceApi.runtimePlatformVersion`
+ * (CDK_AGENTCORE_RUNTIME_PLATFORM_VERSION). V1 is what every Runtime created
+ * before V2 reports, so the default changes nothing on an existing stack.
+ */
+export const AGENTCORE_RUNTIME_PLATFORM_VERSION_DEFAULT = 'V1';
+
+/**
+ * Platform versions the AgentCore Runtime accepts. The CloudFormation schema
+ * takes any non-blank string, so the list is ours: a typo like `v2` or `2`
+ * fails synth instead of reaching the service. Add a version here when AWS
+ * ships one.
+ */
+export const AGENTCORE_RUNTIME_PLATFORM_VERSIONS = ['V1', 'V2'] as const;
+
+/**
  * Default for `appApi.apiConverseMaxInFlight` (CDK_APP_API_CONVERSE_MAX_IN_FLIGHT).
  * Mirrors `DEFAULT_MAX_IN_FLIGHT` in backend/src/apis/app_api/chat/bedrock_offload.py,
  * which is what a task falls back to when the variable is absent; keep the two
@@ -1004,6 +1029,13 @@ export function loadConfig(scope: cdk.App): AppConfig {
     },
     inferenceApi: {
       additionalCorsOrigins: process.env.CDK_INFERENCE_API_CORS_ORIGINS || scope.node.tryGetContext('inferenceApi')?.additionalCorsOrigins,
+      // env var > flat context > nested context > default. `||`, not `??`:
+      // an unset GitHub variable arrives as '' and must fall through.
+      runtimePlatformVersion:
+        process.env.CDK_AGENTCORE_RUNTIME_PLATFORM_VERSION?.trim()
+        || scope.node.tryGetContext('inferenceApi.runtimePlatformVersion')
+        || scope.node.tryGetContext('inferenceApi')?.runtimePlatformVersion
+        || AGENTCORE_RUNTIME_PLATFORM_VERSION_DEFAULT,
     },
     ragIngestion: {
       additionalCorsOrigins: process.env.CDK_RAG_CORS_ORIGINS || scope.node.tryGetContext('ragIngestion')?.additionalCorsOrigins,
@@ -1950,6 +1982,12 @@ function validateConfig(config: AppConfig): void {
   }
   if (!config.appApi.desiredCount && config.appApi.desiredCount !== 0) {
     throw new Error('App API stack requires "desiredCount" to be set.');
+  }
+  if (!(AGENTCORE_RUNTIME_PLATFORM_VERSIONS as readonly string[]).includes(config.inferenceApi.runtimePlatformVersion)) {
+    throw new Error(
+      `Invalid inferenceApi.runtimePlatformVersion: "${String(config.inferenceApi.runtimePlatformVersion)}". ` +
+      `Expected one of ${AGENTCORE_RUNTIME_PLATFORM_VERSIONS.join(', ')} (CDK_AGENTCORE_RUNTIME_PLATFORM_VERSION).`
+    );
   }
   if (!config.appApi.maxCapacity) {
     throw new Error('App API stack requires "maxCapacity" to be set.');
