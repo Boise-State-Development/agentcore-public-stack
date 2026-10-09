@@ -98,3 +98,34 @@ export interface UserSearchOptions {
   email: string;
 }
  
+
+// ========== Direct user grants ==========
+// Mirrors apis/shared/rbac/models.py (UserGrantResponse / UserGrantUpdate).
+
+/**
+ * Tools, models and skills granted to one user beside their roles. Additive
+ * only; an absent grant is served as the empty shape (all lists empty).
+ */
+export interface UserGrant {
+  userId: string;
+  grantedTools: string[];
+  grantedModels: string[];
+  grantedSkills: string[];
+  /** ISO 8601 UTC, or null for a grant that never lapses. */
+  expiresAt: string | null;
+  note: string;
+  grantedBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+  /** Derived server-side: false once `expiresAt` has passed. */
+  active: boolean;
+}
+
+/** Body of `PUT /admin/user-grants/{userId}` — a full replace. */
+export interface UserGrantUpdate {
+  grantedTools: string[];
+  grantedModels: string[];
+  grantedSkills: string[];
+  expiresAt: string | null;
+  note: string;
+}

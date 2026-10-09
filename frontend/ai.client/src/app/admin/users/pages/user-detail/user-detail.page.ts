@@ -21,12 +21,14 @@ import { QuotaEventSummary } from '../../models';
 import { parseIso } from '../../../../utils/date';
 import { SpinnerComponent } from '../../../../components/spinner/spinner.component';
 import { UserService } from '../../../../auth/user.service';
+import { FEATURES } from '../../../../services/features';
 import { UserConversationsComponent } from '../../../costs/components/user-conversations.component';
+import { UserAccessSectionComponent } from '../../components/user-access-section.component';
 
 @Component({
   selector: 'app-user-detail',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, SpinnerComponent, UserConversationsComponent],
+  imports: [NgIcon, SpinnerComponent, UserConversationsComponent, UserAccessSectionComponent],
   providers: [
     provideIcons({
       heroArrowLeft,
@@ -269,6 +271,20 @@ import { UserConversationsComponent } from '../../../costs/components/user-conve
       </div>
 
       <!--
+        Direct access — tools, models and skills granted to this one user beside
+        their roles. System admins only: the grant surface is never delegable
+        (whoever can write a grant can name themselves), so a users-scope
+        delegate sees the page without the section. Also behind the build's
+        userGrants flag, which is off until an environment turns the backend
+        surface on.
+      -->
+      @if (canEditAccess()) {
+        <div class="mt-6">
+          <app-user-access-section [userId]="detail.profile.userId" />
+        </div>
+      }
+
+      <!--
         Conversations — the cost drill-down. Gated on the *costs* scope, not
         this page's: it is cost data and its drill-down target is
         admin.costs-gated, so a users-only delegate sees the page without the
@@ -306,8 +322,13 @@ export class UserDetailPage implements OnInit {
 
   user = computed(() => this.state.selectedUser());
 
+  private features = inject(FEATURES);
+
   /** Whether the viewer may see cost data (system_admin or the admin.costs scope). */
   canSeeCosts = computed(() => this.userService.hasAdminScope('admin.costs'));
+
+  /** Whether the Direct access section is offered: build flag on, and a system admin. */
+  canEditAccess = computed(() => this.features.userGrants && this.userService.isAdmin());
 
   ngOnInit(): void {
     const userId = this.route.snapshot.paramMap.get('userId');
