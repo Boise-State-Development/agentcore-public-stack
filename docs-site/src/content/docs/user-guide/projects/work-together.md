@@ -314,6 +314,44 @@ since; otherwise it leaves both as they are and says why.
 If you edit a file while the run is working on it, the run leaves that file
 alone too.
 
+### The content check
+
+Everything saved to memory in a project goes through a quick content check,
+whoever or whatever saves it: you, a teammate, the assistant, an approved
+proposal, a restore or a tidy-up. It looks for two kinds of thing that don't
+belong in shared memory:
+
+- **Text that reads like an instruction to the assistant**, such as "ignore
+  previous instructions" or "you must now…", or the markup tools use. Memory is
+  reference material: the assistant reads it as facts, and teammates' tasks
+  read it too, so write "Vendor A is preferred because of the support
+  contract", not "Always recommend Vendor A".
+- **Passwords and keys**, such as an access key or a password in a link.
+  Everyone in the project can read project memory.
+
+Your organization may add its own patterns, such as student ID numbers.
+
+What happens next depends on how your organization set it up. Usually the save
+goes through and you're told what was flagged: a warning after you save, and a
+**Content check** line under the item, which everyone who opens the file sees.
+Reviewers see a flagged proposal with a note above it, and the flagged item
+marked. Some organizations block flagged text instead: the save is refused and
+the message says which item to change. Either way, nothing is changed in what
+you wrote. Only new text is checked, so an item that was flagged before never
+stops you editing the rest of the file.
+
+The check is a pattern match, not a judgement. If it flags something that's
+fine, such as a fact that happens to contain the word "password", you can
+leave it.
+
+### Export memory
+
+**Export** on the Memory page downloads the memory you're looking at
+(**Project** or **Just me**) as a zip file: the index, each file, and a
+`provenance.json` that records, for every item, who added it and when, who last
+changed it, and whether it came through a proposal or a restore. Anyone in the
+project can export project memory.
+
 ## Ask for a Word redline
 
 If the project has the **Word Documents** tool, the assistant can produce a
