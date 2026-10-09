@@ -71,3 +71,37 @@ def grants_model_access(
         return bool(set(user_roles).intersection(record.available_to_roles))
 
     return False
+
+
+def model_access_denied_message(
+    model_id: str, record: Optional[ManagedModel], *, agent: bool = False
+) -> str:
+    """The conversational message for a turn refused by :func:`grants_model_access`.
+
+    Names the model by its catalog display name when the row is known. A row
+    with ``enabled: false`` reads as switched off by an administrator, because
+    that is true for everyone and no grant would change it; anything else reads
+    as not available to this account. Errors stream as assistant messages
+    (CLAUDE.md), so this is markdown the user reads in the thread.
+    """
+    name = (record.model_name if record is not None else None) or model_id
+    disabled = record is not None and not record.enabled
+    if agent:
+        if disabled:
+            return (
+                f"This agent runs on **{name}**, which has been turned off by an administrator. "
+                "Ask the agent's owner to choose another model, or use a different agent."
+            )
+        return (
+            f"This agent runs on **{name}**, which isn't available to your account. "
+            "Ask an administrator for access, or use a different agent."
+        )
+    if disabled:
+        return (
+            f"**{name}** has been turned off by an administrator. "
+            "Choose another model to continue."
+        )
+    return (
+        f"**{name}** isn't available to your account. "
+        "Choose another model to continue, or ask an administrator for access."
+    )

@@ -77,8 +77,11 @@ class TestInvocations:
                 json={"session_id": "s-1", "message": "hi", "model_id": "old-redirected", "provider": "bedrock"},
             )
 
-        assert resp.status_code == 403
-        assert resp.json()["detail"] == "Access denied to model: successor"
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/event-stream")
+        assert "**successor** isn't available to your account" in resp.text
+        svc.can_access_model.assert_awaited_once()
+        assert svc.can_access_model.await_args.args[1] == "successor"
 
     def test_retired_without_successor_streams_a_message_even_for_a_wildcard_holder(self):
         svc = _role_service(can_access=True)
