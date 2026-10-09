@@ -679,7 +679,8 @@ async def api_converse(
 
     # 2.7 Model access check (RBAC)
     app_role_service = get_app_role_service()
-    if not await app_role_service.can_access_model(user, request.model_id):
+    access_kwargs = {"record": effective.record} if effective is not None else {}
+    if not await app_role_service.can_access_model(user, request.model_id, **access_kwargs):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Access denied to model: {request.model_id}",

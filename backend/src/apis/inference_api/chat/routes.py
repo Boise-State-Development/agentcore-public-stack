@@ -3593,10 +3593,19 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     if retired_model_denial and not is_resume:
         return _forbidden_turn(input_data, user_id, retired_model_denial)
 
-    # Check model access if a specific model_id is requested
+    # Check model access if a specific model_id is requested. Retirement
+    # resolution above already found the effective id's catalog row, so it is
+    # handed over rather than looked up again (TTFT: no second catalog read).
     if input_data.model_id:
         app_role_service = get_app_role_service()
-        if not await app_role_service.can_access_model(current_user, input_data.model_id):
+        access_kwargs = (
+            {"record": requested_model.record}
+            if requested_model is not None and requested_model.model_id == input_data.model_id
+            else {}
+        )
+        if not await app_role_service.can_access_model(
+            current_user, input_data.model_id, **access_kwargs
+        ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Access denied to model: {input_data.model_id}",

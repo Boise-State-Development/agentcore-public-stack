@@ -221,34 +221,19 @@ def make_whoami_tool(user: User):
 
 
 async def _accessible_models(user: User) -> list:
-    """The managed models this user is allowed to pick, enabled only.
+    """The managed models this user is allowed to pick.
 
-    Mirrors ``ModelAccessService.filter_accessible_models`` (hybrid AppRole
-    ``grantedModels`` + ``"*"`` wildcard, with the legacy ``availableToRoles``
-    fallback) using ONLY ``apis.shared`` primitives — ``agents/`` must never
-    import ``app_api`` (enforced by tests/architecture). This is the single
-    source of "which models may this user set as their default", so the tool
-    can never point the user at a model the picker would not offer them.
+    The same rule the ``/models`` picker and the chat turn apply —
+    ``AppRoleService.filter_accessible_models`` reads the shared
+    ``apis.shared.rbac.model_access`` predicate — so the tool can never point
+    the user at a model the picker would not offer them, or one a turn would
+    then refuse.
     """
     from apis.shared.models.managed_models import list_all_managed_models
-    from apis.shared.rbac import AppRoleService
+    from apis.shared.rbac.service import get_app_role_service
 
     all_models = await list_all_managed_models()
-    perms = await AppRoleService().resolve_user_permissions(user)
-    granted = set(getattr(perms, "models", None) or [])
-    wildcard = "*" in granted
-    roles = set(user.roles or [])
-
-    out = []
-    for m in all_models:
-        if not getattr(m, "enabled", False):
-            continue
-        rec_id = getattr(m, "id", None)
-        bedrock_id = getattr(m, "model_id", None)
-        legacy_roles = set(getattr(m, "available_to_roles", None) or [])
-        if wildcard or rec_id in granted or bedrock_id in granted or (roles & legacy_roles):
-            out.append(m)
-    return out
+    return await get_app_role_service().filter_accessible_models(user, all_models)
 
 
 def _match_model(requested: str, models: list) -> list:

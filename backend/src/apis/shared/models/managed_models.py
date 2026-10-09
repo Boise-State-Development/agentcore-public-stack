@@ -496,6 +496,32 @@ async def list_all_managed_models() -> List[ManagedModel]:
     return await _list_managed_models_cloud(managed_models_table)
 
 
+async def find_managed_model_by_model_id(model_id: str) -> Optional[ManagedModel]:
+    """The catalog row whose provider ``modelId`` is ``model_id``, or ``None``.
+
+    Reads the same cached scan as :func:`list_all_managed_models` but parses only
+    the matching item, so a single-model lookup does not pay to validate the
+    whole catalog. Raises like ``list_all_managed_models`` when the catalog
+    cannot be read; callers that must fail open catch it.
+    """
+    managed_models_table = os.environ.get('DYNAMODB_MANAGED_MODELS_TABLE_NAME')
+    if not managed_models_table:
+        raise RuntimeError("DYNAMODB_MANAGED_MODELS_TABLE_NAME environment variable is required")
+    items = await config_cache.get_or_load(
+        config_cache.MANAGED_MODELS,
+        lambda: asyncio.to_thread(_scan_managed_model_items, managed_models_table),
+    )
+    for item in items:
+        if item.get('modelId') != model_id:
+            continue
+        # A fresh dict: the cached items are shared by every caller.
+        item = _dynamodb_to_python(item)
+        for key in ('PK', 'SK', 'GSI1PK', 'GSI1SK'):
+            item.pop(key, None)
+        return ManagedModel.model_validate(item)
+    return None
+
+
 async def get_default_managed_model() -> Optional[ManagedModel]:
     """The catalog's admin-designated default model (``isDefault``), or ``None``.
 
