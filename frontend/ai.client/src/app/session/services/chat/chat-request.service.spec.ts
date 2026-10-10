@@ -8,6 +8,7 @@ import { ChatStateService } from './chat-state.service';
 import { MessageMapService } from '../session/message-map.service';
 import { MessageFeedbackService } from '../session/message-feedback.service';
 import { SessionService } from '../session/session.service';
+import { SessionPrewarmService } from '../session/session-prewarm.service';
 import { UserService } from '../../../auth/user.service';
 import { ModelService } from '../model/model.service';
 import { ToolService } from '../../../services/tool/tool.service';
@@ -122,6 +123,50 @@ describe('ChatRequestService', () => {
         enabled_tools: ['tool1', 'tool2'],
       })
     );
+  });
+
+  describe('session prewarm', () => {
+    it('a new conversation starts on the id the page warmed, registered like any new one', async () => {
+      const prewarm = TestBed.inject(SessionPrewarmService);
+      vi.spyOn(prewarm, 'claimNewConversationId').mockReturnValue('warmed-id');
+      const sessions = TestBed.inject(SessionService) as unknown as { addSessionToCache: ReturnType<typeof vi.fn> };
+
+      await service.submitChatRequest('Hello', null);
+
+      expect(mockChatHttpService.sendChatRequest).toHaveBeenCalledWith(
+        expect.objectContaining({ session_id: 'warmed-id' }),
+      );
+      // Still treated as new: registered in the sidebar cache before navigating.
+      expect(sessions.addSessionToCache).toHaveBeenCalledWith('warmed-id', 'user1');
+    });
+
+    it('mints its own id when nothing was warmed (the flag is off)', async () => {
+      const prewarm = TestBed.inject(SessionPrewarmService);
+      vi.spyOn(prewarm, 'claimNewConversationId').mockReturnValue(null);
+
+      await service.submitChatRequest('Hello', null);
+
+      const sent = mockChatHttpService.sendChatRequest.mock.calls.at(-1)?.[0];
+      expect(sent.session_id).toMatch(/^[0-9a-f-]{36}$/);
+    });
+
+    it('records every turn as a warm, so typing a follow-up sends nothing', async () => {
+      const prewarm = TestBed.inject(SessionPrewarmService);
+      const noted = vi.spyOn(prewarm, 'noteTurn');
+
+      await service.submitChatRequest('Hello', 'session1');
+
+      expect(noted).toHaveBeenCalledWith('session1');
+    });
+
+    it('an existing conversation never claims the warmed id', async () => {
+      const prewarm = TestBed.inject(SessionPrewarmService);
+      const claim = vi.spyOn(prewarm, 'claimNewConversationId');
+
+      await service.submitChatRequest('Hello', 'session1');
+
+      expect(claim).not.toHaveBeenCalled();
+    });
   });
 
   it('never sends agent_type (skills mode removed)', async () => {

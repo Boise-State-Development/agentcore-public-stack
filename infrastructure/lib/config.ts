@@ -79,6 +79,7 @@ export interface AppConfig {
   memorySpaces: MemorySpacesConfig;
   projects: ProjectsConfig;
   userGrants: UserGrantsConfig;
+  sessionPrewarm: SessionPrewarmConfig;
   memoryLint: MemoryLintConfig;
   conversationIndex: ConversationIndexConfig;
   conversationSearch: ConversationSearchConfig;
@@ -435,6 +436,21 @@ export interface ProjectsConfig {
  * (see `user_grants_enabled` in `apis/shared/feature_flags.py`).
  */
 export interface UserGrantsConfig {
+  enabled: boolean;
+}
+
+/**
+ * Session prewarm (docs/specs/agentcore-runtime-v2.md §5a). **Opt-in while the
+ * feature is in development**: off unless CDK_SESSION_PREWARM_ENABLED=true (or a
+ * `sessionPrewarm.enabled: true` cdk.json context). Sets SESSION_PREWARM_ENABLED
+ * on **app-api only**, which serves `POST /chat/prewarm`: it forwards a no-op
+ * `warm` invocation so a conversation's Runtime microVM starts before its first
+ * send. The Runtime needs no copy (the warm action is a no-op behind the route),
+ * so it spends none of the Runtime's environment-variable budget. It spends
+ * Runtime session time on conversations nobody sends, so it is cheap on V2,
+ * which reclaims idle memory, and billed at peak memory on V1.
+ */
+export interface SessionPrewarmConfig {
   enabled: boolean;
 }
 
@@ -1308,6 +1324,13 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_USER_GRANTS_ENABLED
         ? process.env.CDK_USER_GRANTS_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('userGrants')?.enabled ?? false,
+    },
+    sessionPrewarm: {
+      // Opt-in while in development (CLAUDE.md "Feature flags"): only the literal
+      // "true" turns it on; an unset workflow variable arrives as "" and is off.
+      enabled: process.env.CDK_SESSION_PREWARM_ENABLED
+        ? process.env.CDK_SESSION_PREWARM_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('sessionPrewarm')?.enabled ?? false,
     },
     // Project-memory content lint: configuration of Shared Projects, not a flag.
     // The workflow forwards an EMPTY STRING when a variable is unset, which falls

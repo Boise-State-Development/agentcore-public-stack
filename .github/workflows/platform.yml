@@ -263,6 +263,12 @@ jobs:
       # turn it on there. app-api only. The SPA's matching switch is
       # `features.userGrants` in src/environments/*.ts.
       CDK_USER_GRANTS_ENABLED: ${{ vars.CDK_USER_GRANTS_ENABLED }}
+      # Session prewarm: POST /chat/prewarm starts a conversation's AgentCore
+      # Runtime microVM before its first send (docs/specs/agentcore-runtime-v2.md
+      # §5a). Opt-in while in development: set `CDK_SESSION_PREWARM_ENABLED` to
+      # "true" in an environment to turn it on there. app-api only. The SPA's
+      # matching switch is `features.sessionPrewarm` in src/environments/*.ts.
+      CDK_SESSION_PREWARM_ENABLED: ${{ vars.CDK_SESSION_PREWARM_ENABLED }}
       # Project-memory content lint (Shared Projects 2.7). Configuration, not a
       # flag: it applies only inside Projects. Unset (empty string) means the
       # defaults: `warn`, and no deployment patterns. `CDK_MEMORY_LINT_MODE` is

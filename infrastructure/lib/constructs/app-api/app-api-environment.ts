@@ -377,6 +377,9 @@ export function buildAppApiEnvironment(
     // the admin write surface; resolution reads grant rows everywhere without a
     // switch, so the Runtime (at its env-var cap) deliberately gets no copy.
     USER_GRANTS_ENABLED: config.userGrants.enabled ? 'true' : 'false',
+    // Session prewarm (opt-in while in development): gates POST /chat/prewarm.
+    // app-api only; the Runtime's warm action is a no-op behind this route.
+    SESSION_PREWARM_ENABLED: config.sessionPrewarm.enabled ? 'true' : 'false',
     // Project-memory content lint (Shared Projects 2.7): the Memory page's saves,
     // proposals and restores, and the flags it shows on read.
     MEMORY_LINT_MODE: config.memoryLint.mode,

@@ -665,6 +665,36 @@ describe('RAG Ingestion Configuration', () => {
   });
 
   // ============================================================
+  // Session prewarm feature flag — opt-in while in development
+  // ============================================================
+
+  describe('Session prewarm feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_SESSION_PREWARM_ENABLED;
+    });
+
+    test('defaults to disabled when CDK_SESSION_PREWARM_ENABLED is unset', () => {
+      delete process.env.CDK_SESSION_PREWARM_ENABLED;
+      expect(loadConfig(app).sessionPrewarm.enabled).toBe(false);
+    });
+
+    test('treats empty string (unset GitHub Actions variable) as disabled', () => {
+      process.env.CDK_SESSION_PREWARM_ENABLED = '';
+      expect(loadConfig(app).sessionPrewarm.enabled).toBe(false);
+    });
+
+    test('CDK_SESSION_PREWARM_ENABLED="true" turns it on', () => {
+      process.env.CDK_SESSION_PREWARM_ENABLED = ' TRUE ';
+      expect(loadConfig(app).sessionPrewarm.enabled).toBe(true);
+    });
+
+    test('anything but "true" leaves it off', () => {
+      process.env.CDK_SESSION_PREWARM_ENABLED = 'yes';
+      expect(loadConfig(app).sessionPrewarm.enabled).toBe(false);
+    });
+  });
+
+  // ============================================================
   // Direct user grants feature flag — opt-in while in development
   // ============================================================
 

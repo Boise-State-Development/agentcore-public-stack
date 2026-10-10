@@ -3324,6 +3324,18 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     `stream_with_quota_warning`, which composes the final message and streams
     the agent. The SSE contract is in CLAUDE.md § SSE Event Types.
     """
+    # Session prewarm (spec agentcore-runtime-v2.md §5a). Getting here has
+    # already done the only thing a warm call exists for: AgentCore started (V1)
+    # or restored (V2) the microVM this conversation is pinned to, and
+    # InvocationActivityMiddleware has stamped its idle clock. Return before the
+    # ownership read and everything after it, so a warm call writes no rows,
+    # takes no single-flight lease (the user's first send would collide with
+    # it), charges no quota and calls no model. No flag here: it is a no-op, and
+    # app-api's `POST /chat/prewarm` is the gate.
+    if request.warm:
+        logger.info("prewarm invocation for session %s", _sanitize_log(request.session_id))
+        return {"warmed": True}
+
     input_data = request
     user_id = current_user.user_id
     auth_token = current_user.raw_token
