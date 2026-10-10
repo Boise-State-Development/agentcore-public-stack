@@ -11,6 +11,14 @@ order, mirroring the KB-sync dispatcher
                        no-ops (the EventBridge rule itself is also gated
                        by `config.scheduledRuns.enabled` in CDK — belt and
                        braces, same as KB-sync).
+1a. Project standing  — a schedule that runs in a project (Shared Projects
+                       3.2) runs only while the project is active and its
+                       creator is still an editor or the owner
+                       (`apis.shared.projects.schedules.run_block_reason`).
+                       Otherwise it is paused with that reason, and its
+                       creator and the project's owner are told. The project
+                       service pauses it when the change happens; this is the
+                       backstop for a pause that write missed.
 2. Runaway guard      — `runs_today` (reset on UTC date rollover) compared
                        against the schedule's own `max_runs_per_day`. A
                        schedule that would exceed its ceiling is paused
@@ -40,6 +48,7 @@ from apis.shared.scheduled_prompts.service import (
     set_schedule_state,
 )
 from apis.shared.scheduled_prompts.models import ScheduledPrompt
+from apis.shared.projects.schedules import ProjectSchedules, run_block_reason
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -130,6 +139,16 @@ def _runs_today(schedule: ScheduledPrompt, today: str) -> int:
 async def _dispatch_schedule(schedule: ScheduledPrompt, now: datetime, counts: Dict[str, int]) -> None:
     today = _today()
 
+    # Guard 1a — a project schedule's standing. Sync calls (blocking boto3, and
+    # the pause runs the schedule store's own coroutines), so off the loop.
+    if schedule.project_id:
+        reason = await asyncio.to_thread(run_block_reason, schedule)
+        if reason is not None:
+            await asyncio.to_thread(ProjectSchedules().pause, schedule, reason)
+            logger.warning(f"Schedule {schedule.schedule_id}: project {schedule.project_id} refused it ({reason}); pausing")
+            counts["PausedProject"] += 1
+            return
+
     # Guard 2 — runaway: would firing this schedule exceed its own daily
     # ceiling? Check BEFORE re-arming/invoking, using the rollover-aware
     # counter (a run this tick would be the (runs_today + 1)th today).
@@ -173,6 +192,7 @@ async def dispatch_once() -> Dict[str, int]:
         "SchedulesDue": 0,
         "Dispatched": 0,
         "PausedRunaway": 0,
+        "PausedProject": 0,
         "RearmLost": 0,
     }
 

@@ -25,8 +25,8 @@ export interface ProjectsConstructProps {
  * `UpdateTable` only; `CreateTable` accepts both. A future index on this table
  * is an `UpdateTable` and must land alone (see `gsi-update-limit.test.ts`).
  *
- * `ttl` expires notification rows (90 days). Project rows carry no TTL:
- * deletion is explicit (archive, then purge).
+ * `ttl` expires notification rows and a schedule's run rows (90 days each).
+ * Other project rows carry no TTL: deletion is explicit (archive, then purge).
  */
 export class ProjectsConstruct extends Construct {
   public readonly projectsTable: dynamodb.Table;

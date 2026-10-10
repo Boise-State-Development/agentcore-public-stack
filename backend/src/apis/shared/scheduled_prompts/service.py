@@ -18,7 +18,7 @@ import logging
 import os
 import uuid
 from datetime import date, datetime, timedelta, timezone
-from typing import List, Optional, Union
+from typing import List, Optional, Tuple, Union
 from zoneinfo import ZoneInfo
 
 from .models import DUE_INDEX_PK, IntervalUnit, ScheduleCadence, ScheduledPrompt, ScheduledPromptState
@@ -177,6 +177,8 @@ async def create_scheduled_prompt(
     assistant_id: Optional[str] = None,
     enabled_tools: Optional[List[str]] = None,
     deliver_email: bool = False,
+    project_id: Optional[str] = None,
+    owner_email: Optional[str] = None,
 ) -> ScheduledPrompt:
     """Create an active scheduled prompt, due at the next occurrence of its cadence.
 
@@ -217,6 +219,8 @@ async def create_scheduled_prompt(
         runs_today_date=None,
         enabled_tools=enabled_tools,
         deliver_email=deliver_email,
+        project_id=project_id,
+        owner_email=owner_email,
         created_at=now,
         updated_at=now,
     )
@@ -236,6 +240,35 @@ async def get_scheduled_prompt(user_id: str, schedule_id: str) -> Optional[Sched
     response = _get_table().get_item(Key={"PK": f"USER#{user_id}", "SK": f"SCHEDPROMPT#{schedule_id}"})
     item = response.get("Item")
     return ScheduledPrompt.model_validate(item) if item else None
+
+
+async def get_scheduled_prompts(keys: List[Tuple[str, str]]) -> List[ScheduledPrompt]:
+    """Batch-read schedules by ``(user_id, schedule_id)``; missing ones are left out.
+
+    For a project's schedules, which live in their creators' partitions and are
+    found through the project's ``SCHEDULE#`` pointers.
+    """
+    import boto3
+
+    unique = list(dict.fromkeys(keys))
+    if not unique:
+        return []
+    client = boto3.resource("dynamodb")
+    table = _table_name()
+    schedules: List[ScheduledPrompt] = []
+    for start in range(0, len(unique), 100):
+        request = {
+            table: {"Keys": [{"PK": f"USER#{u}", "SK": f"SCHEDPROMPT#{s}"} for u, s in unique[start:start + 100]]}
+        }
+        while request:
+            response = client.batch_get_item(RequestItems=request)
+            for item in response.get("Responses", {}).get(table, []):
+                try:
+                    schedules.append(ScheduledPrompt.model_validate(item))
+                except Exception as e:
+                    logger.warning(f"Failed to parse scheduled prompt item: {e}")
+            request = response.get("UnprocessedKeys") or None
+    return schedules
 
 
 async def list_scheduled_prompts(user_id: str) -> List[ScheduledPrompt]:

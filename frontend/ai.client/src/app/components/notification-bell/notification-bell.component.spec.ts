@@ -31,6 +31,12 @@ describe('describeNotification', () => {
     [notif({ kind: 'project_proposal_decided', payload: { slug: 'sis', decision: 'rejected' } }), 'ann@x.edu declined your change to “sis” in Enrollment Sync.'],
     [notif({ kind: 'project_memory_maintenance', payload: { runId: 'r1', fileCount: 3 } }), 'Memory maintenance that ann@x.edu ran suggests changes to 3 files in Enrollment Sync’s memory.'],
     [notif({ kind: 'project_memory_maintenance', payload: { runId: 'r1', fileCount: 1 } }), 'Memory maintenance that ann@x.edu ran suggests changes to 1 file in Enrollment Sync’s memory.'],
+    [notif({ kind: 'project_schedule_paused', payload: { label: 'Weekly status', reason: 'member_removed', createdBy: 'me@x.edu' } }), 'Your schedule “Weekly status” in Enrollment Sync stopped because you’re no longer a member.'],
+    [notif({ kind: 'project_schedule_paused', payload: { label: 'Weekly status', reason: 'not_editor', createdBy: 'ed@x.edu' } }), 'The schedule “Weekly status” in Enrollment Sync stopped because its creator is no longer an editor.'],
+    [notif({ kind: 'project_schedule_paused', payload: { label: 'Weekly status', reason: 'reauth_required', createdBy: 'me@x.edu' } }), 'Your schedule “Weekly status” in Enrollment Sync stopped until you sign in again.'],
+    [notif({ kind: 'project_schedule_paused', payload: { label: 'Weekly status', reason: 'paused_by_editor', createdBy: 'me@x.edu' } }), 'ann@x.edu paused your schedule “Weekly status” in Enrollment Sync.'],
+    [notif({ kind: 'project_schedule_paused', payload: { label: 'Weekly status', reason: 'deleted', createdBy: 'me@x.edu' } }), 'ann@x.edu deleted your schedule “Weekly status” in Enrollment Sync.'],
+    [notif({ kind: 'project_schedule_paused', payload: { reason: 'something_new' } }), 'A schedule in Enrollment Sync stopped.'],
     [notif({ actorEmail: null, projectName: null, payload: {} }), 'Someone added you to a project.'],
     [notif({ actorName: 'Ann Lee' }), 'Ann Lee added you to Enrollment Sync as an editor.'],
   ])('%#: reads as a sentence', (n, text) => {
