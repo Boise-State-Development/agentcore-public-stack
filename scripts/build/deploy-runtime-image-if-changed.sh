@@ -30,7 +30,7 @@
 #   CREATING | UPDATING — transitional, can't accept update calls
 #   READY              — accepts update calls
 #   CREATE_FAILED | UPDATE_FAILED | DELETING — terminal/error
-# This script waits up to ~10 minutes for READY before issuing the
+# This script waits up to ~20 minutes for READY before issuing the
 # update, and then waits up to ~10 more for the update to settle.
 #
 # Fields CloudFormation owns (platformVersion, capacityProvider-
@@ -171,10 +171,14 @@ if ! printf '%s' "$UPDATE_SKELETON" \
     exit 7
 fi
 
-# 5. Wait for READY. Poll up to ~10 minutes (60 attempts × 10 sec).
+# 5. Wait for READY. Poll up to ~20 minutes (120 attempts × 10 sec). A V1
+# update reaches READY in seconds; a V2 update prepares and snapshots the
+# environment first, which AWS documents as several minutes (the dev Runtime's
+# first V2 update took 3 min 23 s, 2026-10-10). Ten minutes left little margin
+# for a slow snapshot.
 wait_for_ready() {
     local label="$1"
-    local attempts=60
+    local attempts=120
     while (( attempts > 0 )); do
         local s
         s="$(aws bedrock-agentcore-control get-agent-runtime \

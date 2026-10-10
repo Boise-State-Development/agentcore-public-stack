@@ -87,12 +87,15 @@ async def lifespan(app: FastAPI):
         logger.info(f"CORS Origins: {cors_origins}")
     
     # Pull the first turn's lazy imports and boto service-model loads forward
-    # to container start, off the request path. Daemon thread: /ping answers
-    # immediately and a request that arrives mid-warm-up waits on the import
-    # lock rather than redoing the work. See apis/inference_api/warmup.py.
-    from apis.inference_api.warmup import start_warmup_in_background
+    # to container start, and finish them BEFORE the server accepts a
+    # connection: uvicorn binds only after this hook returns, so /ping cannot
+    # report healthy mid-warm-up. On Runtime V2 the snapshot is taken on the
+    # first healthy /ping, so this is what puts warm-up into the snapshot
+    # instead of into every restored session's first turn. See
+    # apis/inference_api/warmup.py.
+    from apis.inference_api.warmup import warm_before_ready
 
-    start_warmup_in_background()
+    await warm_before_ready()
 
     yield  # Application is running
 
