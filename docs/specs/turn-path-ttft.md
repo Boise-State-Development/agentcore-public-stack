@@ -914,6 +914,24 @@ its failures point back at.
 
 ---
 
+### 6E. Watching it over time
+
+Three instruments, each blind where another sees. Read the user-facing one first.
+
+| Instrument | Clock | Sees | Where |
+|---|---|---|---|
+| `Client*FirstTokenMs` (`features.clientTurnTiming` + `CLIENT_TURN_TIMING_ENABLED`) | The browser: send to first `content_block_delta` | Everything the user waits for: the SPA, the app-api hop, Runtime routing, the session start (a V2 restore) and the model | Top row of the turn-latency dashboard, and its 30-day daily trend |
+| `FirstTokenMs`, `PreludeTotalMs` and the stage metrics | Inference-api handler entry | The server's share, stage by stage | The rest of the dashboard |
+| The scheduled probe (`TtftProbe*Ms`) | A fixed client in the account | A stable baseline independent of traffic mix and volume | See the probe's section below, once it ships |
+
+How the client metric is recorded (`apis/app_api/telemetry/routes.py`, `TurnTimingService` in the SPA):
+- One `POST /telemetry/turn-timing` per send, after the first token has arrived, fire-and-forget. A turn that ends before its first token, a resume and a "Continue" report nothing.
+- Recorded as EMF under metric names, not dimensions, like every EMF caller here: `ClientFirstTokenMs` on every turn; `ClientFirstTurnFirstTokenMs` or `ClientFollowUpFirstTokenMs`; and, for first turns, `ClientFirstTurnWarmedFirstTokenMs` or `ClientFirstTurnColdFirstTokenMs`. A first turn starts its Runtime session and a follow-up usually finds it running, so one percentile over both moves whenever the mix does.
+- Properties for Logs Insights on the app-api log group: `modelId` (the selected model, even when the request omits it as the default), `warmAgeMs` (time since this tab prewarmed the conversation, or null), `hasAgent`, `hasFiles`, `visible`. No message content, user id or session id.
+- A turn is "first" when this tab knows the conversation as new and it has no messages, so an existing conversation sent to before its history loads stays a follow-up.
+
+Reading drift: compare the daily medians on the dashboard's trend widget, first turns and follow-ups separately, and when one moves, slice it by `modelId` in Logs Insights before calling it a regression; a change of default model moves every percentile. Alarms wait for a baseline (see the probe).
+
 ## 7. Clarity refactors
 
 The route's phases are now named functions with typed results, in the order the map
