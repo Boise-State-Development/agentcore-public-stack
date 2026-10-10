@@ -176,3 +176,22 @@ async def test_get_all_skill_ids_caches_and_invalidates():
         freshness.invalidate()
         await freshness.get_all_skill_ids()  # forced refetch
         assert repo.list_skills.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_a_pinned_id_reads_its_skill_and_hashes_its_pin():
+    # shared-projects 3.1: ``skill@2`` is looked up as ``skill`` (one cached read
+    # serves both), and the pin is part of the hash, so moving a pin moves the key.
+    repo = SimpleNamespace(
+        get_skill=AsyncMock(return_value=_skill(datetime(2026, 1, 1, tzinfo=timezone.utc)))
+    )
+    with patch(
+        "apis.shared.skills.repository.get_skill_catalog_repository",
+        return_value=repo,
+    ):
+        v2 = await freshness.get_freshness_hash(["pdf_workflows@2"])
+        v3 = await freshness.get_freshness_hash(["pdf_workflows@3"])
+        live = await freshness.get_freshness_hash(["pdf_workflows"])
+
+    assert len({v2, v3, live}) == 3
+    repo.get_skill.assert_awaited_once_with("pdf_workflows")

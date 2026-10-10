@@ -26,6 +26,13 @@ class TestResolveInvokedSkillSlugs:
             "pdf-workflows"
         ]
 
+    def test_a_pinned_skill_matches_the_id_the_client_names(self):
+        # A project's pinned skill runs as ``pdf_workflows@2``; the composer names
+        # the catalog id, and the slug the model sees has no version in it.
+        assert _resolve_invoked_skill_slugs(["pdf_workflows@2"], ["pdf_workflows"]) == [
+            "pdf-workflows"
+        ]
+
     def test_drops_a_skill_the_turn_does_not_disclose(self):
         # Narrow, never grant. A directive naming a skill absent from
         # <available_skills> would cost the model a tool call to discover.

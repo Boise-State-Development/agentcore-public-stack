@@ -11,12 +11,13 @@ import {
   heroDocumentText,
   heroFolder,
   heroListBullet,
+  heroSparkles,
   heroUsers,
   heroWrenchScrewdriver,
 } from '@ng-icons/heroicons/outline';
 import { BindableItem } from '../../agents/models/agent.model';
 import { AgentService } from '../../agents/services/agent.service';
-import { Project } from '../models/project.model';
+import { BoundBinding, Project } from '../models/project.model';
 import { ProjectApiService } from '../services/project-api.service';
 import { personLabel } from '../../shared/utils/person';
 import {
@@ -28,6 +29,7 @@ import {
   ProjectBindingsDialogComponent,
   ProjectBindingsDialogData,
   ProjectBindingsDialogResult,
+  pinsOf,
 } from '../components/project-bindings-dialog.component';
 import {
   ProjectFilesDialogComponent,
@@ -56,7 +58,7 @@ import {
 } from '../components/project-model-dialog.component';
 
 /** A dialog the rail can open. The page maps legacy tab URLs onto these. */
-export type ProjectPanel = 'instructions' | 'files' | 'model' | 'tools' | 'members' | 'activity' | 'history';
+export type ProjectPanel = 'instructions' | 'files' | 'model' | 'tools' | 'skills' | 'members' | 'activity' | 'history';
 
 interface Row {
   panel: ProjectPanel | 'memory';
@@ -75,7 +77,7 @@ const FILES_PAGE = 100;
 
 /**
  * The project's settings as a slim rail beside the composer: one row per thing
- * the assistant works from (instructions, files, model, tools and skills) and per
+ * the assistant works from (instructions, files, memory, model, tools, skills) and per
  * thing about the project itself (members, activity, history). Each row opens a
  * dialog; the rail only ever shows a one-line summary.
  *
@@ -88,7 +90,17 @@ const FILES_PAGE = 100;
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [NgIcon, NgTemplateOutlet, RouterLink],
   providers: [
-    provideIcons({ heroBookOpen, heroClock, heroCpuChip, heroDocumentText, heroFolder, heroListBullet, heroUsers, heroWrenchScrewdriver }),
+    provideIcons({
+      heroBookOpen,
+      heroClock,
+      heroCpuChip,
+      heroDocumentText,
+      heroFolder,
+      heroListBullet,
+      heroSparkles,
+      heroUsers,
+      heroWrenchScrewdriver,
+    }),
   ],
   host: { class: 'block' },
   template: `
@@ -150,6 +162,7 @@ export class ProjectRailComponent {
   private readonly skillPalette = signal<BindableItem[]>([]);
   private readonly tools = signal<string[]>([]);
   private readonly skills = signal<string[]>([]);
+  private readonly skillPins = signal<Record<string, BoundBinding>>({});
   private readonly fileCount = signal<number | null>(null);
   private readonly moreFiles = signal(false);
   /** Files in the project's shared memory; null when unknown (memory off, or the read failed). */
@@ -206,8 +219,15 @@ export class ProjectRailComponent {
       {
         panel: 'tools',
         icon: 'heroWrenchScrewdriver',
-        label: 'Tools & skills',
-        meta: loaded ? `${count(this.tools().length, 'tool')} · ${count(this.skills().length, 'skill')}` : null,
+        label: 'Tools',
+        meta: loaded ? countOrNone(this.tools().length, 'tool') : null,
+        action: edit ? 'Edit' : 'View',
+      },
+      {
+        panel: 'skills',
+        icon: 'heroSparkles',
+        label: 'Skills',
+        meta: loaded ? this.skillsMeta() : null,
         action: edit ? 'Edit' : 'View',
       },
       {
@@ -249,6 +269,15 @@ export class ProjectRailComponent {
         this.loading = this.load(id);
       });
     });
+  }
+
+  /** "2 skills", plus how many have a newer version than the one the project runs. */
+  private skillsMeta(): string {
+    const skills = this.skills();
+    const base = countOrNone(skills.length, 'skill');
+    const pins = this.skillPins();
+    const updates = skills.filter(ref => pins[ref]?.updateAvailable).length;
+    return updates ? `${base} · ${count(updates, 'update')}` : base;
   }
 
   private memoryMeta(): string | null {
@@ -293,6 +322,7 @@ export class ProjectRailComponent {
     this.modelId.set(model?.modelConfig?.modelId ?? null);
     this.tools.set(tools?.bindings.map(b => b.ref) ?? []);
     this.skills.set(skills?.bindings.map(b => b.ref) ?? []);
+    this.skillPins.set(skills ? pinsOf(skills) : {});
     if (files) {
       this.fileCount.set(files.documents.length);
       this.moreFiles.set(!!files.nextToken);
@@ -341,17 +371,25 @@ export class ProjectRailComponent {
       }
       case 'tools': {
         const ref = this.dialog.open<ProjectBindingsDialogResult, ProjectBindingsDialogData>(ProjectBindingsDialogComponent, {
-          data: {
-            ...common,
-            bound: { tools: this.tools(), skills: this.skills() },
-            palette: { tools: this.toolPalette(), skills: this.skillPalette() },
-          },
+          data: { ...common, kind: 'tools', bound: this.tools(), palette: this.toolPalette() },
         });
         const saved = await this.track(ref);
-        if (saved?.tools) this.tools.set(saved.tools.bindings.map(b => b.ref));
-        if (saved?.skills) this.skills.set(saved.skills.bindings.map(b => b.ref));
-        const version = saved?.skills?.version ?? saved?.tools?.version;
-        if (version !== undefined) this.version.set(version);
+        if (saved) {
+          this.tools.set(saved.bindings.map(b => b.ref));
+          this.version.set(saved.version);
+        }
+        return;
+      }
+      case 'skills': {
+        const ref = this.dialog.open<ProjectBindingsDialogResult, ProjectBindingsDialogData>(ProjectBindingsDialogComponent, {
+          data: { ...common, kind: 'skills', bound: this.skills(), palette: this.skillPalette(), pins: this.skillPins() },
+        });
+        const saved = await this.track(ref);
+        if (saved) {
+          this.skills.set(saved.bindings.map(b => b.ref));
+          this.skillPins.set(pinsOf(saved));
+          this.version.set(saved.version);
+        }
         return;
       }
       case 'files': {
@@ -403,4 +441,8 @@ export class ProjectRailComponent {
 
 function count(n: number, singular: string, plural = `${singular}s`): string {
   return `${n} ${n === 1 ? singular : plural}`;
+}
+
+function countOrNone(n: number, singular: string): string {
+  return n === 0 ? 'None' : count(n, singular);
 }

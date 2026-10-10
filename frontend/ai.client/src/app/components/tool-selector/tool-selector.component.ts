@@ -5,6 +5,7 @@ import {
   computed,
   input,
   model,
+  output,
   signal,
   viewChild,
 } from '@angular/core';
@@ -87,6 +88,8 @@ export class ToolSelectorComponent {
   /** "Select all" / "Clear" over the rows currently shown. */
   readonly bulkActions = input(true);
   readonly maxHeight = input<keyof typeof HEIGHT_CLASS>('md');
+  /** A row's `action` button was pressed. */
+  readonly itemAction = output<ToolSelectorItem>();
 
   private readonly uid = `tool-selector-${nextInstance++}`;
   private readonly searchInput = viewChild<ElementRef<HTMLInputElement>>('search');
@@ -254,6 +257,10 @@ export class ToolSelectorComponent {
       return;
     }
     this.selected.set(toggleItem(this.selected(), item.id));
+  }
+
+  protected runAction(item: ToolSelectorItem): void {
+    if (item.action && !item.action.disabled) this.itemAction.emit(item);
   }
 
   protected selectAllShown(): void {

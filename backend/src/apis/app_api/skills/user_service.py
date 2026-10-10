@@ -236,6 +236,7 @@ class UserSkillService:
         self._delete_skill_md(skill_id)
 
         await self.repository.delete_skill(skill_id)
+        await self.catalog_service.delete_versions(skill_id)
         self._invalidate(skill_id)
 
         logger.info(

@@ -16,6 +16,7 @@ Resolution scope:
 - ``skill``          → feature-flagged; author must have the skill in the ``/agents/bindable``
   palette (``resolve_accessible_skill_ids``, the SAME source the picker fetches). Run-time then
   re-resolves each bound skill against the *invoker* (``resolve_invocable_skill_ids``, D5).
+  ``config.version`` pins the binding to a version, which must exist (shared-projects 3.1).
 - ``memory_space``   → feature-flagged; author needs viewer+ (read) / editor+ (readwrite).
 - ``knowledge_base`` → **managed implicitly** (the KB is welded to the agent and its index
   is not user-configurable), so it is NOT author-settable; the compat layer synthesizes it
@@ -31,6 +32,8 @@ from apis.shared.feature_flags import memory_spaces_enabled, skills_enabled
 from apis.shared.memory.service import MemorySpaceService
 from apis.shared.models.managed_models import list_all_managed_models
 from apis.shared.skills.access import resolve_accessible_skill_ids
+from apis.shared.skills.pins import PIN_CONFIG_KEY, binding_pin
+from apis.shared.skills.repository import get_skill_catalog_repository
 from apis.shared.tools.scoped_ids import SCOPE_DELIMITER, parse_scoped_tool_id
 
 from apis.app_api.admin.services.model_access import ModelAccessService
@@ -93,6 +96,7 @@ async def validate_agent_write(
             accessible_skill_ids = set(await resolve_accessible_skill_ids(user))
         for binding in bindings:
             _validate_binding(user, binding, mem, accessible_tools, accessible_skill_ids)
+        await _validate_skill_pins(bindings)
 
 
 async def _validate_model(user: User, cfg: AgentModelConfig, svc: ModelAccessService) -> None:
@@ -250,6 +254,34 @@ def _validate_skill(binding: AgentBinding, accessible_skill_ids: set) -> None:
         raise BindingValidationError(
             f"You do not have access to skill '{ref}'.", status_code=403
         )
+    pin = (binding.config or {}).get(PIN_CONFIG_KEY)
+    if pin is not None and binding_pin(binding.config) is None:
+        raise BindingValidationError(
+            f"skill binding '{ref}' has an invalid version; it must be a whole number of 1 or more.",
+            status_code=400,
+        )
+
+
+async def _validate_skill_pins(bindings: List[AgentBinding]) -> None:
+    """A pinned skill binding must name a version that exists (shared-projects 3.1).
+
+    The runtime leaves out a pin whose version is missing rather than running the
+    live skill, so a pin to a version that was never cut would bind a skill that
+    never runs.
+    """
+    pinned = [
+        (b.ref, binding_pin(b.config))
+        for b in bindings
+        if b.kind == "skill" and binding_pin(b.config) is not None
+    ]
+    if not pinned:
+        return
+    found = await get_skill_catalog_repository().batch_get_skill_versions(pinned)
+    for ref, number in pinned:
+        if (ref, number) not in found:
+            raise BindingValidationError(
+                f"Version {number} of skill '{ref}' does not exist.", status_code=400
+            )
 
 
 def _validate_memory_space(user: User, binding: AgentBinding, mem: MemorySpaceService) -> None:

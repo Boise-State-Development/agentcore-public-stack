@@ -40,6 +40,7 @@ const ITEMS: ToolSelectorItem[] = [
       labelledBy="host-heading"
       [disabled]="disabled()"
       [helperText]="helper()"
+      (itemAction)="actions.push($event.id)"
     />
   `,
 })
@@ -48,6 +49,7 @@ class HostComponent {
   readonly selected = signal<ReadonlySet<string>>(new Set(['calendar', 'foreign']));
   readonly disabled = signal(false);
   readonly helper = signal('');
+  readonly actions: string[] = [];
 }
 
 describe('ToolSelectorComponent', () => {
@@ -339,5 +341,24 @@ describe('ToolSelectorComponent', () => {
     fixture.detectChanges();
     expect(el.textContent).toContain('No tools available.');
     expect(el.querySelector('input[type="search"]')).toBeNull();
+  });
+
+  it('reports a row action without toggling the row, and not while it is disabled', () => {
+    host.items.set([
+      { ...ITEMS[0], action: { label: 'Update', ariaLabel: 'Update Calendar' } },
+      { ...ITEMS[1], action: { label: 'Update', disabled: true } },
+    ]);
+    fixture.detectChanges();
+    const [calendar, mail] = [...el.querySelectorAll<HTMLButtonElement>('li button')];
+    expect(calendar.getAttribute('aria-label')).toBe('Update Calendar');
+    expect(calendar.closest('label')).toBeNull();
+
+    calendar.click();
+    mail.click();
+    fixture.detectChanges();
+
+    expect(host.actions).toEqual(['calendar']);
+    expect(mail.disabled).toBe(true);
+    expect(host.selected()).toEqual(new Set(['calendar', 'foreign']));
   });
 });

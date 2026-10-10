@@ -62,6 +62,7 @@ from apis.shared.quota import (
 from apis.shared.rbac.model_access import model_access_denied_message
 from apis.shared.rbac.service import get_app_role_service
 from apis.shared.skills.bundle import slugify_skill_name
+from apis.shared.skills.pins import base_skill_id
 from apis.inference_api.chat.agent_binding_resolver import (
     AgentBindingBlockedError,
     AgentNoticeEvent,
@@ -2078,8 +2079,13 @@ def _resolve_invoked_skill_slugs(
     requested = set(invoked_skills)
     # Ordered by the effective set, not by the request: the directive is part of
     # the persisted message, and a list whose order followed client input would
-    # differ between two turns that named the same skills.
-    return [slugify_skill_name(sid) for sid in effective_skill_ids if sid in requested]
+    # differ between two turns that named the same skills. A pinned id
+    # (``skill_id@3``) matches the catalog id the client names.
+    return [
+        slugify_skill_name(base_skill_id(sid))
+        for sid in effective_skill_ids
+        if base_skill_id(sid) in requested
+    ]
 
 
 def _build_skill_invocation_note(skill_slugs: list[str]) -> str:
