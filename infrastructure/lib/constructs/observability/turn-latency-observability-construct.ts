@@ -122,11 +122,14 @@ export class TurnLatencyObservabilityConstruct extends Construct {
           `**Project:** ${config.projectPrefix} | **Region:** ${config.awsRegion} | `
           + `**Namespace:** \`${namespace}\``,
           '',
-          '_Every metric here starts at **inference-api handler entry**. None of them sees '
-          + 'the app-api hop, auth, or AgentCore Runtime routing — ~478ms on a warm path and '
-          + '~1.5s on a cold one. A stage falling here is necessary but **not sufficient** '
-          + 'evidence that the user waits less; the client-side check is `tests/load` '
-          + '(Locust TTFB + TTFT). See `docs/specs/turn-latency-preamble.md`._',
+          '_The first row is **what the user waits for**: send to first token, measured in the '
+          + 'browser and reported by the SPA (`Client*FirstTokenMs`, while `CDK_CLIENT_TURN_TIMING_ENABLED` '
+          + 'is on). It is the only row that sees the app-api hop, Runtime routing and session start '
+          + '(the V2 restore, and what session prewarm hides). First turns and follow-ups are '
+          + 'separate metrics because a first turn starts its session. Every row below it starts '
+          + 'at **inference-api handler entry**: a stage falling there is necessary but **not '
+          + 'sufficient** evidence that the user waits less. The controlled check is still `tests/load` '
+          + '(Locust TTFB + TTFT). See `docs/specs/turn-path-ttft.md` §6._',
           '',
           '_`PreambleMs` is the sum of the five `Preamble*Ms` sub-stages, kept so the '
           + 'pre-split baseline stays comparable. AWS\'s own data-plane `Latency` for the '
@@ -135,6 +138,42 @@ export class TurnLatencyObservabilityConstruct extends Construct {
         ].join('\n'),
         width: 24,
         height: 5,
+      }),
+    );
+
+    // Row 0 — what the user waits for, measured in the browser
+    // (apis/app_api/telemetry/routes.py). Separate metric names, not
+    // dimensions: a first turn starts its Runtime session and a follow-up
+    // usually finds it running, so one percentile over both moves whenever
+    // the mix does. Warmed vs cold first turns track what prewarm is worth.
+    const client = (metricName: string, statistic: string, label: string, period = PERIOD) =>
+      new cloudwatch.Metric({ namespace, metricName, statistic, period, label });
+    const DAY = cdk.Duration.days(1);
+    this.dashboard.addWidgets(
+      new cloudwatch.GraphWidget({
+        title: 'User-perceived first token — first turns (warmed vs cold) and follow-ups',
+        left: [
+          client('ClientFirstTurnWarmedFirstTokenMs', 'p50', 'first turn, prewarmed p50'),
+          client('ClientFirstTurnColdFirstTokenMs', 'p50', 'first turn, cold p50'),
+          client('ClientFollowUpFirstTokenMs', 'p50', 'follow-up p50'),
+          client('ClientFirstTurnFirstTokenMs', 'p90', 'first turn p90'),
+          client('ClientFollowUpFirstTokenMs', 'p90', 'follow-up p90'),
+        ],
+        leftYAxis: { min: 0 },
+        width: 12,
+        height: 6,
+      }),
+      new cloudwatch.GraphWidget({
+        title: 'Trend: daily medians, last 30 days — read drift here',
+        left: [
+          client('ClientFirstTurnFirstTokenMs', 'p50', 'first turn (client) p50', DAY),
+          client('ClientFollowUpFirstTokenMs', 'p50', 'follow-up (client) p50', DAY),
+          client('FirstTokenMs', 'p50', 'server first token p50', DAY),
+        ],
+        start: '-P30D',
+        leftYAxis: { min: 0 },
+        width: 12,
+        height: 6,
       }),
     );
 
