@@ -23,6 +23,9 @@ and refreshes **one** Dashboard artifact so its link and run history persist.
 - `assets/index.html`: the dashboard page. Reads datasets only; data-independent.
 - `references/taxonomy.md`: what each pattern means, its lever, and how to add one.
 
+Baseline numbers, findings, parked levers and the data still to collect are in
+`docs/one-pagers/conversation-usage-patterns.md`. When a run changes the picture, update it.
+
 It complements the per-conversation diagnoses in
 `backend/src/apis/app_api/admin/costs/diagnoses.py`: those say *why* one
 conversation cost money; this says *what kind* of usage carries the spend.
