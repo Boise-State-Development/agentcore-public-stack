@@ -5,9 +5,12 @@ Nothing here touches the network: boto3.client is patched, and the module list
 is exercised with stand-ins so the tests don't depend on sympy import time.
 """
 
+import ast
+import asyncio
 import sys
 import threading
 import types
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -29,10 +32,10 @@ class TestKillSwitch:
         monkeypatch.setenv(warmup.WARMUP_ENABLED_ENV, value)
         assert not warmup.warmup_enabled()
 
-    def test_disabled_starts_no_thread(self, monkeypatch):
+    def test_disabled_runs_nothing(self, monkeypatch):
         monkeypatch.setenv(warmup.WARMUP_ENABLED_ENV, "false")
         with patch.object(warmup, "run_warmup") as run:
-            assert warmup.start_warmup_in_background() is None
+            assert asyncio.run(warmup.warm_before_ready()) is False
         run.assert_not_called()
 
 
@@ -184,23 +187,66 @@ class TestWarmSharedSession:
         shared.assert_called_once_with()
 
 
-class TestBackground:
-    def test_runs_on_a_daemon_thread_and_returns_immediately(self, monkeypatch):
+class TestWarmBeforeReady:
+    """Warm-up must FINISH before the server can answer /ping.
+
+    AgentCore Runtime V2 snapshots the container on its first healthy /ping
+    and restores that snapshot for every new session, so anything still
+    running then is redone on each session's first turn (dev, 2026-10-10:
+    the snapshot preceded warm-up's end by ~0.9 s, and first-turn preludes
+    ran up to 3.4 s against ~1 s).
+    """
+
+    def test_returns_only_after_warmup_completes(self, monkeypatch):
         monkeypatch.delenv(warmup.WARMUP_ENABLED_ENV, raising=False)
-        started = threading.Event()
+        finished = threading.Event()
+
+        def work():
+            threading.Event().wait(0.2)
+            finished.set()
+
+        with patch.object(warmup, "run_warmup", side_effect=work):
+            assert asyncio.run(warmup.warm_before_ready()) is True
+        assert finished.is_set()
+
+    def test_runs_off_the_event_loop_thread(self, monkeypatch):
+        monkeypatch.delenv(warmup.WARMUP_ENABLED_ENV, raising=False)
+        seen = {}
+
+        async def main():
+            seen["loop"] = threading.get_ident()
+            with patch.object(warmup, "run_warmup", side_effect=lambda: seen.setdefault("work", threading.get_ident())):
+                await warmup.warm_before_ready()
+
+        asyncio.run(main())
+        assert seen["work"] != seen["loop"]
+
+    def test_a_stalled_warmup_does_not_hold_startup_past_the_ceiling(self, monkeypatch):
+        monkeypatch.delenv(warmup.WARMUP_ENABLED_ENV, raising=False)
         release = threading.Event()
+        with patch.object(warmup, "run_warmup", side_effect=lambda: release.wait(5)):
+            assert asyncio.run(warmup.warm_before_ready(timeout=0.1)) is False
+        release.set()
 
-        def slow():
-            started.set()
-            release.wait(timeout=5)
+    def test_the_ceiling_is_inside_the_runtime_health_deadline(self):
+        # AgentCore fails a container that is not healthy within 120 s of start.
+        assert 0 < warmup.WARMUP_READY_TIMEOUT_SECONDS < 120
 
-        with patch.object(warmup, "run_warmup", side_effect=slow):
-            thread = warmup.start_warmup_in_background()
-            assert thread is not None
-            assert thread.daemon
-            assert started.wait(timeout=5)
-            # Caller is not blocked while the warm-up is still running.
-            assert thread.is_alive()
-            release.set()
-            thread.join(timeout=5)
-        assert not thread.is_alive()
+    def test_the_entrypoint_awaits_warmup_before_the_server_starts(self):
+        """`await warm_before_ready()` must come before `yield` in the lifespan:
+        uvicorn binds its socket only after startup returns, so that ordering is
+        what keeps /ping (and the V2 snapshot) behind warm-up."""
+        source = Path(__file__).resolve().parents[3] / "src" / "apis" / "inference_api" / "main.py"
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        lifespan = next(
+            n for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef) and n.name == "lifespan"
+        )
+        awaited = [
+            n.lineno for n in ast.walk(lifespan)
+            if isinstance(n, ast.Await) and isinstance(n.value, ast.Call)
+            and getattr(n.value.func, "id", None) == "warm_before_ready"
+        ]
+        yields = [n.lineno for n in ast.walk(lifespan) if isinstance(n, ast.Yield)]
+        assert awaited, "lifespan no longer awaits warm_before_ready()"
+        assert yields and min(awaited) < min(yields)
+        assert "start_warmup_in_background" not in source.read_text(encoding="utf-8")

@@ -84,12 +84,11 @@ Under V2, anything computed at import or lifespan time is computed **once per sn
    - Symptom to look for: 424s or doubled cold starts on first turns.
    - **Fixed (plan step 3):** the first `/ping` after more than `RESTORE_GAP_SECONDS` (60 s) without one restarts the idle clock, at most once per process, and logs `No /ping for Ns; treating this as a snapshot restore`. The gap is measured from the last poll, or from import if there was none, so it covers a snapshot taken before or after polling began. "Origin at the first `/ping`" alone was rejected: a snapshot taken after polling starts carries that stamp too. The once-only limit is what keeps it safe on V1: if the platform's polling were ever irregular, an unbounded rule would re-arm the immortal-microVM bug, while this costs at most one extra idle period.
    - In the dev A/B, that log line on a fresh session is the evidence that V2 restores happen after polling, and how stale the snapshot was.
-2. **Warm-up (`apis/inference_api/warmup.py`) could become free, or wasted.**
-   - Today it runs on a daemon thread so `/ping` answers immediately. It covers the 3.6 s residual first-turn cost from `load-test-assessment-2026-09.md` §1.
-   - If V2 snapshots after `/ping` goes healthy and **before** warm-up finishes, the work isn't in the snapshot, and each restore redoes the rest.
-   - If the snapshot waits for readiness, holding `/ping` until warm-up completes would bake the imports and botocore model parses into the snapshot. That is paid once per deploy instead of once per session, the reverse of the V1 trade-off.
-   - Measure before choosing. See §5.
-3. **Cloned sockets and credentials.** Warm-up builds boto3 clients but makes no calls, so no pooled TCP connections should be in the snapshot today.
+2. **Warm-up (`apis/inference_api/warmup.py`) must finish before `/ping` reports healthy. Resolved by AWS's documentation and measured on dev.**
+   - AWS: "AgentCore Runtime takes the snapshot on the first healthy `/ping` response. Report health from `/ping` only after initialization completes" (devguide, *Platform versions* ▸ *What to expect*; and *Optimize your agent for AgentCore Runtime V2*). The blog post says the same: the Runtime "waits for it to report healthy, then captures a snapshot of the running environment."
+   - Until this fix, warm-up ran on a daemon thread so `/ping` answered at once, a V1 choice. On dev's first V2 snapshot (2026-10-10) the last pre-snapshot `/ping` was about 0.9 s before warm-up logged `complete`. New sessions then redid the rest on their first turn: first-turn preludes of 1.7–3.4 s on about one new session in five, against about 1 s otherwise.
+   - **Fix:** `warm_before_ready()` is awaited in the lifespan before it yields. uvicorn binds its socket only after startup returns (verified on the pinned 0.46.0: the port accepts 0.03 s after startup ends), so no `/ping` and no snapshot can precede warm-up. Bounded by `WARMUP_READY_TIMEOUT_SECONDS` (60 s), inside the Runtime's 120-second health deadline. On V1 the change is invisible: AgentCore pre-boots containers ahead of sessions (see B3), and a request reaching a container mid-boot waited on the same imports anyway.
+3. **Cloned sockets and credentials.** AWS's guidance reverses the caution below: "Construct and exercise your clients at startup, and expect the first call after a restore to re-establish the connection transparently"; the snapshot keeps the service-model parse, endpoint and credential resolution and the pool, and only the socket is re-established. So a warm-up *call* is fine on V2, and the strategy-id read already makes one. Credentials must still be refreshable, which boto3's container provider is. Original note: warm-up builds boto3 clients but makes no calls, so no pooled TCP connections should be in the snapshot today.
    - Keep it that way: anything that opens a connection at init restores a dead socket into every session. That is the stale-connection class behind #1338 (the LTM retrieval fix).
    - Add a comment in `warmup.py` so nobody "optimises" it into a real call.
 4. **Cloned randomness and IDs.** Python's `random` module state and any ID generated at init are identical across every restored instance.
@@ -98,9 +97,15 @@ Under V2, anything computed at import or lifespan time is computed **once per sn
    - Check the **OTEL resource**: if ADOT (`opentelemetry-instrument` in `Dockerfile.inference-api`) derives `service.instance.id` at SDK init, every session reports the same instance.
 5. **Monotonic clocks across a restore.** Any TTL cache keyed on `time.monotonic()` that is populated at init could be read as fresh after restore. That includes the 60 s catalog cache, `oauth_token_cache` and the agent cache. All of them are empty at init today, so this is only a rule to keep: don't pre-populate time-bounded caches at startup.
 
-### B3. The plan's latency metric can't see what V2 improves (verified)
+### B3. The plan's latency metric can't see what V2 improves (verified), and V1 hides its cold starts behind a pool
 
-The review proposed comparing the turn-latency EMF (#1184). `turn_timing.py` states that its clock starts at handler entry, so it "excludes the app-api hop and any Runtime cold start". The ~1.5 s cold routing gap and V2's snapshot restore both happen before that clock starts.
+**Measured on dev, 2026-10-10.** Comparing first-turn first-token times between V1 and V2 smoke runs is misleading, because on V1 most new sessions never cold-start:
+- Over the previous week on V1, 153 of the 178 microVMs that served a new session had been booted a median of 498 s before their first request; the deploy itself pre-boots a batch (all six VMs of a V1 smoke run started within the same second, 10 s after the version went READY, and waited 111–146 s). Only the sessions that miss that pool pay V1's real cold start.
+- On V2 every new session restored a snapshot on demand: all 12 VMs in two passes logged the restore 0.6–1.0 s before their first request (outliers 1.7–4.7 s, the B2.2 race above).
+- So V2's gain is the **pool-miss case** (V1's 5.4–30 s P75 by image size per AWS) and the cost of keeping a pool; on the pooled common case, V1 and V2 should be close once B2.2 is fixed. Measure V2 against V1 pool misses, not against V1's pooled sessions.
+- AWS's ~2 s P75 is platform start only (an echo agent whose code ran in 34 ms); our first turn adds a prelude of about 1 s and the model's own time to first token.
+
+**The metric.** The review proposed comparing the turn-latency EMF (#1184). `turn_timing.py` states that its clock starts at handler entry, so it "excludes the app-api hop and any Runtime cold start". The ~1.5 s cold routing gap and V2's snapshot restore both happen before that clock starts.
 
 - `PreludeTotalMs` will only move if B2.2 changes where warm-up lands.
 - The cold-start comparison has to come from the client side: `tests/load`, or the SPA-observed send→first-delta gap.
