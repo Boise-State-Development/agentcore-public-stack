@@ -75,7 +75,7 @@ GitHub provides two mechanisms for storing configuration values:
 | CDK_PROJECT_PREFIX | Variable | Yes | `agentcore` | All | Prefix for all resource names (e.g., 'mycompany-agentcore') |
 | CDK_RAG_CORS_ORIGINS | Variable | No | None | RAG Ingestion | Additional CORS origins for the RAG documents S3 bucket only (appended to global CORS origins) |
 | CDK_RETAIN_DATA_ON_DELETE | Variable | No | `false` | All | Retain data resources (DynamoDB, S3, Secrets) on stack deletion |
-| CDK_SESSION_PREWARM_ENABLED | Variable | No | `false` | App API | Session prewarm (in development): `true` mounts `POST /chat/prewarm`, which starts a conversation's AgentCore Runtime session when the user opens it, before the first send. Pair with `features.sessionPrewarm` in the SPA environment file. Cheap on the V2 Runtime; billed at peak memory on V1. See `docs/specs/agentcore-runtime-v2.md` §5a |
+| CDK_SESSION_PREWARM_ENABLED | Variable | No | `false` | App API | Session prewarm (in development): `true` mounts `POST /chat/prewarm`, which starts a conversation's AgentCore Runtime session ahead of the send: a new conversation when its page loads, an existing one on the first keystroke. Pair with `features.sessionPrewarm` in the SPA environment file. Cheap on the V2 Runtime; billed at peak memory on V1. See `docs/specs/agentcore-runtime-v2.md` §5a |
 | CDK_VPC_CIDR | Variable | No | `10.0.0.0/16` | Platform | CIDR block for VPC network |
 | ENV_INFERENCE_API_CORS_ORIGINS | Variable | No | None | Inference API | _(Deprecated — use CDK_INFERENCE_API_CORS_ORIGINS instead)_ |
 | ENV_INFERENCE_API_LOG_LEVEL | Variable | No | `INFO` | Inference API | Log level for runtime container (DEBUG, INFO, WARNING, ERROR) |

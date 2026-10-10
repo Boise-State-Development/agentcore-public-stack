@@ -171,15 +171,16 @@ The billing basis inverts, so conclusions from V1 don't carry over:
 
 ## 5a. Phase 2: prewarm the session when the user engages (after the dev A/B)
 
-**Status (2026-10-10): built, behind `SESSION_PREWARM_ENABLED` / `features.sessionPrewarm` (in development, default off).** Two choices differ from the plan below:
+**Status (2026-10-10): built, behind `SESSION_PREWARM_ENABLED` / `features.sessionPrewarm` (in development, default off).** The trigger depends on how strong the page's intent to send is (decided with the developer driving this, 2026-10-10):
 
-- **Trigger: page load, while the tab is visible.** The composer takes focus as the conversation page loads, so "on focus" and "on load" are the same moment (decided with the developer driving this, 2026-10-10). The cost worry behind "never on page load", tabs left open, is handled by visibility instead: a tab loaded in the background warms when the user first looks at it, and returning to an open tab after 10 minutes warms it again. Each conversation warms at most once per 10 minutes (SPA and app-api), and app-api caps a user at 10 warms a minute.
-- **Existing conversations are warmed too** (item 4), whatever their last activity, because the SPA does not know whether the microVM was reaped. A conversation this tab just created is skipped: its first turn already started the microVM.
+- **A new conversation warms on page load, while the tab is visible.** Opening it is almost always intent to send, the composer takes focus as it loads, and it is where paste-then-send and prompt-starter sends happen, which a keystroke trigger would miss or warm too late (a warm needs ~1.5–2 s, the session start it hides). A background tab warms when the user first looks at it, and again on return after 10 minutes.
+- **An existing conversation warms on the composer's first input (typing or paste).** Opening one is often just reading, and a reply takes long enough to type that the warm still finishes first. The page arms the conversation on load; the composer reports input; nothing else warms it. A conversation this tab just created, or any conversation with a turn in the last 10 minutes, is skipped: a real turn already started its microVM.
+- Each conversation warms at most once per 10 minutes (SPA and app-api), and app-api caps a user at 10 warms a minute.
 
 What was built:
 - **Runtime:** `InvocationRequest.warm`. The `/invocations` handler returns `{"warmed": true}` as its first statement, before the ownership read: no rows, no lease, no quota, no model. No flag and no environment variable on the Runtime, so the V2 byte budget is untouched.
 - **app-api:** `POST /chat/prewarm` (`chat/proxy_routes.py`), cookie auth. Answers 202 immediately with `status` (`accepted`, `recently_warmed`, `rate_limited`, or `skipped` when runtime-session affinity is off) and forwards in a background task with the same affinity header the first turn will carry. It logs `prewarm forwarded -> <status> in <ms>`, which is the start time a user no longer waits for.
-- **SPA:** `SessionPrewarmService`. A new conversation's id is minted when the page warms it and claimed by the first send (`chat-request.service.ts`), so the send registers the conversation exactly as before and lands on the warmed microVM. An attach-first conversation adopts the same id for its staged uploads.
+- **SPA:** `SessionPrewarmService`. A new conversation's id is minted when the page warms it and claimed by the first send (`chat-request.service.ts`), so the send registers the conversation exactly as before and lands on the warmed microVM. An attach-first conversation adopts the same id for its staged uploads. Existing conversations are armed by the session page and warmed by `ChatInputComponent.onTextareaInput`; composers on other pages (agent preview, marketplace review) arm nothing and never warm.
 
 Measure it client-side, as below: first token on a new conversation's first turn, with the page open a few seconds before sending, flag on against off.
 
