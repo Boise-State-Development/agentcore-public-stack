@@ -116,6 +116,26 @@ If a Runtime update leaves the stack in `UPDATE_ROLLBACK_FAILED`:
 
 On dev this took about ten minutes.
 
+## Upgrading across the variable change
+
+The release that stops sending the Runtime its resource names needs an
+inference-api image that can derive them, which means one from the previous
+release or later. CloudFormation re-registers the Runtime with whatever image
+is live, so the order of the two deploys matters once.
+
+You don't have to get it right by hand. Before `cdk deploy`, the Platform Stack
+deploy reads a label off the live inference-api image. If the image is too old,
+it stops without changing anything:
+
+```
+Runtime image cannot derive its resource names: ... Run the Backend Deploy workflow (backend.yml) first ...
+```
+
+Run `backend.yml`, then re-run `platform.yml`. If your deploy credentials can't
+read ECR, or you run a custom image, the error says so; after confirming the
+backend deploy has landed, set the GitHub variable
+`SKIP_RUNTIME_ENV_CONTRACT_CHECK=true` for one run.
+
 ## What changes for operators of the Runtime's environment
 
 Starting with the release after 1.27.0, the inference-api fills in any

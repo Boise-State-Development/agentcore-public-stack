@@ -1,16 +1,16 @@
 // The derived-environment manifest must agree with CDK (docs/specs/agentcore-runtime-v2.md §7.3).
 //
-// backend/src/apis/shared/config/derived_environment.json says which Runtime
-// variables the code can rebuild as `{prefix}-{suffix}[-{account}]`. The
-// resolver trusts it; this test is what keeps that trust honest. For every
-// entry it resolves the Runtime's variable in the synthesized template to a
-// literal and asserts it equals the derivation. Renaming a resource in CDK
-// without updating the manifest fails here, as does a manifest entry for a
-// resource CDK names some other way (getTruncatedResourceName, a physical id).
+// backend/src/apis/shared/config/derived_environment.json lists the Runtime
+// variables the inference-api rebuilds as `{prefix}-{suffix}[-{account}]` at
+// startup. The Runtime is no longer sent them, so the manifest is now the ONLY
+// thing that tells the Runtime where its tables and buckets are. This test is
+// what keeps that honest: for every entry, the synthesized template must
+// contain a resource CDK names exactly that, and the Runtime must not also be
+// sent the variable (a value sent alongside would win at runtime and hide a
+// drifted manifest). Renaming a resource in CDK without the manifest fails
+// here, as does a manifest entry for a resource CDK names some other way.
 import * as fs from 'fs';
 import * as path from 'path';
-import * as cdk from 'aws-cdk-lib';
-import { estimateRuntimeEnvironmentPayload } from '../lib/constructs/inference-api/runtime-environment-payload-guard';
 import { MOCK_ACCOUNT, MOCK_PREFIX } from './helpers/mock-config';
 import { runtimeEnvironment, synthWorstCasePlatformStack } from './helpers/runtime-worst-case';
 
@@ -18,65 +18,59 @@ interface ManifestEntry { name: string; suffix: string; accountScoped?: boolean 
 
 const MANIFEST_PATH = path.resolve(__dirname, '../../backend/src/apis/shared/config/derived_environment.json');
 
+/** Properties that carry a resource's physical name, across the types the manifest covers. */
+const NAME_PROPERTIES = ['TableName', 'BucketName', 'VectorBucketName', 'IndexName', 'Name', 'SecretName'];
+
 function loadManifest(): ManifestEntry[] {
-  const raw = JSON.parse(fs.readFileSync(MANIFEST_PATH, 'utf8')) as { variables: ManifestEntry[] };
-  return raw.variables;
+  return (JSON.parse(fs.readFileSync(MANIFEST_PATH, 'utf8')) as { variables: ManifestEntry[] }).variables;
 }
 
-/** Resolve one template value to a literal string the way the Python side would see it at runtime. */
-function resolveLiteral(stack: cdk.Stack, value: unknown): string {
+/** A template value as a literal, substituting the mock account; undefined when it is not a plain name. */
+function literal(value: unknown): string | undefined {
   if (typeof value === 'string') return value;
   if (value && typeof value === 'object' && !Array.isArray(value)) {
     const record = value as Record<string, unknown>;
-    if (typeof record.Ref === 'string') {
-      if (record.Ref === 'AWS::AccountId') return MOCK_ACCOUNT;
-      for (const child of stack.node.findAll()) {
-        if (!cdk.CfnResource.isCfnResource(child)) continue;
-        if (stack.resolve(child.logicalId) !== record.Ref) continue;
-        const rendered = stack.resolve(
-          (child as unknown as { _toCloudFormation(): { Resources?: Record<string, { Properties?: Record<string, unknown> }> } })._toCloudFormation(),
-        );
-        const props = rendered?.Resources?.[record.Ref]?.Properties ?? {};
-        for (const key of ['TableName', 'BucketName', 'SecretName', 'Name']) {
-          if (props[key] !== undefined) return resolveLiteral(stack, props[key]);
-        }
-      }
-      throw new Error(`Ref ${record.Ref} is not a resource with a literal name`);
-    }
+    if (record.Ref === 'AWS::AccountId') return MOCK_ACCOUNT;
     const join = record['Fn::Join'] as [string, unknown[]] | undefined;
-    if (join) return join[1].map((part) => resolveLiteral(stack, part)).join(join[0]);
+    if (join && Array.isArray(join[1])) {
+      const parts = join[1].map(literal);
+      return parts.every((p) => p !== undefined) ? parts.join(join[0]) : undefined;
+    }
   }
-  throw new Error(`cannot resolve ${JSON.stringify(value)} to a literal`);
+  return undefined;
 }
 
-describe('derived_environment.json agrees with the synthesized Runtime', () => {
+describe('derived_environment.json agrees with the synthesized stack', () => {
   const manifest = loadManifest();
-  const { stack, template } = synthWorstCasePlatformStack();
+  const { template } = synthWorstCasePlatformStack();
   const env = runtimeEnvironment(template);
 
-  it('lists at least the variables the plan expects to derive', () => {
+  const physicalNames = new Set<string>();
+  for (const resource of Object.values(template.toJSON().Resources ?? {}) as Array<{ Properties?: Record<string, unknown> }>) {
+    for (const key of NAME_PROPERTIES) {
+      const name = literal(resource.Properties?.[key]);
+      if (name) physicalNames.add(name);
+    }
+  }
+
+  it('lists unique entries', () => {
     expect(manifest.length).toBeGreaterThanOrEqual(20);
     expect(new Set(manifest.map((m) => m.name)).size).toBe(manifest.length);
   });
 
-  it.each(manifest.map((m) => [m.name, m] as const))('%s is {prefix}-{suffix}[-{account}] in the template', (_name, entry) => {
-    expect(env).toHaveProperty(entry.name);
-    const literal = resolveLiteral(stack, env[entry.name]);
+  it.each(manifest.map((m) => [m.name, m] as const))('%s: CDK names a resource {prefix}-{suffix}[-{account}]', (_name, entry) => {
     const expected = entry.accountScoped
       ? `${MOCK_PREFIX}-${entry.suffix}-${MOCK_ACCOUNT}`
       : `${MOCK_PREFIX}-${entry.suffix}`;
-    expect(literal).toBe(expected);
+    expect(physicalNames).toContain(expected);
   });
 
-  it('reports how much of the payload the manifest would remove', () => {
-    const all = estimateRuntimeEnvironmentPayload(stack, env as Record<string, string>);
-    const remaining = Object.fromEntries(Object.entries(env).filter(([k]) => !manifest.some((m) => m.name === k)));
-    const after = estimateRuntimeEnvironmentPayload(stack, remaining as Record<string, string>);
-    // Not an assertion: the number the next PR (spec §7.6 PR B) is sized by.
-    console.log(
-      `[derived-env] manifest covers ${manifest.length} of ${all.variables} Runtime variables; ` +
-      `~${all.bytes} → ~${after.bytes} estimated bytes once they are dropped (plus ~${'AWS_ACCOUNT_ID'.length + 12 + 2} for AWS_ACCOUNT_ID)`,
-    );
-    expect(after.bytes).toBeLessThan(all.bytes);
+  it.each(manifest.map((m) => [m.name] as const))('%s is derived, not sent to the Runtime', (name) => {
+    expect(env).not.toHaveProperty(name);
+  });
+
+  it('sends the two inputs the derivation needs', () => {
+    expect(env.PROJECT_PREFIX).toBe(MOCK_PREFIX);
+    expect(env.AWS_ACCOUNT_ID).toBe(MOCK_ACCOUNT);
   });
 });

@@ -19,7 +19,9 @@
 #      image-tag param doesn't exist, write the bootstrap URI to
 #      it. Idempotent: skips when the param already exists (build
 #      pipeline owns it after first deploy).
-#   4. cdk deploy --app cdk.out/ → CFN resolves the SSM-Parameter::
+#   4. check-runtime-env-contract.sh → refuse to strip the Runtime's
+#      resource names while the live image cannot derive them.
+#   5. cdk deploy --app cdk.out/ → CFN resolves the SSM-Parameter::
 #      Value<String> template params, picks up the freshly-seeded
 #      bootstrap URI on first deploy or the build-pipeline-written
 #      live URI on every subsequent deploy.
@@ -61,7 +63,15 @@ npx cdk-assets publish \
 # ── 3. Seed SSM image-tag params on first deploy ──
 bash "${PROJECT_ROOT}/scripts/stack-bootstrap/seed-image-tags.sh"
 
-# ── 4. Deploy ──
+# ── 4. Refuse to strip the Runtime's resource names under an old image ──
+# The Runtime derives its table and bucket names from PROJECT_PREFIX only in
+# images built after docs/specs/agentcore-runtime-v2.md §7; CFN re-registers
+# it with whatever image is live. Fails here, before anything changes, when
+# the live image predates that, and says to run backend.yml first.
+bash "${PROJECT_ROOT}/scripts/platform/check-runtime-env-contract.sh" \
+    "cdk.out/${CDK_PROJECT_PREFIX}-PlatformStack.template.json"
+
+# ── 5. Deploy ──
 log_info "Deploying PlatformStack..."
 npx cdk deploy "${CDK_PROJECT_PREFIX}-PlatformStack" \
     --app "cdk.out/" \

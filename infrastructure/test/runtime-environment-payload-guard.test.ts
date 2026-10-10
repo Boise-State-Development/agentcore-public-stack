@@ -117,31 +117,39 @@ describe('RuntimeEnvironmentPayloadGuard on a synthetic runtime', () => {
 });
 
 describe('RuntimeEnvironmentPayloadGuard on the real PlatformStack', () => {
-  // The estimate for the worst-case real stack is printed so the number is in
-  // every test run, and the guard's verdict is checked for consistency with it
-  // on both versions. Once spec §7.6 PR B drops the derivable variables, the V2
-  // synth here must come back clean; until then it documents what blocks V2.
-  it('V1: never an error, whatever the payload', () => {
-    const { stack, template } = synthWorstCasePlatformStack({ inferenceApi: { runtimePlatformVersion: 'V1' } });
-    const runtimes = template.findResources('AWS::BedrockAgentCore::Runtime');
-    const [logicalId, resource] = Object.entries(runtimes)[0];
+  // The worst-case config (every conditional block on) must fit the 2,000-byte
+  // budget, not just the 2,560-byte limit, so a V1 deployment can never drift
+  // back into a payload that blocks V2 without CI saying so. Freeing bytes:
+  // move a `{prefix}-{suffix}` name into derived_environment.json, retire a
+  // dead variable, or fold booleans (spec §7).
+  function estimateFor(version: string) {
+    const { stack, template } = synthWorstCasePlatformStack({ inferenceApi: { runtimePlatformVersion: version } });
+    const [logicalId, resource] = Object.entries(template.findResources('AWS::BedrockAgentCore::Runtime'))[0];
     const estimate = estimateRuntimeEnvironmentPayload(stack, (resource.Properties?.EnvironmentVariables ?? {}) as Record<string, string>);
+    return { stack, logicalId, estimate };
+  }
+
+  it('the worst-case environment fits the budget', () => {
+    const { logicalId, estimate } = estimateFor('V1');
     console.log(
       `[env-payload] ${logicalId}: ~${estimate.bytes} bytes estimated across ${estimate.variables} variables ` +
-      `(limit ${RUNTIME_ENV_PAYLOAD_LIMIT_V2_BYTES} on V2, budget ${RUNTIME_ENV_PAYLOAD_BUDGET_BYTES}); ` +
+      `(budget ${RUNTIME_ENV_PAYLOAD_BUDGET_BYTES}, V2 limit ${RUNTIME_ENV_PAYLOAD_LIMIT_V2_BYTES}); ` +
       `unresolved: ${estimate.unresolved.join(', ') || 'none'}; largest: ${estimate.largest.map((c) => `${c.name}=${c.bytes}`).join(', ')}`,
     );
-    Annotations.fromStack(stack).hasNoError('*', Match.stringLikeRegexp('environment limit'));
+    if (estimate.bytes > RUNTIME_ENV_PAYLOAD_BUDGET_BYTES) {
+      throw new Error(
+        `The Runtime's worst-case environment is ~${estimate.bytes} bytes, over the ${RUNTIME_ENV_PAYLOAD_BUDGET_BYTES}-byte budget ` +
+        `(V2 rejects anything over ${RUNTIME_ENV_PAYLOAD_LIMIT_V2_BYTES}). Largest: ` +
+        `${estimate.largest.map((c) => `${c.name}=${c.bytes}`).join(', ')}. Derive a {prefix}-{suffix} name via ` +
+        `backend/src/apis/shared/config/derived_environment.json, retire a dead variable, or fold booleans.`,
+      );
+    }
+    expect(estimate.bytes).toBeLessThanOrEqual(RUNTIME_ENV_PAYLOAD_BUDGET_BYTES);
   });
 
-  it('V2: the verdict follows the estimate', () => {
-    const { stack, template } = synthWorstCasePlatformStack({ inferenceApi: { runtimePlatformVersion: 'V2' } });
-    const [resource] = Object.values(template.findResources('AWS::BedrockAgentCore::Runtime'));
-    const estimate = estimateRuntimeEnvironmentPayload(stack, (resource.Properties?.EnvironmentVariables ?? {}) as Record<string, string>);
-    if (estimate.bytes > RUNTIME_ENV_PAYLOAD_LIMIT_V2_BYTES) {
-      Annotations.fromStack(stack).hasError('*', Match.stringLikeRegexp('exceeds the 2560-byte environment limit'));
-    } else {
-      Annotations.fromStack(stack).hasNoError('*', Match.stringLikeRegexp('environment limit'));
-    }
+  it('V2 synthesizes with no payload error or warning', () => {
+    const { stack } = estimateFor('V2');
+    Annotations.fromStack(stack).hasNoError('*', Match.stringLikeRegexp('environment limit'));
+    Annotations.fromStack(stack).hasNoWarning('*', Match.stringLikeRegexp('byte budget|environment limit'));
   });
 });

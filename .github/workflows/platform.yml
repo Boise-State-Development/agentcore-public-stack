@@ -153,6 +153,10 @@ jobs:
       # reverts to V1 if this variable is deleted. See
       # docs/specs/agentcore-runtime-v2.md.
       CDK_AGENTCORE_RUNTIME_PLATFORM_VERSION: ${{ vars.CDK_AGENTCORE_RUNTIME_PLATFORM_VERSION }}
+      # Escape hatch for scripts/platform/check-runtime-env-contract.sh: set to
+      # `true` only after confirming the live inference-api image derives its
+      # resource names (docs/specs/agentcore-runtime-v2.md §8).
+      SKIP_RUNTIME_ENV_CONTRACT_CHECK: ${{ vars.SKIP_RUNTIME_ENV_CONTRACT_CHECK }}
       CDK_ALB_SUBDOMAIN: ${{ vars.CDK_ALB_SUBDOMAIN }}
       CDK_CERTIFICATE_ARN: ${{ vars.CDK_CERTIFICATE_ARN }}
       # Shared us-east-1 CloudFront cert (wildcard covering {domain} + *.{domain}).
