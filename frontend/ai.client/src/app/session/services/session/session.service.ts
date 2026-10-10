@@ -1,8 +1,9 @@
 import { inject, Injectable, signal, WritableSignal, resource, computed, effect } from '@angular/core';
-import { HttpClient, HttpParams } from '@angular/common/http';
+import { HttpClient, HttpContext, HttpParams } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
 import { SessionService as BffSessionService } from '../../../auth/session.service';
+import { SUPPRESS_ERROR_TOAST } from '../../../auth/error.interceptor';
 import { SessionMetadata, UpdateSessionMetadataRequest } from '../models/session-metadata.model';
 import { Message } from '../models/message.model';
 import type { UiResourceEvent } from '../../../shared/utils/stream-parser';
@@ -612,6 +613,10 @@ export class SessionService {
    * Fetches metadata for a specific session from the Python API.
    * 
    * @param sessionId - UUID of the session
+   * @param options.quiet - Skip the global error toast. For best-effort
+   *   background reads whose caller already tolerates failure. A first turn
+   *   refused before the session row exists (model access) leaves no row, so
+   *   the post-stream title fallback 404s there by design.
    * @returns Promise resolving to SessionMetadata object
    * @throws Error if the API request fails
    * 
@@ -622,13 +627,16 @@ export class SessionService {
    * );
    * ```
    */
-  async getSessionMetadata(sessionId: string): Promise<SessionMetadata> {
+  async getSessionMetadata(
+    sessionId: string,
+    options: { quiet?: boolean } = {},
+  ): Promise<SessionMetadata> {
     // Ensure user is authenticated before making the request
     try {
       const response = await firstValueFrom(
-        this.http.get<SessionMetadata>(
-          `${this.baseUrl()}/${sessionId}/metadata`
-        )
+        this.http.get<SessionMetadata>(`${this.baseUrl()}/${sessionId}/metadata`, {
+          context: new HttpContext().set(SUPPRESS_ERROR_TOAST, options.quiet ?? false),
+        })
       );
 
       return response;
