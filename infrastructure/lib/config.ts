@@ -81,6 +81,7 @@ export interface AppConfig {
   userGrants: UserGrantsConfig;
   sessionPrewarm: SessionPrewarmConfig;
   clientTurnTiming: ClientTurnTimingConfig;
+  ttftProbe: TtftProbeConfig;
   memoryLint: MemoryLintConfig;
   conversationIndex: ConversationIndexConfig;
   conversationSearch: ConversationSearchConfig;
@@ -467,6 +468,20 @@ export interface SessionPrewarmConfig {
  */
 export interface ClientTurnTimingConfig {
   enabled: boolean;
+}
+
+/**
+ * Scheduled time-to-first-token probe (docs/specs/turn-path-ttft.md §6E). Not a
+ * feature flag: operational configuration. Enabled when CDK_TTFT_PROBE_USER_ID
+ * names a user (Cognito sub) with an active headless grant; the probe acts as
+ * that user, hourly, and its turns count against their quota. Unset (the
+ * default) leaves the schedule DISABLED and creates no alarm.
+ * CDK_TTFT_PROBE_MODEL_ID pins the model; unset means the user's default, which
+ * moves the baseline whenever the default changes.
+ */
+export interface TtftProbeConfig {
+  userId: string;
+  modelId: string;
 }
 
 /** What the project-memory content lint does with a finding. */
@@ -1353,6 +1368,11 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_CLIENT_TURN_TIMING_ENABLED
         ? process.env.CDK_CLIENT_TURN_TIMING_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('clientTurnTiming')?.enabled ?? false,
+    },
+    ttftProbe: {
+      // Configuration, not a flag: unset workflow variables arrive as "".
+      userId: (process.env.CDK_TTFT_PROBE_USER_ID || scope.node.tryGetContext('ttftProbe')?.userId || '').trim(),
+      modelId: (process.env.CDK_TTFT_PROBE_MODEL_ID || scope.node.tryGetContext('ttftProbe')?.modelId || '').trim(),
     },
     // Project-memory content lint: configuration of Shared Projects, not a flag.
     // The workflow forwards an EMPTY STRING when a variable is unset, which falls

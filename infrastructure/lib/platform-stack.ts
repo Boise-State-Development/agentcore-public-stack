@@ -95,6 +95,7 @@ import { LambdaAlarmsConstruct } from './constructs/observability/lambda-alarms-
 import { EcsServiceAlarmsConstruct } from './constructs/observability/ecs-service-alarms-construct';
 import { PromptCacheObservabilityConstruct } from './constructs/observability/prompt-cache-observability-construct';
 import { TurnLatencyObservabilityConstruct } from './constructs/observability/turn-latency-observability-construct';
+import { TtftProbeConstruct } from './constructs/observability/ttft-probe-construct';
 
 // Fine-tuning (data half lives in Platform)
 import { FineTuningDataConstruct } from './constructs/fine-tuning/fine-tuning-data-construct';
@@ -1027,12 +1028,25 @@ export class PlatformStack extends cdk.Stack {
     // retention is deleted by the same cascade as a user's delete. Report-only
     // until config.conversationRetentionPruneArmed; disabled when
     // config.conversationRetentionPrunesSessions is false.
-    new SessionRetentionPruneConstruct(this, 'SessionRetentionPrune', {
+    const sessionRetentionPrune = new SessionRetentionPruneConstruct(this, 'SessionRetentionPrune', {
       config: this._config,
       vpc: this.vpc,
       cluster: refs.ecsCluster,
       taskDefinition: appApi.taskDefinition,
       securityGroup: appApi.securityGroup,
+    });
+
+    // Hourly time-to-first-token probe on the same task definition, run by the
+    // pruner's schedule role (identical grants; no new role or policy). DISABLED
+    // until config.ttftProbe.userId names a probe user.
+    new TtftProbeConstruct(this, 'TtftProbe', {
+      config: this._config,
+      vpc: this.vpc,
+      cluster: refs.ecsCluster,
+      taskDefinition: appApi.taskDefinition,
+      securityGroup: appApi.securityGroup,
+      scheduleRole: sessionRetentionPrune.role,
+      alarmTopic: this.alarmTopic,
     });
 
     // After AppApiServiceConstruct: these bind to its target group and service.

@@ -275,6 +275,13 @@ jobs:
       # `CDK_CLIENT_TURN_TIMING_ENABLED` to "true" in an environment to turn it on
       # there. app-api only. The SPA's matching switch is `features.clientTurnTiming`.
       CDK_CLIENT_TURN_TIMING_ENABLED: ${{ vars.CDK_CLIENT_TURN_TIMING_ENABLED }}
+      # Scheduled time-to-first-token probe (docs/specs/turn-path-ttft.md §6E).
+      # Configuration, not a flag: set `CDK_TTFT_PROBE_USER_ID` to the Cognito sub
+      # of a user with an active headless grant to run a fixed turn hourly as that
+      # user; unset leaves the schedule disabled. `CDK_TTFT_PROBE_MODEL_ID` pins the
+      # model (recommended); unset uses that user's default.
+      CDK_TTFT_PROBE_USER_ID: ${{ vars.CDK_TTFT_PROBE_USER_ID }}
+      CDK_TTFT_PROBE_MODEL_ID: ${{ vars.CDK_TTFT_PROBE_MODEL_ID }}
       # Project-memory content lint (Shared Projects 2.7). Configuration, not a
       # flag: it applies only inside Projects. Unset (empty string) means the
       # defaults: `warn`, and no deployment patterns. `CDK_MEMORY_LINT_MODE` is

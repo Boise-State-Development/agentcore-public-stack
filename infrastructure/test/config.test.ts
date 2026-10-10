@@ -665,6 +665,30 @@ describe('RAG Ingestion Configuration', () => {
   });
 
   // ============================================================
+  // TTFT probe — configuration, enabled by naming a probe user
+  // ============================================================
+
+  describe('TTFT probe configuration', () => {
+    afterEach(() => {
+      delete process.env.CDK_TTFT_PROBE_USER_ID;
+      delete process.env.CDK_TTFT_PROBE_MODEL_ID;
+    });
+
+    test('unset and "" (unset GitHub variable) leave it unconfigured', () => {
+      expect(loadConfig(app).ttftProbe).toEqual({ userId: '', modelId: '' });
+      process.env.CDK_TTFT_PROBE_USER_ID = '';
+      process.env.CDK_TTFT_PROBE_MODEL_ID = '';
+      expect(loadConfig(app).ttftProbe).toEqual({ userId: '', modelId: '' });
+    });
+
+    test('reads and trims the user and model', () => {
+      process.env.CDK_TTFT_PROBE_USER_ID = ' probe-sub ';
+      process.env.CDK_TTFT_PROBE_MODEL_ID = 'us.anthropic.claude-haiku-4-5 ';
+      expect(loadConfig(app).ttftProbe).toEqual({ userId: 'probe-sub', modelId: 'us.anthropic.claude-haiku-4-5' });
+    });
+  });
+
+  // ============================================================
   // Client turn timing feature flag — opt-in while in development
   // ============================================================
 

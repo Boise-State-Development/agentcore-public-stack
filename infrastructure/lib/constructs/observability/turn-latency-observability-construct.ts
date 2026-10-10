@@ -169,10 +169,40 @@ export class TurnLatencyObservabilityConstruct extends Construct {
           client('ClientFirstTurnFirstTokenMs', 'p50', 'first turn (client) p50', DAY),
           client('ClientFollowUpFirstTokenMs', 'p50', 'follow-up (client) p50', DAY),
           client('FirstTokenMs', 'p50', 'server first token p50', DAY),
+          client('TtftProbeColdFirstTokenMs', 'p50', 'probe cold first turn p50', DAY),
         ],
         start: '-P30D',
         leftYAxis: { min: 0 },
         width: 12,
+        height: 6,
+      }),
+    );
+
+    // Row 0b — the scheduled probe (apis/app_api/telemetry/ttft_probe.py): one
+    // fixed turn an hour, as one user, so it moves only when the platform does.
+    // Empty until CDK_TTFT_PROBE_USER_ID is set. The baseline to alarm on.
+    const HOUR = cdk.Duration.hours(1);
+    this.dashboard.addWidgets(
+      new cloudwatch.GraphWidget({
+        title: 'Probe: fixed turn, hourly — cold, prewarmed and follow-up first token',
+        left: [
+          client('TtftProbeColdFirstTokenMs', 'Average', 'cold first turn', HOUR),
+          client('TtftProbeWarmedFirstTokenMs', 'Average', 'prewarmed first turn', HOUR),
+          client('TtftProbeFollowUpFirstTokenMs', 'Average', 'follow-up', HOUR),
+          client('TtftProbeWarmCallMs', 'Average', 'warm call (session start)', HOUR),
+        ],
+        start: '-P7D',
+        leftYAxis: { min: 0 },
+        width: 18,
+        height: 6,
+      }),
+      new cloudwatch.SingleValueWidget({
+        title: 'Probe runs vs failures (24 h)',
+        metrics: [
+          client('TtftProbeRuns', 'Sum', 'complete runs', cdk.Duration.days(1)),
+          client('TtftProbeFailures', 'Sum', 'failed runs', cdk.Duration.days(1)),
+        ],
+        width: 6,
         height: 6,
       }),
     );
