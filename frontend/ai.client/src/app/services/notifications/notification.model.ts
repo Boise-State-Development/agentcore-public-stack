@@ -15,7 +15,8 @@ export type NotificationKind =
   | 'project_task_shared'
   | 'project_proposal_pending'
   | 'project_proposal_decided'
-  | 'project_memory_maintenance';
+  | 'project_memory_maintenance'
+  | 'project_schedule_paused';
 
 export interface AppNotification {
   notificationId: string;
@@ -31,7 +32,8 @@ export interface AppNotification {
    * `role` for invitations, role changes and a member leaving (the role they had);
    * `shareId`, `title` and an optional `note` for a shared task;
    * `proposalId`, `slug`, and for a decision `decision` and an optional `note`, for a memory proposal;
-   * `runId`, `fileCount` and up to ten `slugs` for a maintenance run's proposals.
+   * `runId`, `fileCount` and up to ten `slugs` for a maintenance run's proposals;
+   * `scheduleId`, `label`, `reason` and `createdBy` (the creator's email) for a schedule that stopped.
    */
   payload: {
     role?: string;
@@ -44,6 +46,10 @@ export interface AppNotification {
     runId?: string;
     fileCount?: number;
     slugs?: string[];
+    scheduleId?: string;
+    label?: string;
+    reason?: string;
+    createdBy?: string;
   } & Record<string, unknown>;
   createdAt: string;
   readAt?: string | null;

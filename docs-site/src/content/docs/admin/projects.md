@@ -37,8 +37,9 @@ them on**. Two switches, one per side, and they should agree:
 
 - **Backend (the real gate):** set the GitHub environment variable
   `CDK_PROJECTS_ENABLED` to `true` and run the platform deploy. CDK passes
-  `PROJECTS_ENABLED=true` to app-api and the AgentCore Runtime. Unset or any
-  other value means off.
+  `PROJECTS_ENABLED=true` to app-api, the AgentCore Runtime and the
+  scheduled-runs dispatcher and worker. Unset or any other value means off.
+  Turning it off later pauses every project schedule at its next due time.
 - **Front end:** `features.projects` in the SPA's environment file for that
   build: `environment.development.ts` for the deployed dev site,
   `environment.production.ts` for prod, `environment.ts` for local `ng serve`.
@@ -67,7 +68,7 @@ While the backend switch is off:
 
 | Variable | Service | Default | Purpose |
 | --- | --- | --- | --- |
-| `PROJECTS_ENABLED` | app-api, inference-api | off | Only `true` enables (see above). Set by CDK from `CDK_PROJECTS_ENABLED` |
+| `PROJECTS_ENABLED` | app-api, inference-api, scheduled-runs dispatcher and worker | off | Only `true` enables (see above). Set by CDK from `CDK_PROJECTS_ENABLED` |
 | `DYNAMODB_PROJECTS_TABLE_NAME` | app-api, inference-api | — | The `{prefix}-projects` table. Set by CDK |
 | `DYNAMODB_AUDIT_LOG_TABLE_NAME` | app-api | — | Where the Activity trail is written. Without it, nothing is recorded |
 | `PROJECTS_MAX_MEMBERS` | app-api | `200` | Members per project, besides the owner. Invitations past the cap are reported, not added |
@@ -156,9 +157,9 @@ the ordinary memory-space export for any item-format space.
 
 | Store | What |
 | --- | --- |
-| `{prefix}-projects` | Project, member and shared-task rows, monthly cost rollups (`COST#{YYYY-MM}` and one per member), and every user's notification inbox (`INBOX#{email}`, 90-day TTL) |
+| `{prefix}-projects` | Project, member and shared-task rows, schedule pointers (`SCHEDULE#{id}`) and run rows (`SCHEDULE_RUN#…`, 90-day TTL), monthly cost rollups (`COST#{YYYY-MM}` and one per member), and every user's notification inbox (`INBOX#{email}`, 90-day TTL) |
 | `{prefix}-rag-assistants` | Each project's assistant: a hidden agent (`kind = "project"`) that never appears in agent lists or the marketplace. Its versions are the project's settings history |
 | The assistant's knowledge base | The project's files |
-| `{prefix}-sessions-metadata` | Tasks are ordinary sessions with `preferences.projectId`, indexed by `ProjectSessionIndex` |
+| `{prefix}-sessions-metadata` | Tasks are ordinary sessions with `preferences.projectId`, indexed by `ProjectSessionIndex`. A project schedule is a scheduled prompt in its creator's partition (`USER#{id}` / `SCHEDPROMPT#{id}`) with `projectId` |
 | `{prefix}-shared-conversations` | Shares with `access_level = "project"` |
 | `{prefix}-audit-log` | The project trail, `AUDIT#project#{id}` |

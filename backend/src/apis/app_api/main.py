@@ -225,6 +225,7 @@ from apis.app_api.projects.maintenance_routes import router as project_memory_ma
 from apis.app_api.projects.memory_routes import files_router as project_memory_files_router
 from apis.app_api.projects.memory_routes import router as project_memory_router
 from apis.app_api.projects.output_routes import router as project_outputs_router
+from apis.app_api.projects.schedule_routes import router as project_schedules_router
 from apis.app_api.projects.routes import router as projects_router
 from apis.app_api.tools.routes import router as tools_router
 from apis.app_api.files.routes import router as files_router
@@ -277,6 +278,7 @@ app.include_router(project_memory_router)  # Proposals to a project's shared mem
 app.include_router(project_memory_files_router)  # Memory items: pins, provenance, archive (2.5a-2)
 app.include_router(project_memory_maintenance_router)  # Maintenance runs that propose compaction (2.6)
 app.include_router(project_outputs_router)  # Artifacts shared with a project (3.3)
+app.include_router(project_schedules_router)  # /projects/{id}/schedules (3.2); 404 unless PROJECTS_ENABLED and SCHEDULED_RUNS_ENABLED
 app.include_router(notifications_router)  # In-app inbox (PR-1.7); first producer is Shared Projects
 app.include_router(memory_router)  # AgentCore Memory access endpoints
 app.include_router(tools_router)  # Tool discovery and permissions
