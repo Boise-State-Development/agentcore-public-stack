@@ -34,4 +34,10 @@ export interface FeatureFlags {
    * Backend: USER_GRANTS_ENABLED (app-api; `/admin/user-grants` 404s while off).
    */
   userGrants: boolean;
+  /**
+   * Session prewarm: opening a conversation (the page load that focuses the
+   * composer) starts its AgentCore Runtime microVM ahead of the first send.
+   * Backend: SESSION_PREWARM_ENABLED (app-api; `POST /chat/prewarm` 404s while off).
+   */
+  sessionPrewarm: boolean;
 }

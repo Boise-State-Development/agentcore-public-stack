@@ -7,6 +7,7 @@ import { FailedSendService } from './failed-send.service';
 import { MessageMapService } from '../session/message-map.service';
 import { MessageFeedbackService } from '../session/message-feedback.service';
 import { SessionService } from '../session/session.service';
+import { SessionPrewarmService } from '../session/session-prewarm.service';
 import { UserService } from '../../../auth/user.service';
 import { ModelService } from '../model/model.service';
 import { ToolService } from '../../../services/tool/tool.service';
@@ -58,6 +59,7 @@ export class ChatRequestService implements OnDestroy {
   private messageMapService = inject(MessageMapService);
   private messageFeedbackService = inject(MessageFeedbackService);
   private sessionService = inject(SessionService);
+  private sessionPrewarm = inject(SessionPrewarmService);
   private userService = inject(UserService);
   private modelService = inject(ModelService);
   private toolService = inject(ToolService);
@@ -107,7 +109,10 @@ export class ChatRequestService implements OnDestroy {
     // Ensure conversation exists and get its ID
     // Update URL to reflect current conversation
     const isNewSession = !sessionId;
-    sessionId = sessionId || uuidv4();
+    // A new conversation starts on the id the page warmed when it opened, so
+    // this turn lands on the microVM that is already starting (session
+    // prewarm). Null while the feature is off: mint one, as before.
+    sessionId = sessionId || this.sessionPrewarm.claimNewConversationId() || uuidv4();
 
     // Any new send (including a "Continue") retires the previous turn's
     // max_tokens "Continue" affordance and any interrupted-turn chip
