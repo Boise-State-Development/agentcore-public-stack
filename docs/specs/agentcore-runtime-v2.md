@@ -171,6 +171,19 @@ The billing basis inverts, so conclusions from V1 don't carry over:
 
 ## 5a. Phase 2: prewarm the session when the user engages (after the dev A/B)
 
+**Status (2026-10-10): built, behind `SESSION_PREWARM_ENABLED` / `features.sessionPrewarm` (in development, default off).** Two choices differ from the plan below:
+
+- **Trigger: page load, while the tab is visible.** The composer takes focus as the conversation page loads, so "on focus" and "on load" are the same moment (decided with the developer driving this, 2026-10-10). The cost worry behind "never on page load", tabs left open, is handled by visibility instead: a tab loaded in the background warms when the user first looks at it, and returning to an open tab after 10 minutes warms it again. Each conversation warms at most once per 10 minutes (SPA and app-api), and app-api caps a user at 10 warms a minute.
+- **Existing conversations are warmed too** (item 4), whatever their last activity, because the SPA does not know whether the microVM was reaped. A conversation this tab just created is skipped: its first turn already started the microVM.
+
+What was built:
+- **Runtime:** `InvocationRequest.warm`. The `/invocations` handler returns `{"warmed": true}` as its first statement, before the ownership read: no rows, no lease, no quota, no model. No flag and no environment variable on the Runtime, so the V2 byte budget is untouched.
+- **app-api:** `POST /chat/prewarm` (`chat/proxy_routes.py`), cookie auth. Answers 202 immediately with `status` (`accepted`, `recently_warmed`, `rate_limited`, or `skipped` when runtime-session affinity is off) and forwards in a background task with the same affinity header the first turn will carry. It logs `prewarm forwarded -> <status> in <ms>`, which is the start time a user no longer waits for.
+- **SPA:** `SessionPrewarmService`. A new conversation's id is minted when the page warms it and claimed by the first send (`chat-request.service.ts`), so the send registers the conversation exactly as before and lands on the warmed microVM. An attach-first conversation adopts the same id for its staged uploads.
+
+Measure it client-side, as below: first token on a new conversation's first turn, with the page open a few seconds before sending, flag on against off.
+
+
 The blog's tip is to start the session as soon as the user engages, for example when they open a chat or begin typing, instead of waiting for submit. That hides the start time behind the time they spend typing. **V2 does not do this for us.** A microVM starts only when an invocation arrives with a runtime session ID. We pin that ID per conversation (`runtime_session_id_for` in `apis/shared/harness/runner.py`, a hash of the user and the conversation's session ID). So today **every new conversation's first turn is a cold start**, and nothing happens before the user sends.
 
 **Why it waits for V2.** A prewarm for a chat the user never sends leaves a microVM idle for `idleRuntimeSessionTimeout` (900 s).
