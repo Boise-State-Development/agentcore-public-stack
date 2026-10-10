@@ -113,6 +113,8 @@ export class ChatRequestService implements OnDestroy {
     // this turn lands on the microVM that is already starting (session
     // prewarm). Null while the feature is off: mint one, as before.
     sessionId = sessionId || this.sessionPrewarm.claimNewConversationId() || uuidv4();
+    // This turn starts the microVM itself; typing a follow-up need not warm it.
+    this.sessionPrewarm.noteTurn(sessionId);
 
     // Any new send (including a "Continue") retires the previous turn's
     // max_tokens "Continue" affordance and any interrupted-turn chip

@@ -150,6 +150,15 @@ describe('ChatRequestService', () => {
       expect(sent.session_id).toMatch(/^[0-9a-f-]{36}$/);
     });
 
+    it('records every turn as a warm, so typing a follow-up sends nothing', async () => {
+      const prewarm = TestBed.inject(SessionPrewarmService);
+      const noted = vi.spyOn(prewarm, 'noteTurn');
+
+      await service.submitChatRequest('Hello', 'session1');
+
+      expect(noted).toHaveBeenCalledWith('session1');
+    });
+
     it('an existing conversation never claims the warmed id', async () => {
       const prewarm = TestBed.inject(SessionPrewarmService);
       const claim = vi.spyOn(prewarm, 'claimNewConversationId');

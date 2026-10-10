@@ -35,8 +35,8 @@ export interface FeatureFlags {
    */
   userGrants: boolean;
   /**
-   * Session prewarm: opening a conversation (the page load that focuses the
-   * composer) starts its AgentCore Runtime microVM ahead of the first send.
+   * Session prewarm: a new conversation's page load, or the first keystroke in an
+   * existing one, starts its AgentCore Runtime microVM ahead of the send.
    * Backend: SESSION_PREWARM_ENABLED (app-api; `POST /chat/prewarm` 404s while off).
    */
   sessionPrewarm: boolean;

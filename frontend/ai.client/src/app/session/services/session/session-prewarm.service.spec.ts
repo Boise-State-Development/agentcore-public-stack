@@ -55,7 +55,7 @@ describe('SessionPrewarmService', () => {
     vi.useRealTimers();
   });
 
-  describe('existing conversations', () => {
+  describe('warming now (the new-conversation page)', () => {
     it('posts the conversation id, with error toasts suppressed', () => {
       const service = setup();
       service.warm('conv-1');
@@ -89,6 +89,85 @@ describe('SessionPrewarmService', () => {
       const service = setup();
       service.warm(null);
       service.warm('');
+      httpMock.expectNone(URL);
+    });
+  });
+
+  describe('existing conversations: first input, not load', () => {
+    it('arming sends nothing; the first input warms the conversation', () => {
+      const service = setup();
+      service.armOnTyping('conv-1');
+      httpMock.expectNone(URL);
+
+      service.noteTyping();
+      const req = httpMock.expectOne(URL);
+      expect(req.request.body).toEqual({ session_id: 'conv-1' });
+      req.flush({});
+    });
+
+    it('every later keystroke in the window is free', () => {
+      const service = setup();
+      service.armOnTyping('conv-1');
+      service.noteTyping();
+      httpMock.expectOne(URL).flush({});
+      service.noteTyping();
+      service.noteTyping();
+      httpMock.expectNone(URL);
+    });
+
+    it('typing warms again after the window, keeping a long reply warm', () => {
+      vi.useFakeTimers();
+      const service = setup();
+      service.armOnTyping('conv-1');
+      service.noteTyping();
+      httpMock.expectOne(URL).flush({});
+
+      vi.advanceTimersByTime(SessionPrewarmService.REWARM_AFTER_MS + 1);
+      service.noteTyping();
+      httpMock.expectOne(URL).flush({});
+    });
+
+    it('a real turn counts as a warm, so a follow-up sends nothing', () => {
+      const service = setup();
+      service.noteTurn('conv-1');
+      service.armOnTyping('conv-1');
+      service.noteTyping();
+      httpMock.expectNone(URL);
+    });
+
+    it('typing on a page that armed nothing never warms', () => {
+      const service = setup();
+      service.noteTyping();
+      httpMock.expectNone(URL);
+    });
+
+    it('leaving the conversation disarms it', () => {
+      const service = setup();
+      service.armOnTyping('conv-1');
+      service.clearCurrent();
+      service.noteTyping();
+      httpMock.expectNone(URL);
+    });
+
+    it('an armed conversation is not re-warmed by the tab becoming visible', () => {
+      vi.useFakeTimers();
+      const service = setup();
+      service.warmNewConversation();
+      httpMock.expectOne(URL).flush({});
+      service.armOnTyping('conv-1');
+
+      vi.advanceTimersByTime(SessionPrewarmService.REWARM_AFTER_MS + 1);
+      doc.becomes('hidden');
+      doc.becomes('visible');
+      httpMock.expectNone(URL);
+    });
+
+    it('moving to a new conversation disarms the old one', () => {
+      const service = setup();
+      service.armOnTyping('conv-1');
+      service.warmNewConversation();
+      httpMock.expectOne(URL).flush({});
+      service.noteTyping();
       httpMock.expectNone(URL);
     });
   });
@@ -166,6 +245,8 @@ describe('SessionPrewarmService', () => {
       const service = setup({ enabled: false });
       service.warm('conv-1');
       service.warmNewConversation();
+      service.armOnTyping('conv-2');
+      service.noteTyping();
       httpMock.expectNone(URL);
       expect(service.claimNewConversationId()).toBeNull();
     });

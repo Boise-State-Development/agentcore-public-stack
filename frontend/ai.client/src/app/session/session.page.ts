@@ -456,11 +456,12 @@ export class ConversationPage implements OnDestroy {
       }
 
       // Session prewarm: start the Runtime microVM this conversation's next
-      // turn will use while the user reads and types (the composer takes focus
-      // as the page loads). A new conversation warms the id its first send
-      // will claim, or the staged id its attachments are filed under; an
-      // existing one warms its own id. A conversation this tab just created is
-      // already warm from its first turn. Fire-and-forget, off unless
+      // turn will use while the user reads and types. A new conversation warms
+      // on load (the id its first send will claim, or the staged id its
+      // attachments are filed under): opening it is almost always intent to
+      // send. An existing one warms on the composer's first input, since
+      // opening it is often just reading. A conversation this tab just created
+      // is already warm from its first turn. Fire-and-forget, off unless
       // `features.sessionPrewarm`; see SessionPrewarmService.
       if (!id) {
         const staged = this.stagedSessionId();
@@ -470,7 +471,7 @@ export class ConversationPage implements OnDestroy {
           this.sessionPrewarm.warmNewConversation();
         }
       } else if (!this.sessionService.isNewSession(id)) {
-        this.sessionPrewarm.warm(id);
+        this.sessionPrewarm.armOnTyping(id);
       } else {
         this.sessionPrewarm.clearCurrent();
       }

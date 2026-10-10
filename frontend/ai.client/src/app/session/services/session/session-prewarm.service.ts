@@ -7,28 +7,36 @@ import { ConfigService } from '../../../services/config.service';
 import { FEATURES } from '../../../services/features';
 
 /**
- * Starts a conversation's AgentCore Runtime session before its first send.
+ * Starts a conversation's AgentCore Runtime session before its next send.
  *
  * The Runtime starts a conversation's microVM only when an invocation arrives
- * for it, so the first send used to pay that start (a V2 snapshot restore plus
- * first-turn setup). Opening a conversation now asks app-api
+ * for it, so the first send used to pay that start (session creation and a V2
+ * snapshot restore, about 1.5–2 s). This service asks app-api
  * (`POST /chat/prewarm`) to send a no-op warm invocation pinned to the same
- * microVM the first turn will use, so the start overlaps the user reading and
+ * microVM the next turn will use, so the start overlaps the user reading and
  * typing. See docs/specs/agentcore-runtime-v2.md §5a.
  *
- * - **When:** as the conversation page loads, which is when the composer takes
- *   focus, but only while the tab is visible. A tab opened in the background
- *   warms when the user switches to it, not before.
- * - **How often:** at most once per conversation per {@link REWARM_AFTER_MS},
- *   inside the Runtime's 900 s idle timeout; returning to a tab after that
- *   warms it again. app-api applies the same window and a per-user rate limit.
- * - **Never in the way:** fire-and-forget, errors swallowed without a toast.
- *   A send never waits for a warm call; one that lands mid-warm just shares the
- *   microVM while it starts.
- * - **A new conversation:** the warmed id is minted here and handed to the
- *   first send through {@link claimNewConversationId}, so the turn lands on the
- *   microVM that was warmed. While the flag is off nothing is minted and the
- *   send mints its own id, exactly as before.
+ * Two triggers, matched to how strong each page's intent to send is:
+ * - **A new conversation warms on page load** ({@link warmNewConversation} /
+ *   {@link warm}). Opening it is almost always intent to send, and it is where
+ *   paste-then-send and prompt-starter sends happen, which a keystroke trigger
+ *   would miss or warm too late. Only while the tab is visible; a background
+ *   tab warms when the user first looks at it, and again on return after
+ *   {@link REWARM_AFTER_MS}.
+ * - **An existing conversation warms on the composer's first input**
+ *   ({@link armOnTyping} then {@link noteTyping}). Opening one is often just
+ *   reading, and a reply takes long enough to type that the warm still
+ *   finishes first.
+ *
+ * Common to both:
+ * - At most once per conversation per {@link REWARM_AFTER_MS}, inside the
+ *   Runtime's 900 s idle timeout; a real turn counts ({@link noteTurn}).
+ *   app-api applies the same window and a per-user rate limit.
+ * - Fire-and-forget, errors swallowed without a toast. A send never waits for
+ *   a warm call; one that lands mid-warm shares the microVM while it starts.
+ * - A new conversation's id is minted here and handed to its first send
+ *   through {@link claimNewConversationId}, so the turn lands on the warmed
+ *   microVM. While the flag is off nothing is minted or sent.
  */
 @Injectable({ providedIn: 'root' })
 export class SessionPrewarmService {
@@ -43,8 +51,10 @@ export class SessionPrewarmService {
 
   private readonly lastWarmedAt = new Map<string, number>();
   private pendingNewConversationId: string | null = null;
-  /** The conversation the visible page shows; re-warmed when the tab comes back. */
+  /** The new conversation the visible page shows; re-warmed when the tab comes back. */
   private currentId: string | null = null;
+  /** The existing conversation the page shows, warmed on the composer's first input. */
+  private armedId: string | null = null;
   private listening = false;
 
   /** Whether this build warms sessions at all. */
@@ -75,11 +85,12 @@ export class SessionPrewarmService {
     return id;
   }
 
-  /** Warm an existing (or staged) conversation the user just opened. */
+  /** Warm a new (staged) conversation now: the page-load trigger. */
   warm(sessionId: string | null | undefined): void {
     if (!this.enabled || !sessionId) {
       return;
     }
+    this.armedId = null;
     this.currentId = sessionId;
     this.listenForVisibility();
     if (this.document.visibilityState !== 'visible') {
@@ -88,9 +99,40 @@ export class SessionPrewarmService {
     this.send(sessionId);
   }
 
-  /** Forget the page's conversation, so returning to the tab warms nothing. */
+  /**
+   * Arm an existing conversation to warm on the composer's first input,
+   * instead of on load: opening one is often just reading.
+   */
+  armOnTyping(sessionId: string | null | undefined): void {
+    if (!this.enabled || !sessionId) {
+      return;
+    }
+    this.currentId = null;
+    this.armedId = sessionId;
+  }
+
+  /**
+   * The user typed or pasted into the composer. Warms the armed conversation,
+   * once per window; a no-op on any page that armed nothing, so composers
+   * outside the conversation page never warm.
+   */
+  noteTyping(): void {
+    if (this.enabled && this.armedId) {
+      this.send(this.armedId);
+    }
+  }
+
+  /** A real turn started on this conversation, which starts its microVM too. */
+  noteTurn(sessionId: string | null | undefined): void {
+    if (sessionId) {
+      this.lastWarmedAt.set(sessionId, Date.now());
+    }
+  }
+
+  /** Forget the page's conversation, so neither returning nor typing warms it. */
   clearCurrent(): void {
     this.currentId = null;
+    this.armedId = null;
   }
 
   private send(sessionId: string): void {
