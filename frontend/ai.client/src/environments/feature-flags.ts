@@ -40,4 +40,10 @@ export interface FeatureFlags {
    * Backend: SESSION_PREWARM_ENABLED (app-api; `POST /chat/prewarm` 404s while off).
    */
   sessionPrewarm: boolean;
+  /**
+   * Client-measured time to first token: the SPA reports each turn's
+   * send-to-first-token. No UI. Backend: CLIENT_TURN_TIMING_ENABLED (app-api;
+   * `POST /telemetry/turn-timing` 404s while off).
+   */
+  clientTurnTiming: boolean;
 }

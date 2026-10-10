@@ -50,6 +50,8 @@ export class SessionPrewarmService {
   private readonly isBrowser = isPlatformBrowser(inject(PLATFORM_ID));
 
   private readonly lastWarmedAt = new Map<string, number>();
+  /** Real warm calls only (not turns), for the turn-timing report. */
+  private readonly prewarmedAt = new Map<string, number>();
   private pendingNewConversationId: string | null = null;
   /** The new conversation the visible page shows; re-warmed when the tab comes back. */
   private currentId: string | null = null;
@@ -122,6 +124,16 @@ export class SessionPrewarmService {
     }
   }
 
+  /**
+   * Milliseconds since this tab sent a warm call for the conversation, or null
+   * when it never did. Read by the turn-timing report to split warmed from
+   * cold first turns; turns themselves do not count here.
+   */
+  warmAgeMs(sessionId: string | null | undefined): number | null {
+    const at = sessionId ? this.prewarmedAt.get(sessionId) : undefined;
+    return at === undefined ? null : Math.max(0, Date.now() - at);
+  }
+
   /** A real turn started on this conversation, which starts its microVM too. */
   noteTurn(sessionId: string | null | undefined): void {
     if (sessionId) {
@@ -142,6 +154,7 @@ export class SessionPrewarmService {
       return;
     }
     this.lastWarmedAt.set(sessionId, now);
+    this.prewarmedAt.set(sessionId, now);
     this.http
       .post(
         `${this.config.appApiUrl()}/chat/prewarm`,

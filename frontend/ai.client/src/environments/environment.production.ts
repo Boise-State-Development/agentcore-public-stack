@@ -20,5 +20,6 @@ export const environment = {
         conversationSearch: true,
         userGrants: false,
         sessionPrewarm: false,
+        clientTurnTiming: false,
     } satisfies FeatureFlags,
 };
