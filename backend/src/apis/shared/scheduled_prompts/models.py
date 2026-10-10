@@ -83,5 +83,12 @@ class ScheduledPrompt(BaseModel):
         None, alias="enabledTools", description="Tool ids snapshot at creation time; None means 'all RBAC-allowed at creation'"
     )
     deliver_email: bool = Field(False, alias="deliverEmail", description="v1.5 connector-email opt-in; inert in B1")
+    # Shared Projects 3.2: a schedule that runs in a project. It still lives in
+    # its creator's partition and runs as them (the headless grant is theirs),
+    # on the project's harness (``assistant_id``); the project keeps a
+    # ``SCHEDULE#`` pointer. ``owner_email`` is what membership is keyed on, so
+    # the dispatcher can check it without a directory lookup.
+    project_id: Optional[str] = Field(None, alias="projectId", description="The project this schedule runs in")
+    owner_email: Optional[str] = Field(None, alias="ownerEmail", description="The creator's email, for the membership check")
     created_at: str = Field(..., alias="createdAt", description="ISO 8601 timestamp of creation")
     updated_at: str = Field(..., alias="updatedAt", description="ISO 8601 timestamp of last update")

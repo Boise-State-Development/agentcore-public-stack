@@ -1062,6 +1062,7 @@ export class PlatformStack extends cdk.Stack {
       config: this._config,
       sessionsMetadataTable: this.sessionsMetadataTable,
       bffSessionsTable: this.bffSessionsTable,
+      projectsTable: this.projectsTable,
       bffAppClient: this.bffAppClient,
       bffAppClientSecret: this.bffAppClientSecret,
       workloadIdentityName: this.platformWorkloadIdentity.name,

@@ -27,6 +27,10 @@ export interface ScheduledRunsConstructProps {
    * (PK=HEADLESS-GRANT#{id}) live here behind the sparse
    * HeadlessGrantUserIndex GSI. */
   bffSessionsTable: dynamodb.ITable;
+  /** Projects table — a schedule that runs in a project (Shared Projects 3.2):
+   * the dispatcher reads the project and the creator's member row before each
+   * run, and both Lambdas write the project's run rows and pause notices. */
+  projectsTable: dynamodb.ITable;
   /** BFF Cognito app client — the worker mints a per-owner access token
    * via REFRESH_TOKEN_AUTH against this (confidential) client. */
   bffAppClient: cognito.IUserPoolClient;
@@ -90,6 +94,7 @@ export class ScheduledRunsConstruct extends Construct {
       config,
       sessionsMetadataTable,
       bffSessionsTable,
+      projectsTable,
       bffAppClient,
       bffAppClientSecret,
       workloadIdentityName,
@@ -122,6 +127,8 @@ export class ScheduledRunsConstruct extends Construct {
       AGENTCORE_RUNTIME_WORKLOAD_NAME: workloadIdentityName,
       AGENTCORE_LOCAL_OAUTH_CALLBACK_URL: oauthCallbackUrl,
       SCHEDULED_RUNS_ENABLED: config.scheduledRuns.enabled ? 'true' : 'false',
+      DYNAMODB_PROJECTS_TABLE_NAME: projectsTable.tableName,
+      PROJECTS_ENABLED: config.projects.enabled ? 'true' : 'false',
     };
 
     const workerLogGroup = new logs.LogGroup(this, 'ScheduledRunsWorkerLogGroup', {
@@ -169,6 +176,8 @@ export class ScheduledRunsConstruct extends Construct {
         DYNAMODB_SESSIONS_METADATA_TABLE_NAME: sessionsMetadataTable.tableName,
         SCHEDULED_RUNS_ENABLED: config.scheduledRuns.enabled ? 'true' : 'false',
         SCHEDULED_RUNS_WORKER_FUNCTION_NAME: this.workerLambda.functionName,
+        DYNAMODB_PROJECTS_TABLE_NAME: projectsTable.tableName,
+        PROJECTS_ENABLED: config.projects.enabled ? 'true' : 'false',
       },
       description:
         'Scheduled-runs dispatcher - sweeps due schedules on an EventBridge tick, applies the runaway guard, invokes the worker',
@@ -178,6 +187,10 @@ export class ScheduledRunsConstruct extends Construct {
     // the sessions-metadata table (list_due_schedules, rearm_schedule,
     // set_schedule_state).
     sessionsMetadataTable.grantReadWriteData(this.dispatcherLambda);
+    // A project schedule's standing (Shared Projects 3.2): the project and the
+    // creator's member row are read (and the member's userId back-filled, as any
+    // role check does), and a pause writes a run row and the inbox notices.
+    projectsTable.grantReadWriteData(this.dispatcherLambda);
     this.workerLambda.grantInvoke(this.dispatcherLambda);
 
     // Worker: schedule bookkeeping + run-audit trail + delivered session
@@ -185,6 +198,8 @@ export class ScheduledRunsConstruct extends Construct {
     // RunAuditRecorder and the harness's ensure_session_metadata_exists /
     // update_session_title both write here too).
     sessionsMetadataTable.grantReadWriteData(this.workerLambda);
+    // A project schedule's run rows, and the notice when the worker pauses one.
+    projectsTable.grantReadWriteData(this.workerLambda);
 
     // Worker: resolve + touch the caller's headless-grant record
     // (HeadlessGrantService — get_active_grant / persist_rotated_refresh_token
