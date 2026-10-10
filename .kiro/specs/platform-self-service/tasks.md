@@ -11,8 +11,8 @@ full suite.
 
 Re-ordered at the user's request: **finish the "about-the-user" capability as
 one complete, shippable slice, push it, then add the knowledge skill as a
-separate skill.** Progress so far, all committed on `feat/system-tool-tier`
-(not pushed):
+separate skill.** Progress so far, built on `feat/system-tool-tier`
+(merged as #1279):
 
 - **DONE — Phase 1** system/hidden tool tier.
 - **DONE — Phase 2** identity binding (closure capture; see note below).
@@ -22,7 +22,12 @@ separate skill.** Progress so far, all committed on `feat/system-tool-tier`
   original plan, at the user's request.
 - **DONE — Phase 6** confirmed write: `set_default_model` (two-step, accessibility-
   checked, closure-bound identity).
-- **NEXT — push** the branch / open the PR.
+- **SHIPPED** in 1.25.0 (2026-09-25): #1279 (tier + tools), #1314 (infra flag
+  `CDK_PLATFORM_SELF_SERVICE_ENABLED`, on in dev only), #1325 (runtime write
+  grant on user-settings for `set_default_model`).
+- **OPEN — verify in dev:** 1.3 (hidden tools out of the settings panel — the
+  backend passes `hidden` through but nothing filters on it yet) and 1.4
+  (no streaming `tool_use` test yet).
 - **DEFERRED — knowledge layer** ("where's the page / how does X work"): to be
   built AFTER the push as a *separate* skill — either a progressive skill or a
   CI-generated KB doc (decision open). This replaces the earlier "Phase 5 wrap
@@ -35,13 +40,13 @@ separate skill.** Progress so far, all committed on `feat/system-tool-tier`
 
 ## Phase 1 — System / hidden tool tier (foundation)
 
-- [ ] 1.1 Add `system: bool = False` and `hidden: bool = False` to
+- [x] 1.1 Add `system: bool = False` and `hidden: bool = False` to
   `ToolDefinition` and `ToolMetadata`, with `from_dict` reading absent keys as
   false (mirror the existing `alwaysOn` migration).
   `backend/src/apis/shared/tools/models.py`,
   `backend/src/agents/main_agent/tools/tool_catalog.py`. _(Req 1.5, 1.6)_
 
-- [ ] 1.2 Include `system` tool ids in the effective set for RBAC-granted users,
+- [x] 1.2 Include `system` tool ids in the effective set for RBAC-granted users,
   independent of the admin `always_on` table and `ADMIN_ALWAYS_ON_TOOLS_ENABLED`.
   Extend `resolve_always_on_tool_ids` or add `resolve_system_tool_ids` +
   freshness snapshot.
@@ -59,7 +64,7 @@ separate skill.** Progress so far, all committed on `feat/system-tool-tier`
   system/hidden tool (no code change expected; add a test that asserts it).
   `backend/src/agents/main_agent/streaming/stream_processor.py`. _(Req 1.4)_
 
-- [ ] 1.5 Tests: defaults false; system tool survives a user "disable"
+- [x] 1.5 Tests: defaults false; system tool survives a user "disable"
   preference; hidden excluded from toggle list but present in label payload.
 
 ---
@@ -202,18 +207,18 @@ separate skill.** Progress so far, all committed on `feat/system-tool-tier`
 
 ## Phase 6 — First confirmed write: `set_default_model`
 
-- [ ] 6.1 `set_default_model(model)` local tool (system, visible-but-locked):
+- [x] 6.1 `set_default_model(model)` local tool (system, visible-but-locked):
   validate the model is in the user's allowed set, then write only the invoking
   user's setting. _(Req 4.5)_
 
-- [ ] 6.2 Confirmation flow: the agent states the exact change and requires
+- [x] 6.2 Confirmation flow: the agent states the exact change and requires
   explicit user confirmation before the write; KB/untrusted content cannot
   auto-trigger it. _(Req 6.1, 6.2)_
 
-- [ ] 6.3 Post-write, the agent confirms what changed and that it applied only
+- [x] 6.3 Post-write, the agent confirms what changed and that it applied only
   to the invoking user. _(Req 6.3)_
 
-- [ ] 6.4 Tests: rejects a disallowed model; does not write without confirmation;
+- [x] 6.4 Tests: rejects a disallowed model; does not write without confirmation;
   writes scoped to context user only.
 
 ---
