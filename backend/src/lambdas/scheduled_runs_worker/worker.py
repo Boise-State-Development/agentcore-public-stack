@@ -30,6 +30,11 @@ Failure handling (brief §2, "Worker" bullet):
     consecutive_failures >= 5).
   - completed -> record_run_result(status="completed", session_id=...),
     which resets the streak to 0.
+
+A schedule that runs in a project (Shared Projects 3.2) also leaves a run row
+on the project for its members, and its pauses go through
+``ProjectSchedules.pause``, which adds a row and tells the creator and the
+project's owner why it stopped.
 """
 
 import asyncio
@@ -43,6 +48,7 @@ from apis.shared.harness import (
     RunResult,
     run_agent_headless,
 )
+from apis.shared.projects.schedules import ProjectSchedules
 from apis.shared.scheduled_prompts.models import ScheduledPrompt
 from apis.shared.scheduled_prompts.service import (
     get_scheduled_prompt,
@@ -56,6 +62,20 @@ logger.setLevel(logging.INFO)
 
 def _env_int(name: str, default: int) -> int:
     return int(os.environ.get(name, default))
+
+
+async def _pause(schedule: ScheduledPrompt, reason: str) -> None:
+    """Pause with ``reason``; a project schedule also gets a run row and a notice."""
+    if schedule.project_id:
+        # ``schedule`` is the record as it was before this run, so still "active".
+        await asyncio.to_thread(ProjectSchedules().pause, schedule, reason)
+        return
+    await set_schedule_state(schedule.user_id, schedule.schedule_id, "paused_error", state_reason=reason)
+
+
+async def _record_project_run(schedule: ScheduledPrompt, status: str) -> None:
+    if schedule.project_id:
+        await asyncio.to_thread(ProjectSchedules().record_run, schedule, status)
 
 
 async def _record_failure_and_maybe_pause(
@@ -80,13 +100,9 @@ async def _record_failure_and_maybe_pause(
         session_id=session_id,
         error=error,
     )
+    await _record_project_run(schedule, "timeout" if result_label == "timeout" else "error")
     if streak >= max_failures:
-        await set_schedule_state(
-            schedule.user_id,
-            schedule.schedule_id,
-            "paused_error",
-            state_reason="repeated_failures",
-        )
+        await _pause(schedule, "repeated_failures")
         logger.warning(
             f"Schedule {schedule.schedule_id}: {streak} consecutive failures "
             f"(max {max_failures}); pausing"
@@ -101,12 +117,7 @@ async def _pause_reauth(schedule: ScheduledPrompt, reason: str, detail: Optional
         + (f" — {detail}" if detail else "")
     )
     await record_run_result(schedule.user_id, schedule.schedule_id, status="error", error=detail or reason)
-    await set_schedule_state(
-        schedule.user_id,
-        schedule.schedule_id,
-        "paused_error",
-        state_reason=reason,
-    )
+    await _pause(schedule, reason)
     return {"scheduleId": schedule.schedule_id, "result": "paused_error", "reason": reason}
 
 
@@ -157,6 +168,7 @@ async def run_schedule(payload: Dict[str, Any]) -> Dict[str, Any]:
         await record_run_result(
             user_id, schedule_id, status="completed", session_id=result.session_id
         )
+        await _record_project_run(schedule, "completed")
         logger.info(f"Schedule {schedule_id}: run {result.run_id} completed (session {result.session_id})")
         return {"scheduleId": schedule_id, "result": "completed", "sessionId": result.session_id}
 

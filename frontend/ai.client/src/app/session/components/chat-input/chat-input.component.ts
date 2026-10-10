@@ -77,6 +77,7 @@ import {
 import { SkillCommandMenuComponent } from './skill-command-menu.component';
 import { SteeringService } from '../../services/chat/steering.service';
 import { ComposerDraftService } from '../../services/session/composer-draft.service';
+import { SessionPrewarmService } from '../../services/session/session-prewarm.service';
 import {
   ComposerDraftStorageService,
   EMPTY_DRAFT,
@@ -294,6 +295,7 @@ export class ChatInputComponent {
   private readonly fileUploadService = inject(FileUploadService);
   private readonly toastService = inject(ToastService);
   private readonly steering = inject(SteeringService);
+  private readonly sessionPrewarm = inject(SessionPrewarmService);
   private readonly composerDraft = inject(ComposerDraftService);
   private readonly draftStorage = inject(ComposerDraftStorageService);
   private readonly toolService = inject(ToolService);
@@ -1779,6 +1781,10 @@ export class ChatInputComponent {
   }
 
   onTextareaInput(event: Event) {
+    // First keystroke or paste in an existing conversation: start its Runtime
+    // microVM while the user finishes typing (session prewarm). A no-op unless
+    // the conversation page armed it, and deduped per conversation.
+    this.sessionPrewarm.noteTyping();
     this.settleHints();
     const textarea = event.target as HTMLTextAreaElement;
     this.userInput.set(textarea.value);

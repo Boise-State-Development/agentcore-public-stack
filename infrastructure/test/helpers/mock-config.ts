@@ -151,6 +151,9 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     userGrants: {
       enabled: false,
     },
+    sessionPrewarm: {
+      enabled: false,
+    },
     memoryLint: {
       mode: 'warn',
       sensitivePatterns: '',

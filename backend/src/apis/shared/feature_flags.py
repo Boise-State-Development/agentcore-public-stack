@@ -626,6 +626,29 @@ def projects_enabled() -> bool:
     return os.environ.get("PROJECTS_ENABLED", "").strip().lower() == "true"
 
 
+def session_prewarm_enabled() -> bool:
+    """Whether app-api warms a conversation's AgentCore Runtime session ahead of its first send.
+
+    ``POST /chat/prewarm`` (``apis/app_api/chat/proxy_routes.py``) forwards a
+    no-op ``warm`` invocation to ``/invocations`` with the conversation's
+    affinity header, so the microVM the first real turn will use is restored
+    (V2) or booted (V1) while the user is still reading or typing
+    (``docs/specs/agentcore-runtime-v2.md`` §5a). **Opt-in while the feature is
+    in development** (CLAUDE.md "Feature flags"): only ``"true"``
+    (case-insensitive) enables it; while off the route 404s after
+    authentication. CDK sets it on app-api from ``config.sessionPrewarm.enabled``.
+    The SPA's matching switch is ``features.sessionPrewarm``.
+
+    A **feature switch** once finished, not a rollout switch: it spends Runtime
+    session time on conversations the user may never send, which is a cost a
+    deployment may reasonably not want (cheap on V2, which reclaims idle
+    memory; billed at peak memory on V1). The Runtime side needs no flag and no
+    environment variable: the ``warm`` action is a no-op that returns before
+    any work, so the app-api route is the whole gate.
+    """
+    return os.environ.get("SESSION_PREWARM_ENABLED", "").strip().lower() == "true"
+
+
 def user_grants_enabled() -> bool:
     """Whether the admin surface for direct user grants is mounted on app-api.
 

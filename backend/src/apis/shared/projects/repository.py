@@ -42,7 +42,15 @@ except ImportError:  # pragma: no cover - exercised only without boto3
 
 from apis.shared.dynamo_errors import is_missing_index_error, log_missing_index
 
-from .models import Project, ProjectMember, ProjectOutput, SharedTask, normalize_email
+from .models import (
+    Project,
+    ProjectMember,
+    ProjectOutput,
+    ProjectSchedulePointer,
+    ProjectScheduleRun,
+    SharedTask,
+    normalize_email,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +60,10 @@ COST_SK_PREFIX = "COST#"
 SHARED_TASK_SK_PREFIX = "SHARED_TASK#"
 OUTPUT_SK_PREFIX = "OUTPUT#"
 PERSONAL_SPACE_SK_PREFIX = "PERSONAL_SPACE#"
+SCHEDULE_SK_PREFIX = "SCHEDULE#"
+SCHEDULE_RUN_SK_PREFIX = "SCHEDULE_RUN#"
+#: How long a project keeps a schedule's run rows (members' run history).
+SCHEDULE_RUN_RETENTION_DAYS = 90
 OWNER_INDEX = "OwnerIndex"
 MEMBER_INDEX = "MemberIndex"
 
@@ -523,6 +535,53 @@ class ProjectRepository:
             & Key("SK").begins_with(SHARED_TASK_SK_PREFIX)
         )
         return [SharedTask.model_validate(_strip_keys(i)) for i in items]
+
+    # ── schedules (3.2) ─────────────────────────────────────────────────
+
+    def put_schedule(self, pointer: ProjectSchedulePointer) -> None:
+        item = pointer.model_dump(by_alias=True, exclude_none=True)
+        item.update(self._key(pointer.project_id, f"{SCHEDULE_SK_PREFIX}{pointer.schedule_id}"))
+        self._table.put_item(Item=item)
+
+    def get_schedule(self, project_id: str, schedule_id: str) -> Optional[ProjectSchedulePointer]:
+        item = self._table.get_item(Key=self._key(project_id, f"{SCHEDULE_SK_PREFIX}{schedule_id}")).get("Item")
+        return ProjectSchedulePointer.model_validate(_strip_keys(item)) if item else None
+
+    def delete_schedule(self, project_id: str, schedule_id: str) -> None:
+        """Drop the pointer and the schedule's run rows."""
+        self._table.delete_item(Key=self._key(project_id, f"{SCHEDULE_SK_PREFIX}{schedule_id}"))
+        runs = self._query_all(
+            KeyConditionExpression=Key("PK").eq(project_pk(project_id))
+            & Key("SK").begins_with(f"{SCHEDULE_RUN_SK_PREFIX}{schedule_id}#"),
+            ProjectionExpression="PK, SK",
+        )
+        with self._table.batch_writer() as batch:
+            for item in runs:
+                batch.delete_item(Key={"PK": item["PK"], "SK": item["SK"]})
+
+    def list_schedules(self, project_id: str) -> List[ProjectSchedulePointer]:
+        items = self._query_all(
+            KeyConditionExpression=Key("PK").eq(project_pk(project_id)) & Key("SK").begins_with(SCHEDULE_SK_PREFIX)
+        )
+        return [ProjectSchedulePointer.model_validate(_strip_keys(i)) for i in items]
+
+    def put_schedule_run(self, run: ProjectScheduleRun, ttl: int) -> None:
+        item = run.model_dump(by_alias=True, exclude_none=True)
+        item.update(
+            self._key(run.project_id, f"{SCHEDULE_RUN_SK_PREFIX}{run.schedule_id}#{run.finished_at}#{run.run_id}"),
+            ttl=ttl,
+        )
+        self._table.put_item(Item=item)
+
+    def list_schedule_runs(self, project_id: str, schedule_id: str, limit: int) -> List[ProjectScheduleRun]:
+        """Newest first. Rows past their TTL can linger until DynamoDB sweeps them; they're harmless."""
+        resp = self._table.query(
+            KeyConditionExpression=Key("PK").eq(project_pk(project_id))
+            & Key("SK").begins_with(f"{SCHEDULE_RUN_SK_PREFIX}{schedule_id}#"),
+            ScanIndexForward=False,
+            Limit=limit,
+        )
+        return [ProjectScheduleRun.model_validate(_strip_keys(i)) for i in resp.get("Items", [])]
 
     # ── whole project ───────────────────────────────────────────────────
 

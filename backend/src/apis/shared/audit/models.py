@@ -63,9 +63,9 @@ class AuditAction:
     ROLE_MUTATION_DENIED = "app_role.mutation_denied"
 
     # Shared Projects (shared-projects §9.4), target ``project``. Only actions
-    # something records are listed; memory, schedule and output actions arrive
-    # with the phases that emit them. ``tools_updated``/``skills_updated`` are a
-    # project's own bindings, not role grants, so the note above does not apply.
+    # something records are listed; each phase adds the actions it emits.
+    # ``tools_updated``/``skills_updated`` are a project's own bindings, not role
+    # grants, so the note above does not apply.
     PROJECT_CREATED = "project.created"
     PROJECT_UPDATED = "project.updated"
     PROJECT_ARCHIVED = "project.archived"
@@ -91,6 +91,11 @@ class AuditAction:
     PROJECT_OUTPUT_SHARED = "project.output_shared"
     PROJECT_OUTPUT_REMOVED = "project.output_removed"
     PROJECT_MEMORY_MAINTENANCE_STARTED = "project.memory_maintenance_started"
+    PROJECT_SCHEDULE_CREATED = "project.schedule_created"
+    PROJECT_SCHEDULE_UPDATED = "project.schedule_updated"
+    PROJECT_SCHEDULE_PAUSED = "project.schedule_paused"
+    PROJECT_SCHEDULE_RESUMED = "project.schedule_resumed"
+    PROJECT_SCHEDULE_DELETED = "project.schedule_deleted"
 
     # Direct user grants (``apis/shared/rbac/user_grant_admin_service.py``),
     # target ``user_grant`` keyed by the user id. One record per PUT with the
