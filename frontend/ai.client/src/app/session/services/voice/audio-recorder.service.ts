@@ -1,4 +1,5 @@
 import { Injectable, signal } from '@angular/core';
+import { createAudioContext } from './audio-context';
 import { float32ToPcm16, pcm16ToBase64, resampleLinear } from './pcm-utils';
 import { VOICE_SAMPLE_RATE, SAMPLES_PER_CHUNK } from './voice.config';
 
@@ -109,8 +110,7 @@ export class AudioRecorderService {
     try {
       this.mediaStream = await this.openMicrophone();
 
-      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-      this.audioContext = new AudioContextClass({ sampleRate: VOICE_SAMPLE_RATE });
+      this.audioContext = createAudioContext(VOICE_SAMPLE_RATE);
 
       await this.audioContext.audioWorklet.addModule('/audio/pcm-capture.worklet.js');
 
@@ -140,11 +140,17 @@ export class AudioRecorderService {
    * throws OverconstrainedError, which would turn every later voice session
    * into an error toast until the user found the picker. The fallback clears
    * the stale choice so the picker shows the truth.
+   *
+   * `deviceId` must be the only mandatory constraint, or the fallback misreads
+   * a constraint the device can't meet as a missing device and clears a good
+   * choice. Mono is `ideal`, not `exact`: Chrome rejects `exact: 1` on an input
+   * that only delivers stereo, where Firefox downmixes. A stereo track is fine,
+   * because the capture worklet reads channel 0 only.
    */
   private async openMicrophone(): Promise<MediaStream> {
     const base: MediaTrackConstraints = {
       sampleRate: { ideal: VOICE_SAMPLE_RATE },
-      channelCount: { exact: 1 },
+      channelCount: { ideal: 1 },
       echoCancellation: true,
       noiseSuppression: true,
       autoGainControl: true,
