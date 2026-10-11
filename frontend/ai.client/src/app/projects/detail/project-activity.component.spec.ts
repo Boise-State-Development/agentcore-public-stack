@@ -65,6 +65,26 @@ describe('describeActivity', () => {
     [rec('project.memory_edited', { after: { slug: 'MEMORY.md' } }), 'edited the memory index'],
     [rec('project.memory_deleted', { before: { slug: 'sis' } }), 'deleted the memory file “sis”'],
     [rec('project.task_unshared', { after: { title: 'Roster diff' } }), 'stopped sharing the task “Roster diff”'],
+    [rec('project.task_shared', { after: { title: 'Weekly digest', scheduleId: 'sc_1' }, reason: 'schedule' }),
+      'shared “Weekly digest” with the project from a schedule'],
+    [rec('project.schedule_created', { after: { scheduleId: 'sc_1', label: 'Weekly digest', createdBy: 'ann@x.edu' } }),
+      'created the schedule “Weekly digest”'],
+    [rec('project.schedule_updated', {
+      changes: ['hourLocal', 'promptText', 'timezone'], after: { scheduleId: 'sc_1', label: 'Weekly digest', createdBy: 'ann@x.edu' },
+    }), 'edited the schedule “Weekly digest” (the prompt and when it runs)'],
+    [rec('project.schedule_updated', {
+      changes: ['deliverTo', 'label', 'notifyMembers'], after: { scheduleId: 'sc_1', label: 'Digest', createdBy: 'ann@x.edu' },
+    }), 'edited the schedule “Digest” (the name, where its runs go and who hears about its runs)'],
+    [rec('project.schedule_updated', { after: { scheduleId: 'sc_1', label: 'Digest', createdBy: 'ann@x.edu' } }),
+      'edited the schedule “Digest”'],
+    [rec('project.schedule_paused', { after: { scheduleId: 'sc_1', label: 'Weekly digest', createdBy: 'Ann@x.edu' } }),
+      'paused the schedule “Weekly digest”'],
+    [rec('project.schedule_paused', { after: { scheduleId: 'sc_1', label: 'Weekly digest', createdBy: 'bo@x.edu' } }),
+      'paused bo@x.edu’s schedule “Weekly digest”'],
+    [rec('project.schedule_resumed', { after: { scheduleId: 'sc_1', label: 'Weekly digest', createdBy: 'ann@x.edu' } }),
+      'resumed the schedule “Weekly digest”'],
+    [rec('project.schedule_deleted', { before: { scheduleId: 'sc_1', label: 'Weekly digest', createdBy: 'bo@x.edu' } }),
+      'deleted bo@x.edu’s schedule “Weekly digest”'],
     [rec('project.something_new'), 'something new'],
   ])('%#: %s', (record, text) => {
     expect(describeActivity(record).text).toBe(text);
@@ -85,6 +105,13 @@ describe('describeActivity', () => {
     ).text).toBe('added the tool Who am I and removed the tool retired_tool');
     expect(describeActivity(rec('project.skills_updated', { before: { refs: [] }, after: { refs: ['sk-1'] } }), label).text)
       .toBe('added the skill Brand voice');
+  });
+
+  it('names the creator of a schedule someone else acted on', () => {
+    const person = (email: string) => (email === 'bo@x.edu' ? 'Bo Diaz' : email);
+    expect(describeActivity(
+      rec('project.schedule_deleted', { before: { scheduleId: 'sc_1', label: 'Weekly digest', createdBy: 'bo@x.edu' } }), undefined, person,
+    ).text).toBe('deleted Bo Diaz’s schedule “Weekly digest”');
   });
 
   it('points a settings save at the version it cut', () => {

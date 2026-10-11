@@ -74,14 +74,35 @@
               <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div class="min-w-0">
                   <div class="flex flex-wrap items-center gap-2">
-                    <button
-                      type="button"
-                      (click)="onEdit(schedule)"
-                      class="truncate text-sm/6 font-semibold text-gray-900 hover:underline dark:text-white"
-                    >
-                      {{ schedule.label }}
-                    </button>
+                    @if (!schedule.projectId) {
+                      <button
+                        type="button"
+                        (click)="onEdit(schedule)"
+                        class="truncate text-sm/6 font-semibold text-gray-900 hover:underline dark:text-white"
+                      >
+                        {{ schedule.label }}
+                      </button>
+                    } @else {
+                      <span class="truncate text-sm/6 font-semibold text-gray-900 dark:text-white">{{ schedule.label }}</span>
+                    }
                     <span [class]="stateBadgeClasses(schedule)">{{ stateLabel(schedule) }}</span>
+                    @if (schedule.projectId) {
+                      @if (projectLink(schedule); as link) {
+                        <a
+                          [routerLink]="link"
+                          data-testid="project-badge"
+                          class="inline-flex max-w-full items-center gap-1 rounded-2xl bg-gray-100 px-2.5 py-0.5 text-xs/5 font-medium text-gray-700 hover:bg-gray-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600"
+                        >
+                          <ng-icon name="heroRectangleStack" class="size-3.5 shrink-0" aria-hidden="true" />
+                          <span class="truncate">In {{ projectNameOf(schedule) }}</span>
+                        </a>
+                      } @else {
+                        <span data-testid="project-badge" class="inline-flex items-center gap-1 rounded-2xl bg-gray-100 px-2.5 py-0.5 text-xs/5 font-medium text-gray-700 dark:bg-gray-700 dark:text-gray-200">
+                          <ng-icon name="heroRectangleStack" class="size-3.5 shrink-0" aria-hidden="true" />
+                          In {{ projectNameOf(schedule) }}
+                        </span>
+                      }
+                    }
                   </div>
                   <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
                     {{ cadenceSummary(schedule) }} · {{ schedule.timezone }}
@@ -142,7 +163,7 @@
                     >
                       Pause
                     </button>
-                  } @else if (schedule.state === 'paused') {
+                  } @else if (schedule.state === 'paused' && !schedule.projectId) {
                     <button
                       type="button"
                       (click)="onResume(schedule)"
@@ -152,13 +173,24 @@
                       Resume
                     </button>
                   }
-                  <button
-                    type="button"
-                    (click)="onEdit(schedule)"
-                    class="rounded-2xl px-3 py-1.5 text-xs/5 font-medium text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700"
-                  >
-                    Edit
-                  </button>
+                  @if (schedule.projectId) {
+                    @if (projectLink(schedule); as link) {
+                      <a
+                        [routerLink]="link"
+                        class="rounded-2xl px-3 py-1.5 text-xs/5 font-medium text-gray-600 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-300 dark:hover:bg-gray-700"
+                      >
+                        Manage in project
+                      </a>
+                    }
+                  } @else {
+                    <button
+                      type="button"
+                      (click)="onEdit(schedule)"
+                      class="rounded-2xl px-3 py-1.5 text-xs/5 font-medium text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700"
+                    >
+                      Edit
+                    </button>
+                  }
                   <button
                     type="button"
                     (click)="onDelete(schedule)"

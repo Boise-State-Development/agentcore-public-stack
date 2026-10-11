@@ -78,6 +78,28 @@ function versions(value: unknown): Record<string, number> {
   );
 }
 
+/** What a schedule edit changed, by the request fields the trail records (`changes`). */
+const SCHEDULE_FIELDS: Array<[string[], string]> = [
+  [['label'], 'the name'],
+  [['promptText'], 'the prompt'],
+  [['cadence', 'hourLocal', 'weekday', 'intervalValue', 'intervalUnit', 'timezone'], 'when it runs'],
+  [['deliverTo'], 'where its runs go'],
+  [['notifyMembers'], 'who hears about its runs'],
+];
+
+/** "the schedule “X”", or "Ann’s schedule “X”" when someone acted on another member's. */
+function scheduleNamed(record: ProjectAuditRecord, named: Record<string, unknown>, person: ActivityPerson): string {
+  const label = `“${str(named['label']) || 'Untitled schedule'}”`;
+  const creator = str(named['createdBy']);
+  const theirs = creator && record.actorEmail && creator.toLowerCase() !== record.actorEmail.toLowerCase();
+  return theirs ? `${person(creator)}’s schedule ${label}` : `the schedule ${label}`;
+}
+
+function scheduleChanges(changes: string[]): string {
+  const parts = SCHEDULE_FIELDS.filter(([fields]) => fields.some(f => changes.includes(f))).map(([, words]) => words);
+  return parts.length ? list(parts) : '';
+}
+
 /**
  * One audit record as a sentence (without its actor, which the row shows).
  * The trail keeps no instruction text, only the version a save cut, so settings
@@ -144,13 +166,31 @@ export function describeActivity(
     case 'project.knowledge_removed':
       return line(`removed the file ${str(before['filename']) || 'a file'}`);
     case 'project.task_shared':
-      return line(`shared the task “${str(after['title']) || 'Untitled task'}” with the project`);
+      // A schedule's delivery is recorded as its creator's share (3.2b).
+      return line(
+        record.reason === 'schedule'
+          ? `shared “${str(after['title']) || 'Untitled task'}” with the project from a schedule`
+          : `shared the task “${str(after['title']) || 'Untitled task'}” with the project`,
+      );
     case 'project.task_unshared':
       return line(`stopped sharing the task “${str(after['title']) || 'Untitled task'}”`);
     case 'project.output_shared':
       return line(`shared the output “${str(after['title']) || 'Untitled artifact'}” with the project`);
     case 'project.output_removed':
       return line(`removed the output “${str(after['title']) || 'Untitled artifact'}” from the project`);
+    case 'project.schedule_created':
+      return line(`created ${scheduleNamed(record, after, person)}`);
+    case 'project.schedule_updated': {
+      const what = scheduleChanges(record.changes ?? []);
+      const named = scheduleNamed(record, after, person);
+      return line(what ? `edited ${named} (${what})` : `edited ${named}`);
+    }
+    case 'project.schedule_paused':
+      return line(`paused ${scheduleNamed(record, after, person)}`);
+    case 'project.schedule_resumed':
+      return line(`resumed ${scheduleNamed(record, after, person)}`);
+    case 'project.schedule_deleted':
+      return line(`deleted ${scheduleNamed(record, before, person)}`);
     case 'project.memory_proposed':
       return line(`proposed a change to the memory file “${str(after['slug'])}”`);
     case 'project.memory_proposal_approved':

@@ -46,6 +46,11 @@ import {
   ProjectMemory,
   ProjectOutputsResponse,
   UpdateProjectRequest,
+  CreateProjectScheduleRequest,
+  ProjectSchedule,
+  ProjectScheduleRunsResponse,
+  ProjectSchedulesResponse,
+  UpdateProjectScheduleRequest,
 } from '../models/project.model';
 import { CreateDocumentRequest, DownloadUrlResponse } from '../../assistants/models/document.model';
 
@@ -410,6 +415,50 @@ export class ProjectApiService {
 
   sharedTasks(projectId: string): Observable<SharedTasksResponse> {
     return this.http.get<SharedTasksResponse>(this.url(projectId, '/shared-tasks'), this.options());
+  }
+
+  // ---- schedules (3.2) ----------------------------------------------------
+
+  /** Every schedule in the project, oldest first (viewer+). 404s while scheduled runs are off. */
+  schedules(projectId: string): Observable<ProjectSchedulesResponse> {
+    return this.http.get<ProjectSchedulesResponse>(this.url(projectId, '/schedules'), this.options());
+  }
+
+  schedule(projectId: string, scheduleId: string): Observable<ProjectSchedule> {
+    return this.http.get<ProjectSchedule>(this.scheduleUrl(projectId, scheduleId), this.options());
+  }
+
+  /** An editor or the owner, in an active project. It runs as them, on the project's assistant. */
+  createSchedule(projectId: string, request: CreateProjectScheduleRequest): Observable<ProjectSchedule> {
+    return this.http.post<ProjectSchedule>(this.url(projectId, '/schedules'), request, this.options());
+  }
+
+  /** The creator only. */
+  updateSchedule(projectId: string, scheduleId: string, request: UpdateProjectScheduleRequest): Observable<ProjectSchedule> {
+    return this.http.patch<ProjectSchedule>(this.scheduleUrl(projectId, scheduleId), request, this.options());
+  }
+
+  /** The creator, or an editor or the owner (which tells the creator). */
+  pauseSchedule(projectId: string, scheduleId: string): Observable<ProjectSchedule> {
+    return this.http.post<ProjectSchedule>(this.scheduleUrl(projectId, scheduleId, '/pause'), {}, this.options());
+  }
+
+  /** The creator only; 409 with a `detail` while something would stop it running. */
+  resumeSchedule(projectId: string, scheduleId: string): Observable<ProjectSchedule> {
+    return this.http.post<ProjectSchedule>(this.scheduleUrl(projectId, scheduleId, '/resume'), {}, this.options());
+  }
+
+  deleteSchedule(projectId: string, scheduleId: string): Observable<void> {
+    return this.http.delete<void>(this.scheduleUrl(projectId, scheduleId), this.options());
+  }
+
+  /** The schedule's recent runs and pauses, newest first (viewer+). */
+  scheduleRuns(projectId: string, scheduleId: string): Observable<ProjectScheduleRunsResponse> {
+    return this.http.get<ProjectScheduleRunsResponse>(this.scheduleUrl(projectId, scheduleId, '/runs'), this.options());
+  }
+
+  private scheduleUrl(projectId: string, scheduleId: string, suffix = ''): string {
+    return this.url(projectId, `/schedules/${encodeURIComponent(scheduleId)}${suffix}`);
   }
 
   // ---- files ------------------------------------------------------------

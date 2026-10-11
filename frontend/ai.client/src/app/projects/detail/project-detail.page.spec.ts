@@ -14,6 +14,7 @@ import { ProjectTasksComponent } from './project-tasks.component';
 import { ProjectBindingsDialogComponent } from '../components/project-bindings-dialog.component';
 import { ProjectInstructionsDialogComponent } from '../components/project-instructions-dialog.component';
 import { ProjectMembersDialogComponent } from '../components/project-members-dialog.component';
+import { ProjectSchedulesDialogComponent } from '../components/project-schedules-dialog.component';
 import { AgentService } from '../../agents/services/agent.service';
 import { ToastService } from '../../services/toast/toast.service';
 import { ProjectApiService } from '../services/project-api.service';
@@ -66,6 +67,7 @@ describe('ProjectDetailPage', () => {
     model: vi.fn(),
     bindings: vi.fn(),
     files: vi.fn(),
+    schedules: vi.fn(),
   };
   const agents = { loadBindable: vi.fn() };
   const dialog = { open: vi.fn() };
@@ -79,6 +81,7 @@ describe('ProjectDetailPage', () => {
     api.model.mockReturnValue(of({ modelConfig: null, version: 2, canEdit: true }));
     api.bindings.mockReturnValue(of({ bindings: [], version: 2, canEdit: true }));
     api.files.mockReturnValue(of({ documents: [], nextToken: null, canEdit: true }));
+    api.schedules.mockReturnValue(of({ schedules: [] }));
     agents.loadBindable.mockResolvedValue([]);
     dialog.open.mockReturnValue({ closed: of(undefined), close: vi.fn() });
     TestBed.configureTestingModule({
@@ -130,7 +133,7 @@ describe('ProjectDetailPage', () => {
 
   it('lists the settings rail, with Activity for an editor', async () => {
     const { el } = await open('/projects/prj_1');
-    expect(railRows(el)).toEqual(['Instructions', 'Files', 'Model', 'Tools', 'Skills', 'Members', 'Activity', 'History']);
+    expect(railRows(el)).toEqual(['Instructions', 'Files', 'Model', 'Tools', 'Skills', 'Schedules', 'Members', 'Activity', 'History']);
   });
 
   it('gives a viewer no Activity row', async () => {
@@ -162,6 +165,12 @@ describe('ProjectDetailPage', () => {
       ProjectBindingsDialogComponent,
       expect.objectContaining({ data: expect.objectContaining({ kind: 'skills' }) }),
     );
+  });
+
+  it('opens the Schedules dialog from the bell’s and the schedule form’s /schedules link', async () => {
+    await open('/projects/prj_1/schedules');
+    expect(dialog.open).toHaveBeenCalledWith(ProjectSchedulesDialogComponent, expect.anything());
+    expect(TestBed.inject(Router).url).toBe('/projects/prj_1/overview');
   });
 
   it('opens nothing for a viewer on /activity, and still settles the URL', async () => {

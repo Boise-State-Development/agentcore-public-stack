@@ -109,6 +109,19 @@ describe('ProjectTasksComponent', () => {
     expect(Array.from(rows).find(r => r.textContent?.includes('Roster diff'))!.querySelector('p.border-l-2')).toBeNull();
   });
 
+  it('tags a run a schedule delivered, naming the schedule in the byline instead of as a note', async () => {
+    api.sharedTasks.mockReturnValue(of({
+      tasks: [{ ...THEIRS, title: 'Weekly digest', sharedAt: '2026-09-22T12:00:00Z', scheduleId: 'sc_1', note: 'Scheduled: Weekly digest' }, MINE],
+    }));
+    const { el } = await render();
+    const rows = Array.from(el.querySelectorAll('li'));
+    const run = rows.find(r => r.textContent?.includes('Weekly digest'))!;
+    expect(run.querySelector('[data-testid="scheduled-tag"]')?.textContent?.trim()).toBe('Scheduled');
+    expect(run.textContent?.replace(/\s+/g, ' ')).toContain('Shared by Ann Lee · Sep 22 · from the schedule “Weekly digest”');
+    expect(run.querySelector('p.border-l-2')).toBeNull();
+    expect(rows.find(r => r.textContent?.includes('Roster diff'))!.querySelector('[data-testid="scheduled-tag"]')).toBeNull();
+  });
+
   it('continues a shared task as a fork on the project’s agent', async () => {
     shares.exportSharedConversation.mockResolvedValue({ sessionId: 'fork_1', title: 'Term dates (shared)' });
     const router = TestBed.inject(Router);

@@ -82,7 +82,12 @@ describe('ScheduleFormPage — tools picker', () => {
         { provide: ToastService, useValue: { success: vi.fn(), error: vi.fn(), info: vi.fn() } },
         {
           provide: ActivatedRoute,
-          useValue: { snapshot: { paramMap: { get: (key: string) => (key === 'scheduleId' ? scheduleId : null) } } },
+          useValue: {
+            snapshot: {
+              paramMap: { get: (key: string) => (key === 'scheduleId' ? scheduleId : null) },
+              queryParamMap: { get: () => null },
+            },
+          },
         },
       ],
     });

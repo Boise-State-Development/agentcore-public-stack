@@ -65,6 +65,8 @@ one-line summaries. Each row opens a dialog:
 - **Model**: the model every task runs on.
 - **Tools**: what the assistant can use.
 - **Skills**: the playbooks the assistant can follow, and the version of each.
+- **Schedules**: prompts that run in the project on a cadence (see
+  [Schedules](#schedules)).
 - **Members**: people, roles, invitations, and (for the owner) whether editors
   may manage members.
 - **Activity** (editors and the owner): who changed what, newest first.
@@ -98,6 +100,42 @@ From there, any member can:
 
 Someone who leaves a project loses access to its shared tasks. The tasks they
 shared stay listed for everyone else.
+
+## Schedules
+
+A schedule runs a prompt in the project for you, every day, every weekday, once
+a week or every few hours. It runs on the project's assistant with the project's
+tools, as the person who made it. **Schedules** appears in the project's rail
+when your deployment has scheduled runs turned on, with a count of schedules and
+how many are paused.
+
+- **Editors and the owner** can add a schedule with **New schedule**. The form
+  asks for a name, the prompt and when it runs. There is no agent or tool to
+  pick: the project decides.
+- **Share each run with the project** puts every finished run under **Shared
+  with the project**, tagged **Scheduled**. The assistant can read past runs
+  too, so a weekly summary can build on last week's. The newest runs stay
+  shared and older ones stop being shared. Without it, each run stays a task of
+  your own in the project.
+- **Notify members when a run is shared** sends everyone else a notification
+  for each run. It is only available while runs are shared.
+- **Run now** on the form runs the prompt once, straight away, as a task of your
+  own. It doesn't save the schedule or share the run.
+
+A schedule runs as the person who made it, so only they can **Edit** or
+**Resume** it. An editor or the owner can **Pause** or **Delete** anyone's
+schedule, and its creator is told. Everyone in the project, viewers included,
+can see every schedule and open its **Run history**: when each run finished,
+whether it worked, and a link to the run while it is still shared.
+
+A schedule stops on its own when it can no longer run: its creator leaves the
+project or stops being an editor, the project is archived, or it fails several
+times in a row. The Schedules dialog says why, and the creator and the owner get
+a notification. Restoring an archived project starts its schedules again.
+
+Your project schedules also appear on your own **Schedules** page, marked with
+the project's name. You can pause or delete them there; to change or resume one,
+use **Manage in project**.
 
 ## Files
 
@@ -139,7 +177,9 @@ the skill, the project stops using it, whatever version it is on.
 The bell next to your name in the sidebar shows notifications about projects:
 being added, a role change, being removed, becoming owner, a project being
 archived or restored (sent to every member), and, for the owner, someone
-leaving. Opening one marks it read and takes you to the project. Notifications
+leaving. A schedule that stopped tells its creator and the owner. Opening a
+notification marks it read and takes you to the project, or, for a stopped
+schedule, to the project's schedules. Notifications
 expire after 90 days. You are never notified of your own actions.
 
 ## Personal instructions

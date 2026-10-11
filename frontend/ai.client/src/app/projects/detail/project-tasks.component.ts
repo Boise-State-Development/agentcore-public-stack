@@ -110,16 +110,24 @@ const PAGE_SIZE = 20;
             @for (task of shared(); track task.shareId) {
               <li class="flex flex-wrap items-center gap-x-4 gap-y-2 py-3.5">
                 <div class="min-w-0 flex-1">
-                  <a
-                    [routerLink]="['/shared', task.shareId]"
-                    class="block truncate rounded-sm text-sm/6 text-gray-900 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-white"
-                  >
-                    {{ task.title || 'Untitled task' }}
-                  </a>
+                  <div class="flex min-w-0 items-center gap-2">
+                    <a
+                      [routerLink]="['/shared', task.shareId]"
+                      class="truncate rounded-sm text-sm/6 text-gray-900 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-white"
+                    >
+                      {{ task.title || 'Untitled task' }}
+                    </a>
+                    @if (task.scheduleId) {
+                      <span data-testid="scheduled-tag" class="shrink-0 rounded-2xl bg-gray-100 px-2 py-0.5 text-xs/5 font-medium text-gray-700 dark:bg-gray-700 dark:text-gray-200">Scheduled</span>
+                    }
+                  </div>
                   <p class="text-xs/5 text-gray-600 dark:text-gray-400">
                     Shared by <span [attr.title]="!task.isMine && task.sharedByName ? task.sharedByEmail : null">{{ task.isMine ? 'you' : personLabel(task.sharedByName, task.sharedByEmail) }}</span> · {{ sharedAt(task) | date: 'MMM d' }}
+                    @if (scheduleLabel(task); as label) {
+                      · from the schedule “{{ label }}”
+                    }
                   </p>
-                  @if (task.note) {
+                  @if (task.note && !scheduleLabel(task)) {
                     <p class="mt-1 border-l-2 border-gray-200 pl-2 text-sm/6 text-gray-700 dark:border-gray-700 dark:text-gray-300">{{ task.note }}</p>
                   }
                 </div>
@@ -194,6 +202,15 @@ export class ProjectTasksComponent {
         void this.loadShared(id);
       });
     });
+  }
+
+  /**
+   * The schedule a delivered run came from. Its note is the worker's
+   * "Scheduled: <label>", shown as part of the byline rather than as a hand-off note.
+   */
+  protected scheduleLabel(task: SharedTask): string | null {
+    const prefix = 'Scheduled: ';
+    return task.scheduleId && task.note?.startsWith(prefix) ? task.note.slice(prefix.length) : null;
   }
 
   protected when(task: SessionMetadata): Date {

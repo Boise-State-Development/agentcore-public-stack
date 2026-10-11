@@ -8,6 +8,7 @@ import {
 } from '@angular/core';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { FormBuilder, FormControl, ReactiveFormsModule, Validators } from '@angular/forms';
+import { firstValueFrom } from 'rxjs';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroArrowLeft } from '@ng-icons/heroicons/outline';
 import { ScheduleService } from '../services/schedule.service';
@@ -26,6 +27,14 @@ import {
 import { ToastService } from '../../services/toast/toast.service';
 import { ToolSelectorComponent } from '../../components/tool-selector/tool-selector.component';
 import { ToolSelectorItem } from '../../components/tool-selector/tool-selector.model';
+import { ProjectApiService } from '../../projects/services/project-api.service';
+import { projectErrorMessage } from '../../projects/services/projects.service';
+import {
+  CreateProjectScheduleRequest,
+  Project,
+  ProjectSchedule,
+  UpdateProjectScheduleRequest,
+} from '../../projects/models/project.model';
 
 const WEEKDAY_LABELS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
@@ -89,6 +98,15 @@ function timezoneOptions(): string[] {
  * explicit `clearAssistant` / `clearTools` booleans instead. `clearAssistant`
  * reverts to the default agent; `clearTools` re-snapshots the caller's current
  * RBAC-allowed tools. See `buildUpdateRequest`.
+ *
+ * **Project mode** (`?projectId=…`, shared-projects 3.2c): the schedule runs on
+ * that project's assistant with the project's tools, so the agent and tool
+ * pickers give way to where its runs go ("Share each run with the project",
+ * `deliverTo`) and whether members hear about them (`notifyMembers`). It saves
+ * through `/projects/{id}/schedules` and returns to the project with its
+ * Schedules dialog open. Only the creator edits one (the server says so with
+ * `canEdit`), and an edit sends only the fields that changed, so the project's
+ * Activity names what actually moved.
  */
 @Component({
   selector: 'app-schedule-form-page',
@@ -106,8 +124,27 @@ export class ScheduleFormPage implements OnInit {
   private readonly agentService = inject(AgentService);
   private readonly toolService = inject(ToolService);
   private readonly toast = inject(ToastService);
+  private readonly projectApi = inject(ProjectApiService);
 
   readonly scheduleId = signal<string | null>(null);
+  /** Set in project mode: the schedule runs on this project's assistant. */
+  readonly projectId = signal<string | null>(null);
+  readonly project = signal<Project | null>(null);
+  readonly isProject = computed(() => !!this.projectId());
+  /** The project schedule as loaded, so an edit sends only what changed. */
+  private loadedProjectSchedule: ProjectSchedule | null = null;
+  /** Mirror of the share checkbox, so "notify members" can follow it. */
+  readonly shareWithProject = signal(false);
+  /** Where Back and Cancel go. */
+  readonly backLink = computed<string[]>(() => {
+    const id = this.projectId();
+    return id ? ['/projects', id, 'schedules'] : ['/schedules'];
+  });
+  readonly backLabel = computed(() => {
+    if (!this.isProject()) return 'Back to schedules';
+    const name = this.project()?.name;
+    return name ? `Back to ${name}` : 'Back to the project';
+  });
   readonly mode = computed<'create' | 'edit'>(() => (this.scheduleId() ? 'edit' : 'create'));
   readonly saving = signal(false);
   readonly loadError = signal<string | null>(null);
@@ -157,6 +194,8 @@ export class ScheduleFormPage implements OnInit {
     intervalUnit: ['hours' as IntervalUnit, [Validators.required]],
     timezone: [this.guessTimezone(), [Validators.required]],
     assistantId: new FormControl<string | null>(null),
+    deliverToProject: [false],
+    notifyMembers: new FormControl<boolean>({ value: false, disabled: true }, { nonNullable: true }),
   });
 
   private readonly cadenceValue = signal<ScheduleCadence>('daily');
@@ -166,14 +205,22 @@ export class ScheduleFormPage implements OnInit {
   ngOnInit(): void {
     const id = this.route.snapshot.paramMap.get('scheduleId');
     this.scheduleId.set(id);
+    const projectId = this.route.snapshot.queryParamMap.get('projectId');
+    this.projectId.set(projectId);
 
-    void this.agentService.loadAgents(false);
-    if (!this.toolService.initialized()) {
-      void this.toolService.loadTools();
-    }
+    this.form.controls.deliverToProject.valueChanges.subscribe((share) => this.onShareChange(!!share));
 
-    if (id) {
-      void this.loadSchedule(id);
+    if (projectId) {
+      // The project's assistant and its tools decide; there is nothing to pick.
+      void this.loadProject(projectId, id);
+    } else {
+      void this.agentService.loadAgents(false);
+      if (!this.toolService.initialized()) {
+        void this.toolService.loadTools();
+      }
+      if (id) {
+        void this.loadSchedule(id);
+      }
     }
 
     // Keep the selected-agent signal in sync with the control so the tool
@@ -226,6 +273,67 @@ export class ScheduleFormPage implements OnInit {
       this.loadError.set('Failed to load this schedule.');
     } finally {
       this.loadingSchedule.set(false);
+    }
+  }
+
+  /** Project mode: the project (for its name and assistant) and, to edit, its schedule. */
+  private async loadProject(projectId: string, scheduleId: string | null): Promise<void> {
+    this.loadingSchedule.set(true);
+    this.loadError.set(null);
+    try {
+      const [project, schedule] = await Promise.all([
+        firstValueFrom(this.projectApi.get(projectId)),
+        scheduleId ? firstValueFrom(this.projectApi.schedule(projectId, scheduleId)) : Promise.resolve(null),
+      ]);
+      this.project.set(project);
+      if (schedule && !schedule.canEdit) {
+        this.loadError.set(
+          schedule.isMine
+            ? 'This project is archived, so its schedules can’t be changed.'
+            : 'Only the person who made this schedule can change it.',
+        );
+        return;
+      }
+      if (!schedule && (project.role === 'viewer' || project.status !== 'active')) {
+        this.loadError.set(
+          project.status !== 'active'
+            ? 'This project is archived, so it can’t get new schedules.'
+            : 'Only editors and the owner can add schedules to this project.',
+        );
+        return;
+      }
+      if (schedule) {
+        this.loadedProjectSchedule = schedule;
+        this.form.patchValue({
+          label: schedule.label,
+          promptText: schedule.promptText,
+          cadence: schedule.cadence,
+          hourLocal: schedule.hourLocal,
+          weekday: schedule.weekday ?? null,
+          intervalValue: schedule.intervalValue ?? null,
+          intervalUnit: schedule.intervalUnit ?? 'hours',
+          timezone: schedule.timezone,
+          deliverToProject: schedule.deliverTo === 'project',
+        });
+        this.form.controls.notifyMembers.setValue(schedule.notifyMembers);
+        this.cadenceValue.set(schedule.cadence);
+      }
+    } catch (err) {
+      this.loadError.set(projectErrorMessage(err, scheduleId ? 'Failed to load this schedule.' : 'Failed to load this project.'));
+    } finally {
+      this.loadingSchedule.set(false);
+    }
+  }
+
+  /** "Notify members" only means something while runs are shared. */
+  private onShareChange(share: boolean): void {
+    this.shareWithProject.set(share);
+    const notify = this.form.controls.notifyMembers;
+    if (share) {
+      notify.enable({ emitEvent: false });
+    } else {
+      notify.setValue(false, { emitEvent: false });
+      notify.disable({ emitEvent: false });
     }
   }
 
@@ -332,6 +440,11 @@ export class ScheduleFormPage implements OnInit {
       return;
     }
 
+    if (this.isProject()) {
+      await this.saveProjectSchedule(value);
+      return;
+    }
+
     this.saving.set(true);
     try {
       // A selected Agent owns its toolset — its `tool` bindings replace the
@@ -363,6 +476,42 @@ export class ScheduleFormPage implements OnInit {
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to save the schedule';
       this.toast.error('Could not save schedule', message);
+    } finally {
+      this.saving.set(false);
+    }
+  }
+
+  /** Project mode's save: the project's routes, then back to its Schedules dialog. */
+  private async saveProjectSchedule(value: ReturnType<ScheduleFormPage['form']['getRawValue']>): Promise<void> {
+    const projectId = this.projectId()!;
+    const request: CreateProjectScheduleRequest = {
+      label: value.label!,
+      promptText: value.promptText!,
+      cadence: value.cadence!,
+      hourLocal: Number(value.hourLocal),
+      weekday: value.cadence === 'weekly' ? Number(value.weekday) : null,
+      intervalValue: value.cadence === 'interval' ? value.intervalValue : null,
+      intervalUnit: value.cadence === 'interval' ? value.intervalUnit : null,
+      timezone: value.timezone!,
+      deliverTo: value.deliverToProject ? 'project' : 'owner',
+      notifyMembers: !!value.deliverToProject && !!value.notifyMembers,
+    };
+    this.saving.set(true);
+    try {
+      const loaded = this.loadedProjectSchedule;
+      if (!loaded) {
+        await firstValueFrom(this.projectApi.createSchedule(projectId, request));
+        this.toast.success('Schedule created', `"${request.label}" will run on the cadence you set.`);
+      } else {
+        const changes = changedFields(loaded, request);
+        if (Object.keys(changes).length > 0) {
+          await firstValueFrom(this.projectApi.updateSchedule(projectId, loaded.scheduleId, changes));
+        }
+        this.toast.success('Schedule updated');
+      }
+      void this.router.navigate(this.backLink());
+    } catch (err) {
+      this.toast.error('Could not save schedule', projectErrorMessage(err, 'Failed to save the schedule'));
     } finally {
       this.saving.set(false);
     }
@@ -427,7 +576,10 @@ export class ScheduleFormPage implements OnInit {
       return;
     }
 
-    const agentId = this.form.controls.assistantId.value ?? null;
+    // In a project, the run is a task of the caller's own on the project's assistant.
+    const agentId = this.isProject()
+      ? (this.project()?.harnessAgentId ?? null)
+      : (this.form.controls.assistantId.value ?? null);
     // Mirror the schedule's targeting: run against the selected Agent (whose
     // bound tools govern the turn), else fall back to the manual tool snapshot
     // for the default agent.
@@ -442,6 +594,24 @@ export class ScheduleFormPage implements OnInit {
   }
 
   onCancel(): void {
-    this.router.navigate(['/schedules']);
+    this.router.navigate(this.backLink());
   }
+}
+
+/**
+ * The fields of a project schedule's edit that differ from what was loaded. The
+ * server records every field it is sent as changed, so sending only these keeps
+ * the project's Activity line true ("changed the prompt", not every field).
+ */
+export function changedFields(loaded: ProjectSchedule, next: CreateProjectScheduleRequest): UpdateProjectScheduleRequest {
+  const changes: UpdateProjectScheduleRequest = {};
+  const keys = Object.keys(next) as Array<keyof CreateProjectScheduleRequest>;
+  for (const key of keys) {
+    const was = loaded[key] ?? null;
+    const now = next[key] ?? null;
+    if (was !== now) {
+      (changes as Record<string, unknown>)[key] = next[key];
+    }
+  }
+  return changes;
 }

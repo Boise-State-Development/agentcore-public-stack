@@ -9,9 +9,11 @@ import { ProjectFilesDialogComponent, ProjectFilesDialogData } from '../componen
 import { ProjectInstructionsDialogComponent } from '../components/project-instructions-dialog.component';
 import { ProjectMembersDialogComponent, ProjectMembersDialogData } from '../components/project-members-dialog.component';
 import { ProjectModelDialogComponent } from '../components/project-model-dialog.component';
+import { ProjectSchedulesDialogComponent, ProjectSchedulesDialogData } from '../components/project-schedules-dialog.component';
+import { HttpErrorResponse } from '@angular/common/http';
 import { AgentService } from '../../agents/services/agent.service';
 import { ProjectApiService } from '../services/project-api.service';
-import { Project } from '../models/project.model';
+import { Project, ProjectSchedule } from '../models/project.model';
 
 const PROJECT: Project = {
   projectId: 'prj_1',
@@ -37,8 +39,17 @@ const PALETTE = {
   skill: [{ kind: 'skill', ref: 's1', label: 'Memo', description: '', meta: {} }],
 };
 
+function sched(scheduleId: string, state: ProjectSchedule['state']): ProjectSchedule {
+  return {
+    scheduleId, label: scheduleId, promptText: 'p', cadence: 'daily', hourLocal: 7, timezone: 'UTC', deliverTo: 'owner',
+    notifyMembers: false, state, createdByEmail: 'me@x.edu', createdAt: '', updatedAt: '', isMine: true, canEdit: true, canManage: true,
+  };
+}
+
 describe('ProjectRailComponent', () => {
-  const api = { instructions: vi.fn(), model: vi.fn(), bindings: vi.fn(), files: vi.fn(), memory: vi.fn(), memoryEntries: vi.fn() };
+  const api = {
+    instructions: vi.fn(), model: vi.fn(), bindings: vi.fn(), files: vi.fn(), memory: vi.fn(), memoryEntries: vi.fn(), schedules: vi.fn(),
+  };
   const agents = { loadBindable: vi.fn() };
   const dialog = { open: vi.fn() };
 
@@ -53,6 +64,7 @@ describe('ProjectRailComponent', () => {
     api.files.mockReturnValue(of({ documents: [{ documentId: 'a' }, { documentId: 'b' }, { documentId: 'c' }], nextToken: null, canEdit: true }));
     api.memory.mockReturnValue(of({ sharedSpaceId: 'spc_1', personalSpaceId: null, role: 'editor' }));
     api.memoryEntries.mockReturnValue(of({ entries: [{ slug: 'a' }, { slug: 'b' }] }));
+    api.schedules.mockReturnValue(of({ schedules: [sched('a', 'active'), sched('b', 'paused_error')] }));
     agents.loadBindable.mockImplementation((kind: keyof typeof PALETTE) => Promise.resolve(PALETTE[kind]));
     dialog.open.mockReturnValue({ closed: of(undefined), close: vi.fn() });
     TestBed.configureTestingModule({
@@ -95,6 +107,7 @@ describe('ProjectRailComponent', () => {
     expect(text(row('Model'))).toBe('Model Haiku 4.5 Change');
     expect(text(row('Tools'))).toBe('Tools 2 tools Edit');
     expect(text(row('Skills'))).toBe('Skills 1 skill Edit');
+    expect(text(row('Schedules'))).toBe('Schedules 2 schedules · 1 paused Manage');
     expect(text(row('Members'))).toBe('Members 4 people Manage');
     expect(text(row('History'))).toBe('History Version 2 View');
     expect(el.textContent).toContain('Shared with 3 other people. Owned by Olive Owner. You’re an editor.');
@@ -243,6 +256,30 @@ describe('ProjectRailComponent', () => {
     await component.open('history');
     expect(first.close).toHaveBeenCalled();
     expect(dialog.open).toHaveBeenCalledTimes(2);
+  });
+
+  it('says None without schedules, and Not turned on where scheduled runs are off', async () => {
+    api.schedules.mockReturnValue(of({ schedules: [] }));
+    expect(text((await render()).row('Schedules'))).toBe('Schedules None Manage');
+    api.schedules.mockReturnValue(throwError(() => new HttpErrorResponse({ status: 404 })));
+    expect(text((await render()).row('Schedules'))).toBe('Schedules Not turned on Manage');
+    api.schedules.mockReturnValue(throwError(() => new HttpErrorResponse({ status: 500 })));
+    expect(text((await render({ ...PROJECT, role: 'viewer' })).row('Schedules'))).toBe('Schedules View');
+  });
+
+  it('hands the Schedules dialog a live project and takes its list back', async () => {
+    const { row, fixture } = await render();
+    row('Schedules').click();
+    await fixture.whenStable();
+    expect(dialog.open).toHaveBeenCalledWith(ProjectSchedulesDialogComponent, expect.anything());
+    const data = dialog.open.mock.calls[0][1].data as ProjectSchedulesDialogData;
+    expect(data.project()).toEqual(PROJECT);
+    data.onSchedulesChange([sched('a', 'active')]);
+    fixture.detectChanges();
+    expect(text(row('Schedules'))).toBe('Schedules 1 schedule Manage');
+    data.onSchedulesChange(null);
+    fixture.detectChanges();
+    expect(text(row('Schedules'))).toBe('Schedules Not turned on Manage');
   });
 
   it('refuses Activity for a viewer', async () => {

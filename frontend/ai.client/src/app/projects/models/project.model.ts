@@ -9,6 +9,7 @@
 
 import type { Document, KbUsage, UploadUrlResponse } from '../../assistants/models/document.model';
 import type { SessionMetadata } from '../../session/services/models/session-metadata.model';
+import type { IntervalUnit, ScheduleCadence, ScheduledPromptState } from '../../schedules/models/schedule.model';
 
 export type ProjectRole = 'owner' | 'editor' | 'viewer';
 export type MemberRole = 'editor' | 'viewer';
@@ -180,6 +181,8 @@ export interface SharedTask {
   isMine: boolean;
   /** The sharer's note (2.5b), when they left one. */
   note?: string | null;
+  /** The project schedule that delivered this run (3.2b), when one did. */
+  scheduleId?: string | null;
 }
 
 /** An artifact a member shared with the project (3.3), as `/projects/{id}/outputs` returns it. */
@@ -620,4 +623,78 @@ export interface MaintenanceRun {
 export interface MaintenanceRunsResponse {
   /** Newest first. */
   runs: MaintenanceRun[];
+}
+
+// ---- schedules (3.2) -----------------------------------------------------
+
+/** Where a project schedule's runs go: the creator's own sidebar, or shared with the project. */
+export type ScheduleDelivery = 'owner' | 'project';
+
+/** A schedule in a project, as `/projects/{id}/schedules` returns it. It runs as its creator. */
+export interface ProjectSchedule {
+  scheduleId: string;
+  label: string;
+  promptText: string;
+  cadence: ScheduleCadence;
+  hourLocal: number;
+  weekday?: number | null;
+  intervalValue?: number | null;
+  intervalUnit?: IntervalUnit | null;
+  timezone: string;
+  deliverTo: ScheduleDelivery;
+  notifyMembers: boolean;
+  state: ScheduledPromptState;
+  /** A backend code (`member_removed`, `paused_by_editor`, …) or the personal page's "Paused by user". */
+  stateReason?: string | null;
+  nextRunAt?: string | null;
+  lastRunAt?: string | null;
+  lastRunStatus?: string | null;
+  /** The creator's own task from the last run; absent for everyone else. */
+  lastRunSessionId?: string | null;
+  createdByEmail: string;
+  createdByName?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  isMine: boolean;
+  /** Change the prompt, cadence or delivery, and resume: the creator, in an active project. */
+  canEdit: boolean;
+  /** Pause and delete: the creator, or an editor or the owner of an active project. */
+  canManage: boolean;
+}
+
+export interface ProjectSchedulesResponse {
+  /** Oldest first. */
+  schedules: ProjectSchedule[];
+}
+
+export interface CreateProjectScheduleRequest {
+  label: string;
+  promptText: string;
+  cadence: ScheduleCadence;
+  hourLocal: number;
+  weekday?: number | null;
+  intervalValue?: number | null;
+  intervalUnit?: IntervalUnit | null;
+  timezone: string;
+  deliverTo: ScheduleDelivery;
+  notifyMembers: boolean;
+}
+
+/** The creator's change: any subset of what create takes. State has its own routes. */
+export type UpdateProjectScheduleRequest = Partial<CreateProjectScheduleRequest>;
+
+/** One run of a project schedule, or a pause the dispatcher recorded instead of running. */
+export interface ProjectScheduleRun {
+  runId: string;
+  status: 'completed' | 'error' | 'timeout' | 'paused';
+  finishedAt: string;
+  /** A short code; for a pause, the same codes as `stateReason`. */
+  reason?: string | null;
+  /** The delivered run, while it is still shared: opens at `/shared/{shareId}`. */
+  shareId?: string | null;
+}
+
+export interface ProjectScheduleRunsResponse {
+  /** Newest first. */
+  runs: ProjectScheduleRun[];
 }
