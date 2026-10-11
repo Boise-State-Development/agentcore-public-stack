@@ -8,6 +8,7 @@ import { MessageMapService } from '../session/message-map.service';
 import { MessageFeedbackService } from '../session/message-feedback.service';
 import { SessionService } from '../session/session.service';
 import { SessionPrewarmService } from '../session/session-prewarm.service';
+import { TurnTimingService } from './turn-timing.service';
 import { UserService } from '../../../auth/user.service';
 import { ModelService } from '../model/model.service';
 import { ToolService } from '../../../services/tool/tool.service';
@@ -60,6 +61,7 @@ export class ChatRequestService implements OnDestroy {
   private messageFeedbackService = inject(MessageFeedbackService);
   private sessionService = inject(SessionService);
   private sessionPrewarm = inject(SessionPrewarmService);
+  private turnTiming = inject(TurnTimingService);
   private userService = inject(UserService);
   private modelService = inject(ModelService);
   private toolService = inject(ToolService);
@@ -91,6 +93,25 @@ export class ChatRequestService implements OnDestroy {
     );
   }
 
+  /**
+   * Start the client-measured first-token clock for a send. A turn is the
+   * conversation's first when this tab knows the conversation as new and it has
+   * no messages yet; an existing conversation sent to before its history loaded
+   * stays a follow-up. Computed only while the feature is on.
+   */
+  private startTurnTiming(sessionId: string, mintedHere: boolean): void {
+    if (!this.turnTiming.enabled) {
+      return;
+    }
+    const isFirst =
+      (mintedHere || this.sessionService.isNewSession(sessionId)) &&
+      this.messageMapService.getMessagesForSession(sessionId)().length === 0;
+    this.turnTiming.start(sessionId, {
+      turnKind: isFirst ? 'first' : 'followup',
+      warmAgeMs: this.sessionPrewarm.warmAgeMs(sessionId),
+    });
+  }
+
   ngOnDestroy(): void {
     this.oauthConsentService.setResumeHandler(null);
     this.toolApprovalService.setResumeHandler(null);
@@ -113,6 +134,9 @@ export class ChatRequestService implements OnDestroy {
     // this turn lands on the microVM that is already starting (session
     // prewarm). Null while the feature is off: mint one, as before.
     sessionId = sessionId || this.sessionPrewarm.claimNewConversationId() || uuidv4();
+    // Client-measured time to first token starts here, at the send (read before
+    // noteTurn, which this turn's own start would otherwise count as a warm).
+    this.startTurnTiming(sessionId, isNewSession);
     // This turn starts the microVM itself; typing a follow-up need not warm it.
     this.sessionPrewarm.noteTurn(sessionId);
 
@@ -181,8 +205,15 @@ export class ChatRequestService implements OnDestroy {
         mentionAgentId,
         invokedSkillIds,
       );
+      this.turnTiming.describe(sessionId, {
+        // The selected model even when the request omits it as the default.
+        modelId: this.modelService.getSelectedModel()?.modelId ?? null,
+        hasAgent: Boolean(requestObject['rag_assistant_id']),
+        hasFiles: Boolean(fileUploadIds?.length),
+      });
       await this.chatHttpService.sendChatRequest(requestObject);
     } catch (error) {
+      this.turnTiming.abandon(sessionId);
       // TODO: Replace with proper logging service
       // logger.error('Chat request failed', { error, conversationId: sessionId });
       this.chatStateService.setChatLoading(sessionId, false);

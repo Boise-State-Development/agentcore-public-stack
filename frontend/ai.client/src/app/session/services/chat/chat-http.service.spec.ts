@@ -11,6 +11,7 @@ import { StreamParserService } from './stream-parser.service';
 import { ChatStateService } from './chat-state.service';
 import { MessageMapService } from '../session/message-map.service';
 import { ErrorService } from '../../../services/error/error.service';
+import { TurnTimingService } from './turn-timing.service';
 
 describe('ChatHttpService', () => {
   let service: ChatHttpService;
@@ -164,6 +165,32 @@ describe('ChatHttpService', () => {
     expect(chatStateService.releaseAbortController).toHaveBeenCalledWith('s1', controller);
     // Released, not aborted — the turn completed on its own.
     expect(controller.signal.aborted).toBe(false);
+    vi.restoreAllMocks();
+  });
+
+  it('ends the first-token clock on the first delta and clears it when the stream closes', async () => {
+    // Client-measured time to first token (turn-timing.service.ts): the first
+    // `content_block_delta` reports, and close clears whatever never got one.
+    const timing = TestBed.inject(TurnTimingService);
+    const firstToken = vi.spyOn(timing, 'firstToken').mockImplementation(() => undefined);
+    const abandon = vi.spyOn(timing, 'abandon').mockImplementation(() => undefined);
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        'event: message_start\ndata: {}\n\n'
+          + 'event: content_block_delta\ndata: {"type":"text","text":"PO"}\n\n'
+          + 'event: content_block_delta\ndata: {"type":"text","text":"NG"}\n\n'
+          + 'event: done\ndata: {}\n\n',
+        { status: 200, headers: { 'content-type': 'text/event-stream' } },
+      ),
+    );
+
+    await service.sendChatRequest({ session_id: 's1', message: 'hi' });
+
+    // Called per delta; the service itself reports only the first.
+    expect(firstToken).toHaveBeenCalledTimes(2);
+    expect(firstToken).toHaveBeenCalledWith('s1');
+    expect(abandon).toHaveBeenCalledWith('s1');
+    expect(firstToken.mock.invocationCallOrder[0]).toBeLessThan(abandon.mock.invocationCallOrder[0]);
     vi.restoreAllMocks();
   });
 

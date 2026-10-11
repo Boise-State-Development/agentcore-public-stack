@@ -380,6 +380,9 @@ export function buildAppApiEnvironment(
     // Session prewarm (opt-in while in development): gates POST /chat/prewarm.
     // app-api only; the Runtime's warm action is a no-op behind this route.
     SESSION_PREWARM_ENABLED: config.sessionPrewarm.enabled ? 'true' : 'false',
+    // Client-measured time to first token (opt-in while in development): gates
+    // POST /telemetry/turn-timing, which records the SPA's own measurement.
+    CLIENT_TURN_TIMING_ENABLED: config.clientTurnTiming.enabled ? 'true' : 'false',
     // Project-memory content lint (Shared Projects 2.7): the Memory page's saves,
     // proposals and restores, and the flags it shows on read.
     MEMORY_LINT_MODE: config.memoryLint.mode,

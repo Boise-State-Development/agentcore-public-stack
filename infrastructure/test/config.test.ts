@@ -665,6 +665,30 @@ describe('RAG Ingestion Configuration', () => {
   });
 
   // ============================================================
+  // Client turn timing feature flag — opt-in while in development
+  // ============================================================
+
+  describe('Client turn timing feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_CLIENT_TURN_TIMING_ENABLED;
+    });
+
+    test('defaults to disabled, and "" (unset GitHub variable) is disabled', () => {
+      delete process.env.CDK_CLIENT_TURN_TIMING_ENABLED;
+      expect(loadConfig(app).clientTurnTiming.enabled).toBe(false);
+      process.env.CDK_CLIENT_TURN_TIMING_ENABLED = '';
+      expect(loadConfig(app).clientTurnTiming.enabled).toBe(false);
+    });
+
+    test('only "true" turns it on', () => {
+      process.env.CDK_CLIENT_TURN_TIMING_ENABLED = 'True';
+      expect(loadConfig(app).clientTurnTiming.enabled).toBe(true);
+      process.env.CDK_CLIENT_TURN_TIMING_ENABLED = 'yes';
+      expect(loadConfig(app).clientTurnTiming.enabled).toBe(false);
+    });
+  });
+
+  // ============================================================
   // Session prewarm feature flag — opt-in while in development
   // ============================================================
 

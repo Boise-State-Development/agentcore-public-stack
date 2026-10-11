@@ -80,6 +80,7 @@ export interface AppConfig {
   projects: ProjectsConfig;
   userGrants: UserGrantsConfig;
   sessionPrewarm: SessionPrewarmConfig;
+  clientTurnTiming: ClientTurnTimingConfig;
   memoryLint: MemoryLintConfig;
   conversationIndex: ConversationIndexConfig;
   conversationSearch: ConversationSearchConfig;
@@ -451,6 +452,20 @@ export interface UserGrantsConfig {
  * which reclaims idle memory, and billed at peak memory on V1.
  */
 export interface SessionPrewarmConfig {
+  enabled: boolean;
+}
+
+/**
+ * Client-measured time to first token (docs/specs/turn-path-ttft.md §6).
+ * **Opt-in while the feature is in development**: off unless
+ * CDK_CLIENT_TURN_TIMING_ENABLED=true (or a `clientTurnTiming.enabled: true`
+ * cdk.json context). Sets CLIENT_TURN_TIMING_ENABLED on **app-api only**, which
+ * serves `POST /telemetry/turn-timing`: the SPA reports each turn's
+ * send-to-first-token, and app-api records it as EMF in AgentCoreStack/TurnLatency.
+ * It is the only metric covering the browser, the app-api hop, Runtime routing
+ * and session start. Spends none of the Runtime's environment budget.
+ */
+export interface ClientTurnTimingConfig {
   enabled: boolean;
 }
 
@@ -1331,6 +1346,13 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_SESSION_PREWARM_ENABLED
         ? process.env.CDK_SESSION_PREWARM_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('sessionPrewarm')?.enabled ?? false,
+    },
+    clientTurnTiming: {
+      // Opt-in while in development (CLAUDE.md "Feature flags"): only the literal
+      // "true" turns it on; an unset workflow variable arrives as "" and is off.
+      enabled: process.env.CDK_CLIENT_TURN_TIMING_ENABLED
+        ? process.env.CDK_CLIENT_TURN_TIMING_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('clientTurnTiming')?.enabled ?? false,
     },
     // Project-memory content lint: configuration of Shared Projects, not a flag.
     // The workflow forwards an EMPTY STRING when a variable is unset, which falls

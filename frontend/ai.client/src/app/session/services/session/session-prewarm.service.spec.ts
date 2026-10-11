@@ -172,6 +172,24 @@ describe('SessionPrewarmService', () => {
     });
   });
 
+  describe('warm age, for the turn-timing report', () => {
+    it('is null until a warm call goes out, then counts from it', () => {
+      vi.useFakeTimers();
+      const service = setup();
+      expect(service.warmAgeMs('conv-1')).toBeNull();
+      service.warm('conv-1');
+      httpMock.expectOne(URL).flush({});
+      vi.advanceTimersByTime(4000);
+      expect(service.warmAgeMs('conv-1')).toBe(4000);
+    });
+
+    it('a turn is not a prewarm', () => {
+      const service = setup();
+      service.noteTurn('conv-1');
+      expect(service.warmAgeMs('conv-1')).toBeNull();
+    });
+  });
+
   describe('visibility', () => {
     it('defers a background tab until the user looks at it', () => {
       const service = setup({ visibility: 'hidden' });

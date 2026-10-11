@@ -10,6 +10,7 @@ import { HttpClient } from '@angular/common/http';
 import { SessionService } from '../session/session.service';
 import { ErrorService } from '../../../services/error/error.service';
 import { isPreviewSession } from '../../../shared/constants/session.constants';
+import { TurnTimingService } from './turn-timing.service';
 
 /**
  * Title fallback polling. A stream that outruns title generation closes a few
@@ -155,6 +156,7 @@ interface GenerateTitleResponse {
 })
 export class ChatHttpService {
   private streamParserService = inject(StreamParserService);
+  private turnTiming = inject(TurnTimingService);
   private chatStateService = inject(ChatStateService);
   private messageMapService = inject(MessageMapService);
   private config = inject(ConfigService);
@@ -317,6 +319,11 @@ export class ChatHttpService {
             }
           },
           onmessage: (msg: EventSourceMessage) => {
+            // Client-measured time to first token: the first delta of a send
+            // ends its clock (a no-op for resumes, Continue, and later deltas).
+            if (msg.event === 'content_block_delta' && isCurrentStream()) {
+              this.turnTiming.firstToken(sessionId);
+            }
             // Parse the data if it's a string
             let parsedData = msg.data;
             if (typeof msg.data === 'string') {
@@ -335,6 +342,7 @@ export class ChatHttpService {
             );
           },
           onclose: () => {
+            this.turnTiming.abandon(sessionId);
             finalizeStream();
 
             // Fallback only: the title normally arrives mid-stream as a

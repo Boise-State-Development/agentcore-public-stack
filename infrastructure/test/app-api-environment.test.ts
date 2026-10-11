@@ -87,6 +87,14 @@ describe('buildAppApiEnvironment — session prewarm', () => {
   });
 });
 
+describe('buildAppApiEnvironment — client turn timing', () => {
+  it('forwards the flag, off by default', () => {
+    expect(buildAppApiEnvironment(createMockConfig(), stubParams()).CLIENT_TURN_TIMING_ENABLED).toBe('false');
+    const on = buildAppApiEnvironment(createMockConfig({ clientTurnTiming: { enabled: true } }), stubParams());
+    expect(on.CLIENT_TURN_TIMING_ENABLED).toBe('true');
+  });
+});
+
 describe('buildAppApiEnvironment — project-memory content lint (2.7)', () => {
   it('always sets the mode and sets the patterns only when there are some', () => {
     const plain = buildAppApiEnvironment(createMockConfig(), stubParams());

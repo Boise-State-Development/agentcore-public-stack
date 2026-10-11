@@ -626,6 +626,27 @@ def projects_enabled() -> bool:
     return os.environ.get("PROJECTS_ENABLED", "").strip().lower() == "true"
 
 
+def client_turn_timing_enabled() -> bool:
+    """Whether app-api records the SPA's own time-to-first-token for each turn.
+
+    ``POST /telemetry/turn-timing`` (``apis/app_api/telemetry/routes.py``) takes
+    the browser's send-to-first-token measurement and writes it as EMF into
+    ``AgentCoreStack/TurnLatency``. It is the only metric that covers the whole
+    wait a user sees: the browser, the app-api hop, Runtime routing and session
+    start, which the server-side ``FirstTokenMs`` (handler entry onward) cannot
+    see (``docs/specs/turn-path-ttft.md`` §6). **Opt-in while the feature is in
+    development** (CLAUDE.md "Feature flags"): only ``"true"`` (case-insensitive)
+    enables it; while off the route 404s after authentication. CDK sets it on
+    app-api from ``config.clientTurnTiming.enabled``. The SPA's matching switch
+    is ``features.clientTurnTiming``.
+
+    A **feature switch** once finished: it is observability a deployment may not
+    want (a handful of custom metrics, one small log line per turn). It records
+    timings and a model id, never message content, user ids or session ids.
+    """
+    return os.environ.get("CLIENT_TURN_TIMING_ENABLED", "").strip().lower() == "true"
+
+
 def session_prewarm_enabled() -> bool:
     """Whether app-api warms a conversation's AgentCore Runtime session ahead of its first send.
 

@@ -269,6 +269,12 @@ jobs:
       # "true" in an environment to turn it on there. app-api only. The SPA's
       # matching switch is `features.sessionPrewarm` in src/environments/*.ts.
       CDK_SESSION_PREWARM_ENABLED: ${{ vars.CDK_SESSION_PREWARM_ENABLED }}
+      # Client-measured time to first token: POST /telemetry/turn-timing records the
+      # SPA's own send-to-first-token in AgentCoreStack/TurnLatency
+      # (docs/specs/turn-path-ttft.md §6). Opt-in while in development: set
+      # `CDK_CLIENT_TURN_TIMING_ENABLED` to "true" in an environment to turn it on
+      # there. app-api only. The SPA's matching switch is `features.clientTurnTiming`.
+      CDK_CLIENT_TURN_TIMING_ENABLED: ${{ vars.CDK_CLIENT_TURN_TIMING_ENABLED }}
       # Project-memory content lint (Shared Projects 2.7). Configuration, not a
       # flag: it applies only inside Projects. Unset (empty string) means the
       # defaults: `warn`, and no deployment patterns. `CDK_MEMORY_LINT_MODE` is

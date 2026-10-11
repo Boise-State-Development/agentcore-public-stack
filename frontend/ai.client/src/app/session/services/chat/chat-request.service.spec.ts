@@ -9,6 +9,7 @@ import { MessageMapService } from '../session/message-map.service';
 import { MessageFeedbackService } from '../session/message-feedback.service';
 import { SessionService } from '../session/session.service';
 import { SessionPrewarmService } from '../session/session-prewarm.service';
+import { TurnTimingService } from './turn-timing.service';
 import { UserService } from '../../../auth/user.service';
 import { ModelService } from '../model/model.service';
 import { ToolService } from '../../../services/tool/tool.service';
@@ -157,6 +158,37 @@ describe('ChatRequestService', () => {
       await service.submitChatRequest('Hello', 'session1');
 
       expect(noted).toHaveBeenCalledWith('session1');
+    });
+
+    it('starts the first-token clock on a send and describes the turn', async () => {
+      const timing = TestBed.inject(TurnTimingService);
+      vi.spyOn(timing, 'enabled', 'get').mockReturnValue(true);
+      const start = vi.spyOn(timing, 'start').mockImplementation(() => undefined);
+      const describeTurn = vi.spyOn(timing, 'describe').mockImplementation(() => undefined);
+      const messages = TestBed.inject(MessageMapService) as unknown as Record<string, unknown>;
+      messages['getMessagesForSession'] = vi.fn().mockReturnValue(() => []);
+      const prewarm = TestBed.inject(SessionPrewarmService);
+      vi.spyOn(prewarm, 'claimNewConversationId').mockReturnValue('warmed-id');
+      vi.spyOn(prewarm, 'warmAgeMs').mockReturnValue(5200);
+
+      await service.submitChatRequest('Hello', null, ['upload-1'], 'assistant1');
+
+      expect(start).toHaveBeenCalledWith('warmed-id', { turnKind: 'first', warmAgeMs: 5200 });
+      expect(describeTurn).toHaveBeenCalledWith('warmed-id', { modelId: 'test-model', hasAgent: true, hasFiles: true });
+    });
+
+    it('a send into a conversation with messages is a follow-up', async () => {
+      const timing = TestBed.inject(TurnTimingService);
+      vi.spyOn(timing, 'enabled', 'get').mockReturnValue(true);
+      const start = vi.spyOn(timing, 'start').mockImplementation(() => undefined);
+      const messages = TestBed.inject(MessageMapService) as unknown as Record<string, unknown>;
+      messages['getMessagesForSession'] = vi.fn().mockReturnValue(() => [{ id: 'm1' }]);
+      const sessions = TestBed.inject(SessionService) as unknown as Record<string, unknown>;
+      sessions['isNewSession'] = vi.fn().mockReturnValue(false);
+
+      await service.submitChatRequest('Hello', 'session1');
+
+      expect(start).toHaveBeenCalledWith('session1', expect.objectContaining({ turnKind: 'followup' }));
     });
 
     it('an existing conversation never claims the warmed id', async () => {

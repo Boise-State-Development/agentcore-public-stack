@@ -216,6 +216,7 @@ from apis.app_api.costs.routes import router as costs_router
 from apis.app_api.chat.routes import router as chat_router
 from apis.app_api.chat.converse_routes import router as converse_router
 from apis.app_api.chat.proxy_routes import router as bff_chat_proxy_router
+from apis.app_api.telemetry.routes import router as telemetry_router
 from apis.app_api.mcp_apps.routes import router as mcp_apps_router
 from apis.app_api.memory.routes import router as memory_router
 from apis.app_api.memory_spaces.routes import router as memory_spaces_router
@@ -270,6 +271,7 @@ app.include_router(costs_router)
 app.include_router(chat_router)  # Application-specific chat endpoints
 app.include_router(converse_router)  # API-key authenticated /chat/api-converse (Bedrock Converse)
 app.include_router(bff_chat_proxy_router)  # Cookie-authenticated SSE proxy (Phase 4, dormant until SPA cutover)
+app.include_router(telemetry_router)  # POST /telemetry/turn-timing; 404s while CLIENT_TURN_TIMING_ENABLED is off
 app.include_router(mcp_apps_router)  # MCP Apps app-initiated tools/call proxy (PR #5; inert until host flag on)
 app.include_router(memory_spaces_router)  # Memory Spaces user surface (A2); 404s while flag off
 app.include_router(projects_router)  # Shared Projects (PR-1.2); 404s while PROJECTS_ENABLED=false
