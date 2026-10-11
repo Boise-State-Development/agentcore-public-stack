@@ -124,6 +124,14 @@ describe('describeActivity', () => {
     expect(describeActivity(rec('project.tools_updated', { after: { version: '7', refs: [] } })).version).toBe(7);
     expect(describeActivity(rec('project.member_added', { after: { email: 'x', role: 'viewer' } })).version).toBeNull();
   });
+
+  it('never links an artifact’s or a memory file’s version to settings History', () => {
+    expect(describeActivity(rec('project.output_shared', { after: { title: 'Report', version: '1' }, reason: 'schedule' })).version).toBeNull();
+    expect(describeActivity(rec('project.output_removed', { after: { title: 'Report', version: 3 } })).version).toBeNull();
+    expect(describeActivity(rec('project.memory_edited', { after: { slug: 'sis', version: '4' } })).version).toBeNull();
+    expect(describeActivity(rec('project.memory_proposal_approved', { after: { slug: 'sis', version: 5 } })).version).toBeNull();
+    expect(describeActivity(rec('project.skills_updated', { before: { refs: [] }, after: { refs: ['s'], version: '6' } })).version).toBe(6);
+  });
 });
 
 describe('ProjectActivityComponent', () => {

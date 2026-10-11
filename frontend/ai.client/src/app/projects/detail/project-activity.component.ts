@@ -15,6 +15,14 @@ const PAGE_SIZE = 50;
 
 const ROLE_PHRASES: Record<string, string> = { editor: 'an editor', viewer: 'a viewer', owner: 'the owner' };
 
+/** The actions that cut a settings version (`harness_settings.py`), which an entry links to History. */
+const SETTINGS_ACTIONS = new Set([
+  'project.instructions_updated',
+  'project.model_updated',
+  'project.tools_updated',
+  'project.skills_updated',
+]);
+
 /** What an entry says after its actor, and the settings version it cut, if any. */
 export interface ActivityLine {
   text: string;
@@ -114,9 +122,14 @@ export function describeActivity(
 ): ActivityLine {
   const before = record.before ?? {};
   const after = record.after ?? {};
-  // The audit log stores detail values as strings ("2"), so accept either.
+  // The audit log stores detail values as strings ("2"), so accept either. Only a
+  // settings save's `version` is a settings version; an output's is the artifact's
+  // and a memory edit's the file's, which Settings › History knows nothing about.
   const rawVersion = Number(after['version']);
-  const version = after['version'] != null && Number.isInteger(rawVersion) && rawVersion > 0 ? rawVersion : null;
+  const version =
+    SETTINGS_ACTIONS.has(record.action) && after['version'] != null && Number.isInteger(rawVersion) && rawVersion > 0
+      ? rawVersion
+      : null;
   const line = (text: string): ActivityLine => ({ text, version });
 
   switch (record.action) {
