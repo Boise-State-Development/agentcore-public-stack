@@ -52,6 +52,7 @@ from apis.shared.memory.service import (
 )
 from apis.shared.memory.stats import record_read
 from apis.shared.projects.service import ProjectConflictError, ProjectError, ProjectNotFoundError
+from apis.shared.scheduled_prompts.models import is_headless_session
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,10 @@ _INDEX_BUDGETS = {"project": PROJECT_MEMORY_MAX_TOKENS, "mine": MINE_MEMORY_MAX_
 _INDEX_SLUG = "MEMORY.md"
 _ARCHIVED = "This project is archived, so its memory is read-only."
 _NOT_A_MEMBER = "You are no longer a member of this project, so its memory is unavailable."
+_UNATTENDED_INDEX = (
+    "This is a scheduled run, so it can't change the project's MEMORY.md index. "
+    "Use memory_propose for the file instead; an editor adds it to the index on approval."
+)
 
 
 def _session_of(tool_context: Optional[ToolContext]) -> Optional[str]:
@@ -327,6 +332,13 @@ def make_project_memory_save_tool(scopes: ProjectMemoryScopes):
             return bad
         user = scopes.user
         label = _LABELS[scope]
+        session_id = _session_of(tool_context)
+        if scope == "project" and is_headless_session(session_id):
+            # Nobody is watching a scheduled run, so what it would add to the
+            # project's shared memory waits for an editor (shared-projects §9.3).
+            if _is_index_slug(slug):
+                return _error(_UNATTENDED_INDEX)
+            return await _propose(scopes, slug, text, description, session_id, unattended=True)
         try:
             if scope == "mine":
                 space_id = await asyncio.to_thread(scopes.ensure_personal_space)
@@ -341,7 +353,7 @@ def make_project_memory_save_tool(scopes: ProjectMemoryScopes):
                 if saved.warnings:
                     out += " Notes: " + " ".join(saved.warnings)
                 return {"content": [{"text": out}], "status": "success"}
-            context = SaveContext(source_session_id=_session_of(tool_context))
+            context = SaveContext(source_session_id=session_id)
             result = await asyncio.to_thread(
                 lambda: service.save_entry(
                     space_id, user.user_id, user.email, slug, text,
@@ -382,35 +394,51 @@ def make_project_memory_propose_tool(scopes: ProjectMemoryScopes):
             text: The whole proposed file, one "- " item per line.
             description: One line describing the file.
         """
-        from apis.shared.projects.memory_proposals import ProjectMemoryProposals, ProposalProjectError
-
-        user = scopes.user
         session_id = _session_of(tool_context)
-        try:
-            proposal, warnings = await asyncio.to_thread(
-                lambda: ProjectMemoryProposals().propose(
-                    scopes.project_id, user, slug, text,
-                    description=description or None, proposer_kind="agent", source_session_id=session_id,
-                )
-            )
-        except MemoryValidationError as exc:
-            return _error(f"Not proposed: {exc}")
-        except ProposalProjectError as exc:
-            return _error(str(exc))
-        except (MemorySpacePermissionError, MemorySpaceNotFoundError):
-            return _error(_NOT_A_MEMBER)
-        except MemorySpaceError as exc:
-            return _error(f"Could not propose '{slug}': {exc}")
-        verb = "a change to" if proposal.base_version else "a new file,"
-        text_out = (
-            f'Proposed {verb} "{proposal.slug}" for review. The project\'s editors have been notified; '
-            "it takes effect only if one of them approves it."
-        )
-        if warnings:
-            text_out += " Notes: " + " ".join(warnings)
-        return {"content": [{"text": text_out}], "status": "success"}
+        return await _propose(scopes, slug, text, description, session_id, unattended=is_headless_session(session_id))
 
     return memory_propose
+
+
+async def _propose(
+    scopes: ProjectMemoryScopes,
+    slug: str,
+    text: str,
+    description: str,
+    session_id: Optional[str],
+    *,
+    unattended: bool,
+) -> dict[str, Any]:
+    """Queue a change to project memory for review. ``unattended``: a scheduled run's."""
+    from apis.shared.projects.memory_proposals import ProjectMemoryProposals, ProposalProjectError
+
+    try:
+        proposal, warnings = await asyncio.to_thread(
+            lambda: ProjectMemoryProposals().propose(
+                scopes.project_id, scopes.user, slug, text,
+                description=description or None,
+                proposer_kind="schedule" if unattended else "agent",
+                source_session_id=session_id,
+            )
+        )
+    except MemoryValidationError as exc:
+        return _error(f"Not proposed: {exc}")
+    except ProposalProjectError as exc:
+        return _error(str(exc))
+    except (MemorySpacePermissionError, MemorySpaceNotFoundError):
+        return _error(_NOT_A_MEMBER)
+    except MemorySpaceError as exc:
+        return _error(f"Could not propose '{slug}': {exc}")
+    verb = "a change to" if proposal.base_version else "a new file,"
+    text_out = (
+        f'Proposed {verb} "{proposal.slug}" for review. The project\'s editors have been notified; '
+        "it takes effect only if one of them approves it."
+    )
+    if unattended:
+        text_out = "This is a scheduled run, so project memory changes are proposed rather than saved. " + text_out
+    if warnings:
+        text_out += " Notes: " + " ".join(warnings)
+    return {"content": [{"text": text_out}], "status": "success"}
 
 
 async def _index_new_file(

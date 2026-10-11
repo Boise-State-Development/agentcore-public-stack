@@ -122,6 +122,9 @@ class SharedTask(BaseModel):
     shared_at: str = Field(..., alias="sharedAt")
     # The sharer's hand-off line (2.5b). Re-sharing replaces it with the pointer.
     note: Optional[str] = None
+    # Set when a project schedule delivered this task (3.2b): the schedule keeps only
+    # its newest few runs shared, and the SPA says which schedule ran it.
+    schedule_id: Optional[str] = Field(None, alias="scheduleId")
 
 
 class ProjectSchedulePointer(BaseModel):
@@ -163,3 +166,5 @@ class ProjectScheduleRun(BaseModel):
     status: ScheduleRunStatus
     finished_at: str = Field(..., alias="finishedAt")
     reason: Optional[str] = None
+    # The project share a delivered run became (3.2b), which every member may open.
+    share_id: Optional[str] = Field(None, alias="shareId")

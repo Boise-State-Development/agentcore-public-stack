@@ -487,50 +487,12 @@ class ArtifactListService:
         artifacts, which is the same reason `list_for_session` re-checks
         it per row.
         """
-        table = _table()
-        items: list[dict] = []
-        kwargs: dict = {
-            "IndexName": _SESSION_INDEX,
-            "KeyConditionExpression": Key("GSI1PK").eq(
-                f"SESSION#{session_id}"
-            ),
-            "ScanIndexForward": False,  # GSI1SK embeds updated_at → newest first
-        }
+        from apis.shared.shares.artifacts import session_artifact_heads
+
         try:
-            while True:
-                resp = table.query(**kwargs)
-                items.extend(resp.get("Items", []))
-                last = resp.get("LastEvaluatedKey")
-                if not last:
-                    break
-                kwargs["ExclusiveStartKey"] = last
+            return session_artifact_heads(_table(), user_id=user_id, session_id=session_id)
         except ClientError as exc:
             raise ArtifactQueryError("artifact head query failed") from exc
-
-        heads: list[dict] = []
-        seen: set = set()
-        for item in items:
-            artifact_id = str(item.get("artifact_id", ""))
-            if not artifact_id or item.get("user_id") != user_id:
-                continue
-            if artifact_id in seen:
-                continue
-            seen.add(artifact_id)
-            produced_by = item.get("produced_by_message_index")
-            heads.append(
-                {
-                    "artifact_id": artifact_id,
-                    "version": int(item.get("version", 1)),
-                    "title": str(item.get("title", "")),
-                    "content_type": str(
-                        item.get("content_type", "text/html; charset=utf-8")
-                    ),
-                    "produced_by_message_index": (
-                        int(produced_by) if produced_by is not None else None
-                    ),
-                }
-            )
-        return heads
 
     def list_for_user(self, *, user_id: str) -> list[dict]:
         """Every artifact the user owns, at HEAD, newest-first.

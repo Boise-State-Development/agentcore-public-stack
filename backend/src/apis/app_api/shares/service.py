@@ -22,7 +22,7 @@ from apis.shared.auth.models import User
 from apis.shared.feature_flags import projects_enabled
 from apis.shared.notifications.service import NotificationService
 from apis.shared.projects.access import resolve_project_role
-from apis.shared.projects.models import Project, SharedTask, normalize_email
+from apis.shared.projects.models import Project, normalize_email
 from apis.shared.projects.repository import ProjectRepository
 from apis.shared.projects.service import max_members
 from apis.shared.sessions.messages import get_messages
@@ -39,13 +39,9 @@ from .models import (
 from apis.shared.shares.snapshots import SnapshotUnreadableError, convert_decimals_to_float, load_snapshot_raw
 from apis.shared.shares.snapshot_store import (
     ShareSnapshotStore,
-    ShareSnapshotStoreError,
     get_share_snapshot_store,
 )
-
-# Snapshot schema version stamped on the S3 body pointer, for forward
-# migration if the body shape ever changes.
-_SNAPSHOT_SCHEMA_VERSION = 1
+from apis.shared.shares.writer import ShareStorageError, project_pointer, write_share
 
 logger = logging.getLogger(__name__)
 
@@ -193,94 +189,41 @@ class ShareService:
         ]
 
         metadata_snapshot = metadata.model_dump(by_alias=True, exclude_none=True)
-
-        share_id = str(uuid.uuid4())
-        now = datetime.now(timezone.utc).isoformat()
         allowed_emails = self._resolve_allowed_emails(
             request.access_level, request.allowed_emails, user.email
         )
-
-        # Offload the snapshot BODY (messages + metadata) to S3 — a long
-        # conversation exceeds DynamoDB's 400 KB item limit if inlined. The
-        # DynamoDB row keeps only the small control fields plus a pointer.
-        # The body is opaque JSON bytes in S3, so we serialize the raw
-        # model_dump directly and skip the float→Decimal dance (that only
-        # exists to satisfy DynamoDB's boto3 resource, which rejects floats).
         if not self._snapshot_store.enabled:
             raise ShareStorageUnavailableError()
 
-        # Artifacts the conversation produced, pinned at the version each
-        # stood at right now.
-        #
-        # They belong in the snapshot for the same reason the messages
-        # do: this share is a point-in-time copy, and an artifact
-        # resolved live would drift under a recipient who is reading a
-        # frozen conversation — they would see a chart the transcript
-        # around it never describes. Pinning also makes the snapshot the
-        # ALLOWLIST: the mint route will serve an (artifact, version)
-        # pair only if it appears here, so a recipient cannot name an
-        # arbitrary artifact of the owner's.
-        artifacts_snapshot = self._snapshot_artifacts(session_id, user)
-
-        body_bytes = json.dumps(
-            {
-                "metadata": metadata_snapshot,
-                "messages": messages_snapshot,
-                "artifacts": artifacts_snapshot,
-                # The model's one-line tool-batch summaries, frozen with the
-                # messages they describe. They live in TSUM# rows, not on the
-                # messages, so without this a snapshot falls back to the
-                # client-side wording ("Ran memory read").
-                "toolSummaries": messages_response.tool_summaries,
-            }
-        ).encode("utf-8")
-
+        # The body is stored in S3 and the row points at it; a project share's
+        # pointer lands with the row or the share is rolled back (``write_share``).
+        # Artifacts are pinned at the version each stood at right now, which also
+        # makes the snapshot the allowlist the render-token route checks.
         try:
-            bucket_key = self._snapshot_store.put(share_id=share_id, body=body_bytes)
-        except ShareSnapshotStoreError as e:
-            logger.error(
-                f"Failed to store snapshot body for share {self._sanitize_id(share_id)}: {e}"
+            item = write_share(
+                table=self._table,
+                snapshot_store=self._snapshot_store,
+                projects=self._projects() if project_id else None,
+                session_id=session_id,
+                owner_id=user.user_id,
+                owner_email=user.email,
+                access_level=request.access_level,
+                metadata=metadata_snapshot,
+                messages=messages_snapshot,
+                artifacts=self._snapshot_artifacts(session_id, user),
+                # The model's one-line tool-batch summaries live in TSUM# rows, not
+                # on the messages; without them a snapshot falls back to the
+                # client-side wording ("Ran memory read").
+                tool_summaries=messages_response.tool_summaries,
+                allowed_emails=allowed_emails,
+                project_id=project_id,
+                note=request.note,
             )
+        except ShareStorageError as e:
+            logger.error(f"Failed to store snapshot body for session {self._sanitize_id(session_id)}: {e}")
             raise ShareStorageUnavailableError() from e
-
-        item = {
-            "share_id": share_id,
-            "session_id": session_id,
-            "owner_id": user.user_id,
-            "owner_email": user.email,
-            "access_level": request.access_level,
-            "created_at": now,
-            # Denormalized from the snapshot so a project pointer can be rebuilt
-            # from the row alone.
-            "title": str(metadata_snapshot.get("title") or ""),
-            "body_ref": {
-                "bucket_key": bucket_key,
-                "format": "json",
-                "schema_version": _SNAPSHOT_SCHEMA_VERSION,
-                "byte_size": len(body_bytes),
-            },
-        }
-        if allowed_emails is not None:
-            item["allowed_emails"] = allowed_emails
+        share_id = item["share_id"]
         if project_id:
-            item["project_id"] = project_id
-        if request.note:
-            item["note"] = request.note
-
-        self._table.put_item(Item=item)
-        if project_id:
-            # Without its pointer a project share is unlisted, so the two land
-            # together or not at all.
-            try:
-                self._put_project_pointer(item)
-            except Exception:
-                logger.error(
-                    f"Project pointer write failed for share {self._sanitize_id(share_id)}; rolling back",
-                    exc_info=True,
-                )
-                self._table.delete_item(Key={"share_id": share_id})
-                self._delete_snapshot_body(item)
-                raise
             self._record_task_share(
                 AuditAction.PROJECT_TASK_SHARED, user, item, notified=len(recipients), hasNote=bool(request.note)
             )
@@ -875,18 +818,7 @@ class ShareService:
         )
 
     def _put_project_pointer(self, item: dict) -> None:
-        self._projects().put_shared_task(
-            SharedTask(
-                project_id=item["project_id"],
-                session_id=item["session_id"],
-                share_id=item["share_id"],
-                owner_id=item["owner_id"],
-                owner_email=item.get("owner_email", ""),
-                title=self._share_title(item),
-                shared_at=item["created_at"],
-                note=item.get("note"),
-            )
-        )
+        self._projects().put_shared_task(project_pointer({**item, "title": self._share_title(item)}))
 
     def _sync_project_pointer(self, session_id: str, project_id: str) -> None:
         """Point ``SHARED_TASK#{session_id}`` at the task's newest share with the project.
