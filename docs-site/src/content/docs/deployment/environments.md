@@ -96,7 +96,7 @@ differ between a dev and a prod stack:
 | Concern | Variables |
 |---------|-----------|
 | **ECS / Runtime sizing** | `CDK_APP_API_CPU`, `CDK_APP_API_MEMORY`, `CDK_APP_API_DESIRED_COUNT`, `CDK_APP_API_MAX_CAPACITY`, and the matching `CDK_INFERENCE_API_*` |
-| **AgentCore Runtime version** | `CDK_AGENTCORE_RUNTIME_PLATFORM_VERSION` (`V1` default, or `V2`) — set it per environment to trial V2 in dev before prod |
+| **AgentCore Runtime version** | `CDK_AGENTCORE_RUNTIME_PLATFORM_VERSION` (`V1` default, or `V2`) — set it per environment to trial V2 in dev before prod. **Read [AgentCore Runtime V2](/agentcore-public-stack/deployment/agentcore-runtime-v2/) first:** V2 caps the Runtime's environment at 2,560 bytes, which releases through 1.27.0 exceed, and selecting it there wedges the stack |
 | **CloudFront** | `CDK_FRONTEND_CLOUDFRONT_PRICE_CLASS` (`PriceClass_100` / `200` / `All`) |
 | **CORS** | `CDK_CORS_ORIGINS` and per-module overrides — add `http://localhost:4200` to point a local SPA at a deployed environment |
 | **Frame ancestors** | `CDK_ARTIFACTS_EXTRA_FRAME_ANCESTORS`, `CDK_MCP_SANDBOX_EXTRA_FRAME_ANCESTORS` — leave unset in production |

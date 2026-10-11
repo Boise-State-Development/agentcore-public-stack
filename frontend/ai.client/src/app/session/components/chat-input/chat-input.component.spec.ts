@@ -23,6 +23,7 @@ import { ComposerDraftService } from '../../services/session/composer-draft.serv
 import { NEW_CONVERSATION_DRAFT_KEY } from '../../services/session/composer-draft-storage.service';
 import { ChatInputComponent, spliceDictation } from './chat-input.component';
 import { ComposerHandoffService } from './composer-handoff.service';
+import { SessionPrewarmService } from '../../services/session/session-prewarm.service';
 
 const AGENTS: MentionableAgent[] = [
   { agentId: 'a1', name: 'Alpha', group: 'own' },
@@ -196,6 +197,15 @@ describe('ChatInputComponent — the `@` menu keyboard path (D11)', () => {
     textarea.dispatchEvent(new KeyboardEvent('keyup', { key, bubbles: true }));
     fixture.detectChanges();
   }
+
+  it('tells session prewarm about every input, which warms an armed conversation once', () => {
+    // The service decides; the composer only reports. Typing and pasting both
+    // arrive as `input` events.
+    const noted = vi.spyOn(TestBed.inject(SessionPrewarmService), 'noteTyping');
+    type('h');
+    type('hi');
+    expect(noted).toHaveBeenCalledTimes(2);
+  });
 
   it('opens the menu on a word-initial `@`', () => {
     type('@');

@@ -24,7 +24,8 @@ GitHub provides two mechanisms for storing configuration values:
 | AWS_REGION | Variable | Yes | `us-west-2` | All | AWS region for resource deployment |
 | AWS_ROLE_ARN | Secret | No | None | All | AWS IAM role ARN for OIDC authentication (recommended over access keys) |
 | AWS_SECRET_ACCESS_KEY | Secret | No | None | All | AWS secret access key for authentication (alternative to role-based auth) |
-| CDK_AGENTCORE_RUNTIME_PLATFORM_VERSION | Variable | No | `V1` | Inference API | AgentCore Runtime platform version, `V1` or `V2` (sets `PlatformVersion` on the Runtime). V2 reclaims idle memory mid-session and starts sessions from a snapshot, at a higher per-GB-hour rate. Changing it is an in-place update that keeps the runtime id. Any other value fails synth. See `docs/specs/agentcore-runtime-v2.md` |
+| CDK_AGENTCORE_RUNTIME_PLATFORM_VERSION | Variable | No | `V1` | Inference API | AgentCore Runtime platform version, `V1` or `V2` (sets `PlatformVersion` on the Runtime). V2 reclaims idle memory mid-session and starts sessions from a snapshot, at a higher per-GB-hour rate. Changing it is an in-place update that keeps the runtime id. Any other value fails synth. **V2 caps the Runtime's environment at 2,560 bytes**; synth refuses a V2 deployment over it, and releases through 1.27.0 are over it. See `docs/specs/agentcore-runtime-v2.md` and the docs-site page *Deployment ▸ AgentCore Runtime V2* |
+| SKIP_RUNTIME_ENV_CONTRACT_CHECK | Variable | No | unset | Platform | Set `true` to skip the pre-deploy check that the live inference-api image can derive its resource names (`scripts/platform/check-runtime-env-contract.sh`). Only for a custom image, or a deploy role without ECR read, after confirming backend.yml has deployed. See `docs/specs/agentcore-runtime-v2.md` §8 |
 | CDK_ALB_SUBDOMAIN | Variable | No | None | Platform | Subdomain for ALB (e.g., 'api' for api.yourdomain.com) |
 | CDK_APP_API_CPU | Variable | No | `512` | App API | CPU units for App API ECS task (256, 512, 1024, 2048, 4096) |
 | CDK_APP_API_CORS_ORIGINS | Variable | No | None | App API | Additional CORS origins for the app API only (appended to global CORS origins) |
@@ -74,6 +75,7 @@ GitHub provides two mechanisms for storing configuration values:
 | CDK_PROJECT_PREFIX | Variable | Yes | `agentcore` | All | Prefix for all resource names (e.g., 'mycompany-agentcore') |
 | CDK_RAG_CORS_ORIGINS | Variable | No | None | RAG Ingestion | Additional CORS origins for the RAG documents S3 bucket only (appended to global CORS origins) |
 | CDK_RETAIN_DATA_ON_DELETE | Variable | No | `false` | All | Retain data resources (DynamoDB, S3, Secrets) on stack deletion |
+| CDK_SESSION_PREWARM_ENABLED | Variable | No | `false` | App API | Session prewarm (in development): `true` mounts `POST /chat/prewarm`, which starts a conversation's AgentCore Runtime session ahead of the send: a new conversation when its page loads, an existing one on the first keystroke. Pair with `features.sessionPrewarm` in the SPA environment file. Cheap on the V2 Runtime; billed at peak memory on V1. See `docs/specs/agentcore-runtime-v2.md` §5a |
 | CDK_VPC_CIDR | Variable | No | `10.0.0.0/16` | Platform | CIDR block for VPC network |
 | ENV_INFERENCE_API_CORS_ORIGINS | Variable | No | None | Inference API | _(Deprecated — use CDK_INFERENCE_API_CORS_ORIGINS instead)_ |
 | ENV_INFERENCE_API_LOG_LEVEL | Variable | No | `INFO` | Inference API | Log level for runtime container (DEBUG, INFO, WARNING, ERROR) |

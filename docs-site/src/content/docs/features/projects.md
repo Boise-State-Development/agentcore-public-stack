@@ -63,7 +63,8 @@ one-line summaries. Each row opens a dialog:
 - **Instructions**: what the assistant is told in every task.
 - **Files**: the documents the assistant works from.
 - **Model**: the model every task runs on.
-- **Tools & skills**: what the assistant can use and follow.
+- **Tools**: what the assistant can use.
+- **Skills**: the playbooks the assistant can follow, and the version of each.
 - **Members**: people, roles, invitations, and (for the owner) whether editors
   may manage members.
 - **Activity** (editors and the owner): who changed what, newest first.
@@ -117,6 +118,21 @@ still runs with whatever each member is allowed: if a member cannot use one of
 the project's tools, skills, its model, or its memory, their turn runs without
 it. A notice above the composer names what was left out. That notice is not
 saved, so it shows on the live turn only.
+
+### Skill versions
+
+A skill added to a project stays on the version it was added at. If its author
+changes it later, the project keeps running the version it was added at until
+an editor updates it. **Skills** shows each skill's version and the
+date it was saved, and says when a newer version is available. **Update** moves
+the project to the skill's current version. The update is saved straight away
+and appears in History like any other settings change. A skill added before
+versions existed shows "Uses the latest version" until an editor pins it with
+**Pin this version**.
+
+A version saves the skill's instructions and its reference files. It does not
+save whether the skill is switched on. If an administrator disables or deletes
+the skill, the project stops using it, whatever version it is on.
 
 ## Notifications
 

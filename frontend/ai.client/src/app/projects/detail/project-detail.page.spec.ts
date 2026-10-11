@@ -11,6 +11,7 @@ import { ProjectComposerComponent } from './project-composer.component';
 import { ProjectOutputsComponent } from './project-outputs.component';
 import { ProjectProposalsComponent } from './project-proposals.component';
 import { ProjectTasksComponent } from './project-tasks.component';
+import { ProjectBindingsDialogComponent } from '../components/project-bindings-dialog.component';
 import { ProjectInstructionsDialogComponent } from '../components/project-instructions-dialog.component';
 import { ProjectMembersDialogComponent } from '../components/project-members-dialog.component';
 import { AgentService } from '../../agents/services/agent.service';
@@ -129,7 +130,7 @@ describe('ProjectDetailPage', () => {
 
   it('lists the settings rail, with Activity for an editor', async () => {
     const { el } = await open('/projects/prj_1');
-    expect(railRows(el)).toEqual(['Instructions', 'Files', 'Model', 'Tools & skills', 'Members', 'Activity', 'History']);
+    expect(railRows(el)).toEqual(['Instructions', 'Files', 'Model', 'Tools', 'Skills', 'Members', 'Activity', 'History']);
   });
 
   it('gives a viewer no Activity row', async () => {
@@ -152,6 +153,14 @@ describe('ProjectDetailPage', () => {
     expect(dialog.open).toHaveBeenCalledWith(
       ProjectInstructionsDialogComponent,
       expect.objectContaining({ data: expect.objectContaining({ instructions: 'Be terse.', version: 2, canEdit: true }) }),
+    );
+  });
+
+  it('opens the Skills dialog, not Tools, from the old skills tab', async () => {
+    await open('/projects/prj_1/skills');
+    expect(dialog.open).toHaveBeenCalledWith(
+      ProjectBindingsDialogComponent,
+      expect.objectContaining({ data: expect.objectContaining({ kind: 'skills' }) }),
     );
   });
 

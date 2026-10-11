@@ -5,6 +5,7 @@ import { provideHttpClient } from '@angular/common/http';
 import { signal } from '@angular/core';
 import { SessionService, SessionsListResponse, MessagesListResponse, BulkDeleteSessionsResponse, SIDEBAR_PAGE_SIZE } from './session.service';
 import { SessionService as BffSessionService } from '../../../auth/session.service';
+import { SUPPRESS_ERROR_TOAST } from '../../../auth/error.interceptor';
 import { ConfigService } from '../../../services/config.service';
 import { SessionMetadata } from '../models/session-metadata.model';
 import { Message } from '../models/message.model';
@@ -71,6 +72,26 @@ describe('SessionService', () => {
         httpMock.expectOne('http://localhost:8000/sessions/test-session-id/metadata').flush(mockSession);
       });
       expect(await promise).toEqual(mockSession);
+    });
+
+    it('shows the global error toast by default', async () => {
+      const promise = service.getSessionMetadata('test-session-id');
+      await vi.waitFor(() => {
+        const req = httpMock.expectOne('http://localhost:8000/sessions/test-session-id/metadata');
+        expect(req.request.context.get(SUPPRESS_ERROR_TOAST)).toBe(false);
+        req.flush(mockSession);
+      });
+      await promise;
+    });
+
+    it('suppresses the toast when quiet (a refused first turn leaves no row to read)', async () => {
+      const promise = service.getSessionMetadata('test-session-id', { quiet: true });
+      await vi.waitFor(() => {
+        const req = httpMock.expectOne('http://localhost:8000/sessions/test-session-id/metadata');
+        expect(req.request.context.get(SUPPRESS_ERROR_TOAST)).toBe(true);
+        req.flush({ detail: 'Session not found' }, { status: 404, statusText: 'Not Found' });
+      });
+      await expect(promise).rejects.toBeTruthy();
     });
   });
 

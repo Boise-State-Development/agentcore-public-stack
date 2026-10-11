@@ -16,6 +16,32 @@ const REFRESH_ON_FOCUS_MS = 60_000;
 
 const ROLE_PHRASES: Record<string, string> = { editor: 'an editor', viewer: 'a viewer', owner: 'the owner' };
 
+/** Why a project schedule stopped, worded for its creator and for anyone else (the owner). */
+const SCHEDULE_STOPS: Record<string, { mine: string; theirs: string }> = {
+  member_removed: { mine: 'because you’re no longer a member', theirs: 'because its creator is no longer a member' },
+  not_editor: { mine: 'because you’re no longer an editor', theirs: 'because its creator is no longer an editor' },
+  project_archived: { mine: 'because the project was archived', theirs: 'because the project was archived' },
+  project_deleted: { mine: 'because the project was deleted', theirs: 'because the project was deleted' },
+  projects_disabled: { mine: 'because Projects is switched off', theirs: 'because Projects is switched off' },
+  repeated_failures: { mine: 'after failing several times in a row', theirs: 'after failing several times in a row' },
+  reauth_required: { mine: 'until you sign in again', theirs: 'until its creator signs in again' },
+  oauth_required: { mine: 'until you reconnect a tool it uses', theirs: 'until its creator reconnects a tool it uses' },
+};
+
+function describeSchedule(n: AppNotification, who: string, project: string): string {
+  const label = typeof n.payload?.label === 'string' && n.payload.label ? ` “${n.payload.label}”` : '';
+  const mine = !!n.payload?.createdBy && n.payload.createdBy === n.recipientEmail?.toLowerCase();
+  const subject = mine ? `Your schedule${label}` : label ? `The schedule${label}` : 'A schedule';
+  switch (n.payload?.reason) {
+    case 'paused_by_editor':
+      return `${who} paused your schedule${label} in ${project}.`;
+    case 'deleted':
+      return `${who} deleted your schedule${label} in ${project}.`;
+  }
+  const stop = SCHEDULE_STOPS[n.payload?.reason ?? ''];
+  return stop ? `${subject} in ${project} stopped ${mine ? stop.mine : stop.theirs}.` : `${subject} in ${project} stopped.`;
+}
+
 /** The sentence a notification reads as. Actor and project fall back to neutral words. */
 export function describeNotification(n: AppNotification): string {
   const who = personLabel(n.actorName, n.actorEmail) || 'Someone';
@@ -49,6 +75,8 @@ export function describeNotification(n: AppNotification): string {
       const files = count === 1 ? '1 file' : count > 1 ? `${count} files` : 'some files';
       return `Memory maintenance that ${who} ran suggests changes to ${files} in ${project}’s memory.`;
     }
+    case 'project_schedule_paused':
+      return describeSchedule(n, who, project);
     case 'project_task_shared': {
       const title = typeof n.payload?.title === 'string' && n.payload.title ? n.payload.title : 'a task';
       return `${who} shared “${title}” with you in ${project}.`;

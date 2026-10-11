@@ -106,6 +106,13 @@ class InvocationRequest(BaseModel):
 
     session_id: str
     message: str = ""
+    # Session prewarm (docs/specs/agentcore-runtime-v2.md §5a): app-api sends
+    # `{"session_id": ..., "warm": true}` with the conversation's affinity header
+    # when the user opens a conversation, so the microVM the first real turn
+    # lands on is already started. The handler returns before reading anything:
+    # no ownership read, no session or metadata rows, no lease, no quota, no
+    # model call. Every other field is ignored on a warm request.
+    warm: Optional[bool] = None
     model_id: Optional[str] = None
     temperature: Optional[float] = None
     system_prompt: Optional[str] = None

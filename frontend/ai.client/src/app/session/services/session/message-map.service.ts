@@ -267,6 +267,31 @@ export class MessageMapService {
   }
 
   /**
+   * Flag a user message as not sent — see `Message.sendFailure`. Replaces the
+   * message object rather than mutating it so OnPush bubbles re-render.
+   */
+  markSendFailed(sessionId: string, messageId: string, reason: string): void {
+    this.messageMap()[sessionId]?.update(msgs =>
+      msgs.map(m => (m.id === messageId ? { ...m, sendFailure: { reason } } : m)),
+    );
+  }
+
+  /**
+   * Drop a message the server never received, ahead of resending it. Only a
+   * trailing message is safe to drop: ids are `msg-{sessionId}-{index}`, so
+   * removing one from the middle would leave every later id pointing at a
+   * different index than the server will assign on reload. Returns whether
+   * it was removed.
+   */
+  removeTrailingMessage(sessionId: string, messageId: string): boolean {
+    const sessionSignal = this.messageMap()[sessionId];
+    const msgs = sessionSignal?.() ?? [];
+    if (msgs.length === 0 || msgs[msgs.length - 1].id !== messageId) return false;
+    sessionSignal!.set(msgs.slice(0, -1));
+    return true;
+  }
+
+  /**
    * Add a voice transcript message (from VoiceChatService) to the session.
    * Used when the voice agent completes a response and the transcript is finalized.
    *

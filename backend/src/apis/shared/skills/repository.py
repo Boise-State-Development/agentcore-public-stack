@@ -6,6 +6,8 @@ DynamoDB operations for the admin-managed Skill catalog. Mirrors
 (``DYNAMODB_APP_ROLES_TABLE_NAME``) with a distinct PK pattern:
 
   - Skill: PK=SKILL#{skill_id}, SK=METADATA
+  - Version: PK=SKILL#{skill_id}, SK=VERSION#{n:08d} (``versions.SkillVersion``,
+    cut when a binding pins the skill; no GSI keys)
 
 ``SkillOwnerIndex`` (GSI4: GSI4PK=OWNER#{owner_id}, GSI4SK=SKILL#{skill_id})
 backs the user-authored tier's "list my skills" query
@@ -17,18 +19,28 @@ backs the user-authored tier's "list my skills" query
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import boto3
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 
 from .models import SkillDefinition, SkillStatus, UserSkillPreference
+from .versions import VERSION_SK_PREFIX, SkillVersion, version_sk
 
 logger = logging.getLogger(__name__)
 
 # GSI4 — see module docstring. Provisioned in the CDK auth-tables construct.
 SKILL_OWNER_INDEX = "SkillOwnerIndex"
+
+
+class SkillVersionExistsError(ValueError):
+    """A version number was taken by a concurrent pin."""
+
+    def __init__(self, skill_id: str, number: Optional[int]):
+        super().__init__(f"Version {number} of skill {skill_id} already exists")
+        self.skill_id = skill_id
+        self.number = number
 
 
 class SkillCatalogRepository:
@@ -351,6 +363,82 @@ class SkillCatalogRepository:
         except ClientError as e:
             logger.error(f"Error batch getting skills: {e}")
             raise
+
+    # =========================================================================
+    # Version snapshots (shared-projects 3.1): SK=VERSION#{n:08d}
+    # =========================================================================
+
+    async def put_skill_version(self, version: SkillVersion) -> SkillVersion:
+        """Write one numbered version, refusing to overwrite an existing number.
+
+        Raises ``SkillVersionExistsError`` when that number is taken, so the caller
+        can re-pick (see ``pinning.pin_current``).
+        """
+        try:
+            self._table.put_item(
+                Item=version.to_dynamo_item(),
+                ConditionExpression="attribute_not_exists(PK)",
+            )
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                raise SkillVersionExistsError(version.skill_id, version.version) from e
+            logger.error(f"Error writing version {version.version} of skill {version.skill_id}: {e}")
+            raise
+        logger.info(f"Cut version {version.version} of skill {version.skill_id}")
+        return version
+
+    async def get_latest_skill_version(self, skill_id: str) -> Optional[SkillVersion]:
+        """The highest-numbered version, read as the last key of the partition."""
+        response = self._table.query(
+            KeyConditionExpression=Key("PK").eq(f"SKILL#{skill_id}")
+            & Key("SK").begins_with(VERSION_SK_PREFIX),
+            ScanIndexForward=False,
+            Limit=1,
+        )
+        items = response.get("Items", [])
+        return SkillVersion.from_dynamo_item(items[0]) if items else None
+
+    async def batch_get_skill_versions(
+        self, refs: List[Tuple[str, int]]
+    ) -> Dict[Tuple[str, int], SkillVersion]:
+        """Versions by ``(skill_id, number)``; a missing one is simply absent."""
+        wanted = list(dict.fromkeys(refs))
+        found: Dict[Tuple[str, int], SkillVersion] = {}
+        for i in range(0, len(wanted), 100):
+            keys = [
+                {"PK": f"SKILL#{sid}", "SK": version_sk(n)} for sid, n in wanted[i : i + 100]
+            ]
+            response = self._dynamodb.meta.client.batch_get_item(
+                RequestItems={self.table_name: {"Keys": keys}}
+            )
+            for item in response.get("Responses", {}).get(self.table_name, []):
+                version = SkillVersion.from_dynamo_item(item)
+                found[(version.skill_id, version.version)] = version
+        return found
+
+    async def delete_skill_versions(self, skill_id: str) -> List[SkillVersion]:
+        """Delete every version of a skill; return what was deleted.
+
+        Called when the skill itself is hard-deleted. Versions must not outlive it:
+        a skill id can be reused, and a stale pin on a project would otherwise run
+        the deleted skill's instructions under the new skill's live status.
+        """
+        deleted: List[SkillVersion] = []
+        kwargs: Dict[str, Any] = {
+            "KeyConditionExpression": Key("PK").eq(f"SKILL#{skill_id}")
+            & Key("SK").begins_with(VERSION_SK_PREFIX),
+        }
+        while True:
+            response = self._table.query(**kwargs)
+            for item in response.get("Items", []):
+                deleted.append(SkillVersion.from_dynamo_item(item))
+                self._table.delete_item(Key={"PK": item["PK"], "SK": item["SK"]})
+            if "LastEvaluatedKey" not in response:
+                break
+            kwargs["ExclusiveStartKey"] = response["LastEvaluatedKey"]
+        if deleted:
+            logger.info(f"Deleted {len(deleted)} version(s) of skill {skill_id}")
+        return deleted
 
     # =========================================================================
     # User Preferences (mirrors ToolCatalogRepository)

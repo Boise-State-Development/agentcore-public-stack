@@ -330,6 +330,21 @@ class TestToolResolution:
         assert plan.tools is not None and plan.tools.tool_ids == ["web_search"]
 
     @pytest.mark.asyncio
+    async def test_a_pinned_binding_runs_as_its_version(self, monkeypatch):
+        # shared-projects 3.1: access is judged on the catalog id, and the pin rides
+        # the run-time id (skill_id@n) to the cache key, the snapshot and the build.
+        predicate = _patch_skill_access(monkeypatch, True)
+        plan = await resolve_agent_invocation(
+            _assistant(bindings=[
+                AgentBinding(kind="skill", ref="research", config={"version": 3}),
+                _skill_binding("writing"),
+            ]),
+            _user(),
+        )
+        assert plan.skills.skill_ids == ["research@3", "writing"]
+        assert predicate.await_args.args[1] == ["research", "writing"]
+
+    @pytest.mark.asyncio
     async def test_duplicate_refs_deduped(self, monkeypatch):
         _patch_tool_access(monkeypatch, True)
         plan = await resolve_agent_invocation(

@@ -14,5 +14,7 @@ export const environment = {
     features: {
         projects: true,
         conversationSearch: true,
+        userGrants: true,
+        sessionPrewarm: true,
     } satisfies FeatureFlags,
 };

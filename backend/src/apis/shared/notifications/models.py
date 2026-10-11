@@ -32,6 +32,10 @@ NotificationKind = Literal[
     "project_proposal_pending",
     "project_proposal_decided",
     "project_memory_maintenance",
+    # A project schedule stopped running (3.2): payload {scheduleId, label, reason,
+    # createdBy}. ``reason`` is a run_block_reason code, a worker pause reason, or
+    # "paused_by_editor" / "deleted" when someone else stopped it.
+    "project_schedule_paused",
 ]
 
 

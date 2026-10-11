@@ -32,7 +32,12 @@ from apis.shared.models.models import (
     ModelRoleAssignment,
 )
 from apis.shared.auth import User, require_admin_scope
-from apis.shared.feature_flags import announcements_enabled, projects_enabled, skills_enabled
+from apis.shared.feature_flags import (
+    announcements_enabled,
+    projects_enabled,
+    skills_enabled,
+    user_grants_enabled,
+)
 from apis.shared.models.managed_models import (
     create_managed_model,
     get_managed_model,
@@ -1112,6 +1117,15 @@ if projects_enabled():
     from .projects.routes import router as projects_admin_router
 
     router.include_router(projects_admin_router)
+
+# ========== Include User Grants Admin Subrouter (conditional) ==========
+# Mounted only while USER_GRANTS_ENABLED (opt-in while in development). The
+# routes are full-admin only, never scope-delegated: see the module docstring
+# for why a grant surface cannot be delegated.
+if user_grants_enabled():
+    from .user_grants.routes import router as user_grants_admin_router
+
+    router.include_router(user_grants_admin_router)
 
 # ========== Include Fine-Tuning Admin Subrouter (conditional) ==========
 if os.environ.get("FINE_TUNING_ENABLED", "false").lower() == "true":

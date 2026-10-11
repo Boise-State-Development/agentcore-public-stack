@@ -10,25 +10,46 @@ first-turns into phases on a 40k-user load run put that residual at 3.6 s
 start, where it overlaps the Runtime's own readiness wait instead of the
 user's request.
 
-Runs on a daemon thread so ``/ping`` answers immediately. Python's import lock
-makes a first request that arrives mid-warm-up wait for the in-progress import
-rather than redo it, so there is no double work. Best-effort throughout: a
-failure here is logged and the first turn simply pays what it always paid.
+Runs to completion during application startup, BEFORE the server accepts a
+connection, so ``/ping`` cannot report healthy until it is done. That ordering
+is what makes it work on the AgentCore Runtime V2: V2 takes the snapshot every
+session restores from on the first healthy ``/ping``, so work still running
+then is redone in every restored session, on that user's first turn. AWS's
+guidance is exactly this ("report health from /ping only after initialization
+completes", docs: Optimize your agent for AgentCore Runtime V2). The dev V2
+trial on 2026-10-10 showed the cost of the old order, a daemon thread with
+``/ping`` answering at once: the snapshot was taken about 0.9 s before
+warm-up finished, and new sessions' first-turn preludes ran up to 3.4 s
+against about 1 s. On V1 the order costs nothing a user sees: AgentCore
+pre-boots containers ahead of sessions, and a request reaching a container
+mid-boot would have waited on the same imports anyway. The whole step is
+bounded by ``WARMUP_READY_TIMEOUT_SECONDS``, well inside the Runtime's
+120-second health deadline; past it the server starts and warm-up finishes in
+the background, as before.
+
+Best-effort throughout: a failure here is logged and the first turn simply
+pays what it always paid.
 
 Gated by ``INFERENCE_WARMUP_ENABLED`` (default on; ``=false`` is the kill
 switch, per the flags convention in CLAUDE.md).
 """
 
+import asyncio
 import importlib
 import logging
 import os
-import threading
 import time
 from typing import Callable, Iterable
 
 logger = logging.getLogger(__name__)
 
 WARMUP_ENABLED_ENV = "INFERENCE_WARMUP_ENABLED"
+
+# Ceiling on how long startup waits for warm-up before the server starts
+# anyway. The AgentCore Runtime fails a container that is not healthy within
+# 120 s of start; warm-up measures about 0.7 s on dev. The only step that can
+# stall is the strategy-id read, which botocore retries.
+WARMUP_READY_TIMEOUT_SECONDS = 60.0
 
 # Modules the first turn imports lazily. Ordered heaviest-first so a request
 # that arrives mid-warm-up finds the expensive ones already in progress.
@@ -142,12 +163,27 @@ def run_warmup() -> None:
     logger.info("warmup complete ms=%d", int((time.perf_counter() - started) * 1000))
 
 
-def start_warmup_in_background() -> threading.Thread | None:
-    """Kick off :func:`run_warmup` on a daemon thread. Returns the thread, or
-    ``None`` when the kill switch is set."""
+async def warm_before_ready(timeout: float = WARMUP_READY_TIMEOUT_SECONDS) -> bool:
+    """Run :func:`run_warmup` and return once it finishes, for the app's startup hook.
+
+    Await this before the lifespan yields: uvicorn binds its socket only after
+    startup completes, so no ``/ping`` (and on V2, no snapshot) can happen
+    while warm-up is still running. It runs on a worker thread so the event
+    loop stays free. Returns ``True`` when warm-up finished in time, ``False``
+    when it is switched off or timed out; a timed-out warm-up keeps running on
+    its thread, so the first turn still benefits from whatever it finishes.
+    """
     if not warmup_enabled():
         logger.info("warmup disabled via %s", WARMUP_ENABLED_ENV)
-        return None
-    thread = threading.Thread(target=run_warmup, name="inference-warmup", daemon=True)
-    thread.start()
-    return thread
+        return False
+    started = time.perf_counter()
+    try:
+        await asyncio.wait_for(asyncio.to_thread(run_warmup), timeout=timeout)
+    except asyncio.TimeoutError:
+        logger.warning(
+            "warmup still running after %.0fs; starting the server anyway and finishing it in the background",
+            timeout,
+        )
+        return False
+    logger.info("warmup finished before ready ms=%d", int((time.perf_counter() - started) * 1000))
+    return True

@@ -2,10 +2,12 @@ import { inject, Injectable, OnDestroy } from '@angular/core';
 import { Router } from '@angular/router';
 import { v4 as uuidv4 } from 'uuid';
 import { ChatStateService } from './chat-state.service';
-import { ChatHttpService } from './chat-http.service';
+import { ChatHttpService, StreamNotStartedError } from './chat-http.service';
+import { FailedSendService } from './failed-send.service';
 import { MessageMapService } from '../session/message-map.service';
 import { MessageFeedbackService } from '../session/message-feedback.service';
 import { SessionService } from '../session/session.service';
+import { SessionPrewarmService } from '../session/session-prewarm.service';
 import { UserService } from '../../../auth/user.service';
 import { ModelService } from '../model/model.service';
 import { ToolService } from '../../../services/tool/tool.service';
@@ -57,6 +59,7 @@ export class ChatRequestService implements OnDestroy {
   private messageMapService = inject(MessageMapService);
   private messageFeedbackService = inject(MessageFeedbackService);
   private sessionService = inject(SessionService);
+  private sessionPrewarm = inject(SessionPrewarmService);
   private userService = inject(UserService);
   private modelService = inject(ModelService);
   private toolService = inject(ToolService);
@@ -68,6 +71,7 @@ export class ChatRequestService implements OnDestroy {
   private browserLoginService = inject(BrowserLoginService);
   private steering = inject(SteeringService);
   private errorService = inject(ErrorService);
+  private failedSends = inject(FailedSendService);
   private systemPromptsService = inject(SystemPromptsService);
   private router = inject(Router);
   // TODO: Inject proper logging service
@@ -105,7 +109,12 @@ export class ChatRequestService implements OnDestroy {
     // Ensure conversation exists and get its ID
     // Update URL to reflect current conversation
     const isNewSession = !sessionId;
-    sessionId = sessionId || uuidv4();
+    // A new conversation starts on the id the page warmed when it opened, so
+    // this turn lands on the microVM that is already starting (session
+    // prewarm). Null while the feature is off: mint one, as before.
+    sessionId = sessionId || this.sessionPrewarm.claimNewConversationId() || uuidv4();
+    // This turn starts the microVM itself; typing a follow-up need not warm it.
+    this.sessionPrewarm.noteTurn(sessionId);
 
     // Any new send (including a "Continue") retires the previous turn's
     // max_tokens "Continue" affordance and any interrupted-turn chip
@@ -178,8 +187,43 @@ export class ChatRequestService implements OnDestroy {
       // logger.error('Chat request failed', { error, conversationId: sessionId });
       this.chatStateService.setChatLoading(sessionId, false);
       this.messageMapService.endStreaming(sessionId);
+      if (error instanceof StreamNotStartedError) {
+        this.markNotSent(sessionId, userMessage.id, error.reason, () =>
+          this.submitChatRequest(
+            userInput,
+            sessionId,
+            fileUploadIds,
+            assistantId,
+            mentionAgentId,
+            invokedSkillIds,
+          ),
+        );
+      }
       throw error; // Re-throw to allow caller to handle
     }
+  }
+
+  /**
+   * Leave a refused send on screen as "Not sent", with a retry.
+   *
+   * Without this a request refused before streaming — a queued follow-up
+   * flushed into a Runtime 403 or a 409, say — left a bubble that looked
+   * delivered and no reply under it (dev, 2026-10-09). The retry drops that
+   * bubble first so the resend does not render twice; one that is no longer
+   * last stays, still marked, because removing it would shift every later
+   * message id (see `removeTrailingMessage`).
+   */
+  private markNotSent(
+    sessionId: string,
+    messageId: string,
+    reason: string,
+    resend: () => Promise<void>,
+  ): void {
+    this.messageMapService.markSendFailed(sessionId, messageId, reason);
+    this.failedSends.register(messageId, sessionId, () => {
+      this.messageMapService.removeTrailingMessage(sessionId, messageId);
+      resend().catch(error => console.error('Error resending chat request:', error));
+    });
   }
 
   /**

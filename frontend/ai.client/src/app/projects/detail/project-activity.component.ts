@@ -59,6 +59,25 @@ function bindingChange(before: string[], after: string[], kind: 'tool' | 'skill'
   return parts.length ? parts.join(' and ') : `updated the ${kind}s`;
 }
 
+/** "updated the skill X to version 3" when a save only moved pins (`versions`: ref → pinned version). */
+function skillUpdate(before: Record<string, unknown>, after: Record<string, unknown>, label: ActivityLabel): string | null {
+  const was = versions(before['versions']);
+  const now = versions(after['versions']);
+  const moved = Object.keys(now).filter(ref => now[ref] !== was[ref]);
+  if (moved.length !== 1) return null;
+  return `updated the skill ${label('skill', moved[0])} to version ${now[moved[0]]}`;
+}
+
+/** As the audit log returns it, a version may be a number or a numeric string. */
+function versions(value: unknown): Record<string, number> {
+  if (!value || typeof value !== 'object') return {};
+  return Object.fromEntries(
+    Object.entries(value)
+      .map(([ref, v]) => [ref, typeof v === 'number' ? v : Number(v)] as const)
+      .filter(([, v]) => Number.isInteger(v) && v > 0),
+  );
+}
+
 /**
  * One audit record as a sentence (without its actor, which the row shows).
  * The trail keeps no instruction text, only the version a save cut, so settings
@@ -112,8 +131,10 @@ export function describeActivity(
       return line(str(after['modelId']) ? `changed the model to ${label('model', str(after['modelId']))}` : 'changed the model');
     case 'project.tools_updated':
       return line(bindingChange(refs(before['refs']), refs(after['refs']), 'tool', label));
-    case 'project.skills_updated':
-      return line(bindingChange(refs(before['refs']), refs(after['refs']), 'skill', label));
+    case 'project.skills_updated': {
+      const change = bindingChange(refs(before['refs']), refs(after['refs']), 'skill', label);
+      return line(change === 'updated the skills' ? (skillUpdate(before, after, label) ?? change) : change);
+    }
     case 'project.knowledge_added':
       return line(
         str(after['source']) === 'web'

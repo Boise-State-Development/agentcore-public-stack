@@ -1,3 +1,331 @@
+# Release Notes — v1.27.0
+
+**Release Date:** October 8, 2026
+**Previous Release:** v1.26.0 (October 3, 2026)
+
+---
+
+> 🏗️ **A CDK deploy is required, and it creates new resources.** These are the conversation archive bucket, the conversation index queue and Lambdas, the retention pruner's scheduled task, and the memory maintenance worker. Deploy in the usual order: `platform.yml` → `backend.yml` → `frontend-deploy.yml`. There are **no new DynamoDB tables and no GSI changes**.
+>
+> 🔁 **Two backfills run after the deploy:**
+> - `backfill_session_search_attributes.py`, so conversation search finds older conversations by title;
+> - `backfill_conversation_archive.py`, which copies conversations into the archive before AgentCore Memory expires their messages. It races a 90-day clock, so start it the same day.
+>
+> Commands are under Deployment notes.
+>
+> 🔎 **Conversation search turns on with this release.** With nothing set, it matches titles and opening prompts. Full-text search needs the opt-in conversation index: set `CDK_CONVERSATION_INDEX_ENABLED=true` in the GitHub environment **before** the merge, so the archive backfill is indexed as it runs.
+>
+> 🔒 **Two security fixes** close a cross-user exposure on a shared session id and an identity override on the voice socket. After the deploy, each live conversation's first turn runs on a cold container (about 3 s, once).
+
+---
+
+## Highlights
+
+**Find any conversation.** `Cmd/Ctrl+K` opens a search over your own conversations. It matches titles and opening prompts as you type, and with the conversation index on, it also matches anything said in them, opening the conversation at the matching turn. The same dialog finds projects, agents and artifacts.
+
+**Conversations last a year.** Message text lived only in AgentCore Memory events, which expired after 90 days. An old conversation stayed in the sidebar but opened empty, which on prod was 11% of active sessions. Retention is now 365 days and configurable. A per-turn archive keeps a copy, so a conversation Memory has let go still opens, read-only, from the archive.
+
+**Turns that fail or stop now cost what they cost.** Hosted OpenAI models (GPT-6 Sol and Luna, GPT-5.6) retry transient faults instead of ending the turn with "Agent force-stopped". Failed and interrupted turns are now metered against quota. A burst of `api-converse` calls no longer cycles app-api.
+
+**Security.** Two users on one session id could have shared one live conversation; they can't now. Voice takes its identity only from the authenticated token.
+
+Also in this release:
+- Word redlines keep their tracked changes when a knowledge base indexes them.
+- Text-only models such as GLM 5 accept attachments.
+- A fork of a shared conversation works from its first turn.
+- Every dialog has an accessible name.
+- **Shared Projects**, still off by default, finishes its memory phase and gains Outputs.
+
+**Action required:** the CDK deploy, both backfills and a voice check, all under Deployment notes.
+
+---
+
+## Conversation search
+
+Until now the sidebar was the only way to find a conversation, and it scrolled. Search is **on by default** in every deployment (#1380).
+
+### What users get
+
+- **Opening search.** `Cmd/Ctrl+K` works anywhere, including from the composer, and the sidebar header has a search button. With nothing typed, the dialog lists the eight most recent conversations plus New conversation, New project and New agent.
+- **Typing.** Loaded titles filter at once. A server-side match over titles and opening prompts covers every conversation, not just the loaded pages (dev: ~90 ms).
+- **Full text, with the index on.** Enter, or a pause, adds full-text matches with a highlighted snippet (dev: ~0.7–0.8 s). Choosing one opens the conversation scrolled to that turn (`/s/{id}?m=msg-…`).
+- **Scopes.** Chips for All, Conversations, Projects, Agents and Artifacts. The non-conversation scopes filter lists the app already loads, with no new routes. Projects appear only in builds with Projects on.
+- **Keyboard and screen readers.** The dialog works by keyboard, and a screen reader hears the result count once a search settles.
+
+### Isolation
+
+The index is one shared knowledge base, so isolation is enforced in our code, three ways:
+- The only function that queries it builds the `user_id` filter from the session cookie and accepts no caller filter. An architecture test keeps it the only caller.
+- Document ids carry the user (`conv#{user_id}#{session_id}#{n}`), so two users who share a session id never share a document (#1483).
+- Every hit is joined to the caller's own session row, and dropped when the row is missing or deleted.
+
+A route test runs two users, a lost filter and a forged owner attribute through the real path.
+
+### Backend
+
+- **`GET /sessions/search`** (`sessions/search_routes.py`, `apis/shared/conversation_search/`): `mode=lexical` reads DynamoDB only; `mode=all` adds the index, at most 20 a minute per user. When the index is off, unprovisioned or failing, search falls back to lexical (#1480).
+- **New session-row attributes:** `titleLower` and `firstPrompt`, written with the title, off the turn path.
+- **Archive write path:** after `done`, each finished turn's user and assistant text (no tool results, 16 KB cap) is written in the background to `{prefix}-conversation-archive`. It adds nothing before the first token. Injected long-term memory and attachment guidance are stripped first (#1463, #1466).
+- **Index consumer:** EventBridge rules feed a queue drained by the `conversation-index` Lambda. The Lambda creates the shared Managed KB on its first write (about 1–2 minutes) and keeps one document per turn (#1467).
+- **Reconcilers:** a daily job removes documents whose turn is gone (#1471, #1473).
+
+### Frontend
+
+- `components/search/`: the dialog, the shortcut, scope chips and jump-to-message (#1480, #1491).
+- The sidebar's search button sits beside the collapse control (#1491).
+
+### Cost and switches
+
+- **Lexical search** costs nothing beyond DynamoDB reads.
+- **The index** is about $4/month at today's prod volume (`docs/specs/conversation-search.md` §2).
+- **Search** is a permanent feature switch: `CDK_CONVERSATION_SEARCH_ENABLED=false` together with `features.conversationSearch: false` opts a deployment out (#1506).
+- **The index** stays opt-in (`CDK_CONVERSATION_INDEX_ENABLED`). With it off, archive writes stop and search is lexical only.
+
+---
+
+## Conversations kept for 365 days
+
+Message text lives only in AgentCore Memory short-term events, and they expired at 90 days. The session row has no TTL, so an old conversation stayed in the sidebar and opened as "No messages yet". On prod, 1,439 of 13,057 active sessions (11%) were already in that state on 2026-10-06.
+
+- **365 days by default** (`CDK_CONVERSATION_RETENTION_DAYS`, minimum 3). AgentCore Memory caps it at 365. It is an in-place update to the Memory resource (#1450).
+- **Existing events keep their 90-day clock.** Raising the expiry doesn't extend events already written; this was verified twice on dev. That is why the archive backfill below is time-sensitive: it is the only rescue for conversations written before this release.
+- **Archive fallback:** when Memory has no events for a session, `GET /sessions/{id}/messages` serves its archived turns at their original message ids. They are text only, and marked `fromArchive: true` (#1475).
+- **Read-only:** the composer is replaced by a notice with *Start a new conversation*, because the agent can't continue a conversation Memory no longer holds (#1478).
+- **Retention pruner:** a daily scheduled ECS task deletes sessions past retention through the same cascade as a user's delete. **It deletes nothing until `CDK_CONVERSATION_RETENTION_PRUNE_ARMED=true`.** Even then, its first run in an environment only reports the count (#1471).
+- **Conversations already past the cliff** can't be recovered. `prune_sessions_without_events.py` is an optional one-off that removes them (dry-run by default) (#1472).
+
+---
+
+## Model reliability and metering
+
+- **Transient faults retry on every provider (#1446).** Only Bedrock had a retry strategy. On prod, hosted OpenAI models (GPT-6 Sol and Luna, GPT-5.6 Terra) ended turns with "Agent force-stopped" on upstream 5xx and "temporarily unavailable" errors.
+  - One `TransientModelRetryStrategy` now covers throttles, 5xx, connection failures, timeouts and OpenAI in-stream server errors.
+  - It never retries a 4xx, or anything once the model has streamed visible output.
+  - Retries no longer stack under botocore: a call makes at most 4 attempts, where Bedrock used to make up to 12.
+  - On Claude, a blip botocore used to absorb silently now takes about 2 s and shows the `model_retry` notice.
+- **Failed turns are metered (#1457).** A turn that ended in an error skipped every cost write, although the provider billed its completed calls. Each call that reported usage now gets its `C#` row and counts against quota.
+- **Interrupted turns meter every call (#1459).** A Stop used to record at most the last call.
+- **Retries no longer misalign cost rows (#1460).** A retried attempt shifted every later call's row by two messages, and left the cache fingerprints one call behind.
+- **`api-converse` bursts no longer take down app-api (#1499, #1502).**
+  - Bedrock calls held app-api's single event loop for the whole model call, so `/auth/session`, `/sessions` and `/health` froze. The ALB marked the task unhealthy, and ECS cycled the service twice in October.
+  - Calls now run on a worker pool, capped per task by `CDK_APP_API_CONVERSE_MAX_IN_FLIGHT` (default 16). Past the cap, a call gets 429 with `Retry-After: 5`.
+  - The rate limiter, API-key and user repositories' DynamoDB reads moved off the event loop too.
+
+---
+
+## Shared Projects (preview, off by default)
+
+Projects stays dark: `CDK_PROJECTS_ENABLED` must be `true` and the SPA built with `features.projects`.
+
+As of this release, a team shares a project with owner, editor and viewer roles. The project holds:
+- the assistant's instructions, model, tools and skills, with version history;
+- shared files;
+- an Activity trail;
+- governed project memory, with each member's own memory beside it.
+
+Members start private tasks from the project page and can share a task with the project, notifying teammates with a note. Shared artifacts appear under **Outputs**. The project's assistant reads the project's memory, the member's own memory and the shared tasks, and knows which member it is talking to.
+
+New in this release:
+- **Composer-first project page** with a settings rail whose rows open dialogs. Switching models keeps the project (#1461, #1440).
+- **Telling teammates.** Share notifications with a note; archive, restore and leave notifications; directory names next to emails (#1462, #1442, #1441).
+- **The assistant reads shared tasks.** `shared_tasks_list` and `shared_task_read` read the shared snapshot, never the live session (#1464, #1465).
+- **Memory governance.** Viewers propose and editors review. Every item carries provenance, removed items go to a restorable archive, and pinned items can't be dropped (#1468, #1470, #1474).
+- **A Memory page** to browse, edit (block editor, link picker), review and restore history (#1484, #1486, #1488).
+- **Maintenance.** **Tidy up** proposes merges, replacements, removals and splits.
+  - In shared memory, an editor approves each change.
+  - In a member's own memory, changes apply at once with **Undo**.
+  - A deterministic verifier drops any change that adds or loses a number, date, link or name.
+  - Runs are metered to the project's monthly cost.
+  - (#1500, #1503, #1505, #1507, #1510)
+- **Content check** on every project-memory save: instruction-like text, prompt markup and credential-shaped strings. It warns by default (`CDK_MEMORY_LINT_MODE`). **Export** includes `provenance.json` (#1518).
+- **Outputs:** share an artifact made in a project task with the project (#1477, #1482).
+- **Team-simulation fixes:**
+  - new memory files are indexed;
+  - "just for me" preferences persist;
+  - the assistant knows who is speaking;
+  - **Make owner** works for any signed-in editor (#1432, #1433, #1441, #1438).
+
+**Not built yet:**
+- pinned skill versions (3.1); project skills run their live version, and the UI says so;
+- schedules in projects (3.2);
+- project budgets (3.4);
+- automated maintenance (3.5);
+- Phase 4: Entra groups and directory search, regulated-data projects, email notifications.
+
+The end-user guide is on the docs site under **User Guide › Projects** (#1428).
+
+---
+
+## ✨ Also improved
+
+- **A customizable sidebar, with Schedules in it (#1509).** A **More** row under the sidebar's navigation lists hidden entries plus **Edit sidebar…**. The dialog shows or hides each entry (Agents, Projects, Artifacts, Customize, Schedules) and reorders them by drag or arrow keys. The layout is saved to the user's account (`sidebarItems` on `/users/me/settings`), so it follows them across devices. **Schedules** is new to the sidebar; the page existed but was reachable only by URL.
+- **The share dialog names the skills that sharing an agent hands over (#1435).** Recipients run the skills the owner wrote and can get the model to show their instructions. The dialog now says which skills, from the published snapshot.
+- **Shared snapshots show the model's tool summaries (#1443).** New shares carry the same one-line summaries as the live session; re-share an older one to get them.
+
+---
+
+## 🐛 Bug fixes
+
+**Knowledge bases**
+- **Word redlines lost their tracked changes (#1431, #1436).** Deleted and inserted wording ran together on managed KBs, and vanished on the legacy Docling path. On dev, an assistant called a reversed indemnification clause "already matches standard".
+  - Each revision now reads as `[deleted: …]` / `[inserted: …]`, with comments inlined.
+  - Managed KBs receive the annotated text inline.
+  - **Redlines already ingested keep their flattened text until re-uploaded.**
+- **Plain `.txt` uploads failed on the legacy path (#1427).** Docling 2.81 has no plain-text format and refused every `.txt`, so the file is now handed over as Markdown. Previously failed files must be uploaded again.
+- **Documents waited hours on a new managed KB (#1429).** The migration worker never released its lease, so each step lost the next tick. Provisioning also ingested one waiting document per run, so four files took about 90 minutes. The lease is now released per step, and waiting documents go to the ingestion consumer concurrently.
+
+**Conversations and sharing**
+- **Forks of shared conversations broke (#1430).** A fork of a conversation with an attachment failed on every turn after a rebuild. Its first turns also saw no history, because the export never wrote the agent record. Old forks repair themselves on their next restore.
+- **Text-only models rejected attachments (#1452, #1456).** For a TEXT-only catalog row (e.g. `zai.glm-5`):
+  - documents arrive as extracted text (60,000 characters a turn);
+  - images are dropped and named;
+  - the composer warns before sending;
+  - images in history are swapped for a placeholder per call, and the stored history never changes.
+- **Switching models dropped the agent (#1440).** In an agent session, picking another model started a plain chat. It now starts a new session with the same agent.
+- **Shared snapshots showed finished tools as "Running …" (#1438).** The shared view now matches tool results to tool calls, as the session page does.
+
+**Agents**
+- **Shared agents using their owner's skills showed as unavailable (#1434).** The runnability preview checked the viewer's own skill grants. The share dialog now also names the owner's skills that sharing hands over (#1435).
+
+**Sign-in and Runtime**
+- **Pre-auth requests (#1445).** The sign-in page no longer fires announcement and connector requests that 401, and its button no longer sticks on "Connecting…" after Back.
+- **Restored Runtime sessions (#1515).** A session restored from a V2 snapshot starts its idle clock at the restore.
+- **Backend deploys and the Runtime platform version (#1512).** A backend deploy no longer drops the Runtime's `platformVersion` or capacity settings.
+
+---
+
+## 🔒 Security
+
+- **Two users on one session id could share a live conversation (#1492).**
+  - Runtime affinity hashed the session id alone, so two users on one id landed in one container.
+  - There, conversation adoption matched on the session id and aliased the second user's agent onto the owner's live message list.
+  - Adoption now matches on (session, user), and affinity pins per (user, session). This happened on dev in 2026-08; read-only queries of prod found no exposure.
+  - The voice socket now refuses another user's session (4004).
+  - Because runtime session ids change, each live conversation's first turn after the deploy runs on a cold container (about 3 s, once).
+- **Voice trusted a client-claimed identity (#1495).**
+  - The Runtime's voice socket let a `user_id` in the config frame override the token's subject, and it read an unsigned `auth_token` from the frame for RBAC groups.
+  - Identity now comes only from the `Authorization` bearer on the WebSocket upgrade, and any mismatch closes with 4001.
+  - The SPA path through app-api was not affected.
+  - **If the Runtime does not forward that header, voice fails closed.** See Deployment notes.
+- **`fetch_url_content` checks the connected peer (#1511).** It now checks the address it actually connected to, so a DNS answer that changed between lookups can't return a metadata or private address's response.
+- **`browse_web` URL check (#1511).** It refuses loopback, link-local, private and metadata addresses in every spelling Chromium accepts.
+
+---
+
+## ♿ Accessibility
+
+- **Every dialog has an accessible name (#1493, #1496).** About 45 CDK dialogs had none (axe `aria-dialog-name`, critical). The dialog's heading now names the container, and 32 hand-built dialogs moved onto `app-dialog-shell`. Confirmations are announced as alert dialogs, and focus opens on Cancel.
+- **Sidebar contrast in light mode (#1451, #1453).** Date headings and the active and hovered rows now meet AA. The active row carries the brand color as a left bar.
+- **Danger buttons in dark mode (#1498).** Filled danger buttons stay at `state-danger-600` (4.77:1).
+
+---
+
+## ⚠️ Changed and removed
+
+- **Retention defaults to 365 days, up from 90** (see above).
+- **Memory-space responses return `updatedBy` as an email**, plus `updatedByName`, for every space. It was a user id. No SPA code reads it (#1441).
+- **Removed `RETRY_TRANSIENT_SERVICE_ERRORS`, `RETRY_BOTO_MAX_ATTEMPTS` and `RETRY_BOTO_MODE`.** A deployment that set any of them loses the setting; `RETRY_SDK_*` is unchanged (#1446).
+- **Removed `MEMORY_ARN` from the AgentCore Runtime.** It was only logged, and its slot went to `MEMORY_LINT` (#1518).
+- **Removed `POST /assistants/{id}/test-chat`.** It had been uncalled since February and accepted a client-chosen session id (#1494).
+
+---
+
+## 🏗️ Infrastructure
+
+- **New resources:**
+  - the `{prefix}-conversation-archive` bucket;
+  - the `{prefix}-conversation-index` queue and DLQ (alarmed);
+  - two EventBridge rules, created disabled unless the index is on;
+  - the `conversation-index` consumer and reconciler Lambdas, with their schedule;
+  - the retention pruner's scheduled ECS task;
+  - the `memory-maintenance` worker Lambda.
+  - (#1463, #1467, #1471, #1500)
+- **Changed resources:**
+  - Memory `eventExpiryDuration` 365, in place (#1450);
+  - `ttl` on the memory-spaces table (#1470);
+  - Runtime grants: memory stats `UpdateItem`, projects inbox write, shared-conversations read (#1507, #1468, #1464);
+  - app-api's `AppApiMemoryMaintenanceInvokePolicy` (#1504);
+  - the kb-migration worker's invoke grant on the ingestion consumer (#1429).
+- **New optional GitHub environment variables:** `CDK_AGENTCORE_RUNTIME_PLATFORM_VERSION` (V1 default, #1514), `CDK_APP_API_CONVERSE_MAX_IN_FLIGHT`, `CDK_CONVERSATION_INDEX_ENABLED`, `CDK_CONVERSATION_RETENTION_DAYS`, `CDK_CONVERSATION_RETENTION_PRUNES_SESSIONS`, `CDK_CONVERSATION_RETENTION_PRUNE_ARMED`, `CDK_CONVERSATION_SEARCH_ENABLED`, `CDK_MEMORY_LINT_MODE` and `CDK_MEMORY_SENSITIVE_PATTERNS`.
+- **The Runtime stays at 49 of 50 environment variables.** Its payload shrinks (`MEMORY_ARN` → `MEMORY_LINT`), which is a step toward V2's 2,560-byte limit.
+- **The stack is at 460 of CloudFormation's 500 resources.**
+
+## 🔧 CI/CD
+
+- **New jobs in `backend.yml`:** `build-conversation-index` / `deploy-conversation-index-code` and `build-memory-maintenance` / `deploy-memory-maintenance-code` (#1467, #1500).
+- **New `test-ios` job** in `tests.yml`, path-gated, on `xcode-27` (#1485).
+- **`smoke_turns.py --auth headless-grant`** works again after #1492's affinity change (#1517).
+
+## 📚 Docs
+
+- **Shared Projects user guide** on the docs site, plus the team-simulation report (#1428, #1439, #1444).
+- **Specs:** conversation search (#1447, #1458); AgentCore Runtime V2 env payload and recovery runbook (#1516); iOS companion app native sign-in (#1487, #1490). The iOS app itself is a scaffold, and nothing deploys it (#1485).
+
+## 📦 Dependencies
+
+No dependency changes in this release.
+
+---
+
+## 🚀 Deployment notes
+
+**1. Before the merge: choose full-text search.** Search turns on regardless. To include full-text matches, set `CDK_CONVERSATION_INDEX_ENABLED=true` in the GitHub environment now, so the archive backfill in step 5 is indexed as it runs. The index is about $4/month at prod volume. Leave `CDK_PROJECTS_ENABLED` as it is; Projects is a separate decision.
+
+Also check that no environment sets `RETRY_TRANSIENT_SERVICE_ERRORS`, `RETRY_BOTO_MAX_ATTEMPTS` or `RETRY_BOTO_MODE`; those settings are now ignored.
+
+**2. Deploy in order, and check the new Lambdas got their code.** A release merge triggers `platform.yml` and `backend.yml` together, and they queue in whichever order they grab the slot.
+
+The two new code-deploy jobs skip, and report success, when the Platform deploy has not yet created their function. Until `deploy-conversation-index-code` has run for real, the bootstrap stub returns every queue message as failed. Archived turns then wait on the queue and reach the DLQ after about three hours. So, after the Platform Stack run succeeds:
+- re-run `deploy-conversation-index-code` and `deploy-memory-maintenance-code` if they skipped;
+- confirm `{prefix}-conversation-index` runs the real image (its `ImageUri` is no longer the bootstrap stub) before step 5.
+
+**3. Verify the deploy.**
+- The Runtime is `READY`.
+- Signed out, `GET /api/sessions/search` returns 401 (not 404).
+- The AgentCore Memory resource's event expiry reads 365 days.
+- The archive bucket and the `{prefix}-conversation-index` queue exist.
+
+**4. Title backfill (required for search).** It fills `titleLower` on existing session rows; until it runs, older conversations are found only among the titles loaded in the sidebar. It is idempotent and conditional on the title it read, so a rename mid-run is safe.
+
+```bash
+AWS_PROFILE=<env> backend/.venv/bin/python backend/scripts/backfill_session_search_attributes.py \
+    --table <prefix>-sessions-metadata                 # dry run
+AWS_PROFILE=<env> backend/.venv/bin/python backend/scripts/backfill_session_search_attributes.py \
+    --table <prefix>-sessions-metadata --apply
+```
+
+A second dry run should find nothing to do.
+
+**5. Archive backfill (time-sensitive: start the same day).** It copies every conversation whose Memory events are still alive into the archive, oldest first, so the conversations closest to the 90-day cliff go first. Each day it waits, the conversations crossing 90 days lose their messages for good. It never overwrites a turn the runtime has archived.
+
+```bash
+AWS_PROFILE=<env> backend/.venv/bin/python backend/scripts/backfill_conversation_archive.py \
+    --project-prefix <prefix>                                              # dry run; estimates the apply
+AWS_PROFILE=<env> backend/.venv/bin/python backend/scripts/backfill_conversation_archive.py \
+    --project-prefix <prefix> --apply --confirm-prefix <prefix> --user <your-user-id>
+AWS_PROFILE=<env> backend/.venv/bin/python backend/scripts/backfill_conversation_archive.py \
+    --project-prefix <prefix> --apply --confirm-prefix <prefix>
+```
+
+- **With the index off**, add `--archive-without-index`; otherwise the script refuses. Objects archived that way are not indexed later by themselves. Turning the index on afterwards then needs `reindex_conversation_archive.py` (`--project-prefix`, dry run, then `--apply --confirm-prefix`).
+- **With the index on**, the consumer creates the conversations knowledge base on its first write (about 1–2 minutes), and later batches wait for it. Watch that the `{prefix}-conversation-index-dlq` stays empty.
+- **Check it worked:** search for a phrase from an old conversation's answer and confirm it opens at that turn.
+
+**6. Check voice (#1495).** The fix relies on the AgentCore Runtime forwarding `Authorization` on the WebSocket upgrade. AWS documents that, but no deployed environment has exercised it yet. Start a voice session after the deploy. The Runtime log should show `Voice WebSocket connected … auth_token=present`, and no `no bearer token on the upgrade` warning. If voice fails with close code 4001, revert both #1495 commits.
+
+**7. Expected after the deploy.**
+- **One cold start per live conversation (about 3 s)**, because runtime session ids are now per (user, session) (#1492).
+- **No prompt-cache rewrites for ordinary chats and agents.** Project harnesses, where Projects is on, rewrite their cached prefix once.
+- **The retention pruner's first run reports, not deletes.** It records a count of sessions past 365 days; with 365-day retention, expect none or few.
+- **On a managed KB**, documents waiting on a new KB become searchable in minutes.
+
+**8. Optional follow-ups.**
+- **Re-upload** Word redlines (tracked changes) and any `.txt` files that failed on the legacy path before this release.
+- **Clean up** conversations already past the 90-day cliff (they open empty) with `backend/scripts/prune_sessions_without_events.py --prefix <prefix>`. It is a dry run by default; `--apply` deletes, after a canary check.
+- **Re-share** a conversation to give its snapshot the model's tool summaries.
+
+---
+
 # Release Notes — v1.26.0
 
 **Release Date:** October 3, 2026

@@ -273,6 +273,8 @@ class SkillCatalogService:
             deleted = result is not None
         else:
             deleted = await self.repository.delete_skill(skill_id)
+            if deleted:
+                await self.delete_versions(skill_id)
 
         if deleted:
             logger.info(
@@ -287,6 +289,19 @@ class SkillCatalogService:
             )
 
         return deleted
+
+    async def delete_versions(self, skill_id: str) -> None:
+        """Drop a hard-deleted skill's pinned versions and their frozen files.
+
+        Versions must not outlive the skill (shared-projects 3.1): skill ids can be
+        reused, and a project still pinned to ``id@2`` would otherwise run the old
+        skill's instructions under the new one's live status. Frozen files are
+        content-addressed and private to the skill, so all of them go. Best-effort on
+        S3: an orphaned object is only storage.
+        """
+        deleted = await self.repository.delete_skill_versions(skill_id)
+        for key in sorted({ref.s3_key for version in deleted for ref in version.resources}):
+            self.resource_store.delete(key)
 
     # =========================================================================
     # Admin Methods - Reference Files (S3-backed)

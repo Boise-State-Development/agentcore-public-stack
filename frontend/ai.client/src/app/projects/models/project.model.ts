@@ -113,8 +113,18 @@ export interface ModelResponse extends SettingsResponse {
   modelConfig: ModelConfig | null;
 }
 
+/** A bound tool or skill as the project reports it. Only skills carry a pin. */
+export interface BoundBinding extends BindingRef {
+  /** The skill version this binding runs; null for a skill bound before pins (it runs the latest). */
+  version?: number | null;
+  /** When the pinned version was saved. */
+  pinnedAt?: string | null;
+  /** The skill has changed since the pinned version. */
+  updateAvailable?: boolean;
+}
+
 export interface BindingsResponse extends SettingsResponse {
-  bindings: BindingRef[];
+  bindings: BoundBinding[];
 }
 
 export interface SettingsVersionSummary {

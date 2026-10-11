@@ -39,6 +39,10 @@ describe('describeActivity', () => {
     [rec('project.tools_updated', { before: { refs: ['a', 'b'] }, after: { version: 5, refs: ['b', 'c', 'd'] } }),
       'added the tools c and d and removed the tool a'],
     [rec('project.skills_updated', { before: { refs: [] }, after: { version: 6, refs: [] } }), 'updated the skills'],
+    [rec('project.skills_updated', {
+      before: { refs: ['memo', 'pdf'], versions: { memo: '1', pdf: '2' } },
+      after: { version: 7, refs: ['memo', 'pdf'], versions: { memo: '1', pdf: '3' } },
+    }), 'updated the skill pdf to version 3'],
     [rec('project.knowledge_added', { after: { filename: 'plan.pdf', source: 'upload' } }), 'added the file plan.pdf'],
     [rec('project.knowledge_added', { after: { url: 'https://x.edu', source: 'web' } }), 'started adding pages from https://x.edu'],
     [rec('project.knowledge_removed', { before: { filename: 'plan.pdf' } }), 'removed the file plan.pdf'],

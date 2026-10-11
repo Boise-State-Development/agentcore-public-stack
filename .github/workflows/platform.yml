@@ -153,6 +153,10 @@ jobs:
       # reverts to V1 if this variable is deleted. See
       # docs/specs/agentcore-runtime-v2.md.
       CDK_AGENTCORE_RUNTIME_PLATFORM_VERSION: ${{ vars.CDK_AGENTCORE_RUNTIME_PLATFORM_VERSION }}
+      # Escape hatch for scripts/platform/check-runtime-env-contract.sh: set to
+      # `true` only after confirming the live inference-api image derives its
+      # resource names (docs/specs/agentcore-runtime-v2.md §8).
+      SKIP_RUNTIME_ENV_CONTRACT_CHECK: ${{ vars.SKIP_RUNTIME_ENV_CONTRACT_CHECK }}
       CDK_ALB_SUBDOMAIN: ${{ vars.CDK_ALB_SUBDOMAIN }}
       CDK_CERTIFICATE_ARN: ${{ vars.CDK_CERTIFICATE_ARN }}
       # Shared us-east-1 CloudFront cert (wildcard covering {domain} + *.{domain}).
@@ -253,6 +257,18 @@ jobs:
       # there. Unset (empty string) or anything else means off. The SPA's
       # matching switch is `features.projects` in src/environments/*.ts.
       CDK_PROJECTS_ENABLED: ${{ vars.CDK_PROJECTS_ENABLED }}
+      # Direct user grants (tools/models/skills granted to one user beside their
+      # roles; the admin surface at /admin/user-grants). Opt-in while in
+      # development: set `CDK_USER_GRANTS_ENABLED` to "true" in an environment to
+      # turn it on there. app-api only. The SPA's matching switch is
+      # `features.userGrants` in src/environments/*.ts.
+      CDK_USER_GRANTS_ENABLED: ${{ vars.CDK_USER_GRANTS_ENABLED }}
+      # Session prewarm: POST /chat/prewarm starts a conversation's AgentCore
+      # Runtime microVM before its first send (docs/specs/agentcore-runtime-v2.md
+      # §5a). Opt-in while in development: set `CDK_SESSION_PREWARM_ENABLED` to
+      # "true" in an environment to turn it on there. app-api only. The SPA's
+      # matching switch is `features.sessionPrewarm` in src/environments/*.ts.
+      CDK_SESSION_PREWARM_ENABLED: ${{ vars.CDK_SESSION_PREWARM_ENABLED }}
       # Project-memory content lint (Shared Projects 2.7). Configuration, not a
       # flag: it applies only inside Projects. Unset (empty string) means the
       # defaults: `warn`, and no deployment patterns. `CDK_MEMORY_LINT_MODE` is

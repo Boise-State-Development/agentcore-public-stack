@@ -53,6 +53,33 @@ describe('MessageMapService', () => {
     expect(service).toBeTruthy();
   });
 
+  describe('a message that was not sent', () => {
+    it('marks it with the reason, as a new object so OnPush bubbles re-render', () => {
+      const sent = service.addUserMessage('s1', 'first');
+      const failed = service.addUserMessage('s1', 'second');
+
+      service.markSendFailed('s1', failed.id, 'A response was still finishing.');
+
+      const [first, second] = service.getMessagesForSession('s1')();
+      expect(first).toBe(sent);
+      expect(second).not.toBe(failed);
+      expect(second.sendFailure).toEqual({ reason: 'A response was still finishing.' });
+    });
+
+    it('removes it ahead of a resend only while it is the last message', () => {
+      const failed = service.addUserMessage('s1', 'first');
+      service.addUserMessage('s1', 'second');
+
+      // Removing from the middle would shift every later msg-{session}-{index} id.
+      expect(service.removeTrailingMessage('s1', failed.id)).toBe(false);
+      expect(service.getMessagesForSession('s1')()).toHaveLength(2);
+
+      const last = service.getMessagesForSession('s1')()[1];
+      expect(service.removeTrailingMessage('s1', last.id)).toBe(true);
+      expect(service.getMessagesForSession('s1')().map(m => m.id)).toEqual([failed.id]);
+    });
+  });
+
   it('should get messages for session', () => {
     const messagesSignal = service.getMessagesForSession('session-1');
     expect(messagesSignal).toBeTruthy();

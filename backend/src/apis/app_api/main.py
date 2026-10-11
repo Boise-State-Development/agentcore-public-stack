@@ -80,6 +80,13 @@ async def lifespan(app: FastAPI):
     # Startup
     _validate_skip_auth_or_raise()
     logger.info("=== AgentCore Public Stack API Starting ===")
+    # app-api keeps its explicit resource-name variables (ECS has no payload
+    # limit). This only compares them with what PROJECT_PREFIX derives and
+    # warns on a difference, so the Runtime's derivation (spec §7) is checked
+    # against every real deployment before the Runtime stops receiving them.
+    from apis.shared.config import audit_derived_environment, log_environment_report
+
+    log_environment_report(audit_derived_environment(), logger, service="app-api")
     logger.info("Agent execution engine initialized")
 
     yield  # Application is running
@@ -218,6 +225,7 @@ from apis.app_api.projects.maintenance_routes import router as project_memory_ma
 from apis.app_api.projects.memory_routes import files_router as project_memory_files_router
 from apis.app_api.projects.memory_routes import router as project_memory_router
 from apis.app_api.projects.output_routes import router as project_outputs_router
+from apis.app_api.projects.schedule_routes import router as project_schedules_router
 from apis.app_api.projects.routes import router as projects_router
 from apis.app_api.tools.routes import router as tools_router
 from apis.app_api.files.routes import router as files_router
@@ -270,6 +278,7 @@ app.include_router(project_memory_router)  # Proposals to a project's shared mem
 app.include_router(project_memory_files_router)  # Memory items: pins, provenance, archive (2.5a-2)
 app.include_router(project_memory_maintenance_router)  # Maintenance runs that propose compaction (2.6)
 app.include_router(project_outputs_router)  # Artifacts shared with a project (3.3)
+app.include_router(project_schedules_router)  # /projects/{id}/schedules (3.2); 404 unless PROJECTS_ENABLED and SCHEDULED_RUNS_ENABLED
 app.include_router(notifications_router)  # In-app inbox (PR-1.7); first producer is Shared Projects
 app.include_router(memory_router)  # AgentCore Memory access endpoints
 app.include_router(tools_router)  # Tool discovery and permissions

@@ -7,6 +7,7 @@ import { ChatRequestService } from './services/chat/chat-request.service';
 import { MessageMapService } from './services/session/message-map.service';
 import { Message } from './services/models/message.model';
 import { SessionService } from './services/session/session.service';
+import { SessionPrewarmService } from './services/session/session-prewarm.service';
 import { ScrollPositionService } from './services/session/scroll-position.service';
 import {
   ComposerDraftStorageService,
@@ -57,6 +58,7 @@ import { GreetingProvider } from '../../branding/greeting.provider';
 export class ConversationPage implements OnDestroy {
   private route = inject(ActivatedRoute);
   private sessionService = inject(SessionService);
+  private sessionPrewarm = inject(SessionPrewarmService);
   private chatRequestService = inject(ChatRequestService);
   private messageMapService = inject(MessageMapService);
   private chatStateService = inject(ChatStateService);
@@ -453,6 +455,27 @@ export class ConversationPage implements OnDestroy {
         }
       }
 
+      // Session prewarm: start the Runtime microVM this conversation's next
+      // turn will use while the user reads and types. A new conversation warms
+      // on load (the id its first send will claim, or the staged id its
+      // attachments are filed under): opening it is almost always intent to
+      // send. An existing one warms on the composer's first input, since
+      // opening it is often just reading. A conversation this tab just created
+      // is already warm from its first turn. Fire-and-forget, off unless
+      // `features.sessionPrewarm`; see SessionPrewarmService.
+      if (!id) {
+        const staged = this.stagedSessionId();
+        if (staged) {
+          this.sessionPrewarm.warm(staged);
+        } else {
+          this.sessionPrewarm.warmNewConversation();
+        }
+      } else if (!this.sessionService.isNewSession(id)) {
+        this.sessionPrewarm.armOnTyping(id);
+      } else {
+        this.sessionPrewarm.clearCurrent();
+      }
+
       // Cost/context badge and Continue-affordance state is per-session in
       // ChatStateService, and the viewed-session effect above repoints the
       // facades — no cross-session clearing needed here anymore.
@@ -569,6 +592,8 @@ export class ConversationPage implements OnDestroy {
   }
 
   ngOnDestroy() {
+    // Leaving the conversation page: returning to this tab later warms nothing.
+    this.sessionPrewarm.clearCurrent();
     // Leaving the conversation view entirely (e.g. to an admin page, or the
     // `/` ↔ `/s/:id` transitions that recreate this component) — remember
     // where the user was so navigating back restores it.
@@ -763,7 +788,9 @@ export class ConversationPage implements OnDestroy {
     // If no session exists (not navigated to /s/:id and no staged session),
     // create a staged session for file uploads
     if (!this.sessionId() && !this.stagedSessionId()) {
-      const newSessionId = uuidv4();
+      // Reuse the id the page warmed, so the uploads and the first turn share
+      // the microVM that is already starting (session prewarm).
+      const newSessionId = this.sessionPrewarm.claimNewConversationId() ?? uuidv4();
       this.stagedSessionId.set(newSessionId);
 
       // Add the session to cache so sidenav can show it

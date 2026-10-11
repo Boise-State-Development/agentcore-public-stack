@@ -232,8 +232,10 @@ case "$SERVICE" in
             "backend/src/apis/shared/browser_takeover"
             "backend/src/apis/shared/storage"
             "backend/src/apis/shared/observability"
-            # projects/ — sessions/metadata.py's project cost rollup (lazy import).
+            # projects/ — project schedules (3.2) and sessions/metadata.py's
+            # project cost rollup; notifications/ — a project schedule's pause notice.
             "backend/src/apis/shared/projects"
+            "backend/src/apis/shared/notifications"
         )
         # Single-file COPYs hashed as manifests (same as kb-sync/rag-ingestion);
         # the dispatcher's requirements.txt lives inside its own source dir.
@@ -242,6 +244,8 @@ case "$SERVICE" in
             "backend/src/apis/shared/errors.py"
             "backend/src/apis/shared/feature_flags.py"
             "backend/src/apis/shared/dynamo_errors.py"
+            "backend/src/apis/shared/auth/models.py"
+            "backend/src/apis/shared/timestamps.py"
         )
         # Both scheduled-runs Lambdas are arm64 (see the scheduled-runs
         # CDK construct).

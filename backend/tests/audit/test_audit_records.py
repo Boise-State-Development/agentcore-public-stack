@@ -140,7 +140,7 @@ def test_response_projection_is_camel_cased() -> None:
 
 def test_every_action_is_namespaced() -> None:
     for action in ALL_ACTIONS:
-        assert action.startswith(("app_role.", "project.")), action
+        assert action.startswith(("app_role.", "project.", "user_grant.")), action
 
 
 def test_no_action_exists_for_tool_or_skill_grants() -> None:

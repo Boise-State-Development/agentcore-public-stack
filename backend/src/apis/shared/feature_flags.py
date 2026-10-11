@@ -626,6 +626,52 @@ def projects_enabled() -> bool:
     return os.environ.get("PROJECTS_ENABLED", "").strip().lower() == "true"
 
 
+def session_prewarm_enabled() -> bool:
+    """Whether app-api warms a conversation's AgentCore Runtime session ahead of its first send.
+
+    ``POST /chat/prewarm`` (``apis/app_api/chat/proxy_routes.py``) forwards a
+    no-op ``warm`` invocation to ``/invocations`` with the conversation's
+    affinity header, so the microVM the first real turn will use is restored
+    (V2) or booted (V1) while the user is still reading or typing
+    (``docs/specs/agentcore-runtime-v2.md`` §5a). **Opt-in while the feature is
+    in development** (CLAUDE.md "Feature flags"): only ``"true"``
+    (case-insensitive) enables it; while off the route 404s after
+    authentication. CDK sets it on app-api from ``config.sessionPrewarm.enabled``.
+    The SPA's matching switch is ``features.sessionPrewarm``.
+
+    A **feature switch** once finished, not a rollout switch: it spends Runtime
+    session time on conversations the user may never send, which is a cost a
+    deployment may reasonably not want (cheap on V2, which reclaims idle
+    memory; billed at peak memory on V1). The Runtime side needs no flag and no
+    environment variable: the ``warm`` action is a no-op that returns before
+    any work, so the app-api route is the whole gate.
+    """
+    return os.environ.get("SESSION_PREWARM_ENABLED", "").strip().lower() == "true"
+
+
+def user_grants_enabled() -> bool:
+    """Whether the admin surface for direct user grants is mounted on app-api.
+
+    A direct grant (``apis.shared.rbac.models.UserGrant``) hands tools, models
+    and skills to one user beside their roles. **Opt-in while the feature is
+    in development** (CLAUDE.md "Feature flags"): only ``"true"``
+    (case-insensitive) enables it. CDK sets it on app-api from
+    ``config.userGrants.enabled``. The SPA's matching switch is
+    ``features.userGrants``.
+
+    **This gates the write surface only.** Permission resolution reads a
+    user's grant row wherever it runs — app-api and the AgentCore Runtime —
+    without consulting this flag, for two reasons. The Runtime is at its
+    environment-variable cap (and Runtime V2 caps the whole payload), so a
+    second copy of the switch there would cost a slot the turn path needs
+    more. And an absent row *is* the off state: a grant can only exist where
+    an admin wrote one through these routes. Turning the flag off therefore
+    stops new grants and edits but does not revoke what was granted — delete
+    the grant to revoke it.
+    """
+    return os.environ.get("USER_GRANTS_ENABLED", "").strip().lower() == "true"
+
+
 def conversation_index_enabled() -> bool:
     """Whether finished turns are written to the conversation archive.
 

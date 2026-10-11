@@ -263,6 +263,30 @@ class TestSkillValidation:
         assert ei.value.status_code == 400
 
     @pytest.mark.asyncio
+    async def test_a_malformed_pin_400(self, monkeypatch):
+        self._patch_palette(monkeypatch, "skill_1")
+        with pytest.raises(BindingValidationError) as ei:
+            await validate_agent_write(
+                _user(), bindings=[AgentBinding(kind="skill", ref="skill_1", config={"version": "latest"})]
+            )
+        assert ei.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_a_pin_must_name_a_version_that_exists(self, monkeypatch):
+        self._patch_palette(monkeypatch, "skill_1")
+        repo = AsyncMock()
+        repo.batch_get_skill_versions = AsyncMock(return_value={("skill_1", 2): object()})
+        monkeypatch.setattr(f"{MODULE}.get_skill_catalog_repository", lambda: repo)
+        await validate_agent_write(
+            _user(), bindings=[AgentBinding(kind="skill", ref="skill_1", config={"version": 2})]
+        )
+        with pytest.raises(BindingValidationError) as ei:
+            await validate_agent_write(
+                _user(), bindings=[AgentBinding(kind="skill", ref="skill_1", config={"version": 3})]
+            )
+        assert (ei.value.status_code, "Version 3" in ei.value.message) == (400, True)
+
+    @pytest.mark.asyncio
     async def test_flag_off_400(self, monkeypatch):
         monkeypatch.setattr(f"{MODULE}.skills_enabled", lambda: False)
         # Palette isn't even consulted when the feature is off.

@@ -24,6 +24,8 @@ import {
   UpdateScheduleRequest,
 } from '../models/schedule.model';
 import { ToastService } from '../../services/toast/toast.service';
+import { ToolSelectorComponent } from '../../components/tool-selector/tool-selector.component';
+import { ToolSelectorItem } from '../../components/tool-selector/tool-selector.model';
 
 const WEEKDAY_LABELS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
@@ -91,7 +93,7 @@ function timezoneOptions(): string[] {
 @Component({
   selector: 'app-schedule-form-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [ReactiveFormsModule, NgIcon, RouterLink],
+  imports: [ReactiveFormsModule, NgIcon, RouterLink, ToolSelectorComponent],
   providers: [provideIcons({ heroArrowLeft })],
   templateUrl: './schedule-form.page.html',
 })
@@ -129,7 +131,7 @@ export class ScheduleFormPage implements OnInit {
   readonly clearAssistant = signal(false);
   readonly clearTools = signal(false);
 
-  readonly selectedToolIds = signal<Set<string>>(new Set());
+  readonly selectedToolIds = signal<ReadonlySet<string>>(new Set());
 
   /**
    * Mirror of the `assistantId` control value (form values aren't signals) so
@@ -249,24 +251,38 @@ export class ScheduleFormPage implements OnInit {
     return !!tool && isRetiring(tool) && !this.isToolSelected(toolId);
   }
 
-  /** Hover text on the `retiring` chip: why it is refused, and what to use instead. */
-  retiringReason(tool: Tool): string {
+  /** The picker's rows. A retiring tool says so in visible text, not a hover title. */
+  readonly toolItems = computed<ToolSelectorItem[]>(() =>
+    this.tools().map((tool) => {
+      const retiring = isRetiring(tool);
+      return {
+        id: tool.toolId,
+        name: tool.displayName,
+        description: tool.description,
+        group: tool.category,
+        badge: retiring ? 'retiring' : undefined,
+        note: retiring ? this.retiringNote(tool) : undefined,
+        addBlocked: retiring,
+      };
+    }),
+  );
+
+  /** The retiring row's line: why it can't be added (or should go), then what to use instead. */
+  retiringNote(tool: Tool): string {
+    const lead = this.isToolSelected(tool.toolId)
+      ? 'Being retired — remove it from this schedule when you can.'
+      : 'Being retired and can no longer be added to a schedule.';
     const detail = retirementDetail(tool);
-    const lead = 'Being retired and can no longer be added to a schedule.';
     return detail ? `${lead} ${detail}` : lead;
   }
 
-  toggleTool(toolId: string): void {
-    if (this.isToolRetiring(toolId)) return;
-    this.selectedToolIds.update((set) => {
-      const next = new Set(set);
-      if (next.has(toolId)) {
-        next.delete(toolId);
-      } else {
-        next.add(toolId);
-      }
-      return next;
-    });
+  /**
+   * The picker's new selection. It already refuses to add a retiring tool; this is
+   * the backstop behind it, so no path can book one into a snapshot.
+   */
+  onToolSelectionChange(next: ReadonlySet<string>): void {
+    const allowed = new Set([...next].filter((toolId) => !this.isToolRetiring(toolId)));
+    this.selectedToolIds.set(allowed);
     this.clearTools.set(false);
   }
 

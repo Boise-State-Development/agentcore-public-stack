@@ -11,6 +11,7 @@ import { SidenavService } from '../../services/sidenav/sidenav.service';
 import { ThemeService } from '../../components/topnav/components/theme-toggle/theme.service';
 import { ToastService } from '../../services/toast/toast.service';
 import { ToolService } from '../../services/tool/tool.service';
+import { toggleItem } from '../../components/tool-selector/tool-selection';
 
 /**
  * §7 of docs/specs/mcp-server-retirement.md — the Agent Designer's half.
@@ -150,6 +151,15 @@ async function mount(bindings: { kind: string; ref: string }[]): Promise<AgentFo
   return fixture.componentInstance;
 }
 
+/**
+ * What `<app-tool-selector>` emits for a row click, handed to the page's handler.
+ * The selector refuses an add on a retiring row itself; going around it here is
+ * how these pin the page's own backstop.
+ */
+function clickRow(component: AgentFormPage, ref: string): void {
+  component.onToolSelectionChange(toggleItem(component.selectedToolRefs(), ref));
+}
+
 /** The fixture from the most recent `mount`, for the tests that assert on markup. */
 let lastFixture: ComponentFixture<AgentFormPage> | null = null;
 
@@ -170,7 +180,7 @@ describe('AgentFormPage — retiring tools, as rendered', () => {
       (li: Element) => li.textContent?.includes('Canvas Faculty'),
     ) as HTMLElement;
     expect(row).toBeTruthy();
-    expect(row.querySelector('[role="switch"]')?.hasAttribute('disabled')).toBe(true);
+    expect(row.querySelector('input[type="checkbox"]')?.hasAttribute('disabled')).toBe(true);
     expect(row.textContent).toContain('retiring');
     // Inline, not a tooltip — the whole reason this section left chips behind.
     expect(row.textContent).toContain('can no longer be added');
@@ -185,7 +195,7 @@ describe('AgentFormPage — retiring tools, as rendered', () => {
     const row = [...fixture.nativeElement.querySelectorAll('#agent-tools-panel li')].find(
       (li: Element) => li.textContent?.includes('Canvas Faculty'),
     ) as HTMLElement;
-    expect(row.querySelector('[role="switch"]')?.hasAttribute('disabled')).toBe(false);
+    expect(row.querySelector('input[type="checkbox"]')?.hasAttribute('disabled')).toBe(false);
     expect(row.textContent).toContain('remove it from this agent');
   });
 
@@ -227,7 +237,7 @@ describe('AgentFormPage — retiring tools', () => {
     });
 
     it('refuses to add it', () => {
-      component.toggleTool('canvas_faculty');
+      clickRow(component, 'canvas_faculty');
       expect(component.isToolSelected('canvas_faculty')).toBe(false);
       expect([...component.selectedToolRefs()]).toEqual(['calculator']);
     });
@@ -235,12 +245,12 @@ describe('AgentFormPage — retiring tools', () => {
     it('does not mark the form dirty for the refused click', () => {
       // A save button that lights up for a change that did not happen is worse
       // than an inert chip: it offers to persist nothing.
-      component.toggleTool('canvas_faculty');
+      clickRow(component, 'canvas_faculty');
       expect(component.isDirty()).toBe(false);
     });
 
     it('still adds an active tool', () => {
-      component.toggleTool('fetch_url_content');
+      clickRow(component, 'fetch_url_content');
       expect(component.isToolSelected('fetch_url_content')).toBe(true);
     });
 
@@ -282,14 +292,14 @@ describe('AgentFormPage — retiring tools', () => {
     });
 
     it('lets the author remove it — the whole point of the stage', () => {
-      component.toggleTool('canvas_faculty');
+      clickRow(component, 'canvas_faculty');
       expect(component.isToolSelected('canvas_faculty')).toBe(false);
       expect(component.isDirty()).toBe(true);
     });
 
     it('cannot be re-added once removed', () => {
-      component.toggleTool('canvas_faculty');
-      component.toggleTool('canvas_faculty');
+      clickRow(component, 'canvas_faculty');
+      clickRow(component, 'canvas_faculty');
       expect(component.isToolSelected('canvas_faculty')).toBe(false);
     });
   });
@@ -327,7 +337,7 @@ describe('AgentFormPage — retiring tools', () => {
     });
 
     it('lets the author remove the whole server, scoped ref and all', () => {
-      component.toggleTool('canvas_faculty');
+      clickRow(component, 'canvas_faculty');
       expect([...component.selectedToolRefs()]).toEqual([]);
     });
   });

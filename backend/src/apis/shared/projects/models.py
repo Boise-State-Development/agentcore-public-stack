@@ -122,3 +122,44 @@ class SharedTask(BaseModel):
     shared_at: str = Field(..., alias="sharedAt")
     # The sharer's hand-off line (2.5b). Re-sharing replaces it with the pointer.
     note: Optional[str] = None
+
+
+class ProjectSchedulePointer(BaseModel):
+    """A ``PROJECT#{id}`` / ``SCHEDULE#{scheduleId}`` pointer (Shared Projects 3.2).
+
+    The schedule itself stays in its creator's partition of the sessions table
+    (``USER#{ownerId}`` / ``SCHEDPROMPT#{scheduleId}``) and runs as them; this row
+    only lets the project list it. Its live state is read from the schedule, never
+    copied here, so the two can't disagree.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    project_id: str = Field(..., alias="projectId")
+    schedule_id: str = Field(..., alias="scheduleId")
+    owner_id: str = Field(..., alias="ownerId")
+    owner_email: str = Field(..., alias="ownerEmail")
+    created_at: str = Field(..., alias="createdAt")
+
+
+ScheduleRunStatus = Literal["completed", "error", "timeout", "paused"]
+
+
+class ProjectScheduleRun(BaseModel):
+    """One run of a project schedule, as members see it (Shared Projects 3.2).
+
+    ``PROJECT#{id}`` / ``SCHEDULE_RUN#{scheduleId}#{finishedAt}#{runId}``, written
+    by the worker after each run and kept for :data:`SCHEDULE_RUN_RETENTION_DAYS`.
+    It never carries the session id: the task is the creator's own until they
+    share it, as with any task. ``reason`` is a short code, never an error string,
+    which can hold a consent URL meant for the creator alone.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    project_id: str = Field(..., alias="projectId")
+    schedule_id: str = Field(..., alias="scheduleId")
+    run_id: str = Field(..., alias="runId")
+    status: ScheduleRunStatus
+    finished_at: str = Field(..., alias="finishedAt")
+    reason: Optional[str] = None

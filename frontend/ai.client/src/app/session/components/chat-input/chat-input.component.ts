@@ -53,6 +53,7 @@ import {
   AudioRecorderService,
   VoiceChatService,
   VOICE_GROUPS,
+  describeAudioError,
   voiceDescription,
   type AudioInputDevice,
   type VoiceStatus,
@@ -76,6 +77,7 @@ import {
 import { SkillCommandMenuComponent } from './skill-command-menu.component';
 import { SteeringService } from '../../services/chat/steering.service';
 import { ComposerDraftService } from '../../services/session/composer-draft.service';
+import { SessionPrewarmService } from '../../services/session/session-prewarm.service';
 import {
   ComposerDraftStorageService,
   EMPTY_DRAFT,
@@ -293,6 +295,7 @@ export class ChatInputComponent {
   private readonly fileUploadService = inject(FileUploadService);
   private readonly toastService = inject(ToastService);
   private readonly steering = inject(SteeringService);
+  private readonly sessionPrewarm = inject(SessionPrewarmService);
   private readonly composerDraft = inject(ComposerDraftService);
   private readonly draftStorage = inject(ComposerDraftStorageService);
   private readonly toolService = inject(ToolService);
@@ -1659,8 +1662,7 @@ export class ChatInputComponent {
         this.toastService.info('Dictation', 'Dictation is not available here.');
         return;
       }
-      const message = err instanceof Error ? err.message : 'Could not start dictation.';
-      this.toastService.error('Dictation', message);
+      this.toastService.error('Dictation', describeAudioError(err, 'Could not start dictation.'));
     }
   }
 
@@ -1721,8 +1723,7 @@ export class ChatInputComponent {
       try {
         await this.voiceChatService.connect(this.sessionId() || undefined);
       } catch (err) {
-        const msg = err instanceof Error ? err.message : 'Failed to start voice';
-        this.toastService.error('Voice Error', msg);
+        this.toastService.error('Voice Error', describeAudioError(err, 'Failed to start voice'));
       }
     }
   }
@@ -1780,6 +1781,10 @@ export class ChatInputComponent {
   }
 
   onTextareaInput(event: Event) {
+    // First keystroke or paste in an existing conversation: start its Runtime
+    // microVM while the user finishes typing (session prewarm). A no-op unless
+    // the conversation page armed it, and deduped per conversation.
+    this.sessionPrewarm.noteTyping();
     this.settleHints();
     const textarea = event.target as HTMLTextAreaElement;
     this.userInput.set(textarea.value);

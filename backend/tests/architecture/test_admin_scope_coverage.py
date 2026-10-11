@@ -35,6 +35,7 @@ NON_DELEGABLE_MODULES = {
     "roles/routes.py",
     "auth_providers/routes.py",
     "audit/routes.py",
+    "user_grants/routes.py",
 }
 
 # Scope claimed by each router module. `roles/agent_pins.py` is the one place

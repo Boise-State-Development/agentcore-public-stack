@@ -225,7 +225,7 @@
                   type="checkbox"
                   [checked]="clearAssistant()"
                   (change)="onClearAssistantChange($any($event.target).checked)"
-                  class="size-3.5 rounded border-gray-300 text-primary-600 focus:ring-primary-500 dark:border-gray-500 dark:bg-gray-700"
+                  class="size-3.5 rounded accent-primary-accessible dark:accent-primary-500"
                 />
                 Detach agent (use the default agent)
               </label>
@@ -246,42 +246,29 @@
           } @else {
             <div class="mt-5">
               <div class="flex items-center justify-between">
-                <span class="block text-sm/6 font-medium text-gray-900 dark:text-white">Tools</span>
+                <span id="schedule-tools-label" class="block text-sm/6 font-medium text-gray-900 dark:text-white">Tools</span>
                 @if (mode() === 'edit') {
                   <label class="flex items-center gap-2 text-xs/5 text-gray-600 dark:text-gray-400">
                     <input
                       type="checkbox"
                       [checked]="clearTools()"
                       (change)="onClearToolsChange($any($event.target).checked)"
-                      class="size-3.5 rounded border-gray-300 text-primary-600 focus:ring-primary-500 dark:border-gray-500 dark:bg-gray-700"
+                      class="size-3.5 rounded accent-primary-accessible dark:accent-primary-500"
                     />
                     Reset to all my tools
                   </label>
                 }
               </div>
-              <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
-                The tool set is snapshotted when the schedule is created — later changes to your tool
-                access won't silently expand what a sleeping schedule can do.
-              </p>
-              <div class="mt-2 max-h-56 space-y-1 overflow-y-auto rounded-2xl border border-gray-200 p-2 dark:border-gray-700">
-                @for (tool of tools(); track tool.toolId) {
-                  <label class="flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-sm/6 text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-gray-700/40">
-                    <input
-                      type="checkbox"
-                      [checked]="isToolSelected(tool.toolId)"
-                      [disabled]="clearTools() || isToolRetiring(tool.toolId)"
-                      (change)="toggleTool(tool.toolId)"
-                      class="size-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 dark:border-gray-500 dark:bg-gray-700"
-                    />
-                    {{ tool.displayName }}
-                    @if (isToolRetiring(tool.toolId)) {
-                      <span [attr.title]="retiringReason(tool)" class="shrink-0 rounded-sm bg-state-warning-50 px-1.5 font-mono text-[10px]/5 font-medium text-state-warning-700 dark:bg-state-warning-900/30 dark:text-state-warning-300">retiring</span>
-                    }
-                  </label>
-                } @empty {
-                  <p class="px-2 py-1.5 text-xs/5 text-gray-500 dark:text-gray-400">No tools available.</p>
-                }
-              </div>
+              <app-tool-selector
+                class="mt-2"
+                [items]="toolItems()"
+                [selected]="selectedToolIds()"
+                (selectedChange)="onToolSelectionChange($event)"
+                labelledBy="schedule-tools-label"
+                helperText="The tool set is snapshotted when the schedule is created — later changes to your tool access won't silently expand what a sleeping schedule can do."
+                [disabled]="clearTools()"
+                maxHeight="sm"
+              />
             </div>
           }
         </section>
