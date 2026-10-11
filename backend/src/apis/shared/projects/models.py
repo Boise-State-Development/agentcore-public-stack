@@ -100,6 +100,9 @@ class ProjectOutput(BaseModel):
     owner_id: str = Field(..., alias="ownerId")
     owner_email: str = Field(..., alias="ownerEmail")
     shared_at: str = Field(..., alias="sharedAt")
+    # Set when a project schedule published it (3.2d): the schedule replaces its
+    # previous run's outputs, and the SPA tags them.
+    schedule_id: Optional[str] = Field(None, alias="scheduleId")
 
 
 class SharedTask(BaseModel):

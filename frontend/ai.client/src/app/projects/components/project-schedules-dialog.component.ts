@@ -134,6 +134,9 @@ interface RunsState {
                   @if (s.deliverTo === 'project' && s.notifyMembers) {
                     · Members are told about each run
                   }
+                  @if (s.deliverTo === 'project' && s.publishOutputs) {
+                    · Publishes its artifacts to Outputs
+                  }
                 </p>
                 @if (stopSentence(s); as stop) {
                   <p class="mt-1 text-xs/5 text-state-warning-700 dark:text-state-warning-400">{{ stop }}</p>

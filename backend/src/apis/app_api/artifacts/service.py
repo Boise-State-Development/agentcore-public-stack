@@ -28,6 +28,7 @@ from botocore.exceptions import ClientError
 
 from apis.shared.auth import User
 from apis.shared.security.log_sanitize import scrub_log
+from apis.shared.shares import artifact_shares
 
 logger = logging.getLogger(__name__)
 
@@ -790,7 +791,9 @@ def get_artifact_content_service() -> ArtifactContentService:
 # drift.
 # ---------------------------------------------------------------------
 
-_SHARE_LOOKUP_SK = "META"
+# The keys and the row writes live in ``apis.shared.shares.artifact_shares``,
+# which the scheduled-runs worker uses too (Shared Projects 3.2d).
+_SHARE_LOOKUP_SK = artifact_shares.SHARE_LOOKUP_SK
 
 # ---------------------------------------------------------------------
 # Recipient fan-out rows ("shared with you")
@@ -912,18 +915,9 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _owner_share_sk(artifact_id: str, version: int, share_id: str) -> str:
-    """Owner-row sort key. The `V#{version:05d}` zero-pad matches the
-    artifact version rows so the two key spaces read consistently."""
-    return f"SHARE#{artifact_id}#V#{version:05d}#{share_id}"
-
-
-def _owner_share_prefix(artifact_id: str) -> str:
-    return f"SHARE#{artifact_id}#V#"
-
-
-def _share_lookup_key(share_id: str) -> dict:
-    return {"PK": f"SHARE#{share_id}", "SK": _SHARE_LOOKUP_SK}
+_owner_share_sk = artifact_shares.owner_share_sk
+_owner_share_prefix = artifact_shares.owner_share_prefix
+_share_lookup_key = artifact_shares.share_lookup_key
 
 
 def _get_share_lookup(share_id: str) -> Optional[dict]:
@@ -1208,31 +1202,8 @@ class ArtifactShareService:
         # Discovery first, then reachability, then visibility — the same
         # ordering principle as `ArtifactLifecycleService.delete`.
         self._delete_recipient_rows(table, share)
-        owner_sk = _owner_share_sk(
-            str(share.get("artifact_id", "")),
-            int(share.get("version", 0)),
-            share_id,
-        )
         try:
-            table.meta.client.transact_write_items(
-                TransactItems=[
-                    {
-                        "Delete": {
-                            "TableName": table.name,
-                            "Key": {
-                                "PK": f"USER#{share.get('owner_id', '')}",
-                                "SK": owner_sk,
-                            },
-                        }
-                    },
-                    {
-                        "Delete": {
-                            "TableName": table.name,
-                            "Key": _share_lookup_key(share_id),
-                        }
-                    },
-                ]
-            )
+            artifact_shares.delete_share_rows(table, share)
         except ClientError as exc:
             raise ArtifactQueryError("share revoke failed") from exc
         logger.info("revoked artifact share share=%s", scrub_log(share_id))
@@ -1351,25 +1322,8 @@ class ArtifactShareService:
         only — a ConditionCheck item would need `dynamodb:ConditionCheckItem`
         added to the task role, which plain writes do not.
         """
-        table = _table()
-        owner_sk = _owner_share_sk(
-            str(attrs["artifact_id"]),
-            int(attrs["version"]),
-            str(attrs["share_id"]),
-        )
-        owner_row = {
-            **attrs,
-            "PK": f"USER#{attrs['owner_id']}",
-            "SK": owner_sk,
-        }
-        lookup_row = {**attrs, **_share_lookup_key(str(attrs["share_id"]))}
         try:
-            table.meta.client.transact_write_items(
-                TransactItems=[
-                    {"Put": {"TableName": table.name, "Item": owner_row}},
-                    {"Put": {"TableName": table.name, "Item": lookup_row}},
-                ]
-            )
+            artifact_shares.write_share_rows(_table(), attrs)
         except ClientError as exc:
             raise ArtifactQueryError("share write failed") from exc
 

@@ -35,7 +35,9 @@ export interface ScheduledRunsConstructProps {
   /** Delivering a scheduled run to its project (Shared Projects 3.2b): the worker
    * snapshots the run's conversation (AgentCore Memory events, read only), pins its
    * artifacts (the artifacts table's SessionIndex), writes the share (row, S3 body),
-   * and records it on the project's trail (audit log). */
+   * and records it on the project's trail (audit log). A schedule that publishes
+   * its outputs (3.2d) also writes the run's artifact share rows, and deletes the
+   * previous run's, in the artifacts table. */
   agentCoreMemoryArn: string;
   agentCoreMemoryId: string;
   sharedConversationsTable: dynamodb.ITable;
@@ -258,7 +260,9 @@ export class ScheduledRunsConstruct extends Construct {
         conditions: { StringLike: { 's3:prefix': ['shares/*'] } },
       }),
     );
-    artifactsTable.grantReadData(this.workerLambda);
+    // Read: the run's artifacts. Write: the artifact shares a schedule that
+    // publishes its outputs makes and retires (Shared Projects 3.2d).
+    artifactsTable.grantReadWriteData(this.workerLambda);
     auditLogTable.grantWriteData(this.workerLambda);
 
     // Worker: resolve + touch the caller's headless-grant record

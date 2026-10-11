@@ -240,6 +240,21 @@
                 </p>
               </div>
             </div>
+            <div class="flex gap-3">
+              <input
+                id="publishOutputs"
+                type="checkbox"
+                formControlName="publishOutputs"
+                aria-describedby="publishOutputs-help"
+                class="mt-1 size-4 shrink-0 rounded accent-primary-accessible disabled:cursor-not-allowed disabled:opacity-50 dark:accent-primary-500"
+              />
+              <div>
+                <label for="publishOutputs" class="text-sm/6 font-medium text-gray-900 dark:text-white">Publish its artifacts to Outputs</label>
+                <p id="publishOutputs-help" class="text-xs/5 text-gray-500 dark:text-gray-400">
+                  {{ shareWithProject() ? 'Anything a run makes, such as a report or a chart, appears under Outputs, replacing the previous run’s.' : 'Available when runs are shared with the project.' }}
+                </p>
+              </div>
+            </div>
           </div>
         </section>
         } @else {

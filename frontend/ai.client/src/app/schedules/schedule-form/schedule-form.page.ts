@@ -196,6 +196,7 @@ export class ScheduleFormPage implements OnInit {
     assistantId: new FormControl<string | null>(null),
     deliverToProject: [false],
     notifyMembers: new FormControl<boolean>({ value: false, disabled: true }, { nonNullable: true }),
+    publishOutputs: new FormControl<boolean>({ value: false, disabled: true }, { nonNullable: true }),
   });
 
   private readonly cadenceValue = signal<ScheduleCadence>('daily');
@@ -316,6 +317,7 @@ export class ScheduleFormPage implements OnInit {
           deliverToProject: schedule.deliverTo === 'project',
         });
         this.form.controls.notifyMembers.setValue(schedule.notifyMembers);
+        this.form.controls.publishOutputs.setValue(schedule.publishOutputs);
         this.cadenceValue.set(schedule.cadence);
       }
     } catch (err) {
@@ -325,15 +327,16 @@ export class ScheduleFormPage implements OnInit {
     }
   }
 
-  /** "Notify members" only means something while runs are shared. */
+  /** "Notify members" and "Publish to Outputs" only mean something while runs are shared. */
   private onShareChange(share: boolean): void {
     this.shareWithProject.set(share);
-    const notify = this.form.controls.notifyMembers;
-    if (share) {
-      notify.enable({ emitEvent: false });
-    } else {
-      notify.setValue(false, { emitEvent: false });
-      notify.disable({ emitEvent: false });
+    for (const control of [this.form.controls.notifyMembers, this.form.controls.publishOutputs]) {
+      if (share) {
+        control.enable({ emitEvent: false });
+      } else {
+        control.setValue(false, { emitEvent: false });
+        control.disable({ emitEvent: false });
+      }
     }
   }
 
@@ -495,6 +498,7 @@ export class ScheduleFormPage implements OnInit {
       timezone: value.timezone!,
       deliverTo: value.deliverToProject ? 'project' : 'owner',
       notifyMembers: !!value.deliverToProject && !!value.notifyMembers,
+      publishOutputs: !!value.deliverToProject && !!value.publishOutputs,
     };
     this.saving.set(true);
     try {

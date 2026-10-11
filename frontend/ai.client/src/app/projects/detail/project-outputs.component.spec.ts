@@ -86,6 +86,15 @@ describe('ProjectOutputsComponent', () => {
     expect(text).toContain('CSV · Shared by you');
   });
 
+  it('tags what a schedule published, in the card and its accessible name', async () => {
+    api.outputs.mockReturnValue(of({ outputs: [{ ...THEIRS, scheduleId: 'sc_1' }, MINE] }));
+    const { el } = await render();
+    const [scheduled, plain] = Array.from(el.querySelectorAll('a'));
+    expect(scheduled.querySelector('[data-testid="scheduled-tag"]')?.textContent?.trim()).toBe('Scheduled');
+    expect(scheduled.getAttribute('aria-label')).toBe('Open Web page Roster chart, scheduled, shared by Ann Lee');
+    expect(plain.querySelector('[data-testid="scheduled-tag"]')).toBeNull();
+  });
+
   it('offers removal only where the caller may remove', async () => {
     const { el } = await render();
     const buttons = Array.from(el.querySelectorAll('button')).map(b => b.getAttribute('aria-label'));

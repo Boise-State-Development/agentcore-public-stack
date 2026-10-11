@@ -158,10 +158,34 @@ class TestSharing:
         )
         assert (out["isMine"], out["canRemove"]) == (False, False)
         assert "ownerId" not in out and "sessionId" not in out
+        assert out["scheduleId"] is None
         mine = _outputs(world, AUTHOR)[0]
         assert (mine["isMine"], mine["canRemove"]) == (True, True)
         assert _outputs(world, OWNER)[0]["canRemove"] is True
         assert world["trail"].records[-1]["action"] == "project.output_shared"
+
+    def test_a_schedules_output_reads_like_a_hand_share(self, world):
+        """Written by the worker through the shared writer (3.2d), opened through app-api's routes."""
+        from apis.shared.shares.artifact_shares import output_pointer, write_share_rows
+
+        _put_artifact("art-1", "s-proj")
+        share = {
+            "share_id": "sched-share", "artifact_id": "art-1", "version": 1, "owner_id": AUTHOR.user_id,
+            "owner_email": AUTHOR.email, "access_level": "project", "title": "Roster diff",
+            "content_type": "text/html; charset=utf-8", "session_id": "s-proj",
+            "project_id": world["project"].project_id, "schedule_id": "sched-1",
+            "created_at": "2026-10-11T00:00:00Z", "updated_at": "2026-10-11T00:00:00Z",
+        }
+        write_share_rows(boto3.resource("dynamodb", region_name=REGION).Table(ARTIFACTS), share)
+        ProjectRepository(table_name=PROJECTS_TABLE).put_output(output_pointer(share))
+
+        [out] = _outputs(world, VIEWER)
+        assert (out["shareId"], out["scheduleId"]) == ("sched-share", "sched-1")
+        assert world["client"](VIEWER).get("/shared-artifacts/sched-share").status_code == 200
+        assert world["client"](STRANGER).get("/shared-artifacts/sched-share").status_code == 403
+        assert [s["share_id"] for s in ArtifactShareService().list_for_artifact(owner_id=AUTHOR.user_id, artifact_id="art-1")] == [
+            "sched-share"
+        ]
 
     def test_members_open_it_and_nobody_else_does(self, world):
         _put_artifact("art-1", "s-proj")

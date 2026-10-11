@@ -46,6 +46,7 @@ class ProjectOutputResponse(BaseModel):
     share_url: str = Field(..., alias="shareUrl", description="The shared-artifact view")
     is_mine: bool = Field(..., alias="isMine")
     can_remove: bool = Field(..., alias="canRemove", description="The caller may remove it from the project")
+    schedule_id: Optional[str] = Field(None, alias="scheduleId", description="The project schedule that published it, if one did")
 
 
 class ProjectOutputsResponse(BaseModel):
@@ -68,6 +69,7 @@ def _response(o: ProjectOutput, user: User, can_moderate: bool, names: dict) -> 
         share_url=f"/shared-artifact/{o.share_id}",
         is_mine=mine,
         can_remove=mine or can_moderate,
+        schedule_id=o.schedule_id,
     )
 
 

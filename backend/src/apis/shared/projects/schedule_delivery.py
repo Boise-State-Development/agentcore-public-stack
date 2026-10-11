@@ -16,6 +16,12 @@ Older ones are unshared (row, body and pointer), so a daily schedule can't bury
 what people share by hand, nor fill the assistant's 50-task listing with itself.
 The creator's own tasks are never touched.
 
+Outputs (3.2d): a schedule that also publishes its outputs shares each artifact
+the delivered run made with the project, as its creator would from the artifact's
+Share dialog (3.3), and unshares its previous run's, so Outputs hold the latest
+edition. Only shares this schedule made are unshared; an artifact the creator
+shared by hand stays.
+
 Sync, like ``apis.shared.projects.schedules``: the worker calls it through
 ``asyncio.to_thread``.
 """
@@ -24,6 +30,8 @@ from __future__ import annotations
 
 import logging
 import os
+import uuid
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from apis.shared.auth.models import User
@@ -126,6 +134,7 @@ class ScheduleDelivery:
             logger.warning("Run %s of schedule %s isn't a task in its project; not sharing it", session_id, schedule.schedule_id)
             return None
         messages = _wait(get_messages(session_id=session_id, user_id=schedule.user_id))
+        artifacts = self._artifacts(schedule, session_id)
         note = (NOTE_PREFIX + schedule.label)[:_NOTE_MAX]
         item = write_share(
             table=self.table,
@@ -137,7 +146,7 @@ class ScheduleDelivery:
             access_level="project",
             metadata=metadata.model_dump(by_alias=True, exclude_none=True),
             messages=[m.model_dump(by_alias=True, exclude_none=True) for m in messages.messages],
-            artifacts=self._artifacts(schedule, session_id),
+            artifacts=artifacts,
             tool_summaries=messages.tool_summaries,
             project_id=schedule.project_id,
             note=note,
@@ -146,8 +155,101 @@ class ScheduleDelivery:
         notified = self._notify(schedule, project, item) if schedule.notify_members else 0
         self._record(schedule, item, notified)
         self._prune(schedule)
+        if schedule.publish_outputs:
+            self._publish_outputs(schedule, session_id, artifacts)
         logger.info("Delivered run %s of schedule %s as share %s", session_id, schedule.schedule_id, item["share_id"])
         return item["share_id"]
+
+    def _publish_outputs(self, schedule: ScheduledPrompt, session_id: str, artifacts: List[Dict[str, Any]]) -> None:
+        """Share the run's artifacts with the project, then retire the previous run's. Best-effort."""
+        from apis.shared.shares.artifact_shares import write_share_rows, output_pointer, delete_share_rows
+        from apis.shared.shares.artifacts import artifacts_table
+
+        table = self._artifacts_table if self._artifacts_table is not None else artifacts_table()
+        if table is None:
+            logger.warning("The artifacts table isn't configured; schedule %s publishes nothing", schedule.schedule_id)
+            return
+        published: set = set()
+        for head in artifacts:
+            now = datetime.now(timezone.utc).isoformat()
+            share = {
+                "share_id": str(uuid.uuid4()),
+                "artifact_id": head["artifact_id"],
+                "version": int(head["version"]),
+                "owner_id": schedule.user_id,
+                "owner_email": normalize_email(schedule.owner_email or ""),
+                "access_level": "project",
+                "title": head.get("title", ""),
+                "content_type": head.get("content_type") or "text/html; charset=utf-8",
+                "session_id": session_id,
+                "project_id": schedule.project_id,
+                "schedule_id": schedule.schedule_id,
+                "created_at": now,
+                "updated_at": now,
+            }
+            try:
+                write_share_rows(table, share)
+            except Exception:
+                logger.warning("Could not publish artifact %s of schedule %s", head["artifact_id"], schedule.schedule_id, exc_info=True)
+                continue
+            try:
+                self.repository.put_output(output_pointer(share))
+            except Exception:
+                # Unlisted, it is a share nobody could find: undo it, as a hand share would be.
+                logger.warning("Could not list artifact %s in project %s; unsharing it", head["artifact_id"], schedule.project_id, exc_info=True)
+                try:
+                    delete_share_rows(table, share)
+                except Exception:
+                    logger.warning("Could not unshare artifact %s", head["artifact_id"], exc_info=True)
+                continue
+            published.add(head["artifact_id"])
+            self._record_output(schedule, share)
+        if published:
+            # A run that made nothing leaves the last edition in place.
+            self._retire_outputs(schedule, table, keep=published)
+
+    def _retire_outputs(self, schedule: ScheduledPrompt, table: Any, *, keep: set) -> None:
+        """Unshare this schedule's earlier outputs, rebuilding each pointer from what remains. Best-effort."""
+        from apis.shared.shares.artifact_shares import delete_share_rows, shares_for_artifact, sync_project_output
+
+        try:
+            outputs = [
+                o for o in self.repository.list_outputs(schedule.project_id)
+                if o.schedule_id == schedule.schedule_id and o.artifact_id not in keep
+            ]
+            for output in outputs:
+                for share in shares_for_artifact(table, schedule.user_id, output.artifact_id):
+                    # Only what this schedule shared: never a share the creator made by hand.
+                    if share.get("schedule_id") == schedule.schedule_id and share.get("project_id") == schedule.project_id:
+                        delete_share_rows(table, share)
+                sync_project_output(table, schedule.user_id, output.artifact_id, schedule.project_id, repository=self.repository)
+        except Exception:
+            logger.warning("Could not retire the earlier outputs of schedule %s", schedule.schedule_id, exc_info=True)
+
+    def _record_output(self, schedule: ScheduledPrompt, share: Dict[str, Any]) -> None:
+        """``project.output_shared`` by the creator, marked as a schedule's."""
+        try:
+            if self._audit is None:
+                from apis.shared.audit import get_audit_service
+
+                self._audit = get_audit_service()
+            from apis.shared.audit import TARGET_PROJECT, AuditAction
+
+            self._audit.record(
+                action=AuditAction.PROJECT_OUTPUT_SHARED,
+                actor=_creator(schedule),
+                target_type=TARGET_PROJECT,
+                target_id=schedule.project_id,
+                after={
+                    "artifactId": share["artifact_id"],
+                    "version": share["version"],
+                    "title": share["title"],
+                    "scheduleId": schedule.schedule_id,
+                },
+                reason="schedule",
+            )
+        except Exception:
+            logger.warning("Could not record an output of schedule %s", schedule.schedule_id, exc_info=True)
 
     def _artifacts(self, schedule: ScheduledPrompt, session_id: str) -> List[Dict[str, Any]]:
         """The run's artifacts at HEAD; best-effort, as for any share."""

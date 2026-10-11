@@ -200,6 +200,8 @@ export interface ProjectOutput {
   isMine: boolean;
   /** The sharer, or an editor of an active project. */
   canRemove: boolean;
+  /** The project schedule that published it (3.2d), when one did. */
+  scheduleId?: string | null;
 }
 
 export interface ProjectOutputsResponse {
@@ -643,6 +645,8 @@ export interface ProjectSchedule {
   timezone: string;
   deliverTo: ScheduleDelivery;
   notifyMembers: boolean;
+  /** Each shared run's artifacts go to Outputs, replacing the previous run's (3.2d). */
+  publishOutputs: boolean;
   state: ScheduledPromptState;
   /** A backend code (`member_removed`, `paused_by_editor`, …) or the personal page's "Paused by user". */
   stateReason?: string | null;
@@ -678,6 +682,8 @@ export interface CreateProjectScheduleRequest {
   timezone: string;
   deliverTo: ScheduleDelivery;
   notifyMembers: boolean;
+  /** Only with `deliverTo: 'project'`; the API refuses it otherwise. */
+  publishOutputs: boolean;
 }
 
 /** The creator's change: any subset of what create takes. State has its own routes. */

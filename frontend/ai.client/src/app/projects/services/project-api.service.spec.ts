@@ -12,7 +12,7 @@ const BASE = 'http://localhost:8000/projects';
 
 const SCHEDULE_BODY = {
   label: 'Weekly digest', promptText: 'Summarize the week.', cadence: 'weekly' as const, hourLocal: 9, weekday: 1,
-  timezone: 'America/Boise', deliverTo: 'project' as const, notifyMembers: true,
+  timezone: 'America/Boise', deliverTo: 'project' as const, notifyMembers: true, publishOutputs: true,
 };
 
 describe('ProjectApiService', () => {

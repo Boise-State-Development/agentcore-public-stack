@@ -49,6 +49,8 @@ describe('describeActivity', () => {
     [rec('project.task_shared', { after: { title: 'Roster diff' } }), 'shared the task “Roster diff” with the project'],
     [rec('project.output_shared', { after: { title: 'Roster chart' } }), 'shared the output “Roster chart” with the project'],
     [rec('project.output_removed', { after: { title: 'Roster chart' } }), 'removed the output “Roster chart” from the project'],
+    [rec('project.output_shared', { after: { title: 'Weekly report', scheduleId: 'sc_1' }, reason: 'schedule' }),
+      'published “Weekly report” to Outputs from a schedule'],
     [rec('project.memory_proposed', { after: { slug: 'sis' } }), 'proposed a change to the memory file “sis”'],
     [rec('project.memory_proposal_approved', { after: { slug: 'sis', edited: true } }), 'approved a change to the memory file “sis” with edits'],
     [rec('project.memory_proposal_approved', { after: { slug: 'sis', kind: 'compaction', appliedOps: 2, totalOps: 2 } }), 'applied 2 maintenance changes to the memory file “sis”'],

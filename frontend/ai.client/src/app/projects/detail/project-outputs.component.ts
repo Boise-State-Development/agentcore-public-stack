@@ -50,14 +50,19 @@ import { projectErrorMessage } from '../services/projects.service';
             <li class="relative">
               <a
                 [routerLink]="['/shared-artifact', o.shareId]"
-                [attr.aria-label]="'Open ' + style(o).label + ' ' + o.title + ', ' + sharedByPhrase(o)"
+                [attr.aria-label]="'Open ' + style(o).label + ' ' + o.title + (o.scheduleId ? ', scheduled' : '') + ', ' + sharedByPhrase(o)"
                 class="flex w-full items-center gap-3 rounded-2xl border border-gray-200 bg-white px-3 py-2.5 pr-10 text-left transition-colors hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-700 dark:bg-gray-800 dark:hover:bg-gray-700"
               >
                 <span class="grid size-9 shrink-0 place-items-center rounded-2xl" [class]="style(o).bg" aria-hidden="true">
                   <ng-icon [name]="style(o).icon" class="size-5" [class]="style(o).text" />
                 </span>
                 <span class="min-w-0 flex-1">
-                  <span class="block truncate text-sm/6 font-semibold text-gray-900 dark:text-white">{{ o.title }}</span>
+                  <span class="flex min-w-0 items-center gap-2">
+                    <span class="truncate text-sm/6 font-semibold text-gray-900 dark:text-white">{{ o.title }}</span>
+                    @if (o.scheduleId) {
+                      <span data-testid="scheduled-tag" class="shrink-0 rounded-2xl bg-gray-100 px-2 text-xs/5 font-medium text-gray-700 dark:bg-white/10 dark:text-gray-200">Scheduled</span>
+                    }
+                  </span>
                   <span class="block truncate text-xs/5 text-gray-600 dark:text-gray-400">
                     {{ style(o).label }}@if (o.version > 1) { · v{{ o.version }} } · {{ sharer(o) }} · {{ sharedAt(o) | date: 'MMM d' }}
                   </span>
