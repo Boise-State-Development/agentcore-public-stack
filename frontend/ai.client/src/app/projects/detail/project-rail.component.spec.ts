@@ -42,7 +42,7 @@ const PALETTE = {
 function sched(scheduleId: string, state: ProjectSchedule['state']): ProjectSchedule {
   return {
     scheduleId, label: scheduleId, promptText: 'p', cadence: 'daily', hourLocal: 7, timezone: 'UTC', deliverTo: 'owner',
-    notifyMembers: false, state, createdByEmail: 'me@x.edu', createdAt: '', updatedAt: '', isMine: true, canEdit: true, canManage: true,
+    notifyMembers: false, publishOutputs: false, state, createdByEmail: 'me@x.edu', createdAt: '', updatedAt: '', isMine: true, canEdit: true, canManage: true,
   };
 }
 

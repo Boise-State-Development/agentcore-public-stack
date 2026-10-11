@@ -175,7 +175,12 @@ export function describeActivity(
     case 'project.task_unshared':
       return line(`stopped sharing the task “${str(after['title']) || 'Untitled task'}”`);
     case 'project.output_shared':
-      return line(`shared the output “${str(after['title']) || 'Untitled artifact'}” with the project`);
+      // A schedule's published artifact is recorded as its creator's share (3.2d).
+      return line(
+        record.reason === 'schedule'
+          ? `published “${str(after['title']) || 'Untitled artifact'}” to Outputs from a schedule`
+          : `shared the output “${str(after['title']) || 'Untitled artifact'}” with the project`,
+      );
     case 'project.output_removed':
       return line(`removed the output “${str(after['title']) || 'Untitled artifact'}” from the project`);
     case 'project.schedule_created':

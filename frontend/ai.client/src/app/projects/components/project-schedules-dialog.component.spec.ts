@@ -42,6 +42,7 @@ function schedule(over: Partial<ProjectSchedule> = {}): ProjectSchedule {
     timezone: 'America/Boise',
     deliverTo: 'project',
     notifyMembers: true,
+    publishOutputs: false,
     state: 'active',
     stateReason: null,
     nextRunAt: null,
@@ -146,6 +147,14 @@ describe('ProjectSchedulesDialogComponent', () => {
     expect(theirs).toContain('Made by Bo Diaz');
     expect(theirs).toContain('Stopped because its creator is no longer a member.');
     expect(theirs).not.toContain('Shared with the project');
+  });
+
+  it('says when a schedule publishes its artifacts to Outputs', async () => {
+    api.schedules.mockReturnValue(of({ schedules: [schedule({ publishOutputs: true })] }));
+    const { item } = await open();
+    expect(item('Weekly digest').textContent!.replace(/\s+/g, ' ')).toContain(
+      'Members are told about each run · Publishes its artifacts to Outputs',
+    );
   });
 
   it('offers each action only where the schedule allows it', async () => {

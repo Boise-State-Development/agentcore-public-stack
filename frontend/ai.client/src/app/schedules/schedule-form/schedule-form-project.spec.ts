@@ -48,6 +48,7 @@ function schedule(over: Partial<ProjectSchedule> = {}): ProjectSchedule {
     timezone: 'America/Boise',
     deliverTo: 'project',
     notifyMembers: false,
+    publishOutputs: false,
     state: 'active',
     createdByEmail: 'me@x.edu',
     createdAt: '2026-10-01T00:00:00Z',
@@ -121,10 +122,14 @@ describe('ScheduleFormPage — project mode', () => {
     const notify = el.querySelector<HTMLInputElement>('#notifyMembers')!;
     expect(el.querySelector('label[for="deliverToProject"]')?.textContent).toContain('Share each run with the project');
     expect(el.querySelector('label[for="notifyMembers"]')?.textContent).toContain('Notify members when a run is shared');
+    const publish = el.querySelector<HTMLInputElement>('#publishOutputs')!;
+    expect(el.querySelector('label[for="publishOutputs"]')?.textContent).toContain('Publish its artifacts to Outputs');
     expect(notify.disabled).toBe(true);
+    expect(publish.disabled).toBe(true);
     share.click();
     fixture.detectChanges();
     expect(notify.disabled).toBe(false);
+    expect(publish.disabled).toBe(false);
     expect(el.textContent).toContain('Back to Enrollment Sync');
   });
 
@@ -134,6 +139,7 @@ describe('ScheduleFormPage — project mode', () => {
     fill();
     component.form.controls.deliverToProject.setValue(true);
     component.form.controls.notifyMembers.setValue(true);
+    component.form.controls.publishOutputs.setValue(true);
     await component.onSubmit();
     expect(scheduleService.createSchedule).not.toHaveBeenCalled();
     expect(api.createSchedule).toHaveBeenCalledWith('prj_1', {
@@ -147,18 +153,28 @@ describe('ScheduleFormPage — project mode', () => {
       timezone: component.form.controls.timezone.value,
       deliverTo: 'project',
       notifyMembers: true,
+      publishOutputs: true,
     });
     expect(navigate).toHaveBeenCalledWith(['/projects', 'prj_1', 'schedules']);
   });
 
-  it('never asks to notify members about runs it does not share', async () => {
+  it('never notifies or publishes for runs it does not share', async () => {
     await mount();
     fill();
     component.form.controls.deliverToProject.setValue(true);
     component.form.controls.notifyMembers.setValue(true);
+    component.form.controls.publishOutputs.setValue(true);
     component.form.controls.deliverToProject.setValue(false);
     await component.onSubmit();
-    expect(api.createSchedule.mock.calls[0][1]).toMatchObject({ deliverTo: 'owner', notifyMembers: false });
+    expect(api.createSchedule.mock.calls[0][1]).toMatchObject({ deliverTo: 'owner', notifyMembers: false, publishOutputs: false });
+  });
+
+  it('loads and edits whether a schedule publishes its outputs', async () => {
+    await mount('sc_1', PROJECT, schedule({ publishOutputs: true }));
+    expect(component.form.controls.publishOutputs.value).toBe(true);
+    component.form.controls.publishOutputs.setValue(false);
+    await component.onSubmit();
+    expect(api.updateSchedule).toHaveBeenCalledWith('prj_1', 'sc_1', { publishOutputs: false });
   });
 
   it('shows the API’s refusal in the error toast', async () => {
@@ -223,6 +239,7 @@ describe('changedFields', () => {
         timezone: 'America/Denver',
         deliverTo: 'owner',
         notifyMembers: false,
+        publishOutputs: false,
       }),
     ).toEqual({ timezone: 'America/Denver', deliverTo: 'owner' });
   });
