@@ -16,6 +16,7 @@ For narrative release notes written for operators and product owners, see [RELEA
 
 ### 🐛 Fixed
 
+- **A project's Activity linked artifact and memory-file versions to settings History.** An output or memory entry whose audit record carries the artifact's or file's `version` showed a "Version n" link to Settings › History, which holds only settings versions, so it opened the wrong version or none. Only instruction, model, tool and skill saves link there now (found validating Shared Projects 3.2d on dev, `docs/specs/shared-projects.md` §7)
 - **A resumed turn is archived under its own key, and an archive write never replaces another turn's object.** The conversation archive placed a turn from the index of its last assistant message, so a turn that resumed after a pause and ended on a tool result, with no assistant text after it, was written over the previous turn's object (seen on dev with `ask_user_question`). The runtime now places the turn by counting the messages its request appended. A new turn's put is create-only, and a resumed turn reads its paused copy first and replaces it only if it is the same turn. A turn cut short by Stop or a dropped connection is now archived too, with the partial answer the user saw. A CDK deploy grants the AgentCore Runtime role `s3:GetObject` on the archive's `conversations/` prefix; until then a resumed turn keeps its paused copy (#1380, `docs/specs/conversation-search.md` §4)
 
 ## [1.27.0] - 2026-10-08
