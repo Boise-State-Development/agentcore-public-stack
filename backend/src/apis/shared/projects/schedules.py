@@ -152,7 +152,11 @@ class ProjectSchedules:
             self.repository.delete_schedule(schedule.project_id, schedule.schedule_id)
 
     def record_run(
-        self, schedule: ScheduledPrompt, status: ScheduleRunStatus, reason: Optional[str] = None
+        self,
+        schedule: ScheduledPrompt,
+        status: ScheduleRunStatus,
+        reason: Optional[str] = None,
+        share_id: Optional[str] = None,
     ) -> None:
         """A run row for members (best-effort: a missed row costs history, never the run)."""
         if not schedule.project_id:
@@ -168,6 +172,7 @@ class ProjectSchedules:
                     status=status,
                     finished_at=utc_now_iso(),
                     reason=reason,
+                    share_id=share_id,
                 ),
                 ttl=int(time.time()) + SCHEDULE_RUN_RETENTION_DAYS * 86400,
             )

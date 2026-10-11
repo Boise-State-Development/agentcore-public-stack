@@ -69,6 +69,7 @@ While the backend switch is off:
 | Variable | Service | Default | Purpose |
 | --- | --- | --- | --- |
 | `PROJECTS_ENABLED` | app-api, inference-api, scheduled-runs dispatcher and worker | off | Only `true` enables (see above). Set by CDK from `CDK_PROJECTS_ENABLED` |
+| `PROJECTS_SCHEDULE_RUNS_KEPT` | scheduled-runs worker | 10 | How many of one schedule's runs stay shared with its project; older deliveries are unshared |
 | `DYNAMODB_PROJECTS_TABLE_NAME` | app-api, inference-api | — | The `{prefix}-projects` table. Set by CDK |
 | `DYNAMODB_AUDIT_LOG_TABLE_NAME` | app-api | — | Where the Activity trail is written. Without it, nothing is recorded |
 | `PROJECTS_MAX_MEMBERS` | app-api | `200` | Members per project, besides the owner. Invitations past the cap are reported, not added |
@@ -161,5 +162,5 @@ the ordinary memory-space export for any item-format space.
 | `{prefix}-rag-assistants` | Each project's assistant: a hidden agent (`kind = "project"`) that never appears in agent lists or the marketplace. Its versions are the project's settings history |
 | The assistant's knowledge base | The project's files |
 | `{prefix}-sessions-metadata` | Tasks are ordinary sessions with `preferences.projectId`, indexed by `ProjectSessionIndex`. A project schedule is a scheduled prompt in its creator's partition (`USER#{id}` / `SCHEDPROMPT#{id}`) with `projectId` |
-| `{prefix}-shared-conversations` | Shares with `access_level = "project"` |
+| `{prefix}-shared-conversations` | Shares with `access_level = "project"`, including a schedule's delivered runs (`schedule_id` on the row) |
 | `{prefix}-audit-log` | The project trail, `AUDIT#project#{id}` |

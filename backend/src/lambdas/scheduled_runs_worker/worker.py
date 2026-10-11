@@ -34,7 +34,9 @@ Failure handling (brief §2, "Worker" bullet):
 A schedule that runs in a project (Shared Projects 3.2) also leaves a run row
 on the project for its members, and its pauses go through
 ``ProjectSchedules.pause``, which adds a row and tells the creator and the
-project's owner why it stopped.
+project's owner why it stopped. One set to deliver to the project shares each
+completed run with it first (``ScheduleDelivery``, 3.2b), so the run row can
+point at the share; a delivery that fails leaves the run completed and private.
 """
 
 import asyncio
@@ -48,6 +50,7 @@ from apis.shared.harness import (
     RunResult,
     run_agent_headless,
 )
+from apis.shared.projects.schedule_delivery import ScheduleDelivery
 from apis.shared.projects.schedules import ProjectSchedules
 from apis.shared.scheduled_prompts.models import ScheduledPrompt
 from apis.shared.scheduled_prompts.service import (
@@ -73,9 +76,9 @@ async def _pause(schedule: ScheduledPrompt, reason: str) -> None:
     await set_schedule_state(schedule.user_id, schedule.schedule_id, "paused_error", state_reason=reason)
 
 
-async def _record_project_run(schedule: ScheduledPrompt, status: str) -> None:
+async def _record_project_run(schedule: ScheduledPrompt, status: str, share_id: Optional[str] = None) -> None:
     if schedule.project_id:
-        await asyncio.to_thread(ProjectSchedules().record_run, schedule, status)
+        await asyncio.to_thread(ProjectSchedules().record_run, schedule, status, None, share_id)
 
 
 async def _record_failure_and_maybe_pause(
@@ -168,7 +171,10 @@ async def run_schedule(payload: Dict[str, Any]) -> Dict[str, Any]:
         await record_run_result(
             user_id, schedule_id, status="completed", session_id=result.session_id
         )
-        await _record_project_run(schedule, "completed")
+        share_id = None
+        if schedule.project_id and schedule.deliver_to == "project" and result.session_id:
+            share_id = await asyncio.to_thread(ScheduleDelivery().deliver, schedule, result.session_id)
+        await _record_project_run(schedule, "completed", share_id)
         logger.info(f"Schedule {schedule_id}: run {result.run_id} completed (session {result.session_id})")
         return {"scheduleId": schedule_id, "result": "completed", "sessionId": result.session_id}
 

@@ -63,6 +63,16 @@ COPY backend/src/apis/shared/projects/ ${LAMBDA_TASK_ROOT}/apis/shared/projects/
 COPY backend/src/apis/shared/notifications/ ${LAMBDA_TASK_ROOT}/apis/shared/notifications/
 COPY backend/src/apis/shared/auth/models.py ${LAMBDA_TASK_ROOT}/apis/shared/auth/models.py
 COPY backend/src/apis/shared/timestamps.py ${LAMBDA_TASK_ROOT}/apis/shared/timestamps.py
+# Delivering a run to its project (3.2b): the share writer and its snapshot store,
+# the artifact-heads read, and the audit record. get_messages, which snapshots the
+# run exactly as a member's share would, also reaches the UI-resource and
+# tool-summary stores (sessions-metadata rows) and the conversation archive (read
+# only for a session Memory no longer holds, never a run that just finished).
+COPY backend/src/apis/shared/shares/ ${LAMBDA_TASK_ROOT}/apis/shared/shares/
+COPY backend/src/apis/shared/audit/ ${LAMBDA_TASK_ROOT}/apis/shared/audit/
+COPY backend/src/apis/shared/tool_summaries/ ${LAMBDA_TASK_ROOT}/apis/shared/tool_summaries/
+COPY backend/src/apis/shared/conversation_archive/ ${LAMBDA_TASK_ROOT}/apis/shared/conversation_archive/
+COPY backend/src/apis/shared/mcp_apps/ui_resource_store.py ${LAMBDA_TASK_ROOT}/apis/shared/mcp_apps/ui_resource_store.py
 COPY backend/src/apis/shared/dynamo_errors.py ${LAMBDA_TASK_ROOT}/apis/shared/dynamo_errors.py
 
 # The two handlers themselves, as plain top-level modules.

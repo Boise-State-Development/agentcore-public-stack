@@ -64,6 +64,33 @@ describe('Scheduled runs in a project', () => {
     }
   });
 
+  it('gives the worker what delivering a run needs: read-only Memory, the share row and body, artifacts, audit', () => {
+    const env = lambdaEnvironment(on, 'ScheduledRunsWorkerLambda');
+    for (const name of [
+      'AGENTCORE_MEMORY_ID',
+      'SHARED_CONVERSATIONS_TABLE_NAME',
+      'SHARED_CONVERSATIONS_BUCKET_NAME',
+      'DYNAMODB_ARTIFACTS_TABLE_NAME',
+      'DYNAMODB_AUDIT_LOG_TABLE_NAME',
+    ]) {
+      expect(env[name]).toBeDefined();
+    }
+    const statements = statementsFor(on, 'ScheduledRunsWorkerLambda');
+    const memory = statements.find((s) => JSON.stringify(s.Action).includes('bedrock-agentcore:ListEvents'));
+    expect(memory?.Action).toEqual(['bedrock-agentcore:ListEvents', 'bedrock-agentcore:GetEvent']);
+    const bodies = statements.find((s) => JSON.stringify(s.Action).includes('s3:PutObject'));
+    expect(JSON.stringify(bodies?.Resource)).toContain('/shares/*');
+  });
+
+  it('gives the dispatcher none of it', () => {
+    const env = lambdaEnvironment(on, 'ScheduledRunsDispatcherLambda');
+    expect(env.AGENTCORE_MEMORY_ID).toBeUndefined();
+    expect(env.SHARED_CONVERSATIONS_TABLE_NAME).toBeUndefined();
+    const statements = JSON.stringify(statementsFor(on, 'ScheduledRunsDispatcherLambda'));
+    expect(statements).not.toContain('bedrock-agentcore:ListEvents');
+    expect(statements).not.toContain('s3:PutObject');
+  });
+
   it('tells both functions when Projects is off, so the dispatcher pauses instead of running', () => {
     const off = synth(false);
     for (const lambda of LAMBDAS) {

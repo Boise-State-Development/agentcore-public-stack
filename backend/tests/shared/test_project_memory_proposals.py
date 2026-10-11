@@ -235,6 +235,50 @@ class TestTheTool:
         result = asyncio.run(self._tools(team, VIEWER)["memory_propose"](slug="sis", text="Prose."))
         assert result["status"] == "error" and result["content"][0]["text"].startswith("❌ Not proposed:")
 
+    # A scheduled run (Shared Projects 3.2b): nobody is watching, so what it would
+    # add to shared memory waits for an editor, even when its creator is one.
+
+    @staticmethod
+    def _in_session(session_id: str):
+        from types import SimpleNamespace
+
+        manager = SimpleNamespace(config=SimpleNamespace(session_id=session_id))
+        return SimpleNamespace(agent=SimpleNamespace(_session_manager=manager))
+
+    def test_a_scheduled_runs_shared_save_becomes_a_proposal(self, runtime, inbox, team):
+        result = asyncio.run(self._tools(team, EDITOR)["memory_save"](
+            scope="project", slug="sis", text=FACT, description="SIS", tool_context=self._in_session("headless-abc"),
+        ))
+
+        assert result["status"] == "success"
+        assert result["content"][0]["text"].startswith("This is a scheduled run, so project memory changes are proposed")
+        [proposal] = runtime.repository.list_proposals(team.shared_space_id)
+        assert (proposal.proposer_kind, proposal.proposer_id, proposal.source_session_id) == (
+            "schedule", EDITOR.user_id, "headless-abc",
+        )
+        assert _kinds(inbox, OWNER, "project_proposal_pending")
+        assert all(e.slug != "sis" for e in runtime.list_entries(team.shared_space_id, EDITOR.user_id, EDITOR.email))
+
+    def test_a_scheduled_run_cannot_rewrite_the_shared_index(self, runtime, team):
+        result = asyncio.run(self._tools(team, EDITOR)["memory_save"](
+            scope="project", slug="MEMORY.md", text="- [[sis]] — SIS", tool_context=self._in_session("headless-abc"),
+        ))
+        assert result["status"] == "error" and "memory_propose" in result["content"][0]["text"]
+
+    def test_a_scheduled_run_proposes_as_a_schedule(self, runtime, team):
+        asyncio.run(self._tools(team, EDITOR)["memory_propose"](
+            slug="sis", text=FACT, tool_context=self._in_session("headless-abc"),
+        ))
+        [proposal] = runtime.repository.list_proposals(team.shared_space_id)
+        assert proposal.proposer_kind == "schedule"
+
+    def test_an_editor_in_a_conversation_still_saves_directly(self, runtime, team):
+        result = asyncio.run(self._tools(team, EDITOR)["memory_save"](
+            scope="project", slug="sis", text=FACT, description="SIS", tool_context=self._in_session("sess-1"),
+        ))
+        assert result["status"] == "success"
+        assert runtime.repository.list_proposals(team.shared_space_id) == []
+
 
 class TestRoutes:
     @pytest.fixture()

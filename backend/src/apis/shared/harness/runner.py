@@ -30,6 +30,7 @@ from apis.shared.harness.auth import BearerAuthStrategy, HeadlessAuthError
 from apis.shared.harness.governance import GovernanceFloor
 from apis.shared.harness.models import RunResult
 from apis.shared.harness.sse import InvocationStreamAccumulator, iter_sse_events
+from apis.shared.scheduled_prompts.models import HEADLESS_SESSION_PREFIX
 
 logger = logging.getLogger(__name__)
 
@@ -194,7 +195,7 @@ async def run_agent_headless(
     must not execute).
     """
     run_id = run_id or f"run-{uuid.uuid4().hex[:12]}"
-    session_id = session_id or f"headless-{uuid.uuid4().hex[:16]}"
+    session_id = session_id or f"{HEADLESS_SESSION_PREFIX}{uuid.uuid4().hex[:16]}"
     governance = governance or GovernanceFloor()
     started_at = _now_iso()
 

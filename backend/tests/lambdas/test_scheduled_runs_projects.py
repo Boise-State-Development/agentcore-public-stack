@@ -152,3 +152,50 @@ class TestWorker:
         runs = service.schedules.runs(project.project_id, schedule.schedule_id)
         assert sorted((r.status, r.reason) for r in runs) == [("error", None), ("paused", "repeated_failures")]
         assert _notices(OWNER.email) == ["repeated_failures"]
+
+    async def test_a_delivered_run_row_points_at_its_share(
+        self, service, sessions_metadata_table, bff_sessions_table, monkeypatch
+    ):
+        project, schedule = await _due_project_schedule(service, sessions_metadata_table)
+        sessions_metadata_table.update_item(
+            Key={"PK": f"USER#{EDITOR.user_id}", "SK": f"SCHEDPROMPT#{schedule.schedule_id}"},
+            UpdateExpression="SET deliverTo = :p",
+            ExpressionAttributeValues={":p": "project"},
+        )
+        delivered: list = []
+
+        async def fake_run(**kwargs):
+            return _result("completed", session_id="headless-run1")
+
+        def fake_deliver(self, schedule, session_id):
+            delivered.append((schedule.schedule_id, session_id))
+            return "sh-1"
+
+        monkeypatch.setattr(worker, "run_agent_headless", fake_run)
+        monkeypatch.setattr(worker.ScheduleDelivery, "deliver", fake_deliver)
+
+        await worker.run_schedule({"scheduleId": schedule.schedule_id, "userId": EDITOR.user_id})
+
+        assert delivered == [(schedule.schedule_id, "headless-run1")]
+        [run] = service.schedules.runs(project.project_id, schedule.schedule_id)
+        assert (run.status, run.share_id) == ("completed", "sh-1")
+
+    async def test_a_run_kept_by_its_owner_is_not_delivered(
+        self, service, sessions_metadata_table, bff_sessions_table, monkeypatch
+    ):
+        project, schedule = await _due_project_schedule(service, sessions_metadata_table)
+
+        async def fake_run(**kwargs):
+            return _result("completed")
+
+        def fail_deliver(self, schedule, session_id):
+            raise AssertionError("an owner-only schedule must not be delivered")
+
+        monkeypatch.setattr(worker, "run_agent_headless", fake_run)
+        monkeypatch.setattr(worker.ScheduleDelivery, "deliver", fail_deliver)
+
+        await worker.run_schedule({"scheduleId": schedule.schedule_id, "userId": EDITOR.user_id})
+
+        [run] = service.schedules.runs(project.project_id, schedule.schedule_id)
+        assert run.share_id is None
+

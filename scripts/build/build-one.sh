@@ -236,6 +236,11 @@ case "$SERVICE" in
             # project cost rollup; notifications/ — a project schedule's pause notice.
             "backend/src/apis/shared/projects"
             "backend/src/apis/shared/notifications"
+            # 3.2b delivery: the share writer, audit, and what get_messages reaches.
+            "backend/src/apis/shared/shares"
+            "backend/src/apis/shared/audit"
+            "backend/src/apis/shared/tool_summaries"
+            "backend/src/apis/shared/conversation_archive"
         )
         # Single-file COPYs hashed as manifests (same as kb-sync/rag-ingestion);
         # the dispatcher's requirements.txt lives inside its own source dir.
@@ -246,6 +251,7 @@ case "$SERVICE" in
             "backend/src/apis/shared/dynamo_errors.py"
             "backend/src/apis/shared/auth/models.py"
             "backend/src/apis/shared/timestamps.py"
+            "backend/src/apis/shared/mcp_apps/ui_resource_store.py"
         )
         # Both scheduled-runs Lambdas are arm64 (see the scheduled-runs
         # CDK construct).

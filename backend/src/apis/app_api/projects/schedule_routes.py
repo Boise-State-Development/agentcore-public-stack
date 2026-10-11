@@ -31,7 +31,13 @@ from apis.shared.feature_flags import scheduled_runs_enabled
 from apis.shared.projects.models import ROLE_RANK, Project, ProjectRole, ProjectScheduleRun, normalize_email
 from apis.shared.projects.schedules import SCHEDULE_ROLE, next_run_at, run_block_reason
 from apis.shared.projects.service import ProjectError
-from apis.shared.scheduled_prompts.models import IntervalUnit, ScheduleCadence, ScheduledPrompt, ScheduledPromptState
+from apis.shared.scheduled_prompts.models import (
+    DeliverTo,
+    IntervalUnit,
+    ScheduleCadence,
+    ScheduledPrompt,
+    ScheduledPromptState,
+)
 from apis.shared.scheduled_prompts.service import (
     MIN_INTERVAL_MINUTES,
     ScheduledPromptLimitExceeded,
@@ -70,6 +76,9 @@ async def require_schedules_user(user: User = Depends(require_projects_user)) ->
 class CreateProjectScheduleRequest(CreateScheduleRequest):
     """A schedule's prompt and cadence. It always runs on the project's assistant, with its tools."""
 
+    deliver_to: DeliverTo = Field("owner", alias="deliverTo", description='"project" shares each run with the project')
+    notify_members: bool = Field(False, alias="notifyMembers", description="Tell members when a run is shared")
+
     @model_validator(mode="after")
     def _no_agent_or_tools(self) -> "CreateProjectScheduleRequest":
         if self.assistant_id is not None or self.enabled_tools is not None:
@@ -79,6 +88,9 @@ class CreateProjectScheduleRequest(CreateScheduleRequest):
 
 class UpdateProjectScheduleRequest(UpdateScheduleRequest):
     """What a creator can change. Pause and resume have their own routes."""
+
+    deliver_to: Optional[DeliverTo] = Field(None, alias="deliverTo")
+    notify_members: Optional[bool] = Field(None, alias="notifyMembers")
 
     @model_validator(mode="after")
     def _content_only(self) -> "UpdateProjectScheduleRequest":
@@ -103,6 +115,8 @@ class ProjectScheduleResponse(BaseModel):
     interval_value: Optional[int] = Field(None, alias="intervalValue")
     interval_unit: Optional[IntervalUnit] = Field(None, alias="intervalUnit")
     timezone: str
+    deliver_to: DeliverTo = Field(..., alias="deliverTo")
+    notify_members: bool = Field(..., alias="notifyMembers")
     state: ScheduledPromptState
     state_reason: Optional[str] = Field(None, alias="stateReason")
     next_run_at: Optional[str] = Field(None, alias="nextRunAt")
@@ -133,6 +147,7 @@ class ProjectScheduleRunResponse(BaseModel):
     status: Literal["completed", "error", "timeout", "paused"]
     finished_at: str = Field(..., alias="finishedAt")
     reason: Optional[str] = None
+    share_id: Optional[str] = Field(None, alias="shareId", description="The delivered run, while it is still shared")
 
 
 class ProjectScheduleRunsResponse(BaseModel):
@@ -174,6 +189,8 @@ def _response(
         interval_value=schedule.interval_value,
         interval_unit=schedule.interval_unit,
         timezone=schedule.timezone,
+        deliver_to=schedule.deliver_to,
+        notify_members=schedule.notify_members,
         state=schedule.state,
         state_reason=schedule.state_reason,
         next_run_at=schedule.next_run_at,
@@ -249,6 +266,8 @@ async def create_schedule(
             enabled_tools=None,
             project_id=project_id,
             owner_email=normalize_email(user.email),
+            deliver_to=body.deliver_to,
+            notify_members=body.notify_members,
         )
     except ScheduledPromptLimitExceeded as e:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
@@ -317,6 +336,8 @@ async def update_schedule(
             interval_value=body.interval_value,
             interval_unit=body.interval_unit,
             timezone_name=body.timezone,
+            deliver_to=body.deliver_to,
+            notify_members=body.notify_members,
         )
     except ValueError as e:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(e))
@@ -396,9 +417,18 @@ async def list_runs(
     await asyncio.to_thread(_authorize, project_id, user)
     await _one(project_id, schedule_id)
     runs: List[ProjectScheduleRun] = await asyncio.to_thread(_svc().schedules.runs, project_id, schedule_id)
+    # A delivered run stays openable only while it is still shared: the schedule
+    # unshares its oldest deliveries, and the creator can unshare any of them.
+    shared = {t.share_id for t in await asyncio.to_thread(_svc().repository.list_shared_tasks, project_id)}
     return ProjectScheduleRunsResponse(
         runs=[
-            ProjectScheduleRunResponse(run_id=r.run_id, status=r.status, finished_at=r.finished_at, reason=r.reason)
+            ProjectScheduleRunResponse(
+                run_id=r.run_id,
+                status=r.status,
+                finished_at=r.finished_at,
+                reason=r.reason,
+                share_id=r.share_id if r.share_id in shared else None,
+            )
             for r in runs
         ]
     )

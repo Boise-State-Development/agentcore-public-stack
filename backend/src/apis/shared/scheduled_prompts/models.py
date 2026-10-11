@@ -22,6 +22,17 @@ from pydantic import BaseModel, ConfigDict, Field
 ScheduleCadence = Literal["daily", "weekday", "weekly", "interval"]
 IntervalUnit = Literal["minutes", "hours"]
 ScheduledPromptState = Literal["active", "paused", "paused_error"]
+DeliverTo = Literal["owner", "project"]
+
+#: Every headless run's session id starts with this (``run_agent_headless``): a
+#: scheduled run or a "Run now". A tool reads it to tell an unattended turn from a
+#: person's, e.g. so a scheduled run's shared-memory saves become proposals (3.2b).
+HEADLESS_SESSION_PREFIX = "headless-"
+
+
+def is_headless_session(session_id: Optional[str]) -> bool:
+    return bool(session_id) and session_id.startswith(HEADLESS_SESSION_PREFIX)
+
 
 #: Sentinel partition key for the sparse due index. Single logical partition
 #: — fine at our scale; shard to SCHEDDUE#{0..N} if writes ever demand it.
@@ -90,5 +101,11 @@ class ScheduledPrompt(BaseModel):
     # the dispatcher can check it without a directory lookup.
     project_id: Optional[str] = Field(None, alias="projectId", description="The project this schedule runs in")
     owner_email: Optional[str] = Field(None, alias="ownerEmail", description="The creator's email, for the membership check")
+    # 3.2b: "project" shares each completed run's task with the project, as its
+    # creator would from the Share dialog; "owner" keeps it in their sidebar only.
+    deliver_to: DeliverTo = Field("owner", alias="deliverTo", description="Where a completed run goes")
+    notify_members: bool = Field(
+        False, alias="notifyMembers", description="Tell the project's members when a run is shared with it"
+    )
     created_at: str = Field(..., alias="createdAt", description="ISO 8601 timestamp of creation")
     updated_at: str = Field(..., alias="updatedAt", description="ISO 8601 timestamp of last update")

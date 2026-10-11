@@ -268,3 +268,33 @@ class TestPersonalSurface:
 
         assert service.repository.list_schedules(project_id) == []
         assert "project.schedule_deleted" in _audit_actions(service, project_id)
+
+
+def test_delivery_is_set_on_create_and_changed_by_the_creator(project_id):
+    created = _create(project_id, deliverTo="project", notifyMembers=True)
+    assert (created["deliverTo"], created["notifyMembers"]) == ("project", True)
+
+    path = f"/projects/{project_id}/schedules/{created['scheduleId']}"
+    changed = client_for(EDITOR).patch(path, json={"deliverTo": "owner"}).json()
+
+    assert (changed["deliverTo"], changed["notifyMembers"]) == ("owner", True)
+    assert client_for(EDITOR).get("/schedules").json()["schedules"][0]["deliverTo"] == "owner"
+
+
+def test_a_run_links_its_share_only_while_it_is_still_shared(project_id, service):
+    from apis.shared.projects.models import SharedTask
+
+    created = _create(project_id, deliverTo="project")
+    schedule = service.schedules.get(project_id, created["scheduleId"])
+    service.schedules.record_run(schedule, "completed", share_id="sh-gone")
+    service.schedules.record_run(schedule, "completed", share_id="sh-live")
+    service.repository.put_shared_task(SharedTask(
+        project_id=project_id, session_id="headless-2", share_id="sh-live", owner_id=EDITOR.user_id,
+        owner_email=EDITOR.email, title="Weekly status", shared_at="2026-10-10T00:00:00Z",
+        schedule_id=created["scheduleId"],
+    ))
+
+    runs = client_for(VIEWER).get(f"/projects/{project_id}/schedules/{created['scheduleId']}/runs").json()["runs"]
+
+    assert sorted(r["shareId"] or "" for r in runs) == ["", "sh-live"]
+
