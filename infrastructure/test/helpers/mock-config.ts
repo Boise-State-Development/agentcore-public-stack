@@ -157,6 +157,10 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     clientTurnTiming: {
       enabled: false,
     },
+    ttftProbe: {
+      userId: '',
+      modelId: '',
+    },
     memoryLint: {
       mode: 'warn',
       sensitivePatterns: '',

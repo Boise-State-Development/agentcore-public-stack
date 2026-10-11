@@ -922,13 +922,21 @@ Three instruments, each blind where another sees. Read the user-facing one first
 |---|---|---|---|
 | `Client*FirstTokenMs` (`features.clientTurnTiming` + `CLIENT_TURN_TIMING_ENABLED`) | The browser: send to first `content_block_delta` | Everything the user waits for: the SPA, the app-api hop, Runtime routing, the session start (a V2 restore) and the model | Top row of the turn-latency dashboard, and its 30-day daily trend |
 | `FirstTokenMs`, `PreludeTotalMs` and the stage metrics | Inference-api handler entry | The server's share, stage by stage | The rest of the dashboard |
-| The scheduled probe (`TtftProbe*Ms`) | A fixed client in the account | A stable baseline independent of traffic mix and volume | See the probe's section below, once it ships |
+| The scheduled probe (`TtftProbe*Ms`) | A Fargate task in the VPC, through the Runtime's public data plane | A stable baseline: one fixed turn an hour, independent of traffic mix and volume | Dashboard row 0b and the 30-day trend; the `ttft-probe-not-reporting` alarm |
 
 How the client metric is recorded (`apis/app_api/telemetry/routes.py`, `TurnTimingService` in the SPA):
 - One `POST /telemetry/turn-timing` per send, after the first token has arrived, fire-and-forget. A turn that ends before its first token, a resume and a "Continue" report nothing.
 - Recorded as EMF under metric names, not dimensions, like every EMF caller here: `ClientFirstTokenMs` on every turn; `ClientFirstTurnFirstTokenMs` or `ClientFollowUpFirstTokenMs`; and, for first turns, `ClientFirstTurnWarmedFirstTokenMs` or `ClientFirstTurnColdFirstTokenMs`. A first turn starts its Runtime session and a follow-up usually finds it running, so one percentile over both moves whenever the mix does.
 - Properties for Logs Insights on the app-api log group: `modelId` (the selected model, even when the request omits it as the default), `warmAgeMs` (time since this tab prewarmed the conversation, or null), `hasAgent`, `hasFiles`, `visible`. No message content, user id or session id.
 - A turn is "first" when this tab knows the conversation as new and it has no messages, so an existing conversation sent to before its history loads stays a follow-up.
+
+How the probe runs (`apis/app_api/telemetry/ttft_probe.py`, `TtftProbeConstruct`):
+- Hourly (`cron(17 * * * ? *)`), as a one-off Fargate task on app-api's own task definition family, with app-api's environment and role and the session retention pruner's schedule role (no new IAM resources; the stack is near CloudFormation's 500-resource limit).
+- As one dedicated user, `CDK_TTFT_PROBE_USER_ID` (a Cognito sub). That user needs an **active headless grant**: sign in and enable headless runs, which lasts up to 30 days from that sign-in, so someone signs in with the probe account at least monthly. Its turns count against that user's quota (three short turns an hour). Unset, the schedule is DISABLED and no alarm exists.
+- `CDK_TTFT_PROBE_MODEL_ID` pins the model. Pin one: unset means the user's default, which moves the baseline whenever the default changes.
+- Each run: a cold first turn on a new conversation, a follow-up on it, then a second new conversation prewarmed and sent 5 s later. It records `TtftProbeColdFirstTokenMs`, `TtftProbeFollowUpFirstTokenMs`, `TtftProbeWarmedFirstTokenMs`, `TtftProbeWarmCallMs`, and `TtftProbeRuns` (or `TtftProbeFailures`), then soft-deletes both conversations.
+- One alarm, `ttft-probe-not-reporting`: no complete run for 3 hours, missing data breaching. A lapsed grant, an exhausted quota, a broken image and a stopped schedule all look the same from here; the task's `ttft probe` log line in the app-api log group says which.
+- First manual run on dev (2026-10-10): cold 9,004 ms, prewarmed 2,321 ms, follow-up 1,533 ms, warm call 2,024 ms. One sample is not a baseline; set latency alarms on the probe's daily median after one to two weeks of it.
 
 Reading drift: compare the daily medians on the dashboard's trend widget, first turns and follow-ups separately, and when one moves, slice it by `modelId` in Logs Insights before calling it a regression; a change of default model moves every percentile. Alarms wait for a baseline (see the probe).
 
