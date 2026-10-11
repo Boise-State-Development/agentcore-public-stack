@@ -237,12 +237,25 @@ export class ScheduledRunsConstruct extends Construct {
       }),
     );
     sharedConversationsTable.grantReadWriteData(this.workerLambda);
+    // The snapshot store checks for an existing body (HeadObject, which IAM
+    // authorizes as s3:GetObject) before it writes one. Without s3:ListBucket a
+    // missing key answers 403 rather than 404, which the store rightly treats as
+    // a real error, so the listing is granted too, limited to shares/.
     this.workerLambda.addToRolePolicy(
       new iam.PolicyStatement({
         sid: 'ScheduledRunShareBodies',
         effect: iam.Effect.ALLOW,
-        actions: ['s3:PutObject', 's3:DeleteObject'],
+        actions: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject'],
         resources: [sharedConversationsBucket.arnForObjects('shares/*')],
+      }),
+    );
+    this.workerLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'ScheduledRunShareBodiesList',
+        effect: iam.Effect.ALLOW,
+        actions: ['s3:ListBucket'],
+        resources: [sharedConversationsBucket.bucketArn],
+        conditions: { StringLike: { 's3:prefix': ['shares/*'] } },
       }),
     );
     artifactsTable.grantReadData(this.workerLambda);
