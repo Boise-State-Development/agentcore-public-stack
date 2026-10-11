@@ -6,6 +6,7 @@ import { firstValueFrom } from 'rxjs';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroBookOpen,
+  heroCalendarDays,
   heroClock,
   heroCpuChip,
   heroDocumentText,
@@ -17,8 +18,9 @@ import {
 } from '@ng-icons/heroicons/outline';
 import { BindableItem } from '../../agents/models/agent.model';
 import { AgentService } from '../../agents/services/agent.service';
-import { BoundBinding, Project } from '../models/project.model';
+import { BoundBinding, Project, ProjectSchedule } from '../models/project.model';
 import { ProjectApiService } from '../services/project-api.service';
+import { isUnavailable } from '../services/projects.service';
 import { personLabel } from '../../shared/utils/person';
 import {
   ProjectActivityDialogComponent,
@@ -56,9 +58,23 @@ import {
   ProjectModelDialogData,
   ProjectModelDialogResult,
 } from '../components/project-model-dialog.component';
+import {
+  ProjectSchedulesDialogComponent,
+  ProjectSchedulesDialogData,
+  ProjectSchedulesDialogResult,
+} from '../components/project-schedules-dialog.component';
 
 /** A dialog the rail can open. The page maps legacy tab URLs onto these. */
-export type ProjectPanel = 'instructions' | 'files' | 'model' | 'tools' | 'skills' | 'members' | 'activity' | 'history';
+export type ProjectPanel =
+  | 'instructions'
+  | 'files'
+  | 'model'
+  | 'tools'
+  | 'skills'
+  | 'schedules'
+  | 'members'
+  | 'activity'
+  | 'history';
 
 interface Row {
   panel: ProjectPanel | 'memory';
@@ -72,12 +88,16 @@ interface Row {
   action: string;
 }
 
+/** The rail's schedules summary: the list, or `'off'` while scheduled runs are switched off here. */
+type SchedulesSummary = ProjectSchedule[] | 'off';
+
 /** How many files the rail counts before it says "100+". */
 const FILES_PAGE = 100;
 
 /**
  * The project's settings as a slim rail beside the composer: one row per thing
- * the assistant works from (instructions, files, memory, model, tools, skills) and per
+ * the assistant works from (instructions, files, memory, model, tools, skills,
+ * schedules) and per
  * thing about the project itself (members, activity, history). Each row opens a
  * dialog; the rail only ever shows a one-line summary.
  *
@@ -92,6 +112,7 @@ const FILES_PAGE = 100;
   providers: [
     provideIcons({
       heroBookOpen,
+      heroCalendarDays,
       heroClock,
       heroCpuChip,
       heroDocumentText,
@@ -167,6 +188,8 @@ export class ProjectRailComponent {
   private readonly moreFiles = signal(false);
   /** Files in the project's shared memory; null when unknown (memory off, or the read failed). */
   private readonly memoryCount = signal<number | null>(null);
+  /** Null when unknown (the read failed, or hasn't finished). */
+  private readonly schedules = signal<SchedulesSummary | null>(null);
 
   private open$: DialogRef<unknown> | null = null;
   /** The summary read in flight, which a dialog opened early must wait for. */
@@ -231,6 +254,13 @@ export class ProjectRailComponent {
         action: edit ? 'Edit' : 'View',
       },
       {
+        panel: 'schedules',
+        icon: 'heroCalendarDays',
+        label: 'Schedules',
+        meta: this.schedulesMeta(),
+        action: edit ? 'Manage' : 'View',
+      },
+      {
         panel: 'members',
         icon: 'heroUsers',
         label: 'Members',
@@ -280,6 +310,26 @@ export class ProjectRailComponent {
     return updates ? `${base} · ${count(updates, 'update')}` : base;
   }
 
+  /** "2 schedules · 1 paused", "None", or "Not turned on" where scheduled runs are off. */
+  private schedulesMeta(): string | null {
+    const schedules = this.schedules();
+    if (schedules === null) return null;
+    if (schedules === 'off') return 'Not turned on';
+    const base = countOrNone(schedules.length, 'schedule');
+    const paused = schedules.filter(s => s.state !== 'active').length;
+    return paused ? `${base} · ${paused} paused` : base;
+  }
+
+  /** The project's schedules; `'off'` when the routes 404 (`SCHEDULED_RUNS_ENABLED` off). */
+  private async loadSchedules(projectId: string): Promise<SchedulesSummary> {
+    try {
+      return (await firstValueFrom(this.api.schedules(projectId))).schedules;
+    } catch (err) {
+      if (isUnavailable(err)) return 'off';
+      throw err;
+    }
+  }
+
   private memoryMeta(): string | null {
     const n = this.memoryCount();
     if (n === null) return null;
@@ -304,8 +354,9 @@ export class ProjectRailComponent {
     this.loaded.set(false);
     this.fileCount.set(null);
     this.memoryCount.set(null);
+    this.schedules.set(null);
     const quiet = <T>(p: Promise<T>): Promise<T | null> => p.catch(() => null);
-    const [instructions, model, tools, skills, files, models, toolPalette, skillPalette, memoryCount] = await Promise.all([
+    const [instructions, model, tools, skills, files, models, toolPalette, skillPalette, memoryCount, schedules] = await Promise.all([
       quiet(firstValueFrom(this.api.instructions(projectId))),
       quiet(firstValueFrom(this.api.model(projectId))),
       quiet(firstValueFrom(this.api.bindings(projectId, 'tools'))),
@@ -315,6 +366,7 @@ export class ProjectRailComponent {
       quiet(this.agents.loadBindable('tool')),
       quiet(this.agents.loadBindable('skill')),
       quiet(this.loadMemoryCount(projectId)),
+      quiet(this.loadSchedules(projectId)),
     ]);
     if (projectId !== this.projectId()) return;
     this.instructions.set(instructions?.instructions ?? '');
@@ -328,6 +380,7 @@ export class ProjectRailComponent {
       this.moreFiles.set(!!files.nextToken);
     }
     this.memoryCount.set(memoryCount);
+    this.schedules.set(schedules);
     this.models.set(models ?? []);
     this.toolPalette.set(toolPalette ?? []);
     this.skillPalette.set(skillPalette ?? []);
@@ -401,6 +454,13 @@ export class ProjectRailComponent {
               this.moreFiles.set(false);
             },
           },
+        });
+        await this.track(ref);
+        return;
+      }
+      case 'schedules': {
+        const ref = this.dialog.open<ProjectSchedulesDialogResult, ProjectSchedulesDialogData>(ProjectSchedulesDialogComponent, {
+          data: { project: this.project, onSchedulesChange: list => this.schedules.set(list ?? 'off') },
         });
         await this.track(ref);
         return;

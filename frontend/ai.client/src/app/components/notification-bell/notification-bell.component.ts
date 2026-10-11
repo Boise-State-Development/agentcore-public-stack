@@ -10,23 +10,12 @@ import { AppNotification } from '../../services/notifications/notification.model
 import { SidenavService } from '../../services/sidenav/sidenav.service';
 import { parseIso } from '../../utils/date';
 import { personLabel } from '../../shared/utils/person';
+import { SCHEDULE_STOPS } from '../../schedules/schedule-wording';
 
 /** Re-read on returning to the tab at most this often. */
 const REFRESH_ON_FOCUS_MS = 60_000;
 
 const ROLE_PHRASES: Record<string, string> = { editor: 'an editor', viewer: 'a viewer', owner: 'the owner' };
-
-/** Why a project schedule stopped, worded for its creator and for anyone else (the owner). */
-const SCHEDULE_STOPS: Record<string, { mine: string; theirs: string }> = {
-  member_removed: { mine: 'because you’re no longer a member', theirs: 'because its creator is no longer a member' },
-  not_editor: { mine: 'because you’re no longer an editor', theirs: 'because its creator is no longer an editor' },
-  project_archived: { mine: 'because the project was archived', theirs: 'because the project was archived' },
-  project_deleted: { mine: 'because the project was deleted', theirs: 'because the project was deleted' },
-  projects_disabled: { mine: 'because Projects is switched off', theirs: 'because Projects is switched off' },
-  repeated_failures: { mine: 'after failing several times in a row', theirs: 'after failing several times in a row' },
-  reauth_required: { mine: 'until you sign in again', theirs: 'until its creator signs in again' },
-  oauth_required: { mine: 'until you reconnect a tool it uses', theirs: 'until its creator reconnects a tool it uses' },
-};
 
 function describeSchedule(n: AppNotification, who: string, project: string): string {
   const label = typeof n.payload?.label === 'string' && n.payload.label ? ` “${n.payload.label}”` : '';
@@ -337,6 +326,13 @@ export class NotificationBellComponent {
     if (n.kind === 'project_proposal_decided' && n.projectId) {
       const file = typeof n.payload?.slug === 'string' ? n.payload.slug : undefined;
       void this.router.navigate(['/projects', n.projectId, 'memory'], { queryParams: file ? { file } : {} });
+      this.sidenav.close();
+      return;
+    }
+    // A stopped schedule opens the project's Schedules dialog; a deleted one has
+    // nothing left to show there, so it opens the project.
+    if (n.kind === 'project_schedule_paused' && n.projectId && n.payload?.reason !== 'deleted') {
+      void this.router.navigate(['/projects', n.projectId, 'schedules']);
       this.sidenav.close();
       return;
     }

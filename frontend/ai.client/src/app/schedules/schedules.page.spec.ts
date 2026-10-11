@@ -10,6 +10,8 @@ import { GrantService } from './services/grant.service';
 import { ToastService } from '../services/toast/toast.service';
 import { ScheduledPrompt } from './models/schedule.model';
 import { GrantStatus } from './models/grant.model';
+import { ProjectsService } from '../projects/services/projects.service';
+import { FEATURES } from '../services/features';
 
 function stubSchedule(overrides: Partial<ScheduledPrompt> = {}): ScheduledPrompt {
   return {
@@ -35,6 +37,15 @@ function stubSchedule(overrides: Partial<ScheduledPrompt> = {}): ScheduledPrompt
     createdAt: '2026-07-05T00:00:00Z',
     updatedAt: '2026-07-05T00:00:00Z',
     ...overrides,
+  };
+}
+
+function projectsStub(projects: Array<{ projectId: string; name: string }> = []) {
+  return {
+    projects$: signal(projects),
+    available$: signal<boolean | null>(true),
+    loading$: signal(false),
+    load: vi.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -88,6 +99,8 @@ describe('SchedulesPage', () => {
         { provide: ScheduleService, useValue: mockScheduleService },
         { provide: GrantService, useValue: mockGrantService },
         { provide: ToastService, useValue: mockToast },
+        { provide: ProjectsService, useValue: projectsStub() },
+        { provide: FEATURES, useValue: { projects: true } },
       ],
     });
     TestBed.overrideComponent(SchedulesPage, { set: { template: '<div></div>' } });
@@ -171,6 +184,14 @@ describe('SchedulesPage', () => {
     expect(mockToast.success).toHaveBeenCalled();
   });
 
+  it('onReauthenticate leaves a project schedule for its project to resume', async () => {
+    const component = createComponent();
+    await component.onReauthenticate(stubSchedule({ state: 'paused_error', stateReason: 'reauth_required', projectId: 'prj_1' }));
+    expect(mockGrantService.enable).toHaveBeenCalled();
+    expect(mockScheduleService.resumeSchedule).not.toHaveBeenCalled();
+    expect(mockToast.success).toHaveBeenCalledWith('Access renewed', 'Resume "Morning Briefing" from a project.');
+  });
+
   it('onPause pauses the schedule', async () => {
     const component = createComponent();
     const schedule = stubSchedule();
@@ -225,5 +246,66 @@ describe('SchedulesPage', () => {
     expect(component.stateLabel(stubSchedule({ state: 'active' }))).toBe('Active');
     expect(component.stateLabel(stubSchedule({ state: 'paused' }))).toBe('Paused');
     expect(component.stateLabel(stubSchedule({ state: 'paused_error' }))).toBe('Needs attention');
+  });
+});
+
+describe('SchedulesPage with a project schedule', () => {
+  beforeEach(() => {
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({
+      providers: [
+        provideRouter([]),
+        {
+          provide: ScheduleService,
+          useValue: {
+            schedules$: signal<ScheduledPrompt[]>([
+              stubSchedule({ scheduleId: 'p1', label: 'Weekly digest', state: 'paused', projectId: 'prj_1', deliverTo: 'project' }),
+              stubSchedule({ scheduleId: 'm1', label: 'Mine', state: 'paused' }),
+            ]),
+            loading$: signal(false),
+            accessible$: signal<boolean | null>(true),
+            loadSchedules: vi.fn().mockResolvedValue(undefined),
+          },
+        },
+        {
+          provide: GrantService,
+          useValue: { status$: signal<GrantStatus>({ enabled: true }), loading$: signal(false), loadStatus: vi.fn().mockResolvedValue(undefined) },
+        },
+        { provide: ToastService, useValue: { success: vi.fn(), error: vi.fn() } },
+        { provide: ProjectsService, useValue: projectsStub([{ projectId: 'prj_1', name: 'Enrollment Sync' }]) },
+        { provide: FEATURES, useValue: { projects: true } },
+      ],
+    });
+  });
+
+  function render() {
+    const fixture = TestBed.createComponent(SchedulesPage);
+    fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+    const item = (label: string) => Array.from(el.querySelectorAll('li')).find(li => li.textContent?.includes(label))!;
+    return { el, item };
+  }
+
+  it('badges it with its project and sends changes there instead of offering Edit or Resume', () => {
+    const { item } = render();
+    const project = item('Weekly digest');
+    const badge = project.querySelector<HTMLAnchorElement>('[data-testid="project-badge"]')!;
+    expect(badge.textContent?.trim()).toBe('In Enrollment Sync');
+    expect(badge.getAttribute('href')).toBe('/projects/prj_1/schedules');
+    const actions = Array.from(project.querySelectorAll('button, a')).map(b => b.textContent?.trim());
+    expect(actions).toContain('Manage in project');
+    expect(actions).toContain('Delete');
+    expect(actions).not.toContain('Edit');
+    expect(actions).not.toContain('Resume');
+
+    const mine = Array.from(item('Mine').querySelectorAll('button')).map(b => b.textContent?.trim());
+    expect(mine).toEqual(expect.arrayContaining(['Resume', 'Edit', 'Delete']));
+    expect(item('Mine').querySelector('[data-testid="project-badge"]')).toBeNull();
+  });
+
+  it('names an unknown project neutrally', () => {
+    TestBed.overrideProvider(ProjectsService, { useValue: projectsStub() });
+    const { item } = render();
+    expect(item('Weekly digest').querySelector('[data-testid="project-badge"]')?.textContent?.trim()).toBe('In a project');
   });
 });

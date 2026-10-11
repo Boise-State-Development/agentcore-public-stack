@@ -248,6 +248,9 @@ class SharedTaskResponse(BaseModel):
     share_url: str = Field(..., alias="shareUrl")
     is_mine: bool = Field(..., alias="isMine", description="Whether the caller shared it (and so may revoke it)")
     note: Optional[str] = Field(None, description="The sharer's note, when they left one")
+    schedule_id: Optional[str] = Field(
+        None, alias="scheduleId", description="The project schedule that delivered this run, when one did"
+    )
 
     @classmethod
     def from_pointer(cls, pointer: SharedTask, caller_id: str, names: Mapping[str, str]) -> "SharedTaskResponse":
@@ -260,6 +263,7 @@ class SharedTaskResponse(BaseModel):
             share_url=f"/shared/{pointer.share_id}",
             is_mine=pointer.owner_id == caller_id,
             note=pointer.note,
+            schedule_id=pointer.schedule_id,
         )
 
 

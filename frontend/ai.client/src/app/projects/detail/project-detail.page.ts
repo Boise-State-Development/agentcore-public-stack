@@ -34,9 +34,10 @@ import { ProjectTasksComponent } from './project-tasks.component';
 
 /**
  * What `/projects/:id/:tab` opens. The page has no tabs any more: a link that
- * names one lands on the page with that dialog open (the bell's Members link, an
- * Activity entry's Version link). `overview` and `tasks` are the page itself, and
- * the old `settings` tab is the Instructions dialog.
+ * names one lands on the page with that dialog open (the bell's Members and
+ * Schedules links, an Activity entry's Version link, the schedule form's way
+ * back). `overview` and `tasks` are the page itself, and the old `settings` tab
+ * is the Instructions dialog.
  */
 const PANEL_FOR_TAB: Record<string, ProjectPanel | null> = {
   overview: null,
@@ -47,6 +48,7 @@ const PANEL_FOR_TAB: Record<string, ProjectPanel | null> = {
   model: 'model',
   tools: 'tools',
   skills: 'skills',
+  schedules: 'schedules',
   members: 'members',
   activity: 'activity',
   history: 'history',

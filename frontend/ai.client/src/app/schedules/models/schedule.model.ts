@@ -37,6 +37,13 @@ export interface ScheduledPrompt {
   maxRunsPerDay: number;
   enabledTools?: string[] | null;
   deliverEmail: boolean;
+  /**
+   * Set for a schedule that runs in a Shared Project (3.2). It is changed and
+   * resumed from the project; here it can only be paused or deleted.
+   */
+  projectId?: string | null;
+  /** A project schedule's delivery: the creator's sidebar, or shared with the project. */
+  deliverTo?: 'owner' | 'project' | null;
   createdAt: string;
   updatedAt: string;
 }

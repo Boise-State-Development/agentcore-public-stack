@@ -36,6 +36,7 @@ describe('describeNotification', () => {
     [notif({ kind: 'project_schedule_paused', payload: { label: 'Weekly status', reason: 'reauth_required', createdBy: 'me@x.edu' } }), 'Your schedule “Weekly status” in Enrollment Sync stopped until you sign in again.'],
     [notif({ kind: 'project_schedule_paused', payload: { label: 'Weekly status', reason: 'paused_by_editor', createdBy: 'me@x.edu' } }), 'ann@x.edu paused your schedule “Weekly status” in Enrollment Sync.'],
     [notif({ kind: 'project_schedule_paused', payload: { label: 'Weekly status', reason: 'deleted', createdBy: 'me@x.edu' } }), 'ann@x.edu deleted your schedule “Weekly status” in Enrollment Sync.'],
+    [notif({ kind: 'project_schedule_paused', payload: { label: 'Weekly status', reason: 'max_runs_per_day_exceeded', createdBy: 'ed@x.edu' } }), 'The schedule “Weekly status” in Enrollment Sync stopped after reaching its daily run limit.'],
     [notif({ kind: 'project_schedule_paused', payload: { reason: 'something_new' } }), 'A schedule in Enrollment Sync stopped.'],
     [notif({ actorEmail: null, projectName: null, payload: {} }), 'Someone added you to a project.'],
     [notif({ actorName: 'Ann Lee' }), 'Ann Lee added you to Enrollment Sync as an editor.'],
@@ -199,6 +200,15 @@ describe('NotificationBellComponent', () => {
     expect(navigate).toHaveBeenLastCalledWith(['/projects', 'prj_1', 'memory'], { queryParams: { file: 'sis' } });
     component.open(notif({ kind: 'project_memory_maintenance', payload: { runId: 'r1', fileCount: 2 } }));
     expect(navigate).toHaveBeenLastCalledWith(['/projects', 'prj_1', 'memory'], { queryParams: { view: 'review' } });
+  });
+
+  it('a stopped schedule opens the project’s Schedules dialog; a deleted one, the project', () => {
+    const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+    const { component } = render();
+    component.open(notif({ kind: 'project_schedule_paused', payload: { scheduleId: 'sc1', label: 'W', reason: 'member_removed' } }));
+    expect(navigate).toHaveBeenLastCalledWith(['/projects', 'prj_1', 'schedules']);
+    component.open(notif({ kind: 'project_schedule_paused', payload: { scheduleId: 'sc1', label: 'W', reason: 'deleted' } }));
+    expect(navigate).toHaveBeenLastCalledWith(['/projects', 'prj_1']);
   });
 
   it('a shared task opens the shared view, revoked or not', () => {

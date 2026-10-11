@@ -86,7 +86,7 @@ describe('ScheduleFormPage', () => {
         { provide: ToastService, useValue: mockToast },
         {
           provide: ActivatedRoute,
-          useValue: { snapshot: { paramMap: { get: (key: string) => routeParams[key] ?? null } } },
+          useValue: { snapshot: { paramMap: { get: (key: string) => routeParams[key] ?? null }, queryParamMap: { get: () => null } } },
         },
       ],
     })
