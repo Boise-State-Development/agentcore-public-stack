@@ -107,5 +107,10 @@ class ScheduledPrompt(BaseModel):
     notify_members: bool = Field(
         False, alias="notifyMembers", description="Tell the project's members when a run is shared with it"
     )
+    # 3.2d: with ``deliver_to == "project"``, also share each run's artifacts with
+    # the project as its Outputs, replacing the previous run's.
+    publish_outputs: bool = Field(
+        False, alias="publishOutputs", description="Publish each delivered run's artifacts to the project's Outputs"
+    )
     created_at: str = Field(..., alias="createdAt", description="ISO 8601 timestamp of creation")
     updated_at: str = Field(..., alias="updatedAt", description="ISO 8601 timestamp of last update")

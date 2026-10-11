@@ -82,6 +82,16 @@ describe('Scheduled runs in a project', () => {
     expect(JSON.stringify(bodies?.Resource)).toContain('/shares/*');
   });
 
+  it('lets the worker write artifact shares, for a schedule that publishes its outputs (3.2d)', () => {
+    const actions = statementsFor(on, 'ScheduledRunsWorkerLambda')
+      .filter((s) => JSON.stringify(s.Resource ?? '').includes('Artifact'))
+      .flatMap((s) => (Array.isArray(s.Action) ? s.Action : [s.Action ?? '']));
+    for (const action of ['dynamodb:Query', 'dynamodb:PutItem', 'dynamodb:DeleteItem']) {
+      expect(actions).toContain(action);
+    }
+    expect(JSON.stringify(statementsFor(on, 'ScheduledRunsDispatcherLambda'))).not.toContain('Artifact');
+  });
+
   it('gives the dispatcher none of it', () => {
     const env = lambdaEnvironment(on, 'ScheduledRunsDispatcherLambda');
     expect(env.AGENTCORE_MEMORY_ID).toBeUndefined();

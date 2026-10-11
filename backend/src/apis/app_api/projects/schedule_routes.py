@@ -54,6 +54,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/projects/{project_id}/schedules", tags=["projects"])
 
+_PUBLISH_NEEDS_SHARING = "A schedule publishes its artifacts to Outputs only while it shares its runs with the project"
+
 #: Why a create or resume was refused, by ``run_block_reason``'s code.
 _BLOCKED = {
     "project_archived": "This project is archived. Restore it to make changes.",
@@ -78,11 +80,16 @@ class CreateProjectScheduleRequest(CreateScheduleRequest):
 
     deliver_to: DeliverTo = Field("owner", alias="deliverTo", description='"project" shares each run with the project')
     notify_members: bool = Field(False, alias="notifyMembers", description="Tell members when a run is shared")
+    publish_outputs: bool = Field(
+        False, alias="publishOutputs", description="Publish each shared run's artifacts to the project's Outputs"
+    )
 
     @model_validator(mode="after")
     def _no_agent_or_tools(self) -> "CreateProjectScheduleRequest":
         if self.assistant_id is not None or self.enabled_tools is not None:
             raise ValueError("A project schedule runs on the project's assistant and its tools")
+        if self.publish_outputs and self.deliver_to != "project":
+            raise ValueError(_PUBLISH_NEEDS_SHARING)
         return self
 
 
@@ -91,6 +98,7 @@ class UpdateProjectScheduleRequest(UpdateScheduleRequest):
 
     deliver_to: Optional[DeliverTo] = Field(None, alias="deliverTo")
     notify_members: Optional[bool] = Field(None, alias="notifyMembers")
+    publish_outputs: Optional[bool] = Field(None, alias="publishOutputs")
 
     @model_validator(mode="after")
     def _content_only(self) -> "UpdateProjectScheduleRequest":
@@ -117,6 +125,7 @@ class ProjectScheduleResponse(BaseModel):
     timezone: str
     deliver_to: DeliverTo = Field(..., alias="deliverTo")
     notify_members: bool = Field(..., alias="notifyMembers")
+    publish_outputs: bool = Field(False, alias="publishOutputs")
     state: ScheduledPromptState
     state_reason: Optional[str] = Field(None, alias="stateReason")
     next_run_at: Optional[str] = Field(None, alias="nextRunAt")
@@ -191,6 +200,7 @@ def _response(
         timezone=schedule.timezone,
         deliver_to=schedule.deliver_to,
         notify_members=schedule.notify_members,
+        publish_outputs=schedule.publish_outputs,
         state=schedule.state,
         state_reason=schedule.state_reason,
         next_run_at=schedule.next_run_at,
@@ -268,6 +278,7 @@ async def create_schedule(
             owner_email=normalize_email(user.email),
             deliver_to=body.deliver_to,
             notify_members=body.notify_members,
+            publish_outputs=body.publish_outputs,
         )
     except ScheduledPromptLimitExceeded as e:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
@@ -312,6 +323,14 @@ async def update_schedule(
     changes = sorted(
         k for k, v in body.model_dump(by_alias=True, exclude_none=True).items() if k not in ("clearAssistant", "clearTools")
     )
+    deliver_to = body.deliver_to or schedule.deliver_to
+    publish = body.publish_outputs if body.publish_outputs is not None else schedule.publish_outputs
+    if publish and deliver_to != "project":
+        if body.publish_outputs:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, _PUBLISH_NEEDS_SHARING)
+        # Stopping sharing stops publishing too, without the client having to say so.
+        body.publish_outputs = False
+        changes = sorted({*changes, "publishOutputs"})
     cadence = body.cadence or schedule.cadence
     if cadence == "weekly" and (body.weekday if body.weekday is not None else schedule.weekday) is None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "weekday is required when cadence is 'weekly'")
@@ -338,6 +357,7 @@ async def update_schedule(
             timezone_name=body.timezone,
             deliver_to=body.deliver_to,
             notify_members=body.notify_members,
+            publish_outputs=body.publish_outputs,
         )
     except ValueError as e:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(e))

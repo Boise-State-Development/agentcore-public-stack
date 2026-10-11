@@ -181,6 +181,7 @@ async def create_scheduled_prompt(
     owner_email: Optional[str] = None,
     deliver_to: DeliverTo = "owner",
     notify_members: bool = False,
+    publish_outputs: bool = False,
 ) -> ScheduledPrompt:
     """Create an active scheduled prompt, due at the next occurrence of its cadence.
 
@@ -225,6 +226,7 @@ async def create_scheduled_prompt(
         owner_email=owner_email,
         deliver_to=deliver_to,
         notify_members=notify_members,
+        publish_outputs=publish_outputs,
         created_at=now,
         updated_at=now,
     )
@@ -483,6 +485,7 @@ async def update_scheduled_prompt(
     deliver_email: Optional[bool] = None,
     deliver_to: Optional[DeliverTo] = None,
     notify_members: Optional[bool] = None,
+    publish_outputs: Optional[bool] = None,
 ) -> Optional[ScheduledPrompt]:
     """Edit a schedule's fields in place.
 
@@ -559,6 +562,7 @@ async def update_scheduled_prompt(
         ("deliverEmail", deliver_email),
         ("deliverTo", deliver_to),
         ("notifyMembers", notify_members),
+        ("publishOutputs", publish_outputs),
     ):
         if value is not None:
             set_parts.append(f"{attr} = :{attr}")

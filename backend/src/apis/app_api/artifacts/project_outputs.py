@@ -22,8 +22,9 @@ from typing import Iterable, Optional, Tuple
 from apis.shared.auth import User
 from apis.shared.feature_flags import projects_enabled
 from apis.shared.projects.access import resolve_project_role
-from apis.shared.projects.models import Project, ProjectOutput
+from apis.shared.projects.models import Project
 from apis.shared.projects.repository import ProjectRepository
+from apis.shared.shares import artifact_shares
 from apis.shared.security.log_sanitize import scrub_log
 
 logger = logging.getLogger(__name__)
@@ -81,41 +82,19 @@ async def require_shareable_project(
     return project
 
 
-def _pointer(share: dict) -> ProjectOutput:
-    return ProjectOutput(
-        project_id=str(share["project_id"]),
-        artifact_id=str(share["artifact_id"]),
-        share_id=str(share["share_id"]),
-        version=int(share.get("version", 0)),
-        title=str(share.get("title", "")),
-        content_type=str(share.get("content_type", "")),
-        owner_id=str(share.get("owner_id", "")),
-        owner_email=str(share.get("owner_email", "")),
-        shared_at=str(share.get("created_at", "")),
-    )
-
-
 def put_output(share: dict, repository: Optional[ProjectRepository] = None) -> None:
     """List a new project share. Raises, so the caller can undo a share nobody could find."""
-    (repository or ProjectRepository()).put_output(_pointer(share))
+    (repository or ProjectRepository()).put_output(artifact_shares.output_pointer(share))
 
 
 def sync_output(
     owner_id: str, artifact_id: str, project_id: str, repository: Optional[ProjectRepository] = None
 ) -> None:
     """Point ``OUTPUT#{artifact_id}`` at the artifact's newest share with ``project_id``, or remove it."""
-    from .service import ArtifactShareService
+    from .service import _table
 
-    repo = repository or ProjectRepository()
     try:
-        remaining = [
-            s for s in ArtifactShareService().list_for_artifact(owner_id=owner_id, artifact_id=artifact_id)
-            if s.get("access_level") == "project" and s.get("project_id") == project_id
-        ]
-        if remaining:
-            repo.put_output(_pointer(max(remaining, key=lambda s: str(s.get("created_at", "")))))
-        else:
-            repo.delete_output(project_id, artifact_id)
+        artifact_shares.sync_project_output(_table(), owner_id, artifact_id, project_id, repository=repository)
     except Exception:
         logger.warning(
             "Could not sync output %s in project %s", scrub_log(artifact_id), scrub_log(project_id), exc_info=True

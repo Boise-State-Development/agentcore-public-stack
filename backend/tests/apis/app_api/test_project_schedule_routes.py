@@ -281,6 +281,34 @@ def test_delivery_is_set_on_create_and_changed_by_the_creator(project_id):
     assert client_for(EDITOR).get("/schedules").json()["schedules"][0]["deliverTo"] == "owner"
 
 
+def test_publishing_outputs_needs_sharing(project_id):
+    refused = client_for(EDITOR).post(
+        f"/projects/{project_id}/schedules", json={**SCHEDULE, "deliverTo": "owner", "publishOutputs": True}
+    )
+    assert refused.status_code == 422
+    assert _create(project_id)["publishOutputs"] is False
+
+    created = _create(project_id, deliverTo="project", publishOutputs=True)
+    assert created["publishOutputs"] is True
+    path = f"/projects/{project_id}/schedules/{created['scheduleId']}"
+    assert client_for(EDITOR).patch(path, json={"publishOutputs": False}).json()["publishOutputs"] is False
+    assert client_for(EDITOR).patch(path, json={"publishOutputs": True}).json()["publishOutputs"] is True
+    # Asking to publish without sharing is refused; it changes nothing.
+    assert client_for(EDITOR).patch(path, json={"deliverTo": "owner", "publishOutputs": True}).status_code == 422
+    assert client_for(EDITOR).get(path).json()["deliverTo"] == "project"
+
+
+def test_stopping_sharing_stops_publishing(project_id, service):
+    created = _create(project_id, deliverTo="project", publishOutputs=True)
+    path = f"/projects/{project_id}/schedules/{created['scheduleId']}"
+
+    changed = client_for(EDITOR).patch(path, json={"deliverTo": "owner"}).json()
+
+    assert (changed["deliverTo"], changed["publishOutputs"]) == ("owner", False)
+    [updated] = [r for r in service.audit.records if r["action"] == "project.schedule_updated"]
+    assert updated["changes"] == ["deliverTo", "publishOutputs"]
+
+
 def test_a_run_links_its_share_only_while_it_is_still_shared(project_id, service):
     from apis.shared.projects.models import SharedTask
 
