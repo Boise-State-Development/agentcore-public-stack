@@ -1,0 +1,768 @@
+<style>
+  .cp { display: grid; gap: var(--cds-gap-xl); font-family: var(--font-anthropic-sans); font-variant-numeric: tabular-nums; }
+  .cp h1 { font-family: var(--font-anthropic-serif); font-weight: 400; font-size: var(--cds-font-size-title); margin: 0; text-wrap: balance; }
+  .cp h2 { font-size: var(--cds-font-size-heading); font-weight: var(--cds-font-weight-medium); margin: 0; text-wrap: balance; }
+  .cp h3 { font-size: var(--cds-font-size-body); font-weight: var(--cds-font-weight-medium); margin: 0; }
+  .cp p { margin: 0; }
+  .cp-muted { color: var(--color-fg-muted); font-size: var(--cds-font-size-caption); }
+  .cp-head { display: grid; gap: var(--cds-gap-xs); }
+  .cp-take { max-width: 70ch; line-height: 1.5; }
+  .cp .cp-take b, .cp .cp-kpi b { font-weight: var(--cds-font-weight-medium); }
+  .cp-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr)); gap: var(--cds-gap-md); }
+  .cp-kpi { background: var(--color-panel); border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); padding: var(--cds-pad-md); display: grid; gap: var(--cds-gap-xs); align-content: start; min-width: 0; }
+  .cp-kpi .cp-num { font-family: var(--font-anthropic-serif); font-weight: 400; font-size: var(--cds-font-size-title); line-height: 1.1; min-height: 1.1em; }
+  .cp-delta { font-size: var(--cds-font-size-caption); min-height: 1.2em; }
+  .cp-good { color: var(--color-ok); } .cp-bad { color: var(--color-bad); } .cp-flat { color: var(--color-fg-muted); }
+  .cp-section { display: grid; gap: var(--cds-gap-md); }
+  .cp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 24rem), 1fr)); gap: var(--cds-gap-md); }
+  .cp-card { background: var(--color-panel); border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); padding: var(--cds-pad-lg); display: grid; gap: var(--cds-gap-sm); align-content: start; min-width: 0; }
+  .cp-chart { position: relative; min-height: 12rem; }
+  .cp-chart svg { display: block; overflow: visible; }
+  .cp-tip { position: absolute; pointer-events: none; background: var(--cds-surface-popover); border: 1px solid var(--cds-border); border-radius: var(--cds-radius); box-shadow: var(--cds-shadow-popover); padding: var(--cds-pad-xs) var(--cds-pad-sm); font-size: var(--cds-font-size-caption); white-space: nowrap; z-index: 2; }
+  .cp-tip .cp-tip-h { color: var(--cds-text-secondary); margin-bottom: 2px; }
+  .cp-tip .cp-sw { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
+  .cp-legend { display: flex; flex-wrap: wrap; gap: var(--cds-gap-xs) var(--cds-gap-md); font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); }
+  .cp-legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .cp-legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+  .cp-tablewrap { overflow: auto; max-height: 34rem; }
+  .cp-table { width: 100%; border-collapse: collapse; font-size: var(--cds-font-size-caption); }
+  .cp-table th, .cp-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--color-border-line); vertical-align: top; }
+  .cp-table th { position: sticky; top: 0; background: var(--color-panel); z-index: 1; font-weight: var(--cds-font-weight-medium); white-space: nowrap; }
+  .cp-table th button { all: unset; cursor: pointer; }
+  .cp-table th button:focus-visible { outline: 2px solid var(--color-fg); outline-offset: 2px; }
+  .cp-table td.cp-n, .cp-table th.cp-n { text-align: right; white-space: nowrap; }
+  .cp-table td.cp-wrap { min-width: 14rem; }
+  .cp-table a { color: inherit; }
+  .cp-bar { display: grid; grid-template-columns: 1fr auto; gap: 6px; align-items: center; min-width: 7rem; }
+  .cp-bar i { display: block; height: 6px; border-radius: 3px; background: var(--cds-chart-muted); }
+  .cp-bar i b { display: block; height: 100%; border-radius: 3px; background: var(--cds-chart-status-critical); }
+  .cp-bar.cp-accent i b { background: var(--cds-chart-reference); }
+  .cp-tools { display: flex; flex-wrap: wrap; gap: var(--cds-gap-sm); align-items: center; justify-content: space-between; }
+  .cp-seg { display: inline-flex; border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); overflow: hidden; }
+  .cp-seg button { all: unset; cursor: pointer; padding: 4px 10px; font-size: var(--cds-font-size-caption); }
+  .cp-seg button[aria-pressed="true"] { background: var(--color-fg); color: var(--color-bg); }
+  .cp-seg button:focus-visible { outline: 2px solid var(--color-fg); outline-offset: -2px; }
+  .cp-search { font: inherit; font-size: var(--cds-font-size-caption); padding: 4px 8px; border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); background: var(--color-bg); color: var(--color-fg); min-width: 0; width: 14rem; max-width: 100%; }
+  .cp-pill { display: inline-block; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--color-border-line); white-space: nowrap; }
+  .cp-empty { color: var(--color-fg-muted); font-size: var(--cds-font-size-caption); }
+  .cp-fail { display: flex; align-items: center; justify-content: center; gap: 6px; color: var(--color-fg-muted); font-size: var(--cds-font-size-caption); min-height: inherit; }
+  .cp-fail::before { content: ""; width: .375rem; height: .375rem; border-radius: 50%; background: var(--color-bad); }
+  .cp-method dl { display: grid; grid-template-columns: minmax(8rem, max-content) 1fr; gap: 6px var(--cds-gap-md); margin: 0; font-size: var(--cds-font-size-caption); }
+  .cp-method dt { font-weight: var(--cds-font-weight-medium); }
+  .cp-method dd { margin: 0; color: var(--color-fg-muted); }
+  .cp-method ul { margin: 0; padding-left: 1.2em; display: grid; gap: 4px; font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); max-width: 80ch; }
+  [data-dash-source-state=empty] { color: transparent; }
+  [data-dash-source-state=refreshing] { opacity: .5; transition: opacity var(--cds-dur-slow); }
+  @media (max-width: 40rem) { .cp-hide-narrow { display: none; } }
+</style>
+
+<div class="cp">
+  <header class="cp-head" id="summary">
+    <h1>Conversation cost patterns</h1>
+    <p class="cp-muted"><span data-source="latest_run" data-field="window_start" data-row="0" class="dash-skeleton">—</span> to <span data-source="latest_run" data-field="window_end" data-row="0">—</span> · <span data-source="latest_run" data-field="window_days" data-row="0">—</span> days · rules <span data-source="latest_run" data-field="rules_version" data-row="0">—</span></p>
+    <p class="cp-take" id="takeaway">Idle re-writes were <b data-source="takeaway" data-field="idle_share" data-row="0">—</b> of <b data-source="takeaway" data-field="fleet_cost" data-row="0">—</b> spend. The costliest pattern you can engineer for is <b data-source="takeaway" data-field="pattern" data-row="0">—</b> at <b data-source="takeaway" data-field="pattern_cost" data-row="0">—</b> (<span data-source="takeaway" data-field="pattern_share" data-row="0">—</span>), <span data-source="takeaway" data-field="pattern_cps" data-row="0">—</span> a conversation. <span data-source="takeaway" data-field="discovery_n" data-row="0">—</span> conversations over $1 match no pattern yet.</p>
+  </header>
+
+  <section class="cp-kpis" id="kpis" aria-label="Headline figures">
+    <div class="cp-kpi" id="kpi-spend"><span class="cp-muted">Spend, window</span><span class="cp-num dash-skeleton" data-source="latest_run" data-field="fleet_cost_usd" data-row="0"></span><span class="cp-delta"><span data-source="run_change" data-field="fleet_cost_change" data-row="0"></span> <span class="cp-delta-note" id="note-fleet"></span></span></div>
+    <div class="cp-kpi" id="kpi-convs"><span class="cp-muted">Conversations</span><span class="cp-num dash-skeleton" data-source="latest_run" data-field="conversations" data-row="0"></span><span class="cp-delta cp-muted"><span data-source="latest_run" data-field="cost_per_conversation" data-row="0"></span> each on average</span></div>
+    <div class="cp-kpi" id="kpi-idle"><span class="cp-muted">Idle re-writes</span><span class="cp-num dash-skeleton" data-source="latest_run" data-field="idle_rewrite_share" data-row="0"></span><span class="cp-delta"><span data-source="run_change" data-field="idle_share_change" data-row="0"></span> <span class="cp-delta-note" id="note-idle"></span></span></div>
+    <div class="cp-kpi" id="kpi-top10"><span class="cp-muted">Top 10 conversations</span><span class="cp-num dash-skeleton" data-source="latest_run" data-field="top10_share" data-row="0"></span><span class="cp-delta cp-muted">top 100: <span data-source="latest_run" data-field="top100_share" data-row="0"></span></span></div>
+    <div class="cp-kpi" id="kpi-discovery"><span class="cp-muted">Discovery queue</span><span class="cp-num dash-skeleton" data-source="latest_run" data-field="unclassified_over_1_usd" data-row="0"></span><span class="cp-delta cp-muted"><span data-source="latest_run" data-field="unclassified_over_1_n" data-row="0"></span> unclassified over $1</span></div>
+    <div class="cp-kpi" id="kpi-unmetered"><span class="cp-muted">Calls with no cost</span><span class="cp-num dash-skeleton" data-source="latest_run" data-field="unmetered_calls" data-row="0"></span><span class="cp-delta cp-muted">API pipeline: <span data-source="latest_run" data-field="api_cost_usd" data-row="0"></span></span></div>
+  </section>
+
+  <section class="cp-section" id="patterns">
+    <h2>Usage patterns</h2>
+    <div class="cp-card" id="patterns-table-card">
+      <h3>Spend by pattern</h3>
+      <p class="cp-muted">Each conversation gets the first pattern whose rule it matches. The lever is the engineering change that would make that pattern cheaper without cutting answer quality.</p>
+      <div class="cp-tablewrap"><table class="cp-table" id="patterns-table" data-source="patterns" data-row-key="pattern">
+        <thead><tr>
+          <th data-field="pattern"><button type="button">Pattern</button></th>
+          <th class="cp-n" data-field="sessions"><button type="button">Conversations</button></th>
+          <th class="cp-n" data-field="cost_usd"><button type="button">Spend</button></th>
+          <th data-field="share"><button type="button">Share</button></th>
+          <th class="cp-n" data-field="cost_per_session"><button type="button">Per conversation</button></th>
+          <th class="cp-n cp-hide-narrow" data-field="over_1_usd"><button type="button">Over $1</button></th>
+          <th class="cp-hide-narrow" data-field="lever"><button type="button">Lever</button></th>
+        </tr></thead><tbody></tbody>
+      </table></div>
+    </div>
+    <div class="cp-grid">
+      <div class="cp-card" id="mechanism-by-pattern">
+        <h3>What each pattern pays for</h3>
+        <p class="cp-muted">Spend split by cost mechanism. Idle re-writes are cache writes after a pause of 5 minutes or more.</p>
+        <div class="cp-legend" id="mech-legend"></div>
+        <div class="cp-chart" id="mech-pattern-chart" data-source="patterns" style="min-height: 22rem"></div>
+      </div>
+      <div class="cp-card" id="mechanism-fleet">
+        <h3>Where the money goes</h3>
+        <p class="cp-muted">All conversations in the window, by mechanism.</p>
+        <div class="cp-chart" id="mech-fleet-chart" data-source="mechanism_totals" style="min-height: 16rem"></div>
+      </div>
+    </div>
+    <div class="cp-grid">
+      <div class="cp-card" id="daily-card">
+        <h3>Daily spend by pattern</h3>
+        <p class="cp-muted">The costliest patterns; the rest are grouped as Other.</p>
+        <div class="cp-legend" id="daily-legend"></div>
+        <div class="cp-chart" id="daily-chart" data-source="daily" style="min-height: 15rem"></div>
+      </div>
+      <div class="cp-card" id="modifiers-card">
+        <h3>Modifiers</h3>
+        <p class="cp-muted">Traits that cut across patterns. A conversation can carry several, so shares add up to more than 100%.</p>
+        <div class="cp-tablewrap"><table class="cp-table" id="modifiers-table" data-source="modifiers" data-row-key="modifier">
+          <thead><tr>
+            <th data-field="modifier"><button type="button">Modifier</button></th>
+            <th class="cp-n" data-field="sessions"><button type="button">Conversations</button></th>
+            <th class="cp-n" data-field="cost_usd"><button type="button">Spend</button></th>
+            <th data-field="share"><button type="button">Share</button></th>
+          </tr></thead><tbody></tbody>
+        </table></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="cp-section" id="conversations">
+    <h2>Conversations</h2>
+    <div class="cp-card" id="conversations-card">
+      <div class="cp-tools">
+        <div class="cp-seg" role="group" aria-label="Which conversations">
+          <button type="button" id="queue-top" aria-pressed="true">Most expensive</button>
+          <button type="button" id="queue-discovery" aria-pressed="false">Discovery queue</button>
+        </div>
+        <input class="cp-search" id="conv-search" type="search" placeholder="Filter by pattern, tool, model…" aria-label="Filter conversations">
+      </div>
+      <p class="cp-muted" id="queue-note">The 30 costliest conversations in the window. Spend is within the window; lifetime includes earlier months. Session ids open the admin drill-down.</p>
+      <div class="cp-tablewrap"><table class="cp-table" id="conv-table" data-source="conversations" data-row-key="session">
+        <thead><tr>
+          <th class="cp-n" data-field="rank"><button type="button">#</button></th>
+          <th data-field="short_id"><button type="button">Session</button></th>
+          <th data-field="pattern"><button type="button">Pattern</button></th>
+          <th class="cp-hide-narrow" data-field="modifiers"><button type="button">Modifiers</button></th>
+          <th class="cp-n" data-field="cost_usd"><button type="button">Spend</button></th>
+          <th class="cp-n cp-hide-narrow" data-field="lifetime_cost_usd"><button type="button">Lifetime</button></th>
+          <th class="cp-n" data-field="turns"><button type="button">Turns</button></th>
+          <th class="cp-n cp-hide-narrow" data-field="calls_per_turn"><button type="button">Calls/turn</button></th>
+          <th class="cp-n" data-field="peak_context_k"><button type="button">Peak context</button></th>
+          <th class="cp-n" data-field="idle_rewrite_share"><button type="button">Idle re-write</button></th>
+          <th class="cp-n cp-hide-narrow" data-field="output_share"><button type="button">Output</button></th>
+          <th class="cp-n cp-hide-narrow" data-field="uploads"><button type="button">Uploads</button></th>
+          <th class="cp-n cp-hide-narrow" data-field="largest_paste_k"><button type="button">Largest paste</button></th>
+          <th class="cp-hide-narrow" data-field="top_tools"><button type="button">Top tools</button></th>
+          <th class="cp-hide-narrow" data-field="model"><button type="button">Model</button></th>
+          <th class="cp-n cp-hide-narrow" data-field="last_active"><button type="button">Last active</button></th>
+        </tr></thead><tbody></tbody>
+      </table></div>
+    </div>
+  </section>
+
+  <section class="cp-section" id="diagnostics">
+    <h2>Diagnostics</h2>
+    <div class="cp-grid">
+      <div class="cp-card" id="gaps-card">
+        <h3>The 5-minute cliff</h3>
+        <p class="cp-muted">Cache-write spend by the pause before each call. Labels show how often a call re-wrote more than it read.</p>
+        <div class="cp-chart" id="gaps-chart" data-source="gaps" style="min-height: 15rem"></div>
+      </div>
+      <div class="cp-card" id="tools-card">
+        <h3>Tool reliability</h3>
+        <p class="cp-muted">Tools with 20+ calls. Follow-up spend is the cost of the model call that handled the error, split across the tools that failed in that batch.</p>
+        <div class="cp-tablewrap" style="max-height: 22rem"><table class="cp-table" id="tools-table" data-source="tools" data-row-key="tool">
+          <thead><tr>
+            <th data-field="tool"><button type="button">Tool</button></th>
+            <th class="cp-n" data-field="calls"><button type="button">Calls</button></th>
+            <th class="cp-n" data-field="errors"><button type="button">Errors</button></th>
+            <th data-field="error_rate"><button type="button">Error rate</button></th>
+            <th class="cp-n cp-hide-narrow" data-field="sessions"><button type="button">Conversations</button></th>
+            <th class="cp-n" data-field="error_followup_usd"><button type="button">Follow-up</button></th>
+          </tr></thead><tbody></tbody>
+        </table></div>
+      </div>
+    </div>
+    <div class="cp-grid">
+      <div class="cp-card" id="models-card">
+        <h3>Models</h3>
+        <p class="cp-muted">Write:read is cache-write tokens per cache-read token; a healthy conversation reads far more than it writes. Calls with no cost are unpriced (a model without a catalog row).</p>
+        <div class="cp-tablewrap" style="max-height: 22rem"><table class="cp-table" id="models-table" data-source="models" data-row-key="model">
+          <thead><tr>
+            <th data-field="model"><button type="button">Model</button></th>
+            <th class="cp-n" data-field="calls"><button type="button">Calls</button></th>
+            <th class="cp-n" data-field="cost_usd"><button type="button">Spend</button></th>
+            <th data-field="share"><button type="button">Share</button></th>
+            <th class="cp-n" data-field="write_read_ratio"><button type="button">Write:read</button></th>
+            <th class="cp-n cp-hide-narrow" data-field="output_share"><button type="button">Output</button></th>
+            <th class="cp-n" data-field="unmetered_calls"><button type="button">No cost</button></th>
+          </tr></thead><tbody></tbody>
+        </table></div>
+      </div>
+      <div class="cp-card" id="attachments-card">
+        <h3>Attachments</h3>
+        <p class="cp-muted">Conversations by what was uploaded into them (API pipelines excluded).</p>
+        <div class="cp-tablewrap"><table class="cp-table" id="attachments-table" data-source="attachments" data-row-key="attachments">
+          <thead><tr>
+            <th data-field="attachments"><button type="button">Uploads</button></th>
+            <th class="cp-n" data-field="sessions"><button type="button">Conversations</button></th>
+            <th class="cp-n" data-field="cost_usd"><button type="button">Spend</button></th>
+            <th data-field="share"><button type="button">Share</button></th>
+            <th class="cp-n" data-field="cost_per_session"><button type="button">Per conversation</button></th>
+          </tr></thead><tbody></tbody>
+        </table></div>
+      </div>
+    </div>
+    <div class="cp-card" id="compaction-card">
+      <h3>Context management</h3>
+      <p class="cp-muted">Compaction and trimming events recorded on calls in the window, and the spend of the conversations they happened in. Unreachable floor means compaction could not get the context under its target because the protected recent turns alone were too big.</p>
+      <div class="cp-tablewrap"><table class="cp-table" id="compaction-table" data-source="compaction" data-row-key="signal">
+        <thead><tr>
+          <th data-field="signal"><button type="button">Signal</button></th>
+          <th class="cp-n" data-field="events"><button type="button">Events</button></th>
+          <th class="cp-n" data-field="sessions"><button type="button">Conversations</button></th>
+          <th class="cp-n" data-field="cost_usd"><button type="button">Their spend</button></th>
+        </tr></thead><tbody></tbody>
+      </table></div>
+    </div>
+  </section>
+
+  <section class="cp-section" id="history">
+    <h2>Run history</h2>
+    <div class="cp-card" id="history-card">
+      <h3>Spend and idle re-write share per run</h3>
+      <p class="cp-muted" id="history-note">One point per refresh of this dashboard.</p>
+      <div class="cp-chart" id="history-chart" data-source="runs" style="min-height: 12rem"></div>
+    </div>
+  </section>
+
+  <section class="cp-section cp-method" id="method">
+    <h2>Method</h2>
+    <div class="cp-grid">
+      <div class="cp-card" id="pattern-definitions">
+        <h3>Pattern rules</h3>
+        <p class="cp-muted">Checked in this order; the first match wins.</p>
+        <div class="cp-tablewrap"><table class="cp-table" id="definitions-table" data-source="patterns" data-row-key="pattern">
+          <thead><tr><th data-field="pattern">Pattern</th><th data-field="definition">Rule</th></tr></thead><tbody></tbody>
+        </table></div>
+      </div>
+      <div class="cp-card" id="modifier-definitions">
+        <h3>Modifier rules</h3>
+        <div class="cp-tablewrap"><table class="cp-table" id="modifier-definitions-table" data-source="modifiers" data-row-key="modifier">
+          <thead><tr><th data-field="modifier">Modifier</th><th data-field="definition">Rule</th></tr></thead><tbody></tbody>
+        </table></div>
+        <h3>Cost mechanisms</h3>
+        <dl>
+          <dt>First write</dt><dd>The cache write on a conversation's first call.</dd>
+          <dt>Idle re-write</dt><dd>Cache writes on calls after a pause of 5 minutes or more, when the cached context had expired.</dd>
+          <dt>Live re-write</dt><dd>Partial misses inside the cache window: history re-written while still warm.</dd>
+          <dt>Growth write</dt><dd>Caching genuinely new content inside the cache window.</dd>
+          <dt>Cache read</dt><dd>Reading the cached context on every call.</dd>
+          <dt>Output</dt><dd>Tokens the model generated.</dd>
+          <dt>Uncached input</dt><dd>Input outside any cache point.</dd>
+          <dt>Unattributed</dt><dd>Cost stored without a breakdown (API pipeline rows).</dd>
+        </dl>
+      </div>
+    </div>
+    <ul>
+      <li>Built from per-call cost rows and upload records with no message text, titles, file names or user ids. Session ids are kept so admins can open the drill-down.</li>
+      <li>A turn is a call more than 60 seconds after the previous one. A paste is context growth on a turn with no attachment and no tool result, net of the previous reply.</li>
+      <li>Spend is per call inside the window. Lifetime cost comes from the session row and includes earlier months.</li>
+      <li>Anyone who can open this dashboard can read the data files behind it.</li>
+    </ul>
+  </section>
+</div>
+
+<script>
+  const money = (v) => v == null || Number.isNaN(+v) ? '—' : (Math.abs(+v) >= 1000 ? d3.format('$,.0f')(+v) : d3.format('$,.2f')(+v));
+  const pct = (v) => v == null ? '—' : d3.format('.1%')(+v);
+  const int = (v) => v == null ? '—' : d3.format(',')(Math.round(+v));
+  const ratio = (v) => v == null ? '—' : d3.format('.2f')(+v);
+  const kTok = (v) => v == null || +v === 0 ? '—' : d3.format(',')(Math.round(+v)) + 'K';
+  const day = (v) => v ? d3.utcFormat('%b %-d, %Y')(new Date(v + 'T00:00:00Z')) : '—';
+  window.cpFmt = { money, pct, int, ratio, kTok, day };
+
+  const MECH = [
+    ['first_write_usd', 'First write'], ['idle_rewrite_usd', 'Idle re-write'], ['live_rewrite_usd', 'Live re-write'],
+    ['growth_write_usd', 'Growth write'], ['read_usd', 'Cache read'], ['output_usd', 'Output'],
+    ['input_usd', 'Uncached input'], ['unattributed_usd', 'Unattributed'],
+  ];
+  window.cpMech = MECH;
+
+  dash.calc('latest_run', {
+    title: 'This run',
+    description: 'The most recent row of the run history: this refresh of the dashboard.',
+    inputs: ['runs'],
+    fn: (runs) => runs.length ? [runs[runs.length - 1]] : [],
+  });
+
+  dash.calc('run_change', {
+    title: 'Change since last run',
+    description: 'This run minus the run before it, for spend and the idle re-write share.',
+    inputs: ['runs'],
+    fn: (runs) => {
+      if (runs.length < 2) return [{ previous_window_end: null, fleet_cost_change: null, idle_share_change: null }];
+      const a = runs[runs.length - 2], b = runs[runs.length - 1];
+      return [{
+        previous_window_end: a.window_end,
+        fleet_cost_change: b.fleet_cost_usd - a.fleet_cost_usd,
+        idle_share_change: b.idle_rewrite_share - a.idle_rewrite_share,
+      }];
+    },
+  });
+
+  dash.calc('mechanism_totals', {
+    title: 'Spend by mechanism',
+    description: 'Each mechanism summed over every pattern, with its share of the total.',
+    inputs: ['patterns'],
+    fn: (patterns) => {
+      const cols = ['first_write_usd', 'idle_rewrite_usd', 'live_rewrite_usd', 'growth_write_usd', 'read_usd', 'output_usd', 'input_usd', 'unattributed_usd'];
+      const total = patterns.reduce((s, p) => s + p.cost_usd, 0);
+      return cols.map((c) => {
+        const usd = patterns.reduce((s, p) => s + (p[c] || 0), 0);
+        return { mechanism: c, usd, share: total ? usd / total : 0 };
+      });
+    },
+  });
+
+  dash.calc('takeaway', {
+    title: 'Headline',
+    description: 'Idle re-write share and the costliest pattern other than Quick Q&A and Unclassified.',
+    inputs: ['runs', 'patterns'],
+    fn: (runs, patterns) => {
+      if (!runs.length || !patterns.length) return [];
+      const run = runs[runs.length - 1];
+      const p = patterns.filter((x) => x.pattern_id !== 'QUICK_QA' && x.pattern_id !== 'UNCLASSIFIED')
+        .sort((a, b) => b.cost_usd - a.cost_usd)[0];
+      return [{
+        idle_share: run.idle_rewrite_share, fleet_cost: run.fleet_cost_usd,
+        pattern: p ? p.pattern : '', pattern_cost: p ? p.cost_usd : null,
+        pattern_share: p ? p.share : null, pattern_cps: p ? p.cost_per_session : null,
+        discovery_n: run.unclassified_over_1_n,
+      }];
+    },
+  });
+</script>
+
+<script>
+(() => {
+  const { money, pct, int, ratio, kTok, day } = window.cpFmt;
+  const FORMAT = {
+    fleet_cost_usd: money, cost_per_conversation: money, unclassified_over_1_usd: money, api_cost_usd: money,
+    conversations: int, unclassified_over_1_n: int, unmetered_calls: int, window_days: int,
+    idle_rewrite_share: pct, top10_share: pct, top100_share: pct,
+    window_start: day, window_end: day, rules_version: (v) => v ?? '—',
+    idle_share: pct, fleet_cost: money, pattern_cost: money, pattern_share: pct, pattern_cps: money,
+    pattern: (v) => v ?? '—', discovery_n: int,
+  };
+  const signed = (fmt) => (v) => (v > 0 ? '+' : v < 0 ? '-' : '') + fmt(Math.abs(v));
+
+  const fill = (sourceId) => {
+    const d = dash.data(sourceId);
+    document.querySelectorAll(`[data-source="${sourceId}"][data-field]`).forEach((el) => {
+      if (el.tagName === 'TH') return;
+      el.classList.toggle('dash-skeleton', d.status === 'loading');
+      if (d.status !== 'ok') { el.textContent = d.status === 'loading' ? '' : '—'; return; }
+      const row = d.data[+(el.dataset.row || 0)];
+      const v = row ? row[el.dataset.field] : null;
+      el.textContent = (FORMAT[el.dataset.field] || String)(v ?? null);
+    });
+  };
+
+  dash.onData(() => {
+    fill('latest_run');
+    fill('takeaway');
+    const ch = dash.data('run_change');
+    const has = ch.status === 'ok' && ch.data.length && ch.data[0].previous_window_end;
+    [['fleet_cost_change', 'note-fleet', (v) => signed(money)(v)],
+     ['idle_share_change', 'note-idle', (v) => signed((x) => d3.format('.1f')(x * 100) + ' pts')(v)]].forEach(([field, noteId, fmt]) => {
+      const el = document.querySelector(`[data-source="run_change"][data-field="${field}"]`);
+      const note = document.getElementById(noteId);
+      el.className = '';
+      note.className = 'cp-delta-note cp-flat';
+      if (!has) {
+        el.textContent = '';
+        note.textContent = ch.status === 'ok' ? 'First run: no comparison yet' : '';
+        return;
+      }
+      const v = ch.data[0][field];
+      el.textContent = fmt(v);
+      el.classList.add(Math.abs(v) < 1e-9 ? 'cp-flat' : v > 0 ? 'cp-bad' : 'cp-good');
+      note.textContent = `vs run ending ${day(ch.data[0].previous_window_end)}`;
+    });
+  });
+})();
+</script>
+
+<script>
+(() => {
+  // Sortable, searchable tables over one dataset each; cells are text only.
+  const { money, pct, int, ratio, kTok, day } = window.cpFmt;
+  const bar = (max, accent) => (td, v) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'cp-bar' + (accent ? ' cp-accent' : '');
+    const track = document.createElement('i');
+    const fillEl = document.createElement('b');
+    fillEl.style.width = (max ? Math.max(0, Math.min(1, v / max)) * 100 : 0) + '%';
+    track.appendChild(fillEl);
+    const label = document.createElement('span');
+    label.textContent = pct(v);
+    wrap.append(track, label);
+    td.appendChild(wrap);
+  };
+
+  const COLS = {
+    'patterns-table': { pattern: null, sessions: int, cost_usd: money, share: 'bar', cost_per_session: money, over_1_usd: int, lever: null },
+    'modifiers-table': { modifier: null, sessions: int, cost_usd: money, share: 'bar' },
+    'tools-table': { tool: null, calls: int, errors: int, error_rate: 'barRed', sessions: int, error_followup_usd: money },
+    'models-table': { model: null, calls: int, cost_usd: money, share: 'bar', write_read_ratio: ratio, output_share: pct, unmetered_calls: int },
+    'attachments-table': { attachments: null, sessions: int, cost_usd: money, share: 'bar', cost_per_session: money },
+    'compaction-table': { signal: (v) => String(v).replace(/_/g, ' '), events: int, sessions: int, cost_usd: money },
+    'definitions-table': { pattern: null, definition: null },
+    'modifier-definitions-table': { modifier: null, definition: null },
+    'conv-table': {
+      rank: (v) => v == null ? '' : String(v), short_id: 'link', pattern: null, modifiers: null, cost_usd: money,
+      lifetime_cost_usd: money, turns: int, calls_per_turn: (v) => d3.format('.1f')(v), peak_context_k: kTok,
+      idle_rewrite_share: pct, output_share: pct, uploads: int, largest_paste_k: kTok, top_tools: null, model: null, last_active: day,
+    },
+  };
+  const DEFAULT_SORT = {
+    'patterns-table': ['cost_usd', -1], 'modifiers-table': ['cost_usd', -1], 'tools-table': ['error_rate', -1],
+    'models-table': ['cost_usd', -1], 'attachments-table': ['cost_usd', -1], 'compaction-table': ['sessions', -1],
+    'conv-table': ['cost_usd', -1], 'definitions-table': ['rule_order', 1],
+  };
+  const sortState = {};
+  const state = { queue: 'top', q: '' };
+
+  const draw = (id) => {
+    const table = document.getElementById(id);
+    const src = table.dataset.source;
+    const keyCol = table.dataset.rowKey;
+    const d = dash.data(src);
+    const tbody = table.querySelector('tbody');
+    const cols = COLS[id];
+    const fields = [...table.querySelectorAll('th')].map((th) => th.dataset.field);
+    tbody.replaceChildren();
+    if (d.status !== 'ok') {
+      const tr = tbody.insertRow();
+      const td = tr.insertCell();
+      td.colSpan = fields.length;
+      td.className = d.status === 'error' ? 'cp-fail' : 'dash-skeleton';
+      td.textContent = d.status === 'error' ? 'Failed to load' : '';
+      return;
+    }
+    let rows = d.data.slice();
+    if (id === 'conv-table') {
+      rows = rows.filter((r) => state.queue === 'top' ? r.queue !== 'discovery' : r.queue !== 'top');
+      if (state.q) {
+        const q = state.q.toLowerCase();
+        rows = rows.filter((r) => [r.short_id, r.pattern, r.modifiers, r.top_tools, r.model].join(' ').toLowerCase().includes(q));
+      }
+    }
+    const [sf, dir] = sortState[id] || DEFAULT_SORT[id] || [null, 1];
+    if (sf) rows.sort((a, b) => {
+      const x = a[sf], y = b[sf];
+      if (x == null && y == null) return 0;
+      if (x == null) return 1;
+      if (y == null) return -1;
+      return (typeof x === 'number' ? x - y : String(x).localeCompare(String(y))) * dir;
+    });
+    table.querySelectorAll('th').forEach((th) => {
+      th.setAttribute('aria-sort', th.dataset.field === sf ? (dir > 0 ? 'ascending' : 'descending') : 'none');
+    });
+    const maxOf = (f) => d3.max(d.data, (r) => r[f]) || 0;
+    if (!rows.length) {
+      const td = tbody.insertRow().insertCell();
+      td.colSpan = fields.length;
+      td.className = 'cp-empty';
+      td.textContent = id === 'conv-table' && state.queue === 'discovery'
+        ? 'Every conversation over $1 matched a pattern.' : 'Nothing matches.';
+      return;
+    }
+    rows.forEach((r) => {
+      const tr = tbody.insertRow();
+      tr.dataset.key = String(r[keyCol]);
+      fields.forEach((f) => {
+        const td = tr.insertCell();
+        const th = table.querySelector(`th[data-field="${f}"]`);
+        if (th.classList.contains('cp-n')) td.classList.add('cp-n');
+        if (th.classList.contains('cp-hide-narrow')) td.classList.add('cp-hide-narrow');
+        const fmt = cols[f];
+        const v = r[f];
+        if (fmt === 'bar') return bar(maxOf(f), false)(td, v);
+        if (fmt === 'barRed') return bar(1, false)(td, v);
+        if (fmt === 'link') {
+          if (r.console_url) {
+            const a = document.createElement('a');
+            a.href = r.console_url; a.target = '_blank'; a.rel = 'noopener';
+            a.textContent = v;
+            td.appendChild(a);
+          } else td.textContent = v;
+          return;
+        }
+        if (f === 'lever' || f === 'definition' || f === 'top_tools') td.classList.add('cp-wrap');
+        td.textContent = fmt ? fmt(v) : (v ?? '');
+      });
+    });
+  };
+
+  Object.keys(COLS).forEach((id) => {
+    const table = document.getElementById(id);
+    table.querySelectorAll('th button').forEach((btn) => btn.addEventListener('click', () => {
+      const f = btn.closest('th').dataset.field;
+      const [cur, dir] = sortState[id] || DEFAULT_SORT[id] || [null, 1];
+      const numeric = btn.closest('th').classList.contains('cp-n') || ['share', 'error_rate'].includes(f);
+      sortState[id] = [f, cur === f ? -dir : (numeric ? -1 : 1)];
+      draw(id);
+    }));
+  });
+
+  const top = document.getElementById('queue-top');
+  const disc = document.getElementById('queue-discovery');
+  const note = document.getElementById('queue-note');
+  const setQueue = (q) => {
+    state.queue = q;
+    top.setAttribute('aria-pressed', String(q === 'top'));
+    disc.setAttribute('aria-pressed', String(q === 'discovery'));
+    note.textContent = q === 'top'
+      ? 'The 30 costliest conversations in the window. Spend is within the window; lifetime includes earlier months. Session ids open the admin drill-down.'
+      : 'Conversations over $1 that matched no pattern, costliest first. A signature that recurs here is a candidate for a new pattern.';
+    draw('conv-table');
+  };
+  top.addEventListener('click', () => setQueue('top'));
+  disc.addEventListener('click', () => setQueue('discovery'));
+  document.getElementById('conv-search').addEventListener('input', (e) => { state.q = e.target.value.trim(); draw('conv-table'); });
+
+  dash.onData(() => Object.keys(COLS).forEach(draw));
+})();
+</script>
+
+<script>
+(() => {
+  // Charts: drawn from clientWidth on every onData.
+  const { money, pct, day } = window.cpFmt;
+  const MECH = window.cpMech;
+
+  const tipFor = (box) => {
+    let tip = box.querySelector('.cp-tip');
+    if (!tip) { tip = document.createElement('div'); tip.className = 'cp-tip'; tip.hidden = true; box.appendChild(tip); }
+    return tip;
+  };
+  const showTip = (box, tip, event, head, lines) => {
+    tip.replaceChildren();
+    const h = document.createElement('div'); h.className = 'cp-tip-h'; h.textContent = head; tip.appendChild(h);
+    lines.forEach(([color, name, value]) => {
+      const line = document.createElement('div');
+      if (color) { const sw = document.createElement('span'); sw.className = 'cp-sw'; sw.style.background = color; line.appendChild(sw); }
+      line.append(name ? `${name}: ${value}` : value);
+      tip.appendChild(line);
+    });
+    tip.hidden = false;
+    const r = box.getBoundingClientRect();
+    const tw = tip.offsetWidth, th = tip.offsetHeight;
+    let x = event.clientX - r.left + 12, y = event.clientY - r.top + 12;
+    if (x + tw > r.width) x = Math.max(0, event.clientX - r.left - tw - 12);
+    if (y + th > r.height + 40) y = Math.max(0, event.clientY - r.top - th - 12);
+    tip.style.left = x + 'px'; tip.style.top = y + 'px';
+  };
+  const failOrWait = (box, d) => {
+    box.replaceChildren();
+    box.classList.toggle('dash-skeleton', d.status === 'loading');
+    if (d.status === 'error') { const f = document.createElement('div'); f.className = 'cp-fail'; f.textContent = 'Failed to load'; box.appendChild(f); }
+    return d.status !== 'ok';
+  };
+  const textWidth = (svg, strings, cls) => {
+    const t = svg.append('g').attr('class', cls);
+    const w = d3.max(strings, (s) => t.append('text').style('font-size', 'var(--cds-font-size-caption)').text(s).node().getComputedTextLength()) || 0;
+    t.remove();
+    return w;
+  };
+  const axisStyle = (g) => {
+    g.attr('font-size', null).attr('font-family', null);
+    g.selectAll('text').attr('fill', 'var(--color-fg-muted)').style('font-size', 'var(--cds-font-size-caption)');
+    g.selectAll('line').attr('stroke', 'var(--cds-chart-grid)');
+    g.select('.domain').remove();
+  };
+
+  const legend = (el, items) => {
+    el.replaceChildren(...items.map(([color, name]) => {
+      const s = document.createElement('span');
+      const i = document.createElement('i'); i.style.background = color;
+      s.append(i, name);
+      return s;
+    }));
+  };
+
+  function drawMechByPattern() {
+    const box = document.getElementById('mech-pattern-chart');
+    const d = dash.data('patterns');
+    legend(document.getElementById('mech-legend'), MECH.map(([, name], i) => [dash.colors[i], name]));
+    if (failOrWait(box, d)) return;
+    const rows = d.data.slice().sort((a, b) => b.cost_usd - a.cost_usd);
+    const W = box.clientWidth || 600, rowH = 22, gap = 8;
+    const svg = d3.select(box).append('svg').attr('width', '100%');
+    const labelW = textWidth(svg, rows.map((r) => r.pattern)) + 8;
+    const valW = textWidth(svg, rows.map((r) => money(r.cost_usd))) + 8;
+    const m = { top: 4, right: valW, bottom: 4, left: labelW };
+    const H = m.top + m.bottom + rows.length * (rowH + gap);
+    svg.attr('viewBox', `0 0 ${W} ${H}`).attr('height', H);
+    const x = d3.scaleLinear([0, d3.max(rows, (r) => r.cost_usd) || 1], [m.left, W - m.right]);
+    const tip = tipFor(box);
+    rows.forEach((r, i) => {
+      const y = m.top + i * (rowH + gap);
+      svg.append('text').attr('x', m.left - 8).attr('y', y + rowH / 2).attr('dy', '0.35em').attr('text-anchor', 'end')
+        .attr('fill', 'var(--color-fg)').style('font-size', 'var(--cds-font-size-caption)').text(r.pattern);
+      let acc = 0;
+      MECH.forEach(([field, name], k) => {
+        const v = r[field] || 0;
+        if (v <= 0) return;
+        const x0 = x(acc), x1 = x(acc + v);
+        acc += v;
+        svg.append('rect').attr('x', x0).attr('y', y).attr('width', Math.max(0, x1 - x0)).attr('height', rowH)
+          .attr('fill', dash.colors[k])
+          .on('mousemove', (event) => showTip(box, tip, event, r.pattern, [[dash.colors[k], name, `${money(v)} (${pct(r.cost_usd ? v / r.cost_usd : 0)})`]]))
+          .on('mouseleave', () => { tip.hidden = true; });
+      });
+      svg.append('text').attr('x', x(r.cost_usd) + 6).attr('y', y + rowH / 2).attr('dy', '0.35em')
+        .attr('fill', 'var(--color-fg-muted)').style('font-size', 'var(--cds-font-size-caption)').text(money(r.cost_usd));
+    });
+  }
+
+  function drawMechFleet() {
+    const box = document.getElementById('mech-fleet-chart');
+    const d = dash.data('mechanism_totals');
+    if (failOrWait(box, d)) return;
+    const name = Object.fromEntries(MECH);
+    const colorOf = Object.fromEntries(MECH.map(([f], i) => [f, dash.colors[i]]));
+    const rows = d.data.filter((r) => r.usd > 0).sort((a, b) => b.usd - a.usd);
+    const W = box.clientWidth || 500, rowH = 20, gap = 10;
+    const svg = d3.select(box).append('svg').attr('width', '100%');
+    const labelW = textWidth(svg, rows.map((r) => name[r.mechanism])) + 8;
+    const valW = textWidth(svg, rows.map((r) => `${money(r.usd)} · ${pct(r.share)}`)) + 8;
+    const m = { top: 4, right: valW, bottom: 4, left: labelW };
+    const H = m.top + m.bottom + rows.length * (rowH + gap);
+    svg.attr('viewBox', `0 0 ${W} ${H}`).attr('height', H);
+    const x = d3.scaleLinear([0, d3.max(rows, (r) => r.usd) || 1], [m.left, W - m.right]);
+    rows.forEach((r, i) => {
+      const y = m.top + i * (rowH + gap);
+      svg.append('text').attr('x', m.left - 8).attr('y', y + rowH / 2).attr('dy', '0.35em').attr('text-anchor', 'end')
+        .attr('fill', 'var(--color-fg)').style('font-size', 'var(--cds-font-size-caption)').text(name[r.mechanism]);
+      svg.append('rect').attr('x', m.left).attr('y', y).attr('width', Math.max(0, x(r.usd) - m.left)).attr('height', rowH)
+        .attr('rx', 4).attr('fill', colorOf[r.mechanism]);
+      svg.append('text').attr('x', x(r.usd) + 6).attr('y', y + rowH / 2).attr('dy', '0.35em')
+        .attr('fill', 'var(--color-fg-muted)').style('font-size', 'var(--cds-font-size-caption)').text(`${money(r.usd)} · ${pct(r.share)}`);
+    });
+  }
+
+  function drawDaily() {
+    const box = document.getElementById('daily-chart');
+    const d = dash.data('daily');
+    if (failOrWait(box, d)) { legend(document.getElementById('daily-legend'), []); return; }
+    const series = [...new Set(d.data.map((r) => r.pattern))];
+    const days = [...new Set(d.data.map((r) => r.day))].sort();
+    const color = (s) => s === 'Other' ? 'var(--cds-chart-muted)' : dash.colors[series.indexOf(s) % dash.colors.length];
+    legend(document.getElementById('daily-legend'), series.map((s) => [color(s), s]));
+    const byDay = d3.group(d.data, (r) => r.day);
+    const stacked = days.map((dd) => {
+      const vals = Object.fromEntries((byDay.get(dd) || []).map((r) => [r.pattern, r.cost_usd]));
+      return { day: dd, vals, total: d3.sum(series, (s) => vals[s] || 0) };
+    });
+    const W = box.clientWidth || 600, H = 220;
+    const svg = d3.select(box).append('svg').attr('width', '100%').attr('viewBox', `0 0 ${W} ${H}`).attr('height', H);
+    const yMax = d3.max(stacked, (s) => s.total) || 1;
+    const y = d3.scaleLinear([0, yMax], [H - 24, 8]).nice();
+    const yTicks = y.ticks(4);
+    const left = textWidth(svg, yTicks.map((t) => d3.format('$,.0f')(t))) + 10;
+    const x = d3.scaleBand(days, [left, W - 4]).padding(0.2);
+    svg.append('g').attr('transform', `translate(${left},0)`).call(d3.axisLeft(y).tickValues(yTicks).tickFormat(d3.format('$,.0f')).tickSize(-(W - left - 4))).call(axisStyle);
+    const every = Math.max(1, Math.ceil(days.length / Math.max(2, Math.floor((W - left) / 70))));
+    svg.append('g').attr('transform', `translate(0,${H - 24})`)
+      .call(d3.axisBottom(x).tickValues(days.filter((_, i) => i % every === 0)).tickFormat((v) => d3.utcFormat('%b %-d')(new Date(v + 'T00:00:00Z'))).tickSize(0).tickPadding(8))
+      .call(axisStyle);
+    const tip = tipFor(box);
+    stacked.forEach((s) => {
+      let acc = 0;
+      const g = svg.append('g');
+      series.forEach((name) => {
+        const v = s.vals[name] || 0;
+        if (v <= 0) return;
+        g.append('rect').attr('x', x(s.day)).attr('width', x.bandwidth()).attr('y', y(acc + v)).attr('height', Math.max(0, y(acc) - y(acc + v))).attr('fill', color(name));
+        acc += v;
+      });
+      g.append('rect').attr('x', x(s.day)).attr('width', x.bandwidth()).attr('y', 8).attr('height', H - 32).attr('fill', 'transparent')
+        .on('mousemove', (event) => showTip(box, tip, event, `${d3.utcFormat('%b %-d')(new Date(s.day + 'T00:00:00Z'))} · ${money(s.total)}`,
+          series.filter((n) => (s.vals[n] || 0) > 0).map((n) => [color(n), n, money(s.vals[n])])))
+        .on('mouseleave', () => { tip.hidden = true; });
+    });
+  }
+
+  function drawGaps() {
+    const box = document.getElementById('gaps-chart');
+    const d = dash.data('gaps');
+    if (failOrWait(box, d)) return;
+    const rows = d.data.slice().sort((a, b) => a.order - b.order);
+    const W = box.clientWidth || 500, H = 230;
+    const svg = d3.select(box).append('svg').attr('width', '100%').attr('viewBox', `0 0 ${W} ${H}`).attr('height', H);
+    const y = d3.scaleLinear([0, d3.max(rows, (r) => r.cache_write_usd) || 1], [H - 28, 28]).nice();
+    const yTicks = y.ticks(4);
+    const left = textWidth(svg, yTicks.map((t) => d3.format('$,.0f')(t))) + 10;
+    const x = d3.scaleBand(rows.map((r) => r.gap), [left, W - 4]).padding(0.3);
+    svg.append('g').attr('transform', `translate(${left},0)`).call(d3.axisLeft(y).tickValues(yTicks).tickFormat(d3.format('$,.0f')).tickSize(-(W - left - 4))).call(axisStyle);
+    svg.append('g').attr('transform', `translate(0,${H - 28})`).call(d3.axisBottom(x).tickSize(0).tickPadding(8)).call(axisStyle);
+    const tip = tipFor(box);
+    rows.forEach((r) => {
+      const idle = r.order >= 2;
+      svg.append('rect').attr('x', x(r.gap)).attr('width', x.bandwidth()).attr('y', y(r.cache_write_usd))
+        .attr('height', Math.max(0, y(0) - y(r.cache_write_usd))).attr('rx', 4)
+        .attr('fill', idle ? 'var(--cds-chart-status-critical)' : dash.colors[0])
+        .on('mousemove', (event) => showTip(box, tip, event, `Pause ${r.gap}`, [
+          [null, 'Calls', d3.format(',')(r.calls)], [null, 'Cache writes', money(r.cache_write_usd)],
+          [null, 'Re-wrote more than read', pct(r.rewrite_rate)], [null, 'All spend', money(r.cost_usd)]]))
+        .on('mouseleave', () => { tip.hidden = true; });
+      svg.append('text').attr('x', x(r.gap) + x.bandwidth() / 2).attr('y', y(r.cache_write_usd) - 6).attr('text-anchor', 'middle')
+        .attr('fill', idle ? 'var(--color-fg)' : 'var(--color-fg-muted)').style('font-size', 'var(--cds-font-size-caption)').text(pct(r.rewrite_rate));
+    });
+    const b1 = rows.find((r) => r.order === 1), b2 = rows.find((r) => r.order === 2);
+    if (b1 && b2) {
+      const cx = (x(b1.gap) + x.bandwidth() + x(b2.gap)) / 2;
+      svg.append('line').attr('x1', cx).attr('x2', cx).attr('y1', 14).attr('y2', H - 28)
+        .attr('stroke', 'var(--cds-chart-reference)').attr('stroke-dasharray', '4 3');
+      svg.append('text').attr('x', cx + 4).attr('y', 12).attr('fill', 'var(--color-fg-muted)')
+        .style('font-size', 'var(--cds-font-size-caption)').text('cache expires at 5 min');
+    }
+  }
+
+  function drawHistory() {
+    const box = document.getElementById('history-chart');
+    const note = document.getElementById('history-note');
+    const d = dash.data('runs');
+    if (failOrWait(box, d)) return;
+    const rows = d.data.slice().sort((a, b) => a.window_end.localeCompare(b.window_end));
+    if (rows.length < 2) {
+      note.textContent = 'History starts with this run. Each refresh adds a point.';
+      const p = document.createElement('p'); p.className = 'cp-empty';
+      p.textContent = `One run so far: ${money(rows[0] && rows[0].fleet_cost_usd)} over ${rows[0] ? rows[0].window_days : '—'} days, ${pct(rows[0] && rows[0].idle_rewrite_share)} idle re-writes.`;
+      box.appendChild(p);
+      return;
+    }
+    note.textContent = 'One point per refresh, at the end of its window. Spend on the left axis; idle re-write share is labelled on each point.';
+    const W = box.clientWidth || 600, H = 200;
+    const svg = d3.select(box).append('svg').attr('width', '100%').attr('viewBox', `0 0 ${W} ${H}`).attr('height', H);
+    const dates = rows.map((r) => new Date(r.window_end + 'T00:00:00Z'));
+    const y = d3.scaleLinear([0, d3.max(rows, (r) => r.fleet_cost_usd) || 1], [H - 24, 20]).nice();
+    const yTicks = y.ticks(4);
+    const left = textWidth(svg, yTicks.map((t) => d3.format('$,.0f')(t))) + 10;
+    const x = d3.scaleUtc(d3.extent(dates), [left + 30, W - 40]);
+    svg.append('g').attr('transform', `translate(${left},0)`).call(d3.axisLeft(y).tickValues(yTicks).tickFormat(d3.format('$,.0f')).tickSize(-(W - left - 4))).call(axisStyle);
+    svg.append('g').attr('transform', `translate(0,${H - 24})`).call(d3.axisBottom(x).ticks(Math.min(rows.length, 6)).tickFormat(d3.utcFormat('%b %-d')).tickSize(0).tickPadding(8)).call(axisStyle);
+    svg.append('path').datum(rows).attr('fill', 'none').attr('stroke', dash.colors[0]).attr('stroke-width', 2)
+      .attr('stroke-linejoin', 'round').attr('stroke-linecap', 'round')
+      .attr('d', d3.line((r, i) => x(dates[i]), (r) => y(r.fleet_cost_usd)));
+    rows.forEach((r, i) => {
+      svg.append('circle').attr('cx', x(dates[i])).attr('cy', y(r.fleet_cost_usd)).attr('r', 3.5).attr('fill', dash.colors[0]);
+      svg.append('text').attr('x', x(dates[i])).attr('y', y(r.fleet_cost_usd) - 9).attr('text-anchor', 'middle')
+        .attr('fill', 'var(--color-fg-muted)').style('font-size', 'var(--cds-font-size-caption)').text(pct(r.idle_rewrite_share));
+    });
+  }
+
+  dash.onData(() => { drawMechByPattern(); drawMechFleet(); drawDaily(); drawGaps(); drawHistory(); });
+})();
+</script>
