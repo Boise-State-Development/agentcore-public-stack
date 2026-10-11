@@ -80,6 +80,13 @@ describe('Scheduled runs in a project', () => {
     expect(memory?.Action).toEqual(['bedrock-agentcore:ListEvents', 'bedrock-agentcore:GetEvent']);
     const bodies = statements.find((s) => JSON.stringify(s.Action).includes('s3:PutObject'));
     expect(JSON.stringify(bodies?.Resource)).toContain('/shares/*');
+    // The store's existence check is a HeadObject: GetObject, and ListBucket so a
+    // missing body is a 404, not a 403 (which failed the first delivery on dev).
+    expect(bodies?.Action).toEqual(['s3:GetObject', 's3:PutObject', 's3:DeleteObject']);
+    const listing = statements.find((s) => JSON.stringify(s.Action).includes('s3:ListBucket')) as
+      | { Condition?: unknown }
+      | undefined;
+    expect(JSON.stringify(listing?.Condition)).toContain('shares/*');
   });
 
   it('lets the worker write artifact shares, for a schedule that publishes its outputs (3.2d)', () => {
