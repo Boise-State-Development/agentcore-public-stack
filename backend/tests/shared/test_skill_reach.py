@@ -83,8 +83,18 @@ class TestSummary:
         ).summary()
         assert 'runs unpinned in 2 shared agents ("Advisor", "Helper") and 1 project ("BIO 101")' in text
         assert "use the new version on their next turn" in text
-        assert '1 of your private agent ("Scratch")' in text
+        assert 'It is also used unpinned by 1 of your private agents ("Scratch"), which only you use.' in text
         assert 'Pinned, so unaffected: "Grader" (v3), project "Team" (v1).' in text
+
+    def test_private_only_reads_as_its_own_sentence(self):
+        """Found on dev: a skill bound only to a private agent read
+        "It is also used unpinned by 1 of your private agent", with nothing
+        before the "also" and a singular after "1 of"."""
+        text = SkillReach("s1", [SkillBinding("Oliver", False, False, None)]).summary()
+        assert text == (
+            'This skill is used unpinned by 1 of your private agents ("Oliver"), '
+            "which only you use."
+        )
 
     def test_long_lists_are_cut(self):
         many = [SkillBinding(f"Agent {i}", False, True, None) for i in range(8)]
