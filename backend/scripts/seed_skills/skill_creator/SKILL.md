@@ -1,6 +1,6 @@
 ---
 name: skill-creator
-description: Help the user create a new skill or improve one of their own skills. Work out what the skill should do and when it should be used, write a description that gets it used at the right moments, write clear instructions and any reference files, save it to their skills, and help them try it and refine it. Use this whenever the user wants to make, write, draft, edit, fix or improve a skill, wants to turn a workflow or this conversation into a reusable skill, or asks why a skill they wrote is not being used, even if they never say the word skill.
+description: Help the user create a new skill or improve one of their own skills. Work out what the skill should do and when it should be used, write a description that gets it used at the right moments, write clear instructions and any reference files, save it to their skills, and help them try it and refine it. Use this whenever the user wants to make, build, create, write, draft, edit, fix or improve a skill, wants to turn a workflow or this conversation into a reusable skill, or asks why a skill they wrote is not being used, even if they never say the word skill. Read it before drafting a skill or calling any my_skill_ tool, because it holds this platform's rules for skills (where they are turned on, limits, file layout) that you cannot otherwise know.
 license: Apache-2.0
 ---
 
@@ -34,7 +34,7 @@ Read this before drafting, because it shapes what a good skill looks like on thi
 
 ### When you have the skill tools
 
-Use this path if `my_skill_create` is among your tools.
+Use this path only if `my_skill_create` appears in your list of tools for this conversation. If it doesn't, the tools aren't turned on for this user and calling one just fails, so go straight to the next section.
 
 - **New skill:** call `my_skill_create` with the display name, description and instructions. Then call `my_skill_write_file` once per reference file, with the `skill_id` it returned.
 - **Existing skill:** find it with `my_skill_list`, read its fields and file list with `my_skill_read`, and read one file with `my_skill_read_file`. Change only what needs changing. `my_skill_update` replaces the instructions whole, so start from the current text.
@@ -51,6 +51,7 @@ Hand the finished skill to the user to add themselves, under **Customize → Ski
 - Give the name, the description and the instructions as separate blocks they can copy into the form. Alternatively, give a complete `SKILL.md` (frontmatter and body) that they can save as a file and load with **Import a SKILL.md** on that form. Keep every frontmatter value on one line, because the import reads simple `key: value` lines only.
 - Give each reference file as its own block, with its filename. They upload these from the skill's page after saving it.
 - Say plainly that this is a copy step because the tools that save skills directly aren't turned on for them.
+- Don't try to save the skill any other way, such as by opening the site in a web browser tool. That browser is not signed in as the user, and it is not how skills are saved. Hand the draft over instead.
 
 ## Safety
 
