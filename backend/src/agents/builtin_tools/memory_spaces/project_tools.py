@@ -303,9 +303,9 @@ def make_project_memory_save_tool(scopes: ProjectMemoryScopes):
 
         When the member asks you to remember something for them alone (a preference, how
         they want answers, a standing request), save it to "mine" now: this conversation
-        alone will not carry it into their next task. Make `description` the rule itself,
+        alone will not carry it into their next one. Make `description` the rule itself,
         such as "Status checks: reply 'STATUS-OK:' plus one sentence", because that line
-        is what their later tasks see.
+        is what their later conversations see.
 
         A file is a list with one fact per "- " line, such as "- The pilot starts
         March 3."; prose and headings are rejected. To change a file, `memory_read` it

@@ -22,7 +22,7 @@ Spaces S3 offload) and ``apis/shared/skills/resource_store.py``:
 
 It lives in ``apis.shared`` because it has two consumers: app-api (create
 writes; view/export read; revoke deletes) and, read-only, a project harness's
-``shared_task_read`` tool in the AgentCore Runtime (Shared Projects 2.5c).
+``shared_conversation_read`` tool in the AgentCore Runtime (Shared Projects 2.5c).
 
 Configuration: app-api's bucket name comes from ``SHARED_CONVERSATIONS_BUCKET_NAME``
 (set on the app-api role by the CDK ``SharedConversationsConstruct`` wiring). The

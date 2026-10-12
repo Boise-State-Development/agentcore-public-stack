@@ -306,14 +306,14 @@ async def _find_managed_model(model_id: str | None):
 
 # A project harness's guidance on where teammates' work lives (shared-projects 2.5c).
 # Without it Haiku 4.5 answered "every open escalation" from project memory alone and
-# never listed the shared tasks (0 of 6 first responses on the simulation project);
+# never listed the shared conversations (0 of 6 first responses on the simulation project);
 # with it, 6 of 6. Constant text, so it costs one cache write per harness, on deploy.
 PROJECT_WORKSPACE_GUIDANCE = (
     "## Project Workspace\n\n"
-    "Teammates' work reaches you three ways: the project's files, project memory, and tasks "
-    "members have shared with the project. Before answering about the team's status, open "
-    "items, decisions or who owns what, check all three: call `shared_tasks_list` and read the "
-    "relevant shared tasks, not only memory."
+    "Teammates' work reaches you three ways: the project's files, project memory, and "
+    "conversations members have shared with the project. Before answering about the team's status, open "
+    "items, decisions or who owns what, check all three: call `shared_conversations_list` and read the "
+    "relevant shared conversations, not only memory."
 )
 
 
@@ -396,8 +396,8 @@ async def _plain_turn_prompt(input_data, user_id: Optional[str]) -> Optional[str
 
 
 PROJECTS_DISABLED_MESSAGE = (
-    "Projects are turned off here, so this project task can't continue. "
-    "Your conversation history is still here, and nothing in the project was deleted."
+    "Projects are turned off here, so this project conversation can't continue. "
+    "Its history is still here, and nothing in the project was deleted."
 )
 
 
@@ -419,7 +419,7 @@ async def _project_turn_gate(project_id: Optional[str]) -> Tuple[Optional[str], 
         return "This project no longer exists.", None
     if project.status != "active":
         return (
-            f'The project "{project.name}" is archived, so it\'s read-only: no new tasks or messages. '
+            f'The project "{project.name}" is archived, so it\'s read-only: its conversations can be read but not started or continued. '
             "Ask the project owner to restore it."
         ), project
     return None, project

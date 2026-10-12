@@ -73,7 +73,7 @@ async def require_shareable_project(
         raise ArtifactProjectError(400, "Projects are not available")
     project_id = await _project_of_session(session_id, user)
     if not project_id:
-        raise ArtifactProjectError(400, "Only an artifact made in a project task can be shared with a project")
+        raise ArtifactProjectError(400, "Only an artifact made in a project conversation can be shared with a project")
     project, role = resolve_project_role(project_id, user.user_id, user.email, repository=repository)
     if project is None or role is None:
         raise ArtifactProjectError(403, "You are not a member of this artifact's project")

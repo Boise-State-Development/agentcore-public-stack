@@ -184,9 +184,9 @@ class TestPrompt:
     def test_a_harness_is_told_to_check_shared_tasks(self):
         """2.5c: without this, an "every open escalation" question never listed shared tasks."""
         prompt = compose_agent_system_prompt("BASE", "Do X.", project_harness=True)
-        assert "call `shared_tasks_list`" in prompt
+        assert "call `shared_conversations_list`" in prompt
         assert prompt.index("## Project Workspace") < prompt.index("## Project Instructions")
-        assert "shared_tasks_list" not in compose_agent_system_prompt("BASE", "Do X.", project_harness=False)
+        assert "shared_conversations_list" not in compose_agent_system_prompt("BASE", "Do X.", project_harness=False)
 
     def test_two_members_render_the_same_prefix(self):
         """Nothing about the invoker can reach this text — the signature takes no user —
