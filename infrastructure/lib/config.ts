@@ -88,6 +88,7 @@ export interface AppConfig {
   platformSelfService: PlatformSelfServiceConfig;
   feedbackEvalSampling: FeedbackEvalSamplingConfig;
   skills: SkillsConfig;
+  skillAuthoring: SkillAuthoringConfig;
   agents: AgentsConfig;
   agentMarketplace: AgentMarketplaceConfig;
   dictation: DictationConfig;
@@ -632,6 +633,20 @@ export interface FeedbackEvalSamplingConfig {
  * can reach *which* skills is a role's `grantedSkills`, edited in that UI.
  */
 export interface SkillsConfig {
+  enabled: boolean;
+}
+
+/**
+ * Skill authoring tools (docs/specs/skill-creator.md D12): the seven `my_skill_*`
+ * agent tools that create and edit the invoking user's own skills. **Opt-in while
+ * in development**: off unless CDK_SKILL_AUTHORING_ENABLED=true (or a
+ * `skillAuthoring.enabled: true` cdk.json context). Sets SKILL_AUTHORING_ENABLED on
+ * the AgentCore Runtime only, and only while on, so an environment that leaves it
+ * off spends none of the Runtime's environment budget. No app-api or SPA switch:
+ * the tools run in the Runtime and reuse the existing approval card. ANDs with
+ * `skills.enabled` and the `my_skill_create` tool grant.
+ */
+export interface SkillAuthoringConfig {
   enabled: boolean;
 }
 
@@ -1415,6 +1430,13 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_SKILLS_ENABLED
         ? process.env.CDK_SKILLS_ENABLED !== 'false'
         : scope.node.tryGetContext('skills')?.enabled ?? true,
+    },
+    skillAuthoring: {
+      // Opt-in while in development, same parsing as projects above: '' (an
+      // unset workflow variable) and anything but "true" are off.
+      enabled: process.env.CDK_SKILL_AUTHORING_ENABLED
+        ? process.env.CDK_SKILL_AUTHORING_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('skillAuthoring')?.enabled ?? false,
     },
     agents: {
       // Default ON with a kill switch (house style, mirroring memorySpaces /

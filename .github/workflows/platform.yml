@@ -306,6 +306,13 @@ jobs:
       # and see the ones their role grants. Which skills a cohort gets is a
       # role's `grantedSkills`, managed in the admin roles UI.
       CDK_SKILLS_ENABLED: ${{ vars.CDK_SKILLS_ENABLED }}
+      # Skill authoring tools: the seven `my_skill_*` agent tools that create
+      # and edit the invoking user's own skills (docs/specs/skill-creator.md
+      # D12). Opt-in while in development: set the
+      # `CDK_SKILL_AUTHORING_ENABLED` variable to "true" in an environment to
+      # turn it on there. Unset (empty string) or anything else means off. The
+      # `my_skill_create` catalog row must also be seeded and granted to a role.
+      CDK_SKILL_AUTHORING_ENABLED: ${{ vars.CDK_SKILL_AUTHORING_ENABLED }}
       # SageMaker fine-tuning. The tables, bucket, SageMaker role and IAM
       # grants deploy unconditionally, but these two decide whether the feature
       # is reachable and how it is rationed, and neither was forwarded before —
