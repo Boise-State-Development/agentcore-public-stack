@@ -313,6 +313,13 @@ jobs:
       # turn it on there. Unset (empty string) or anything else means off. The
       # `my_skill_create` catalog row must also be seeded and granted to a role.
       CDK_SKILL_AUTHORING_ENABLED: ${{ vars.CDK_SKILL_AUTHORING_ENABLED }}
+      # Word tracked changes: a .docx's tracked changes reach the model written
+      # out as [deleted: …] / [inserted: …], and the Word tools gain
+      # redline_word_document (docs/specs/word-tracked-changes.md). Opt-in while
+      # in development: set the `CDK_WORD_TRACKED_CHANGES_ENABLED` variable to
+      # "true" in an environment to turn it on there. Unset (empty string) or
+      # anything else means off. Sets the flag on both app-api and the Runtime.
+      CDK_WORD_TRACKED_CHANGES_ENABLED: ${{ vars.CDK_WORD_TRACKED_CHANGES_ENABLED }}
       # SageMaker fine-tuning. The tables, bucket, SageMaker role and IAM
       # grants deploy unconditionally, but these two decide whether the feature
       # is reachable and how it is rationed, and neither was forwarded before —

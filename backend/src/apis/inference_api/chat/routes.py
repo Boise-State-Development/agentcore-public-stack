@@ -870,11 +870,15 @@ def _build_word_document_tools(
     enabled_tools: list | None,
     session_id: str,
     user_id: str,
+    user_name: Optional[str] = None,
 ) -> list:
     """Create context-bound Word document tools if enabled by the user.
 
     Identity is captured by closure (same pattern as the artifact and
     spreadsheet tools) since the runtime does not populate ToolContext.
+    ``redline_word_document`` joins the family only while the in-development
+    ``WORD_TRACKED_CHANGES_ENABLED`` is on; off, its spec never reaches
+    ``toolConfig``. ``user_name`` is its default revision author.
     """
     if not enabled_tools or not WORD_DOCUMENT_TOOL_IDS.intersection(enabled_tools):
         return []
@@ -889,12 +893,18 @@ def _build_word_document_tools(
         make_read_word_document_tool,
     )
 
+    from apis.shared.feature_flags import word_tracked_changes_enabled
+
     tools = [
         make_create_word_document_tool(session_id, user_id),
         make_modify_word_document_tool(session_id, user_id),
         make_list_word_documents_tool(session_id, user_id),
         make_read_word_document_tool(session_id, user_id),
     ]
+    if word_tracked_changes_enabled():
+        from agents.builtin_tools.word_document_tool import make_redline_word_document_tool
+
+        tools.append(make_redline_word_document_tool(session_id, user_id, user_name))
 
     logger.info(f"Created {len(tools)} word document tools")
     return tools
@@ -2579,6 +2589,8 @@ async def _resolve_turn_attachments(
         all_files, oversized_inline + over_budget_inline + [x.file for x in unpersisted_inline]
     )
 
+    files_to_send = await _write_out_tracked_changes(files_to_send)
+
     return TurnAttachments(
         recovered_upload_ids=recovered_upload_ids,
         files_to_send=files_to_send,
@@ -2592,6 +2604,58 @@ async def _resolve_turn_attachments(
         marker_names=attachment_marker_names,
         unpersisted_inline=unpersisted_inline,
     )
+
+
+def _annotated_inline_docx(file):
+    """``file`` with its tracked changes written out, or ``file`` itself if it has none."""
+    import base64
+
+    from apis.shared.kb_backend.docx_revisions import annotate_tracked_changes
+
+    annotated = annotate_tracked_changes(base64.b64decode(file.bytes or ""))
+    if annotated is None:
+        return file
+    return file.model_copy(update={"bytes": base64.b64encode(annotated).decode("ascii")})
+
+
+async def _write_out_tracked_changes(files_to_send: list) -> list:
+    """Give the model each inline ``.docx``'s tracked changes as text (map stage B4).
+
+    Bedrock's document parser keeps every run and drops the revision markup, so
+    a redline reaches the model as both sides merged: "State of IdahoDelaware"
+    (measured on dev, 2026-10-12). The annotated package comes through verbatim
+    as ``[deleted: Idaho][inserted: Delaware]`` and stays a ``docx`` block, so the
+    block's name and format do not change (``docs/specs/word-tracked-changes.md``
+    §2, R3).
+
+    Inline document bytes are stripped from restored history, so this shapes
+    only the turn that attaches the file, and it is a pure function of the
+    bytes. Returns the list unchanged while ``WORD_TRACKED_CHANGES_ENABLED`` is
+    off or no ``.docx`` is attached. Otherwise the rewrite runs off the event
+    loop, and a file that fails to rewrite is sent as it was.
+    """
+    from apis.shared.feature_flags import word_tracked_changes_enabled
+
+    if not files_to_send or not word_tracked_changes_enabled():
+        return files_to_send
+    positions = [i for i, f in enumerate(files_to_send) if (f.filename or "").lower().endswith(".docx")]
+    if not positions:
+        return files_to_send
+
+    results = await asyncio.gather(
+        *(asyncio.to_thread(_annotated_inline_docx, files_to_send[i]) for i in positions),
+        return_exceptions=True,
+    )
+    out = list(files_to_send)
+    for i, result in zip(positions, results):
+        if isinstance(result, BaseException):
+            logger.warning("Could not write out tracked changes for a docx attachment: %s", result)
+            continue
+        out[i] = result
+    annotated = sum(1 for i in positions if out[i] is not files_to_send[i])
+    if annotated:
+        logger.info("Wrote out tracked changes for %d docx attachment(s)", annotated)
+    return out
 
 
 @dataclass
@@ -3145,6 +3209,7 @@ async def _build_turn_tools(
         enabled_tools=effective_enabled_tools,
         session_id=input_data.session_id,
         user_id=user_id,
+        user_name=current_user.name,
     ) + _build_workspace_tools(
         enabled_tools=effective_enabled_tools,
         session_id=input_data.session_id,
