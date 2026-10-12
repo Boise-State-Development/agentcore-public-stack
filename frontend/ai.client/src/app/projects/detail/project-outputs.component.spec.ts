@@ -6,7 +6,7 @@ import { Dialog } from '@angular/cdk/dialog';
 import { of, throwError } from 'rxjs';
 import { ProjectOutputsComponent } from './project-outputs.component';
 import { ProjectApiService } from '../services/project-api.service';
-import { Project, ProjectOutput } from '../models/project.model';
+import { Project, ProjectOutput, ProjectSchedule } from '../models/project.model';
 
 const PROJECT: Project = {
   projectId: 'prj_1',
@@ -41,8 +41,19 @@ const MINE: ProjectOutput = {
   sharedByEmail: 'me@x.edu', sharedByName: null, isMine: true, canRemove: true,
 };
 
+const SCHEDULE = {
+  scheduleId: 'sc_1',
+  label: 'Weekly digest',
+  cadence: 'weekly',
+  hourLocal: 8,
+  weekday: 1,
+  timezone: 'America/Boise',
+  state: 'active',
+  nextRunAt: '2026-10-19T14:00:00Z',
+} as ProjectSchedule;
+
 describe('ProjectOutputsComponent', () => {
-  const api = { outputs: vi.fn(), removeOutput: vi.fn() };
+  const api = { outputs: vi.fn(), removeOutput: vi.fn(), schedule: vi.fn() };
   const dialog = { open: vi.fn() };
 
   beforeEach(() => {
@@ -50,6 +61,7 @@ describe('ProjectOutputsComponent', () => {
     vi.clearAllMocks();
     api.outputs.mockReturnValue(of({ outputs: [THEIRS, MINE] }));
     api.removeOutput.mockReturnValue(of(undefined));
+    api.schedule.mockReturnValue(of(SCHEDULE));
     dialog.open.mockReturnValue({ closed: of(true) });
     TestBed.configureTestingModule({
       imports: [ProjectOutputsComponent],
@@ -65,8 +77,11 @@ describe('ProjectOutputsComponent', () => {
     const fixture = TestBed.createComponent(ProjectOutputsComponent);
     fixture.componentRef.setInput('project', project);
     fixture.detectChanges();
-    await fixture.whenStable();
-    fixture.detectChanges();
+    // Twice: the outputs, then the featured output's schedule read after them.
+    for (let i = 0; i < 2; i++) {
+      await fixture.whenStable();
+      fixture.detectChanges();
+    }
     return { fixture, el: fixture.nativeElement as HTMLElement };
   }
 
@@ -80,19 +95,69 @@ describe('ProjectOutputsComponent', () => {
       'Open Web page Roster chart, shared by Ann Lee',
       'Open CSV Term dates, shared by you',
     ]);
-    const text = el.textContent?.replace(/\s+/g, ' ') ?? '';
-    expect(text).toContain('Roster chart');
-    expect(text).toContain('Web page · v2 · Shared by Ann Lee');
-    expect(text).toContain('CSV · Shared by you');
+    const [theirs, mine] = links.map(a => a.textContent?.replace(/\s+/g, ' ') ?? '');
+    expect(theirs).toContain('Roster chart');
+    expect(theirs).toContain('Web page');
+    expect(theirs).toContain('v2');
+    expect(theirs).toContain('Shared by Ann Lee');
+    expect(theirs).toContain('· Oct 7');
+    expect(mine).toContain('CSV');
+    expect(mine).not.toContain('v1');
+    expect(mine).toContain('Shared by you');
+    expect(el.querySelector('[data-testid="featured-output"]')).toBeNull();
+    expect(api.schedule).not.toHaveBeenCalled();
   });
 
-  it('tags what a schedule published, in the card and its accessible name', async () => {
-    api.outputs.mockReturnValue(of({ outputs: [{ ...THEIRS, scheduleId: 'sc_1' }, MINE] }));
+  it('draws each card from its stored excerpt', async () => {
+    api.outputs.mockReturnValue(of({ outputs: [{ ...MINE, preview: 'term,starts\nFall,Aug 24' }, THEIRS] }));
     const { el } = await render();
-    const [scheduled, plain] = Array.from(el.querySelectorAll('a'));
-    expect(scheduled.querySelector('[data-testid="scheduled-tag"]')?.textContent?.trim()).toBe('Scheduled');
-    expect(scheduled.getAttribute('aria-label')).toBe('Open Web page Roster chart, scheduled, shared by Ann Lee');
-    expect(plain.querySelector('[data-testid="scheduled-tag"]')).toBeNull();
+    const [csv, page] = Array.from(el.querySelectorAll('li'));
+    expect(csv.querySelector('[data-testid="preview-csv"] th')?.textContent).toBe('term');
+    expect(page.querySelector('app-artifact-preview')?.getAttribute('aria-hidden')).toBe('true');
+    expect(page.querySelector('[data-testid="preview-page"]')).toBeNull();
+  });
+
+  it('fans out a stack behind an output with several versions', async () => {
+    const { el } = await render();
+    const [theirs, mine] = Array.from(el.querySelectorAll('li'));
+    expect(theirs.querySelectorAll(':scope > div[aria-hidden="true"]').length).toBe(2);
+    expect(mine.querySelectorAll(':scope > div[aria-hidden="true"]').length).toBe(0);
+  });
+
+  it('leads with the newest scheduled output and its schedule', async () => {
+    const scheduled = { ...THEIRS, scheduleId: 'sc_1' };
+    api.outputs.mockReturnValue(of({ outputs: [MINE, scheduled] }));
+    const { el } = await render();
+    expect(api.schedule).toHaveBeenCalledWith('prj_1', 'sc_1');
+    const featured = el.querySelector('[data-testid="featured-output"]') as HTMLElement;
+    expect(featured.querySelector('a')?.getAttribute('aria-label')).toBe('Open Web page Roster chart, scheduled, shared by Ann Lee');
+    expect(featured.textContent).toContain('Latest scheduled run');
+    expect(featured.querySelector('[data-testid="schedule-cadence"]')?.textContent).toContain('Every Monday at 8:00 AM');
+    expect(featured.querySelector('[data-testid="schedule-next"]')?.textContent).toContain('Next run Mon, Oct 19');
+    const sheets = Array.from(el.querySelectorAll('li a')).map(a => a.getAttribute('href'));
+    expect(sheets).toEqual(['/shared-artifact/sh-2']);
+  });
+
+  it('reads a paused schedule as paused, and a scheduled card without its schedule still reads', async () => {
+    api.outputs.mockReturnValue(of({ outputs: [{ ...THEIRS, scheduleId: 'sc_1' }] }));
+    api.schedule.mockReturnValue(of({ ...SCHEDULE, state: 'paused' }));
+    let { el } = await render();
+    expect(el.querySelector('[data-testid="schedule-next"]')?.textContent).toContain('Paused');
+
+    api.schedule.mockReturnValue(throwError(() => new HttpErrorResponse({ status: 404 })));
+    ({ el } = await render());
+    const featured = el.querySelector('[data-testid="featured-output"]') as HTMLElement;
+    expect(featured.textContent).toContain('Published Oct 7');
+    expect(featured.querySelector('[data-testid="schedule-cadence"]')).toBeNull();
+    expect(el.querySelector('[role=alert]')).toBeNull();
+  });
+
+  it('tags later scheduled outputs on their sheets', async () => {
+    api.outputs.mockReturnValue(of({ outputs: [{ ...THEIRS, scheduleId: 'sc_1' }, { ...MINE, scheduleId: 'sc_2' }] }));
+    const { el } = await render();
+    const [sheet] = Array.from(el.querySelectorAll('li'));
+    expect(sheet.querySelector('[data-testid="scheduled-tag"]')?.textContent?.trim()).toBe('Scheduled');
+    expect(sheet.querySelector('a')?.getAttribute('aria-label')).toBe('Open CSV Term dates, scheduled, shared by you');
   });
 
   it('offers removal only where the caller may remove', async () => {

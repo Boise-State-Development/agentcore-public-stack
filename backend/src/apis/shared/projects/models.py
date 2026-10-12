@@ -103,6 +103,10 @@ class ProjectOutput(BaseModel):
     # Set when a project schedule published it (3.2d): the schedule replaces its
     # previous run's outputs, and the SPA tags them.
     schedule_id: Optional[str] = Field(None, alias="scheduleId")
+    # The card's excerpt (``apis/app_api/artifacts/preview.py``), computed on
+    # the first listing that finds none: absent until then, "" when the
+    # artifact has nothing to show. A rebuilt pointer starts without one.
+    preview: Optional[str] = None
 
 
 class SharedTask(BaseModel):

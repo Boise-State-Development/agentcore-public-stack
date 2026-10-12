@@ -104,7 +104,9 @@ own, without sharing the whole conversation. Open the artifact's **Share** menu
 and pick **Project members**.
 
 - It appears under **Outputs** on the project page, between the composer and
-  **Recents**, and every member can open it.
+  **Recents**, and every member can open it. Its card shows the top of the
+  artifact: the opening of a document, the first rows of a table, or the image
+  itself.
 - A share shows one version. Sharing a newer version replaces the one listed.
 - To take it off the project, use the ✕ on its card. Editors can remove anyone's
   output; everyone else can remove only their own.
