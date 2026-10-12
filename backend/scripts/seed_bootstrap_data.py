@@ -513,6 +513,24 @@ DEFAULT_TOOLS: list[dict[str, Any]] = [
         "forwardAuthToken": False,
     },
     {
+        # Single catalog entry / toggle that provisions the seven my_skill_*
+        # tools (list/read/read_file/create/update/write_file/delete_file) —
+        # see SKILL_AUTHORING_TOOL_IDS and _build_skill_authoring_tools in
+        # apis/inference_api/chat/routes.py, and docs/specs/skill-creator.md.
+        # Keep the toolId as "my_skill_create": it is the gate key. Off by
+        # default and not public: it is granted to a pilot role, and the
+        # runtime also needs SKILL_AUTHORING_ENABLED=true. Every write pauses
+        # for the user's approval.
+        "toolId": "my_skill_create",
+        "displayName": "Skill Authoring",
+        "description": "Create and edit your own skills from the conversation: list and read your skills, create one, change its instructions, and add, replace or remove its text files. Every change asks for your approval first.",
+        "category": "utility",
+        "protocol": "local",
+        "enabledByDefault": False,
+        "isPublic": False,
+        "forwardAuthToken": False,
+    },
+    {
         # Spreadsheet ANALYSIS (read an uploaded .xlsx/.csv and answer questions
         # about it via Code Interpreter) — distinct from the spreadsheet
         # *authoring* tool below. Both ids are context-bound: enabling them

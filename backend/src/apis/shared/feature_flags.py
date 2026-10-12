@@ -42,6 +42,24 @@ def skills_enabled() -> bool:
     return os.environ.get("SKILLS_ENABLED", "").strip().lower() != "false"
 
 
+def skill_authoring_enabled() -> bool:
+    """Whether the agent may author the invoking user's own skills.
+
+    Covers the seven ``my_skill_*`` tools (``docs/specs/skill-creator.md`` D12),
+    built per request by ``_build_skill_authoring_tools`` in the inference API.
+    **Opt-in while the feature is in development** (CLAUDE.md "Feature flags"):
+    only ``"true"`` (case-insensitive) enables it; unset, empty or anything else
+    is off. CDK sets it on the AgentCore Runtime only, and only when on (an unset
+    variable costs the Runtime's environment budget nothing). There is no SPA
+    switch: the tools reuse the existing approval card.
+
+    It ANDs with :func:`skills_enabled` and with the ``my_skill_create`` tool id
+    being in the turn's tools. Off, the tools are never built, so their specs
+    never reach ``toolConfig``.
+    """
+    return os.environ.get("SKILL_AUTHORING_ENABLED", "").strip().lower() == "true"
+
+
 def scheduled_runs_enabled() -> bool:
     """Whether the scheduled-runs surface is enabled for this environment.
 

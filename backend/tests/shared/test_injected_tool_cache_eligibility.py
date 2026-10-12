@@ -18,6 +18,7 @@ from apis.shared.tools.injected import (
     INJECTED_TOOL_IDS,
     KEY_DESCRIBED_INJECTED_TOOL_IDS,
     POWERPOINT_PRESENTATION_TOOL_IDS,
+    SKILL_AUTHORING_TOOL_IDS,
     SPREADSHEET_TOOL_IDS,
     WORD_DOCUMENT_TOOL_IDS,
     WORKSPACE_TOOL_IDS,
@@ -72,6 +73,26 @@ class TestKeyDescribedPredicate:
                 [tool_id]
             ), f"{tool_id} closes over session+user only and must be cacheable"
 
+    def test_skill_authoring_is_key_described(self):
+        """`_build_skill_authoring_tools` closes over `(session_id, user_id,
+        user_email)`. The email names the same identity as `user_id` (the
+        Memory-Space tools rest on the same equivalence) and is only logged;
+        the binding-reach lookup runs per call at approval time, so the closure
+        holds nothing the key does not describe (skill-creator spec, Gating)."""
+        assert SKILL_AUTHORING_TOOL_IDS == frozenset({"my_skill_create"})
+        assert SKILL_AUTHORING_TOOL_IDS <= INJECTED_TOOL_IDS
+        assert injected_tools_are_key_described(["my_skill_create", "web_search"])
+
+    def test_skill_authoring_closure_captures_only_key_elements(self):
+        """Pin the claim above on the code: every free variable of every
+        tool function the factory returns is one of the three identity values."""
+        from agents.builtin_tools.skill_authoring.tools import build_skill_authoring_tools
+
+        for built in build_skill_authoring_tools("sess", "user", "user@example.com"):
+            fn = built._tool_func
+            captured = dict(zip(fn.__code__.co_freevars, (c.cell_contents for c in fn.__closure__ or ())))
+            assert set(captured) <= {"session_id", "user_id", "user_email"}, (built.tool_name, captured)
+
     def test_a_turn_mixing_every_promoted_family_is_key_described(self):
         assert injected_tools_are_key_described(
             [
@@ -80,6 +101,7 @@ class TestKeyDescribedPredicate:
                 "create_excel_spreadsheet",
                 "create_powerpoint_presentation",
                 "workspace_files",
+                "my_skill_create",
                 "web_search",
             ],
         )
