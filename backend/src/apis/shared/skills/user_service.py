@@ -1,4 +1,5 @@
-"""User-authored skills service (Skills v2 PR-3).
+"""User-authored skills service (Skills v2 PR-3; moved to ``apis.shared`` by
+skill-creator spec D5 so the runtime's authoring tools can use it).
 
 The owner-scoped half of the skill catalog. Admin catalog skills
 (``owner_id == "system"``, governed by RBAC ``granted_skills``) and
@@ -8,7 +9,7 @@ the same record type in the same table — two authorship tiers, one store
 resolves the record and refuses to touch one the caller does not own.
 
 Resource-file handling (caps, manifest, S3 bundle layout, orphan GC) is
-*not* reimplemented here — it is delegated to :class:`SkillCatalogService`
+*not* reimplemented here — it is delegated to :class:`SkillBundleFiles`
 after the ownership check, so both tiers write identical agentskills.io
 bundles through one code path.
 """
@@ -18,6 +19,8 @@ import re
 from typing import Dict, List, Optional, Tuple
 
 from apis.shared.auth.models import User
+from apis.shared.security.log_sanitize import scrub_log
+from apis.shared.skills.bundle_files import SkillBundleFiles, get_skill_bundle_files
 from apis.shared.skills.models import (
     SKILL_ID_PATTERN,
     SkillDefinition,
@@ -29,9 +32,10 @@ from apis.shared.skills.repository import (
     SkillCatalogRepository,
     get_skill_catalog_repository,
 )
-
-from .service import SkillCatalogService, get_skill_catalog_service
-from apis.shared.security.log_sanitize import scrub_log
+from apis.shared.skills.resource_types import (
+    is_text_content_type,
+    resolve_upload_content_type,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -83,13 +87,13 @@ class UserSkillService:
     def __init__(
         self,
         repository: Optional[SkillCatalogRepository] = None,
-        catalog_service: Optional[SkillCatalogService] = None,
+        bundle_files: Optional[SkillBundleFiles] = None,
     ):
         self.repository = repository or get_skill_catalog_repository()
-        # Reused purely for its resource-file machinery (caps, manifest,
-        # SKILL.md projection, orphan GC) — never for its role-sync methods,
-        # which are admin-only by construction.
-        self.catalog_service = catalog_service or get_skill_catalog_service()
+        # The bundle layout both tiers share (caps, manifest, SKILL.md
+        # projection, orphan GC). It makes no access decision; every call
+        # below checks ownership first.
+        self.bundle_files = bundle_files or get_skill_bundle_files()
 
     # =========================================================================
     # Ownership
@@ -176,7 +180,7 @@ class UserSkillService:
         )
 
         created = await self.repository.create_skill(skill)
-        self.catalog_service.write_skill_md(created)
+        self.bundle_files.write_skill_md(created)
         self._invalidate(skill_id)
 
         logger.info(
@@ -206,7 +210,7 @@ class UserSkillService:
         if updated is None:
             raise UserSkillNotFoundError(f"Skill '{skill_id}' not found")
 
-        self.catalog_service.write_skill_md(updated)
+        self.bundle_files.write_skill_md(updated)
         self._invalidate(skill_id)
 
         logger.info(
@@ -232,11 +236,11 @@ class UserSkillService:
         skill = await self.require_owned(skill_id, user)
 
         for ref in skill.resources:
-            self.catalog_service.resource_store.delete(ref.s3_key)
-        self._delete_skill_md(skill_id)
+            self.bundle_files.resource_store.delete(ref.s3_key)
+        self.bundle_files.delete_skill_md(skill_id)
 
         await self.repository.delete_skill(skill_id)
-        await self.catalog_service.delete_versions(skill_id)
+        await self.bundle_files.delete_versions(skill_id)
         self._invalidate(skill_id)
 
         logger.info(
@@ -249,7 +253,7 @@ class UserSkillService:
         )
 
     # =========================================================================
-    # Bundle files — delegated to the shared catalog service post-ownership
+    # Bundle files — delegated to SkillBundleFiles post-ownership
     # =========================================================================
 
     async def list_resources(
@@ -268,7 +272,7 @@ class UserSkillService:
         kind: str = "reference",
     ) -> List[SkillResourceRef]:
         await self.require_owned(skill_id, user)
-        refs = await self.catalog_service.add_resource(
+        refs = await self.bundle_files.add_resource(
             skill_id, filename, content, content_type, user, kind=kind
         )
         self._invalidate(skill_id)
@@ -278,15 +282,57 @@ class UserSkillService:
         self, skill_id: str, filename: str, user: User
     ) -> Tuple[SkillResourceRef, bytes]:
         await self.require_owned(skill_id, user)
-        return await self.catalog_service.read_resource(skill_id, filename)
+        return await self.bundle_files.read_resource(skill_id, filename)
 
     async def delete_resource(
         self, skill_id: str, filename: str, user: User
     ) -> List[SkillResourceRef]:
         await self.require_owned(skill_id, user)
-        refs = await self.catalog_service.delete_resource(skill_id, filename, user)
+        refs = await self.bundle_files.delete_resource(skill_id, filename, user)
         self._invalidate(skill_id)
         return refs
+
+    async def write_text_file(
+        self,
+        skill_id: str,
+        kind: str,
+        filename: str,
+        content: str,
+        user: User,
+    ) -> List[SkillResourceRef]:
+        """Write one bundle file from inline text (skill-creator spec D5).
+
+        The agent's entry point: it produces text, not a multipart upload. The
+        text is UTF-8 encoded and goes through :meth:`add_resource`, so the
+        caps, the type allowlist, the manifest and orphan GC are the upload
+        route's, and the bundle is laid out exactly as a hand upload would be.
+
+        Only a filename whose allowlisted type is text is accepted. The
+        allowlist also admits ``.png`` or ``.pdf`` for uploads, but text
+        written under one of those names is a corrupt binary that every reader
+        would then mis-handle.
+
+        Raises:
+            UserSkillNotFoundError: Not the caller's skill.
+            ValueError: The kind, filename or size is invalid, the type is not
+                allowed or not text, or the per-skill file cap is reached.
+        """
+        await self.require_owned(skill_id, user)
+        content_type = resolve_upload_content_type(filename)
+        if not is_text_content_type(content_type):
+            raise ValueError(
+                f"'{filename}' is a {content_type} file, which cannot be written "
+                "as text. Use a text format such as .md, .txt, .json, .yaml or "
+                "a source-code extension."
+            )
+        return await self.add_resource(
+            skill_id,
+            filename,
+            content.encode("utf-8"),
+            content_type,
+            user,
+            kind=kind,
+        )
 
     # =========================================================================
     # Internals
@@ -314,12 +360,6 @@ class UserSkillService:
         if not _SKILL_ID_RE.match(candidate):
             candidate = f"{_FALLBACK_STEM}_{uuid.uuid4().hex[:8]}"
         return candidate
-
-    def _delete_skill_md(self, skill_id: str) -> None:
-        """Best-effort removal of the SKILL.md projection for a deleted skill."""
-        from apis.shared.skills.resource_store import skill_md_key
-
-        self.catalog_service.resource_store.delete(skill_md_key(skill_id))
 
     @staticmethod
     def _invalidate(skill_id: str) -> None:

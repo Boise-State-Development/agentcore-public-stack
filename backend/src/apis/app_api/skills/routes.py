@@ -57,7 +57,7 @@ from apis.shared.skills.resource_types import (
 )
 
 from .service import get_skill_catalog_service
-from .user_service import (
+from apis.shared.skills.user_service import (
     UserSkillError,
     UserSkillLimitError,
     UserSkillNotFoundError,

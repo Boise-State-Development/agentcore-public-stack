@@ -1,11 +1,23 @@
 # Skill Creator — guided skill authoring, and the agent write path it needs
 
-**Status:** Draft / proposal (2026-07-19)
+**Status:** Accepted with revisions (2026-10-12). Drafted 2026-07-19. Implementation starts with PR-A (§Phasing).
 **Author:** Phil Merrell (drafted with Claude)
 **Targets branch:** `develop`
 **Depends on:** [`skills-as-agent-primitive.md`](skills-as-agent-primitive.md) PR-1–PR-5 — merged. [`skill-bundle-import.md`](skill-bundle-import.md) PR-1 (nested paths) and its server-side `SKILL.md` parser — **draft, branch-only**; see D7.
 **Related:** [`user-markdown-memory.md`](user-markdown-memory.md) §W1/B3 (`memory_write` — the sole precedent for an agent tool that writes user-owned platform content); [`agentic-platform-primitives.md`](agentic-platform-primitives.md) F1 (headless entrypoint — the prerequisite for the eval half, see D8); [`agent-designer.md`](agent-designer.md) (the authoring surface for Agents, which this deliberately does not extend); [`admin-skills-rbac-tool-binding.md`](admin-skills-rbac-tool-binding.md) §0.4 (the existing drag-and-drop import-prefill flow, which PR-1 rides).
 **Prior art:** [Anthropic's open-source `skill-creator`](https://github.com/anthropics/skills/blob/main/skills/skill-creator/SKILL.md).
+
+### Revision 2026-10-12
+
+The July draft was reviewed against `develop` before implementation. Four things changed underneath it, and one claim in it was wrong:
+
+- **Wrong: "go through `SkillUserService`".** The class is `UserSkillService`, and it lives in `apis/app_api/skills/`, along with the `SkillCatalogService` file machinery it delegates to. The runtime cannot import either one (`tests/architecture/test_import_boundaries.py`). D5 now says the write path moves to `apis.shared` first, which is PR-A.
+- **New since July: skill versions and pins** (Shared Projects 3.1). Pins limit the damage of a live edit, but only for bindings that pin. See D9.
+- **New since July: Shared Projects bind skills to a project's harness.** Together with Agent invoke-through, a user's own skill can now run for people other than its author. See D9.
+- **The approval interrupt exists.** `tool_approval_required` and `MCPExternalApprovalHook` shipped for MCP tools. D10 extends that hook to these tools and closes open question 4.
+- **The cost and rollout rules got sharper.** CLAUDE.md now has the prompt-cache contract and the in-development flag rule. See D11 and D12.
+
+The phasing is reordered (§Phasing). The service-layer move ships first because every later PR needs it, and it has no agent surface. The content-only skill no longer gates *building* the tools. It gates *widening* them past the pilot.
 
 ## Summary
 
@@ -66,11 +78,17 @@ Permission model, mirroring `memory_write` exactly: **the tool executes as the i
 
 The only bundle-file ingress today is `POST /skills/mine/{id}/resources`, **multipart binary upload only**. An agent produces text, not multipart, and — per D4 — does not speak HTTP to app-api at all.
 
-So the write tools call a service-layer method that accepts inline `content: str`. No new route. The SPA keeps its multipart upload path unchanged; both converge on the same `SkillCatalogService` file machinery that the user and admin tiers already share, so bundles written by the agent are byte-identical in layout to bundles uploaded by hand.
+So the write tools call a service-layer method that accepts inline `content: str`. No new route. The SPA keeps its multipart upload path unchanged. Both paths share the same bundle-file code as the admin tier, so a bundle the agent writes has exactly the same layout as one uploaded by hand.
+
+**That shared code has to move first.** In July it all lived in `apis/app_api/skills/`: `UserSkillService` (ownership, caps, id allocation) and the `SkillCatalogService` methods it delegates to for files (caps, type allowlist, manifest, `SKILL.md` projection, orphan GC). Neither is importable from the runtime. PR-A moves them:
+
+- `apis/shared/skills/bundle_files.py` (`SkillBundleFiles`): the file and projection code, with no RBAC dependencies. `SkillCatalogService` composes it and keeps its admin-scoped wrappers (`require_catalog_skill`, role sync), so the admin surface does not change.
+- `apis/shared/skills/user_service.py` (`UserSkillService`): moved as is. It now composes `SkillBundleFiles` instead of the whole `SkillCatalogService`. That also drops its transitive dependency on `AppRoleAdminService`, which a runtime tool has no reason to build.
+- `UserSkillService.write_text_file(skill_id, kind, filename, content: str, user)`: the inline-text entry point. It encodes UTF-8 and goes through the same `add_resource` code as an upload. It refuses a filename whose allowlisted type is not text (`.png`, `.pdf`), because the agent's text written into one would be a corrupt binary.
 
 Two consequences that are easy to miss and expensive to rediscover:
 
-- **Go through `SkillUserService`, not raw boto3.** You get the `SKILL.md` S3 write-through projection, `_gc_orphaned` cleanup, and — the sharp edge — the `freshness.invalidate()` call. Bypass it and the 10-second TTL cache serves a stale catalog immediately after the agent writes.
+- **Go through `UserSkillService`, not raw boto3.** It gives you the `SKILL.md` projection, `_gc_orphaned` cleanup and, the sharp edge, the `freshness.invalidate()` call. Skip it and the 10-second TTL cache serves a stale catalog right after the agent writes. The invalidation only reaches the process it runs in: a runtime write clears the runtime's cache, and app-api's copy expires on its own TTL. That is fine, because the SPA reads through app-api and 10 seconds is shorter than any human round trip.
 - **Slug the name on the DB→`Skill` mapping.** Per [`skills-v2-pr2-spike-findings.md`](skills-v2-pr2-spike-findings.md), Strands `Skill(...)` does no name validation at all, so a display name the agent invents can produce an invalid skill name that fails silently downstream.
 
 ## D6 — A skill written mid-turn is not usable that turn
@@ -80,6 +98,8 @@ Two consequences that are easy to miss and expensive to rediscover:
 We do not fight this. Re-constructing the agent mid-turn to pick up a just-written skill would invalidate the `skills_hash` cache key, disturb cache points that [the PR-2 spike](skills-v2-pr2-spike-findings.md) verified are preserved, and interact badly with interrupt-resume snapshot replay — a lot of risk for a nicety.
 
 Instead the skill-creator's instructions state it plainly and end the authoring flow with an explicit "start a new conversation to try it" step. Left unstated, this reads as a bug: the user asks the agent to use the skill it just wrote, and it has no idea what they mean.
+
+*Revision 2026-10-12:* a new conversation is not enough by itself. Skills are **opt-in per turn** (Skills v2 D6): the turn's set is the accessible set narrowed by the request's `enabled_skills`, and an empty selection means no skills at all (`_apply_enabled_skills_filter`). A skill the agent just created is accessible but not selected. So the closing step is "turn it on in the skills picker (or use its slash command), then try it". `my_skill_create`'s result should say the same thing, so the instruction does not depend on the skill-creator skill being active.
 
 ## D7 — Nested paths and the server-side parser belong to `skill-bundle-import`, not here
 
@@ -100,6 +120,50 @@ The right home is F1, the headless run entrypoint, whose stated unblock list in 
 
 Recording the dependency and moving on is the correct call. A half-eval in the chat runtime — "here are three prompts, try them yourself" — is worse than none, because it looks like the real thing.
 
+## D9 — An edit reaches everyone the skill runs for, so the tool says who that is
+
+*(Added 2026-10-12.)* In July, an owned skill ran only for its owner. That is no longer true. A user's own skill also resolves:
+
+- for anyone an Agent is shared with, when the Agent binds it (invoke-through, `resolve_invocable_skill_ids` clause 3), and
+- for every member of a Shared Project whose harness binds it.
+
+An **unpinned** binding runs the live row. So `my_skill_update` and `my_skill_write_file` change what other people's agents do, on their next turn, without them doing anything. A **pinned** binding (`id@N`, `apis/shared/skills/pins.py`) runs a frozen version, and the edit does not reach it, by design.
+
+The UI has the same exposure, so this is not a new hole. What the agent path changes is speed and attention: a person editing in the My Skills form is looking at the skill, while an agent mid-task may not be. Rules:
+
+- **Before an edit is applied, the tool states its reach.** The edit tools look up where the skill is bound and, if it is bound anywhere unpinned, include that in what the approval prompt shows (D10): "This skill runs unpinned in 2 shared agents and 1 project. They will use the new version on their next turn." Pinned bindings are listed separately as unaffected.
+- **No binding lookup on the turn path.** It runs inside the tool call, after the user asked for an edit, never in a `BeforeInvocation`/`BeforeModelCall` hook (TTFT budget).
+- **The tools never pin or unpin.** Pinning is a decision for whoever owns the binding (the Agent or project owner), and that is often not the skill's author.
+
+If the reverse lookup ("which bindings name skill X") has no index, PR-B builds it from the owner's own Agents and projects only, since invoke-through needs the Agent owner to be the skill owner. That bounds it to one owner-partition query per kind. If that turns out not to hold for projects, PR-B records the gap rather than scanning.
+
+## D10 — Every write asks the user first, through the existing approval interrupt
+
+*(Added 2026-10-12. Resolves open question 4.)* A skill is instructions that persist into every future conversation that turns it on. The agent writing one is the one place in this design where content the agent *read* (a web page, a document, an MCP result) can become instructions it *follows* in later sessions. In other words, it is a persistent prompt-injection channel. `memory_write`'s per-call permission check does not cover this, because the threat is not "wrong user", it is "right user, content they never saw".
+
+So `my_skill_create`, `my_skill_update`, `my_skill_write_file` and `my_skill_delete_file` pause for approval before they run. Reads (`my_skill_list`, `my_skill_read`) do not.
+
+- **Reuse the existing gate, don't build a second one.** `MCPExternalApprovalHook` (`agents/main_agent/session/hooks/tool_approval.py`) already pauses on `BeforeToolCallEvent`, emits `tool_approval_required`, resumes on the user's decision and turns a denial into `cancel_tool`. Its gating set comes from an `ApprovalNamesLookup`. PR-B composes that lookup with a fixed set of built-in names, so the snapshot, the resume route, the `PendingInterrupt` breadcrumb and the SPA card all work unchanged.
+- **The card must show what will be written.** The hook already JSON-encodes the tool input for "Inspect arguments", and that is enough for v1. A rendered diff against the current row is a nice-to-have, not a requirement.
+- **The `confirm=true` pattern is rejected here.** `set_default_model` gates on a model-supplied flag. That is fine for a reversible setting, but it is exactly the control prompt injection defeats, because the injected content can tell the model the user already confirmed.
+
+## D11 — What authoring costs against the prompt cache
+
+*(Added 2026-10-12.)* The tools are bounded by the prompt-cache contract (CLAUDE.md):
+
+- **Tool specs.** Seven specs add roughly 1–1.5k tokens to `toolConfig` on every turn, for every user who has them. That is acceptable only because they are not default-on: a single catalog id (D12) provisions them, so a user who never authors skills pays nothing. Their order is fixed at the source like every other injected tool.
+- **Creating a skill changes no prefix.** Skills are opt-in per turn (D6 revision), so a new skill is not in anyone's `<available_skills>` until someone turns it on, and that is a deliberate change.
+- **Editing an enabled skill's name or description re-writes the prefix once.** Those fields are in `<available_skills>` in the system prompt. Editing only the instructions or a reference file does not touch the prefix, because those load through tool results.
+- **The model can read stale instructions in history.** If the skill was activated earlier in the session, its *old* instructions remain in that `skills` tool result. The update tool's result says so ("re-activate the skill to load the new instructions"), rather than letting the agent act on both versions.
+- **`my_skill_read` returns the whole skill.** It is bounded by the author's own caps (instructions on the row, files at 1 MiB each). It does not return file bodies; those go through a per-file read, which the tool-result offloader handles as usual. That resolves open question 2.
+
+## D12 — An in-development flag, and the runtime gets write access to one bucket
+
+*(Added 2026-10-12.)*
+
+- **Flag.** `SKILL_AUTHORING_ENABLED` (backend, read by the Runtime) and `CDK_SKILL_AUTHORING_ENABLED`, default off: only `"true"` enables it, and an empty string counts as unset. It ANDs with `skills_enabled()` and the tool grant. There is no frontend flag in v1, because the tools reuse the existing approval card and there is no new UI. PR-A ships no agent surface, so it needs no flag.
+- **IAM.** The Runtime role already has `PutItem`/`UpdateItem` on the app-roles table, where skill rows live, through `DynamoDBTableAccess`. On the skill-resources bucket it has only `s3:GetObject` and `s3:ListBucket` (`SkillResourcesBucketRead`, "app-api owns writes"). PR-B adds `s3:PutObject` and `s3:DeleteObject`, scoped to `skills/*`, with the comment updated to say why the runtime now writes. That is one statement on an existing policy, so no new resources (the stack resource budget is unaffected).
+
 ## Data model
 
 **No schema changes.** Skills written by the agent are ordinary user-tier rows: `owner_id = <user_id>`, `visibility = PRIVATE`, server-allocated `skill_id`, same `resources[]` manifest, same S3 bundle layout. That is the point — an agent-authored skill and a hand-authored one are indistinguishable at rest, so every existing surface (My Skills, the picker, invoke-through, delete) works on them with no changes.
@@ -110,22 +174,27 @@ The caps in `SkillCatalogService` apply unchanged and become failure modes an ag
 
 Named against the `/skills/mine` surface so they never read as siblings of the existing `read_skill_file`, which does something different (reads reference files of skills *active in the current turn*, structurally scoped so no id can escape the turn's set).
 
-| Tool | Shape | Notes |
-|---|---|---|
-| `my_skill_list` | `() -> [{skill_id, display_name, description, status}]` | Owned only, via GSI4 |
-| `my_skill_read` | `(skill_id) -> {metadata, instructions, resources[]}` | Ownership re-checked; not-yours = not-found |
-| `my_skill_create` | `(display_name, description, instructions, category?, skill_metadata?) -> skill_id` | Server allocates `skill_id` with collision suffixing |
-| `my_skill_update` | `(skill_id, ...partial) -> ok` | Re-projects `SKILL.md` |
-| `my_skill_write_file` | `(skill_id, kind, filename, content: str) -> ok` | Inline text (D5); upsert by `(kind, filename)` |
-| `my_skill_delete_file` | `(skill_id, filename) -> ok` | Scoped to one skill's bundle |
+| Tool | Shape | Approval (D10) | Notes |
+|---|---|---|---|
+| `my_skill_list` | `() -> [{skill_id, display_name, description, status}]` | no | Owned only, via GSI4 |
+| `my_skill_read` | `(skill_id) -> {metadata, instructions, resources[]}` | no | Ownership re-checked; not-yours = not-found. Manifest only, no file bodies (D11) |
+| `my_skill_read_file` | `(skill_id, filename) -> str` | no | *Added 2026-10-12.* One owned file's text, so an edit can start from the current content. `read_skill_file` cannot do this: it only reaches skills enabled for the turn |
+| `my_skill_create` | `(display_name, description, instructions, category?, skill_metadata?) -> skill_id` | yes | Server allocates `skill_id` with collision suffixing. Result tells the user how to turn the skill on (D6) |
+| `my_skill_update` | `(skill_id, ...partial) -> ok` | yes, with reach (D9) | Re-projects `SKILL.md`. Result warns that earlier activations in history are stale (D11) |
+| `my_skill_write_file` | `(skill_id, kind, filename, content: str) -> ok` | yes, with reach (D9) | Inline text (D5); upsert by `(kind, filename)`; text types only |
+| `my_skill_delete_file` | `(skill_id, filename) -> ok` | yes, with reach (D9) | Scoped to one skill's bundle |
 
 **Deliberately absent: whole-skill delete.** User-tier delete is a hard delete plus S3 purge with no undo. That stays a UI action behind human intent. An agent that can create skills in a loop should not also be able to destroy them in one.
 
 ## Gating
 
-Follow the Word-document pattern in `apis/inference_api/chat/routes.py:456` rather than the catalog: a context-bound factory built per request, capturing `user_id` by closure (the runtime does not populate `ToolContext`), gated on a single tool id in `enabled_tools` that provisions the whole toolset — `SKILL_AUTHORING_TOOL_IDS = {"my_skill_create"}`, mirroring `WORD_DOCUMENT_TOOL_IDS`.
+Follow the Word-document pattern (`_build_word_document_tools` in `apis/inference_api/chat/routes.py`) rather than the catalog: a context-bound factory built per request, capturing the user by closure (the runtime does not populate `ToolContext`), gated on a single tool id in `enabled_tools` that provisions the whole toolset — `SKILL_AUTHORING_TOOL_IDS = {"my_skill_create"}` in `apis/shared/tools/injected.py`, mirroring `WORD_DOCUMENT_TOOL_IDS`.
 
-Two additional gates, both cheap:
+*Revision 2026-10-12, agent cache:* an injected family not in `KEY_DESCRIBED_INJECTED_TOOL_IDS` bypasses the agent cache on every turn it is enabled. That means a full `initialize()`, a Memory restore and a prefix re-write. The factory therefore closes over `(session_id, user_id, user_email)` only, all of which the cache key describes, and PR-B adds the family to the key-described set under the guard tests in `tests/shared/test_injected_tool_cache_eligibility.py`. The binding-reach lookup (D9) runs inside the tool call, so the closure never needs more. The catalog seed is `enabledByDefault: false`.
+
+Further gates, all cheap:
+
+- `skill_authoring_enabled()` (D12), the in-development flag.
 
 - `skills_enabled()` — no authoring tools when the kill switch is off, matching how the router unmounts.
 - The `skills` capability. Note the existing asymmetry: the capability gates the app-api surfaces but deliberately **not** the runtime, so invoke-through keeps working for users without it. Authoring is a *write* into the user's own catalog and is the app-api-shaped side of that line, so it should honor the capability even though it executes in the runtime.
@@ -139,13 +208,22 @@ PR-1 needs nothing. PR-2–PR-4 need nothing strictly, but two small things make
 
 ## Phasing
 
+*Revised 2026-10-12.* The service-layer move goes first. Every later PR needs it, it has no agent surface, and it fixes a boundary the July draft got wrong. The content-only skill (old PR-1) can ship any time in parallel. Its pilot now gates *widening* the tools (PR-D), not *building* them, because editing an existing skill is the case copy-paste serves worst, and the pilot cannot measure that.
+
+- **PR-A — spec revision + service layer.** This revision, plus D5's move: `SkillBundleFiles` and `UserSkillService` into `apis.shared.skills`, `SkillCatalogService` composing the former, and `UserSkillService.write_text_file` for inline text. Behavior-preserving for both existing tiers (their route and service suites pass unchanged, apart from import paths and the module that holds the caps). No flag, no agent surface, no infra.
+- **PR-B — the tools.** The seven `my_skill_*` factories; `SKILL_AUTHORING_TOOL_IDS`, in the key-described set; the D12 flag and the S3 write grant; the D10 approval lookup; the D9 reach lookup; legible errors for caps and permissions. Catalog seed `enabledByDefault: false`.
+- **PR-C — the skill.** The adapted `skill-creator` SKILL.md (D2), written for the tools and including the D6 enable step, seeded as an admin-catalog skill and granted to a pilot role. The copy-paste flow (D3) remains its fallback when the tools are not granted.
+- **PR-D — GA by grant.** Widen once the pilot says the skills produced are worth keeping. Promoting the flag to default-on is its own change, per the feature-flag rules.
+
+The original July phasing is kept below for the record.
+
 - **PR-1 — the skill, content only.** Author the adapted `skill-creator` SKILL.md; seed as an admin-catalog skill; grant to a pilot role. No code. Ships the methodology and the copy-paste flow (D3).
 - **PR-2 — service layer.** Inline-text write method on `SkillUserService` + ownership re-check + `freshness.invalidate()`. Unit-tested against the caps. No agent surface yet.
 - **PR-3 — the tools.** `my_skill_*` factories, `SKILL_AUTHORING_TOOL_IDS` gate, wired into the `extra_tools` chain. Legible cap/permission errors.
 - **PR-4 — the skill, rewritten for the tools.** Replace the copy-paste handoff with direct authoring; add the D6 reload step.
 - **PR-5 — GA by grant.** Widen to `default` once the pilot says the skills produced are worth keeping.
 
-PR-1 is independently valuable and independently revertable. If it lands and nobody uses the output, PR-2–PR-5 should not be built.
+PR-1 is independently valuable and independently revertable. If it lands and nobody uses the output, PR-2–PR-5 should not be built. *(Superseded 2026-10-12. See the revised phasing above.)*
 
 ## Non-goals (v1)
 
@@ -159,7 +237,7 @@ PR-1 is independently valuable and independently revertable. If it lands and nob
 ## Open questions
 
 1. **Licensing and attribution.** Upstream `skill-creator` is Anthropic's open-source work. D2 makes ours a derivative-by-methodology rather than a copy, but we should confirm the license terms and decide what attribution the shipped skill carries.
-2. **Does the agent need to read the skill it is editing?** `my_skill_read` returns full instructions, which for a large skill is a meaningful chunk of context. Worth checking against [`tool-search-token-bloat-strategy.md`](tool-search-token-bloat-strategy.md) before defaulting to full-body reads.
+2. **Does the agent need to read the skill it is editing?** `my_skill_read` returns full instructions, which for a large skill is a meaningful chunk of context. Worth checking against [`tool-search-token-bloat-strategy.md`](tool-search-token-bloat-strategy.md) before defaulting to full-body reads. *Resolved 2026-10-12 by D11: yes, but `my_skill_read` returns the manifest without file bodies, and `my_skill_read_file` reads one file at a time.*
 3. **Should PR-1 be admin-catalog or a seeded user skill?** D1 says admin-catalog, but seeding a *copy* into each user's tier would let them edit the creator itself. Probably wrong — divergent copies, no upgrade path — but worth one round of thought.
-4. **Prompt-injection surface.** [`skill-bundle-import.md`](skill-bundle-import.md) §6.10 is honest that a skill bundle is by construction instructions a model will follow. Agent-authored skills are self-authored so the trust story is better, but a skill written from content the agent fetched off the web is not. Does `my_skill_write_file` need provenance guidance in the skill's own instructions?
+4. **Prompt-injection surface.** [`skill-bundle-import.md`](skill-bundle-import.md) §6.10 is honest that a skill bundle is by construction instructions a model will follow. Agent-authored skills are self-authored so the trust story is better, but a skill written from content the agent fetched off the web is not. Does `my_skill_write_file` need provenance guidance in the skill's own instructions? *Resolved 2026-10-12 by D10: every write pauses for user approval through the existing interrupt, and the card shows what will be written.*
 5. **Is this the My Skills entry point?** Raised under Frontend. A product call.

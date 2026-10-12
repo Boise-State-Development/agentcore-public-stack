@@ -40,9 +40,10 @@ the page's origin. Notably absent:
   the bytes are readable and inert. This matches spec D5: ``script`` resources
   are stored, listed, and never executed.
 
-Both tiers (admin catalog and user-authored "My Skills") funnel their uploads
-through ``SkillCatalogService.add_resource``, so applying the policy there
-covers both. Enforced by tests/apis/app_api/skills/test_skill_resource_mime.py.
+Both tiers (admin catalog and user-authored "My Skills") and the runtime's
+authoring tools funnel their writes through ``SkillBundleFiles.add_resource``
+(``apis.shared.skills.bundle_files``), so applying the policy there covers all
+of them. Enforced by tests/apis/app_api/skills/test_skill_resource_mime.py.
 """
 
 from __future__ import annotations
@@ -177,7 +178,7 @@ RESOURCE_SECURITY_HEADERS: Final[Dict[str, str]] = {
     "Cache-Control": "no-store",
 }
 
-# The upload-side filename guard in ``SkillCatalogService`` already forbids path
+# The upload-side filename guard in ``SkillBundleFiles`` already forbids path
 # separators, so a header value built from a validated filename cannot break
 # out. Belt-and-braces for the read path, which also runs against legacy rows:
 # ``build_content_disposition`` collapses anything outside its safe set before
@@ -234,6 +235,28 @@ def resolve_upload_content_type(filename: str) -> str:
             f"Allowed extensions: {', '.join(sorted(SAFE_EXTENSION_CONTENT_TYPES))}."
         )
     return content_type
+
+
+# Media types whose bytes are text an agent can read or write inline. Shared by
+# the runtime's ``read_skill_file`` (what it returns as text rather than
+# describing) and ``UserSkillService.write_text_file`` (what it will accept as
+# text), so the two cannot disagree about which files are text.
+_TEXT_CONTENT_TYPES: Final[frozenset] = frozenset(
+    {
+        "application/json",
+        "application/xml",
+        "application/yaml",
+        "application/x-yaml",
+        "application/toml",
+        "application/javascript",
+    }
+)
+
+
+def is_text_content_type(content_type: str) -> bool:
+    """True if ``content_type`` is one an agent handles inline as text."""
+    ct = (content_type or "").split(";", 1)[0].strip().lower()
+    return ct.startswith("text/") or ct in _TEXT_CONTENT_TYPES
 
 
 def safe_download_content_type(filename: str) -> str:

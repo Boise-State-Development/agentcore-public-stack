@@ -26,6 +26,7 @@ from apis.shared.skills.resource_store import (
     SkillResourceStoreError,
     get_skill_resource_store,
 )
+from apis.shared.skills.resource_types import is_text_content_type
 
 logger = logging.getLogger(__name__)
 
@@ -38,19 +39,6 @@ __all__ = [
     "make_read_skill_file_tool",
 ]
 
-# Text MIME types whose bytes ``read_skill_file`` returns inline. Anything else
-# (images, PDFs, archives) is described, never dumped as raw bytes.
-_TEXT_PREFIXES = ("text/",)
-_TEXT_EXACT = frozenset(
-    {
-        "application/json",
-        "application/xml",
-        "application/yaml",
-        "application/x-yaml",
-        "application/toml",
-        "application/javascript",
-    }
-)
 _INERT_SCRIPT_NOTICE = (
     "[This script is stored with the skill for reference only. It is NOT "
     "executable on this platform — read it to understand the approach, then "
@@ -161,12 +149,6 @@ def fetch_active_skill_records(skill_ids: List[str]) -> List[Any]:
         return []
 
 
-def _is_text_content(content_type: str) -> bool:
-    """True if the MIME type is one we return inline as text."""
-    ct = (content_type or "").split(";", 1)[0].strip().lower()
-    return ct.startswith(_TEXT_PREFIXES) or ct in _TEXT_EXACT
-
-
 def _resolve_resource(record: Any, path: str) -> Optional[Any]:
     """Resolve ``path`` against a skill's manifest (no filesystem, no traversal).
 
@@ -238,7 +220,7 @@ def make_read_skill_file_tool(records: List[Any]):
         kind = getattr(ref, "kind", "reference")
         if kind == "script":
             return f"{_INERT_SCRIPT_NOTICE}\n\n{raw.decode('utf-8', errors='replace')}"
-        if kind == "asset" or not _is_text_content(ref.content_type):
+        if kind == "asset" or not is_text_content_type(ref.content_type):
             return (
                 f"'{path}' is a binary {kind} ({ref.content_type or 'unknown type'}, "
                 f"{ref.size} bytes) and cannot be shown as text."

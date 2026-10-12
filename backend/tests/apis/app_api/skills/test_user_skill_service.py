@@ -6,7 +6,7 @@ without ever colliding across tiers, and ownership is checked on every path.
 
 import pytest
 
-from apis.app_api.skills.user_service import (
+from apis.shared.skills.user_service import (
     MAX_SKILLS_PER_USER,
     UserSkillError,
     UserSkillLimitError,
@@ -135,11 +135,8 @@ async def test_create_requires_name_and_description(user_skill_service, author_u
 async def test_create_enforces_the_per_user_cap(
     user_skill_service, author_user, monkeypatch
 ):
-    monkeypatch.setattr(
-        "apis.app_api.skills.user_service.MAX_SKILLS_PER_USER", 2, raising=False
-    )
     # The service reads the module-level constant at call time.
-    import apis.app_api.skills.user_service as mod
+    import apis.shared.skills.user_service as mod
 
     monkeypatch.setattr(mod, "MAX_SKILLS_PER_USER", 2)
 
@@ -379,3 +376,132 @@ async def test_user_skills_cannot_be_granted_to_app_roles(
         await skill_service.set_roles_for_skill(mine.skill_id, ["some_role"], admin_user)
     with pytest.raises(ValueError, match="not found"):
         await skill_service.add_roles_to_skill(mine.skill_id, ["some_role"], admin_user)
+
+
+# =============================================================================
+# write_text_file — inline text for the runtime's authoring tools
+# (skill-creator spec D5)
+# =============================================================================
+
+
+async def test_write_text_file_lands_like_an_upload(
+    user_skill_service, skill_resource_store, author_user
+):
+    """Agent-written text is laid out exactly as a hand upload would be."""
+    skill = await user_skill_service.create_my_skill(
+        author_user, display_name="Notes", description="d"
+    )
+
+    refs = await user_skill_service.write_text_file(
+        skill.skill_id, "reference", "forms.md", "# Formulär ✓", author_user
+    )
+
+    (ref,) = refs
+    assert ref.s3_key == f"skills/{skill.skill_id}/references/forms.md"
+    assert ref.content_type == "text/markdown"
+    assert ref.size == len("# Formulär ✓".encode("utf-8"))
+    assert skill_resource_store.get(ref.s3_key).decode("utf-8") == "# Formulär ✓"
+
+
+async def test_write_text_file_replaces_a_file_of_the_same_name(
+    user_skill_service, author_user
+):
+    skill = await user_skill_service.create_my_skill(
+        author_user, display_name="Notes", description="d"
+    )
+    await user_skill_service.write_text_file(
+        skill.skill_id, "reference", "forms.md", "v1", author_user
+    )
+
+    refs = await user_skill_service.write_text_file(
+        skill.skill_id, "reference", "forms.md", "version two", author_user
+    )
+
+    assert [r.filename for r in refs] == ["forms.md"]
+    assert refs[0].size == len(b"version two")
+
+
+async def test_write_text_file_refuses_an_allowed_binary_type(
+    user_skill_service, author_user
+):
+    """``.png`` is allowlisted for uploads, but text written as one is corrupt."""
+    skill = await user_skill_service.create_my_skill(
+        author_user, display_name="Notes", description="d"
+    )
+
+    with pytest.raises(ValueError, match="cannot be written as text"):
+        await user_skill_service.write_text_file(
+            skill.skill_id, "asset", "logo.png", "not really a png", author_user
+        )
+
+    assert (await user_skill_service.get_my_skill(skill.skill_id, author_user)).resources == []
+
+
+async def test_write_text_file_keeps_the_upload_type_allowlist(
+    user_skill_service, author_user
+):
+    from apis.shared.skills.resource_types import SkillResourceTypeError
+
+    skill = await user_skill_service.create_my_skill(
+        author_user, display_name="Notes", description="d"
+    )
+
+    with pytest.raises(SkillResourceTypeError):
+        await user_skill_service.write_text_file(
+            skill.skill_id, "reference", "page.html", "<script>", author_user
+        )
+
+
+async def test_write_text_file_enforces_ownership(
+    user_skill_service, skill_service, admin_user, author_user, other_user
+):
+    """Another user's skill and an admin catalog skill both read as not found."""
+    mine = await user_skill_service.create_my_skill(
+        author_user, display_name="Notes", description="d"
+    )
+    await skill_service.create_skill(
+        SkillDefinition(
+            skill_id="catalog_one",
+            display_name="Catalog",
+            description="d",
+            instructions="",
+        ),
+        admin_user,
+    )
+
+    with pytest.raises(UserSkillNotFoundError):
+        await user_skill_service.write_text_file(
+            mine.skill_id, "reference", "forms.md", "x", other_user
+        )
+    with pytest.raises(UserSkillNotFoundError):
+        await user_skill_service.write_text_file(
+            "catalog_one", "reference", "forms.md", "x", author_user
+        )
+
+
+async def test_user_skill_service_builds_without_rbac(
+    app_roles_table, skill_resource_store, author_user
+):
+    """The runtime builds this service; it must not need the role-admin stack."""
+    from apis.shared.skills.bundle_files import SkillBundleFiles
+    from apis.shared.skills.repository import SkillCatalogRepository
+    from apis.shared.skills.user_service import UserSkillService
+
+    from .conftest import TABLE
+
+    repository = SkillCatalogRepository(table_name=TABLE)
+    service = UserSkillService(
+        repository=repository,
+        bundle_files=SkillBundleFiles(
+            repository=repository, resource_store=skill_resource_store
+        ),
+    )
+
+    skill = await service.create_my_skill(
+        author_user, display_name="Runtime Made", description="d"
+    )
+    refs = await service.write_text_file(
+        skill.skill_id, "reference", "notes.md", "hello", author_user
+    )
+
+    assert refs[0].filename == "notes.md"
