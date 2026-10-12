@@ -3,33 +3,17 @@ import { TestBed } from '@angular/core/testing';
 import { signal } from '@angular/core';
 import { HttpErrorResponse } from '@angular/common/http';
 import { Dialog } from '@angular/cdk/dialog';
-import { Router, provideRouter } from '@angular/router';
+import { Router } from '@angular/router';
 import { of, throwError } from 'rxjs';
-import {
-  ProjectSchedulesDialogComponent,
-  ProjectSchedulesDialogData,
-} from './project-schedules-dialog.component';
+import { ProjectSchedulesPage } from './project-schedules.page';
 import { ConfirmationDialogComponent } from '../../components/confirmation-dialog/confirmation-dialog.component';
 import { ProjectApiService } from '../services/project-api.service';
 import { GrantService } from '../../schedules/services/grant.service';
 import { GrantStatus } from '../../schedules/models/grant.model';
 import { Project, ProjectSchedule } from '../models/project.model';
-import { expectNamedDialog, openInCdkDialog } from '../../../testing/cdk-dialog';
+import { TEST_PROJECT, openProjectPage, provideProjectPageRoute, settlePage } from '../../../testing/project-page';
 
-const PROJECT: Project = {
-  projectId: 'prj_1',
-  name: 'Enrollment Sync',
-  description: '',
-  ownerEmail: 'o@x.edu',
-  ownerName: null,
-  role: 'editor',
-  status: 'active',
-  editorsManageMembers: true,
-  memberCount: 2,
-  harnessAgentId: 'ast-1',
-  createdAt: '2026-09-24T00:00:00Z',
-  updatedAt: '2026-09-24T00:00:00Z',
-};
+const PROJECT: Project = TEST_PROJECT;
 
 function schedule(over: Partial<ProjectSchedule> = {}): ProjectSchedule {
   return {
@@ -75,8 +59,9 @@ const THEIRS = schedule({
   canManage: true,
 });
 
-describe('ProjectSchedulesDialogComponent', () => {
+describe('ProjectSchedulesPage', () => {
   const api = {
+    get: vi.fn(),
     schedules: vi.fn(),
     pauseSchedule: vi.fn(),
     resumeSchedule: vi.fn(),
@@ -89,18 +74,16 @@ describe('ProjectSchedulesDialogComponent', () => {
     loadStatus: vi.fn(),
     enable: vi.fn(),
   };
-  let changes: Array<ProjectSchedule[] | null>;
 
   beforeEach(() => {
     TestBed.resetTestingModule();
     vi.clearAllMocks();
-    changes = [];
     grants.status$.set({ enabled: true });
     grants.loadStatus.mockResolvedValue(undefined);
     api.schedules.mockReturnValue(of({ schedules: [schedule(), THEIRS] }));
     TestBed.configureTestingModule({
       providers: [
-        provideRouter([]),
+        provideProjectPageRoute('schedules', ProjectSchedulesPage),
         { provide: ProjectApiService, useValue: api },
         { provide: GrantService, useValue: grants },
       ],
@@ -110,29 +93,22 @@ describe('ProjectSchedulesDialogComponent', () => {
   afterEach(() => TestBed.inject(Dialog).closeAll());
 
   async function open(project: Project = PROJECT) {
-    const opened = await openInCdkDialog<ProjectSchedulesDialogComponent, ProjectSchedulesDialogData>(
-      ProjectSchedulesDialogComponent,
-      { data: { project: signal(project), onSchedulesChange: list => changes.push(list) } },
-    );
-    await new Promise(resolve => setTimeout(resolve, 0));
-    const container = opened.container;
+    api.get.mockReturnValue(of(project));
+    const { harness, el: container } = await openProjectPage('/projects/prj_1/schedules');
     const item = (label: string) =>
       Array.from(container.querySelectorAll<HTMLLIElement>('li[data-schedule]')).find(li => li.textContent?.includes(label))!;
     const buttons = (node: Element) => Array.from(node.querySelectorAll('button')).map(b => b.textContent?.trim());
     const button = (node: Element, name: string) =>
       Array.from(node.querySelectorAll<HTMLButtonElement>('button')).find(b => b.textContent?.trim() === name)!;
-    const settle = async () => {
-      await new Promise(resolve => setTimeout(resolve, 0));
-      TestBed.tick();
-    };
-    return { ...opened, item, buttons, button, settle };
+    const settle = () => settlePage(harness);
+    return { container, item, buttons, button, settle };
   }
 
-  it('is a named dialog listing each schedule, and hands the list back to the rail', async () => {
+  it('is a page listing each schedule', async () => {
     const { container, item } = await open();
-    expectNamedDialog(container, { name: 'Schedules', description: /on this project’s assistant/ });
+    expect(container.querySelector('h1')?.textContent).toContain('Schedules');
+    expect(container.textContent).toContain('on this project’s assistant');
     expect(api.schedules).toHaveBeenCalledWith('prj_1');
-    expect(changes).toEqual([[schedule(), THEIRS]]);
 
     const mine = item('Weekly digest').textContent!.replace(/\s+/g, ' ');
     expect(mine).toContain('Active');
@@ -159,7 +135,7 @@ describe('ProjectSchedulesDialogComponent', () => {
 
   it('offers each action only where the schedule allows it', async () => {
     const { container, item, buttons } = await open();
-    expect(buttons(container)).toContain('New schedule');
+    expect(buttons(container.querySelector('[data-shell-actions]')!)).toEqual(['New schedule']);
     expect(buttons(item('Weekly digest'))).toEqual(['Run history', 'Edit', 'Pause', 'Delete']);
     // An editor may stop someone else's, never resume or change it.
     expect(buttons(item('Roster check'))).toEqual(['Run history', 'Delete']);
@@ -181,7 +157,6 @@ describe('ProjectSchedulesDialogComponent', () => {
     expect(api.pauseSchedule).toHaveBeenCalledWith('prj_1', 'sc_1');
     expect(item('Weekly digest').textContent).toContain('Paused');
     expect(buttons(item('Weekly digest'))).toEqual(['Run history', 'Edit', 'Resume', 'Delete']);
-    expect(changes.at(-1)?.[0].state).toBe('paused');
   });
 
   it('shows a refused resume on the schedule it was about', async () => {
@@ -214,7 +189,6 @@ describe('ProjectSchedulesDialogComponent', () => {
     await settle();
     expect(api.deleteSchedule).toHaveBeenCalledWith('prj_1', 'sc_2');
     expect(item('Roster check')).toBeUndefined();
-    expect(changes.at(-1)).toEqual([schedule()]);
   });
 
   it('expands a schedule’s run history, linking a delivered run to its share', async () => {
@@ -252,14 +226,11 @@ describe('ProjectSchedulesDialogComponent', () => {
 
   it('opens the form in project mode for a new schedule or an edit', async () => {
     const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
-    const first = await open();
-    const closed = vi.spyOn(first.ref, 'close');
-    first.button(first.item('Weekly digest'), 'Edit').click();
+    const page = await open();
+    page.button(page.item('Weekly digest'), 'Edit').click();
     expect(navigate).toHaveBeenCalledWith(['/schedules', 'sc_1', 'edit'], { queryParams: { projectId: 'prj_1' } });
-    expect(closed).toHaveBeenCalled();
 
-    const second = await open();
-    second.button(second.container, 'New schedule').click();
+    page.button(page.container, 'New schedule').click();
     expect(navigate).toHaveBeenLastCalledWith(['/schedules/new'], { queryParams: { projectId: 'prj_1' } });
   });
 
@@ -275,12 +246,11 @@ describe('ProjectSchedulesDialogComponent', () => {
     expect(container.textContent).not.toContain('Turn on scheduled runs so they can.');
   });
 
-  it('says scheduled runs are off when the routes 404, and tells the rail', async () => {
+  it('says scheduled runs are off when the routes 404', async () => {
     api.schedules.mockReturnValue(throwError(() => new HttpErrorResponse({ status: 404 })));
     const { container, buttons } = await open();
     expect(container.textContent).toContain('Scheduled runs aren’t turned on here.');
     expect(buttons(container)).not.toContain('New schedule');
-    expect(changes).toEqual([null]);
   });
 
   it('invites an editor to create the first schedule', async () => {

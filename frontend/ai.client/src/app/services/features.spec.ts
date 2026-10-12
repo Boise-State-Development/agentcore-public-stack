@@ -20,8 +20,8 @@ describe('FEATURES', () => {
 });
 
 describe('/projects routes follow the Projects switch', () => {
-  // `projects/:id` only redirects (Angular forbids a guard on a redirect); its target is guarded.
-  const projectRoutes = routes.filter(r => r.path?.startsWith('projects') && !r.redirectTo);
+  // Every page under `projects/:id` is a child of that one guarded route (projects.routes.ts).
+  const projectRoutes = routes.filter(r => r.path?.startsWith('projects'));
 
   function matches(route: Route, projects: boolean): boolean {
     TestBed.resetTestingModule();
@@ -32,8 +32,7 @@ describe('/projects routes follow the Projects switch', () => {
   }
 
   it('covers every /projects route', () => {
-    expect(projectRoutes.map(r => r.path)).toEqual(['projects/:id/memory', 'projects/:id/:tab', 'projects']);
-    expect(routes.find(r => r.path === 'projects/:id')?.redirectTo).toBe('projects/:id/overview');
+    expect(projectRoutes.map(r => r.path)).toEqual(['projects/:id', 'projects']);
     for (const route of projectRoutes) expect(route.canMatch?.length).toBeGreaterThan(0);
   });
 
