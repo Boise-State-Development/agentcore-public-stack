@@ -327,7 +327,7 @@ async def _store_document(
     return upload_id, size_kb
 
 
-def _download_card(filename: str, upload_id: str, size_kb: str, verb: str) -> str:
+def _download_card(filename: str, upload_id: str, size_kb: str, verb: str, details: str = "") -> str:
     """Build the promoted inline-download-card tool result (JSON string).
 
     The ``ui_type``/``ui_display: inline`` discriminators make the frontend
@@ -340,7 +340,8 @@ def _download_card(filename: str, upload_id: str, size_kb: str, verb: str) -> st
     ``{appApiUrl}/files/{uploadId}/download`` from it. The summary tells the
     model the card is already on screen, because the model reads this same
     JSON and will otherwise helpfully write its own download link out of
-    whatever URL-shaped text it finds here.
+    whatever URL-shaped text it finds here. ``details`` follows the first
+    sentence, for a tool with more to report than the file itself.
     """
     return json.dumps(
         {
@@ -353,7 +354,8 @@ def _download_card(filename: str, upload_id: str, size_kb: str, verb: str) -> st
                 "size_kb": size_kb,
             },
             "summary": (
-                f"{verb} {filename} ({size_kb}). Also saved to this chat's Files. "
+                f"{verb} {filename} ({size_kb}). {details + ' ' if details else ''}"
+                "Also saved to this chat's Files. "
                 "A download card with a working Download button is already "
                 "displayed to the user — do not write a download link or URL "
                 "for this file in your reply."

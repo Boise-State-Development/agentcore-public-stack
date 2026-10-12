@@ -383,6 +383,10 @@ export function buildAppApiEnvironment(
     // Client-measured time to first token (opt-in while in development): gates
     // POST /telemetry/turn-timing, which records the SPA's own measurement.
     CLIENT_TURN_TIMING_ENABLED: config.clientTurnTiming.enabled ? 'true' : 'false',
+    // Word tracked changes (opt-in while in development). The upload digest is
+    // built here and numbers paragraphs the way the Runtime's document_read
+    // does, so this must match the Runtime's copy.
+    WORD_TRACKED_CHANGES_ENABLED: config.wordTrackedChanges.enabled ? 'true' : 'false',
     // Project-memory content lint (Shared Projects 2.7): the Memory page's saves,
     // proposals and restores, and the flags it shows on read.
     MEMORY_LINT_MODE: config.memoryLint.mode,

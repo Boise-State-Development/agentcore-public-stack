@@ -89,6 +89,7 @@ export interface AppConfig {
   feedbackEvalSampling: FeedbackEvalSamplingConfig;
   skills: SkillsConfig;
   skillAuthoring: SkillAuthoringConfig;
+  wordTrackedChanges: WordTrackedChangesConfig;
   agents: AgentsConfig;
   agentMarketplace: AgentMarketplaceConfig;
   dictation: DictationConfig;
@@ -647,6 +648,21 @@ export interface SkillsConfig {
  * `skills.enabled` and the `my_skill_create` tool grant.
  */
 export interface SkillAuthoringConfig {
+  enabled: boolean;
+}
+
+/**
+ * Word tracked changes (docs/specs/word-tracked-changes.md): a .docx's tracked
+ * changes reach the model written out as `[deleted: …]` / `[inserted: …]`, and
+ * the Word tools gain `redline_word_document`. **Opt-in while in development**:
+ * off unless CDK_WORD_TRACKED_CHANGES_ENABLED=true (or a
+ * `wordTrackedChanges.enabled: true` cdk.json context). Sets
+ * WORD_TRACKED_CHANGES_ENABLED on the AgentCore Runtime only while on, so an
+ * environment that leaves it off spends none of the Runtime's environment
+ * budget, and on app-api, which builds the upload digest whose paragraph
+ * numbers must match `document_read`'s. No SPA switch.
+ */
+export interface WordTrackedChangesConfig {
   enabled: boolean;
 }
 
@@ -1437,6 +1453,12 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_SKILL_AUTHORING_ENABLED
         ? process.env.CDK_SKILL_AUTHORING_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('skillAuthoring')?.enabled ?? false,
+    },
+    wordTrackedChanges: {
+      // Opt-in while in development, same parsing as skillAuthoring above.
+      enabled: process.env.CDK_WORD_TRACKED_CHANGES_ENABLED
+        ? process.env.CDK_WORD_TRACKED_CHANGES_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('wordTrackedChanges')?.enabled ?? false,
     },
     agents: {
       // Default ON with a kill switch (house style, mirroring memorySpaces /

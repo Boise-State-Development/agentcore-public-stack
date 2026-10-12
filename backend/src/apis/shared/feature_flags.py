@@ -60,6 +60,25 @@ def skill_authoring_enabled() -> bool:
     return os.environ.get("SKILL_AUTHORING_ENABLED", "").strip().lower() == "true"
 
 
+def word_tracked_changes_enabled() -> bool:
+    """Whether Word tracked changes are read and written (``docs/specs/word-tracked-changes.md``).
+
+    On, a ``.docx`` with tracked changes reaches the model with each change
+    written out as ``[deleted: …]`` / ``[inserted: …]`` — as an inline
+    attachment, through ``document_read`` and the upload digest, and through
+    ``read_word_document`` — and the Word family gains ``redline_word_document``.
+    Off, each of those reads the file exactly as before and the tool is never
+    built. **Opt-in while the feature is in development**: only ``"true"``
+    (case-insensitive) enables it; unset, empty or anything else is off.
+
+    CDK sets it on the AgentCore Runtime and on app-api, and only while on. Both
+    are needed: app-api builds the upload digest, whose paragraph numbers have to
+    match what ``document_read`` returns on the Runtime. No SPA switch: the
+    redline comes back on the existing download card.
+    """
+    return os.environ.get("WORD_TRACKED_CHANGES_ENABLED", "").strip().lower() == "true"
+
+
 def scheduled_runs_enabled() -> bool:
     """Whether the scheduled-runs surface is enabled for this environment.
 

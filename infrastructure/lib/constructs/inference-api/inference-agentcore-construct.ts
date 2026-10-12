@@ -398,6 +398,9 @@ export class InferenceAgentCoreConstruct extends Construct {
         // spec D12). Spread in only while on: the code reads unset as off, so
         // an environment that leaves it off spends no bytes on it.
         ...(config.skillAuthoring.enabled ? { SKILL_AUTHORING_ENABLED: 'true' } : {}),
+        // Word tracked changes (in development, default off). Spread in only
+        // while on, like skill authoring; must match app-api's copy.
+        ...(config.wordTrackedChanges.enabled ? { WORD_TRACKED_CHANGES_ENABLED: 'true' } : {}),
         // Agent Designer harness resolution: the runtime resolves an Agent's
         // bindings + modelConfig at invocation. Default off, mirrors app-api.
         AGENTS_API_ENABLED: config.agents.enabled ? 'true' : 'false',

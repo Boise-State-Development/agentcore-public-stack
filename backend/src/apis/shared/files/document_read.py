@@ -551,10 +551,33 @@ def _pdf_index(raw: bytes, base: Dict[str, Any]) -> DocumentReadResult:
 # ---------------------------------------------------------------------------
 
 
+def annotate_docx_for_model(raw: bytes) -> bytes:
+    """``raw`` with its tracked changes written out as text, while the flag is on.
+
+    Returns ``raw`` itself when the flag is off or the document has no tracked
+    changes, so every other document reads exactly as before.
+    """
+    from apis.shared.feature_flags import word_tracked_changes_enabled
+
+    if not word_tracked_changes_enabled():
+        return raw
+    from apis.shared.kb_backend.docx_revisions import annotate_tracked_changes
+
+    return annotate_tracked_changes(raw) or raw
+
+
 def docx_paragraphs(raw: bytes) -> List[str]:
     """Paragraph text of a .docx, in document order. Tables contribute their
     cell paragraphs; runs are joined; tabs and line breaks become whitespace.
-    Good enough for pattern search and bounded reading, not a renderer."""
+    Good enough for pattern search and bounded reading, not a renderer.
+
+    With ``WORD_TRACKED_CHANGES_ENABLED`` on, tracked changes are written out as
+    ``[deleted: …]`` / ``[inserted: …]`` first. Without it ``w:delText`` is not
+    read, so a deletion vanishes and an insertion reads as settled text. The
+    upload digest numbers paragraphs through this same function, so its outline
+    and ``document_read`` agree only while app-api and the Runtime have the flag
+    set the same way."""
+    raw = annotate_docx_for_model(raw)
     try:
         with zipfile.ZipFile(io.BytesIO(raw)) as archive:
             xml = archive.read("word/document.xml")

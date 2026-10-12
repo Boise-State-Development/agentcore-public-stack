@@ -13,6 +13,9 @@ Tools
 * ``modify_word_document`` — edit an existing document with python-docx code.
 * ``list_word_documents``  — list the .docx files available in this chat.
 * ``read_word_document``   — extract an existing document's text content.
+* ``redline_word_document`` — propose edits as tracked changes and comments.
+  Built only while ``WORD_TRACKED_CHANGES_ENABLED`` is on; stdlib, no Code
+  Interpreter (``office/docx_redline.py``).
 
 (A page-screenshot/preview tool is intentionally omitted: rasterizing a
 .docx requires LibreOffice/poppler, which the Python-only Code Interpreter
@@ -37,10 +40,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from strands import tool
 
+from agents.builtin_tools.office.docx_redline import Change, RedlineError, redline
 from agents.builtin_tools.office._storage import (
     _DocGenError,
     _ci_exec,
@@ -432,6 +436,139 @@ def make_modify_word_document_tool(session_id: str, user_id: str):
     return modify_word_document
 
 
+def _parse_changes(changes: Any) -> Tuple[List[Change], List[str]]:
+    """The tool's ``changes`` argument as :class:`Change` objects, or the problems."""
+    if not isinstance(changes, list) or not changes:
+        return [], ["`changes` must be a non-empty list of {find, replace?, comment?, occurrence?}."]
+    parsed: List[Change] = []
+    problems: List[str] = []
+    for index, raw in enumerate(changes):
+        label = f"Change {index + 1}"
+        if not isinstance(raw, dict):
+            problems.append(f"{label}: expected an object with `find`.")
+            continue
+        find, replace, comment, occurrence = (
+            raw.get("find"), raw.get("replace"), raw.get("comment"), raw.get("occurrence")
+        )
+        if not isinstance(find, str):
+            problems.append(f"{label}: `find` must be text.")
+            continue
+        if replace is not None and not isinstance(replace, str):
+            problems.append(f"{label}: `replace` must be text.")
+            continue
+        if comment is not None and not isinstance(comment, str):
+            problems.append(f"{label}: `comment` must be text.")
+            continue
+        if occurrence is not None and (isinstance(occurrence, bool) or not isinstance(occurrence, int)):
+            problems.append(f"{label}: `occurrence` must be a whole number.")
+            continue
+        parsed.append(Change(find, replace, comment, occurrence))
+    return parsed, problems
+
+
+def make_redline_word_document_tool(session_id: str, user_id: str, user_name: Optional[str]):
+    """Create a ``redline_word_document`` tool bound to the given identity.
+
+    Built only while ``WORD_TRACKED_CHANGES_ENABLED`` is on
+    (``docs/specs/word-tracked-changes.md`` §3). ``user_name`` is the default
+    author of each revision: a redline goes back to the counterparty as the
+    user's.
+    """
+
+    @tool
+    async def redline_word_document(
+        document_name: str,
+        changes: List[Dict[str, Any]],
+        author: Optional[str] = None,
+        output_name: Optional[str] = None,
+    ) -> Any:
+        """Propose edits to a Word (.docx) document as tracked changes and comments.
+
+        Use this instead of modify_word_document whenever the user wants a
+        redline, markup, suggested edits or comments: on a contract, policy or
+        anything someone else will review. Each change shows in Word's
+        Reviewing pane and can be accepted or rejected. The original is kept;
+        the redline is saved as a new file and returned as a download card.
+
+        All or nothing: if any change cannot be placed, nothing is saved and
+        the error names each problem, so fix those changes and call again.
+
+        Args:
+            document_name: The document to mark up (with or without .docx),
+                e.g. "services-agreement". Use list_word_documents if unsure.
+            changes: The edits, in any order. Each is an object:
+                - find: wording copied exactly from ONE paragraph (quotes,
+                  dashes and spacing may differ). Include enough words to be
+                  unique, or pass occurrence.
+                - replace: the new wording for `find`; "" deletes it. Give the
+                  whole new phrase: only the words that differ are marked, so
+                  {"find": "within thirty (30) days", "replace": "within
+                  ninety (90) days"} marks just "thirty (30)" → "ninety (90)".
+                  To insert, repeat the neighbouring words in both.
+                - comment: optional comment on the change, or on `find` alone
+                  when there is no `replace`.
+                - occurrence: 1-based, only when `find` appears more than once.
+            author: Name shown on each change. Defaults to the user's name.
+            output_name: File name for the redline, without extension.
+                Defaults to "<document_name>-redline".
+
+        Returns:
+            A download card for the redline and one line per change applied.
+        """
+        if not _storage_configured():
+            return _error(_NO_STORAGE_MESSAGE)
+
+        parsed, problems = _parse_changes(changes)
+        if problems:
+            return _error("❌ Nothing was changed:\n" + "\n".join(f"- {p}" for p in problems))
+
+        source = await _find_word_document(user_id, session_id, document_name)
+        if source is None:
+            return _error(
+                f"❌ No Word document named '{document_name}' was found in this "
+                "chat. Use list_word_documents to see what's available."
+            )
+
+        source_base = source.filename[: -len(".docx")] if source.filename.lower().endswith(".docx") else source.filename
+        out_base = output_name or f"{source_base}-redline"
+        if out_base.lower().endswith(".docx"):
+            out_base = out_base[: -len(".docx")]
+        is_valid, error_msg = _validate_document_name(out_base)
+        if not is_valid:
+            return _error(f"❌ Invalid output name '{out_base}': {error_msg}")
+        output_filename = f"{out_base}.docx"
+        reviewer = (author or user_name or "").strip() or "Reviewer"
+
+        try:
+            source_bytes = await asyncio.to_thread(
+                _download_s3_bytes, source.s3_bucket, source.s3_key
+            )
+            result = await asyncio.to_thread(redline, source_bytes, parsed, reviewer)
+        except RedlineError as exc:
+            return _error(
+                f"❌ Nothing was changed in '{source.filename}':\n"
+                + "\n".join(f"- {p}" for p in exc.problems)
+            )
+        except Exception as exc:  # noqa: BLE001 - surface any read/parse error
+            logger.error(f"redline_word_document error: {exc}")
+            return _error(f"❌ Failed to redline '{source.filename}': {exc}")
+
+        try:
+            upload_id, size_kb = await _store_document(
+                user_id, session_id, output_filename, result.docx, _DOCX_MIME
+            )
+        except Exception as exc:  # noqa: BLE001 - storage failure is terminal
+            logger.error(f"redline_word_document storage error: {exc}")
+            return _error(
+                f"❌ Redlined '{source.filename}' but failed to save it: {exc}"
+            )
+
+        details = f"Tracked changes by {reviewer}: " + "; ".join(result.applied) + "."
+        return _download_card(output_filename, upload_id, size_kb, "Redlined", details)
+
+    return redline_word_document
+
+
 def make_list_word_documents_tool(session_id: str, user_id: str):
     """Create a ``list_word_documents`` tool bound to the given identity."""
 
@@ -504,6 +641,13 @@ def make_read_word_document_tool(session_id: str, user_id: str):
         try:
             source_bytes = await asyncio.to_thread(
                 _download_s3_bytes, source.s3_bucket, source.s3_key
+            )
+            # python-docx reads only direct-child runs, so both sides of a
+            # tracked change are invisible to it until they are written out.
+            from apis.shared.files.document_read import annotate_docx_for_model
+
+            source_bytes = await asyncio.to_thread(
+                annotate_docx_for_model, source_bytes
             )
             text = await asyncio.to_thread(
                 _extract_docx_text, code_interpreter_id, source_bytes

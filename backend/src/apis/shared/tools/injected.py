@@ -100,7 +100,10 @@ INJECTED_TOOL_IDS = frozenset(
 #   - WORD (`_build_word_document_tools`), EXCEL
 #     (`_build_excel_spreadsheet_tools`), POWERPOINT
 #     (`_build_powerpoint_presentation_tools`), WORKSPACE
-#     (`_build_workspace_tools`).
+#     (`_build_workspace_tools`). With `WORD_TRACKED_CHANGES_ENABLED` on, WORD
+#     also closes over the user's display name, as `redline_word_document`'s
+#     default revision author. That names the same identity as `user_id`, the
+#     equivalence SKILL_AUTHORING's email rests on below.
 #
 #   - SPREADSHEET (`_build_spreadsheet_tools`) closes over `assistant_id` as
 #     well. That was NOT a key element until `_create_cache_key` gained it,
