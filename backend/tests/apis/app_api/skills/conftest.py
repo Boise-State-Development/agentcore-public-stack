@@ -123,12 +123,12 @@ def skill_service(app_roles_table, skill_resource_store):
 
 @pytest.fixture()
 def user_skill_service(skill_service):
-    """UserSkillService sharing the moto-backed catalog service + repository."""
-    from apis.app_api.skills.user_service import UserSkillService
+    """UserSkillService sharing the moto-backed repository + bundle files."""
+    from apis.shared.skills.user_service import UserSkillService
 
     return UserSkillService(
         repository=skill_service.repository,
-        catalog_service=skill_service,
+        bundle_files=skill_service.bundle_files,
     )
 
 
