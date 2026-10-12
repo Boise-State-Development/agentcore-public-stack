@@ -25,7 +25,7 @@ describe('describeNotification', () => {
     [notif({ kind: 'project_restored', payload: {} }), 'ann@x.edu restored Enrollment Sync.'],
     [notif({ kind: 'project_member_left', payload: { role: 'viewer' } }), 'ann@x.edu left Enrollment Sync.'],
     [notif({ kind: 'project_task_shared', payload: { shareId: 'sh-1', title: 'Vendor reply' } }), 'ann@x.edu shared “Vendor reply” with you in Enrollment Sync.'],
-    [notif({ kind: 'project_task_shared', payload: { shareId: 'sh-1' } }), 'ann@x.edu shared “a task” with you in Enrollment Sync.'],
+    [notif({ kind: 'project_task_shared', payload: { shareId: 'sh-1' } }), 'ann@x.edu shared “a conversation” with you in Enrollment Sync.'],
     [notif({ kind: 'project_proposal_pending', payload: { proposalId: 'p1', slug: 'sis' } }), 'ann@x.edu proposed a change to “sis” in Enrollment Sync’s memory.'],
     [notif({ kind: 'project_proposal_decided', payload: { slug: 'sis', decision: 'approved' } }), 'ann@x.edu approved your change to “sis” in Enrollment Sync.'],
     [notif({ kind: 'project_proposal_decided', payload: { slug: 'sis', decision: 'rejected' } }), 'ann@x.edu declined your change to “sis” in Enrollment Sync.'],

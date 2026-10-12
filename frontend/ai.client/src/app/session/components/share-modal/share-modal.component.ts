@@ -63,7 +63,7 @@ const NOTIFY_OPTIONS: { value: NotifyMode; label: string }[] = [
 const PROJECT_ACCESS_OPTION: AccessOption = {
   value: 'project',
   label: 'Project members',
-  description: 'Everyone in this task’s project can view it and continue it in their own task',
+  description: 'Everyone in this conversation’s project can view it and continue it in their own conversation',
 };
 
 @Component({
@@ -251,7 +251,7 @@ const PROJECT_ACCESS_OPTION: AccessOption = {
               class="mt-1 block w-full resize-none rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-900 placeholder:text-gray-500 focus:border-primary-500 focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-400"
             ></textarea>
             <p id="share-note-hint" class="mt-1 flex justify-between gap-3 text-xs text-gray-600 dark:text-gray-400">
-              <span>Shown with the task{{ notifyMode() === 'none' ? '' : ' and in the notification' }}.</span>
+              <span>Shown with the conversation{{ notifyMode() === 'none' ? '' : ' and in the notification' }}.</span>
               <span>{{ maxNoteChars - note().length }} left</span>
             </p>
           </div>
@@ -263,7 +263,7 @@ const PROJECT_ACCESS_OPTION: AccessOption = {
         <div class="mt-4 rounded-md bg-state-info-50 p-3 dark:bg-state-info-500/10">
           <p class="text-xs text-state-info-700 dark:text-state-info-300">
             @if (replacesProjectShare()) {
-              This task is already shared with the project. Sharing again replaces the snapshot the project sees.
+              This conversation is already shared with the project. Sharing again replaces the snapshot the project sees.
             } @else {
               This conversation has {{ existingShares().length }} existing share{{ existingShares().length > 1 ? 's' : '' }}.
               Creating a new share will add another snapshot.
@@ -281,7 +281,7 @@ const PROJECT_ACCESS_OPTION: AccessOption = {
           <p class="text-xs text-state-success-700 dark:text-state-success-400 mb-2">
             Future messages aren't included in the share.
             @if (shareResult()!.accessLevel === 'project') {
-              It’s listed under Shared tasks in the project, replacing any earlier share of this task.
+              It’s listed under “Shared with the project”, replacing any earlier share of this conversation.
               @if (notifiedSummary()) {
                 {{ notifiedSummary() }}
               }

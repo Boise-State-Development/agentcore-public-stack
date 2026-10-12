@@ -26,7 +26,7 @@ type SwitchTarget = 'chat' | 'agent' | 'project';
 const SWITCH_HINT: Record<SwitchTarget, { pill: string; note: string }> = {
   chat: { pill: 'New chat', note: 'Choosing another model starts a new chat.' },
   agent: { pill: 'New session', note: 'Choosing another model starts a new session with this agent.' },
-  project: { pill: 'New task', note: 'Choosing another model starts a new task in this project.' },
+  project: { pill: 'New conversation', note: 'Choosing another model starts a new conversation in this project.' },
 };
 
 @Component({

@@ -94,6 +94,8 @@ Memory   = one Memory Space per project (scope=shared, project_id set) + one per
 Tasks    = ordinary sessions with preferences.projectId; private to their creator; shared via snapshot
 ```
 
+**Naming: "task" in code, "conversation" to people (2026-10-12).** This spec, the code and the API call a project's session a *task*: `GET /projects/{id}/tasks`, `/shared-tasks`, the `SHARED_TASK#` pointer, the `project.task_shared` / `task_unshared` audit actions and the `project_task_shared` notification kind. Those names are persisted or on the wire, so they stay. Everything a person or the model reads says *conversation*, the word the rest of the app uses for a session: the SPA copy, the user guide, error text that reaches the SPA, and the harness's tools (`shared_conversations_list`, `shared_conversation_read`), their results and `PROJECT_WORKSPACE_GUIDANCE`. When writing new user-facing or model-facing text for Projects, say conversation.
+
 **Why a hidden harness Agent instead of a Project-with-instructions (principle 4).** The invocation path keys everything on an agent id: the wire key `rag_assistant_id` (which the AgentCore gateway 424s if renamed), session binding, KB documents, ingestion, retrieval, binding resolution, the `KnowledgeBaseSectionComponent`, and the version-diff UI. A Project that *owns* an Agent gets all of it. A Project that *is* a new prompt source would need every one of those seams re-taught.
 
 **Why a separate `projects` table instead of `rag-assistants` rows (principle 3, and the repo's per-domain-table convention).** Membership (up to 200/project), pointers, outputs, cost rollups and notifications are project rows, not agent rows; `rag-assistants` already carries seven GSIs and the one-GSI-per-deploy trap makes adding to it expensive.
@@ -306,7 +308,7 @@ Every handler resolves `ProjectService.resolve_permission(project_id, user)` fir
 | GET/POST | `/notifications`, `POST /notifications/{id}/read` | — | per-user inbox |
 | Admin | `/admin/projects…` | `admin.projects` scope (new, delegable) | list, export (config + memory + provenance + audit), regulated-data designation, force-archive |
 
-**Agent tools** (server-side authorized through the same `resolve_permission`; the tool closure carries the invoking user, never the owner): `memory_list`, `memory_read`, `memory_query`, `memory_save`, `memory_propose`. `memory_save` is bound only when the invoker is editor+; `memory_propose` for everyone. Scheduled runs bind `memory_propose` only. 2.5c adds `shared_tasks_list` and `shared_task_read` for every member (viewer+), harness only.
+**Agent tools** (server-side authorized through the same `resolve_permission`; the tool closure carries the invoking user, never the owner): `memory_list`, `memory_read`, `memory_query`, `memory_save`, `memory_propose`. `memory_save` is bound only when the invoker is editor+; `memory_propose` for everyone. Scheduled runs bind `memory_propose` only. 2.5c adds `shared_conversations_list` and `shared_conversation_read` (named `shared_tasks_list` / `shared_task_read` until 2026-10-12) for every member (viewer+), harness only.
 
 ---
 
@@ -740,8 +742,8 @@ Each PR targets `develop`, lands behind `PROJECTS_ENABLED` (opt-in while in deve
         - *Revoke:* after Stop sharing, `/shared/{id}` read "This is no longer shared".
         - *Bell:* a sharer is never notified, so a copy of the row went into the owner's inbox to check rendering. It read "Marcus Ortega shared "…" with you in Cascadia Microsystems ISRA (SIM)." with the note in italics, and opened the revoked share's "no longer shared" page. The row was deleted afterwards.
   - **2.5c The assistant reads shared tasks.** Two harness-only tools give a project task the same view of the team's shared work that members have on the Tasks tab.
-    - **`shared_tasks_list()`** returns the project's `SHARED_TASK#` pointers, newest first: `shareId`, title, who shared it, when, and its note (2.5b).
-    - **`shared_task_read(share_id, part?)`** returns one snapshot as a transcript:
+    - **`shared_conversations_list()`** (originally `shared_tasks_list`, renamed with the rest of the user-facing "task" wording on 2026-10-12; the measurements below predate it) returns the project's `SHARED_TASK#` pointers, newest first: `shareId`, title, who shared it, when, and its note (2.5b).
+    - **`shared_conversation_read(share_id, part?)`** (originally `shared_task_read`) returns one snapshot as a transcript:
       - Text is the user's `displayText` and the assistant's final text.
       - Tool calls collapse to one line each (name and status). Tool results, documents and images are left out.
       - It reads the snapshot body the same way `/shared/{shareId}` does (`ShareService._load_snapshot_body`: the S3 object, or the inline body on older shares). So the assistant sees what the sharer chose to share, never the live session, and the tools need no new storage or GSI.

@@ -86,7 +86,7 @@ describe('MemoryIndexEditorComponent', () => {
     expect(toast.success).not.toHaveBeenCalled();
     expect(toast.warning).toHaveBeenCalledWith(
       'Saved the index',
-      'Line 1 of the index reads like an instruction to the assistant: “You must now”. Every task loads the index, so check it before moving on.',
+      'Line 1 of the index reads like an instruction to the assistant: “You must now”. Every conversation loads the index, so check it before moving on.',
     );
   });
 });

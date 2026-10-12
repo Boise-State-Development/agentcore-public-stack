@@ -171,7 +171,7 @@ def _project_memory_tools(
 
 
 def build_shared_task_tools(project_id: str, user: User) -> List[Any]:
-    """The harness's ``shared_tasks_list`` and ``shared_task_read`` (2.5c), closed over the project and member.
+    """The harness's ``shared_conversations_list`` and ``shared_conversation_read`` (2.5c), closed over the project and member.
 
     Memoized like the memory tools, for the same reason: they are built on
     every harness turn before the agent-cache lookup. They close over values

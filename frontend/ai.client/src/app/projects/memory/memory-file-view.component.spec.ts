@@ -81,8 +81,8 @@ describe('MemoryFileViewComponent', () => {
     expect(el.textContent).toContain('also “term codes”');
     expect(el.textContent).toContain('2 contributors');
     const [first, second, third] = items().map(li => li.textContent?.replace(/\s+/g, ' ') ?? '');
-    expect(first).toContain('Pinned · Saved by Dana Whitfield from a task · Sep 18, 2026');
-    expect(second).toContain('Saved by you from a task (open it)');
+    expect(first).toContain('Pinned · Saved by Dana Whitfield from a conversation · Sep 18, 2026');
+    expect(second).toContain('Saved by you from a conversation (open it)');
     expect(third).toContain('Added before item history was kept');
   });
 

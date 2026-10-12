@@ -1,6 +1,6 @@
 ---
 title: Shared Projects
-description: Shared workspaces with their own instructions, files, members and tasks, where everyone works with the same assistant.
+description: Shared workspaces with their own instructions, files, members and conversations, where everyone works with the same assistant.
 sidebar:
   label: Projects
   order: 6
@@ -11,8 +11,8 @@ that everyone in the project works with. The assistant's instructions, model,
 tools, skills and files belong to the project, so a change one editor makes
 applies to every member's next turn.
 
-Each conversation started in a project is a **task**. A task stays private to
-the person who started it until they choose to share it with the project.
+Each conversation started in a project stays private to the person who started
+it until they choose to share it with the project.
 
 Design and as-built notes live in
 [`docs/specs/shared-projects.md`](https://github.com/Boise-State-Development/agentcore-public-stack/blob/main/docs/specs/shared-projects.md).
@@ -32,9 +32,9 @@ waiting when they do.
 
 | | Viewer | Editor | Owner |
 | --- | --- | --- | --- |
-| Open the project, its files and shared tasks | ✓ | ✓ | ✓ |
-| Start tasks with the project's assistant | ✓ | ✓ | ✓ |
-| Share their own tasks with the project | ✓ | ✓ | ✓ |
+| Open the project, its files and shared conversations | ✓ | ✓ | ✓ |
+| Start conversations with the project's assistant | ✓ | ✓ | ✓ |
+| Share their own conversations with the project | ✓ | ✓ | ✓ |
 | Add, delete and download files | download only | ✓ | ✓ |
 | Rename, edit the description | | ✓ | ✓ |
 | Change instructions, model, tools and skills | | ✓ | ✓ |
@@ -46,7 +46,7 @@ waiting when they do.
   the project to an editor who has signed in at least once; the old owner
   becomes an editor.
 - **Editors manage members by default.** The owner can limit that to
-  themselves in the Members dialog.
+  themselves on the Members page.
 - **Anyone but the owner can leave.**
 
 ## The project page
@@ -55,14 +55,16 @@ waiting when they do.
 Mine, Shared with me, or Archived. It's in the sidebar menu when your deployment
 has Projects turned on.
 
-A project's page is a composer that starts a task in the project, with your
-**Recents** (your own tasks, newest first) and the tasks others **shared with
-the project** beneath it. Beside them, a rail lists the project's settings as
-one-line summaries. Each row opens a dialog:
+A project's page is a composer that starts a conversation in the project, with
+your **Recents** (your own conversations, newest first) and the conversations
+others **shared with the project** beneath it. Beside them, a rail lists the
+project's settings as one-line summaries. Each row opens that setting's own
+page, except **Model**, which is a menu on its row:
 
-- **Instructions**: what the assistant is told in every task.
+- **Instructions**: what the assistant is told in every conversation.
 - **Files**: the documents the assistant works from.
-- **Model**: the model every task runs on.
+- **Memory**: what the assistant remembers for the project, and for you.
+- **Model**: the model every conversation runs on.
 - **Tools**: what the assistant can use.
 - **Skills**: the playbooks the assistant can follow, and the version of each.
 - **Schedules**: prompts that run in the project on a cadence (see
@@ -74,40 +76,41 @@ one-line summaries. Each row opens a dialog:
 
 The menu on the project's name in the breadcrumb renames the project, archives
 or restores it, deletes it (once archived), or lets you leave it. Links that
-name a section, such as `/projects/{id}/members`, open that dialog.
+name a section, such as `/projects/{id}/members`, open that page.
 
-The sidebar lists project tasks in their usual Today / Yesterday / … groups,
-under a small heading with the project's name.
+The sidebar lists project conversations in their usual Today / Yesterday / …
+groups, under a small heading with the project's name.
 
-## Tasks and sharing
+## Conversations and sharing
 
-A task is an ordinary conversation bound to the project's assistant. Only the
-person who started it can see it in **Recents**.
+A project conversation is an ordinary conversation bound to the project's
+assistant. Only the person who started it can see it in **Recents**.
 
-To show a task to the project, open its **Share** dialog and choose
-**Project members**. This option appears only for a task in a project. The share
-is a snapshot: later messages are not included. Sharing the same task again
-replaces its entry, so a task is listed once in **Shared with the project**.
+To show a conversation to the project, open its **Share** dialog and choose
+**Project members**. This option appears only for a conversation in a project.
+The share is a snapshot: later messages are not included. Sharing the same
+conversation again replaces its entry, so it is listed once in **Shared with
+the project**.
 
 From there, any member can:
 
 - **Open** the snapshot (read-only).
-- **Continue in my own task**, which copies the conversation into a new task of
-  their own. While the project is active, the copy is a task in the same
-  project, on the project's current assistant; from an archived project it is
-  an ordinary conversation.
+- **Continue in my own conversation**, which copies the conversation into a
+  new one of their own. While the project is active, the copy is a conversation
+  in the same project, on the project's current assistant; from an archived
+  project it is an ordinary conversation outside the project.
 - **Stop sharing**, for the person who shared it.
 
-Someone who leaves a project loses access to its shared tasks. The tasks they
-shared stay listed for everyone else.
+Someone who leaves a project loses access to its shared conversations. The
+ones they shared stay listed for everyone else.
 
 ## Schedules
 
 A schedule runs a prompt in the project for you, every day, every weekday, once
 a week or every few hours. It runs on the project's assistant with the project's
-tools, as the person who made it. **Schedules** appears in the project's rail
-when your deployment has scheduled runs turned on, with a count of schedules and
-how many are paused.
+tools, as the person who made it. The **Schedules** row in the project's rail
+shows a count of schedules and how many are paused, or "Not turned on" when your
+deployment has scheduled runs off.
 
 - **Editors and the owner** can add a schedule with **New schedule**. The form
   asks for a name, the prompt and when it runs. There is no agent or tool to
@@ -115,18 +118,18 @@ how many are paused.
 - **Share each run with the project** puts every finished run under **Shared
   with the project**, tagged **Scheduled**. The assistant can read past runs
   too, so a weekly summary can build on last week's. The newest runs stay
-  shared and older ones stop being shared. Without it, each run stays a task of
-  your own in the project.
+  shared and older ones stop being shared. Without it, each run stays a
+  conversation of your own in the project.
 - **Notify members when a run is shared** sends everyone else a notification
   for each run. It is only available while runs are shared.
 - **Publish its artifacts to Outputs** puts whatever a run makes, such as a
   report, a chart or a table, under the project's **Outputs**, tagged
   **Scheduled**. Each run's artifacts replace the previous run's, so Outputs
   always show the latest edition; earlier editions stay in each run's shared
-  task. A run that makes nothing leaves the last edition in place. It is only
-  available while runs are shared.
-- **Run now** on the form runs the prompt once, straight away, as a task of your
-  own. It doesn't save the schedule or share the run.
+  conversation. A run that makes nothing leaves the last edition in place. It
+  is only available while runs are shared.
+- **Run now** on the form runs the prompt once, straight away, as a
+  conversation of your own. It doesn't save the schedule or share the run.
 
 A schedule runs as the person who made it, so only they can **Edit** or
 **Resume** it. An editor or the owner can **Pause** or **Delete** anyone's
@@ -136,7 +139,7 @@ whether it worked, and a link to the run while it is still shared.
 
 A schedule stops on its own when it can no longer run: its creator leaves the
 project or stops being an editor, the project is archived, or it fails several
-times in a row. The Schedules dialog says why, and the creator and the owner get
+times in a row. The Schedules page says why, and the creator and the owner get
 a notification. Restoring an archived project starts its schedules again.
 
 Your project schedules also appear on your own **Schedules** page, marked with
@@ -198,12 +201,12 @@ prompt is exactly what it would be without the feature.
 
 ## Archive, delete, transfer
 
-- **Archive** (owner) makes the project read-only for everyone: no new tasks,
-  no edits, no member changes. Members can still read it. The owner can restore
+- **Archive** (owner) makes the project read-only for everyone: no new
+  conversations, no edits, no member changes. Members can still read it. The owner can restore
   it.
 - **Delete** (owner) works on an archived project only, so it is always two
   steps. It removes the project, its assistant, its files and its list of
-  shared tasks. The tasks themselves are not deleted: each stays in its
-  owner's conversation list.
+  shared conversations. The conversations themselves are not deleted: each
+  stays in its owner's conversation list.
 - An administrator can archive or restore any project; see
   [Admin › Projects](/agentcore-public-stack/admin/projects/).

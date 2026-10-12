@@ -144,7 +144,7 @@ const MODEL_MENU_POSITIONS: ConnectedPosition[] = [
         class="max-h-[min(28rem,70vh)] w-80 overflow-y-auto rounded-xl bg-white p-1 shadow-lg ring-1 ring-black/5 focus:outline-hidden dark:bg-gray-800 dark:ring-white/10 animate-in fade-in slide-in-from-top-1 duration-200"
       >
         <p id="project-model-note" class="px-3 pt-2 pb-2 text-xs/5 text-gray-600 dark:text-gray-400">
-          Every task in this project runs on this model. Members who can’t use it get their own default instead.
+          Every conversation in this project runs on this model. Members who can’t use it get their own default instead.
         </p>
         @for (m of models(); track m.ref) {
           <button

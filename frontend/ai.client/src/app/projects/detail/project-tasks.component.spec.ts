@@ -127,7 +127,7 @@ describe('ProjectTasksComponent', () => {
     const router = TestBed.inject(Router);
     const navigate = vi.spyOn(router, 'navigate').mockResolvedValue(true);
     const { fixture, el } = await render();
-    const buttons = Array.from(el.querySelectorAll('button')).filter(b => b.textContent?.includes('Continue in my own task'));
+    const buttons = Array.from(el.querySelectorAll('button')).filter(b => b.textContent?.includes('Continue in my own conversation'));
     buttons[1].click();
     await fixture.whenStable();
     expect(shares.exportSharedConversation).toHaveBeenCalledWith('sh_2', { suppressErrorToast: true });
@@ -176,7 +176,7 @@ describe('ProjectTasksComponent', () => {
     api.tasks.mockReturnValue(of({ sessions: [], nextToken: null }));
     api.sharedTasks.mockReturnValue(of({ tasks: [] }));
     const { el } = await render();
-    expect(el.textContent).toContain('You haven’t started a task in this project yet.');
-    expect(el.textContent).toContain('No one has shared a task with the project yet.');
+    expect(el.textContent).toContain('You haven’t started a conversation in this project yet.');
+    expect(el.textContent).toContain('No one has shared a conversation with the project yet.');
   });
 });

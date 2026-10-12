@@ -92,7 +92,7 @@ describe('ProjectMemoryPage', () => {
   it('shows the index with its links and its budget', async () => {
     const { el } = await render({ file: 'MEMORY.md' });
     const article = el.querySelector('article')!;
-    expect(article.textContent).toContain('Loads into every member’s tasks');
+    expect(article.textContent).toContain('Loads into every member’s conversations');
     expect(article.querySelector('a')?.getAttribute('href')).toContain('file=rates');
     expect(article.textContent).toContain('(no file by that name)');
     expect(article.querySelector('[role=meter]')?.getAttribute('aria-valuemax')).toBe('2000');

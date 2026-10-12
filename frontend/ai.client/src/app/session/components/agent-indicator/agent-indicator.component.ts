@@ -150,7 +150,7 @@ export interface AgentGovernance {
             (click)="onNewSession()"
           >
             <ng-icon name="heroPlusCircle" class="menu-icon" />
-            <span>{{ projectId() ? 'New task' : 'New session' }}</span>
+            <span>{{ projectId() ? 'New conversation' : 'New session' }}</span>
           </button>
 
           @if (projectId(); as id) {

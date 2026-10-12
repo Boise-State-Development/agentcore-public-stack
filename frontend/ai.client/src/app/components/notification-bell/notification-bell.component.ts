@@ -67,7 +67,7 @@ export function describeNotification(n: AppNotification): string {
     case 'project_schedule_paused':
       return describeSchedule(n, who, project);
     case 'project_task_shared': {
-      const title = typeof n.payload?.title === 'string' && n.payload.title ? n.payload.title : 'a task';
+      const title = typeof n.payload?.title === 'string' && n.payload.title ? n.payload.title : 'a conversation';
       return `${who} shared “${title}” with you in ${project}.`;
     }
     default:

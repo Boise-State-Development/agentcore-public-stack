@@ -4,7 +4,7 @@ A project schedule set to deliver to the project shares each completed run's tas
 with the project, exactly as its creator would from the Share dialog: a snapshot of
 the conversation, listed under "Shared with the project" with the note
 "Scheduled: <label>", where members open it and the project's assistant reads it
-through ``shared_tasks_list`` / ``shared_task_read`` (2.5c). So a weekly digest can
+through ``shared_conversations_list`` / ``shared_conversation_read`` (2.5c). So a weekly digest can
 build on last week's.
 
 Runs in the scheduled-runs worker, which can't import app-api: the snapshot goes

@@ -99,13 +99,13 @@ describe('describeProvenance', () => {
       people,
       'me@x.edu',
     );
-    expect(saved.text).toBe('Saved by Dana Whitfield from a task');
+    expect(saved.text).toBe('Saved by Dana Whitfield from a conversation');
     expect(saved.sessionId).toBeNull();
   });
 
   it('links the caller to their own task, and calls them you', () => {
     const mine = describeProvenance({ addedBy: 'Me@x.edu', addedAt: 'a', sourceSessionId: 'sess-1' }, people, 'me@x.edu');
-    expect(mine).toEqual({ text: 'Saved by you from a task', at: 'a', sessionId: 'sess-1', movedFrom: null });
+    expect(mine).toEqual({ text: 'Saved by you from a conversation', at: 'a', sessionId: 'sess-1', movedFrom: null });
   });
 
   it('tells a proposal, an edit and a restore apart', () => {

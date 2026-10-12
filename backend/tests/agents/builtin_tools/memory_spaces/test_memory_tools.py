@@ -219,7 +219,7 @@ class TestProjectHarnessSpecs:
         """G17: asked to "remember this just for me", Haiku kept it in the conversation."""
         description = " ".join(self._specs()["memory_save"]["description"].split())
         assert 'save it to "mine" now' in description
-        assert "will not carry it into their next task" in description
+        assert "will not carry it into their next one" in description
         assert "Make `description` the rule itself" in description
 
     def test_save_says_a_new_file_is_indexed_for_it(self):

@@ -410,10 +410,10 @@ describe('ModelDropdownComponent', () => {
       openMenu(fixture);
 
       const menu = document.querySelector('[role="menu"]')!;
-      expect(menu.textContent).toContain('starts a new task in this project');
-      expect(itemLabelled('Beta')!.textContent).toContain('New task');
+      expect(menu.textContent).toContain('starts a new conversation in this project');
+      expect(itemLabelled('Beta')!.textContent).toContain('New conversation');
       // The current model's row carries the check mark, not a hint.
-      expect(itemLabelled('Alpha')!.textContent).not.toContain('New task');
+      expect(itemLabelled('Alpha')!.textContent).not.toContain('New conversation');
     });
 
     it('recognises a project task from the session preferences when the list lacks it', () => {
@@ -424,7 +424,7 @@ describe('ModelDropdownComponent', () => {
         preferences: { assistantId: 'harness-1', projectId: 'p1' },
       });
       openMenu(fixture);
-      expect(itemLabelled('Beta')!.textContent).toContain('New task');
+      expect(itemLabelled('Beta')!.textContent).toContain('New conversation');
     });
 
     it('labels an agent conversation as a new session with the agent', () => {

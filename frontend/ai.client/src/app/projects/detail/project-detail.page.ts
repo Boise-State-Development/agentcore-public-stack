@@ -128,7 +128,7 @@ export class ProjectDetailPage {
     if (archived) {
       const ok = await this.confirm({
         title: 'Archive this project?',
-        message: 'It becomes read-only for everyone and can’t start new tasks. You can restore it later.',
+        message: 'It becomes read-only for everyone and can’t start new conversations. You can restore it later.',
         confirmText: 'Archive',
       });
       if (!ok) return;
@@ -148,7 +148,7 @@ export class ProjectDetailPage {
     if (!project) return;
     const ok = await this.confirm({
       title: `Delete ${project.name}?`,
-      message: 'This permanently removes the project, its settings and its files for everyone. Members keep their own tasks. This can’t be undone.',
+      message: 'This permanently removes the project, its settings and its files for everyone. Members keep their own conversations. This can’t be undone.',
       confirmText: 'Delete project',
       destructive: true,
     });
@@ -168,7 +168,7 @@ export class ProjectDetailPage {
     if (!project) return;
     const ok = await this.confirm({
       title: 'Leave this project?',
-      message: 'You lose access to it and to the tasks shared in it. Someone would have to add you again.',
+      message: 'You lose access to it and to the conversations shared in it. Someone would have to add you again.',
       confirmText: 'Leave project',
       destructive: true,
     });

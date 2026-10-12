@@ -81,7 +81,7 @@ _CATEGORY_TEXT: Dict[str, str] = {
 }
 
 WARN_ADVICE = (
-    "Tasks read memory as reference material, so write facts rather than instructions, "
+    "Conversations read memory as reference material, so write facts rather than instructions, "
     "and keep credentials out of it."
 )
 BLOCK_ADVICE = "The content check doesn't allow this in project memory, so take it out and save again."

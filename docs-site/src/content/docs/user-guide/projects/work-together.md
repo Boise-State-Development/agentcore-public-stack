@@ -1,30 +1,32 @@
 ---
 title: Work together in a project
-description: Start tasks, share them, build up project memory, work with attachments and Word redlines, and keep track of changes.
+description: Start conversations, share them, build up project memory, work with attachments and Word redlines, and keep track of changes.
 sidebar:
   label: Work together
   order: 3
 ---
 
-## Start a task
+## Start a conversation
 
-Type in the composer on the project's **Overview** tab, or choose **Start a
-task** on the **Tasks** tab. The task runs on the project's assistant, with the
-project's instructions, files, tools and memory, and appears in your sidebar
-under the project's name. The breadcrumb at the top of the task shows which
+Type in the composer at the top of the project's page (it reads "New
+conversation in" and the project's name). The conversation runs on the
+project's assistant, with the project's instructions, files, tools and memory.
+It appears under **Recents** on the project's page, and in your sidebar under
+the project's name. The breadcrumb at the top of the conversation shows which
 project it belongs to.
 
-![A task inside the project: the breadcrumb shows the project, and the assistant answers with an escalation table.](../../../../assets/user-guide/projects/project-task.jpg)
+![A conversation inside the project: the breadcrumb shows the project, and the assistant answers with an escalation table.](../../../../assets/user-guide/projects/project-task.jpg)
 
-**Your tasks are private.** Nobody else in the project, including the owner, can
-see them until you share one.
+**Your conversations are private.** Nobody else in the project, including the
+owner, can see them until you share one.
 
-:::note[Switching models starts a new task]
-Picking a different model from the model menu inside a task starts a **new
-task in the same project**, on the project's assistant. The conversation so far
-stays in the old task and doesn't come along. The menu says this before you
-choose. If the project pins a model in **Settings › Model**, the menu is locked
-to it; change it there to use a different model for the whole team.
+:::note[Switching models starts a new conversation]
+Picking a different model from the model menu inside a project conversation
+starts a **new conversation in the same project**, on the project's assistant.
+The conversation so far stays where it was and doesn't come along. The menu
+marks this with a **New conversation** label and says so before you choose. If
+the project pins a model in its **Model** setting, the menu is locked to it;
+change it there to use a different model for the whole team.
 :::
 
 ### Your role and preferences
@@ -44,16 +46,17 @@ Personal instructions (up to 4,000 characters) are added to every conversation
 you have, in every project. Where they conflict with a project's
 instructions, the project's win.
 
-## Attach a file to a task
+## Attach a file to a conversation
 
-Use **+** in the composer to attach a file to *your* task. Attachments are
-private to that task. They aren't added to project Files and other members'
-assistants can't see them.
+Use **+** in the composer to attach a file to *your* conversation. Attachments
+are private to that conversation. They aren't added to project Files and other
+members' assistants can't see them.
 
 Attach rather than upload when:
 
 - It's a **one-off** (an email thread, a draft you're not ready to share).
-- Only **you** need it. Anything in Files is searched for everyone's tasks.
+- Only **you** need it. Anything in Files is searched for everyone's
+  conversations.
 - The project's files are still **Setting up** and you need an answer now.
 
 Both work for a **redline with tracked changes**: the assistant can quote what
@@ -61,19 +64,20 @@ the other side struck and what they added, whether the redline is attached or
 in [Files](/agentcore-public-stack/user-guide/projects/set-up/#word-redlines-in-files).
 Put it in Files when the whole team is working from it.
 
-## Share a task with the project
+## Share a conversation with the project
 
-Open the task's menu (the chevron next to its title), choose **Share**, and pick
-**Project members**.
+Open the conversation's menu (the chevron next to its title), choose **Share**,
+and pick **Project members** ("Everyone in this conversation’s project can view
+it and continue it in their own conversation").
 
 ![The Share dialog with Project members selected, plus Public link and Limited share options.](../../../../assets/user-guide/projects/share-dialog.jpg)
 
 - A share is a **snapshot**: messages you add later aren't included. Share
-  again to update it. A new project share replaces the old entry, so the task
-  is listed once.
-- Shared tasks appear on everyone's **Tasks** tab under **Shared with the
-  project**, with who shared them and when.
-- To stop sharing, use the trash icon next to a task you shared.
+  again to update it. A new project share replaces the old entry, so the
+  conversation is listed once.
+- Shared conversations appear under **Shared with the project** on the
+  project's page, for every member, with who shared them and when.
+- To stop sharing, use the trash icon next to a conversation you shared.
 
 ### Let people know
 
@@ -82,24 +86,25 @@ Sharing tells nobody unless you ask it to. Under **Let people know**, choose
 a list. You can only notify people already in the project.
 
 Add a **note** (up to 280 characters) to say what you need, such as "Can you
-check the spring dates?" The note appears under the task in **Shared with the
-project** and in the notification. Sharing the task again replaces the note
-along with the snapshot.
+check the spring dates?" The note appears under the conversation in **Shared
+with the project** and in the notification. Sharing the conversation again
+replaces the note along with the snapshot.
 
-![The Tasks tab: your private tasks on top, and tasks shared with the project below, each with Continue in my own task.](../../../../assets/user-guide/projects/tasks.jpg)
+![The project's lists: your private conversations under Recents, and conversations shared with the project below, each with Continue in my own conversation.](../../../../assets/user-guide/projects/tasks.jpg)
 
-**Public link** and **Limited share** are also offered. They share the task
-outside the project, so think twice before using them for project work.
+**Public link** and **Limited share** are also offered. They share the
+conversation outside the project, so think twice before using them for project
+work.
 
 ## Share an output with the project
 
-When the assistant makes an artifact in a project task, such as a chart, a web
-page or a CSV, you can share that artifact with the project on its own, without
-sharing the whole task. Open the artifact's **Share** menu and pick **Project
-members**.
+When the assistant makes an artifact in a project conversation, such as a
+chart, a web page or a CSV, you can share that artifact with the project on its
+own, without sharing the whole conversation. Open the artifact's **Share** menu
+and pick **Project members**.
 
 - It appears under **Outputs** on the project page, between the composer and
-  your recent tasks, and every member can open it.
+  **Recents**, and every member can open it.
 - A share shows one version. Sharing a newer version replaces the one listed.
 - To take it off the project, use the ✕ on its card. Editors can remove anyone's
   output; everyone else can remove only their own.
@@ -107,30 +112,30 @@ members**.
 
 ## Pick up someone else's work
 
-Open a shared task to read its snapshot.
+Open a shared conversation to read its snapshot.
 
-You can also ask the assistant. In any task in the project it can list the tasks
-members have shared and read them, so "what escalations are still open?" covers
-shared work as well as Files and project memory. It reads the snapshot each
-person shared: what they asked and what the assistant answered, without tool
-results or attachments. It only sees what's shared with the project, never
-anyone's private tasks.
+You can also ask the assistant. In any conversation in the project it can list
+the conversations members have shared and read them, so "what escalations are
+still open?" covers shared work as well as Files and project memory. It reads
+the snapshot each person shared: what they asked and what the assistant
+answered, without tool results or attachments. It only sees what's shared with
+the project, never anyone's private conversations.
 
 ![A shared read-only snapshot: the assistant's clause-by-clause table for an export-control clause.](../../../../assets/user-guide/projects/shared-snapshot.jpg)
 
-To build on it, choose **Continue in my own task**. You get your own copy of the
-conversation, still in the project and on the project's current assistant, and
-the original is untouched. The assistant sees the copied conversation from your
+To build on it, choose **Continue in my own conversation**. You get your own
+copy of the conversation, still in the project and on the project's current
+assistant, and the original is untouched. The assistant sees the copied conversation from your
 first message, and the copy shows what the original author typed.
 
-**Attachments aren't copied.** They belong to the person who shared the task.
-Where the original had one, the copy says which files weren't copied. Attach
-your own copy of any you need, or ask the person who shared the task to add it
-to Files.
+**Attachments aren't copied.** They belong to the person who shared the
+conversation. Where the original had one, the copy says which files weren't
+copied. Attach your own copy of any you need, or ask the person who shared it to
+add it to Files.
 
 ## Project memory
 
-The assistant can remember things across tasks, at two levels:
+The assistant can remember things across conversations, at two levels:
 
 | | **Project memory** | **Just for me** |
 | --- | --- | --- |
@@ -139,8 +144,9 @@ The assistant can remember things across tasks, at two levels:
 | Good for | Deadlines, owners, agreed positions, open issues | Your formatting preferences, your own working notes |
 | How to ask | "Record in **project memory** that…" | "Remember **for me** (not the team) that…" |
 
-How it reaches other people's tasks: each memory has a short **index**, and the
-index is what the assistant sees at the start of every task. Detailed entries
+How it reaches other people's conversations: each memory has a short
+**index**, and the index is what the assistant sees at the start of every
+conversation. Detailed entries
 are only read when the assistant goes looking. When the assistant saves a new
 memory, it adds a line for it to the index automatically, so you only need to
 say what to record:
@@ -148,8 +154,8 @@ say what to record:
 > Record our agreed Article 3 payment position in project memory.
 
 "Just for me" memory works the same way. Ask the assistant to remember a
-preference **for you** and it's saved and applied in your next task in this
-project:
+preference **for you** and it's saved and applied in your next conversation in
+this project:
 
 > Remember this just for me, not the team: when I ask for a status check, reply
 > with one line per open article.
@@ -174,18 +180,20 @@ Ask the assistant to read back what it saved, and correct it straight away.
 
 Open **Memory** in the project's settings, beside Files. Two tabs at the top
 switch between **Project** memory and your own (**Just me**). Each lists the
-**Index** first, because it's what every task sees, and then the files.
+**Index** first, because it's what every conversation sees, and then the
+files.
 
 Open a file to see its items. Under each item is who added it and how: saved by
-the assistant from someone's task, proposed and approved, or edited directly.
-When it came from one of your own tasks, you can open that task from there.
+the assistant from someone's conversation, proposed and approved, or edited
+directly. When it came from one of your own conversations, you can open that
+conversation from there.
 Words in double square brackets, like `[[deadlines]]`, link to other files.
 
 The bar beside each file shows its size against the limit for one file
 (8,000 tokens, roughly 6,000 words). It turns amber when a file is close, and a
 change that would take a file over the limit is refused. The index has its own
-bar: only about the first 2,000 tokens of the project index reach a task (1,000
-for yours), so keep it to one short line per file.
+bar: only about the first 2,000 tokens of the project index reach a
+conversation (1,000 for yours), so keep it to one short line per file.
 
 ### Edit memory yourself
 
@@ -323,8 +331,8 @@ belong in shared memory:
 
 - **Text that reads like an instruction to the assistant**, such as "ignore
   previous instructions" or "you must now…", or the markup tools use. Memory is
-  reference material: the assistant reads it as facts, and teammates' tasks
-  read it too, so write "Vendor A is preferred because of the support
+  reference material: the assistant reads it as facts, and teammates'
+  conversations read it too, so write "Vendor A is preferred because of the support
   contract", not "Always recommend Vendor A".
 - **Passwords and keys**, such as an access key or a password in a link.
   Everyone in the project can read project memory.
@@ -366,11 +374,13 @@ what you want:
 ![A generated Word document showing tracked insertions (underlined) and deletions (struck through), with a playbook note under each article.](../../../../assets/user-guide/projects/word-redline.jpg)
 
 Open the file in Word and use **Review › Track Changes** to accept or reject
-each change. The generated file is saved to **your task**, not the project:
+each change. The generated file is saved to **your conversation**, not the
+project:
 
-- Download it from the task.
+- Download it from the conversation.
 - Review it. The assistant can miss a clause or misstate a rule.
-- Teammates can't open a file from your task, even after you share the task.
+- Teammates can't open a file from your conversation, even after you share the
+  conversation.
   To give the team and the assistant your draft, download it and add it to
   project Files. Its tracked changes stay readable there (see
   [Word redlines in Files](/agentcore-public-stack/user-guide/projects/set-up/#word-redlines-in-files)).
@@ -379,19 +389,20 @@ each change. The generated file is saved to **your task**, not the project:
 ## Settings history and Activity
 
 Every saved change to instructions, model, tools or skills becomes a numbered
-version. Open **Settings › History** and expand a version to see the change
-and who made it.
+version. Open **History** in the project's settings rail and expand a version
+to see the change and who made it.
 
-![Settings › History: version 4 expanded, showing the added instruction line in green and the editor's email.](../../../../assets/user-guide/projects/settings-history.jpg)
+![History: version 4 expanded, showing the added instruction line in green and the editor's email.](../../../../assets/user-guide/projects/settings-history.jpg)
 
 To go back to an earlier version, copy the text from History into the editor and
 save. That becomes a new version.
 
-The **Activity** tab (editors and owner) lists who added people, changed roles,
-added files, shared tasks, edited settings, archived or restored the project,
-and left it.
+**Activity** in the rail (editors and owner) lists who added people, changed
+roles, added files, shared conversations, edited settings, archived or restored
+the project, and left it. A share shows as "shared the conversation “…” with
+the project", and taking one down as "stopped sharing the conversation “…”".
 
-![The Activity tab: a list of events such as restored, archived, shared a task, left the project, made someone the owner, added a file.](../../../../assets/user-guide/projects/activity.jpg)
+![The Activity page: a list of events such as restored, archived, shared a conversation, left the project, made someone the owner, added a file.](../../../../assets/user-guide/projects/activity.jpg)
 
 ## Notifications
 
@@ -403,15 +414,17 @@ The bell next to your name in the sidebar shows when someone:
 - makes you the owner
 - archives or restores a project you're in
 - leaves a project you own
-- shares a task and chooses to notify you, with their note if they left one
+- shares a conversation and chooses to notify you, with their note if they
+  left one
 - proposes a change to project memory, or decides on one you proposed
 - runs memory maintenance that suggests changes for you to review
 
 ![The notifications panel: "made you the owner" and "added you … as an editor".](../../../../assets/user-guide/projects/notifications.jpg)
 
 Opening a notification marks it read and takes you to the project (to
-**Members** when someone left, and to the task itself when someone shared one).
-If the task has since stopped being shared, the page says so. Notifications
+**Members** when someone left, and to the conversation itself when someone
+shared one). If the conversation has since stopped being shared, the page says
+so. Notifications
 expire after 90 days, and you're never notified about your own actions. New
 files and setting changes don't notify anyone. Check **Activity**.
 
@@ -419,10 +432,12 @@ files and setting changes don't notify anyone. Check **Activity**.
 
 | Action | Who | Where | What happens |
 | --- | --- | --- | --- |
-| **Archive** | Owner | Settings › Owner controls | Read-only for everyone: no new tasks or messages, no file or setting changes. Files and shared tasks stay readable. Every member is notified. |
-| **Restore** | Owner | Settings | Back to normal. Every member is notified. |
-| **Delete** | Owner | Settings, archived projects only | Removes the project, its assistant, its files and its list of shared tasks. Each member keeps their own tasks as ordinary conversations. |
+| **Archive** | Owner | Project menu › **Archive project** | Read-only for everyone: no new conversations or messages, no file or setting changes. Files and shared conversations stay readable. Every member is notified. |
+| **Restore** | Owner | Project menu › **Restore project** | Back to normal. Every member is notified. |
+| **Delete** | Owner | Project menu › **Delete project**, archived projects only | Removes the project, its assistant, its files and its list of shared conversations. Each member keeps their own conversations from the project as ordinary conversations. |
 | **Transfer ownership** | Owner | Members › **Make owner** | Goes to an editor who has signed in at least once. The old owner becomes an editor, and the new owner is notified. |
-| **Leave** | Anyone but the owner | Members › **Leave project** | You lose access, and the owner is notified. Tasks you shared stay listed for the team. |
+| **Leave** | Anyone but the owner | Project menu › **Leave project** | You lose access, and the owner is notified. Conversations you shared stay listed for the team. |
 
-![An archived project: a banner saying it's read-only and can be restored from Settings.](../../../../assets/user-guide/projects/archived.jpg)
+The project menu opens from the project's name at the top of its page.
+
+![An archived project: a banner saying it's read-only and can be restored.](../../../../assets/user-guide/projects/archived.jpg)

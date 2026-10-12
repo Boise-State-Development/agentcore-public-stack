@@ -413,7 +413,7 @@ describe('ShareModalComponent (a task in a project)', () => {
     expect(shareService.createShare).toHaveBeenCalledWith('sess-9', 'project', undefined, { suppressErrorToast: true });
     const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
     expect(text).toContain('Shared with the project');
-    expect(text).toContain('Shared tasks');
+    expect(text).toContain('listed under “Shared with the project”');
   });
 
   it.each([

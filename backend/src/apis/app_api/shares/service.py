@@ -760,12 +760,12 @@ class ShareService:
         prefs = getattr(metadata, "preferences", None)
         project_id = getattr(prefs, "project_id", None) if prefs else None
         if not project_id:
-            raise ProjectShareError(400, "Only a task in a project can be shared with a project")
+            raise ProjectShareError(400, "Only a conversation in a project can be shared with a project")
         project, role = self._project_role(project_id, user)
         if project is None or role is None:
-            raise ProjectShareError(403, "You are not a member of this task's project")
+            raise ProjectShareError(403, "You are not a member of this conversation's project")
         if project.status != "active":
-            raise ProjectShareError(409, "This project is archived. Restore it to share tasks with it.")
+            raise ProjectShareError(409, "This project is archived. Restore it to share conversations with it.")
         return project
 
     def _notify_recipients(self, project: Project, request: CreateShareRequest, user: User) -> List[str]:
