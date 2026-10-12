@@ -34,6 +34,7 @@ def _service(meta, body=b"%PDF"):
     repository.increment_quota = AsyncMock()
     repository.update_file_digest = AsyncMock(return_value=meta)
     s3 = MagicMock()
+    s3.head_object.return_value = {"ContentLength": meta.size_bytes}
     s3.get_object.return_value = {"Body": MagicMock(read=MagicMock(return_value=body))}
     return FileUploadService(repository=repository, s3_client=s3, bucket_name="b")
 

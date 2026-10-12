@@ -7,6 +7,8 @@ Endpoints under test:
 - POST   /files/presign              → 403 for exceeded quota
 - POST   /files/{upload_id}/complete → 200 for valid upload
 - POST   /files/{upload_id}/complete → 404 for nonexistent upload
+- POST   /files/{upload_id}/complete → 400 when the stored object exceeds the cap
+- POST   /files/{upload_id}/complete → 409 when the stored size differs from the declared size
 - GET    /files                      → 200 with paginated file list
 - DELETE /files/{upload_id}          → 204 for owned file
 - DELETE /files/{upload_id}          → 404 for nonexistent file
@@ -27,6 +29,7 @@ from apis.app_api.files.service import (
     QuotaExceededError,
     InvalidFileTypeError,
     FileTooLargeError,
+    UploadSizeMismatchError,
     FileNotFoundError as ServiceFileNotFoundError,
 )
 from apis.shared.files.models import (
@@ -205,6 +208,34 @@ class TestCompleteUpload:
 
         assert resp.status_code == 404
         assert "not found" in resp.json()["detail"]
+
+    def test_returns_400_when_stored_object_exceeds_cap(
+        self, app, make_user, authenticated_client, mock_file_service
+    ):
+        client = authenticated_client(app, make_user())
+
+        mock_file_service.complete_upload.side_effect = FileTooLargeError(
+            size_bytes=50 * 1024 * 1024, max_size=4 * 1024 * 1024
+        )
+
+        resp = client.post("/files/upload-001/complete")
+
+        assert resp.status_code == 400
+        assert "4MB" in resp.json()["detail"]
+
+    def test_returns_409_when_stored_size_differs_from_declared(
+        self, app, make_user, authenticated_client, mock_file_service
+    ):
+        client = authenticated_client(app, make_user())
+
+        mock_file_service.complete_upload.side_effect = UploadSizeMismatchError(
+            declared_bytes=1024, stored_bytes=2048
+        )
+
+        resp = client.post("/files/upload-001/complete")
+
+        assert resp.status_code == 409
+        assert "does not match" in resp.json()["detail"]
 
 
 # ---------------------------------------------------------------------------
