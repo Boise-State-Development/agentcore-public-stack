@@ -35,8 +35,7 @@ import {
   ProjectSchedule,
   UpdateProjectScheduleRequest,
 } from '../../projects/models/project.model';
-
-const WEEKDAY_LABELS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+import { WEEKDAY_LABELS } from '../schedule-wording';
 
 /** All 24 hours, labeled 12-hour-with-suffix for the select. */
 function hourOptions(): { value: number; label: string }[] {
@@ -236,9 +235,9 @@ export class ScheduleFormPage implements OnInit {
     this.cadenceValue.set(this.form.controls.cadence.value ?? 'daily');
     this.form.controls.cadence.valueChanges.subscribe((cadence) => {
       this.cadenceValue.set(cadence ?? 'daily');
-      // "weekly" requires a weekday — default to Monday the first time it's chosen.
+      // "weekly" requires a weekday — default to Monday (0) the first time it's chosen.
       if (cadence === 'weekly' && this.form.controls.weekday.value === null) {
-        this.form.controls.weekday.setValue(1);
+        this.form.controls.weekday.setValue(0);
       }
       // "interval" needs a magnitude — default to every 6 hours the first time.
       if (cadence === 'interval' && this.form.controls.intervalValue.value === null) {

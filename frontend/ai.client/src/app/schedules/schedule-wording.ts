@@ -8,7 +8,13 @@
 import { parseIso } from '../utils/date';
 import { IntervalUnit, ScheduleCadence } from './models/schedule.model';
 
-const WEEKDAY_LABELS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+/**
+ * Day names indexed by a schedule's `weekday`, which is the backend's
+ * 0=Monday..6=Sunday (Python's `datetime.weekday()`, `compute_next_run_at`).
+ * The form's day picker reads this too, so the day a user picks, the day every
+ * summary names and the day the dispatcher runs are one convention.
+ */
+export const WEEKDAY_LABELS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
 /** The fields a cadence summary reads. */
 export interface ScheduleCadenceFields {

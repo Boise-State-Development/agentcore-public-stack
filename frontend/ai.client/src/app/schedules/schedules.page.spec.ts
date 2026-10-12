@@ -237,7 +237,7 @@ describe('SchedulesPage', () => {
       'Every weekday at 1:00 PM',
     );
     expect(
-      component.cadenceSummary(stubSchedule({ cadence: 'weekly', hourLocal: 0, weekday: 1 })),
+      component.cadenceSummary(stubSchedule({ cadence: 'weekly', hourLocal: 0, weekday: 0 })),
     ).toBe('Every Monday at 12:00 AM');
   });
 

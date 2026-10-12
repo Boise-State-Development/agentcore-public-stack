@@ -112,10 +112,43 @@ describe('ScheduleFormPage', () => {
       expect(component.scheduleId()).toBeNull();
     });
 
-    it('defaults weekday to Monday the first time weekly is chosen', () => {
+    it('defaults weekday to Monday (0) the first time weekly is chosen', () => {
       expect(component.form.controls.weekday.value).toBeNull();
       component.form.controls.cadence.setValue('weekly');
-      expect(component.form.controls.weekday.value).toBe(1);
+      expect(component.form.controls.weekday.value).toBe(0);
+      expect(component.weekdayLabels[0]).toBe('Monday');
+    });
+
+    // The picker's option value is its index, and the backend runs index 0 on a
+    // Monday (`compute_next_run_at`), so the label at each index must be the day
+    // the dispatcher runs.
+    it('offers the days Monday first, matching the backend 0=Monday..6=Sunday', () => {
+      expect(component.weekdayLabels).toEqual([
+        'Monday',
+        'Tuesday',
+        'Wednesday',
+        'Thursday',
+        'Friday',
+        'Saturday',
+        'Sunday',
+      ]);
+    });
+
+    it('sends the picked day as its 0=Monday index', async () => {
+      component.form.patchValue({
+        label: 'Test',
+        promptText: 'Do the thing',
+        cadence: 'weekly',
+        hourLocal: 8,
+        timezone: 'UTC',
+      });
+      component.form.controls.weekday.setValue(component.weekdayLabels.indexOf('Sunday'));
+
+      await component.onSubmit();
+
+      expect(mockScheduleService.createSchedule).toHaveBeenCalledWith(
+        expect.objectContaining({ cadence: 'weekly', weekday: 6 }),
+      );
     });
 
     it('rejects submit when required fields are missing', async () => {
