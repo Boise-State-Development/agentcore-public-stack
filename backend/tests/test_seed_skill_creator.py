@@ -108,6 +108,19 @@ class TestContent:
         assert "Customize → Skills" in bundle.instructions
         assert "new conversation" in bundle.instructions
 
+    def test_it_asks_to_be_read_before_the_tools(self, bundle):
+        """Found validating on dev: with the my_skill_* tools on, Haiku 4.5 went
+        straight to them and never read this skill. The description gives the
+        model a reason to read it first: platform rules it cannot know."""
+        description = bundle.frontmatter["description"]
+        assert "before drafting a skill or calling any my_skill_ tool" in description
+        assert "build" in description and "create" in description
+
+    def test_it_forbids_saving_through_a_browser(self, bundle):
+        """Found validating on dev: without the tools, Haiku 4.5 tried to save
+        by pointing browse_web at the site before falling back."""
+        assert "Don't try to save the skill any other way" in bundle.instructions
+
     @pytest.mark.parametrize(
         "upstream_only",
         ["evals.json", "run_loop", "generate_review", "aggregate_benchmark", "claude -p", "subagent", "package_skill"],
