@@ -46,7 +46,7 @@ const SCHEDULE = {
   label: 'Weekly digest',
   cadence: 'weekly',
   hourLocal: 8,
-  weekday: 1,
+  weekday: 0,
   timezone: 'America/Boise',
   state: 'active',
   nextRunAt: '2026-10-19T14:00:00Z',
