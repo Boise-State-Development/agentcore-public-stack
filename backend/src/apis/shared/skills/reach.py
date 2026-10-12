@@ -97,10 +97,12 @@ class SkillReach:
                 "new version on their next turn, for everyone who uses them."
             )
         if live_private:
-            noun = "agent" if len(live_private) == 1 else "agents"
+            # "1 of your private agents" is the grammatical form, and "also"
+            # only reads right after a sentence about shared bindings.
+            lead = "It is also used" if live_shared else "This skill is used"
             parts.append(
-                f"It is also used unpinned by {len(live_private)} of your private {noun}"
-                f" ({_names(live_private)})."
+                f"{lead} unpinned by {len(live_private)} of your private agents"
+                f" ({_names(live_private)}), which only you use."
             )
         if self.pinned:
             pinned = ", ".join(
