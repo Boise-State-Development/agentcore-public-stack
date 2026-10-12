@@ -182,11 +182,11 @@ export function describeActivity(
       // A schedule's delivery is recorded as its creator's share (3.2b).
       return line(
         record.reason === 'schedule'
-          ? `shared “${str(after['title']) || 'Untitled task'}” with the project from a schedule`
-          : `shared the task “${str(after['title']) || 'Untitled task'}” with the project`,
+          ? `shared “${str(after['title']) || 'Untitled conversation'}” with the project from a schedule`
+          : `shared the conversation “${str(after['title']) || 'Untitled conversation'}” with the project`,
       );
     case 'project.task_unshared':
-      return line(`stopped sharing the task “${str(after['title']) || 'Untitled task'}”`);
+      return line(`stopped sharing the conversation “${str(after['title']) || 'Untitled conversation'}”`);
     case 'project.output_shared':
       // A schedule's published artifact is recorded as its creator's share (3.2d).
       return line(

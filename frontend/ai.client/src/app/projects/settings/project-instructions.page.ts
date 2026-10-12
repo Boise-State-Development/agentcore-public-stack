@@ -110,7 +110,7 @@ export class ProjectInstructionsPage implements HasUnsavedChanges {
 
   protected readonly description = computed(() => {
     const name = this.state.project()?.name ?? 'this project';
-    return `What the assistant is told in every task in ${name}. Where they conflict with a member’s personal instructions, these win.`;
+    return `What the assistant is told in every conversation in ${name}. Where they conflict with a member’s personal instructions, these win.`;
   });
 
   constructor() {

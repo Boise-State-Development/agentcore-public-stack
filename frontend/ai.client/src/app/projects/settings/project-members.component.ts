@@ -250,7 +250,7 @@ export class ProjectMembersComponent {
   protected async remove(member: ProjectMember): Promise<void> {
     const ok = await this.confirm({
       title: `Remove ${this.label(member)}?`,
-      message: 'They lose access to this project and everything shared in it. Their own tasks stay theirs.',
+      message: 'They lose access to this project and everything shared in it. Their own conversations stay theirs.',
       confirmText: 'Remove',
       destructive: true,
     });

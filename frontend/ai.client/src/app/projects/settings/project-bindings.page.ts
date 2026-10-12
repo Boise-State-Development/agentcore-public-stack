@@ -18,7 +18,7 @@ export type BindingKind = 'tools' | 'skills';
 const KIND_COPY: Record<BindingKind, { title: string; description: string; noun: string; nounPlural: string; saved: string }> = {
   tools: {
     title: 'Tools',
-    description: 'What the project’s assistant can use in every task. Members without access to a tool get the assistant without it.',
+    description: 'What the project’s assistant can use in every conversation. Members without access to a tool get the assistant without it.',
     noun: 'tool',
     nounPlural: 'tools',
     saved: 'Tools saved',
@@ -26,7 +26,7 @@ const KIND_COPY: Record<BindingKind, { title: string; description: string; noun:
   skills: {
     title: 'Skills',
     description:
-      'Playbooks the project’s assistant can follow in every task. A skill stays on the version it was added at until someone updates it.',
+      'Playbooks the project’s assistant can follow in every conversation. A skill stays on the version it was added at until someone updates it.',
     noun: 'skill',
     nounPlural: 'skills',
     saved: 'Skills saved',

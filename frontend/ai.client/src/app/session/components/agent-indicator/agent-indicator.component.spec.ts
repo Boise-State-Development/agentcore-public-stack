@@ -149,7 +149,7 @@ describe('AgentIndicatorComponent', () => {
       const link = fixture.nativeElement.querySelector('a.menu-item') as HTMLAnchorElement;
       expect(link.getAttribute('href')).toBe('/projects/prj_1');
       expect(link.textContent).toContain('Open project');
-      expect(text(fixture)).toContain('New task');
+      expect(text(fixture)).toContain('New conversation');
     });
 
     it('names no owner: the harness keeps its creator after a transfer', () => {

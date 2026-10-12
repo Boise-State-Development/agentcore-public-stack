@@ -36,15 +36,15 @@ interface IndexLine {
       </div>
       <p class="mt-0.5 text-sm/6 text-gray-600 dark:text-gray-400">
         {{ scope() === 'project'
-          ? 'Loads into every member’s tasks in this project. The assistant opens the files it links to when they bear on a request.'
-          : 'Loads into your own tasks in this project, beside the project’s index. Only you can see it.' }}
+          ? 'Loads into every member’s conversations in this project. The assistant opens the files it links to when they bear on a request.'
+          : 'Loads into your own conversations in this project, beside the project’s index. Only you can see it.' }}
       </p>
       <div class="mt-4 text-xs/5 text-gray-600 dark:text-gray-400">
-        <app-memory-meter [tokens]="tokens()" [max]="budget()" label="Index size against what reaches a task" />
+        <app-memory-meter [tokens]="tokens()" [max]="budget()" label="Index size against what a conversation loads" />
       </div>
       @if (tokens() > budget()) {
         <p class="mt-3 rounded-xl bg-state-warning-50 px-3 py-2 text-xs/5 text-state-warning-800 dark:bg-state-warning-900/20 dark:text-state-warning-300">
-          Only about the first {{ budget().toLocaleString('en-US') }} tokens reach a task. Lines past that point aren’t seen unless the assistant opens a file.
+          Only about the first {{ budget().toLocaleString('en-US') }} tokens reach a conversation. Lines past that point aren’t seen unless the assistant opens a file.
         </p>
       }
     </header>
@@ -69,7 +69,7 @@ interface IndexLine {
       </div>
     } @else {
       <p class="p-5 text-sm/6 text-gray-600 dark:text-gray-400">
-        The index is empty, so nothing from this memory loads into tasks yet. A new file joins it when it’s created, whether here, by the assistant or from an approved proposal.
+        The index is empty, so nothing from this memory loads into conversations yet. A new file joins it when it’s created, whether here, by the assistant or from an approved proposal.
       </p>
     }
   `,

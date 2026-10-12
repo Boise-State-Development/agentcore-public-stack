@@ -56,7 +56,7 @@ export interface ReviewOutcome {
         <p class="text-sm/6 font-semibold text-gray-900 dark:text-white">{{ canReview() ? 'All caught up' : 'Nothing waiting' }}</p>
         <p class="mx-auto mt-1 max-w-sm text-sm/6 text-gray-600 dark:text-gray-400">
           {{ canReview()
-            ? 'No proposals are waiting. New ones from members and their tasks show up here.'
+            ? 'No proposals are waiting. New ones from members and their conversations show up here.'
             : 'You have no proposals waiting for review.' }}
         </p>
       </div>
@@ -109,7 +109,7 @@ export interface ReviewOutcome {
                     <li>{{ note }}</li>
                   }
                 </ul>
-                <p class="mt-1.5">Every task reads memory as reference material. Approving saves the text as written, so check it states facts rather than telling the assistant what to do, and holds no passwords or keys.</p>
+                <p class="mt-1.5">In every conversation, the assistant reads memory as reference material. Approving saves the text as written, so check it states facts rather than telling the assistant what to do, and holds no passwords or keys.</p>
               </div>
             }
 
