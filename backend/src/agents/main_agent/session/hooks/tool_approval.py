@@ -1,10 +1,15 @@
-"""Per-tool approval gate for external MCP tools.
+"""Per-tool approval gate for external MCP tools and the skill-authoring writes.
 
 Pauses the agent before invoking any MCP tool that the admin flagged with
 `needs_approval=True` in the tool catalog. The pause uses Strands' interrupt
 protocol: the streaming layer surfaces a `tool_approval_required` SSE event
 to the frontend, the user clicks Approve/Deny, and the resume request feeds
 the decision back here via `event.interrupt(...)`'s return value.
+
+The same gate holds the four built-in skill-authoring writes
+(`my_skill_create` / `_update` / `_write_file` / `_delete_file`,
+skill-creator spec D10): `base_agent` composes their fixed names into the
+gating set, and passes an `ApprovalDetailsLookup` that shapes their card.
 
 Design notes:
 - Approval is scoped to the parent MCP server (the same tool name on a
@@ -21,7 +26,8 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Callable, Optional, Set
+from dataclasses import dataclass
+from typing import Any, Awaitable, Callable, Optional, Set
 
 from strands.hooks import BeforeToolCallEvent, HookProvider, HookRegistry
 
@@ -54,6 +60,26 @@ def _encode_tool_input(value: Any) -> Optional[str]:
 ApprovalNamesLookup = Callable[[Any], Set[str]]
 
 
+@dataclass(frozen=True)
+class ApprovalDetails:
+    """A tool-specific card: the arguments to show, and the message to send.
+
+    `tool_input` replaces the raw input on the card ("View arguments", which
+    is what the SPA renders) and on the persisted breadcrumb; the tool itself
+    still receives its real input.
+    """
+
+    tool_input: Any
+    message: str
+
+
+# Resolves `(tool_name, tool_input)` for a call the gate is about to pause to
+# the card it should show, or None for the default (raw input, default
+# message). Awaited only for a tool that is actually being paused, so it costs
+# nothing on any other call.
+ApprovalDetailsLookup = Callable[[str, Any], Awaitable[Optional[ApprovalDetails]]]
+
+
 # Default user-facing message; admins can extend this later by wiring a
 # per-tool message field through the catalog if needed.
 _DEFAULT_APPROVAL_MESSAGE = (
@@ -68,34 +94,52 @@ class MCPExternalApprovalHook(HookProvider):
     def __init__(
         self,
         approval_names_lookup: ApprovalNamesLookup,
+        approval_details_lookup: Optional[ApprovalDetailsLookup] = None,
     ):
         """Initialize.
 
         Args:
             approval_names_lookup: See `ApprovalNamesLookup`.
+            approval_details_lookup: See `ApprovalDetailsLookup`. Optional; MCP
+                tools use the default card.
         """
         self._approval_names_lookup = approval_names_lookup
+        self._approval_details_lookup = approval_details_lookup
 
     def register_hooks(self, registry: HookRegistry, **kwargs: Any) -> None:
         registry.add_callback(BeforeToolCallEvent, self._gate)
 
-    def _gate(self, event: BeforeToolCallEvent) -> None:
+    async def _gate(self, event: BeforeToolCallEvent) -> None:
         approval_names = self._approval_names_lookup(event.selected_tool)
         tool_name = event.tool_use.get("name", "")
-        if approval_names and tool_name in approval_names:
-            self._require_approval(event, tool_name, event.tool_use.get("input"))
+        if not approval_names or tool_name not in approval_names:
+            return
+        tool_input = event.tool_use.get("input")
+        details = None
+        if self._approval_details_lookup is not None:
+            try:
+                details = await self._approval_details_lookup(tool_name, tool_input)
+            except Exception:  # noqa: BLE001 - a card detail must never skip the gate
+                logger.warning("Approval details lookup failed for %s", tool_name, exc_info=True)
+        self._require_approval(event, tool_name, tool_input, details)
 
     def _require_approval(
-        self, event: BeforeToolCallEvent, tool_name: str, tool_input: Any
+        self,
+        event: BeforeToolCallEvent,
+        tool_name: str,
+        tool_input: Any,
+        details: Optional[ApprovalDetails] = None,
     ) -> None:
         """Interrupt for user approval; cancel the call unless approved.
 
         `tool_name` / `tool_input` describe the tool the user is approving,
         while the interrupt's `toolUseId` lets the frontend correlate it with
-        the actual streamed tool_use block.
+        the actual streamed tool_use block. `details`, when given, replaces the
+        input shown on the card and the message.
         """
         tool_use_id = event.tool_use.get("toolUseId", "")
-        encoded_input = _encode_tool_input(tool_input)
+        encoded_input = _encode_tool_input(details.tool_input if details else tool_input)
+        message = details.message if details else _DEFAULT_APPROVAL_MESSAGE
 
         logger.info(
             "Pausing for user approval: tool=%s tool_use_id=%s",
@@ -113,7 +157,7 @@ class MCPExternalApprovalHook(HookProvider):
                 "toolUseId": tool_use_id,
                 "toolName": tool_name,
                 "toolInput": encoded_input,
-                "message": _DEFAULT_APPROVAL_MESSAGE,
+                "message": message,
             },
         )
 

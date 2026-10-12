@@ -42,6 +42,12 @@ POWERPOINT_PRESENTATION_TOOL_IDS = frozenset({"create_powerpoint_presentation"})
 # Session workspace files. A single toggle that provisions list/read/write.
 WORKSPACE_TOOL_IDS = frozenset({"workspace_files"})
 
+# Authoring the invoking user's own skills (bound to session/user). A single
+# toggle that provisions all seven ``my_skill_*`` tools
+# (docs/specs/skill-creator.md, Gating); additionally gated on
+# ``skill_authoring_enabled()`` and ``skills_enabled()``.
+SKILL_AUTHORING_TOOL_IDS = frozenset({"my_skill_create"})
+
 # Document retrieval (bound to session/user). Listed for the record, and
 # deliberately NOT folded into ``INJECTED_TOOL_IDS`` below: ``document_read``
 # is gated on the session having a readable attachment, not on
@@ -62,6 +68,7 @@ INJECTED_TOOL_IDS = frozenset(
     | EXCEL_SPREADSHEET_TOOL_IDS
     | POWERPOINT_PRESENTATION_TOOL_IDS
     | WORKSPACE_TOOL_IDS
+    | SKILL_AUTHORING_TOOL_IDS
 )
 
 
@@ -103,6 +110,15 @@ INJECTED_TOOL_IDS = frozenset(
 #     is the dominant cohort: the 2026-08-03 prod read put
 #     `analyze_spreadsheet` on ~2,669 of 3,565 sessions.
 #
+#   - SKILL_AUTHORING (`_build_skill_authoring_tools`) closes over
+#     `(session_id, user_id, user_email)`. The email is not a key element of
+#     its own, but it names the same identity as `user_id` (the Memory-Space
+#     tools below rest on the same equivalence), and the tools only log it. The
+#     binding-reach lookup (skill-creator spec D9) runs per call, at approval
+#     time, so the closure holds nothing else. Admitted with the family rather
+#     than later: an opt-in family left out of this set makes every turn that
+#     enables it rebuild the agent and re-write the prompt-cache prefix.
+#
 # Memory-Space tools are not in any set here (they are not gated on
 # `enabled_tools`), but they are described too: they close over the resolved
 # binding (space id, name, access) plus `(user_id, user_email)`, and
@@ -119,6 +135,7 @@ KEY_DESCRIBED_INJECTED_TOOL_IDS = frozenset(
     | POWERPOINT_PRESENTATION_TOOL_IDS
     | WORKSPACE_TOOL_IDS
     | SPREADSHEET_TOOL_IDS
+    | SKILL_AUTHORING_TOOL_IDS
 )
 
 

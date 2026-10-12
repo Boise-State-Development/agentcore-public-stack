@@ -178,6 +178,9 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     skills: {
       enabled: false,
     },
+    skillAuthoring: {
+      enabled: false,
+    },
     agents: {
       enabled: false,
     },

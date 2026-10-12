@@ -394,6 +394,10 @@ export class InferenceAgentCoreConstruct extends Construct {
         // there, so a mismatch would let an Agent be built with skills the
         // runtime then blocks.
         SKILLS_ENABLED: config.skills.enabled ? 'true' : 'false',
+        // Skill authoring tools (in development, default off; skill-creator
+        // spec D12). Spread in only while on: the code reads unset as off, so
+        // an environment that leaves it off spends no bytes on it.
+        ...(config.skillAuthoring.enabled ? { SKILL_AUTHORING_ENABLED: 'true' } : {}),
         // Agent Designer harness resolution: the runtime resolves an Agent's
         // bindings + modelConfig at invocation. Default off, mirrors app-api.
         AGENTS_API_ENABLED: config.agents.enabled ? 'true' : 'false',

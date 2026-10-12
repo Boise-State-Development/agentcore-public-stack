@@ -1,6 +1,6 @@
 # Skill Creator — guided skill authoring, and the agent write path it needs
 
-**Status:** Accepted with revisions (2026-10-12). Drafted 2026-07-19. Implementation starts with PR-A (§Phasing).
+**Status:** Accepted with revisions (2026-10-12). Drafted 2026-07-19. PR-A merged (#1555); PR-B (the tools) built against this revision, with the corrections in §PR-B as built.
 **Author:** Phil Merrell (drafted with Claude)
 **Targets branch:** `develop`
 **Depends on:** [`skills-as-agent-primitive.md`](skills-as-agent-primitive.md) PR-1–PR-5 — merged. [`skill-bundle-import.md`](skill-bundle-import.md) PR-1 (nested paths) and its server-side `SKILL.md` parser — **draft, branch-only**; see D7.
@@ -16,6 +16,8 @@ The July draft was reviewed against `develop` before implementation. Four things
 - **New since July: Shared Projects bind skills to a project's harness.** Together with Agent invoke-through, a user's own skill can now run for people other than its author. See D9.
 - **The approval interrupt exists.** `tool_approval_required` and `MCPExternalApprovalHook` shipped for MCP tools. D10 extends that hook to these tools and closes open question 4.
 - **The cost and rollout rules got sharper.** CLAUDE.md now has the prompt-cache contract and the in-development flag rule. See D11 and D12.
+
+Building PR-B turned up five more places where this spec and the code disagreed. They are corrected in place and listed in §PR-B as built.
 
 The phasing is reordered (§Phasing). The service-layer move ships first because every later PR needs it, and it has no agent surface. The content-only skill no longer gates *building* the tools. It gates *widening* them past the pilot.
 
@@ -99,7 +101,9 @@ We do not fight this. Re-constructing the agent mid-turn to pick up a just-writt
 
 Instead the skill-creator's instructions state it plainly and end the authoring flow with an explicit "start a new conversation to try it" step. Left unstated, this reads as a bug: the user asks the agent to use the skill it just wrote, and it has no idea what they mean.
 
-*Revision 2026-10-12:* a new conversation is not enough by itself. Skills are **opt-in per turn** (Skills v2 D6): the turn's set is the accessible set narrowed by the request's `enabled_skills`, and an empty selection means no skills at all (`_apply_enabled_skills_filter`). A skill the agent just created is accessible but not selected. So the closing step is "turn it on in the skills picker (or use its slash command), then try it". `my_skill_create`'s result should say the same thing, so the instruction does not depend on the skill-creator skill being active.
+*Revision 2026-10-12:* a new conversation is not enough by itself. Skills are **opt-in per turn** (Skills v2 D6): the turn's set is the accessible set narrowed by the request's `enabled_skills`, and an empty selection means no skills at all (`_apply_enabled_skills_filter`). A skill the agent just created is accessible but not selected. So the closing step is "turn it on under **Customize → Skills** (`/customize/skills`), then start a new conversation". `my_skill_create`'s result says the same thing, so the instruction does not depend on the skill-creator skill being active.
+
+*Corrected 2026-10-12 (PR-B):* the July text offered "or use its slash command" as an alternative. It is not one. The composer's slash menu lists only skills that are already on (`SkillCommandService` filters to `isSkillShownEnabled`), so a new skill has no slash command until it is turned on. Verified on dev the same day: a freshly created skill reads `isEnabled: false` and the slash menu shows "No skills match" until Customize → Skills turns it on.
 
 ## D7 — Nested paths and the server-side parser belong to `skill-bundle-import`, not here
 
@@ -137,6 +141,8 @@ The UI has the same exposure, so this is not a new hole. What the agent path cha
 
 If the reverse lookup ("which bindings name skill X") has no index, PR-B builds it from the owner's own Agents and projects only, since invoke-through needs the Agent owner to be the skill owner. That bounds it to one owner-partition query per kind. If that turns out not to hold for projects, PR-B records the gap rather than scanning.
 
+*As built (PR-B):* it holds for projects, and it is one query, not one per kind. A project's harness is an Agent record (`kind: "project"`) in the same assistants table, and the resolver judges invoke-through on the harness's own `ownerId`, which is the project's creator and is immutable on the record. So every binding that can run skill X for someone else is in X's owner's partition of `OwnerStatusIndex`, harnesses and drafts included, and the lookup (`apis/shared/skills/reach.py`) is exact. There is no gap to record. A binding on another user's Agent can only ever run the skill for its author.
+
 ## D10 — Every write asks the user first, through the existing approval interrupt
 
 *(Added 2026-10-12. Resolves open question 4.)* A skill is instructions that persist into every future conversation that turns it on. The agent writing one is the one place in this design where content the agent *read* (a web page, a document, an MCP result) can become instructions it *follows* in later sessions. In other words, it is a persistent prompt-injection channel. `memory_write`'s per-call permission check does not cover this, because the threat is not "wrong user", it is "right user, content they never saw".
@@ -145,13 +151,15 @@ So `my_skill_create`, `my_skill_update`, `my_skill_write_file` and `my_skill_del
 
 - **Reuse the existing gate, don't build a second one.** `MCPExternalApprovalHook` (`agents/main_agent/session/hooks/tool_approval.py`) already pauses on `BeforeToolCallEvent`, emits `tool_approval_required`, resumes on the user's decision and turns a denial into `cancel_tool`. Its gating set comes from an `ApprovalNamesLookup`. PR-B composes that lookup with a fixed set of built-in names, so the snapshot, the resume route, the `PendingInterrupt` breadcrumb and the SPA card all work unchanged.
 - **The card must show what will be written.** The hook already JSON-encodes the tool input for "Inspect arguments", and that is enough for v1. A rendered diff against the current row is a nice-to-have, not a requirement.
+- *As built (PR-B):* the SPA card renders the tool input and **not** the event's `message`. So the reach (D9) is the first key of the input the card shows, and is also in `message` for a future card. The hook takes an optional `ApprovalDetailsLookup` that replaces the shown input and message for a call it is about to pause; the tool still receives its real input. Long text arguments are cut to an 8,000-character preview on the card, because the shown input is also persisted as the `PendingInterrupt` breadcrumb on the session row, where a 1 MiB file body would not fit in a DynamoDB item.
+- *Where the reach lookup runs (PR-B):* in that details lookup, which the hook awaits only for the three edit tools, at the moment it pauses. That is after the model has already emitted the tool call, so it adds nothing before the first token, and every other tool call costs one set lookup, as before. It is a `BeforeToolCallEvent` callback, not the `BeforeInvocation`/`BeforeModelCall` hooks D9 rules out, because the card is drawn before the tool runs, so the reach has to be known by then. The alternative was to have each tool raise its own interrupt, as `ask_user_question` does, which would compute reach inside the tool body but would leave the shared hook, and its `cancel_tool` on decline, for create only.
 - **The `confirm=true` pattern is rejected here.** `set_default_model` gates on a model-supplied flag. That is fine for a reversible setting, but it is exactly the control prompt injection defeats, because the injected content can tell the model the user already confirmed.
 
 ## D11 — What authoring costs against the prompt cache
 
 *(Added 2026-10-12.)* The tools are bounded by the prompt-cache contract (CLAUDE.md):
 
-- **Tool specs.** Seven specs add roughly 1–1.5k tokens to `toolConfig` on every turn, for every user who has them. That is acceptable only because they are not default-on: a single catalog id (D12) provisions them, so a user who never authors skills pays nothing. Their order is fixed at the source like every other injected tool.
+- **Tool specs.** Seven specs add roughly 1–1.5k tokens to `toolConfig` on every turn, for every user who has them. *Measured (PR-B):* **1,303 tokens** on Haiku 4.5 (Bedrock CountTokens, the seven specs against a one-tool baseline). That is acceptable only because they are not default-on: a single catalog id (D12) provisions them, so a user who never authors skills pays nothing. Their order is fixed at the source like every other injected tool.
 - **Creating a skill changes no prefix.** Skills are opt-in per turn (D6 revision), so a new skill is not in anyone's `<available_skills>` until someone turns it on, and that is a deliberate change.
 - **Editing an enabled skill's name or description re-writes the prefix once.** Those fields are in `<available_skills>` in the system prompt. Editing only the instructions or a reference file does not touch the prefix, because those load through tool results.
 - **The model can read stale instructions in history.** If the skill was activated earlier in the session, its *old* instructions remain in that `skills` tool result. The update tool's result says so ("re-activate the skill to load the new instructions"), rather than letting the agent act on both versions.
@@ -163,6 +171,7 @@ So `my_skill_create`, `my_skill_update`, `my_skill_write_file` and `my_skill_del
 
 - **Flag.** `SKILL_AUTHORING_ENABLED` (backend, read by the Runtime) and `CDK_SKILL_AUTHORING_ENABLED`, default off: only `"true"` enables it, and an empty string counts as unset. It ANDs with `skills_enabled()` and the tool grant. There is no frontend flag in v1, because the tools reuse the existing approval card and there is no new UI. PR-A ships no agent surface, so it needs no flag.
 - **IAM.** The Runtime role already has `PutItem`/`UpdateItem` on the app-roles table, where skill rows live, through `DynamoDBTableAccess`. On the skill-resources bucket it has only `s3:GetObject` and `s3:ListBucket` (`SkillResourcesBucketRead`, "app-api owns writes"). PR-B adds `s3:PutObject` and `s3:DeleteObject`, scoped to `skills/*`, with the comment updated to say why the runtime now writes. That is one statement on an existing policy, so no new resources (the stack resource budget is unaffected).
+- *As built (PR-B):* the new statement is `SkillResourcesBucketWrite`, beside the unchanged read statement, on the same role policy. Pinned versions' frozen files live under `skill-versions/`, outside the grant, so nothing the Runtime does can change what a pin runs. The Runtime gets `SKILL_AUTHORING_ENABLED` only while the flag is on (the code reads unset as off), so an environment that leaves it off spends no environment-budget bytes on it.
 
 ## Data model
 
@@ -197,7 +206,9 @@ Further gates, all cheap:
 - `skill_authoring_enabled()` (D12), the in-development flag.
 
 - `skills_enabled()` — no authoring tools when the kill switch is off, matching how the router unmounts.
-- The `skills` capability. Note the existing asymmetry: the capability gates the app-api surfaces but deliberately **not** the runtime, so invoke-through keeps working for users without it. Authoring is a *write* into the user's own catalog and is the app-api-shaped side of that line, so it should honor the capability even though it executes in the runtime.
+- ~~The `skills` capability.~~ *Corrected (PR-B):* there is no such capability any more. It was removed because a capability id cannot be granted from the admin roles UI (see `skills_enabled()` and the `apis/app_api/skills/routes.py` docstring), and the My Skills routes now require only a session. The per-user gate is the `my_skill_create` grant itself.
+
+One caveat on that grant, recorded rather than fixed here: the inference API does not intersect a request's `enabled_tools` with the caller's RBAC grants (a pre-existing gap that applies to every tool, not just this family). A crafted request could therefore provision these tools without the grant, while the flag is on. That is not a privilege escalation for this family: the tools only write the caller's own skills, which any signed-in user can already do in My Skills, and every write still pauses for the caller's approval. The grant is a provisioning and cost control here, not the security boundary.
 
 ## Frontend
 
@@ -241,3 +252,15 @@ PR-1 is independently valuable and independently revertable. If it lands and nob
 3. **Should PR-1 be admin-catalog or a seeded user skill?** D1 says admin-catalog, but seeding a *copy* into each user's tier would let them edit the creator itself. Probably wrong — divergent copies, no upgrade path — but worth one round of thought.
 4. **Prompt-injection surface.** [`skill-bundle-import.md`](skill-bundle-import.md) §6.10 is honest that a skill bundle is by construction instructions a model will follow. Agent-authored skills are self-authored so the trust story is better, but a skill written from content the agent fetched off the web is not. Does `my_skill_write_file` need provenance guidance in the skill's own instructions? *Resolved 2026-10-12 by D10: every write pauses for user approval through the existing interrupt, and the card shows what will be written.*
 5. **Is this the My Skills entry point?** Raised under Frontend. A product call.
+
+## PR-B as built
+
+What PR-B found where this spec and the code disagreed, all corrected above:
+
+1. **D6:** a new skill has no slash command until it is on, so `my_skill_create`'s result names Customize → Skills and a new conversation, with no slash-command alternative.
+2. **D9:** the reverse lookup is exact, not bounded-with-a-gap. A harness is an Agent in its creator's partition, so one owner-partition query covers Agents and projects.
+3. **D10:** the SPA card shows the tool input, not the message, so the reach goes in the input. The lookup runs when the hook pauses one of the three edit tools, which is after the model emits the call and before the tool runs.
+4. **Gating:** the `skills` capability no longer exists. The grant is `my_skill_create`, with the RBAC-intersection caveat above.
+5. **D11:** the seven specs measure 1,303 tokens.
+
+Implementation map: tools in `agents/builtin_tools/skill_authoring/tools.py` (synchronous, so Strands runs them in a worker thread and `UserSkillService`'s blocking boto3 never stalls the event loop); the card in `.../approval.py`; reach in `apis/shared/skills/reach.py`; the factory `_build_skill_authoring_tools` in `apis/inference_api/chat/routes.py`; the composed gate in `BaseAgent._build_mcp_external_approval_hook`.

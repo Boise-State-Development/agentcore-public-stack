@@ -365,15 +365,28 @@ export function createRuntimeExecutionRole(
   }));
 
   // ── Skill reference files (S3, read-only) ──
-  // The runtime is a READER of a skill's reference files (PR-6 progressive
-  // disclosure); app-api owns writes. Provisioned now so PR-6 needs no infra
-  // change. No code consumes it yet.
+  // The runtime reads a skill's reference files (`read_skill_file`, progressive
+  // disclosure) and, since the skill authoring tools (docs/specs/skill-creator.md
+  // D12), writes the invoking user's OWN skill bundles: `my_skill_create` /
+  // `_update` project SKILL.md, `my_skill_write_file` puts a file and
+  // `my_skill_delete_file` garbage-collects the orphaned object. Ownership is
+  // enforced by UserSkillService, not here. Put and delete are scoped to the
+  // live bundle layout under `skills/` (files and SKILL.md). A pinned version's
+  // frozen copies live under `skill-versions/`, outside that grant, so nothing
+  // the runtime does can alter what a pin runs. Whole-skill delete stays
+  // app-api's: no runtime tool exposes it.
   const skillResourcesBucketArn = refs.skillResourcesBucket.bucketArn;
   role.addToPolicy(new iam.PolicyStatement({
     sid: 'SkillResourcesBucketRead',
     effect: iam.Effect.ALLOW,
     actions: ['s3:GetObject', 's3:ListBucket'],
     resources: [skillResourcesBucketArn, `${skillResourcesBucketArn}/*`],
+  }));
+  role.addToPolicy(new iam.PolicyStatement({
+    sid: 'SkillResourcesBucketWrite',
+    effect: iam.Effect.ALLOW,
+    actions: ['s3:PutObject', 's3:DeleteObject'],
+    resources: [`${skillResourcesBucketArn}/skills/*`],
   }));
 
   // ── Conversation archive (put, plus the read that guards a re-archive) ──

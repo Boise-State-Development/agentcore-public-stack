@@ -81,6 +81,7 @@ from apis.shared.tools.injected import (
     ARTIFACT_TOOL_IDS,
     EXCEL_SPREADSHEET_TOOL_IDS,
     POWERPOINT_PRESENTATION_TOOL_IDS,
+    SKILL_AUTHORING_TOOL_IDS,
     SPREADSHEET_TOOL_IDS,
     WORD_DOCUMENT_TOOL_IDS,
     WORKSPACE_TOOL_IDS,
@@ -896,6 +897,45 @@ def _build_word_document_tools(
     ]
 
     logger.info(f"Created {len(tools)} word document tools")
+    return tools
+
+
+# ============================================================
+# Skill Authoring Tool Injection
+# ============================================================
+
+def _build_skill_authoring_tools(
+    enabled_tools: list | None,
+    session_id: str,
+    user_id: str,
+    user_email: Optional[str],
+) -> list:
+    """Create the context-bound ``my_skill_*`` tools if enabled (skill-creator spec).
+
+    A single toggle: ``my_skill_create`` in the turn's tools provisions all
+    seven (list / read / read_file / create / update / write_file /
+    delete_file). Also gated on the in-development ``SKILL_AUTHORING_ENABLED``
+    and on ``SKILLS_ENABLED``. No IO. A turn without the id returns after one
+    set intersection. With it, building the seven tools costs ~9 ms on a
+    session's first turn and a memo lookup after that (see
+    ``build_skill_authoring_tools``).
+
+    Closes over ``(session_id, user_id, user_email)`` only, which is why the
+    family is in ``KEY_DESCRIBED_INJECTED_TOOL_IDS``. The binding-reach lookup
+    for the approval card runs per call, never here (spec D9).
+    """
+    if not enabled_tools or not SKILL_AUTHORING_TOOL_IDS.intersection(enabled_tools):
+        return []
+
+    from apis.shared.feature_flags import skill_authoring_enabled, skills_enabled
+
+    if not (skill_authoring_enabled() and skills_enabled()):
+        return []
+
+    from agents.builtin_tools.skill_authoring.tools import build_skill_authoring_tools
+
+    tools = build_skill_authoring_tools(session_id, user_id, user_email)
+    logger.info(f"Created {len(tools)} skill authoring tools")
     return tools
 
 
@@ -3117,7 +3157,12 @@ async def _build_turn_tools(
         enabled_tools=effective_enabled_tools,
         session_id=input_data.session_id,
         user_id=user_id,
-    ) + _build_account_tools(effective_enabled_tools, current_user)
+    ) + _build_account_tools(effective_enabled_tools, current_user) + _build_skill_authoring_tools(
+        enabled_tools=effective_enabled_tools,
+        session_id=input_data.session_id,
+        user_id=user_id,
+        user_email=current_user.email,
+    )
 
     memory_tools = _build_memory_tools(
         agent_memory=agent_memory,
