@@ -44,13 +44,13 @@ const ROLE_LABELS: Record<ProjectRole, string> = { owner: 'Owner', editor: 'Edit
       }
 
       <section aria-labelledby="members-heading">
-        <h3 id="members-heading" class="text-sm/6 font-semibold text-gray-900 dark:text-white" [class.sr-only]="members().length === 0">
+        <h2 id="members-heading" class="text-sm/6 font-semibold text-gray-900 dark:text-white" [class.sr-only]="members().length === 0">
           @if (members().length) {
             {{ members().length }} {{ members().length === 1 ? 'person' : 'people' }}
           } @else {
             Members
           }
-        </h3>
+        </h2>
 
         @if (error()) {
           <p role="alert" class="mt-3 text-sm/6 text-state-danger-600 dark:text-state-danger-400">{{ error() }}</p>
@@ -128,7 +128,7 @@ const ROLE_LABELS: Record<ProjectRole, string> = { owner: 'Owner', editor: 'Edit
 
       @if (isOwner()) {
         <section aria-labelledby="member-access-heading" class="border-t border-gray-200 pt-6 dark:border-gray-700">
-          <h3 id="member-access-heading" class="sr-only">Who can manage members</h3>
+          <h2 id="member-access-heading" class="sr-only">Who can manage members</h2>
           <label class="flex items-start gap-3">
             <input
               type="checkbox"

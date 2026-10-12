@@ -64,13 +64,13 @@ export function formatBytes(bytes: number): string {
     <div class="space-y-6">
       <section aria-labelledby="files-heading">
         <div class="flex flex-wrap items-center justify-between gap-3">
-          <h3 id="files-heading" class="text-sm/6 font-semibold text-gray-900 dark:text-white" [class.sr-only]="documents().length === 0">
+          <h2 id="files-heading" class="text-sm/6 font-semibold text-gray-900 dark:text-white" [class.sr-only]="documents().length === 0">
             @if (documents().length) {
               {{ documents().length }} {{ documents().length === 1 ? 'file' : 'files' }}
             } @else {
               Files
             }
-          </h3>
+          </h2>
           @if (canEdit()) {
             <input #picker type="file" class="sr-only" tabindex="-1" aria-hidden="true" multiple [accept]="accept" (change)="onFilesPicked($event)" />
             <button

@@ -27,32 +27,10 @@ import {
   ProjectDetailsDialogResult,
 } from '../components/project-details-dialog.component';
 import { ProjectComposerComponent } from './project-composer.component';
-import { ProjectPanel, ProjectRailComponent } from './project-rail.component';
+import { ProjectRailComponent } from './project-rail.component';
 import { ProjectOutputsComponent } from './project-outputs.component';
 import { ProjectProposalsComponent } from './project-proposals.component';
 import { ProjectTasksComponent } from './project-tasks.component';
-
-/**
- * What `/projects/:id/:tab` opens. The page has no tabs any more: a link that
- * names one lands on the page with that dialog open (the bell's Members and
- * Schedules links, an Activity entry's Version link, the schedule form's way
- * back). `overview` and `tasks` are the page itself, and the old `settings` tab
- * is the Instructions dialog.
- */
-const PANEL_FOR_TAB: Record<string, ProjectPanel | null> = {
-  overview: null,
-  tasks: null,
-  settings: 'instructions',
-  instructions: 'instructions',
-  files: 'files',
-  model: 'model',
-  tools: 'tools',
-  skills: 'skills',
-  schedules: 'schedules',
-  members: 'members',
-  activity: 'activity',
-  history: 'history',
-};
 
 const MENU_POSITIONS: ConnectedPosition[] = [
   { originX: 'start', originY: 'bottom', overlayX: 'start', overlayY: 'top', offsetY: 4 },
@@ -60,18 +38,14 @@ const MENU_POSITIONS: ConnectedPosition[] = [
 ];
 
 /**
- * `/projects/:id[/:tab]` — one project (shared-projects §6).
+ * `/projects/:id/overview` — one project (shared-projects §6).
  *
  * A composer and the caller's recent tasks down the middle, and the project's
  * settings as a rail of one-line summaries beside them (`app-project-rail`), each
- * opening a dialog. The project's own actions (rename, archive, delete, leave)
- * live in the menu on its name in the breadcrumb.
- *
- * The URL's `tab` segment is kept for links that predate the rail: it opens the
- * matching dialog once and is then replaced with `overview`, so a reload shows the
- * page, not the dialog again. Dialogs hand back a changed project (`projectChange`)
- * so the title, the rail and the composer always agree about its name, the
- * caller's role and whether it is archived.
+ * linking to that setting's page (`projects.routes.ts`). The project's own actions
+ * (rename, archive, delete, leave) live in the menu on its name in the breadcrumb,
+ * and hand back the changed project so the title, the rail and the composer agree
+ * about its name and whether it is archived.
  */
 @Component({
   selector: 'app-project-detail',
@@ -87,9 +61,8 @@ export class ProjectDetailPage {
   private dialog = inject(Dialog);
   private toast = inject(ToastService);
 
-  /** Route params (`withComponentInputBinding`). */
+  /** Route param (`withComponentInputBinding`). */
   readonly id = input.required<string>();
-  readonly tab = input<string | undefined>(undefined);
 
   protected readonly menuPositions = MENU_POSITIONS;
   protected readonly project = signal<Project | null>(null);
@@ -113,18 +86,6 @@ export class ProjectDetailPage {
     effect(() => {
       const id = this.id();
       untracked(() => void this.load(id));
-    });
-    // A tab in the URL opens its dialog once the rail exists, then leaves the URL.
-    effect(() => {
-      const tab = this.tab();
-      const project = this.project();
-      const rail = this.rail();
-      if (!tab || tab === 'overview' || !project || !rail) return;
-      untracked(() => {
-        const panel = PANEL_FOR_TAB[tab] ?? null;
-        if (panel) void rail.open(panel);
-        void this.router.navigate(['/projects', project.projectId, 'overview'], { replaceUrl: true });
-      });
     });
   }
 

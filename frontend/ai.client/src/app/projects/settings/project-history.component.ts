@@ -1,5 +1,5 @@
 import { DatePipe } from '@angular/common';
-import { ChangeDetectionStrategy, Component, effect, inject, input, signal, untracked } from '@angular/core';
+import { ChangeDetectionStrategy, Component, ElementRef, Injector, afterNextRender, effect, inject, input, signal, untracked } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroChevronRight } from '@ng-icons/heroicons/outline';
@@ -19,9 +19,9 @@ const FIELD_LABELS: Record<string, string> = {
 /**
  * Every saved change to a project's settings, newest first (PR-1.5a).
  *
- * The list is loaded when the section is opened (this component is created then)
- * and each version's diff when that version is expanded, so an unopened history
- * costs nothing.
+ * The list is loaded when the component is created and each version's diff when
+ * that version is expanded. `initialVersion` (an Activity entry's Version link)
+ * opens that version once the list arrives and scrolls it into view.
  */
 @Component({
   selector: 'app-project-history',
@@ -38,7 +38,7 @@ const FIELD_LABELS: Record<string, string> = {
     } @else {
       <ul class="divide-y divide-gray-200 overflow-hidden rounded-2xl border border-gray-200 bg-white dark:divide-gray-700 dark:border-gray-700 dark:bg-gray-800">
         @for (v of versions(); track v.version) {
-          <li>
+          <li [attr.data-version]="v.version">
             <button
               type="button"
               (click)="toggle(v.version)"
@@ -85,10 +85,14 @@ const FIELD_LABELS: Record<string, string> = {
 })
 export class ProjectHistoryComponent {
   private api = inject(ProjectApiService);
+  private host = inject<ElementRef<HTMLElement>>(ElementRef);
+  private injector = inject(Injector);
 
   protected readonly personLabel = personLabel;
 
   readonly projectId = input.required<string>();
+  /** A version to open on arrival, if the list has it. */
+  readonly initialVersion = input<number | null>(null);
 
   protected readonly versions = signal<SettingsVersionSummary[] | null>(null);
   protected readonly open = signal<number | null>(null);
@@ -96,7 +100,6 @@ export class ProjectHistoryComponent {
   protected readonly error = signal<string | null>(null);
 
   constructor() {
-    // Opening the section creates this component, so it loads on arrival.
     effect(() => {
       this.projectId();
       untracked(() => void this.load());
@@ -109,6 +112,11 @@ export class ProjectHistoryComponent {
       const response = await firstValueFrom(this.api.versions(this.projectId()));
       this.versions.set(response.versions);
       this.error.set(null);
+      const wanted = this.initialVersion();
+      if (wanted !== null && this.open() === null && response.versions.some(v => v.version === wanted)) {
+        void this.toggle(wanted);
+        this.reveal(wanted);
+      }
     } catch (err) {
       this.error.set(projectErrorMessage(err, 'History could not be loaded.'));
     }
@@ -127,6 +135,14 @@ export class ProjectHistoryComponent {
     } catch (err) {
       this.error.set(projectErrorMessage(err, 'That version could not be loaded.'));
     }
+  }
+
+  /** Scroll a version's row into view once it has rendered. */
+  private reveal(version: number): void {
+    afterNextRender(
+      () => this.host.nativeElement.querySelector(`[data-version="${version}"]`)?.scrollIntoView?.({ block: 'center' }),
+      { injector: this.injector },
+    );
   }
 
   protected labels(fields: string[]): string {

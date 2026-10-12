@@ -273,6 +273,7 @@ export function describeActivity(
                 @if (entry.line.version !== null) {
                   <a
                     [routerLink]="['/projects', project().projectId, 'history']"
+                    [queryParams]="{ version: entry.line.version }"
                     class="rounded-sm font-medium whitespace-nowrap text-primary-accessible hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-50"
                   >Version {{ entry.line.version }}</a>
                 }

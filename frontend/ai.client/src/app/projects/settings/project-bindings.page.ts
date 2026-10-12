@@ -1,35 +1,19 @@
-import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal, untracked } from '@angular/core';
 import { formatDate } from '@angular/common';
-import { DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
 import { firstValueFrom } from 'rxjs';
 import { BindableItem } from '../../agents/models/agent.model';
-import { DialogShellComponent } from '../../components/dialog/dialog-shell.component';
+import { AgentService } from '../../agents/services/agent.service';
 import { ToolSelectorComponent } from '../../components/tool-selector/tool-selector.component';
 import { ToolSelectorItem } from '../../components/tool-selector/tool-selector.model';
 import { ToastService } from '../../services/toast/toast.service';
 import { BindingRef, BindingsResponse, BoundBinding } from '../models/project.model';
 import { ProjectApiService } from '../services/project-api.service';
 import { projectErrorMessage } from '../services/projects.service';
+import { injectProjectPage } from './project-page-state';
+import { ProjectSettingsShellComponent } from './project-settings-shell.component';
+import { HasUnsavedChanges } from './unsaved-changes.guard';
 
 export type BindingKind = 'tools' | 'skills';
-
-export interface ProjectBindingsDialogData {
-  projectId: string;
-  canEdit: boolean;
-  kind: BindingKind;
-  /** What the project binds today. */
-  bound: string[];
-  /** What the caller may bind (`AgentService.loadBindable`). */
-  palette: BindableItem[];
-  /** Skills only: the version each bound skill runs, by ref. */
-  pins?: Record<string, BoundBinding>;
-}
-
-/**
- * The project's bindings of this kind after the last write: a Save, or for skills an
- * Update that moved a pin. `undefined` when nothing was written.
- */
-export type ProjectBindingsDialogResult = BindingsResponse | undefined;
 
 const KIND_COPY: Record<BindingKind, { title: string; description: string; noun: string; nounPlural: string; saved: string }> = {
   tools: {
@@ -57,8 +41,9 @@ function sameRefs(a: ReadonlySet<string>, b: string[]): boolean {
 }
 
 /**
- * Pick the project assistant's tools, or its skills: one kind per dialog, opened from
- * its own row on the rail. Save writes the selection as a settings version.
+ * `/projects/:id/tools` and `/projects/:id/skills` — pick the project assistant's
+ * tools, or its skills. The kind comes from the route's `data`. Save writes the
+ * selection as a settings version; the page asks before a link leaves it unsaved.
  *
  * A tool or skill the caller can't use themselves stays listed if someone else added
  * it, and a save keeps it: the server only checks what a save adds.
@@ -67,80 +52,100 @@ function sameRefs(a: ReadonlySet<string>, b: string[]): boolean {
  * content and is saved straight away, apart from Save, like any settings change.
  */
 @Component({
-  selector: 'app-project-bindings-dialog',
+  selector: 'app-project-bindings-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DialogShellComponent, ToolSelectorComponent],
+  imports: [ProjectSettingsShellComponent, ToolSelectorComponent],
+  host: { '(window:beforeunload)': 'onBeforeUnload($event)' },
   template: `
-    <app-dialog-shell [title]="copy.title" [description]="copy.description" size="lg" (closed)="cancel()">
-      <app-tool-selector
-        [items]="items()"
-        [selected]="selected()"
-        (selectedChange)="selected.set($event)"
-        (itemAction)="updatePin($event)"
-        [label]="copy.title"
-        [noun]="copy.noun"
-        [nounPlural]="copy.nounPlural"
-        [disabled]="!data.canEdit"
-        [emptyText]="'None are available to you.'"
-        maxHeight="lg"
-      />
-      @if (error()) {
-        <p role="alert" class="mt-4 text-sm/6 text-state-danger-600 dark:text-state-danger-400">{{ error() }}</p>
-      }
-
-      <div dialogFooter class="flex justify-end gap-3 border-t border-gray-200 px-6 py-4 dark:border-gray-700">
-        <button
-          type="button"
-          (click)="cancel()"
-          class="rounded-2xl px-4 py-2 text-sm/6 font-medium text-gray-600 hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-500 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white"
-        >
-          {{ data.canEdit ? 'Cancel' : 'Close' }}
-        </button>
-        @if (data.canEdit) {
+    <app-project-settings-shell
+      [project]="state.project()"
+      [loading]="state.loading() || (!loaded() && !loadError())"
+      [error]="state.error()"
+      [heading]="copy().title"
+      [description]="copy().description"
+    >
+      @if (state.canEdit() && loaded()) {
+        <div shellActions class="flex items-center gap-3">
+          <button
+            type="button"
+            (click)="discard()"
+            [disabled]="!dirty() || saving()"
+            class="rounded-2xl px-4 py-2 text-sm/6 font-medium text-gray-600 hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white"
+          >
+            Discard changes
+          </button>
           <button
             type="button"
             (click)="save()"
             [disabled]="!dirty() || saving()"
             class="rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-semibold text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {{ saving() ? 'Saving…' : 'Save' }}
+            {{ saving() ? 'Saving…' : 'Save ' + copy().nounPlural }}
           </button>
+        </div>
+      }
+
+      @if (state.project()) {
+        @if (loadError()) {
+          <p role="alert" class="text-sm/6 text-state-danger-600 dark:text-state-danger-400">{{ loadError() }}</p>
+        } @else {
+          @if (error()) {
+            <p role="alert" class="mb-4 text-sm/6 text-state-danger-600 dark:text-state-danger-400">{{ error() }}</p>
+          }
+          <app-tool-selector
+            [items]="items()"
+            [selected]="selected()"
+            (selectedChange)="selected.set($event)"
+            (itemAction)="updatePin($event)"
+            [label]="copy().title"
+            [noun]="copy().noun"
+            [nounPlural]="copy().nounPlural"
+            [disabled]="!state.canEdit()"
+            [emptyText]="'None are available to you.'"
+            maxHeight="lg"
+          />
         }
-      </div>
-    </app-dialog-shell>
+      }
+    </app-project-settings-shell>
   `,
 })
-export class ProjectBindingsDialogComponent {
-  private dialogRef = inject<DialogRef<ProjectBindingsDialogResult>>(DialogRef);
+export class ProjectBindingsPage implements HasUnsavedChanges {
   private api = inject(ProjectApiService);
+  private agents = inject(AgentService);
   private toast = inject(ToastService);
 
-  protected readonly data = inject<ProjectBindingsDialogData>(DIALOG_DATA);
-  protected readonly copy = KIND_COPY[this.data.kind];
+  /** Route param and route data (`withComponentInputBinding`). */
+  readonly id = input.required<string>();
+  readonly kind = input.required<BindingKind>();
 
-  private readonly saved = signal(this.data.bound);
-  protected readonly selected = signal<ReadonlySet<string>>(new Set(this.data.bound));
-  private readonly pins = signal<Record<string, BoundBinding>>(this.data.pins ?? {});
+  protected readonly state = injectProjectPage(this.id);
+  protected readonly copy = computed(() => KIND_COPY[this.kind()]);
+
+  private readonly choices = signal<ToolSelectorItem[]>([]);
+  /** What the project binds as last saved, which Discard returns to. */
+  private readonly saved = signal<string[]>([]);
+  protected readonly selected = signal<ReadonlySet<string>>(new Set());
+  private readonly pins = signal<Record<string, BoundBinding>>({});
   /** The skill whose pin is being updated. */
   private readonly pinning = signal<string | null>(null);
+  protected readonly loaded = signal(false);
+  protected readonly loadError = signal<string | null>(null);
   protected readonly saving = signal(false);
   protected readonly error = signal<string | null>(null);
-  /** The last write, reported on close so the rail can update in place. */
-  private written: BindingsResponse | undefined;
-
-  private readonly choices = choices(this.data.bound, this.data.palette);
 
   protected readonly items = computed<ToolSelectorItem[]>(() => {
-    if (this.data.kind !== 'skills') return this.choices;
+    const choices = this.choices();
+    if (this.kind() !== 'skills') return choices;
     const saved = this.saved();
     const pins = this.pins();
     const pinning = this.pinning();
     const busy = pinning !== null || this.saving();
-    return this.choices.map(item => {
+    const canEdit = this.state.canEdit();
+    return choices.map(item => {
       const pin = saved.includes(item.id) ? pins[item.id] : undefined;
       if (!pin) return item;
       const line = pinLine(pin);
-      const offer = this.data.canEdit && !item.locked && (pin.updateAvailable || !pin.version);
+      const offer = canEdit && !item.locked && (pin.updateAvailable || !pin.version);
       return {
         ...item,
         note: item.locked ? `${line} ${FOREIGN_NOTE}` : line,
@@ -156,7 +161,49 @@ export class ProjectBindingsDialogComponent {
     });
   });
 
-  protected readonly dirty = computed(() => !sameRefs(this.selected(), this.saved()));
+  protected readonly dirty = computed(() => this.loaded() && !sameRefs(this.selected(), this.saved()));
+
+  constructor() {
+    effect(() => {
+      const id = this.id();
+      const kind = this.kind();
+      untracked(() => void this.load(id, kind));
+    });
+  }
+
+  private async load(projectId: string, kind: BindingKind): Promise<void> {
+    this.loaded.set(false);
+    this.loadError.set(null);
+    this.error.set(null);
+    try {
+      const [bound, palette] = await Promise.all([
+        firstValueFrom(this.api.bindings(projectId, kind)),
+        this.agents.loadBindable(kind === 'tools' ? 'tool' : 'skill'),
+      ]);
+      if (projectId !== this.id() || kind !== this.kind()) return;
+      const refs = bound.bindings.map(b => b.ref);
+      this.choices.set(choices(refs, palette));
+      this.saved.set(refs);
+      this.selected.set(new Set(refs));
+      this.pins.set(pinsOf(bound));
+      this.loaded.set(true);
+    } catch (err) {
+      if (projectId === this.id()) this.loadError.set(projectErrorMessage(err, `The ${KIND_COPY[kind].nounPlural} could not be loaded.`));
+    }
+  }
+
+  hasUnsavedChanges(): boolean {
+    return this.dirty();
+  }
+
+  protected onBeforeUnload(event: BeforeUnloadEvent): void {
+    if (this.dirty()) event.preventDefault();
+  }
+
+  protected discard(): void {
+    this.selected.set(new Set(this.saved()));
+    this.error.set(null);
+  }
 
   protected async save(): Promise<void> {
     if (!this.dirty() || this.saving()) return;
@@ -165,10 +212,10 @@ export class ProjectBindingsDialogComponent {
     try {
       const selected = this.selected();
       // Keep the palette's order so an unchanged selection is an unchanged list.
-      const bindings: BindingRef[] = this.choices.filter(c => selected.has(c.id)).map(c => ({ ref: c.id }));
-      this.written = await firstValueFrom(this.api.saveBindings(this.data.projectId, this.data.kind, bindings));
-      this.toast.success(this.copy.saved);
-      this.dialogRef.close(this.written);
+      const bindings: BindingRef[] = this.choices().filter(c => selected.has(c.id)).map(c => ({ ref: c.id }));
+      const written = await firstValueFrom(this.api.saveBindings(this.id(), this.kind(), bindings));
+      this.adopt(written);
+      this.toast.success(this.copy().saved);
     } catch (err) {
       this.error.set(projectErrorMessage(err, 'That change could not be saved.'));
     } finally {
@@ -181,13 +228,12 @@ export class ProjectBindingsDialogComponent {
    * change; unsaved checkbox changes are left as they are.
    */
   protected async updatePin(item: ToolSelectorItem): Promise<void> {
-    if (this.data.kind !== 'skills' || this.pinning() !== null) return;
+    if (this.kind() !== 'skills' || this.pinning() !== null) return;
     this.pinning.set(item.id);
     this.error.set(null);
     try {
-      const saved = await firstValueFrom(this.api.pinSkill(this.data.projectId, item.id));
-      this.written = saved;
-      this.pins.set(pinsOf(saved));
+      const written = await firstValueFrom(this.api.pinSkill(this.id(), item.id));
+      this.pins.set(pinsOf(written));
       this.toast.success(`${item.name} updated`);
     } catch (err) {
       this.error.set(projectErrorMessage(err, 'That skill could not be updated.'));
@@ -196,9 +242,12 @@ export class ProjectBindingsDialogComponent {
     }
   }
 
-  /** Cancelling after an Update still reports it, so the rail's history version moves. */
-  protected cancel(): void {
-    this.dialogRef.close(this.written);
+  /** A save's response is the new saved state. */
+  private adopt(written: BindingsResponse): void {
+    const refs = written.bindings.map(b => b.ref);
+    this.saved.set(refs);
+    this.selected.set(new Set(refs));
+    this.pins.set(pinsOf(written));
   }
 }
 
