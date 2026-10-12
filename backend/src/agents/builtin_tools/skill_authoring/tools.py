@@ -146,6 +146,22 @@ def _field_problems(display_name: Optional[str], description: Optional[str]) -> 
     return problems
 
 
+def _log_applied(tool_name: str, skill_id: str, session_id: str) -> None:
+    """One line per write that went through, for the pilot readout.
+
+    The approval hook logs every pause, so pauses minus these lines is the number
+    of writes the user declined (or that failed after approval). Ids only: the
+    content stays out of logs. ``scripts/skill_authoring_pilot_readout.py``
+    parses this exact shape.
+    """
+    logger.info(
+        "%s applied %s",
+        tool_name,
+        skill_id,
+        extra={"event": "skill_authoring_write", "tool": tool_name, "session_id": session_id},
+    )
+
+
 def _stale_note() -> str:
     return (
         "If this skill was activated earlier in this conversation, what that earlier "
@@ -306,11 +322,7 @@ def make_my_skill_create_tool(session_id: str, user_id: str, user_email: Optiona
             )
         except Exception as exc:  # noqa: BLE001 - surfaced as a tool result
             return _failure("create the skill", exc)
-        logger.info(
-            "my_skill_create created %s",
-            skill.skill_id,
-            extra={"event": "skill_authoring_create", "session_id": session_id},
-        )
+        _log_applied("my_skill_create", skill.skill_id, session_id)
         return _ok(
             f'Created the skill "{skill.display_name}" (id: {skill.skill_id}). It is saved '
             "but turned off, and it cannot be used in this conversation. To try it, the "
@@ -377,6 +389,7 @@ def make_my_skill_update_tool(session_id: str, user_id: str, user_email: Optiona
             )
         except Exception as exc:  # noqa: BLE001 - surfaced as a tool result
             return _failure(f"update skill '{skill_id}'", exc, skill_id)
+        _log_applied("my_skill_update", skill_id, session_id)
         return _ok(
             f'Updated "{skill.display_name}" ({", ".join(sorted(updates))}). {_stale_note()}'
         )
@@ -423,6 +436,7 @@ def make_my_skill_write_file_tool(session_id: str, user_id: str, user_email: Opt
             )
         except Exception as exc:  # noqa: BLE001 - surfaced as a tool result
             return _failure(f"write '{filename}'", exc, skill_id)
+        _log_applied("my_skill_write_file", skill_id, session_id)
         return _ok(
             f"Saved '{filename}' ({kind}, {size:,} bytes) to skill '{skill_id}', which now "
             f"has {len(refs)} of {MAX_RESOURCES_PER_SKILL} files. If this file was read "
@@ -451,6 +465,7 @@ def make_my_skill_delete_file_tool(session_id: str, user_id: str, user_email: Op
             )
         except Exception as exc:  # noqa: BLE001 - surfaced as a tool result
             return _failure(f"delete '{filename}'", exc, skill_id)
+        _log_applied("my_skill_delete_file", skill_id, session_id)
         return _ok(
             f"Deleted '{filename}' from skill '{skill_id}', which now has {len(refs)} files."
         )
