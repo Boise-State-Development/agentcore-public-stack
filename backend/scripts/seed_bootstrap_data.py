@@ -22,6 +22,7 @@ Environment variables:
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import re
@@ -30,6 +31,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
+from pathlib import Path
 from typing import Any, Optional
 
 import boto3
@@ -1072,8 +1074,25 @@ def _skill_slug(skill_id: str) -> str:
     return slug[:64].strip("-") or "skill"
 
 
+def _frontmatter_value(value: str) -> str:
+    """A YAML scalar for one frontmatter line.
+
+    Plain when that is unambiguous, else a double-quoted string (a JSON string is
+    a valid YAML double-quoted scalar). A description such as "Review: grants"
+    written plain would make the whole frontmatter unparseable.
+    """
+    text = str(value)
+    if not text or ": " in text or " #" in text or text[0] in "!&*-?{}[]|>'\"%@`#,":
+        return json.dumps(text, ensure_ascii=False)
+    return text
+
+
 def _write_skill_md(
-    skill_id: str, description: str, instructions: str, region: str
+    skill_id: str,
+    description: str,
+    instructions: str,
+    region: str,
+    metadata: Optional[dict[str, str]] = None,
 ) -> None:
     """Write the skill's ``SKILL.md`` projection so the prefix is a real bundle.
 
@@ -1087,10 +1106,14 @@ def _write_skill_md(
     if not bucket:
         return
 
+    extra = "".join(
+        f"{key}: {_frontmatter_value(value)}\n" for key, value in (metadata or {}).items()
+    )
     content = (
         "---\n"
         f"name: {_skill_slug(skill_id)}\n"
-        f"description: {description}\n"
+        f"description: {_frontmatter_value(description)}\n"
+        f"{extra}"
         "---\n"
         "\n"
         f"{instructions.strip()}\n"
@@ -1321,6 +1344,169 @@ def seed_example_skills(
     return result
 
 
+# =============================================================================
+# Skill Creator (docs/specs/skill-creator.md, PR-C)
+# =============================================================================
+#
+# A platform skill that helps users author their own skills. Its content lives
+# as a real bundle under ``scripts/seed_skills/skill_creator/`` (SKILL.md plus
+# reference files), so it is reviewed as Markdown rather than as Python
+# strings, and it is adapted from Anthropic's Apache-2.0 skill-creator (see the
+# bundle's NOTICE.md).
+#
+# Deliberately NOT granted to any role. The spec pilots it with one role first
+# and widens later (PR-D); which role is the pilot is a deployment's choice, made
+# in the admin roles UI. Until then only roles holding the skills wildcard
+# (system_admin) can reach it, and skills are opt-in per user even then.
+#
+# It works with or without the skill authoring tools: with ``my_skill_create``
+# granted it saves skills directly, and without it the user copies the draft
+# into Customize -> Skills -> Add.
+
+SEED_SKILLS_DIR = Path(__file__).resolve().parent / "seed_skills"
+
+SKILL_CREATOR_ID = "skill_creator"
+SKILL_CREATOR_DISPLAY_NAME = "Skill Creator"
+SKILL_CREATOR_CATEGORY = "Utility"
+
+_REFERENCE_CONTENT_TYPES = {".md": "text/markdown", ".txt": "text/plain"}
+
+
+@dataclass
+class SeedSkillBundle:
+    """A skill bundle read from ``seed_skills/<dir>/``."""
+
+    frontmatter: dict[str, str]
+    instructions: str
+    references: list[tuple[str, bytes, str]]  # (filename, bytes, content type)
+
+
+def load_seed_skill_bundle(directory: Path) -> SeedSkillBundle:
+    """Read a ``SKILL.md`` and its ``references/`` files.
+
+    The frontmatter is read as flat ``key: value`` lines (the subset the SPA's
+    importer also reads), so this standalone script needs no YAML dependency.
+    A double-quoted value is decoded as JSON.
+    """
+    text = (directory / "SKILL.md").read_text(encoding="utf-8")
+    match = re.match(r"\A---\n(.*?)\n---\n(.*)\Z", text, re.S)
+    if not match:
+        raise ValueError(f"{directory}/SKILL.md has no frontmatter block")
+    frontmatter: dict[str, str] = {}
+    for line in match.group(1).splitlines():
+        key, sep, value = line.partition(":")
+        if not sep or not key.strip():
+            raise ValueError(f"{directory}/SKILL.md: unreadable frontmatter line {line!r}")
+        value = value.strip()
+        frontmatter[key.strip()] = json.loads(value) if value.startswith('"') else value
+    references = []
+    ref_dir = directory / "references"
+    for path in sorted(ref_dir.iterdir()) if ref_dir.is_dir() else []:
+        content_type = _REFERENCE_CONTENT_TYPES.get(path.suffix.lower())
+        if content_type is None:
+            raise ValueError(f"{path}: only .md and .txt reference files are seeded")
+        references.append((path.name, path.read_bytes(), content_type))
+    return SeedSkillBundle(frontmatter, match.group(2).strip() + "\n", references)
+
+
+def seed_skill_creator(
+    table_name: str,
+    region: str,
+    bundle_dir: Optional[Path] = None,
+) -> SeedResult:
+    """Seed the Skill Creator as an admin-catalog skill, granted to no role.
+
+    Idempotent: an existing catalog row is left alone, so an admin's edits
+    survive a re-seed. If a USER owns the id (ids are global across the two
+    tiers), nothing is written and the run reports a failure rather than
+    overwriting someone's skill.
+    """
+    result = SeedResult(category="skill_creator")
+    bundle = load_seed_skill_bundle(bundle_dir or SEED_SKILLS_DIR / SKILL_CREATOR_ID)
+    table = boto3.Session(region_name=region).resource("dynamodb").Table(table_name)
+
+    skill_id = SKILL_CREATOR_ID
+    pk = f"SKILL#{skill_id}"
+    try:
+        existing = table.get_item(Key={"PK": pk, "SK": "METADATA"}).get("Item")
+    except ClientError as e:
+        msg = f"Failed to check existing skill '{skill_id}': {e}"
+        logger.error(msg)
+        result.failed += 1
+        result.details.append(msg)
+        return result
+    if existing:
+        if existing.get("ownerId") == "system":
+            msg = f"Skill '{skill_id}' already exists — skipped"
+            logger.info(msg)
+            result.skipped += 1
+        else:
+            msg = (
+                f"Skill id '{skill_id}' belongs to a user's own skill — not seeded. "
+                "Rename that skill or seed the Skill Creator under another id."
+            )
+            logger.error(msg)
+            result.failed += 1
+        result.details.append(msg)
+        return result
+
+    resources = []
+    for filename, content, content_type in bundle.references:
+        ref = _upload_skill_reference(skill_id, filename, content, content_type, region)
+        if ref:
+            resources.append(ref)
+
+    description = bundle.frontmatter["description"]
+    metadata = {
+        key: value
+        for key, value in bundle.frontmatter.items()
+        if key not in ("name", "description")
+    }
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    item: dict[str, Any] = {
+        "PK": pk,
+        "SK": "METADATA",
+        # SkillOwnerIndex (GSI4) — mirrors SkillDefinition.to_dynamo_item.
+        "GSI4PK": "OWNER#system",
+        "GSI4SK": pk,
+        "skillId": skill_id,
+        "displayName": SKILL_CREATOR_DISPLAY_NAME,
+        "description": description,
+        "instructions": bundle.instructions,
+        "category": SKILL_CREATOR_CATEGORY,
+        "skillMetadata": metadata,
+        "allowedTools": [],
+        "compose": [],
+        "resources": resources,
+        "status": "active",
+        "ownerId": "system",
+        "visibility": "admin",
+        "createdAt": now,
+        "updatedAt": now,
+        "createdBy": "bootstrap-seed",
+        "updatedBy": "bootstrap-seed",
+    }
+    try:
+        # Conditional, so a row created between the read and this write wins.
+        table.put_item(Item=item, ConditionExpression="attribute_not_exists(PK)")
+    except ClientError as e:
+        msg = f"Failed to write skill '{skill_id}': {e}"
+        logger.error(msg)
+        result.failed += 1
+        result.details.append(msg)
+        return result
+
+    _write_skill_md(skill_id, description, bundle.instructions, region, metadata)
+    msg = (
+        f"Skill '{skill_id}' created ({len(resources)} reference file(s)); "
+        "not granted to any role — grant it to a pilot role in Admin → Roles"
+    )
+    logger.info(msg)
+    result.created += 1
+    result.details.append(msg)
+    return result
+
+
 def _serialize(item: dict[str, Any]) -> dict[str, Any]:
     """Convert a high-level DynamoDB item dict to low-level client format."""
     from boto3.dynamodb.types import TypeSerializer
@@ -1383,6 +1569,9 @@ def main() -> None:
 
     # --- Example bundled skill (PR-6b) ---
     results.append(seed_example_skills(table_name=app_roles_table, region=region))
+
+    # --- Skill Creator (skill-creator spec PR-C); granted to no role ---
+    results.append(seed_skill_creator(table_name=app_roles_table, region=region))
 
     # --- Summary ---
     print_summary(results)

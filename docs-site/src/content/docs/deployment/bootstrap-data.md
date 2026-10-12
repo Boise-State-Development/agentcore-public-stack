@@ -18,6 +18,12 @@ table names from SSM and runs `backend/scripts/seed_bootstrap_data.py` to upsert
 - **RBAC roles** — the baseline role definitions.
 - **Quota tiers** — default usage limits.
 - **Tool catalog** — the built-in tool entries.
+- **Skills** — two admin-catalog skills. *Web Research Assistant* is granted to the
+  `default` role. *Skill Creator* (helps users write their own skills, adapted from
+  Anthropic's Apache-2.0 `skill-creator`) is granted to **no role**: grant it to a pilot
+  role under **Admin → Roles** when you are ready. It saves skills directly for users
+  who also have the Skill Authoring tool (`SKILL_AUTHORING_ENABLED`), and hands everyone
+  else a draft to add under Customize → Skills.
 
 ## Safe to re-run
 
@@ -38,6 +44,6 @@ dashboard — no redeploy or seed required.
 
 | You changed | Re-run |
 |-------------|--------|
-| Default tools, models, or roles | `bootstrap-data-seeding.yml` |
+| Default tools, models, roles, or seeded skills | `bootstrap-data-seeding.yml` |
 
 Routine application and infrastructure changes don't need a re-seed.
