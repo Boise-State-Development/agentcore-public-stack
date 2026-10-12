@@ -511,6 +511,23 @@ class ProjectRepository:
         item = self._table.get_item(Key=self._key(project_id, f"{OUTPUT_SK_PREFIX}{artifact_id}")).get("Item")
         return ProjectOutput.model_validate(_strip_keys(item)) if item else None
 
+    def set_output_preview(self, project_id: str, artifact_id: str, version: int, preview: str) -> None:
+        """Keep a computed excerpt on the pointer, only while it still lists ``version``.
+
+        A pointer rebuilt for another version since the excerpt was read keeps
+        none, and the next listing computes that version's.
+        """
+        try:
+            self._table.update_item(
+                Key=self._key(project_id, f"{OUTPUT_SK_PREFIX}{artifact_id}"),
+                UpdateExpression="SET preview = :p",
+                ConditionExpression="attribute_exists(PK) AND version = :v",
+                ExpressionAttributeValues={":p": preview, ":v": version},
+            )
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+                raise
+
     def delete_output(self, project_id: str, artifact_id: str) -> None:
         self._table.delete_item(Key=self._key(project_id, f"{OUTPUT_SK_PREFIX}{artifact_id}"))
 

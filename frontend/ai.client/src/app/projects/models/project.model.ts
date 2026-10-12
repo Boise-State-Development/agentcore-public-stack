@@ -202,6 +202,12 @@ export interface ProjectOutput {
   canRemove: boolean;
   /** The project schedule that published it (3.2d), when one did. */
   scheduleId?: string | null;
+  /**
+   * A short excerpt for the card (`apis/app_api/artifacts/preview.py`): the
+   * opening Markdown, the first CSV rows, a page's text or a small SVG. Null
+   * when the artifact has none to show; the card then draws its type's icon.
+   */
+  preview?: string | null;
 }
 
 export interface ProjectOutputsResponse {

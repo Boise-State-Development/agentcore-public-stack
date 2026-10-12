@@ -124,8 +124,9 @@ deployment has scheduled runs off.
   for each run. It is only available while runs are shared.
 - **Publish its artifacts to Outputs** puts whatever a run makes, such as a
   report, a chart or a table, under the project's **Outputs**, tagged
-  **Scheduled**. Each run's artifacts replace the previous run's, so Outputs
-  always show the latest edition; earlier editions stay in each run's shared
+  **Scheduled**. The newest one leads Outputs as a wide card with the
+  schedule's cadence and next run. Each run's artifacts replace the previous
+  run's, so Outputs always show the latest edition; earlier editions stay in each run's shared
   conversation. A run that makes nothing leaves the last edition in place. It
   is only available while runs are shared.
 - **Run now** on the form runs the prompt once, straight away, as a

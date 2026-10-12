@@ -17,12 +17,13 @@ now 404s.
 from __future__ import annotations
 
 import logging
-from typing import Iterable, Optional, Tuple
+from concurrent.futures import ThreadPoolExecutor
+from typing import Iterable, List, Optional, Tuple
 
 from apis.shared.auth import User
 from apis.shared.feature_flags import projects_enabled
 from apis.shared.projects.access import resolve_project_role
-from apis.shared.projects.models import Project
+from apis.shared.projects.models import Project, ProjectOutput
 from apis.shared.projects.repository import ProjectRepository
 from apis.shared.shares import artifact_shares
 from apis.shared.security.log_sanitize import scrub_log
@@ -110,6 +111,50 @@ def sync_outputs(owner_id: str, shares: Iterable[dict], repository: Optional[Pro
     }
     for artifact_id, project_id in pairs:
         sync_output(owner_id, artifact_id, project_id, repository=repository)
+
+
+# Previews computed in one listing at once. A listing usually finds one new
+# output; a project opened for the first time since this shipped finds them all.
+_PREVIEW_WORKERS = 4
+
+
+def _compute_preview(output: ProjectOutput) -> Optional[str]:
+    """The excerpt of the version ``output`` lists, "" when it has none, None when unreadable for now."""
+    from . import preview
+    from .service import ArtifactNotFoundError, ArtifactTooLargeError, ArtifactContentService
+
+    try:
+        content, content_type = ArtifactContentService().get(
+            owner_id=output.owner_id, artifact_id=output.artifact_id, version=output.version
+        )
+    except (ArtifactNotFoundError, ArtifactTooLargeError):
+        return ""
+    except Exception:
+        logger.warning("Could not read output %s for its preview", scrub_log(output.artifact_id), exc_info=True)
+        return None
+    return preview.excerpt(content, content_type)
+
+
+def fill_previews(outputs: List[ProjectOutput], repository: Optional[ProjectRepository] = None) -> None:
+    """Give every output without an excerpt one, and keep it on its pointer. Never raises.
+
+    The listing's caller is a member, and a project share lets every member
+    read the artifact, so reading its content here grants nothing new.
+    """
+    missing = [o for o in outputs if o.preview is None]
+    if not missing:
+        return
+    repo = repository or ProjectRepository()
+    with ThreadPoolExecutor(max_workers=min(_PREVIEW_WORKERS, len(missing))) as pool:
+        computed = list(pool.map(_compute_preview, missing))
+    for output, text in zip(missing, computed):
+        if text is None:
+            continue
+        output.preview = text
+        try:
+            repo.set_output_preview(output.project_id, output.artifact_id, output.version, text)
+        except Exception:
+            logger.warning("Could not keep the preview of output %s", scrub_log(output.artifact_id), exc_info=True)
 
 
 def artifact_session_id(owner_id: str, artifact_id: str) -> str:
