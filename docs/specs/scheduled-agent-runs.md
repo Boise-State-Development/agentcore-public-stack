@@ -140,7 +140,7 @@ Attributes:
   promptText: str                       # what to run
   cadence: "daily" | "weekday" | "weekly"
   hourLocal: int (0–23)
-  weekday: int | None                   # for "weekly"
+  weekday: int | None                   # for "weekly"; 0=Monday..6=Sunday (datetime.weekday())
   timezone: str                         # IANA, e.g. "America/Boise"
   state: "active" | "paused" | "paused_error"
   nextRunAt: str                        # ISO 8601 UTC — recomputed on each run/edit

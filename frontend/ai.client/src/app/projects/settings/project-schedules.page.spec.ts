@@ -22,7 +22,7 @@ function schedule(over: Partial<ProjectSchedule> = {}): ProjectSchedule {
     promptText: 'Summarize the week.',
     cadence: 'weekly',
     hourLocal: 9,
-    weekday: 1,
+    weekday: 0,
     timezone: 'America/Boise',
     deliverTo: 'project',
     notifyMembers: true,
