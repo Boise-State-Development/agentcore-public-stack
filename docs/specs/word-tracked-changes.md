@@ -55,7 +55,7 @@ including the base64 round trip): a `.docx` with no tracked changes costs
 **0.3 ms**; a 215 KB `document.xml` (about 50 pages) with 40 changes costs
 **3.5 ms**; an 859 KB one with 150 changes costs **13 ms**. Word's own markup is
 heavier per paragraph than the synthetic test text, so a real 50-page redline
-likely lands at 5–12 ms. If that is too much, the rewrite can start as a task in
+likely lands at 5–12 ms. **Accepted by the developer driving the change, 2026-10-12.** If it proves too much, the rewrite can start as a task in
 `_resolve_turn_attachments` and be awaited at prompt build, which hides it behind
 the session-state, quota and model stages.
 
