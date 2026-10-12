@@ -12,6 +12,7 @@ import asyncio
 import re
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 from typing import List
@@ -141,6 +142,8 @@ class TestOffTheReturnPath:
                 done.set()
 
         monkeypatch.setattr(stats, "_repository", lambda: Slow())
+        # The root conftest runs counts inline; this test is about the thread.
+        monkeypatch.setattr(stats, "_executor", ThreadPoolExecutor(max_workers=1))
         scopes = ProjectMemoryScopes(team.project_id, team.shared_space_id, None, OWNER)
         tool = {t.tool_name: t for t in make_project_memory_tools(scopes)}["memory_read"]
 
