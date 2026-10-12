@@ -110,6 +110,18 @@ class FileTooLargeError(FileUploadError):
         )
 
 
+class UploadSizeMismatchError(FileUploadError):
+    """Raised when the stored object's size differs from the declared size."""
+
+    def __init__(self, declared_bytes: int, stored_bytes: Optional[int]):
+        self.declared_bytes = declared_bytes
+        self.stored_bytes = stored_bytes
+        super().__init__(
+            f"Uploaded size {stored_bytes} bytes does not match declared size "
+            f"{declared_bytes} bytes"
+        )
+
+
 class FileNotFoundError(FileUploadError):
     """Raised when file is not found."""
     pass
@@ -321,9 +333,10 @@ class FileUploadService:
 
         This is Phase 2 of the upload flow:
         1. Verify file exists in pending state
-        2. Optionally verify S3 object exists (HEAD request)
-        3. Update status to READY
-        4. Increment user quota
+        2. Verify S3 object exists (HEAD request)
+        3. Verify the stored size is within the cap and matches the declared size
+        4. Update status to READY
+        5. Increment user quota
 
         Args:
             user_id: The uploading user's ID
@@ -334,6 +347,8 @@ class FileUploadService:
 
         Raises:
             FileNotFoundError: If upload not found or not owned by user
+            FileTooLargeError: If the stored object exceeds the size cap
+            UploadSizeMismatchError: If the stored size differs from the declared size
             FileUploadError: If upload not in pending state
         """
         # Get file metadata
@@ -346,9 +361,9 @@ class FileUploadService:
                 f"Upload {upload_id} is already {file_meta.status}, cannot complete"
             )
 
-        # Optional: Verify S3 object exists
+        # Verify S3 object exists
         try:
-            self._s3_client.head_object(
+            head = self._s3_client.head_object(
                 Bucket=self.bucket_name,
                 Key=file_meta.s3_key,
             )
@@ -362,6 +377,18 @@ class FileUploadService:
                     f"S3 object not found for upload {upload_id}"
                 )
             raise
+
+        # The presigned PUT does not sign Content-Length, so the presign-time
+        # size check only saw what the client declared. Hold the stored object
+        # to the cap and to that declaration before it counts against quota.
+        stored_size = head.get("ContentLength")
+        size_limit = self.max_size_for(file_meta.filename, file_meta.mime_type)
+        if stored_size is not None and stored_size > size_limit:
+            await self._reject_upload(file_meta)
+            raise FileTooLargeError(stored_size, size_limit)
+        if stored_size != file_meta.size_bytes:
+            await self._reject_upload(file_meta)
+            raise UploadSizeMismatchError(file_meta.size_bytes, stored_size)
 
         # Update status to READY
         await self.repository.update_file_status(
@@ -834,6 +861,24 @@ class FileUploadService:
             self._s3_client.delete_object(Bucket=self.bucket_name, Key=thumb_key)
         except ClientError as e:
             logger.warning(f"Failed to delete thumbnail {thumb_key}: {e}")
+
+    async def _reject_upload(self, file_meta: FileMetadata) -> None:
+        """
+        Fail a pending upload whose stored object did not pass verification.
+
+        Marks the row FAILED and best-effort deletes the S3 object. No
+        thumbnail can exist yet: thumbnails render only for READY files.
+        """
+        await self.repository.update_file_status(
+            file_meta.user_id, file_meta.upload_id, FileStatus.FAILED
+        )
+        try:
+            self._s3_client.delete_object(
+                Bucket=self.bucket_name, Key=file_meta.s3_key
+            )
+        except ClientError:
+            logger.warning("Failed to delete rejected upload object", exc_info=True)
+        logger.warning("Rejected upload: stored object failed size verification")
 
     # =========================================================================
     # File Management

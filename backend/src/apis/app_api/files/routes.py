@@ -138,6 +138,16 @@ async def complete_upload(
             detail=f"Upload {upload_id} not found or not owned by you",
         )
 
+    except FileTooLargeError as e:
+        logger.warning(
+            f"Stored upload too large from user {user.name}: "
+            f"{e.size_bytes} > {e.max_size}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"File exceeds {e.max_size // (1024*1024)}MB limit",
+        )
+
     except FileUploadError as e:
         logger.warning("Upload completion error")
         raise HTTPException(
