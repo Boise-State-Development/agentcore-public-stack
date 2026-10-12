@@ -83,7 +83,7 @@ again. See
 [Word redlines in Files](/agentcore-public-stack/user-guide/projects/set-up/#word-redlines-in-files).
 :::
 
-Finally Dana starts a task to seed **project memory**:
+Finally Dana starts a conversation to seed **project memory**:
 
 > Please record these kickoff facts in the shared project memory so everyone
 > sees them: sponsor returned v2 on 29 Sept; our response is due 16 Oct;
@@ -91,19 +91,19 @@ Finally Dana starts a task to seed **project memory**:
 > owns Article 3; Dr. Sokolova confirms scope and publication; Alex Morgan is
 > the escalation point for VPRED/OGC items. Add it to the memory index.
 
-Every teammate's task now starts out knowing the deadline and who owns
-what. In the test run, Priya's assistant routed an escalation to the right
+Every teammate's conversation now starts out knowing the deadline and who
+owns what. In the test run, Priya's assistant routed an escalation to the right
 person with no further prompting.
 
 At the time, the last sentence of Dana's prompt was needed: a new memory
-didn't reliably reach teammates' tasks until a line for it was added to the
-memory index, and the assistant often skipped that step. *(Fixed since: the assistant adds the index
+didn't reliably reach teammates' conversations until a line for it was added to
+the memory index, and the assistant often skipped that step. *(Fixed since: the assistant adds the index
 line itself whenever it saves a new memory.)*
 
 ## Step 2: Each office reviews its clauses, in parallel
 
-Everyone works in **their own task**, so nobody's half-finished analysis lands in
-anyone else's way.
+Everyone works in **their own conversation**, so nobody's half-finished
+analysis lands in anyone else's way.
 
 **Priya (export control)** pastes Article 8 from the sponsor's email:
 
@@ -112,13 +112,13 @@ anyone else's way.
 > sponsor approval of personnel? Apply it to Cascadia's Article 8 and give me
 > counter-language.
 
-![Priya's shared task: a table classifying three sponsor sentences as COUNTER, ESCALATE, ESCALATE with playbook citations and rationale.](../../../../assets/user-guide/projects/shared-snapshot.jpg)
+![Priya's shared conversation: a table classifying three sponsor sentences as COUNTER, ESCALATE, ESCALATE with playbook citations and rationale.](../../../../assets/user-guide/projects/shared-snapshot.jpg)
 
 Her first, longer question returned the wrong playbook sections. The
 short, keyword-rich version above found §7 directly. See
 [Ask good questions](/agentcore-public-stack/user-guide/projects/tips-and-limits/#ask-questions-the-files-can-answer).
 
-**Tom (tech transfer)** attaches the v2 redline to his task and asks:
+**Tom (tech transfer)** attaches the v2 redline to his conversation and asks:
 
 > Focus on Article 7 (IP): 1) quote exactly what Cascadia deleted and what they
 > inserted; 2) classify against playbook §1 and draft our response language;
@@ -136,10 +136,10 @@ her student's thesis. The assistant explains that sponsor approval of
 publications is non-negotiable under the playbook, and drafts a carve-out for
 theses.
 
-Each of them then opens **Share › Project members**, and the **Tasks** tab fills
-up with the team's analyses.
+Each of them then opens **Share › Project members**, and the project page's
+**Shared with the project** list fills up with the team's analyses.
 
-![The Tasks tab listing tasks shared by several team members, each with Continue in my own task.](../../../../assets/user-guide/projects/tasks.jpg)
+![The Shared with the project list: conversations shared by several team members, each with Continue in my own conversation.](../../../../assets/user-guide/projects/tasks.jpg)
 
 :::caution[Lesson: check numbers and rules before they're saved]
 Jordan's analysis concluded the university would be owed **$0** at month 12
@@ -152,8 +152,8 @@ the whole team's assistant accurate.
 
 ## Step 3: Marcus drafts the response redline
 
-Marcus reads the shared tasks, starts a **fresh task**, attaches Cascadia's v2,
-and pastes the team's positions:
+Marcus reads the shared conversations, starts a **fresh conversation**,
+attaches Cascadia's v2, and pastes the team's positions:
 
 > Team positions to apply: Art. 3 restore 50/50, net 30, no acceptance
 > contingency; Art. 5 three years, strike the student acknowledgement; Art. 6
@@ -174,10 +174,10 @@ as genuine tracked changes, ready for **Review › Accept/Reject** in Word.
 
 Marcus's review still catches one miss. In Article 5 the assistant struck the
 student acknowledgement but left "These obligations bind each individual,
-including students". He fixes it in Word and shares his task.
+including students". He fixes it in Word and shares his conversation.
 
-The generated file belongs to Marcus's task, so teammates can't open it from
-the shared snapshot. In the test run he added **v3** to the project's Files so
+The generated file belongs to Marcus's conversation, so teammates can't open it
+from the shared snapshot. In the test run he added **v3** to the project's Files so
 they could. Because Files flattened tracked changes at the time, the assistant
 later read v3's Article 10 as "already matches our standard, no escalation
 needed", when Cascadia had in fact demanded university indemnification.
@@ -193,14 +193,14 @@ Two days before the deadline, Dana goes on leave. She opens **Members** and
 chooses **Make owner** for Alex Morgan, the associate VP. Alex is notified, and
 Dana stays on as an editor.
 
-Alex starts a task:
+Alex starts a conversation:
 
 > I'm now the project owner. Give me my escalation queue for Cascadia: every
 > item that needs VPRED/OGC or my sign-off, who raised it, and the proposed
 > University position. Also tell me what you could NOT see, so I know how
 > complete this is.
 
-![Alex's task inside the project: an escalation queue table compiled from the sponsor markup and the playbook.](../../../../assets/user-guide/projects/project-task.jpg)
+![Alex's conversation inside the project: an escalation queue table compiled from the sponsor markup and the playbook.](../../../../assets/user-guide/projects/project-task.jpg)
 
 The last sentence of that prompt is worth copying. The assistant listed which
 articles it had and hadn't seen, which told Alex what to double-check.
@@ -208,20 +208,21 @@ articles it had and hadn't seen, which told Alex what to double-check.
 :::caution[Lesson: the assistant only knows what reached project memory or Files]
 When counsel (a viewer) asked the same question earlier, the answer listed **two**
 escalations instead of seven. Priya's Article 8 position and Dr. Sokolova's thesis
-requirement lived only in shared tasks and in the PI's own "just for me"
-memory, and the assistant doesn't read shared tasks. Some team memories saved
-in the run were also never added to the memory index, so teammates' tasks
-didn't see them *(fixed since: new memories are indexed automatically)*. If a
-decision matters, an editor should **record it in project memory**.
+requirement lived only in shared conversations and in the PI's own "just for
+me" memory, and the assistant doesn't read shared conversations. Some team
+memories saved in the run were also never added to the memory index, so
+teammates' conversations didn't see them *(fixed since: new memories are
+indexed automatically)*. If a decision matters, an editor should **record it in
+project memory**.
 :::
 
 ## Step 5: Wrapping up
 
-- Tom finishes the IP review and **leaves** the project. His shared task stays
-  listed for the team.
+- Tom finishes the IP review and **leaves** the project. His shared
+  conversation stays listed for the team.
 - After Cascadia signs, Alex **archives** the project. It stays readable, with
-  its files, history and shared tasks, but nobody can start new work in it.
-  If the sponsor comes back with an amendment, Alex **restores** it.
+  its files, history and shared conversations, but nobody can start new work
+  in it. If the sponsor comes back with an amendment, Alex **restores** it.
 
 ## What made it work
 
@@ -229,7 +230,7 @@ decision matters, an editor should **record it in project memory**.
    reviewer, with the same format and citations.
 2. **Owners for each clause, recorded in memory.** The assistant routed issues
    to the right office without being told each time.
-3. **Private tasks, explicit sharing.** People worked in parallel and published
+3. **Private conversations, explicit sharing.** People worked in parallel and published
    finished analyses.
 4. **Redlines read as redlines.** Tom's attached redline let the assistant
    quote each deletion and insertion. Since the fix, a redline in Files does

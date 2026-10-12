@@ -7,7 +7,8 @@ sidebar:
 ---
 
 Setting up a project takes about ten minutes. Most of that is writing good
-instructions, and that time pays back on every task anyone runs in the project.
+instructions, and that time pays back in every conversation anyone has in the
+project.
 
 ## 1. Create the project
 
@@ -19,8 +20,8 @@ its **owner**.
 
 ## 2. Write the instructions
 
-Open **Settings › Instructions**. Instructions are what the assistant is told at
-the start of *every* task, for *every* member. Treat them as a standing brief:
+Open **Instructions** in the project's settings rail. Instructions are what the
+assistant is told at the start of *every* conversation, for *every* member. Treat them as a standing brief:
 who the assistant works for, which documents are authoritative, how answers
 should be laid out, and what it must never do.
 
@@ -36,7 +37,7 @@ A good brief covers four things:
    non-negotiable. Say who on the team should handle questions outside contract
    terms."
 
-![Settings tab: the Instructions editor with the version number and character count.](../../../../assets/user-guide/projects/settings-instructions.jpg)
+![The Instructions editor with the version number and character count.](../../../../assets/user-guide/projects/settings-instructions.jpg)
 
 Every save that changes something becomes a new **version**. See
 [History](/agentcore-public-stack/user-guide/projects/work-together/#settings-history-and-activity).
@@ -50,7 +51,7 @@ which ride along on every conversation you have.
 
 ## 3. Choose a model, tools and skills
 
-Still in **Settings**:
+Each of these is its own row in the rail:
 
 - **Model.** Leave it on *Each member's default model*, or pin one model for
   the whole team. Anyone who can't use the pinned model gets their own
@@ -67,7 +68,7 @@ Still in **Settings**:
 - **Skills.** Add any skills the team relies on.
 
 If a member doesn't have access to one of the project's tools, skills, its model
-or its memory, their tasks still run without it, and a notice above the
+or its memory, their conversations still run without it, and a notice above the
 composer says what was left out.
 
 ## 4. Add the files the assistant should work from
@@ -77,7 +78,7 @@ Markdown, HTML and plain text are accepted. Everyone in the project can open
 these files, and the assistant searches them to answer *anyone* in the project.
 The page reminds you how many people that is.
 
-![The Files tab: five files, each showing who added it, with Ready or Setting up status and a storage meter.](../../../../assets/user-guide/projects/files-setting-up.jpg)
+![The Files page: five files, each showing who added it, with Ready or Setting up status and a storage meter.](../../../../assets/user-guide/projects/files-setting-up.jpg)
 
 Each file shows who added it and a status:
 
@@ -130,24 +131,25 @@ emails, and pick a role. Invalid addresses and people who are already members
 are reported back to you. Anyone you add gets a notification (the bell next to
 your name in the sidebar), and the project appears in their Projects list.
 
-![The Members tab from the owner's view: role pickers, remove buttons and Make owner.](../../../../assets/user-guide/projects/members.jpg)
+![The Members page from the owner's view: role pickers, remove buttons and Make owner.](../../../../assets/user-guide/projects/members.jpg)
 
 - Change a role with the role picker next to a person's name, or remove them
   with the trash icon.
 - By default, **editors can manage members too**. To keep that to yourself,
-  clear **Settings › Owner controls › Editors can manage members**.
+  clear **Editors can manage members** on the Members page.
 
 ![Owner controls: the Editors can manage members checkbox and the Archive project button.](../../../../assets/user-guide/projects/owner-controls.jpg)
 
 ## 6. Seed the project memory
 
 Before the team starts, give the assistant the facts everyone should share: key
-dates, who owns which part, decisions already made. Start a task and ask:
+dates, who owns which part, decisions already made. Start a conversation and
+ask:
 
 > Please record these kickoff facts in the shared project memory so everyone on
 > the team sees them: our response is due 16 October; Marcus drafts the
 > response; Priya owns export control; Tom owns IP.
 
 The assistant saves them and adds a line to the project memory index, which is
-what every teammate's task starts from. See
+what every teammate's conversation starts from. See
 [Project memory](/agentcore-public-stack/user-guide/projects/work-together/#project-memory).
