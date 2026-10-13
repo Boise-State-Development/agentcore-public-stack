@@ -15,10 +15,9 @@ over the document and web-crawl routes, authorized by the project instead:
     whose viewers should see its files, so reads call the document service
     directly, with the harness's owner id the service keys on.
 
-A project's knowledge base is only ever created managed (Bedrock): adding the
-first file to a project starts born-managed provisioning on every path, and if
-that cannot start, the file is refused rather than founding a classic knowledge
-base. A project that already has a classic one keeps using it.
+Projects are native to managed (Bedrock) knowledge bases: adding the first file
+starts born-managed provisioning on every path, and a file is refused rather than
+ever added to a classic knowledge base.
 
 Every document says who added it (``addedByEmail``, and ``addedByName`` from
 the directory), resolved from the member list, so a former member's files show
@@ -42,11 +41,7 @@ from apis.app_api.documents.models import (
     ImportDocumentsRequest,
     ReportUploadFailureRequest,
 )
-from apis.app_api.documents.services.document_service import (
-    assistant_has_documents,
-    get_document,
-    list_assistant_documents,
-)
+from apis.app_api.documents.services.document_service import get_document, list_assistant_documents
 from apis.app_api.kb_upgrade.born_managed import begin_born_managed
 from apis.app_api.documents.services.storage_service import generate_download_url
 from apis.app_api.sync_policies import routes as sync_routes
@@ -122,22 +117,21 @@ def _document(doc, emails: Dict[str, str], names: Dict[str, str]) -> ProjectDocu
 
 
 async def _require_managed_knowledge(harness: Assistant) -> None:
-    """Refuse to found a classic knowledge base for a project.
+    """Refuse to add a project's file to anything but a managed knowledge base.
 
     ``begin_born_managed`` starts (or joins) provisioning for a project with no
     knowledge yet and is idempotent, so the agent handler calling it again is a
-    no-op. It answers "legacy" when ``MANAGED_KB_NEW_DEFAULT`` is off or the start
-    failed; the agent handlers then carry on on the classic engine, which a project
-    must not. An existing classic knowledge base (it already holds documents) is
-    left as it is.
+    no-op. It answers "legacy" when ``MANAGED_KB_NEW_DEFAULT`` is off, the start
+    failed, or the harness already holds classic documents; the agent handlers
+    would then carry on on the classic engine, which a project never uses.
     """
     from apis.shared.kb_backend.records import ENGINE_MANAGED, get_kb_record, resolve_engine
 
     await begin_born_managed(harness.assistant_id, owner_user_id=harness.owner_id)
     record = await asyncio.to_thread(get_kb_record, harness.assistant_id, harness.assistant_id)
-    if resolve_engine(record) == ENGINE_MANAGED or await assistant_has_documents(harness.assistant_id):
+    if resolve_engine(record) == ENGINE_MANAGED:
         return
-    logger.warning("project harness %s: managed knowledge base unavailable; refusing its first file", harness.assistant_id)
+    logger.warning("project harness %s: no managed knowledge base; refusing the file", harness.assistant_id)
     raise HTTPException(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         detail="The project's knowledge base can't be set up right now. Try again in a few minutes.",

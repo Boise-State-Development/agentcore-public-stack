@@ -241,10 +241,9 @@ def kb(monkeypatch):
 
     from apis.shared.kb_backend import records
 
-    state = SimpleNamespace(record=None, has_documents=False, born=AsyncMock(return_value=False))
+    state = SimpleNamespace(record=None, born=AsyncMock(return_value=False))
     monkeypatch.setattr(knowledge_routes, "begin_born_managed", state.born)
     monkeypatch.setattr(records, "get_kb_record", lambda assistant_id, app_kb_id: state.record)
-    monkeypatch.setattr(knowledge_routes, "assistant_has_documents", AsyncMock(side_effect=lambda _: state.has_documents))
     return state
 
 
@@ -270,9 +269,18 @@ def test_a_project_never_founds_a_classic_knowledge_base(kb):
     assert refused.value.status_code == 503
 
 
-def test_a_project_with_a_classic_knowledge_base_keeps_it(kb):
-    kb.has_documents = True
-    _check()  # no error: it adds to the knowledge base it already has
+def test_a_project_never_adds_to_a_classic_knowledge_base(kb):
+    from fastapi import HTTPException
+
+    # A harness that already holds classic documents: the trigger leaves it legacy.
+    with pytest.raises(HTTPException) as refused:
+        _check()
+    assert refused.value.status_code == 503
+
+
+def test_a_project_adds_to_its_built_managed_knowledge_base(kb):
+    kb.record = {"retrievalEngine": "managed", "awsKbId": "kb", "awsDataSourceId": "ds"}
+    _check()
 
 
 def test_the_check_guards_every_way_a_project_adds_files(pid, monkeypatch):
