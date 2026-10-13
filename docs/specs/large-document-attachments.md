@@ -1,8 +1,9 @@
 # Large document attachments: attach by reference, search through a managed KB
 
 **Status:** Tier 1 shipped to dev (PR-0 #1560, PR-1 #1573, PR-2 #1577, dev-validated
-2026-10-13). Tier 2: PR-3 (the attachments KB, folded into the PR-1 pipeline, §4E
-"As built") is the next change. Decisions recorded in §9 (size limit, ingest source,
+2026-10-13). Tier 2: PR-3 (the attachments KB, folded into the PR-1 pipeline, §4E′;
+#1580 + #1581) merged and dev-validated 2026-10-13, flag on in dev; PR-4 (`query`
+mode + chip, #1583) in review. Decisions recorded in §9 (size limit, ingest source,
 page numbers, retention, per-user cap) and D7.
 **Motivating gap:** a user cannot attach a document over 4 MB to a conversation.
 The SPA rejects it on the client, so it never reaches the server and no metric
@@ -329,7 +330,24 @@ the queue's visibility timeout follows it at six times. The first ingest in an
 environment provisions the KB inside the function: the saga waits up to 300 s for
 ACTIVE.
 
-New resources while on: **2** (the two rules). Everything else is statements on
+New resources while on: **2** (the two rules).
+
+**PR-3 readout on dev (2026-10-13).** A 43.8 MB, 500-page PDF uploaded through the
+SPA was:
+- prepared in 7.3 s;
+- the first ingest of the environment, which provisioned the KB in about 10 s, not
+  the 47–124 s measured earlier;
+- `TEXT_INDEXED` about 80 s after submit, and `INDEXED` at 10 min 47 s, the image
+  extraction across 500 pages taking the rest.
+
+Retrieve, filtered on `andAll(user_id, session_id)`, returned the right
+`_excerpt_page_number` for three of three questions (288, 137, 412), and nothing
+with another user's id. Each hit carried `document_id`, `filename`, `session_id`,
+`upload_id` and `user_id`. Deleting the file released its bytes in under 5 s, and
+the document reached `NOT_FOUND` about 2 min 17 s later; the listing keeps the
+tombstone. A manual `reconcile` ran clean. One delete of a large PDF also sends
+about 55 *Object Deleted* events for its sidecars, all ignored by the handler; a
+follow-up narrows the rule's pattern. Everything else is statements on
 existing roles: the prepare role, and the managed-KB service role (read
 `user-files/*`).
 
