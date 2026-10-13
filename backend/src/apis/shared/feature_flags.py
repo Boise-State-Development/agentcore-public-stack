@@ -79,6 +79,26 @@ def word_tracked_changes_enabled() -> bool:
     return os.environ.get("WORD_TRACKED_CHANGES_ENABLED", "").strip().lower() == "true"
 
 
+def large_document_attachments_enabled() -> bool:
+    """Whether documents over the inline limit are attached by reference
+    (``docs/specs/large-document-attachments.md``).
+
+    On, a reference-class upload (``is_reference_document``: a pdf, docx, txt,
+    md or html file over 4 MB and up to 50 MB) completes by enqueueing it for
+    the ``large-document-prepare`` Lambda, which writes the ``_derived/``
+    sidecars ``document_read`` reads. Off, nothing is enqueued. **Opt-in while
+    the feature is in development**: only ``"true"`` (case-insensitive) enables
+    it; unset, empty or anything else is off.
+
+    app-api only. CDK sets it from ``CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED``,
+    together with the prepare queue's URL, which exists only while it is on.
+    The Runtime needs no copy: ``document_read`` branches on the file row's
+    ``preparation``, not on a switch, so files already prepared stay readable
+    after the flag is turned off.
+    """
+    return os.environ.get("LARGE_DOCUMENT_ATTACHMENTS_ENABLED", "").strip().lower() == "true"
+
+
 def scheduled_runs_enabled() -> bool:
     """Whether the scheduled-runs surface is enabled for this environment.
 

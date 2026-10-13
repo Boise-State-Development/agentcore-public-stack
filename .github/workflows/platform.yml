@@ -320,6 +320,14 @@ jobs:
       # "true" in an environment to turn it on there. Unset (empty string) or
       # anything else means off. Sets the flag on both app-api and the Runtime.
       CDK_WORD_TRACKED_CHANGES_ENABLED: ${{ vars.CDK_WORD_TRACKED_CHANGES_ENABLED }}
+      # Large document attachments: documents over the 4 MB inline limit are
+      # attached by reference and read from sidecars a preparation Lambda
+      # builds (docs/specs/large-document-attachments.md). Opt-in while in
+      # development: set the `CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED` variable
+      # to "true" in an environment to turn it on there. Unset (empty string)
+      # or anything else means off, and the prepare queue and Lambda are not
+      # deployed at all. Sets the flag on app-api only.
+      CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED: ${{ vars.CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED }}
       # SageMaker fine-tuning. The tables, bucket, SageMaker role and IAM
       # grants deploy unconditionally, but these two decide whether the feature
       # is reachable and how it is rationed, and neither was forwarded before —

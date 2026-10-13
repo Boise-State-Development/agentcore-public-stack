@@ -280,9 +280,30 @@ case "$SERVICE" in
         PLATFORM="linux/arm64"
         SSM_KEY="/${CDK_PROJECT_PREFIX}/memory-maintenance/image-tag"
         ;;
+    large-document-prepare)
+        # Large-document attachments PR-1: the `_derived/` sidecar builder.
+        # Keep SOURCE_DIRS and MANIFESTS in lockstep with
+        # Dockerfile.large-document-prepare's COPY list.
+        DOCKERFILE="backend/Dockerfile.large-document-prepare"
+        SOURCE_DIRS=(
+            "backend/src/lambdas/large_document_prepare"
+            "backend/src/apis/shared/files"
+            "backend/src/apis/shared/observability"
+        )
+        MANIFESTS=(
+            "backend/src/apis/shared/__init__.py"
+            "backend/src/apis/shared/timestamps.py"
+            "backend/src/apis/shared/aws_clients.py"
+            "backend/src/apis/shared/feature_flags.py"
+            "backend/src/apis/shared/kb_backend/__init__.py"
+            "backend/src/apis/shared/kb_backend/docx_revisions.py"
+        )
+        PLATFORM="linux/arm64"
+        SSM_KEY="/${CDK_PROJECT_PREFIX}/large-document-prepare/image-tag"
+        ;;
     *)
         echo "Unknown service: $SERVICE" >&2
-        echo "Expected one of: app-api | inference-api | rag-ingestion | kb-sync | kb-migration | conversation-index | scheduled-runs | memory-maintenance" >&2
+        echo "Expected one of: app-api | inference-api | rag-ingestion | kb-sync | kb-migration | conversation-index | scheduled-runs | memory-maintenance | large-document-prepare" >&2
         exit 1
         ;;
 esac

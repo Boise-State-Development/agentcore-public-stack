@@ -165,6 +165,37 @@ INLINE_DOCUMENT_MAX_BYTES = int(
     os.environ.get("INLINE_DOCUMENT_MAX_BYTES", 4 * 1024 * 1024)  # 4MB
 )
 
+# Ceiling for a reference-class document (docs/specs/large-document-attachments.md
+# §4 "Size classes", §9 D1). A product choice, not an AWS limit: it bounds the
+# preparation Lambda's memory and time, the size of the ``_derived/`` sidecars
+# ``document_read`` reads, and per-user storage. Raising it means re-measuring
+# preparation, nothing else (the managed KB connector's own default is 500 MB).
+LARGE_DOCUMENT_MAX_BYTES = int(
+    os.environ.get("LARGE_DOCUMENT_MAX_BYTES", 50 * 1024 * 1024)  # 50MB
+)
+
+
+def is_reference_document(meta: "FileMetadata") -> bool:
+    """Whether ``meta`` is attached by reference rather than inline.
+
+    The one predicate for the reference class (large-document spec §4): a
+    document ``document_read`` can read (pdf, docx, txt, md, html) whose size is
+    over ``INLINE_DOCUMENT_MAX_BYTES`` and at most ``LARGE_DOCUMENT_MAX_BYTES``.
+    Such a file never rides inline: the upload enqueues it for preparation
+    instead of building a digest in-process, and ``document_read`` reads its
+    ``_derived/`` sidecars. Smaller documents stay inline-class; larger ones are
+    refused at upload.
+    """
+    # Function-local: document_read imports this module, and the format
+    # classification (tabular and presentation carve-outs included) must stay
+    # the one ``document_read`` itself uses.
+    from .document_read import document_format_for
+
+    if document_format_for(meta.mime_type, meta.filename) is None:
+        return False
+    return INLINE_DOCUMENT_MAX_BYTES < meta.size_bytes <= LARGE_DOCUMENT_MAX_BYTES
+
+
 # A turn's inline attachments are persisted as ONE message, and the message —
 # not the file — is what AgentCore Memory bounds. Anything over the SDK's
 # ~72 KB conversational limit is written as a base64 ``blob`` payload, so raw
@@ -261,6 +292,13 @@ class FileMetadata(BaseModel):
     # denylisted in the admin projections.
     digest: Optional[dict] = Field(None, description="DocumentDigest map, when generated")
 
+    # Preparation of a reference-class document (large-document spec §4C):
+    # ``{status: pending|ready|failed, pageCount, shardPages, textBytes,
+    # error?}``, written by app-api (pending) and the large-document-prepare
+    # Lambda (ready / failed). ``None`` for every inline-class file. Numeric and
+    # status fields only: never content.
+    preparation: Optional[dict] = Field(None, description="Large-document preparation state, when queued")
+
     # Timestamps
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -309,6 +347,8 @@ class FileMetadata(BaseModel):
         }
         if self.digest:
             item["digest"] = self.digest
+        if self.preparation:
+            item["preparation"] = self.preparation
         return item
 
     @classmethod
@@ -332,6 +372,7 @@ class FileMetadata(BaseModel):
             updated_at=from_iso(updated_at) if updated_at else datetime.now(timezone.utc),
             ttl=item.get("ttl"),
             digest=item.get("digest") if isinstance(item.get("digest"), dict) else None,
+            preparation=item.get("preparation") if isinstance(item.get("preparation"), dict) else None,
         )
 
 

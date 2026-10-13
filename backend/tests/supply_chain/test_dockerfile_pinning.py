@@ -20,6 +20,7 @@ DOCKERFILES = [
     BACKEND_DIR / "Dockerfile.conversation-index",
     BACKEND_DIR / "Dockerfile.scheduled-runs",
     BACKEND_DIR / "Dockerfile.memory-maintenance",
+    BACKEND_DIR / "Dockerfile.large-document-prepare",
 ]
 
 # apt-get version pin: package=version (e.g., gcc=4:14.2.0-1)

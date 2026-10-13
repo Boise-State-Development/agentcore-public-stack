@@ -173,6 +173,47 @@ class FileUploadRepository:
             logger.error(f"Error updating file digest {upload_id}: {e}")
             raise
 
+    async def update_file_preparation(
+        self, user_id: str, upload_id: str, preparation: dict, digest: Optional[dict] = None
+    ) -> Optional[FileMetadata]:
+        """Store a large-document ``preparation`` map (and, with it, the
+        digest) on a READY file row, in one write.
+
+        ``None`` when the row no longer exists or is no longer READY: the file
+        was deleted while it was being prepared, and the caller must clean up
+        whatever it wrote for it.
+        """
+        return self.update_file_preparation_sync(user_id, upload_id, preparation, digest)
+
+    def update_file_preparation_sync(
+        self, user_id: str, upload_id: str, preparation: dict, digest: Optional[dict] = None
+    ) -> Optional[FileMetadata]:
+        """Synchronous body of :meth:`update_file_preparation`."""
+        expression = "SET preparation = :preparation, updatedAt = :now"
+        values = {
+            ":preparation": self._convert_floats_to_decimals(dict(preparation)),
+            ":now": utc_now_iso(),
+            ":ready": FileStatus.READY.value,
+        }
+        if digest is not None:
+            expression += ", digest = :digest"
+            values[":digest"] = self._convert_floats_to_decimals(dict(digest))
+        try:
+            response = self._table.update_item(
+                Key={"PK": f"USER#{user_id}", "SK": f"FILE#{upload_id}"},
+                UpdateExpression=expression,
+                ExpressionAttributeNames={"#status": "status"},
+                ExpressionAttributeValues=values,
+                ConditionExpression="attribute_exists(PK) AND #status = :ready",
+                ReturnValues="ALL_NEW",
+            )
+            return FileMetadata.from_dynamo_item(response["Attributes"])
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                return None
+            logger.error(f"Error updating file preparation {upload_id}: {e}")
+            raise
+
     async def delete_file(self, user_id: str, upload_id: str) -> Optional[FileMetadata]:
         """
         Delete a file metadata record.

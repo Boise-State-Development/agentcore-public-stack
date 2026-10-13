@@ -88,6 +88,8 @@ export interface AppApiSsmParams {
   userFilesBucketArn: string;
   userFilesTableName: string;
   userFilesTableArn: string;
+  /** Large-document prepare queue URL; absent unless the feature is on. */
+  largeDocumentPrepareQueueUrl?: string;
   // RAG
   ragDocumentsBucketName: string;
   ragAssistantsTableName: string;
@@ -212,6 +214,7 @@ export function resolveAppApiParams(
     userFilesBucketArn: refs.fileUploadBucket.bucketArn,
     userFilesTableName: refs.fileUploadTable.tableName,
     userFilesTableArn: refs.fileUploadTable.tableArn,
+    largeDocumentPrepareQueueUrl: refs.largeDocumentPrepareQueue?.queueUrl,
     // RAG
     ragDocumentsBucketName: refs.ragDocumentsBucket.bucketName,
     ragAssistantsTableName: refs.ragAssistantsTable.tableName,
@@ -387,6 +390,13 @@ export function buildAppApiEnvironment(
     // built here and numbers paragraphs the way the Runtime's document_read
     // does, so this must match the Runtime's copy.
     WORD_TRACKED_CHANGES_ENABLED: config.wordTrackedChanges.enabled ? 'true' : 'false',
+    // Large document attachments (opt-in while in development). app-api only:
+    // complete_upload enqueues a reference-class upload for preparation. The
+    // Runtime reads a prepared file by its row and needs no copy.
+    LARGE_DOCUMENT_ATTACHMENTS_ENABLED: config.largeDocumentAttachments.enabled ? 'true' : 'false',
+    ...(params.largeDocumentPrepareQueueUrl
+      ? { LARGE_DOCUMENT_PREPARE_QUEUE_URL: params.largeDocumentPrepareQueueUrl }
+      : {}),
     // Project-memory content lint (Shared Projects 2.7): the Memory page's saves,
     // proposals and restores, and the flags it shows on read.
     MEMORY_LINT_MODE: config.memoryLint.mode,
