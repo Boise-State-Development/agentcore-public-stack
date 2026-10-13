@@ -318,7 +318,7 @@ export class LargeDocumentPrepareConstruct extends Construct {
    *
    * Two resources, both rules targeting the existing queue (their send
    * permission is a statement on the queue's existing policy): S3 Object
-   * Deleted for originals under `user-files/`, and the daily reconcile.
+   * Deleted for originals (never a sidecar or thumbnail), and the daily reconcile.
    * PlatformStack switches on the bucket's EventBridge delivery, since a
    * construct never mutates a bucket handed to it. Everything else is
    * statements on roles that already exist.
@@ -383,8 +383,15 @@ export class LargeDocumentPrepareConstruct extends Construct {
 
     // Deleted originals (a user delete, a session cascade, lifecycle expiry):
     // the handler re-syncs the upload, finds it gone, and removes the document.
-    // Sidecar and thumbnail deletes match the prefix too; the handler ignores
-    // them by key shape (`parse_original_key`).
+    // Sidecars and thumbnails are excluded here, because deleting one 500-page
+    // PDF also deletes ~50 page shards, its text layer and its thumbnail, and
+    // at batch size 1 that burst would queue ahead of other users'
+    // preparations. The key cannot also carry a `user-files/` prefix matcher:
+    // EventBridge allows one matcher per expression and ORs the expressions in
+    // a field's array, so a prefix beside this exclusion would match every key
+    // again. The bucket is the scope instead, since every upload is written
+    // under `user-files/`, and the handler still rejects any key that is not an
+    // original (`parse_original_key`).
     new events.Rule(this, 'AttachmentKbObjectDeletedRule', {
       ruleName: getResourceName(config, 'attachment-kb-object-deleted'),
       description: 'Deleted user-files originals -> large-document queue -> remove from the attachments KB',
@@ -393,7 +400,7 @@ export class LargeDocumentPrepareConstruct extends Construct {
         detailType: ['Object Deleted'],
         detail: {
           bucket: { name: [userFilesBucket.bucketName] },
-          object: { key: [{ prefix: USER_FILES_PREFIX }] },
+          object: { key: [{ 'anything-but': { wildcard: ['*/_derived/*', '*/_thumb.png'] } }] },
         },
       },
       targets: [new targets.SqsQueue(this.queue)],
