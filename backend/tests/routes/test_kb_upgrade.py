@@ -222,6 +222,24 @@ class TestStatus:
         )
 
     @pytest.mark.asyncio
+    async def test_documents_bedrock_could_not_index_are_named_for_the_owner(self, table):
+        """The one failure the owner can fix: say which files, not the parser's reason."""
+        table.item = _kb_record(
+            migrationState=r.MIGRATION_FAILED,
+            migrationError=(
+                "DocumentsNotIndexed: Bedrock could not index 2 document(s): scan.pdf, "
+                "chart.png (Unsupported file content). Remove or replace them and retry; "
+                "the knowledge base stays on classic."
+            ),
+        )
+        status = await s.get_upgrade_status(ASSISTANT_ID, can_edit=True)
+        assert status.phase == "failed" and status.can_upgrade is True
+        assert "scan.pdf, chart.png" in status.reason
+        assert "Remove or replace" in status.reason
+        assert "Unsupported file content" not in status.reason
+        assert "DocumentsNotIndexed" not in status.reason
+
+    @pytest.mark.asyncio
     async def test_an_unrecognised_failure_does_not_leak_the_operator_string(
         self, table
     ):

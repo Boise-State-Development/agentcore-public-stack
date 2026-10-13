@@ -1790,3 +1790,64 @@ def test_the_module_constants_match_the_verified_api_limits():
     assert p.EMBEDDING_MODEL_ID == "amazon.titan-embed-text-v2:0"
     assert p.EMBEDDING_DIMENSIONS == 1024
     assert mb.RERANKING_MODEL_TYPE == "MANAGED"
+
+
+# ===========================================================================
+# Document status, for migration verify
+# ===========================================================================
+
+
+class _StatusAgent:
+    """``get_knowledge_base_documents`` with Bedrock's per-document answers."""
+
+    def __init__(self, known: Dict[str, Tuple[str, Optional[str]]]):
+        self.known = known
+        self.calls: List[List[str]] = []
+
+    def get_knowledge_base_documents(self, *, knowledgeBaseId, dataSourceId, documentIdentifiers):
+        assert (knowledgeBaseId, dataSourceId) == (AWS_KB_ID, AWS_DS_ID)
+        ids = [identifier["custom"]["id"] for identifier in documentIdentifiers]
+        self.calls.append(ids)
+        return {
+            "documentDetails": [
+                {
+                    "identifier": {"dataSourceType": "CUSTOM", "custom": {"id": i}},
+                    "status": self.known.get(i, ("NOT_FOUND", None))[0],
+                    "statusReason": self.known.get(i, ("NOT_FOUND", None))[1],
+                }
+                for i in ids
+            ]
+        }
+
+
+class TestDocumentStatuses:
+    @pytest.mark.asyncio
+    async def test_statuses_come_back_per_document_in_batches_of_ten(self):
+        agent = _StatusAgent({"d0": ("INDEXED", None), "d11": ("FAILED", "parse error")})
+        backend = mb.ManagedKbBackend(agent_client=agent, locator=_locator())
+
+        statuses = await backend.document_statuses(APP_KB_ID, [f"d{i}" for i in range(12)])
+
+        assert [len(call) for call in agent.calls] == [10, 2], "the API takes at most 10 identifiers"
+        assert statuses["d0"] == ("INDEXED", None)
+        assert statuses["d11"] == ("FAILED", "parse error")
+        assert statuses["d5"] == ("NOT_FOUND", None)
+
+    @pytest.mark.asyncio
+    async def test_a_document_bedrock_leaves_out_reads_as_not_found(self):
+        class _Silent(_StatusAgent):
+            def get_knowledge_base_documents(self, **kwargs):
+                return {"documentDetails": []}
+
+        backend = mb.ManagedKbBackend(agent_client=_Silent({}), locator=_locator())
+        assert await backend.document_statuses(APP_KB_ID, ["d1"]) == {"d1": ("NOT_FOUND", None)}
+
+    @pytest.mark.asyncio
+    async def test_a_failed_call_raises_rather_than_reading_as_not_found(self):
+        class _Throttled(_StatusAgent):
+            def get_knowledge_base_documents(self, **kwargs):
+                raise RuntimeError("ThrottlingException")
+
+        backend = mb.ManagedKbBackend(agent_client=_Throttled({}), locator=_locator())
+        with pytest.raises(RuntimeError):
+            await backend.document_statuses(APP_KB_ID, ["d1"])

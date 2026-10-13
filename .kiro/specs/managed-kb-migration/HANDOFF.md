@@ -1029,6 +1029,40 @@ answer than legacy** on a question it retrieves *better*. Both are open.
     not put a per-column question from a diagram in front of an audience, and do not
     promise precise per-semester / per-column results from image-only documents.
 
+### The seventeenth through nineteenth: `verify` verified one document
+
+17. **`verify` never checked the manifest.** It computed `source_manifest` and used
+    it only in a log line. The one real check was the canary, which passes if *any*
+    of the first three filenames' documents comes back. Shadow's ingest is
+    fire-and-forget, so a document Bedrock failed to parse, or never received, was
+    promoted past. Its `DOC#` still said `complete` on a corpus that no longer
+    held it. `verify` now asks Bedrock for every `complete` document's status
+    (`ManagedKbBackend.document_statuses`, `GetKnowledgeBaseDocuments` in batches
+    of 10):
+    - **Indexed or partially indexed:** passes.
+    - **In flight, unknown, or the status call failed:** defers.
+    - **`NOT_FOUND`:** back to `shadow` with those ids removed from
+      `migratedDocIds`, at most `MAX_VERIFY_RESENDS` times.
+    - **`FAILED`, `METADATA_UPDATE_FAILED` or `IGNORED`:** fails with
+      `DocumentsNotIndexed`, naming the files. `METADATA_UPDATE_FAILED` counts as
+      unusable because the metadata carries the `document_id` that retrieval
+      filters on.
+18. **Promotion's `migrated = total` guard was true by construction.** `shadow`
+    wrote the handed-over count as both numbers. It now writes the corpus as it
+    stands (`total`) against how much of it was handed over (`migrated`), and only
+    a passing `verify` writes them equal. `promote` also re-reads the corpus and
+    goes back to `shadow` if a document completed after `verify`; uploads keep
+    landing on legacy until the cutover.
+19. **The upgrade card never showed a specific failure.** `_failure_reason` picks
+    its copy by the error's type name, but expected failures were stored as the
+    bare message, so every one fell through to the generic "Something went wrong".
+    They are now stored as `Type: message`. `DocumentsNotIndexed` gets copy that
+    names the files to remove or replace.
+
+**Still open:** a document edited after it was ingested (a KB-sync refresh
+mid-migration) is not re-checked. Bedrock holds the earlier version until the
+next sync after promotion.
+
 ---
 
 ## 6. Remaining work
