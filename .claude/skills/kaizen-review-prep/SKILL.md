@@ -36,6 +36,7 @@ Friday late morning (~10am MT), ~4 hours after `kaizen-research` runs. Phil revi
    - `gh run list --status=failure --limit 30` — fresh CI failures.
 7. **`CLAUDE.md` + skill inventory** — surface concerns only; never propose unilateral edits to these.
 8. **`CHANGELOG.md` / `RELEASE_NOTES.md`** — most recent ~14 days, for the "what shipped this week" celebration block + the don't-re-propose filter.
+9. **Spec sync rows** — the research doc's "Spec sync" table (kaizen-research source 2b) and the matching `Spec sync:` queue entries. They keep the multi-agent living specs (`docs/specs/multi-agent-patterns.md`, `docs/specs/agent-handoffs-and-consults.md`) true to upstream and to our own code. If the research doc has no Spec sync table, or no "no drift found" line, say the watch didn't run; don't treat it as a clean week.
 
 ## Output
 
@@ -88,6 +89,18 @@ check before decisions.]
 
 ### 2. [Next proposal]
 …
+
+## Living Spec Sync — multi-agent
+<!-- From the research doc's Spec sync table. Kept apart from Proposals so they
+     never crowd out the ranked ideas, and so drift never waits for a slow week.
+     Default recommendation is Ship when the evidence is verified (a release note,
+     a merged PR, a file:line): it's a small docs PR. Recommend Decline only when
+     the evidence is asserted rather than verified, and say which. A sync that
+     changes a decision in the spec (a gate, a phase order, a non-goal) is not a
+     sync — promote it to Proposals instead. -->
+
+- **[Doc §]** — "[stale claim]" → "[proposed text]" — *evidence*: [URL / SHA / file:line] — recommendation: Ship / Decline — [why]
+- Or: "No drift found this week (watch ran)." / "Watch did not run — [reason]."
 
 ## Carried Over From Prior Reviews
 <!-- Items deferred in earlier review docs that have hit their revisit date.
