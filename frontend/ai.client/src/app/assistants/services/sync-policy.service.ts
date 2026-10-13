@@ -10,6 +10,7 @@ import {
   SyncPolicy,
   UpdateSyncPolicyRequest,
 } from '../models/sync-policy.model';
+import { KnowledgeTarget, knowledgePaths } from '../models/knowledge-target.model';
 
 /**
  * Error raised by {@link SyncPolicyService}. `code` is `HTTP_{status}` for
@@ -50,16 +51,16 @@ export class SyncPolicyService {
     };
   }
 
-  private policiesUrl(assistantId: string): string {
-    return `${this.baseUrl()}/assistants/${encodeURIComponent(assistantId)}/sync-policies`;
+  private policiesUrl(target: KnowledgeTarget): string {
+    return `${this.baseUrl()}${knowledgePaths(target).syncPolicies}`;
   }
 
-  /** List all sync policies for an assistant. */
-  async listPolicies(assistantId: string): Promise<SyncPolicy[]> {
+  /** List all sync policies for an agent or a project. */
+  async listPolicies(target: KnowledgeTarget): Promise<SyncPolicy[]> {
     try {
       const response = await firstValueFrom(
         this.http.get<SyncPoliciesListResponse>(
-          this.policiesUrl(assistantId),
+          this.policiesUrl(target),
           this.requestOptions(),
         ),
       );
@@ -71,13 +72,13 @@ export class SyncPolicyService {
 
   /** Create a policy covering a content source. 409 = source already synced. */
   async createPolicy(
-    assistantId: string,
+    target: KnowledgeTarget,
     request: CreateSyncPolicyRequest,
   ): Promise<SyncPolicy> {
     try {
       return await firstValueFrom(
         this.http.post<SyncPolicy>(
-          this.policiesUrl(assistantId),
+          this.policiesUrl(target),
           request,
           this.requestOptions(),
         ),
@@ -92,14 +93,14 @@ export class SyncPolicyService {
    * immediately; resuming a paused_reauth policy is rejected with 409.
    */
   async updatePolicy(
-    assistantId: string,
+    target: KnowledgeTarget,
     policyId: string,
     request: UpdateSyncPolicyRequest,
   ): Promise<SyncPolicy> {
     try {
       return await firstValueFrom(
         this.http.patch<SyncPolicy>(
-          `${this.policiesUrl(assistantId)}/${encodeURIComponent(policyId)}`,
+          `${this.policiesUrl(target)}/${encodeURIComponent(policyId)}`,
           request,
           this.requestOptions(),
         ),
@@ -110,11 +111,12 @@ export class SyncPolicyService {
   }
 
   /** Delete a policy — the source goes back to manual-only. */
-  async deletePolicy(assistantId: string, policyId: string): Promise<void> {
+  async deletePolicy(
+    target: KnowledgeTarget, policyId: string): Promise<void> {
     try {
       await firstValueFrom(
         this.http.delete<void>(
-          `${this.policiesUrl(assistantId)}/${encodeURIComponent(policyId)}`,
+          `${this.policiesUrl(target)}/${encodeURIComponent(policyId)}`,
           this.requestOptions(),
         ),
       );
@@ -128,11 +130,12 @@ export class SyncPolicyService {
    * dispatcher sweep, so it starts within ~15 minutes. 429 = within the
    * 10-minute cooldown; 409 = policy not active.
    */
-  async runNow(assistantId: string, policyId: string): Promise<SyncPolicy> {
+  async runNow(
+    target: KnowledgeTarget, policyId: string): Promise<SyncPolicy> {
     try {
       return await firstValueFrom(
         this.http.post<SyncPolicy>(
-          `${this.policiesUrl(assistantId)}/${encodeURIComponent(policyId)}/run-now`,
+          `${this.policiesUrl(target)}/${encodeURIComponent(policyId)}/run-now`,
           null,
           this.requestOptions(),
         ),

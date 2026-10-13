@@ -905,7 +905,7 @@ export class KnowledgeBaseSectionComponent implements OnDestroy {
     const dialogRef = this.dialog.open<Document[] | undefined, FileSourceBrowserDialogData>(
       FileSourceBrowserDialogComponent,
       {
-        data: { assistantId: recordId, connector },
+        data: { target: recordId, connector },
         hasBackdrop: false,
       },
     );
@@ -941,7 +941,7 @@ export class KnowledgeBaseSectionComponent implements OnDestroy {
     const dialogRef = this.dialog.open<Document[] | undefined, WebSourceDialogData>(
       WebSourceDialogComponent,
       {
-        data: { assistantId: recordId },
+        data: { target: recordId },
         hasBackdrop: false,
       },
     );
@@ -1163,7 +1163,7 @@ export class KnowledgeBaseSectionComponent implements OnDestroy {
     }
     this.dialog.open<void, ExtractedContentDialogData>(ExtractedContentDialogComponent, {
       data: {
-        assistantId: recordId,
+        target: recordId,
         documentId: doc.documentId,
         filename: doc.filename,
       },

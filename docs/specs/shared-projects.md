@@ -430,7 +430,7 @@ Each PR targets `develop`, lands behind `PROJECTS_ENABLED` (opt-in while in deve
     - The crawl routes are declared before `/{document_id}`.
   - **`addedByUserId` on every document create path (§9.5).** `create_document` takes `added_by_user_id` and defaults it to the provenance importer, which covers connector import, the crawl root and pages, and a sync refresh. A device upload passes the uploader. Project responses turn it into `addedByEmail` from the current member list, falling back to `importedByUserId` for older imports. Unknown adders and former members show null, and user ids are never returned.
   - **Upload notice.** `upload-url`, `import` and `crawl` responses carry `notice` ("Everyone in {project} ({n} people) can open this file, and the project's agent can use it…"), so every client says it the same way.
-  - Not proxied: sync policies. An editor still reaches `/assistants/{harnessAgentId}/sync-policies`, which delegates to the project and refuses while archived. A project-scoped route can follow if the Files tab needs one.
+  - Sync policies were not proxied in 1.5b. They are now: `/projects/{id}/knowledge/sync-policies` (list, create, `PATCH`/`DELETE {policyId}`, `{policyId}/run-now`) needs an editor, writes need an active project, and each calls the agent's sync-policy handler on the harness. These routes are also declared before `/{document_id}`.
   - **UI impact (for the 1.8 mockup re-sync):**
     - Files shows "Added by {email}" or "Added by unknown" per file.
     - Viewers see and download files but get no add or delete controls (`canEdit`).
@@ -515,7 +515,12 @@ Each PR targets `develop`, lands behind `PROJECTS_ENABLED` (opt-in while in deve
     - The page states before upload that everyone in the project can open these files. The upload response's `notice` then replaces that sentence.
     - Each file shows "Added by {email}", or "Added by Unknown" when the email is null. Controls follow `canEdit`; viewers get download only, and an archived project says why.
     - The same 10 MB cap and file-type list as the agent editor.
-    - Not in this PR: connector import and web crawl. Their routes exist, and the Files tab can add them later.
+    - Not in 1.5b: connector import, web crawl and sync. They were added later, so Files now offers everything an agent's knowledge base does:
+      - "Add web content" (one page or a bounded crawl), and a button per file source the editor can use, such as Google Drive, with OAuth consent in place.
+      - A "Web sources" list with the crawl's progress, a sync schedule and remove.
+      - A sync schedule on each imported file, including "Reconnect" when its connection lapses.
+      - "View extracted content".
+      - The crawl, import and extracted-content dialogs and the web-source, file-source and sync-policy services take a `KnowledgeTarget`: an agent id, or `{ projectId }` for the `/projects/{id}/knowledge` routes. Viewers never call these editor-only routes; they still see the crawled and imported files in the list.
   - **Sidebar grouping** (`session-list`):
     - `groupProjectSessions` splits each time bucket into plain rows and one group per project. A group sits where its newest task would, under a heading that links to `/projects/{id}`.
     - Project names come from `ProjectsService`, loaded once and only when some session has a `projectId`. A project the caller can't see (they left, or it was purged) gets the heading "Project".
