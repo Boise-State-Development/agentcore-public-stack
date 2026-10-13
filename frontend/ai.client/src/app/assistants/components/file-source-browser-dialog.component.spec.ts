@@ -29,7 +29,7 @@ function fileEntry(over: Partial<FileEntry>): FileEntry {
 
 function setup(
   fileSourceOverrides: Partial<Record<string, unknown>> = {},
-  dialogData: Record<string, unknown> = { assistantId: 'AST-1' },
+  dialogData: Record<string, unknown> = { target: 'AST-1' },
 ) {
   const fileSourceService = {
     listFileSources: vi.fn().mockResolvedValue([CONNECTED]),
@@ -241,7 +241,7 @@ describe('FileSourceBrowserDialogComponent', () => {
       configure();
       const { container } = await openInCdkDialog<FileSourceBrowserDialogComponent, FileSourceBrowserDialogData>(
         FileSourceBrowserDialogComponent,
-        { data: { assistantId: 'AST-1' } },
+        { data: { target: 'AST-1' } },
       );
       expectNamedDialog(container, { name: 'Import from a connector' });
     });

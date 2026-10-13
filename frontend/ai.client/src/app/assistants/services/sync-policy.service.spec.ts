@@ -64,6 +64,18 @@ describe('SyncPolicyService', () => {
     expect(await promise).toEqual(policies);
   });
 
+  it('should reach a project\'s schedules through its knowledge routes', async () => {
+    const promise = service.runNow({ projectId: 'prj_1' }, 'syn-1');
+
+    await vi.waitFor(() => {
+      const req = httpMock.expectOne('http://localhost:8000/projects/prj_1/knowledge/sync-policies/syn-1/run-now');
+      expect(req.request.method).toBe('POST');
+      req.flush(stubPolicy());
+    });
+
+    expect((await promise).policyId).toBe('syn-abc123def456');
+  });
+
   it('should create a policy', async () => {
     const policy = stubPolicy();
 

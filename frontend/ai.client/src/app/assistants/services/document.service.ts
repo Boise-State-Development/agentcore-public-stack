@@ -13,6 +13,7 @@ import {
   STALE_DOCUMENT_THRESHOLD_MS,
 } from '../models/document.model';
 import { parseIso } from '../../utils/date';
+import { KnowledgeTarget, knowledgePaths } from '../models/knowledge-target.model';
 
 /**
  * Error class for document upload operations
@@ -260,13 +261,13 @@ export class DocumentService {
    * they need to see as an error.
    */
   async getExtractedChunks(
-    assistantId: string,
+    target: KnowledgeTarget,
     documentId: string,
   ): Promise<ExtractedChunksResponse> {
     try {
       return await firstValueFrom(
         this.http.get<ExtractedChunksResponse>(
-          `${this.baseUrl()}/${assistantId}/documents/${documentId}/chunks`,
+          `${this.config.appApiUrl()}${knowledgePaths(target).documents}/${encodeURIComponent(documentId)}/chunks`,
         ),
       );
     } catch (err) {

@@ -34,6 +34,7 @@ import { Document } from '../models/document.model';
 import { UserConnectorsService } from '../../settings/connectors/services/user-connectors.service';
 import { OAuthConsentService } from '../../services/oauth-consent/oauth-consent.service';
 import { ToastService } from '../../services/toast/toast.service';
+import { KnowledgeTarget } from '../models/knowledge-target.model';
 import { DialogDismissDirective } from '../../components/dialog/dialog-dismiss.directive';
 import { DialogTitleDirective } from '../../components/dialog/dialog-title.directive';
 import { SpinnerComponent } from '../../components/spinner/spinner.component';
@@ -48,8 +49,8 @@ export type FileSourceBrowserMode = 'import' | 'pick-folder';
 
 /** Data passed in when a caller opens the browser. */
 export interface FileSourceBrowserDialogData {
-  /** Required in `import` mode — the assistant the files are imported into. */
-  assistantId?: string;
+  /** Required in `import` mode — the agent (by id) or project the files are imported into. */
+  target?: KnowledgeTarget;
   /**
    * When set, the dialog opens straight into this connector — its folder
    * browser if already connected, or an inline Connect prompt if not — and
@@ -539,15 +540,15 @@ export class FileSourceBrowserDialogComponent {
 
   protected async importSelected(): Promise<void> {
     const connector = this.connector();
-    const assistantId = this.data.assistantId;
+    const target = this.data.target;
     const files = [...this.selected().values()];
-    if (!connector || !assistantId || files.length === 0 || this.importing()) {
+    if (!connector || !target || files.length === 0 || this.importing()) {
       return;
     }
     this.importing.set(true);
     try {
       const response = await this.fileSourceService.importDocuments(
-        assistantId,
+        target,
         connector.providerId,
         files,
       );

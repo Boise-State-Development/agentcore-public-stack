@@ -22,7 +22,7 @@ describe('WebSourceDialogComponent', () => {
 
   function open() {
     return openInCdkDialog<WebSourceDialogComponent, WebSourceDialogData, Document[]>(WebSourceDialogComponent, {
-      data: { assistantId: 'AST-1' },
+      data: { target: 'AST-1' },
     });
   }
 

@@ -25,7 +25,7 @@ describe('ExtractedContentDialogComponent', () => {
   function open() {
     return openInCdkDialog<ExtractedContentDialogComponent, ExtractedContentDialogData>(
       ExtractedContentDialogComponent,
-      { data: { assistantId: 'a1', documentId: 'd1', filename: 'syllabus.pdf' } },
+      { data: { target: 'a1', documentId: 'd1', filename: 'syllabus.pdf' } },
     );
   }
 

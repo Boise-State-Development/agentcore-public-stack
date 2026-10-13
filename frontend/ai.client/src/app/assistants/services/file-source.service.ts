@@ -17,6 +17,7 @@ import {
   SourceRoot,
   SourceRootsResponse,
 } from '../models/file-source.model';
+import { KnowledgeTarget, knowledgePaths } from '../models/knowledge-target.model';
 
 /**
  * Error raised by {@link FileSourceService} for any failed call. `code` is
@@ -155,18 +156,18 @@ export class FileSourceService {
   }
 
   /**
-   * Import the selected files into an assistant. The backend creates one
-   * document per file (status 'uploading') and downloads them asynchronously.
+   * Import the selected files into an agent or a project. The backend creates
+   * one document per file (status 'uploading') and downloads them asynchronously.
    */
   async importDocuments(
-    assistantId: string,
+    target: KnowledgeTarget,
     connectorId: string,
     files: ImportFileRef[],
   ): Promise<ImportDocumentsResponse> {
     try {
       return await firstValueFrom(
         this.http.post<ImportDocumentsResponse>(
-          `${this.baseUrl()}/assistants/${encodeURIComponent(assistantId)}/documents/import`,
+          `${this.baseUrl()}${knowledgePaths(target).documents}/import`,
           { connectorId, files },
           this.requestOptions(),
         ),

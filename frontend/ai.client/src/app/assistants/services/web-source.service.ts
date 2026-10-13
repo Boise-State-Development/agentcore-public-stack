@@ -15,6 +15,7 @@ import {
   StartCrawlRequest,
   StartCrawlResponse,
 } from '../models/web-source.model';
+import { KnowledgeTarget, knowledgePaths } from '../models/knowledge-target.model';
 
 /**
  * Error raised by {@link WebSourceService}. `code` is `HTTP_{status}` for
@@ -53,15 +54,15 @@ export class WebSourceService {
     };
   }
 
-  /** Kick off a crawl for the given assistant. Returns the root document + job. */
+  /** Kick off a crawl for an agent or a project. Returns the root document + job. */
   async startCrawl(
-    assistantId: string,
+    target: KnowledgeTarget,
     request: StartCrawlRequest,
   ): Promise<StartCrawlResponse> {
     try {
       return await firstValueFrom(
         this.http.post<StartCrawlResponse>(
-          `${this.baseUrl()}/assistants/${encodeURIComponent(assistantId)}/web-sources/crawl`,
+          `${this.baseUrl()}${knowledgePaths(target).webSources}/crawl`,
           request,
           this.requestOptions(),
         ),
@@ -71,13 +72,13 @@ export class WebSourceService {
     }
   }
 
-  /** List crawls currently `running` for an assistant. Empty list when idle. */
-  async listActiveCrawls(assistantId: string): Promise<CrawlJob[]> {
+  /** List crawls currently `running` for an agent or a project. Empty list when idle. */
+  async listActiveCrawls(target: KnowledgeTarget): Promise<CrawlJob[]> {
     const params = new HttpParams().set('active', 'true');
     try {
       const response = await firstValueFrom(
         this.http.get<ActiveCrawlsResponse>(
-          `${this.baseUrl()}/assistants/${encodeURIComponent(assistantId)}/web-sources/crawls`,
+          `${this.baseUrl()}${knowledgePaths(target).webSources}/crawls`,
           { ...this.requestOptions(), params },
         ),
       );
@@ -92,11 +93,11 @@ export class WebSourceService {
    * crawls are the syncable web sources — a web_crawl sync policy's
    * source is the terminal CrawlJob row.
    */
-  async listCrawls(assistantId: string): Promise<CrawlJob[]> {
+  async listCrawls(target: KnowledgeTarget): Promise<CrawlJob[]> {
     try {
       const response = await firstValueFrom(
         this.http.get<ActiveCrawlsResponse>(
-          `${this.baseUrl()}/assistants/${encodeURIComponent(assistantId)}/web-sources/crawls`,
+          `${this.baseUrl()}${knowledgePaths(target).webSources}/crawls`,
           this.requestOptions(),
         ),
       );
@@ -111,11 +112,11 @@ export class WebSourceService {
    * sync policy covering it. Rejects with `HTTP_409` while the crawl is still
    * running (its pages are still being written).
    */
-  async deleteCrawl(assistantId: string, crawlId: string): Promise<void> {
+  async deleteCrawl(target: KnowledgeTarget, crawlId: string): Promise<void> {
     try {
       await firstValueFrom(
         this.http.delete<void>(
-          `${this.baseUrl()}/assistants/${encodeURIComponent(assistantId)}/web-sources/crawls/${encodeURIComponent(crawlId)}`,
+          `${this.baseUrl()}${knowledgePaths(target).webSources}/crawls/${encodeURIComponent(crawlId)}`,
           this.requestOptions(),
         ),
       );
