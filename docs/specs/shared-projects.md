@@ -521,6 +521,11 @@ Each PR targets `develop`, lands behind `PROJECTS_ENABLED` (opt-in while in deve
       - A sync schedule on each imported file, including "Reconnect" when its connection lapses.
       - "View extracted content".
       - The crawl, import and extracted-content dialogs and the web-source, file-source and sync-policy services take a `KnowledgeTarget`: an agent id, or `{ projectId }` for the `/projects/{id}/knowledge` routes. Viewers never call these editor-only routes; they still see the crawled and imported files in the list.
+    - **A project's knowledge base is only ever created managed (Bedrock).**
+      - Born-managed provisioning (`MANAGED_KB_NEW_DEFAULT`) used to start only on a device upload. A first file added by Drive import or web crawl therefore founded a classic knowledge base, which then stayed classic. Import and crawl now start it as well (`initial_document_status`), for agents and projects alike.
+      - Those documents begin at `provisioning` while the knowledge base is being built. Crawl pages each check `records.awaiting_provisioning` as they are created, because the provisioning job ingests only `provisioning` rows.
+      - `knowledge_routes._require_managed_knowledge` covers upload, import and crawl. A project with no knowledge whose knowledge base can't be born managed (flag off, or the start failed) gets a 503 instead of a classic one.
+      - A project that already has a classic knowledge base keeps using it.
   - **Sidebar grouping** (`session-list`):
     - `groupProjectSessions` splits each time bucket into plain rows and one group per project. A group sits where its newest task would, under a heading that links to `/projects/{id}`.
     - Project names come from `ProjectsService`, loaded once and only when some session has a `projectId`. A project the caller can't see (they left, or it was purged) gets the heading "Project".

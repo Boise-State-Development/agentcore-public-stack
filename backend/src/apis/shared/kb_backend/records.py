@@ -290,6 +290,25 @@ def resolve_engine(item: Optional[Mapping[str, Any]]) -> str:
     return ENGINE_MANAGED if item.get("retrievalEngine") == ENGINE_MANAGED else ENGINE_LEGACY
 
 
+def awaiting_provisioning(item: Optional[Mapping[str, Any]]) -> bool:
+    """Whether this is a managed knowledge base that is not built yet.
+
+    A document added now must wait for the born-managed provisioning job, which
+    ingests every ``provisioning`` row once the knowledge base exists. Tests the
+    engine AND the absence of the AWS identifiers rather than
+    ``provisioningState``, because the identifiers are what ingestion needs;
+    ``records.attach_aws_ids`` sets both in one write, so they cannot disagree.
+
+    Lives here, not beside the trigger in ``kb_upgrade``, so the crawler can ask
+    it from the kb-sync image too, which carries ``kb_backend`` but not
+    ``kb_upgrade``.
+    """
+    if resolve_engine(item) != ENGINE_MANAGED:
+        return False
+    item = item or {}
+    return not (item.get("awsKbId") and item.get("awsDataSourceId"))
+
+
 # ── Reads ────────────────────────────────────────────────────────────────────
 def get_kb_record(assistant_id: str, app_kb_id: str) -> Optional[Dict[str, Any]]:
     response = _table().get_item(Key={"PK": kb_pk(assistant_id), "SK": kb_sk(app_kb_id)})

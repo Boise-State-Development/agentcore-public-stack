@@ -883,3 +883,14 @@ class TestAssistantHasDocuments:
 
         monkeypatch.delenv("DYNAMODB_ASSISTANTS_TABLE_NAME", raising=False)
         assert await assistant_has_documents(ASSISTANT_ID) is True
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provisioning,expected", [(True, "provisioning"), (False, "uploading")])
+async def test_initial_document_status_follows_the_trigger(monkeypatch, provisioning, expected):
+    """Import and crawl start their documents where the born-managed trigger says."""
+    trigger = AsyncMock(return_value=provisioning)
+    monkeypatch.setattr(bm, "begin_born_managed", trigger)
+    assert await bm.initial_document_status("ast-1", owner_user_id="u-1") == expected
+    trigger.assert_awaited_once_with("ast-1", owner_user_id="u-1")

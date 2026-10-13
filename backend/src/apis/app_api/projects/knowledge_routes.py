@@ -15,6 +15,11 @@ over the document and web-crawl routes, authorized by the project instead:
     whose viewers should see its files, so reads call the document service
     directly, with the harness's owner id the service keys on.
 
+A project's knowledge base is only ever created managed (Bedrock): adding the
+first file to a project starts born-managed provisioning on every path, and if
+that cannot start, the file is refused rather than founding a classic knowledge
+base. A project that already has a classic one keeps using it.
+
 Every document says who added it (``addedByEmail``, and ``addedByName`` from
 the directory), resolved from the member list, so a former member's files show
 no name rather than a stale one.
@@ -37,7 +42,12 @@ from apis.app_api.documents.models import (
     ImportDocumentsRequest,
     ReportUploadFailureRequest,
 )
-from apis.app_api.documents.services.document_service import get_document, list_assistant_documents
+from apis.app_api.documents.services.document_service import (
+    assistant_has_documents,
+    get_document,
+    list_assistant_documents,
+)
+from apis.app_api.kb_upgrade.born_managed import begin_born_managed
 from apis.app_api.documents.services.storage_service import generate_download_url
 from apis.app_api.sync_policies import routes as sync_routes
 from apis.app_api.sync_policies.models import (
@@ -111,6 +121,29 @@ def _document(doc, emails: Dict[str, str], names: Dict[str, str]) -> ProjectDocu
     )
 
 
+async def _require_managed_knowledge(harness: Assistant) -> None:
+    """Refuse to found a classic knowledge base for a project.
+
+    ``begin_born_managed`` starts (or joins) provisioning for a project with no
+    knowledge yet and is idempotent, so the agent handler calling it again is a
+    no-op. It answers "legacy" when ``MANAGED_KB_NEW_DEFAULT`` is off or the start
+    failed; the agent handlers then carry on on the classic engine, which a project
+    must not. An existing classic knowledge base (it already holds documents) is
+    left as it is.
+    """
+    from apis.shared.kb_backend.records import ENGINE_MANAGED, get_kb_record, resolve_engine
+
+    await begin_born_managed(harness.assistant_id, owner_user_id=harness.owner_id)
+    record = await asyncio.to_thread(get_kb_record, harness.assistant_id, harness.assistant_id)
+    if resolve_engine(record) == ENGINE_MANAGED or await assistant_has_documents(harness.assistant_id):
+        return
+    logger.warning("project harness %s: managed knowledge base unavailable; refusing its first file", harness.assistant_id)
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="The project's knowledge base can't be set up right now. Try again in a few minutes.",
+    )
+
+
 async def _names(emails: Dict[str, str]) -> Dict[str, str]:
     return await asyncio.to_thread(display_names, set(emails.values()))
 
@@ -136,6 +169,7 @@ async def start_crawl(
     project_id: str, body: StartCrawlRequest, user: User = Depends(require_projects_user)
 ) -> ProjectStartCrawlResponse:
     project, harness = await _editor(project_id, user)
+    await _require_managed_knowledge(harness)
     result = await crawl_routes.start_crawl(harness.assistant_id, body, user)
     _svc().record(AuditAction.PROJECT_KNOWLEDGE_ADDED, user, project_id, after={"url": body.url, "source": "web"})
     return ProjectStartCrawlResponse(**result.model_dump(), notice=sharing_notice(project))
@@ -269,6 +303,7 @@ async def upload_file(
 ) -> ProjectUploadUrlResponse:
     """Start an upload: a presigned URL, plus the notice that every member can read the file."""
     project, harness = await _editor(project_id, user)
+    await _require_managed_knowledge(harness)
     result = await document_routes.generate_upload_url_endpoint(harness.assistant_id, body, user)
     _svc().record(
         AuditAction.PROJECT_KNOWLEDGE_ADDED, user, project_id,
@@ -292,6 +327,7 @@ async def import_files(
 ) -> ProjectImportResponse:
     """Import files from the caller's connected file source (their credentials, the project's files)."""
     project, harness = await _editor(project_id, user)
+    await _require_managed_knowledge(harness)
     result = await document_routes.import_documents(harness.assistant_id, body, user, provider_repo, role_service)
     for doc in result.documents:
         _svc().record(

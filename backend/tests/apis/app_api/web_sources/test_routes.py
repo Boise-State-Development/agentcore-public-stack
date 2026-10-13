@@ -124,6 +124,41 @@ class TestStartCrawl:
         # exercising the real crawler.
         run_crawl_mock.assert_called_once()
 
+    def test_a_crawl_can_found_a_born_managed_knowledge_base(self, app: FastAPI):
+        mock_auth_user(app, _user())
+        create_doc = AsyncMock(return_value=_stub_document())
+        initial = AsyncMock(return_value="provisioning")
+        with patch(
+            "apis.app_api.web_sources.routes.resolve_assistant_permission",
+            new_callable=AsyncMock,
+            return_value=_stub_permission("owner"),
+        ), patch(
+            "apis.app_api.web_sources.routes.list_active_crawls",
+            new_callable=AsyncMock,
+            return_value=[],
+        ), patch(
+            "apis.app_api.kb_upgrade.born_managed.initial_document_status", initial,
+        ), patch(
+            "apis.app_api.web_sources.routes.create_document", create_doc,
+        ), patch(
+            "apis.app_api.web_sources.routes.create_crawl_job",
+            new_callable=AsyncMock,
+            return_value=_stub_crawl(),
+        ), patch(
+            "apis.app_api.web_sources.routes.run_crawl", AsyncMock(return_value=None),
+        ), patch(
+            "apis.app_api.web_sources.routes.assert_url_is_public",
+            return_value="https://example.com/",
+        ):
+            resp = TestClient(app).post(
+                f"/assistants/{ASSISTANT_ID}/web-sources/crawl",
+                json={"url": "https://example.com/"},
+            )
+        assert resp.status_code == 202
+        initial.assert_awaited_once()
+        assert initial.await_args.args == (ASSISTANT_ID,)
+        assert create_doc.await_args.kwargs["status"] == "provisioning"
+
     def test_returns_409_when_crawl_already_running(self, app: FastAPI):
         """Concurrency guard: a second crawl for the same assistant while one
         is already `running` is rejected with 409 — and no document or job

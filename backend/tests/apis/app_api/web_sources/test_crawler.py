@@ -46,6 +46,8 @@ class _Recorder:
         self.finalized_error: str | None = None
         self._doc_counter = 0
         self.preassigned_root_id = "DOC-root00000001"
+        self.created_statuses: List[str] = []  # the status each new page starts at
+        self.kb_record: dict | None = None  # the knowledge-base record a new page reads
 
     def next_doc_id(self) -> str:
         self._doc_counter += 1
@@ -65,11 +67,13 @@ def recorder(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
         s3_key: str,
         document_id: str | None = None,
         provenance=None,
+        status: str = "uploading",
     ):
         document_id = document_id or rec.next_doc_id()
         rec.created_docs.append(
             (document_id, provenance.source_file_id if provenance else "")
         )
+        rec.created_statuses.append(status)
 
         class _Stub:
             pass
@@ -161,6 +165,11 @@ def recorder(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
         await real_sleep(0)
 
     monkeypatch.setattr(asyncio, "sleep", no_sleep)
+    # Each new page reads the knowledge-base record to pick its starting status.
+    monkeypatch.setattr(
+        "apis.shared.kb_backend.records.get_kb_record",
+        lambda assistant_id, app_kb_id: rec.kb_record,
+    )
 
     return rec
 
@@ -223,6 +232,35 @@ async def test_single_page_crawl_writes_one_doc(recorder: _Recorder):
     assert len(recorder.s3_puts) == 1
     assert recorder.fetched_delta == 1
     assert recorder.failed_delta == 0
+
+
+@pytest.mark.parametrize(
+    "kb_record,expected",
+    [
+        (None, "uploading"),  # legacy: no record
+        ({"retrievalEngine": "managed", "awsKbId": "kb", "awsDataSourceId": "ds"}, "uploading"),  # built
+        ({"retrievalEngine": "managed"}, "provisioning"),  # being born managed
+    ],
+)
+@pytest.mark.asyncio
+async def test_pages_wait_on_a_knowledge_base_still_being_provisioned(recorder: _Recorder, kb_record, expected):
+    # Otherwise the managed consumer defers them and the provisioning job, which
+    # ingests only `provisioning` rows, never picks them up.
+    recorder.kb_record = kb_record
+    pages = {
+        "https://example.com/": '<html><body><a href="/a">A</a></body></html>',
+        "https://example.com/a": "<html><head><title>A</title></head><body>a</body></html>",
+    }
+    await run_crawl(
+        assistant_id="ast-1",
+        crawl_id="CRAWL-1",
+        user_id="user-1",
+        root_url="https://example.com/",
+        settings=CrawlSettings(max_depth=1, max_pages=5),
+        root_document_id=recorder.preassigned_root_id,
+        http_client_factory=_client_factory(_build_handler(pages)),
+    )
+    assert recorder.created_statuses == [expected]
 
 
 @pytest.mark.asyncio
