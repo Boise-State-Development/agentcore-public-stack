@@ -25,6 +25,7 @@ pending, steered into a running turn, or waking an idle conversation. Sections 9
 - `docs/specs/ask-user-question.md` — the model for a constant, kill-switched tool spec in `toolConfig`
 - `docs/specs/scheduled-agent-runs.md` — the headless run entrypoint (F1) and the unread dot
 - `CLAUDE.md` — prompt-cache contract, token cost tenet, "one session can be served by more than one agent"
+- `docs/specs/multi-agent-patterns.md` — brainstorm: how Agents as Tools, Swarm, Graph, Workflow and A2A map onto this spec's layers, and why Phase 1's plumbing should be built pattern-agnostic
 
 ---
 
