@@ -36,11 +36,12 @@ def _send_all(queue_url: str, user_id: str, upload_ids: list) -> None:
         )
 
 
-async def requeue_evicted_attachments(session_id: str, user_id: str) -> int:
+async def requeue_evicted_attachments(session_id: str, user_id: str, repository=None) -> int:
     """Queue a re-index for each of the caller's evicted documents in the session.
 
     Returns how many were queued. Rows are matched on the caller: the session
-    index is keyed by conversation, not owner.
+    index is keyed by conversation, not owner. ``repository`` defaults to the
+    shared file repository.
     """
     if not attachment_kb_enabled():
         return 0
@@ -51,7 +52,8 @@ async def requeue_evicted_attachments(session_id: str, user_id: str) -> int:
         from apis.shared.files.attachment_index import evicted_upload_ids
         from apis.shared.files.repository import get_file_upload_repository
 
-        files = await get_file_upload_repository().list_session_files(session_id)
+        repository = repository or get_file_upload_repository()
+        files = await repository.list_session_files(session_id)
         upload_ids = evicted_upload_ids(f for f in files if f.user_id == user_id)
         if not upload_ids:
             return 0
