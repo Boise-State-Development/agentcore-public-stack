@@ -102,9 +102,12 @@ export class ArtifactsDistributionConstruct extends Construct {
     const cspDirectives = [
       `default-src 'none'`,
       `script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://esm.sh https://cdn.jsdelivr.net https://unpkg.com`,
-      `style-src 'self' 'unsafe-inline'`,
+      // jsDelivr serves the KaTeX stylesheet and fonts the Markdown render
+      // wrapper typesets math with (script-src already lists the host).
+      // Mirrored in artifact_render/handler.py `_csp_header()`.
+      `style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net`,
       `img-src 'self' data: https:`,
-      `font-src 'self' data:`,
+      `font-src 'self' data: https://cdn.jsdelivr.net`,
       `connect-src 'none'`,
       `frame-ancestors ${frameAncestors}`,
       `form-action 'none'`,

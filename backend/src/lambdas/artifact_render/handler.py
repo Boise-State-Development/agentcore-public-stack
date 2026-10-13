@@ -37,6 +37,13 @@ render scaffolding. The embed marker is part of the frozen writer
 contract; if it is ever absent (older render / template drift) the
 download falls back to the wrapper bytes as `.html`.
 
+Markdown wrappers are served as stored, never re-wrapped. A change to
+the writer's template (math typesetting is the first) therefore reaches
+new versions only; an older version keeps the renderer it was written
+with. Re-wrapping here would turn this gate into a templating layer with
+a third copy of the template, and would change what an immutable,
+possibly shared version displays without anyone writing a new one.
+
 No third-party dependencies: HS256 is HMAC-SHA256, verified with the
 standard library. boto3 is provided by the Lambda runtime.
 
@@ -115,14 +122,20 @@ class _UnsupportedStorage(Exception):
 def _csp_header() -> str:
     """Build the artifact-origin CSP. Mirrors the CloudFront response-
     headers-policy so the policy is identical whether CloudFront sets it
-    or the Lambda does (defense in depth)."""
+    or the Lambda does (defense in depth).
+
+    `cdn.jsdelivr.net` in style-src and font-src is for the KaTeX
+    stylesheet and the fonts it references, which the Markdown render
+    wrapper loads to typeset math. script-src already lists the same
+    host, so this lets a document load nothing it could not already
+    run; connect-src stays 'none'."""
     return "; ".join(
         [
             "default-src 'none'",
             f"script-src {_CSP_SCRIPT_SRC}",
-            "style-src 'self' 'unsafe-inline'",
+            "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
             "img-src 'self' data: https:",
-            "font-src 'self' data:",
+            "font-src 'self' data: https://cdn.jsdelivr.net",
             "connect-src 'none'",
             f"frame-ancestors {_FRAME_ANCESTOR}",
             "form-action 'none'",

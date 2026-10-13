@@ -9,7 +9,10 @@ Lambda would serve.
 from __future__ import annotations
 
 import base64
+import json
 import re
+from pathlib import Path
+from urllib.parse import urlsplit
 
 import boto3
 import pytest
@@ -17,6 +20,7 @@ from moto import mock_aws
 
 from agents.builtin_tools.artifacts import service
 from apis.inference_api.chat.routes import _build_artifact_tools
+from lambdas.artifact_render import handler as render_handler
 
 REGION = "us-east-1"
 TABLE = "test-user-artifacts"
@@ -280,6 +284,101 @@ def test_html_artifact_not_wrapped(aws) -> None:
     assert s3.get_object(
         Bucket=BUCKET, Key=f"{USER}/{aid}/v1/index.html"
     )["Body"].read().decode() == DOC
+
+
+# --------------------------------------------------------------------------
+# Math in the Markdown render wrapper. The wrapper's JS can't run here, so
+# these pin the contract around it: exact CDN versions with SRI, the same
+# KaTeX version and currency rule as the chat, and an artifact-origin CSP
+# that admits every host the wrapper loads from.
+# --------------------------------------------------------------------------
+
+REPO_ROOT = Path(__file__).resolve().parents[5]
+_CDN_URL_RE = re.compile(r'https://[^"\s]+')
+
+
+def _wrapper() -> str:
+    return service._wrap_markdown("Doc", MD)
+
+
+def _origin(url: str) -> str:
+    parts = urlsplit(url)
+    return f"{parts.scheme}://{parts.netloc}"
+
+
+def _csp_sources(csp: str, name: str) -> list[str]:
+    for directive in csp.split(";"):
+        tokens = directive.split()
+        if tokens and tokens[0] == name:
+            return tokens[1:]
+    raise AssertionError(f"{name} missing from CSP: {csp}")
+
+
+def test_markdown_wrapper_loads_katex_pinned_with_sri() -> None:
+    body = _wrapper()
+    for asset in ("katex.min.css", "katex.min.js"):
+        tag = re.search(
+            rf"<(?:link|script)[^>]*/dist/{re.escape(asset)}\"[^>]*>", body
+        )
+        assert tag, f"wrapper does not load {asset}"
+        assert re.search(r'integrity="sha384-[A-Za-z0-9+/=]{64}"', tag.group(0))
+        assert 'crossorigin="anonymous"' in tag.group(0)
+    # Exact pins only: a range or dist-tag would let a CDN publish change
+    # what every stored artifact renders (and break its SRI hash).
+    for url in _CDN_URL_RE.findall(body):
+        assert re.search(r"@\d+\.\d+\.\d+(/|$)", url), url
+
+
+def test_markdown_wrapper_katex_matches_chat_version() -> None:
+    package = REPO_ROOT / "frontend" / "ai.client" / "package.json"
+    if not package.exists():
+        pytest.skip("frontend package not in this checkout")
+    chat = json.loads(package.read_text())["dependencies"]["katex"]
+    versions = set(re.findall(r"katex@(\d+\.\d+\.\d+)/", _wrapper()))
+    assert versions == {chat}
+
+
+def test_markdown_wrapper_currency_rule_matches_chat() -> None:
+    """The guarded `$…$` rule is what keeps "$5 fee" prose. It must be
+    the chat's rule byte for byte (the raw-string template keeps every
+    backslash), so a fix to one side can't silently skip the other."""
+    source = (
+        REPO_ROOT / "frontend" / "ai.client" / "src" / "app" / "shared"
+        / "utils" / "katex-math-markdown.ts"
+    )
+    if not source.exists():
+        pytest.skip("frontend source not in this checkout")
+    pattern = re.compile(r"const DOLLAR_INLINE_MATH = (/.+/);")
+    chat = pattern.search(source.read_text())
+    ours = pattern.search(_wrapper())
+    assert chat and ours
+    assert ours.group(1) == chat.group(1)
+
+
+def test_markdown_wrapper_hosts_are_allowed_by_render_csp() -> None:
+    body = _wrapper()
+    csp = render_handler._csp_header()
+    construct = (
+        REPO_ROOT / "infrastructure" / "lib" / "constructs" / "artifacts"
+        / "artifact-render-lambda-construct.ts"
+    )
+    script_src = re.search(
+        r'CSP_SCRIPT_SRC:\s*"([^"]+)"', construct.read_text()
+    ).group(1).split()
+
+    stylesheets = re.findall(r'<link rel="stylesheet"[^>]*href="([^"]+)"', body)
+    scripts = re.findall(r'<script[^>]*\ssrc="([^"]+)"', body) + re.findall(
+        r'import [^;]+ from "([^"]+)"', body
+    )
+    assert stylesheets and scripts
+    for url in stylesheets:
+        assert _origin(url) in _csp_sources(csp, "style-src"), url
+        # The stylesheet's fonts resolve relative to it, on the same host.
+        assert _origin(url) in _csp_sources(csp, "font-src"), url
+    for url in scripts:
+        assert _origin(url) in script_src, url
+    # Loading math assets must not reopen a channel out of the sandbox.
+    assert _csp_sources(csp, "connect-src") == ["'none'"]
 
 
 def test_ssm_fallback(aws, monkeypatch: pytest.MonkeyPatch) -> None:

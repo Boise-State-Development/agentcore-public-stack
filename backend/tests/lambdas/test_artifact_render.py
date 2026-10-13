@@ -405,6 +405,22 @@ def test_markdown_record_served_as_html(aws_env) -> None:
     assert resp["body"] == wrapper  # bytes are an exact pass-through
 
 
+def test_csp_admits_katex_styles_and_fonts_only() -> None:
+    # The Markdown wrapper typesets math with KaTeX from jsDelivr: its
+    # stylesheet and the fonts that stylesheet references. That host is
+    # added to exactly those two directives; the exfiltration and
+    # navigation lines stay shut.
+    directives = {
+        d.split()[0]: d.split()[1:] for d in handler._csp_header().split("; ")
+    }
+    assert "https://cdn.jsdelivr.net" in directives["style-src"]
+    assert "https://cdn.jsdelivr.net" in directives["font-src"]
+    assert directives["connect-src"] == ["'none'"]
+    assert directives["form-action"] == ["'none'"]
+    assert directives["base-uri"] == ["'none'"]
+    assert directives["default-src"] == ["'none'"]
+
+
 def test_non_markdown_content_type_served_verbatim(aws_env) -> None:
     _put_record(aws_env["ddb"], content_type="image/svg+xml")
     resp = handler.handler(_event(_mint(_valid_claims())), None)
