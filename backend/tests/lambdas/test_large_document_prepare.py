@@ -129,6 +129,10 @@ class TestPrepare:
             ("notes.txt", "text/plain", b"a\r\nb\n\nc", ["a", "b", "", "c"]),
             ("page.html", "text/html", b"<h1>A</h1>\n<p>b</p>", ["<h1>A</h1>", "<p>b</p>"]),
         ],
+        # Fixed ids: the default id embeds the raw bytes, and a .docx zip carries the
+        # time it was built, so xdist workers collecting a second apart disagreed on
+        # the test names and the whole run aborted at collection.
+        ids=["docx", "txt", "html"],
     )
     async def test_other_formats_get_a_text_layer_and_no_shards(self, store, filename, mime, raw, expected):
         s3, repository = store
