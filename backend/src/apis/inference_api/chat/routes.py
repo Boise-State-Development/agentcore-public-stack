@@ -47,6 +47,12 @@ from apis.shared.files.models import (
     MAX_FILES_PER_MESSAGE,
     TEXT_ONLY_DOCUMENTS_MAX_CHARS,
 )
+from apis.shared.files.reference_attachments import (
+    ReferenceAttachment,
+    format_size,
+    record_reference_attachments,
+    render_references_section,
+)
 from apis.shared.models.managed_models import get_default_managed_model, list_managed_models
 from apis.shared.models.retirement import resolve_effective_model, retired_model_message
 from apis.shared.quota import (
@@ -1429,10 +1435,16 @@ def _estimate_decoded_size(file: "FileContent") -> int:
 
 def _partition_attachments(
     all_files: list,
-) -> tuple[list, list, list, list]:
+) -> tuple[list, list, list, list, list]:
     """Split attachments into
-    (inline_for_bedrock, tabular, presentations, oversized_non_tabular).
+    (inline_for_bedrock, tabular, presentations, oversized_non_tabular, reference).
 
+    - Reference files (``ReferenceAttachment``: a reference-class upload the
+      resolver returned without its bytes, large-document spec §4B.2) are
+      never inline. They carry no bytes, so they add nothing to the inline
+      byte budget, and they reach the model as a digest or a stub in the user
+      message. Only an upload row can be one: direct ``files`` bytes over the
+      inline limit stay oversized (§4B.6).
     - Tabular files (csv/xlsx) are never sent inline — they route through
       the spreadsheet analysis tools. Keeps Bedrock's 4.5MB document limit
       from exploding on XLSX files that expand during internal parsing.
@@ -1458,8 +1470,12 @@ def _partition_attachments(
     tabular: list = []
     presentations: list = []
     oversized: list = []
+    reference: list = []
 
     for file in all_files:
+        if isinstance(file, ReferenceAttachment):
+            reference.append(file)
+            continue
         if is_tabular_file(file.filename, file.content_type):
             tabular.append(file)
             continue
@@ -1476,7 +1492,7 @@ def _partition_attachments(
             continue
         inline.append(file)
 
-    return inline, tabular, presentations, oversized
+    return inline, tabular, presentations, oversized, reference
 
 
 def _apply_message_file_cap(
@@ -1621,6 +1637,8 @@ def _build_attachment_guidance(
     unpersisted: list | None = None,
     unreadable_images: list | None = None,
     unreadable_documents: list | None = None,
+    references: list | None = None,
+    document_read_available: bool = True,
 ) -> str:
     """Return a short markdown addendum describing how attachments will be
     handled, to append to the user's message so the agent (and the user)
@@ -1638,8 +1656,35 @@ def _build_attachment_guidance(
     "available through the tool" line. ``unreadable_images`` /
     ``unreadable_documents`` were dropped because the turn's model reads text
     only (`_adapt_attachments_for_model`); the remedy is a different model.
+    ``references`` are large documents attached by reference (large-document
+    spec §4B.4): not skipped, but readable only in parts, through
+    ``document_read`` when this turn has it (``document_read_available``).
     """
     parts: list[str] = []
+
+    # Directive on purpose: measured on dev, Haiku 4.5 answered "I don't see a
+    # file called X attached" for a non-inline document even with the tool
+    # injected, and used it only when told to call it. So the sentence names
+    # the tool, the call and the id.
+    for ref in references or ():
+        lead = (
+            f"_`{ref.filename}` ({format_size(ref.size_bytes)}) is attached but too large "
+            f"to include in full, so its content is not in this message."
+        )
+        if not document_read_available:
+            parts.append(f"{lead} Reading parts of it is not available in this conversation._")
+            continue
+        call = f"call `document_read` with `upload_id` `{ref.upload_id}`"
+        if ref.format == "pdf":
+            parts.append(
+                f"{lead} To answer from it, {call}: first with `pattern` to find the "
+                f"relevant pages, then with `page_range` to read them._"
+            )
+        else:
+            parts.append(
+                f"{lead} To answer from it, {call}: first with `pattern` to find the "
+                f"relevant passages, then read on from there._"
+            )
 
     if diverted_tabular:
         names = ", ".join(f"`{f.filename}`" for f in diverted_tabular)
@@ -2301,7 +2346,8 @@ class TurnAttachments:
     ``files_to_send`` is the inline set the model receives as document/image
     blocks. The three diverted lists never go inline (spreadsheets and decks
     route through their tools; oversized and over-budget files are dropped with
-    a note). ``marker_names`` is every filename that still exists in the
+    a note), and neither does ``reference_documents`` (large documents carried
+    as a digest or stub). ``marker_names`` is every filename that still exists in the
     session, in attachment order, for the ``[Attached files: …]`` marker the
     SPA replays on reload. ``turn_has_document`` is the *classified* answer to
     "did this turn attach something ``document_read`` can read", which feeds
@@ -2318,6 +2364,11 @@ class TurnAttachments:
     dropped_over_count_total: int = 0
     turn_has_document: bool = False
     marker_names: list = field(default_factory=list)
+    # Reference-class uploads (``ReferenceAttachment``, large-document spec
+    # §4B): never inline, no bytes. Each reaches the model as its digest or a
+    # stub in the user message, stays in the marker, and counts toward the
+    # per-message file cap (applied to the ids before they were resolved).
+    reference_documents: list = field(default_factory=list)
     # Inline (base64 ``files``) spreadsheets/decks that could not be stored as
     # session files — ``PersistFailure`` entries (file + user-facing reason).
     # Dropped from the turn: not diverted, not in the marker, named in the note.
@@ -2493,6 +2544,10 @@ async def _resolve_turn_attachments(
                 max_files=None if turn_guard_on else 5,
             )
             for rf in resolved_files:
+                reference_meta = getattr(rf, "reference", None)
+                if reference_meta is not None:
+                    all_files.append(ReferenceAttachment(meta=reference_meta))
+                    continue
                 all_files.append(
                     FileContent(filename=rf.filename, content_type=rf.content_type, bytes=rf.bytes)
                 )
@@ -2536,7 +2591,14 @@ async def _resolve_turn_attachments(
         diverted_tabular,
         diverted_presentations,
         oversized_inline,
+        reference_documents,
     ) = _partition_attachments(all_files)
+    if reference_documents:
+        logger.info(
+            "Attached %d large document(s) by reference (no S3 read on the turn path)",
+            len(reference_documents),
+        )
+        record_reference_attachments(reference_documents)
     if diverted_tabular:
         logger.info(
             f"Diverted {len(diverted_tabular)} tabular file(s) from inline document blocks; "
@@ -2603,6 +2665,7 @@ async def _resolve_turn_attachments(
         turn_has_document=turn_has_document,
         marker_names=attachment_marker_names,
         unpersisted_inline=unpersisted_inline,
+        reference_documents=reference_documents,
     )
 
 
@@ -4465,8 +4528,12 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
         #
         # Bound before the branch: the stream closure reads it on every turn,
         # and only the non-resume branch (a TEXT-only model with documents
-        # attached) ever fills it.
+        # attached) ever fills it. The same goes for the reference section
+        # (large documents attached by reference) and whether this turn carries
+        # `document_read`, which decides if that section advertises a handle.
         extracted_documents_section = ""
+        reference_documents_section = ""
+        document_read_available = False
         if is_resume:
             from datetime import datetime, timezone
             from apis.shared.sessions.metadata import clear_paused_turn, get_paused_turn
@@ -4612,9 +4679,17 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 turn_has_document=attachments.turn_has_document,
                 text_only_model=turn_model.text_only,
             )
+            document_read_available = bool(turn_tools.document_tools)
             extracted_documents_section = _build_extracted_documents_section(
                 attachments.extracted_documents,
-                document_read_available=bool(turn_tools.document_tools),
+                document_read_available=document_read_available,
+            )
+            # Large-document spec §4B.3: the stored digest or a fixed stub per
+            # reference, read off the row the resolver already returned. Never
+            # a digest build, never an S3 read.
+            reference_documents_section = render_references_section(
+                attachments.reference_documents,
+                include_handle=document_read_available,
             )
 
             # System-prompt assembly, the single-flight lease, skill
@@ -4773,6 +4848,8 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 unpersisted=attachments.unpersisted_inline,
                 unreadable_images=attachments.unreadable_images,
                 unreadable_documents=attachments.unreadable_documents,
+                references=attachments.reference_documents,
+                document_read_available=document_read_available,
             )
             # When multiple spreadsheets are visible, ship the full inventory
             # up front so the agent can disambiguate intentionally instead of
@@ -4789,6 +4866,11 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             final_message = augmented_message
             if attachment_guidance:
                 final_message = f"{final_message}\n\n{attachment_guidance}"
+            # Rendered into the persisted user message once, from this turn's
+            # read of the row: a digest that lands later never rewrites it, so
+            # restored history stays byte-stable (large-document spec §4B.5).
+            if reference_documents_section:
+                final_message = f"{final_message}\n\n{reference_documents_section}"
             if extracted_documents_section:
                 final_message = f"{final_message}\n\n{extracted_documents_section}"
             if tabular_inventory:
