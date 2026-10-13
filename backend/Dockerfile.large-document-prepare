@@ -41,9 +41,10 @@ COPY backend/src/apis/shared/observability/ ${LAMBDA_TASK_ROOT}/apis/shared/obse
 # extractors, the digest and the sidecar layout. Its modules import each other
 # relatively, so it is copied as a unit.
 COPY backend/src/apis/shared/files/ ${LAMBDA_TASK_ROOT}/apis/shared/files/
-# docx_revisions.py — tracked changes written out, when the flag is on.
-COPY backend/src/apis/shared/kb_backend/__init__.py ${LAMBDA_TASK_ROOT}/apis/shared/kb_backend/__init__.py
-COPY backend/src/apis/shared/kb_backend/docx_revisions.py ${LAMBDA_TASK_ROOT}/apis/shared/kb_backend/docx_revisions.py
+# kb_backend/ — whole package (stdlib-only at module scope): docx_revisions for
+# tracked changes, and the managed-KB provisioning, records and backend the
+# attachments index (apis/shared/files/attachment_index.py) uses.
+COPY backend/src/apis/shared/kb_backend/ ${LAMBDA_TASK_ROOT}/apis/shared/kb_backend/
 
 # The handler itself, as a plain top-level module.
 COPY backend/src/lambdas/large_document_prepare/handler.py ${LAMBDA_TASK_ROOT}/handler.py

@@ -627,6 +627,34 @@ export class PlatformStack extends cdk.Stack {
     conversationArchive.bucket.enableEventBridgeNotification();
 
     // ============================================================
+    // The shared `attachments` knowledge base for large documents
+    // (docs/specs/large-document-attachments.md §4E). Rides the large-document
+    // pipeline (config refuses it without largeDocumentAttachments): the
+    // prepare Lambda ingests, removes and evicts documents. Two resources, the
+    // rules inside the construct.
+    //
+    // The user-files bucket's EventBridge delivery is switched on here (a
+    // construct never mutates a bucket handed to it), and through the bucket's
+    // own CloudFormation property rather than `enableEventBridgeNotification()`:
+    // that helper adds a Custom::S3BucketNotifications and a handler policy per
+    // bucket, two of the eight resources dev had left. This bucket has no other
+    // notification. ⚠️ If one is ever added through CDK's notification helpers,
+    // move this to `enableEventBridgeNotification()` too, so one owner writes
+    // the bucket's notification configuration.
+    // ============================================================
+    if (config.attachmentKb.enabled && this._largeDocumentPrepare) {
+      this._largeDocumentPrepare.enableAttachmentKb({
+        assistantsTable: this.ragAssistantsTable,
+        sessionsMetadataTable: this.sessionsMetadataTable,
+        managedKbRole,
+      });
+      (fileUpload.bucket.node.defaultChild as s3.CfnBucket).addPropertyOverride(
+        'NotificationConfiguration.EventBridgeConfiguration.EventBridgeEnabled',
+        true,
+      );
+    }
+
+    // ============================================================
     // Fine-tuning data
     // ============================================================
     const fineTuningData = new FineTuningDataConstruct(

@@ -1,8 +1,9 @@
 # Large document attachments: attach by reference, search through a managed KB
 
-**Status:** Tier 1 in progress. PR-0 (#1560) and PR-1 (#1573) merged; PR-2 (the
-turn path and the raised limits) is the next change. Decisions recorded in §9
-(size limit, ingest source, page numbers, retention, per-user cap).
+**Status:** Tier 1 shipped to dev (PR-0 #1560, PR-1 #1573, PR-2 #1577, dev-validated
+2026-10-13). Tier 2: PR-3 (the attachments KB, folded into the PR-1 pipeline, §4E
+"As built") is the next change. Decisions recorded in §9 (size limit, ingest source,
+page numbers, retention, per-user cap) and D7.
 **Motivating gap:** a user cannot attach a document over 4 MB to a conversation.
 The SPA rejects it on the client, so it never reaches the server and no metric
 anywhere records the demand.
@@ -305,6 +306,30 @@ A copy of the `conversations` KB design, applied to attachments:
 - **Row field** `kbIndex: {status: queued|indexing|indexed|failed|skipped_cap|evicted, indexedAt}`,
   written by the consumer and read by the SPA chip.
 
+#### E′. As built in PR-3 (D7)
+
+PR-3 builds §4E without the separate index queue, consumer and reconciler. The
+dev PlatformStack had 8 of CloudFormation's 500 resources left after PR-1, and that
+pipeline would have cost about 17 (D7). The PR-1 pipeline carries it instead:
+
+| §4E piece | As built |
+|---|---|
+| Index queue + consumer (`maxConcurrency` 2) | The prepare queue and Lambda. A preparation that ends `ready` ingests in the same invocation. `{"action": "index" \| "check"}` messages re-sync or poll one upload. The prepare event source drops to 2 in flight while the KB is on, which also caps concurrent preparations at 2 |
+| EventBridge delete rule on `user-files/` | An S3 *Object Deleted* rule targeting the prepare queue. The handler ignores sidecar and thumbnail keys (`parse_original_key`). The bucket's EventBridge delivery is set through its own CloudFormation property rather than CDK's notification custom resource, which would cost two more resources |
+| Daily reconciler Lambda + schedule | A schedule rule that puts `{"action": "reconcile"}` on the same queue. It walks the KB's documents: it removes orphans and documents no longer eligible, settles statuses the checks missed, and evicts inactive documents |
+| Last-use timestamp, written at most once a day | Not written. Inactivity is the session's `lastMessageAt`, which every turn already maintains (a `document_read` call is always inside a turn), or the last (re-)index, whichever is later. Nothing is added to the turn path |
+| `byte_cap` record `AST#attachments` / `OWNER#{user_id}` | That record, plus a `BYTES#{user_id}#{upload_id}` marker per document, written in one transaction: reserved once, refused over the cap, released exactly once. `byte_cap`'s own functions are keyed on an assistant's `KB#` record, so they are not reused |
+| Ingest status | Ingestion is asynchronous. A delayed `check` message polls `GetKnowledgeBaseDocuments` at 2, 3, 5, 10 and then 15-minute intervals (about 75 minutes in all), then leaves the document to the daily reconcile |
+
+The prepare function's timeout rises from 5 to 10 minutes while the KB is on, and
+the queue's visibility timeout follows it at six times. The first ingest in an
+environment provisions the KB inside the function: the saga waits up to 300 s for
+ACTIVE.
+
+New resources while on: **2** (the two rules). Everything else is statements on
+existing roles: the prepare role, and the managed-KB service role (read
+`user-files/*`).
+
 #### F. Semantic search mode on `document_read` (Tier 2)
 
 - New argument `query: str`. With an `upload_id` it searches that document; without
@@ -350,10 +375,11 @@ A copy of the `conversations` KB design, applied to attachments:
 | Flag | Side | Kind | Default |
 |---|---|---|---|
 | `LARGE_DOCUMENT_ATTACHMENTS_ENABLED` / `CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED`, `features.largeDocumentAttachments` | app-api + SPA | Feature switch (widens what users can do, costs Lambda and storage) | **Off** (in development) |
-| `ATTACHMENT_KB_ENABLED` / `CDK_ATTACHMENT_KB_ENABLED` | CDK construct, app-api, Runtime | Feature switch (provisions a billed KB) | **Off** (in development) |
+| `ATTACHMENT_KB_ENABLED` / `CDK_ATTACHMENT_KB_ENABLED` | Prepare Lambda and app-api (PR-3); Runtime from PR-4 | Feature switch (provisions a billed KB) | **Off** (in development) |
 
-With the CDK flag off, the attachments-KB construct is not synthesized at all, so a
-deployment that never opts in gets no queue, no Lambda and no KB. Tier 2 requires
+With the CDK flag off, none of the attachments-KB wiring is synthesized (the two
+rules, the grants, the bucket's EventBridge delivery), so a deployment that never
+opts in gets no rules and no KB. Tier 2 requires
 Tier 1. The CDK config refuses `ATTACHMENT_KB_ENABLED` without
 `LARGE_DOCUMENT_ATTACHMENTS_ENABLED`.
 
@@ -381,7 +407,7 @@ too-large message.
 | **PR-0** | `complete_upload` verifies `ContentLength` against the declared size and limit (D6). Being done as a standalone change; listed here because PR-2 depends on it | No |
 | **PR-1** | `is_reference_document`; preparation Lambda + prepare queue + CDK construct; `_derived/` sidecars; `document_read` reads sidecars; `_derived/` deletion. Behind `CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED` (construct) | No: nothing is reference-class until PR-2 raises the limit |
 | **PR-2** | Raise the limits (SPA, presign); metadata-first resolver; `reference` partition; digest or stub in the user message; guidance sentence; marker names. Flag-gated | Yes, when the flag is on |
-| **PR-3** | Attachments KB: reserved id, index queue, consumer, EventBridge delete rule, KB role grant on `user-files/*`, daily reconciler (30-day eviction, stuck rows), `byte_cap` per-user cap, `kbIndex` and last-use fields, re-index on conversation open. Acceptance: one ~45 MB PDF ingested by `s3Location` (D1). Behind `CDK_ATTACHMENT_KB_ENABLED` | No |
+| **PR-3** | Attachments KB: reserved id, EventBridge delete rule, KB role grant on `user-files/*`, daily reconcile (30-day eviction, orphans, stuck statuses), per-user cap, `kbIndex` field, re-index on conversation open. Folded into the PR-1 queue and Lambda (§4E′, D7): 2 new resources. Acceptance: one ~45 MB PDF ingested by `s3Location` (D1). Behind `CDK_ATTACHMENT_KB_ENABLED` | No |
 | **PR-4** | `document_read` `query` mode; `attachment_search.py` and its architecture test; SPA *Indexing* / *Searchable* chip | Yes, when the flag is on |
 | **PR-5** | Readout (§6) and the decision to promote either flag | — |
 
@@ -536,6 +562,16 @@ specified in §4E. Configurable per deployment.
 **D6. Uploaded size is verified against the stored object.** This gap (§1) is being
 fixed as a standalone change, separately from this spec's PRs, and is a
 prerequisite for PR-2.
+
+**D7. Tier 2 rides the Tier 1 pipeline (decided 2026-10-13).** The dev
+PlatformStack sat at 492 of 500 resources after PR-1. The §4E pipeline (index queue,
+DLQ, consumer, reconciler, roles, log groups, schedule, SSM parameters, alarms) would
+have cost about 17, so it would first have needed a budget-freeing change. Instead,
+the prepare queue and Lambda carry index, check, delete and reconcile messages (§4E′),
+for 2 new resources. Costs: preparations share the 2-in-flight bound the KB quotas
+need, and the prepare alarms cover both jobs. If Tier 2's volume ever needs its own
+concurrency, splitting it back out is a CDK change plus a handler move. The code
+already lives in `apis/shared/files/attachment_index.py`, not in the handler.
 
 ### Still open
 

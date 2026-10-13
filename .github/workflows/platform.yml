@@ -328,6 +328,13 @@ jobs:
       # or anything else means off, and the prepare queue and Lambda are not
       # deployed at all. Sets the flag on app-api only.
       CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED: ${{ vars.CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED }}
+      # The shared `attachments` managed knowledge base for large documents
+      # (docs/specs/large-document-attachments.md §4E). Opt-in while in
+      # development, and only together with CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED
+      # (synth fails otherwise). Adds two EventBridge rules and the user-files
+      # bucket's EventBridge notification; the knowledge base is created on
+      # first ingest and billed at $5/GB-month of indexed source bytes.
+      CDK_ATTACHMENT_KB_ENABLED: ${{ vars.CDK_ATTACHMENT_KB_ENABLED }}
       # SageMaker fine-tuning. The tables, bucket, SageMaker role and IAM
       # grants deploy unconditionally, but these two decide whether the feature
       # is reachable and how it is rationed, and neither was forwarded before —

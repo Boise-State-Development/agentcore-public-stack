@@ -299,6 +299,13 @@ class FileMetadata(BaseModel):
     # status fields only: never content.
     preparation: Optional[dict] = Field(None, description="Large-document preparation state, when queued")
 
+    # The reference-class document's state in the shared ``attachments``
+    # managed knowledge base (large-document spec §4E): ``{status:
+    # queued|indexing|indexed|failed|skipped_cap|evicted|removed, indexedAt?,
+    # updatedAt, error?}``, written only by the large-document pipeline.
+    # ``None`` = never queued for indexing. Status fields only: never content.
+    kb_index: Optional[dict] = Field(None, description="Attachments-KB index state, when queued")
+
     # Timestamps
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -349,6 +356,8 @@ class FileMetadata(BaseModel):
             item["digest"] = self.digest
         if self.preparation:
             item["preparation"] = self.preparation
+        if self.kb_index:
+            item["kbIndex"] = self.kb_index
         return item
 
     @classmethod
@@ -373,6 +382,7 @@ class FileMetadata(BaseModel):
             ttl=item.get("ttl"),
             digest=item.get("digest") if isinstance(item.get("digest"), dict) else None,
             preparation=item.get("preparation") if isinstance(item.get("preparation"), dict) else None,
+            kb_index=item.get("kbIndex") if isinstance(item.get("kbIndex"), dict) else None,
         )
 
 

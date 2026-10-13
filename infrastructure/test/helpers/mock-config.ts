@@ -187,6 +187,9 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     largeDocumentAttachments: {
       enabled: false,
     },
+    attachmentKb: {
+      enabled: false,
+    },
     agents: {
       enabled: false,
     },

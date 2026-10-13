@@ -394,6 +394,9 @@ export function buildAppApiEnvironment(
     // complete_upload enqueues a reference-class upload for preparation. The
     // Runtime reads a prepared file by its row and needs no copy.
     LARGE_DOCUMENT_ATTACHMENTS_ENABLED: config.largeDocumentAttachments.enabled ? 'true' : 'false',
+    // The attachments knowledge base (opt-in while in development): opening a
+    // conversation re-queues its evicted large documents for indexing.
+    ATTACHMENT_KB_ENABLED: config.attachmentKb.enabled ? 'true' : 'false',
     ...(params.largeDocumentPrepareQueueUrl
       ? { LARGE_DOCUMENT_PREPARE_QUEUE_URL: params.largeDocumentPrepareQueueUrl }
       : {}),

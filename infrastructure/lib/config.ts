@@ -91,6 +91,7 @@ export interface AppConfig {
   skillAuthoring: SkillAuthoringConfig;
   wordTrackedChanges: WordTrackedChangesConfig;
   largeDocumentAttachments: LargeDocumentAttachmentsConfig;
+  attachmentKb: AttachmentKbConfig;
   agents: AgentsConfig;
   agentMarketplace: AgentMarketplaceConfig;
   dictation: DictationConfig;
@@ -681,6 +682,23 @@ export interface WordTrackedChangesConfig {
  * environment budget.
  */
 export interface LargeDocumentAttachmentsConfig {
+  enabled: boolean;
+}
+
+/**
+ * The shared `attachments` managed knowledge base for large documents
+ * (docs/specs/large-document-attachments.md §4E, Tier 2). **Opt-in while in
+ * development**: off unless CDK_ATTACHMENT_KB_ENABLED=true (or an
+ * `attachmentKb.enabled: true` cdk.json context), and refused without
+ * `largeDocumentAttachments.enabled`, because it rides the large-document
+ * pipeline: the prepare Lambda also ingests, removes and evicts documents.
+ * While on it adds two resources (an S3 Object Deleted rule and a daily
+ * schedule, both targeting the prepare queue), turns on the user-files bucket's
+ * EventBridge delivery, and grants on existing roles. Sets
+ * ATTACHMENT_KB_ENABLED on the prepare Lambda and app-api. The knowledge base
+ * itself is created on first ingest, never by CloudFormation.
+ */
+export interface AttachmentKbConfig {
   enabled: boolean;
 }
 
@@ -1485,6 +1503,12 @@ export function loadConfig(scope: cdk.App): AppConfig {
         ? process.env.CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('largeDocumentAttachments')?.enabled ?? false,
     },
+    attachmentKb: {
+      // Opt-in while in development, same parsing as largeDocumentAttachments.
+      enabled: process.env.CDK_ATTACHMENT_KB_ENABLED
+        ? process.env.CDK_ATTACHMENT_KB_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('attachmentKb')?.enabled ?? false,
+    },
     agents: {
       // Default ON with a kill switch (house style, mirroring memorySpaces /
       // scheduledRuns): the workflow forwards an EMPTY STRING when unset, so treat
@@ -2118,6 +2142,14 @@ export function validateAwsRegion(region: string): void {
  * Validate configuration values
  */
 function validateConfig(config: AppConfig): void {
+  // The attachments KB rides the large-document pipeline (its queue and Lambda).
+  if (config.attachmentKb.enabled && !config.largeDocumentAttachments.enabled) {
+    throw new Error(
+      'CDK_ATTACHMENT_KB_ENABLED=true requires CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED=true: '
+      + 'the attachments knowledge base is fed by the large-document preparation pipeline.',
+    );
+  }
+
   // Validate project prefix
   if (!/^[a-z][a-z0-9-]{1,20}$/.test(config.projectPrefix)) {
     throw new Error(
