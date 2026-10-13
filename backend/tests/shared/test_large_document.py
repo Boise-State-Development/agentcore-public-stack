@@ -461,6 +461,9 @@ def test_feature_flag_is_opt_in(monkeypatch, value, expected):
          ["1. Scope", "Body text here.", "2. Terms"]),
         ("m.md", "text/markdown", b"# Title\nbody\n## Part\nmore", "line", ["# Title", "body", "## Part", "more"]),
     ],
+    # Fixed ids: the default embeds the raw bytes, and the .docx zip carries the time
+    # it was built, so xdist workers collecting a second apart disagreed on the names.
+    ids=["pdf", "docx", "md"],
 )
 async def test_digest_from_extracted_units_matches_the_digest_from_bytes(filename, mime, raw, unit, texts):
     """The Lambda hands build_digest the units it already extracted; the

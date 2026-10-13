@@ -90,6 +90,25 @@ VERIFY_RETRY_SECONDS = 60
 #: it is a corpus that will never answer — and the owner deserves to be told.
 MAX_VERIFY_ATTEMPTS = 10
 
+#: How many times ``verify`` may send documents Bedrock has no record of back to
+#: ``shadow``. An ingest Bedrock accepted and then never lists is rare; one still
+#: missing after three re-sends will not appear, and looping would bill for it.
+MAX_VERIFY_RESENDS = 3
+
+#: Bedrock statuses ``verify`` reads as indexed. Partial counts: the document is
+#: retrievable, and the consumer treats it the same way.
+VERIFIED_STATUSES = frozenset({"INDEXED", "PARTIALLY_INDEXED", "METADATA_PARTIALLY_INDEXED"})
+
+#: Bedrock statuses that will not become indexed. ``METADATA_UPDATE_FAILED`` is
+#: here, not with the partials: the metadata carries the ``document_id`` that
+#: retrieval filters on, so its content would be unreachable. ``IGNORED`` is
+#: Bedrock declining the document outright.
+UNUSABLE_STATUSES = frozenset({"FAILED", "METADATA_UPDATE_FAILED", "IGNORED"})
+
+#: Bedrock has no record of the document: it was never sent, the send was lost, or
+#: it became ``complete`` after ``shadow`` converged.
+MISSING_STATUS = "NOT_FOUND"
+
 #: Catch-up passes before the worker gives up waiting for quiet. A knowledge base
 #: whose owner is actively uploading may never converge; stopping is correct —
 #: the record stays in ``shadow``, the dispatcher brings it back, and the corpus
@@ -135,6 +154,14 @@ class VerificationFailed(MigrationError):
     """The managed corpus does not match the source manifest, or the canary
     retrieval returned nothing. Sends the migration to ``failed``, which leaves the
     knowledge base on legacy and fully usable (17.4)."""
+
+
+class DocumentsNotIndexed(VerificationFailed):
+    """Bedrock failed or declined to index documents that serve on legacy today.
+
+    Its own type so the upgrade card can name the files to remove or replace,
+    rather than a generic failure the owner cannot act on.
+    """
 
 
 @dataclass
@@ -489,12 +516,19 @@ async def run_shadow(
     counts["skipped"] += extra["skipped"]
     newly_done = list(counts["done"]) + list(extra["done"])
 
-    total_done = len(done) + counts["migrated"]
+    # Measured against the corpus as it stands now, not against what this run
+    # handed over. Writing the handed-over count as both numbers made promotion's
+    # `migrated = total` guard true by construction.
+    current = [
+        document_id_of(item)
+        for item in await asyncio.to_thread(list_document_items, assistant_id)
+        if is_complete(item)
+    ]
     await _record_progress(
         assistant_id,
         app_kb_id,
-        migrated=total_done,
-        total=total_done,
+        migrated=sum(1 for document_id in current if document_id in migrated_ids),
+        total=len(current),
         skipped=counts["skipped"],
         newly_done=newly_done,
     )
@@ -591,15 +625,27 @@ async def run_verify(
     record: Dict[str, Any],
     backend=None,
 ) -> StepResult:
-    """Compare an exact manifest, then prove retrieval works.
+    """Prove every ``complete`` document is indexed in Bedrock, then that retrieval works.
 
     Requirements 15.6, 15.7. Two checks, and both are needed:
 
-    * The **manifest** is a set of ``document_id:identity`` strings, not a count.
-      A count is satisfied by the right number of wrong documents.
+    * The **manifest**: Bedrock's own status for every ``complete`` document, by
+      id. Ingestion is fire-and-forget (``IngestKnowledgeBaseDocuments`` returns
+      on acceptance), so nothing else knows whether a document was indexed, failed
+      to parse, or never arrived. A count would be satisfied by the right number
+      of wrong documents, and the record's own progress only says what was
+      *handed over*.
+
+      - Indexed (fully or partially): verified.
+      - Still being worked on, or the status could not be read: defer and ask again.
+      - Unknown to Bedrock: back to ``shadow``, which re-sends it. This also
+        catches a document that became ``complete`` after ``shadow`` converged.
+      - Failed or ignored: the migration fails, naming the files. Promoting would
+        silently drop documents that answer on legacy today.
+
     * The **canary retrieval** proves the corpus is genuinely queryable. Bedrock
       reporting a document ``INDEXED`` precedes it being retrievable by
-      0.75–1.03 s, and a knowledge base can hold documents while returning nothing
+      0.75-1.03 s, and a knowledge base can hold documents while returning nothing
       — so "we ingested everything" and "retrieval works" are separate claims.
     """
     from apis.shared.kb_backend import records as r
@@ -608,13 +654,46 @@ async def run_verify(
     backend = backend or _managed_backend()
 
     items = await asyncio.to_thread(list_document_items, assistant_id)
-    expected = source_manifest(items)
-
     complete = [item for item in items if is_complete(item)]
     if not complete:
         raise VerificationFailed(
             f"kb {app_kb_id} has no complete documents to verify; there is nothing "
             f"to promote"
+        )
+
+    by_id = {document_id_of(item): item for item in complete if document_id_of(item)}
+    try:
+        statuses = await backend.document_statuses(app_kb_id, list(by_id))
+    except Exception as exc:  # noqa: BLE001 — could not ask is not "not there"
+        logger.warning(f"kb {app_kb_id}: could not read Bedrock's document statuses: {exc}")
+        return await _defer_verify(
+            assistant_id, app_kb_id, generation, "Bedrock's document statuses could not be read"
+        )
+
+    def named(document_ids: Sequence[str]) -> str:
+        names = [str(by_id[document_id].get("filename") or document_id) for document_id in document_ids]
+        return ", ".join(names[:10]) + (f" and {len(names) - 10} more" if len(names) > 10 else "")
+
+    unusable = [i for i, (status, _) in statuses.items() if status in UNUSABLE_STATUSES]
+    if unusable:
+        reasons = sorted({str(statuses[i][1]) for i in unusable if statuses[i][1]})
+        raise DocumentsNotIndexed(
+            f"Bedrock could not index {len(unusable)} document(s): {named(unusable)}"
+            + (f" ({'; '.join(reasons)[:300]})" if reasons else "")
+            + ". Remove or replace them and retry; the knowledge base stays on classic."
+        )
+
+    missing = [i for i, (status, _) in statuses.items() if status == MISSING_STATUS]
+    if missing:
+        return await _resend(assistant_id, app_kb_id, record, missing, named(missing))
+
+    pending = [i for i, (status, _) in statuses.items() if status not in VERIFIED_STATUSES]
+    if pending:
+        return await _defer_verify(
+            assistant_id,
+            app_kb_id,
+            generation,
+            f"{len(pending)} document(s) still indexing in Bedrock",
         )
 
     canary_text = _canary_query(complete)
@@ -626,40 +705,31 @@ async def run_verify(
         # warm-knowledge-base figure. Failing here marked a perfectly good
         # migration `failed` for being asked too early, and the owner then saw a
         # retry button for a problem that would have resolved itself.
-        attempts = await asyncio.to_thread(
-            r.defer_verify,
+        return await _defer_verify(
             assistant_id,
             app_kb_id,
             generation,
-            _iso(_now() + timedelta(seconds=VERIFY_RETRY_SECONDS)),
-        )
-        if attempts > MAX_VERIFY_ATTEMPTS:
-            raise VerificationFailed(
-                f"canary retrieval on kb {app_kb_id} still returned nothing after "
-                f"{attempts} attempts over ~"
-                f"{attempts * VERIFY_RETRY_SECONDS // 60} minutes; the corpus "
-                f"never became queryable"
-            )
-        logger.info(
-            f"kb {app_kb_id}: corpus not queryable yet (attempt {attempts}); "
-            f"deferring verify by {VERIFY_RETRY_SECONDS}s"
-        )
-        return StepResult(
-            assistant_id=assistant_id,
-            app_kb_id=app_kb_id,
-            from_state=r.VERIFY,
-            to_state=r.VERIFY,
-            detail=f"corpus not queryable yet; deferred (attempt {attempts})",
+            "corpus not queryable yet",
+            failure="canary retrieval still returned nothing; the corpus never became queryable",
         )
 
     retrieved_ids = {chunk.document_id for chunk in chunks if chunk.document_id}
-    expected_ids = {document_id_of(item) for item in complete}
-    if not retrieved_ids & expected_ids:
+    if not retrieved_ids & set(by_id):
         raise VerificationFailed(
             f"canary retrieval on kb {app_kb_id} returned only documents this "
             f"assistant does not own: {sorted(retrieved_ids)}"
         )
 
+    # What promotion's `migrated = total` guard now certifies: every complete
+    # document, by id, is indexed in Bedrock.
+    progress = record.get("migrationProgress") or {}
+    await _record_progress(
+        assistant_id,
+        app_kb_id,
+        migrated=len(by_id),
+        total=len(by_id),
+        skipped=int(progress.get("skipped") or 0),
+    )
     await asyncio.to_thread(
         r.set_migration_state,
         assistant_id,
@@ -674,8 +744,99 @@ async def run_verify(
         app_kb_id,
         r.VERIFY,
         r.PROMOTE,
-        detail=f"manifest of {len(expected)} document(s) verified; canary returned "
+        detail=f"all {len(by_id)} document(s) indexed in Bedrock; canary returned "
         f"{len(chunks)} chunk(s)",
+    )
+
+
+async def _defer_verify(
+    assistant_id: str,
+    app_kb_id: str,
+    generation: int,
+    reason: str,
+    *,
+    failure: Optional[str] = None,
+) -> StepResult:
+    """Ask again on a later tick, failing once :data:`MAX_VERIFY_ATTEMPTS` is used up."""
+    from apis.shared.kb_backend import records as r
+
+    attempts = await asyncio.to_thread(
+        r.defer_verify,
+        assistant_id,
+        app_kb_id,
+        generation,
+        _iso(_now() + timedelta(seconds=VERIFY_RETRY_SECONDS)),
+    )
+    if attempts > MAX_VERIFY_ATTEMPTS:
+        raise VerificationFailed(
+            f"kb {app_kb_id}: {failure or reason} after {attempts} attempts over ~"
+            f"{attempts * VERIFY_RETRY_SECONDS // 60} minutes"
+        )
+    logger.info(
+        f"kb {app_kb_id}: {reason} (attempt {attempts}); deferring verify by "
+        f"{VERIFY_RETRY_SECONDS}s"
+    )
+    return StepResult(
+        assistant_id=assistant_id,
+        app_kb_id=app_kb_id,
+        from_state=r.VERIFY,
+        to_state=r.VERIFY,
+        detail=f"{reason}; deferred (attempt {attempts})",
+    )
+
+
+async def _resend(
+    assistant_id: str,
+    app_kb_id: str,
+    record: Dict[str, Any],
+    document_ids: Sequence[str],
+    names: str,
+) -> StepResult:
+    """Send documents Bedrock has no record of back through ``shadow``.
+
+    They come off ``migratedDocIds`` so ``shadow`` ingests them again, and the
+    deferral count resets because the next ``verify`` is waiting on a new ingest.
+    Bounded by :data:`MAX_VERIFY_RESENDS`.
+    """
+    from apis.shared.kb_backend import records as r
+    from apis.shared.kb_backend.records import update_if_present
+
+    generation = int(record.get("migrationGeneration") or 0)
+    resends = int(record.get("verifyResends") or 0) + 1
+    if resends > MAX_VERIFY_RESENDS:
+        raise VerificationFailed(
+            f"Bedrock still has no record of {len(document_ids)} document(s) after "
+            f"{MAX_VERIFY_RESENDS} re-sends: {names}"
+        )
+
+    await asyncio.to_thread(
+        update_if_present,
+        assistant_id,
+        app_kb_id,
+        table=_table(),
+        UpdateExpression="SET verifyResends = :n REMOVE verifyAttempts DELETE #done :ids",
+        ExpressionAttributeNames={"#done": "migratedDocIds"},
+        ExpressionAttributeValues={":n": resends, ":ids": set(document_ids)},
+    )
+    await asyncio.to_thread(
+        r.set_migration_state,
+        assistant_id,
+        app_kb_id,
+        r.SHADOW,
+        generation,
+        _iso(_now() + timedelta(seconds=STEP_DELAY_SECONDS)),
+        [r.VERIFY],
+    )
+    logger.warning(
+        f"kb {app_kb_id}: Bedrock has no record of {len(document_ids)} document(s) "
+        f"({names}); back to shadow to re-send (re-send {resends})"
+    )
+    return StepResult(
+        assistant_id,
+        app_kb_id,
+        r.VERIFY,
+        r.SHADOW,
+        detail=f"{len(document_ids)} document(s) missing from Bedrock; re-sending",
     )
 
 
@@ -733,6 +894,34 @@ async def run_promote(
     already_promoted = record.get("retrievalEngine") == r.ENGINE_MANAGED
 
     if not already_promoted:
+        # Uploads keep landing on legacy until the cutover, so one that finished
+        # after `verify` passed would be left behind by promoting now. Its id is
+        # not in the ingested set; send the knowledge base back round. Skipped
+        # past the tracking cap, where the set is empty by design.
+        complete = [
+            document_id_of(item)
+            for item in await asyncio.to_thread(list_document_items, assistant_id)
+            if is_complete(item)
+        ]
+        late = [i for i in complete if i not in already_migrated(record)]
+        if late and len(complete) <= MAX_TRACKED_DOCUMENT_IDS:
+            await asyncio.to_thread(
+                r.set_migration_state,
+                assistant_id,
+                app_kb_id,
+                r.SHADOW,
+                generation,
+                _iso(_now() + timedelta(seconds=STEP_DELAY_SECONDS)),
+                [r.PROMOTE],
+            )
+            return StepResult(
+                assistant_id,
+                app_kb_id,
+                r.PROMOTE,
+                r.SHADOW,
+                detail=f"{len(late)} document(s) added since verify; back to shadow",
+            )
+
         try:
             await asyncio.to_thread(
                 r.promote_engine, assistant_id, app_kb_id, generation, _now_iso()
@@ -1037,8 +1226,9 @@ async def run_step(
         raise
     except (VerificationFailed, byte_cap.ByteCapExceeded) as exc:
         # Expected failure modes. The knowledge base stays on legacy and stays
-        # usable (17.4); `failed` is terminal and removes the work keys.
-        await _fail(assistant_id, app_kb_id, generation, str(exc))
+        # usable (17.4); `failed` is terminal and removes the work keys. Stored
+        # with its type, which is what the upgrade card keys its copy on.
+        await _fail(assistant_id, app_kb_id, generation, f"{type(exc).__name__}: {exc}")
         emit_count(METRIC_FAILED)
         return StepResult(
             assistant_id, app_kb_id, state, r.MIGRATION_FAILED, detail=str(exc)
