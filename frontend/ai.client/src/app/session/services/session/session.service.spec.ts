@@ -198,6 +198,60 @@ describe('SessionService', () => {
       expect((service as any).mergeSessions([withOwn], [api])[0].preferences).toEqual({ assistantId: 'mine' });
     });
 
+    describe('a conversation started in this tab', () => {
+      // The repro: a project composer starts a conversation on the project's
+      // agent. The backend binds the project before it streams, but this tab
+      // shows the optimistic row, and the `session_title` event takes the
+      // session out of `newSessionIds` without reading the row. Until the row
+      // was read back, the share modal had no "Project members" option and the
+      // sidebar did not group the conversation under its project.
+      beforeEach(() => {
+        // Let the signed-out auth effect run its first (cache-clearing) pass.
+        TestBed.tick();
+        service.addSessionToCache('s1', 'u1');
+        service.setSessionMetadataId('s1');
+        TestBed.tick();
+        service.applyServerTitle('s1', 'Lab Safety Review');
+        TestBed.tick();
+      });
+
+      it('awaits its server row until preferences are adopted, after the title arrived', () => {
+        expect(service.isNewSession('s1')).toBe(false);
+        expect(service.awaitsServerRow('s1')).toBe(true);
+        expect(service.currentSession().preferences).toBeUndefined();
+
+        service.adoptServerPreferences('s1', undefined);
+
+        expect(service.awaitsServerRow('s1')).toBe(false);
+      });
+
+      it('puts the bound project on the header session and the list row', () => {
+        service.adoptServerPreferences('s1', { assistantId: 'harness-1', projectId: 'prj_1' });
+
+        expect(service.currentSession().preferences?.projectId).toBe('prj_1');
+        expect(service.currentSession().title).toBe('Lab Safety Review');
+        const row = service.mergedSessionsResource().sessions.find(s => s.sessionId === 's1');
+        expect(row?.preferences).toEqual({ assistantId: 'harness-1', projectId: 'prj_1' });
+      });
+
+      it('keeps preferences this tab set after the row was created', () => {
+        service.currentSession.update(current => ({ ...current, preferences: { lastModel: 'mine' } }));
+
+        service.adoptServerPreferences('s1', { lastModel: 'server', projectId: 'prj_1' });
+
+        expect(service.currentSession().preferences).toEqual({ lastModel: 'mine', projectId: 'prj_1' });
+      });
+
+      it('leaves another session on screen alone', () => {
+        service.setSessionMetadataId(null);
+        TestBed.tick();
+
+        service.adoptServerPreferences('s1', { projectId: 'prj_1' });
+
+        expect(service.currentSession().preferences).toBeUndefined();
+      });
+    });
+
     it('should clear cache', () => {
       service.addSessionToCache('s1', 'u1');
       service.addSessionToCache('s2', 'u1');

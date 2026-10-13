@@ -345,14 +345,13 @@ export class ChatHttpService {
             this.turnTiming.abandon(sessionId);
             finalizeStream();
 
-            // Fallback only: the title normally arrives mid-stream as a
-            // `session_title` SSE event, whose handler (applyServerTitle)
-            // removes the session from newSessionIds — making this a no-op.
-            // It still fires when the stream outran title generation (fast
-            // response) or the event was lost, fetching the title Nova Micro
-            // wrote to session metadata concurrently with the stream.
-            if (this.sessionService.isNewSession(requestObject.session_id)) {
-              this.refreshTitleFromServer(requestObject.session_id);
+            // A first turn reads the session's server row back once: the
+            // backend bound its agent and project before streaming, and the
+            // optimistic row this tab shows has neither. The same read is the
+            // title fallback for a stream that outran title generation (fast
+            // response) or lost the `session_title` event.
+            if (this.needsServerRow(requestObject.session_id)) {
+              void this.refreshNewSessionFromServer(requestObject.session_id);
             }
           },
           onerror: (err) => {
@@ -427,13 +426,13 @@ export class ChatHttpService {
     // real — but there is nothing left to interrupt. Signalling
     // `user_stopped` would stamp a false "interrupted" marker on a complete
     // answer (and a false interruption note on the next prompt), so just
-    // close the transport. Aborting skips `onclose`, so run its title
-    // fallback here; the aggregates re-fetch below is unneeded, because the
+    // close the transport. Aborting skips `onclose`, so run its first-turn
+    // read-back here; the aggregates re-fetch below is unneeded, because the
     // turn's `metadata` event arrived before `done`.
     if (this.streamParserService.hasReceivedDone(sessionId)) {
       this.stopLocally(sessionId);
-      if (this.sessionService.isNewSession(sessionId)) {
-        void this.refreshTitleFromServer(sessionId);
+      if (this.needsServerRow(sessionId)) {
+        void this.refreshNewSessionFromServer(sessionId);
       }
       return;
     }
@@ -574,19 +573,31 @@ export class ChatHttpService {
     this.destroyRef.onDestroy(() => window.removeEventListener('pagehide', onPageHide));
   }
 
+  /** Whether a session started in this tab still needs its server row read. */
+  private needsServerRow(sessionId: string): boolean {
+    return this.sessionService.isNewSession(sessionId) || this.sessionService.awaitsServerRow(sessionId);
+  }
+
   /**
-   * Fallback pull of the server-generated title (sidebar cache + header).
+   * Reads a first turn's session row back into this tab (see onclose).
    *
-   * Title generation runs concurrently with the agent stream on the backend
-   * and is normally PUSHED mid-stream as a `session_title` SSE event; this
-   * fetch only runs when the stream closed while the session still looked
-   * new (see onclose). On a "New Conversation" placeholder — generation
-   * still in flight or failed — we poll a few more times at a short interval
-   * before giving up, stopping early if the title arrived another way.
+   * Preferences: the backend binds the session's agent and project before
+   * streaming, and nothing else fetches the row of a session started here, so
+   * this is what groups a project conversation under its project and offers
+   * "Project members" sharing without a reload.
+   *
+   * Title, as a fallback: generation runs concurrently with the agent stream
+   * and is normally PUSHED mid-stream as a `session_title` SSE event, which
+   * takes the session out of `isNewSession`. Otherwise, on a
+   * "New Conversation" placeholder (generation still in flight or failed) we
+   * poll a few more times at a short interval before giving up, stopping early
+   * if the title arrived another way.
    */
-  private async refreshTitleFromServer(sessionId: string, attempt = 0): Promise<void> {
+  private async refreshNewSessionFromServer(sessionId: string, attempt = 0): Promise<void> {
     try {
       const metadata = await this.sessionService.getSessionMetadata(sessionId, { quiet: true });
+      this.sessionService.adoptServerPreferences(sessionId, metadata.preferences);
+      if (!this.sessionService.isNewSession(sessionId)) return;
       if (metadata.title && metadata.title !== 'New Conversation') {
         this.sessionService.applyServerTitle(sessionId, metadata.title);
         return;
@@ -594,7 +605,7 @@ export class ChatHttpService {
       if (attempt < TITLE_REFRESH_MAX_RETRIES) {
         setTimeout(() => {
           if (this.sessionService.isNewSession(sessionId)) {
-            void this.refreshTitleFromServer(sessionId, attempt + 1);
+            void this.refreshNewSessionFromServer(sessionId, attempt + 1);
           }
         }, TITLE_REFRESH_RETRY_MS);
       }

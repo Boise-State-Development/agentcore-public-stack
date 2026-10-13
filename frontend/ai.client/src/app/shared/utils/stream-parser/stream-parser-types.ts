@@ -323,7 +323,7 @@ export interface ArtifactEvent {
  *
  * Best-effort by design: a stream that finishes before generation does
  * never emits this event, and the SPA's post-close metadata refresh
- * (ChatHttpService.refreshTitleFromServer) remains the fallback. Never
+ * (ChatHttpService.refreshNewSessionFromServer) remains the fallback. Never
  * carries the "New Conversation" placeholder.
  */
 export interface SessionTitleEvent {
