@@ -11,7 +11,8 @@
  *     session-activity grants scoped to their keys, and the KB grants; its event
  *     source drops to two in flight;
  *   - the KB service role may read originals under `user-files/` only;
- *   - app-api gets the flag; the Runtime's environment is untouched.
+ *   - app-api gets the flag; the Runtime gets it only while on (PR-4: it adds
+ *     document_read's `query` argument), and nothing else changes there.
  */
 import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
@@ -263,11 +264,15 @@ describe('the attachments KB in PlatformStack', () => {
     expect(maxConcurrency(docsOnly)).toEqual([LARGE_DOCUMENT_PREPARE_ESM.MAX_CONCURRENCY]);
   });
 
-  it('gives app-api the flag, and the Runtime nothing', () => {
+  it('gives app-api the flag, and the Runtime the flag only while on', () => {
     expect(appApiEnv(withKb).ATTACHMENT_KB_ENABLED).toBe('true');
     expect(appApiEnv(docsOnly).ATTACHMENT_KB_ENABLED).toBe('false');
     const runtimeEnv = (t: Template) =>
       (Object.values(t.findResources('AWS::BedrockAgentCore::Runtime'))[0] as any).Properties.EnvironmentVariables;
-    expect(runtimeEnv(withKb)).toEqual(runtimeEnv(docsOnly));
+    // Off spends no bytes of the V2 environment budget.
+    expect(runtimeEnv(docsOnly)).not.toHaveProperty('ATTACHMENT_KB_ENABLED');
+    const { ATTACHMENT_KB_ENABLED, ...rest } = runtimeEnv(withKb);
+    expect(ATTACHMENT_KB_ENABLED).toBe('true');
+    expect(rest).toEqual(runtimeEnv(docsOnly));
   });
 });
