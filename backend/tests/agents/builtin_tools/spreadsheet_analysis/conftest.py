@@ -137,11 +137,19 @@ def files_table(aws_mocked, monkeypatch):
 
 
 @pytest.fixture
-def file_repository(files_table):
-    """A real ``FileUploadRepository`` pointed at the moto-backed table."""
+def file_repository(files_table, monkeypatch):
+    """A real ``FileUploadRepository`` pointed at the moto-backed table.
+
+    Also returned by ``get_file_upload_repository()``, which is how
+    ``_get_session_files`` reads: otherwise an earlier test that built the
+    process-wide singleton against another table makes every read here
+    miss, and the result depends on test order.
+    """
     from apis.shared.files.repository import FileUploadRepository
 
-    return FileUploadRepository(table_name="test-user-files")
+    repo = FileUploadRepository(table_name="test-user-files")
+    monkeypatch.setattr("apis.shared.files.repository.get_file_upload_repository", lambda: repo)
+    return repo
 
 
 # ---------------------------------------------------------------------------
