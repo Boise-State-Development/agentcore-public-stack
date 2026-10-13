@@ -11,7 +11,13 @@ import {
   heroPhoto
 } from '@ng-icons/heroicons/outline';
 import { TooltipDirective } from '../tooltip';
-import { formatBytes, type PendingUpload, type FileMetadata } from '../../services/file-upload';
+import {
+  formatBytes,
+  isReferenceDocument,
+  resolveMimeType,
+  type PendingUpload,
+  type FileMetadata,
+} from '../../services/file-upload';
 
 /**
  * Check if MIME type is an image
@@ -159,7 +165,7 @@ const DEFAULT_COLORS = {
   },
   template: `
     <div
-      class="group relative flex w-56 shrink-0 items-center gap-2 rounded-lg border px-3 py-2 transition-colors"
+      class="group relative flex shrink-0 items-center gap-2 rounded-lg border px-3 py-2 transition-colors"
       [class]="containerClass()"
     >
       <!-- File icon or image preview -->
@@ -195,6 +201,20 @@ const DEFAULT_COLORS = {
             Uploading... {{ progress() }}%
           } @else if (isCompleting()) {
             Finalizing...
+          } @else if (isReference()) {
+            <!-- A large document is attached by reference: the model reads the
+                 parts it needs rather than the whole file. The card has room
+                 for the short form; the full chip copy is the tooltip and the
+                 accessible text. -->
+            <span
+              [appTooltip]="'Large document, read on demand'"
+              appTooltipPosition="top"
+              data-testid="reference-chip"
+            >
+              {{ formattedSize() }} ·
+              <span class="font-medium text-gray-700 dark:text-gray-300" aria-hidden="true">Read on demand</span>
+              <span class="sr-only">Large document, read on demand</span>
+            </span>
           } @else {
             {{ formattedSize() }}
           }
@@ -353,6 +373,14 @@ export class FileCardComponent {
   protected readonly isReady = computed(() => this.status() === 'ready');
   protected readonly isImage = computed(() => isImageMimeType(this.mimeType()));
 
+  /** A document over the inline limit, attached by reference. Classified on the
+   *  MIME the upload was presigned with, which a browser may not report. */
+  protected readonly isReference = computed(() => {
+    const pending = this.pendingUpload();
+    const mime = pending ? resolveMimeType(pending.file) : this.mimeType();
+    return isReferenceDocument(mime, this.sizeBytes());
+  });
+
   protected readonly iconName = computed(() => {
     const mime = this.mimeType();
     return FILE_TYPE_ICONS[mime] ?? 'heroDocument';
@@ -364,10 +392,12 @@ export class FileCardComponent {
   });
 
   protected readonly containerClass = computed(() => {
+    // A reference card is a little wider, to fit "38 MB · Read on demand".
+    const width = this.isReference() && this.isReady() ? 'w-64' : 'w-56';
     if (this.isError()) {
-      return 'border-state-danger-200 bg-state-danger-50 dark:border-state-danger-800 dark:bg-state-danger-950/30';
+      return `${width} border-state-danger-200 bg-state-danger-50 dark:border-state-danger-800 dark:bg-state-danger-950/30`;
     }
-    return 'border-gray-200 bg-gray-50 dark:border-gray-600 dark:bg-gray-800';
+    return `${width} border-gray-200 bg-gray-50 dark:border-gray-600 dark:bg-gray-800`;
   });
 
   protected readonly iconContainerClass = computed(() => {

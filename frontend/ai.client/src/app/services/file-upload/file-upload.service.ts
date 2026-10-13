@@ -2,6 +2,7 @@ import { Injectable, inject, signal, computed } from '@angular/core';
 import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../config.service';
+import { FEATURES, type FeatureFlags } from '../features';
 /**
  * File status enum matching backend FileStatus
  */
@@ -66,16 +67,71 @@ export const MAX_FILE_SIZE_BYTES = 4 * 1024 * 1024;
 export const PPTX_MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024;
 
 /**
- * Resolve the size cap that applies to a given file. Use this rather than
- * `MAX_FILE_SIZE_BYTES` directly at any gate, or a legitimate deck gets
- * rejected by whichever check was missed.
+ * Maximum size of a large document attached by reference (50MB).
+ *
+ * A document over `MAX_FILE_SIZE_BYTES` never rides inline: the backend
+ * prepares it off the request path and the model reads the parts it needs
+ * through `document_read` (docs/specs/large-document-attachments.md). Admitted
+ * only while `features.largeDocumentAttachments` is on.
+ *
+ * Must match `LARGE_DOCUMENT_MAX_BYTES` on the backend
+ * (`backend/src/apis/shared/files/models.py`), which is the enforcing side.
  */
-export function maxFileSizeFor(file: File): number {
+export const LARGE_DOCUMENT_MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024;
+
+/**
+ * MIME types `document_read` can read: the backend's `DOCUMENT_CLASS_FORMATS`
+ * (pdf, docx, txt, md, html), as `document_format_for` classifies them. CSV is
+ * text but tabular, so it routes to the spreadsheet tools instead.
+ */
+const DOCUMENT_CLASS_MIME_TYPES = new Set<string>([
+  'application/pdf',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'text/plain',
+  'text/markdown',
+  'text/html',
+]);
+
+/** Whether a file of this MIME type is a document `document_read` can read. */
+export function isDocumentClassMimeType(mimeType: string): boolean {
+  return DOCUMENT_CLASS_MIME_TYPES.has(mimeType);
+}
+
+/**
+ * Whether a file is attached by reference: a document over the inline limit
+ * and within the large-document ceiling. Mirrors the backend's one predicate,
+ * `is_reference_document`, for display only (the attachment chip); the backend
+ * decides how the file actually reaches the model.
+ */
+export function isReferenceDocument(mimeType: string, sizeBytes: number): boolean {
+  return (
+    isDocumentClassMimeType(mimeType) &&
+    sizeBytes > MAX_FILE_SIZE_BYTES &&
+    sizeBytes <= LARGE_DOCUMENT_MAX_FILE_SIZE_BYTES
+  );
+}
+
+/**
+ * Resolve the size cap that applies to a given file. Use this rather than
+ * `MAX_FILE_SIZE_BYTES` directly at any gate, or a legitimate deck (or, with
+ * large-document attachments on, a large PDF) gets rejected by whichever check
+ * was missed. `features` comes from the `FEATURES` token at the call site.
+ */
+export function maxFileSizeFor(
+  file: File,
+  features: Pick<FeatureFlags, 'largeDocumentAttachments'>,
+): number {
   const isPptx =
     file.name.toLowerCase().endsWith('.pptx') ||
     file.type ===
       'application/vnd.openxmlformats-officedocument.presentationml.presentation';
-  return isPptx ? PPTX_MAX_FILE_SIZE_BYTES : MAX_FILE_SIZE_BYTES;
+  if (isPptx) {
+    return PPTX_MAX_FILE_SIZE_BYTES;
+  }
+  if (features.largeDocumentAttachments && isDocumentClassMimeType(resolveMimeType(file))) {
+    return LARGE_DOCUMENT_MAX_FILE_SIZE_BYTES;
+  }
+  return MAX_FILE_SIZE_BYTES;
 }
 
 /**
@@ -324,6 +380,7 @@ export function resolveMimeType(file: File): string {
 export class FileUploadService {
   private http = inject(HttpClient);
   private config = inject(ConfigService);
+  private features = inject(FEATURES);
 
   private readonly baseUrl = computed(() => `${this.config.appApiUrl()}/files`);
 
@@ -391,8 +448,8 @@ export class FileUploadService {
    * @throws FileUploadError if validation fails
    */
   validateFile(file: File): void {
-    // Check size (pptx has its own, larger cap)
-    const sizeLimit = maxFileSizeFor(file);
+    // Check size (pptx and, behind the flag, large documents have their own caps)
+    const sizeLimit = maxFileSizeFor(file, this.features);
     if (file.size > sizeLimit) {
       throw new FileTooLargeError(file.size, sizeLimit);
     }

@@ -46,6 +46,7 @@ import {
   MAX_FILES_PER_MESSAGE,
   formatBytes
 } from '../../../services/file-upload';
+import { FEATURES } from '../../../services/features';
 import { ToastService } from '../../../services/toast/toast.service';
 import { ToolService } from '../../../services/tool/tool.service';
 import { ModelService, isTextOnlyModel } from '../../services/model/model.service';
@@ -293,6 +294,7 @@ function dedupeAttachments(attachments: StoredAttachment[]): StoredAttachment[] 
 export class ChatInputComponent {
   // Service injection
   private readonly fileUploadService = inject(FileUploadService);
+  private readonly features = inject(FEATURES);
   private readonly toastService = inject(ToastService);
   private readonly steering = inject(SteeringService);
   private readonly sessionPrewarm = inject(SessionPrewarmService);
@@ -2312,8 +2314,9 @@ export class ChatInputComponent {
 
     // Validate and upload each file
     for (const file of newFiles) {
-      // Check file size (pptx has its own, larger cap — see maxFileSizeFor)
-      const sizeLimit = maxFileSizeFor(file);
+      // Check file size (pptx and, behind the flag, large documents have
+      // their own caps — see maxFileSizeFor)
+      const sizeLimit = maxFileSizeFor(file, this.features);
       if (file.size > sizeLimit) {
         this.toastService.error(
           'File Too Large',

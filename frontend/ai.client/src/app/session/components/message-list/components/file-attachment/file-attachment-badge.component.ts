@@ -11,7 +11,7 @@ import {
   heroEye,
 } from '@ng-icons/heroicons/outline';
 import { MarkdownComponent } from 'ngx-markdown';
-import { formatBytes, FileUploadService } from '../../../../../services/file-upload';
+import { formatBytes, FileUploadService, isReferenceDocument } from '../../../../../services/file-upload';
 import { FileAttachmentData } from '../../../../services/models/message.model';
 import { FilePreviewStateService } from '../../../../services/file-preview/file-preview-state.service';
 import { isPreviewableFilename } from '../../../../services/file-preview/file-preview.model';
@@ -384,6 +384,19 @@ const SLIDE_BULLET_WIDTHS = [78, 92, 60];
         <p class="text-xs text-gray-500 dark:text-gray-400">
           {{ formattedSize() }}
         </p>
+        <!-- A large document is attached by reference: the model reads the
+             parts it needs through document_read, not the whole file. Shown
+             while it is being prepared and after; the SPA classifies on size
+             alone, the same thresholds the backend's is_reference_document
+             uses. -->
+        @if (isReference()) {
+          <p
+            class="mt-1 inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-medium text-gray-700 dark:bg-gray-700 dark:text-gray-200"
+            data-testid="reference-chip"
+          >
+            Large document, read on demand
+          </p>
+        }
       </div>
     </button>
 
@@ -423,6 +436,10 @@ export class FileAttachmentBadgeComponent {
   );
 
   protected readonly hasSnippet = computed(() => this.snippet().trim().length > 0);
+
+  protected readonly isReference = computed(() =>
+    isReferenceDocument(this.attachment().mimeType, this.attachment().sizeBytes),
+  );
 
   protected readonly isMarkdown = computed(() => this.attachment().mimeType === 'text/markdown');
 
