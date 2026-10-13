@@ -200,6 +200,22 @@ describe('AdminCostStateService', () => {
     expect(service.dashboard()).toBeTruthy();
   });
 
+  it('should serve a consistent month snapshot for the demo period', async () => {
+    service.setPeriod('demo');
+    await service.loadDashboard({ includeTrends: true });
+
+    const dashboard = service.dashboard()!;
+    const summary = dashboard.currentPeriod;
+    const modelCost = dashboard.modelUsage.reduce((sum, m) => sum + m.totalCost, 0);
+
+    expect(summary.period).toBe('2026-09');
+    expect(summary.activeUsers).toBe(1762);
+    expect(modelCost).toBeCloseTo(summary.totalCost, 0);
+    expect(Object.keys(summary.modelBreakdown ?? {})).toHaveLength(dashboard.modelUsage.length);
+    expect(dashboard.dailyTrends).toHaveLength(30);
+    expect(dashboard.dailyTrends!.every((t) => t.date.startsWith('2026-09-'))).toBe(true);
+  });
+
   it('should handle dashboard error', async () => {
     httpService.getDashboard.mockReturnValue(throwError(() => new Error('API Error')));
     

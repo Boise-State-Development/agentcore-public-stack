@@ -17,6 +17,43 @@ import {
 export const DEMO_PERIOD = 'demo';
 
 /**
+ * The Demo Month replays one real month of a production deployment: the
+ * system totals, per-model usage and daily trend of boisestate.ai for
+ * September 2026, as its admin cost endpoints reported them. Aggregates only;
+ * the demo top-users list stays fictional.
+ */
+const DEMO_SNAPSHOT_PERIOD = '2026-09';
+
+const DEMO_MODEL_USAGE: ModelUsageSummary[] = [
+  { modelId: 'global.anthropic.claude-sonnet-5', modelName: 'Claude Sonnet 5', provider: 'Anthropic', totalCost: 1507.07, totalRequests: 40902, uniqueUsers: 1665, avgCostPerRequest: 0.037, totalInputTokens: 9_200_038, totalOutputTokens: 44_108_975 },
+  { modelId: 'global.anthropic.claude-opus-5', modelName: 'Claude Opus 5', provider: 'Anthropic', totalCost: 120.01, totalRequests: 787, uniqueUsers: 34, avgCostPerRequest: 0.152, totalInputTokens: 1_166_861, totalOutputTokens: 1_476_143 },
+  { modelId: 'global.openai.gpt-5.6-sol', modelName: 'GPT-5.6 Sol', provider: 'OpenAI', totalCost: 69.58, totalRequests: 1053, uniqueUsers: 27, avgCostPerRequest: 0.066, totalInputTokens: 1_323_362, totalOutputTokens: 1_086_064 },
+  { modelId: 'global.anthropic.claude-haiku-4-5-20251001-v1:0', modelName: 'Claude Haiku 4.5', provider: 'Anthropic', totalCost: 43.28, totalRequests: 8756, uniqueUsers: 558, avgCostPerRequest: 0.005, totalInputTokens: 557_054, totalOutputTokens: 2_760_857 },
+  { modelId: 'global.openai.gpt-6-sol', modelName: 'GPT-6 Sol', provider: 'OpenAI', totalCost: 33.7, totalRequests: 1246, uniqueUsers: 17, avgCostPerRequest: 0.027, totalInputTokens: 1_156_721, totalOutputTokens: 1_243_586 },
+  { modelId: 'global.anthropic.claude-opus-5-5', modelName: 'Claude Opus 5.5', provider: 'Anthropic', totalCost: 31.47, totalRequests: 249, uniqueUsers: 15, avgCostPerRequest: 0.126, totalInputTokens: 189_430, totalOutputTokens: 314_511 },
+  { modelId: 'global.openai.gpt-5.6-terra', modelName: 'GPT-5.6 Terra', provider: 'OpenAI', totalCost: 25.35, totalRequests: 700, uniqueUsers: 61, avgCostPerRequest: 0.036, totalInputTokens: 498_912, totalOutputTokens: 674_212 },
+  { modelId: 'global.anthropic.claude-sonnet-4-6', modelName: 'Claude Sonnet 4.6', provider: 'Anthropic', totalCost: 19.51, totalRequests: 679, uniqueUsers: 1, avgCostPerRequest: 0.029, totalInputTokens: 2_704_440, totalOutputTokens: 759_947 },
+  { modelId: 'openai.gpt-5.4', modelName: 'GPT-5.4', provider: 'OpenAI', totalCost: 15.3, totalRequests: 563, uniqueUsers: 16, avgCostPerRequest: 0.027, totalInputTokens: 3_450_208, totalOutputTokens: 340_694 },
+  { modelId: 'global.openai.gpt-5.6-luna', modelName: 'GPT-5.6 Luna', provider: 'OpenAI', totalCost: 2.25, totalRequests: 592, uniqueUsers: 70, avgCostPerRequest: 0.004, totalInputTokens: 653_862, totalOutputTokens: 374_566 },
+  { modelId: 'google.gemma-4-31b', modelName: 'Gemma 4 31B', provider: 'Google', totalCost: 0.8, totalRequests: 284, uniqueUsers: 53, avgCostPerRequest: 0.003, totalInputTokens: 5_210_708, totalOutputTokens: 165_235 },
+  { modelId: 'global.openai.gpt-6-luna', modelName: 'GPT-6 Luna', provider: 'OpenAI', totalCost: 0.17, totalRequests: 209, uniqueUsers: 21, avgCostPerRequest: 0.001, totalInputTokens: 20_693, totalOutputTokens: 99_436 },
+  { modelId: 'global.openai.gpt-5.5', modelName: 'GPT-5.5', provider: 'OpenAI', totalCost: 0.14, totalRequests: 7, uniqueUsers: 1, avgCostPerRequest: 0.02, totalInputTokens: 19_594, totalOutputTokens: 600 },
+  { modelId: 'global.moonshotai.kimi-k3', modelName: 'Kimi K3', provider: 'Moonshot AI', totalCost: 0.08, totalRequests: 7, uniqueUsers: 2, avgCostPerRequest: 0.011, totalInputTokens: 830, totalOutputTokens: 2_064 },
+];
+
+/** [day of September, cost, requests, active users] */
+const DEMO_DAILY_TRENDS: ReadonlyArray<readonly [number, number, number, number]> = [
+  [1, 46.95, 1146, 151], [2, 63.4, 1368, 158], [3, 52.29, 1304, 153], [4, 44.16, 1003, 128],
+  [5, 8.74, 322, 28], [6, 15.97, 567, 47], [7, 24.9, 585, 59], [8, 56.44, 1388, 142],
+  [9, 76.45, 3406, 579], [10, 50.09, 1427, 197], [11, 98.36, 3393, 127], [12, 10.18, 336, 40],
+  [13, 34.42, 667, 54], [14, 85.56, 8291, 628], [15, 69.84, 2034, 249], [16, 73.66, 1743, 233],
+  [17, 61.08, 1033, 154], [18, 69.7, 1270, 133], [19, 19.73, 531, 48], [20, 31.6, 419, 41],
+  [21, 66.38, 1873, 167], [22, 77.43, 1635, 156], [23, 66.72, 1587, 160], [24, 108.82, 2474, 258],
+  [25, 100.13, 1638, 139], [26, 34.97, 723, 48], [27, 39.81, 926, 55], [28, 144.46, 6547, 584],
+  [29, 129.69, 3299, 239], [30, 106.74, 3299, 239],
+];
+
+/**
  * State management service for admin cost dashboard using signals.
  * Provides reactive state for dashboard data, loading states, and errors.
  */
@@ -296,33 +333,27 @@ export class AdminCostStateService {
   // ========== Demo Data Generation ==========
 
   private generateDemoData(options: DashboardRequestOptions = {}): AdminCostDashboard {
-    const now = new Date();
-    const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-
     return {
-      currentPeriod: this.generateDemoSystemSummary(currentMonth),
+      currentPeriod: this.generateDemoSystemSummary(),
       topUsers: this.generateDemoTopUsers(options.topUsersLimit ?? 20),
       modelUsage: this.generateDemoModelUsage(),
       dailyTrends: options.includeTrends ? this.generateDemoDailyTrends() : undefined,
     };
   }
 
-  private generateDemoSystemSummary(period: string): SystemCostSummary {
+  private generateDemoSystemSummary(): SystemCostSummary {
     return {
-      period,
+      period: DEMO_SNAPSHOT_PERIOD,
       periodType: 'monthly',
-      totalCost: 2847.53,
-      totalRequests: 45892,
-      activeUsers: 949,
-      totalInputTokens: 89_450_000,
-      totalOutputTokens: 12_340_000,
-      totalCacheSavings: 412.87,
-      modelBreakdown: {
-        'claude-haiku-4-5': { cost: 892.45, requests: 28450 },
-        'claude-sonnet-4': { cost: 1245.67, requests: 12340 },
-        'claude-opus-4': { cost: 589.21, requests: 4102 },
-        'gpt-4o': { cost: 120.20, requests: 1000 },
-      },
+      totalCost: 1868.7,
+      totalRequests: 56234,
+      activeUsers: 1762,
+      totalInputTokens: 26_318_629,
+      totalOutputTokens: 53_863_409,
+      totalCacheSavings: 2549.3,
+      modelBreakdown: Object.fromEntries(
+        DEMO_MODEL_USAGE.map((m) => [m.modelId, { cost: m.totalCost, requests: m.totalRequests }]),
+      ),
       lastUpdated: new Date().toISOString(),
     };
   }
@@ -355,82 +386,15 @@ export class AdminCostStateService {
   }
 
   private generateDemoModelUsage(): ModelUsageSummary[] {
-    return [
-      {
-        modelId: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
-        modelName: 'Claude Haiku 4.5',
-        provider: 'Anthropic',
-        totalCost: 892.45,
-        totalRequests: 28450,
-        uniqueUsers: 142,
-        avgCostPerRequest: 0.031,
-        totalInputTokens: 45_230_000,
-        totalOutputTokens: 6_780_000,
-      },
-      {
-        modelId: 'us.anthropic.claude-sonnet-4-20250514-v1:0',
-        modelName: 'Claude Sonnet 4',
-        provider: 'Anthropic',
-        totalCost: 1245.67,
-        totalRequests: 12340,
-        uniqueUsers: 98,
-        avgCostPerRequest: 0.101,
-        totalInputTokens: 32_450_000,
-        totalOutputTokens: 4_120_000,
-      },
-      {
-        modelId: 'us.anthropic.claude-opus-4-20250514-v1:0',
-        modelName: 'Claude Opus 4',
-        provider: 'Anthropic',
-        totalCost: 589.21,
-        totalRequests: 4102,
-        uniqueUsers: 45,
-        avgCostPerRequest: 0.144,
-        totalInputTokens: 8_920_000,
-        totalOutputTokens: 1_230_000,
-      },
-      {
-        modelId: 'gpt-4o',
-        modelName: 'GPT-4o',
-        provider: 'OpenAI',
-        totalCost: 120.20,
-        totalRequests: 1000,
-        uniqueUsers: 23,
-        avgCostPerRequest: 0.120,
-        totalInputTokens: 2_850_000,
-        totalOutputTokens: 210_000,
-      },
-    ];
+    return DEMO_MODEL_USAGE.map((m) => ({ ...m }));
   }
 
   private generateDemoDailyTrends(): CostTrend[] {
-    const trends: CostTrend[] = [];
-    const now = new Date();
-    const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-    const currentDay = now.getDate();
-
-    // Generate realistic daily patterns with weekend dips
-    for (let day = 1; day <= Math.min(currentDay, daysInMonth); day++) {
-      const date = new Date(now.getFullYear(), now.getMonth(), day);
-      const dayOfWeek = date.getDay();
-      const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-
-      // Base values with some randomness
-      const baseRequests = isWeekend ? 800 : 1800;
-      const baseCost = isWeekend ? 45 : 110;
-      const baseUsers = isWeekend ? 25 : 65;
-
-      // Add some variance (±20%)
-      const variance = () => 0.8 + Math.random() * 0.4;
-
-      trends.push({
-        date: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`,
-        totalCost: Math.round(baseCost * variance() * 100) / 100,
-        totalRequests: Math.round(baseRequests * variance()),
-        activeUsers: Math.round(baseUsers * variance()),
-      });
-    }
-
-    return trends;
+    return DEMO_DAILY_TRENDS.map(([day, totalCost, totalRequests, activeUsers]) => ({
+      date: `${DEMO_SNAPSHOT_PERIOD}-${String(day).padStart(2, '0')}`,
+      totalCost,
+      totalRequests,
+      activeUsers,
+    }));
   }
 }
