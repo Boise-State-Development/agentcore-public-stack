@@ -30,7 +30,7 @@ describe('ChatHttpService', () => {
         // and lets cookie auth ride along with the request rather than
         // attaching a Bearer manually.
         { provide: BffSessionService, useValue: { csrfHeaders: vi.fn().mockReturnValue({}), handleUnauthorized: vi.fn() } },
-        { provide: SessionService, useValue: { currentSession: signal({ sessionId: 's1' }), updateSessionTitleInCache: vi.fn(), getSessionMetadata: vi.fn().mockResolvedValue({}), isNewSession: vi.fn().mockReturnValue(false) } },
+        { provide: SessionService, useValue: { currentSession: signal({ sessionId: 's1' }), updateSessionTitleInCache: vi.fn(), getSessionMetadata: vi.fn().mockResolvedValue({}), isNewSession: vi.fn().mockReturnValue(false), awaitsServerRow: vi.fn().mockReturnValue(false), adoptServerPreferences: vi.fn() } },
         { provide: StreamParserService, useValue: { getCurrentStreamId: vi.fn().mockReturnValue('stream-1'), parseEventSourceMessage: vi.fn(), hasReceivedDone: vi.fn().mockReturnValue(false) } },
         { provide: ChatStateService, useValue: { abortRequest: vi.fn(), setChatLoading: vi.fn(), setLastTurnInterrupted: vi.fn(), seedSessionAggregates: vi.fn(), createAbortController: vi.fn().mockReturnValue(new AbortController()), releaseAbortController: vi.fn(), streamingSessionIds: vi.fn().mockReturnValue([]) } },
         { provide: MessageMapService, useValue: { endStreaming: vi.fn() } },
@@ -434,6 +434,57 @@ describe('ChatHttpService', () => {
     });
   });
 
+  describe('first-turn read-back of the session row', () => {
+    // The backend binds a session's agent and project before it streams, but
+    // a session started in this tab is shown from its optimistic cache row,
+    // and `session_title` takes it out of `isNewSession` without fetching
+    // anything. Without this read a project conversation had no "Project
+    // members" share option, and sat outside its project, until a reload.
+    let sessionSvc: any;
+
+    beforeEach(() => {
+      sessionSvc = TestBed.inject(SessionService) as any;
+      sessionSvc.applyServerTitle = vi.fn();
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+        new Response('event: done\ndata: {}\n\n', {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream' },
+        }),
+      );
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('adopts the bound preferences when the title already arrived mid-stream', async () => {
+      sessionSvc.awaitsServerRow.mockReturnValue(true);
+      sessionSvc.getSessionMetadata.mockResolvedValue({
+        title: 'Lab Safety Review',
+        preferences: { assistantId: 'harness-1', projectId: 'proj-1' },
+      });
+
+      await service.sendChatRequest({ session_id: 's1', message: 'hi' });
+      await vi.waitFor(() => expect(sessionSvc.adoptServerPreferences).toHaveBeenCalled());
+
+      expect(sessionSvc.adoptServerPreferences).toHaveBeenCalledWith('s1', {
+        assistantId: 'harness-1',
+        projectId: 'proj-1',
+      });
+      expect(sessionSvc.getSessionMetadata).toHaveBeenCalledTimes(1);
+      // The title is the session_title event's to apply; this read only fills in.
+      expect(sessionSvc.applyServerTitle).not.toHaveBeenCalled();
+    });
+
+    it('reads nothing back on a later turn', async () => {
+      await service.sendChatRequest({ session_id: 's1', message: 'hi' });
+      await Promise.resolve();
+
+      expect(sessionSvc.getSessionMetadata).not.toHaveBeenCalled();
+      expect(sessionSvc.adoptServerPreferences).not.toHaveBeenCalled();
+    });
+  });
+
   describe('title fallback polling', () => {
     // A stream that outran title generation closes before Nova Micro answers,
     // so the first read sees the placeholder. Short retries pick the title up
@@ -458,7 +509,7 @@ describe('ChatHttpService', () => {
         .mockResolvedValueOnce({ title: 'New Conversation' })
         .mockResolvedValue({ title: 'Biology Syllabus' });
 
-      void (service as any).refreshTitleFromServer('s1');
+      void (service as any).refreshNewSessionFromServer('s1');
       await vi.advanceTimersByTimeAsync(800);
 
       expect(sessionSvc.getSessionMetadata).toHaveBeenCalledTimes(3);
@@ -470,7 +521,7 @@ describe('ChatHttpService', () => {
     it('gives up after a bounded number of retries', async () => {
       sessionSvc.getSessionMetadata = vi.fn().mockResolvedValue({ title: 'New Conversation' });
 
-      void (service as any).refreshTitleFromServer('s1');
+      void (service as any).refreshNewSessionFromServer('s1');
       await vi.runAllTimersAsync();
 
       expect(sessionSvc.getSessionMetadata).toHaveBeenCalledTimes(6);
@@ -480,7 +531,7 @@ describe('ChatHttpService', () => {
     it('stops polling once the title arrived another way', async () => {
       sessionSvc.getSessionMetadata = vi.fn().mockResolvedValue({ title: 'New Conversation' });
 
-      void (service as any).refreshTitleFromServer('s1');
+      void (service as any).refreshNewSessionFromServer('s1');
       await vi.advanceTimersByTimeAsync(0);
       // A late `session_title` event applied the title and cleared the flag.
       sessionSvc.isNewSession.mockReturnValue(false);
