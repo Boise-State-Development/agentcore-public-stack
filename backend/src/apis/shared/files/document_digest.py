@@ -188,9 +188,15 @@ def _sample_sections(sections: List[DigestSection], limit: int) -> List[DigestSe
     return [sections[int(i * step)] for i in range(limit)]
 
 
-def extract_outline(fmt: str, raw: bytes) -> DocumentDigest:
+#: ``(unit name, unit texts)`` as ``_units_for`` returns them. A caller that has
+#: already extracted a document's units passes them in so the digest does not
+#: parse the document again (the large-document preparation Lambda).
+Units = Tuple[str, List[str]]
+
+
+def extract_outline(fmt: str, raw: bytes, units: Optional[Units] = None) -> DocumentDigest:
     """The deterministic half of the digest (no abstract, no tokens yet)."""
-    unit, texts = _units_for(fmt, raw)
+    unit, texts = units if units is not None else _units_for(fmt, raw)
     sections: List[DigestSection] = []
     tables = figures = chars = 0
     for index, text in enumerate(texts, start=1):
@@ -234,10 +240,12 @@ def _sample_units(fmt: str, texts: List[str], limit: int) -> str:
     return "\n".join(t for t in texts if t.strip())[:limit]
 
 
-def text_sample(fmt: str, raw: bytes, limit: int = DOCUMENT_DIGEST_SAMPLE_CHARS) -> str:
+def text_sample(
+    fmt: str, raw: bytes, limit: int = DOCUMENT_DIGEST_SAMPLE_CHARS, units: Optional[Units] = None
+) -> str:
     """Up to ``limit`` characters spread across the document (not just its
     head), so the abstract sees the middle and the end of a long file."""
-    _, texts = _units_for(fmt, raw)
+    _, texts = units if units is not None else _units_for(fmt, raw)
     return _sample_units(fmt, texts, limit)
 
 
@@ -445,17 +453,24 @@ async def build_digest(
     upload_id: str,
     model_id: str = DOCUMENT_DIGEST_MODEL_ID,
     with_abstract: bool = True,
+    units: Optional[Units] = None,
 ) -> DocumentDigest:
     """Outline + abstract + rendered token estimate. Never raises: an
     extraction failure yields ``status="failed"`` with the exception class
-    name; an abstract failure yields a digest without one."""
+    name; an abstract failure yields a digest without one.
+
+    ``units`` must be exactly what ``_units_for(fmt, raw)`` would return (HTML,
+    for one, is tag-stripped there); when given, ``raw`` is not parsed."""
     started = time.monotonic()
     fmt = document_format_for(mime_type, filename)
     if fmt is None:
         return DocumentDigest(status="failed", error="NotADocument", extractor_ms=0)
     try:
-        outline = await asyncio.to_thread(extract_outline, fmt, raw)
-        sample = await asyncio.to_thread(text_sample, fmt, raw) if with_abstract else ""
+        outline = await asyncio.to_thread(extract_outline, fmt, raw, units)
+        sample = (
+            await asyncio.to_thread(text_sample, fmt, raw, DOCUMENT_DIGEST_SAMPLE_CHARS, units)
+            if with_abstract else ""
+        )
     except Exception as e:  # noqa: BLE001
         logger.warning("Document digest extraction failed (%s)", type(e).__name__, exc_info=True)
         return DocumentDigest(

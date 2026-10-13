@@ -5,6 +5,7 @@ Business logic for file uploads with S3 pre-signed URLs and quota management.
 """
 
 import asyncio
+import json
 import os
 import logging
 import uuid
@@ -36,6 +37,7 @@ from apis.shared.files.models import (
     QuotaResponse,
     is_allowed_mime_type,
     is_presentation_file,
+    is_reference_document,
     ALLOWED_MIME_TYPES,
     MAX_FILES_PER_MESSAGE,
 )
@@ -157,9 +159,12 @@ class FileUploadService:
         max_files_per_message: Optional[int] = None,
         user_quota_bytes: Optional[int] = None,
         thumbnail_renderer: Optional[ThumbnailRenderer] = None,
+        sqs_client=None,
     ):
         """Initialize with dependencies."""
         self.repository = repository or get_file_upload_repository()
+        # Built on first use: only a reference-class upload sends to SQS.
+        self._sqs_client = sqs_client
         self._thumbnail_renderer = thumbnail_renderer or get_thumbnail_renderer()
 
         # S3 configuration
@@ -403,7 +408,14 @@ class FileUploadService:
         # later turn can carry the digest instead of the bytes. Non-documents
         # (spreadsheets, decks, images) and the kill switch skip it. The
         # response does not wait for it.
-        self._schedule_digest(file_meta)
+        #
+        # A reference-class document (large-document spec §4A) is never read
+        # here: the preparation Lambda builds its digest along with the
+        # sidecars, so app-api never holds a 50 MB object in memory.
+        if is_reference_document(file_meta):
+            await self._enqueue_preparation(file_meta)
+        else:
+            self._schedule_digest(file_meta)
 
         logger.info("Completed file upload")
 
@@ -848,6 +860,74 @@ class FileUploadService:
         except Exception:  # noqa: BLE001 - a digest is never worth an error
             logger.warning("Document digest build failed", exc_info=True)
 
+    # =========================================================================
+    # Large-document preparation (docs/specs/large-document-attachments.md §4C)
+    # =========================================================================
+
+    def _sqs(self):
+        if self._sqs_client is None:
+            self._sqs_client = boto3.client("sqs", region_name=os.environ.get("AWS_REGION", "us-west-2"))
+        return self._sqs_client
+
+    async def _enqueue_preparation(self, file_meta: FileMetadata) -> None:
+        """Queue a reference-class upload for the preparation Lambda. Never raises.
+
+        ``preparation = pending`` is written *before* the message is sent, so
+        the Lambda's ``ready`` can never be overwritten by it. A send that
+        fails marks the row ``failed``; ``document_read`` then falls back to
+        the original where it can, and the upload itself still succeeds.
+        """
+        from apis.shared.feature_flags import large_document_attachments_enabled
+        from apis.shared.files.large_document import STATUS_FAILED, STATUS_PENDING, preparation_record
+
+        queue_url = os.environ.get("LARGE_DOCUMENT_PREPARE_QUEUE_URL", "").strip()
+        if not large_document_attachments_enabled() or not queue_url:
+            # Unreachable while the presign cap is the inline limit; logged so a
+            # misconfiguration (flag on without the queue) is visible.
+            logger.warning("Large document not queued for preparation: feature off or queue unset")
+            return
+        try:
+            stored = await self.repository.update_file_preparation(
+                file_meta.user_id, file_meta.upload_id, preparation_record(status=STATUS_PENDING)
+            )
+            if stored is None:
+                return
+            body = json.dumps({"user_id": file_meta.user_id, "upload_id": file_meta.upload_id})
+            await asyncio.to_thread(self._sqs().send_message, QueueUrl=queue_url, MessageBody=body)
+        except Exception as e:  # noqa: BLE001 - preparation is never worth a failed upload
+            logger.warning("Large document preparation not queued", exc_info=True)
+            try:
+                await self.repository.update_file_preparation(
+                    file_meta.user_id, file_meta.upload_id,
+                    preparation_record(status=STATUS_FAILED, error=type(e).__name__),
+                )
+            except Exception:  # noqa: BLE001
+                logger.warning("Could not record the failed preparation", exc_info=True)
+
+    def _delete_derived_objects(self, file_meta: FileMetadata) -> None:
+        """Best-effort delete of a prepared document's ``_derived/`` sidecars.
+
+        Only reference-class files can have any, so every other file skips the
+        LIST. A preparation still running when the row is deleted cleans up
+        after itself: its final row write is conditional on the row, and it
+        deletes the prefix when that write fails.
+        """
+        if not (file_meta.preparation or is_reference_document(file_meta)):
+            return
+        from apis.shared.files.large_document import derived_prefix
+
+        prefix = derived_prefix(file_meta.s3_key)
+        try:
+            paginator = self._s3_client.get_paginator("list_objects_v2")
+            for page in paginator.paginate(Bucket=self.bucket_name, Prefix=prefix):
+                keys = [{"Key": obj["Key"]} for obj in page.get("Contents", [])]
+                if keys:
+                    self._s3_client.delete_objects(
+                        Bucket=self.bucket_name, Delete={"Objects": keys, "Quiet": True}
+                    )
+        except ClientError:
+            logger.warning("Failed to delete derived objects for a prepared document", exc_info=True)
+
     def _delete_thumbnail_object(self, file_meta: FileMetadata) -> None:
         """
         Best-effort delete of the thumbnail sibling.
@@ -923,8 +1003,10 @@ class FileUploadService:
             logger.warning("Failed to delete S3 object", exc_info=True)
             # Continue with metadata deletion even if S3 fails
 
-        # Best-effort delete of the thumbnail sibling, if one exists.
+        # Best-effort delete of the thumbnail sibling, if one exists, and of a
+        # prepared document's sidecars.
         self._delete_thumbnail_object(file_meta)
+        self._delete_derived_objects(file_meta)
 
         # Delete metadata
         deleted = await self.repository.delete_file(user_id, upload_id)
@@ -1070,8 +1152,10 @@ class FileUploadService:
                     logger.warning(f"Failed to delete S3 object for {file_meta.upload_id}: {e}")
                     # Continue with metadata deletion
 
-                # Best-effort delete of the thumbnail sibling, if one exists.
+                # Best-effort delete of the thumbnail sibling, if one exists,
+                # and of a prepared document's sidecars.
                 self._delete_thumbnail_object(file_meta)
+                self._delete_derived_objects(file_meta)
 
                 # Delete metadata
                 deleted = await self.repository.delete_file(

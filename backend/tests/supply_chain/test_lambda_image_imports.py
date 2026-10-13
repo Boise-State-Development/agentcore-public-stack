@@ -99,6 +99,12 @@ IMAGES: Dict[str, Tuple[str, List[str], List[str]]] = {
         ["lambdas/memory_maintenance_worker/worker.py"],
         ["lambdas/memory_maintenance_worker"],
     ),
+    # Large-document attachments PR-1: the `_derived/` sidecars for document_read.
+    "large-document-prepare": (
+        "backend/Dockerfile.large-document-prepare",
+        ["lambdas/large_document_prepare/handler.py"],
+        ["lambdas/large_document_prepare"],
+    ),
 }
 
 # The kb-sync image deliberately ships these alongside their packages but

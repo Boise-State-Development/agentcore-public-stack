@@ -27,6 +27,12 @@ Plus a **list** mode (no ``upload_id``) enumerating the session's readable
 documents, and an **index** mode (a PDF with neither range nor pattern) that
 returns the page count and a short per-page snippet index.
 
+A **prepared** document (a reference-class upload the ``large-document-prepare``
+Lambda has processed; ``large_document.py``) is read from its ``_derived/``
+sidecars instead of the original: the text layer for pattern, text and index,
+and only the covering page shards for a page range. Same modes, same output,
+same caps; only where the bytes come from differs.
+
 Every read goes through the DynamoDB user-files table (ownership by key shape,
 ``PK = USER#{userId}``) and reuses the workspace service's S3 client. No
 operation accepts a model-supplied S3 key. Nothing here emits metrics or
@@ -44,9 +50,10 @@ import time
 import uuid
 import zipfile
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 from xml.etree import ElementTree
 
+from . import large_document
 from .models import FileMetadata, FileStatus, get_file_format, is_presentation_file, is_tabular_file
 from .repository import get_file_upload_repository
 from .workspace import (
@@ -90,8 +97,9 @@ _LINE_CHARS = 200
 _SNIPPET_CHARS = 90
 #: Lines of context on either side of a pattern match.
 _CONTEXT_LINES = 1
-#: Documents larger than this are not searched or sliced (the upload cap is
-#: 4 MB, so this only guards a misconfigured bucket).
+#: Documents larger than this are not searched or sliced from the original (the
+#: inline upload cap is 4 MB). A prepared document is exempt: it is read from
+#: its sidecars, which are bounded per call.
 _MAX_DOCUMENT_BYTES = int(os.environ.get("DOCUMENT_READ_MAX_SOURCE_BYTES", 8 * 1024 * 1024))
 
 #: Bedrock document formats the tool can read. Tabular and presentation files
@@ -288,8 +296,9 @@ async def read_document(
             "analyze_spreadsheet, presentations through read_powerpoint_presentation, "
             "and images are only available inline."
         )
-    if meta.size_bytes > _MAX_DOCUMENT_BYTES:
-        raise DocumentReadError(f"'{meta.filename}' is too large to read ({meta.size_bytes} bytes).")
+    prepared = large_document.is_prepared(meta)
+    if not prepared and meta.size_bytes > _MAX_DOCUMENT_BYTES:
+        raise DocumentReadError(_unreadable_message(meta))
 
     pages = parse_page_range(page_range)
     pattern_text = (pattern or "").strip() or None
@@ -301,6 +310,12 @@ async def read_document(
         "format": fmt,
         "size_bytes": meta.size_bytes,
     }
+
+    if prepared:
+        return await _read_prepared(
+            user_id, upload_id, meta, fmt, base,
+            pages=pages, pattern=pattern_text, limit=limit, offset=offset, text_only=text_only,
+        )
 
     if fmt == "pdf":
         raw = await _fetch_bytes(meta)
@@ -325,6 +340,14 @@ async def read_document(
     if pattern_text:
         raw = await _fetch_bytes(meta)
         return await asyncio.to_thread(_text_pattern, raw.decode("utf-8", errors="replace"), pattern_text, base, "line")
+    return await _text_read(user_id, upload_id, offset, base, fmt)
+
+
+async def _text_read(user_id: str, upload_id: str, offset: int, base: Dict[str, Any], fmt: str) -> DocumentReadResult:
+    """Text mode for txt / md / html: a ranged GET of the original, so it is
+    already bounded by ``WORKSPACE_READ_MAX_BYTES`` whatever the file's size.
+    Prepared documents use it too: the bytes it returns are the original's
+    exactly, which a text layer split into lines could not reproduce."""
     result = await read_workspace_file(user_id, upload_id, offset=offset)
     payload = {
         **base,
@@ -355,6 +378,113 @@ async def _fetch_bytes(meta: FileMetadata) -> bytes:
     return raw
 
 
+def _unreadable_message(meta: FileMetadata) -> str:
+    """Why a document over the source cap cannot be read (no usable sidecars)."""
+    status = large_document.preparation_status(meta)
+    if status == large_document.STATUS_PENDING:
+        return (
+            f"'{meta.filename}' is still being prepared for reading. "
+            "Tell the user it will be readable shortly, then try again."
+        )
+    if status == large_document.STATUS_FAILED:
+        return f"'{meta.filename}' could not be prepared for reading, so it cannot be searched or read."
+    return f"'{meta.filename}' is too large to read ({meta.size_bytes} bytes)."
+
+
+# ---------------------------------------------------------------------------
+# Prepared documents (``_derived/`` sidecars; large_document.py)
+# ---------------------------------------------------------------------------
+
+
+async def _fetch_text_layer(meta: FileMetadata) -> List[str]:
+    key = large_document.text_layer_key(meta.s3_key)
+    body = await asyncio.to_thread(_get_object_bytes, meta.s3_bucket, key)
+    return await asyncio.to_thread(large_document.decode_text_layer, body)
+
+
+async def _read_prepared(
+    user_id: str,
+    upload_id: str,
+    meta: FileMetadata,
+    fmt: str,
+    base: Dict[str, Any],
+    *,
+    pages: Optional[Tuple[int, int]],
+    pattern: Optional[str],
+    limit: int,
+    offset: int,
+    text_only: bool,
+) -> DocumentReadResult:
+    """``read_document`` over the sidecars. Each branch ends in the same
+    helper the original's branch does, so the payloads are the same."""
+    if fmt == "pdf":
+        # Same precedence as the original's branch: pattern, then a page range
+        # (as text for a text-only model), then the index.
+        if pages and not pattern and not text_only:
+            return await _pdf_pages_from_shards(meta, pages, limit, base)
+        texts = await _fetch_text_layer(meta)
+        page_text = texts.__getitem__
+        if pattern:
+            regex, note = _compile(pattern)
+            return await asyncio.to_thread(_scan_pages, len(texts), page_text, pattern, regex, note, base)
+        if pages:
+            return await asyncio.to_thread(_pages_text, len(texts), page_text, pages, limit, base)
+        return await asyncio.to_thread(_page_index, len(texts), page_text, base)
+
+    if pages:
+        raise WorkspaceValidationError(
+            f"page_range applies to PDFs only; '{meta.filename}' is {fmt}. Use pattern or offset instead."
+        )
+
+    if fmt == "docx":
+        paragraphs = await _fetch_text_layer(meta)
+        return await asyncio.to_thread(_docx_read_paragraphs, paragraphs, pattern, offset, base)
+
+    if pattern:
+        lines = await _fetch_text_layer(meta)
+        return await asyncio.to_thread(_lines_pattern, lines, pattern, base, "line")
+    return await _text_read(user_id, upload_id, offset, base, fmt)
+
+
+async def _pdf_pages_from_shards(
+    meta: FileMetadata, pages: Tuple[int, int], limit: int, base: Dict[str, Any]
+) -> DocumentReadResult:
+    """``_pdf_pages`` over the page shards: the range is resolved against the
+    prepared page count, then only the shards covering it are fetched (in
+    parallel) and sliced with the same ``import_pages`` re-assembly."""
+    count = large_document.prepared_page_count(meta)
+    shard_pages = large_document.prepared_shard_pages(meta)
+    start, end, truncated = _resolve_range(pages, count, limit)
+    shards = large_document.covering_shards(start, end, count, shard_pages)
+    blobs = await asyncio.gather(
+        *(
+            asyncio.to_thread(_get_object_bytes, meta.s3_bucket, large_document.shard_key(meta.s3_key, s, e))
+            for s, e in shards
+        )
+    )
+    sliced = await asyncio.to_thread(_assemble_from_shards, list(zip(shards, blobs)), start, end)
+    return _pages_result(sliced, start, end, count, truncated, base, meta.filename)
+
+
+def _assemble_from_shards(shards: Sequence[Tuple[Tuple[int, int], bytes]], start: int, end: int) -> bytes:
+    import pypdfium2 as pdfium
+
+    sub = pdfium.PdfDocument.new()
+    try:
+        for (shard_start, shard_end), raw in shards:
+            shard = _open_pdf(raw)
+            try:
+                first, last = max(start, shard_start), min(end, shard_end)
+                sub.import_pages(shard, pages=list(range(first - shard_start, last - shard_start + 1)))
+            finally:
+                shard.close()
+        buffer = io.BytesIO()
+        sub.save(buffer)
+    finally:
+        sub.close()
+    return buffer.getvalue()
+
+
 # ---------------------------------------------------------------------------
 # PDF (pypdfium2 — already a dependency for attachment thumbnails)
 # ---------------------------------------------------------------------------
@@ -381,20 +511,27 @@ def _pdf_page_text(pdf, index: int) -> str:
         page.close()
 
 
+def _resolve_range(pages: Tuple[int, int], count: int, limit: int) -> Tuple[int, int, bool]:
+    """``(start, end, truncated)``: the requested range clamped to the document
+    and to ``limit`` pages. Raises when it starts past the last page."""
+    start, end = pages
+    if start > count:
+        raise WorkspaceValidationError(f"page_range starts at {start} but the document has {count} pages.")
+    end = min(end, count)
+    truncated = False
+    if end - start + 1 > limit:
+        end = start + limit - 1
+        truncated = True
+    return start, end, truncated
+
+
 def _pdf_pages(raw: bytes, pages: Tuple[int, int], limit: int, base: Dict[str, Any], filename: str) -> DocumentReadResult:
     import pypdfium2 as pdfium
 
-    start, end = pages
     pdf = _open_pdf(raw)
     try:
         count = len(pdf)
-        if start > count:
-            raise WorkspaceValidationError(f"page_range starts at {start} but the document has {count} pages.")
-        end = min(end, count)
-        truncated = False
-        if end - start + 1 > limit:
-            end = start + limit - 1
-            truncated = True
+        start, end, truncated = _resolve_range(pages, count, limit)
         sub = pdfium.PdfDocument.new()
         try:
             sub.import_pages(pdf, pages=list(range(start - 1, end)))
@@ -404,8 +541,12 @@ def _pdf_pages(raw: bytes, pages: Tuple[int, int], limit: int, base: Dict[str, A
             sub.close()
     finally:
         pdf.close()
+    return _pages_result(buffer.getvalue(), start, end, count, truncated, base, filename)
 
-    sliced = buffer.getvalue()
+
+def _pages_result(
+    sliced: bytes, start: int, end: int, count: int, truncated: bool, base: Dict[str, Any], filename: str
+) -> DocumentReadResult:
     returned = end - start + 1
     name = _unique_document_name(filename, f"p{start}-{end}")
     payload = {
@@ -431,21 +572,18 @@ def _pdf_pages(raw: bytes, pages: Tuple[int, int], limit: int, base: Dict[str, A
 def _pdf_pages_text(raw: bytes, pages: Tuple[int, int], limit: int, base: Dict[str, Any]) -> DocumentReadResult:
     """``_pdf_pages`` for a text-only model: the same range and the same
     ``max_pages`` cap, returned as each page's text layer in the payload."""
-    start, end = pages
     pdf = _open_pdf(raw)
     try:
-        count = len(pdf)
-        if start > count:
-            raise WorkspaceValidationError(f"page_range starts at {start} but the document has {count} pages.")
-        end = min(end, count)
-        truncated = False
-        if end - start + 1 > limit:
-            end = start + limit - 1
-            truncated = True
-        texts = [{"page": i + 1, "text": _pdf_page_text(pdf, i)} for i in range(start - 1, end)]
+        return _pages_text(len(pdf), lambda i: _pdf_page_text(pdf, i), pages, limit, base)
     finally:
         pdf.close()
 
+
+def _pages_text(
+    count: int, page_text: Callable[[int], str], pages: Tuple[int, int], limit: int, base: Dict[str, Any]
+) -> DocumentReadResult:
+    start, end, truncated = _resolve_range(pages, count, limit)
+    texts = [{"page": i + 1, "text": page_text(i)} for i in range(start - 1, end)]
     returned = end - start + 1
     payload = {
         **base,
@@ -470,30 +608,41 @@ def _pdf_pages_text(raw: bytes, pages: Tuple[int, int], limit: int, base: Dict[s
 def _pdf_pattern(raw: bytes, pattern: str, base: Dict[str, Any]) -> DocumentReadResult:
     regex, note = _compile(pattern)
     pdf = _open_pdf(raw)
+    try:
+        return _scan_pages(len(pdf), lambda i: _pdf_page_text(pdf, i), pattern, regex, note, base)
+    finally:
+        pdf.close()
+
+
+def _scan_pages(
+    count: int,
+    page_text: Callable[[int], str],
+    pattern: str,
+    regex: "re.Pattern[str]",
+    note: Optional[str],
+    base: Dict[str, Any],
+) -> DocumentReadResult:
+    """Pattern mode over a PDF's pages, from the document or its text layer."""
     # The clock starts after the open: lazily importing the pypdfium2 native
     # library and parsing the document are setup, not scanning, and charging
     # them to the scan's budget can report a timeout on pages never examined.
     clock = _Budget(DOCUMENT_READ_PATTERN_BUDGET_SECONDS)
     pages_searched = 0
-    try:
-        count = len(pdf)
-        matches: List[Dict[str, Any]] = []
-        pages_matched: List[int] = []
-        for index in range(count):
-            if len(matches) >= DOCUMENT_READ_MAX_MATCHES or clock.out_of_time():
-                break
-            pages_searched = index + 1
-            lines = _pdf_page_text(pdf, index).splitlines()
-            page_no = index + 1
-            hit = False
-            for entry in _grep_lines(lines, regex, DOCUMENT_READ_MAX_MATCHES - len(matches), clock):
-                entry["page"] = page_no
-                matches.append(entry)
-                hit = True
-            if hit:
-                pages_matched.append(page_no)
-    finally:
-        pdf.close()
+    matches: List[Dict[str, Any]] = []
+    pages_matched: List[int] = []
+    for index in range(count):
+        if len(matches) >= DOCUMENT_READ_MAX_MATCHES or clock.out_of_time():
+            break
+        pages_searched = index + 1
+        lines = page_text(index).splitlines()
+        page_no = index + 1
+        hit = False
+        for entry in _grep_lines(lines, regex, DOCUMENT_READ_MAX_MATCHES - len(matches), clock):
+            entry["page"] = page_no
+            matches.append(entry)
+            hit = True
+        if hit:
+            pages_matched.append(page_no)
     payload = {
         **base,
         "mode": "pattern",
@@ -520,18 +669,21 @@ def _pdf_pattern(raw: bytes, pattern: str, base: Dict[str, Any]) -> DocumentRead
 def _pdf_index(raw: bytes, base: Dict[str, Any]) -> DocumentReadResult:
     pdf = _open_pdf(raw)
     try:
-        count = len(pdf)
-        index: List[Dict[str, Any]] = []
-        for i in range(min(count, DOCUMENT_READ_INDEX_PAGES)):
-            snippet = ""
-            for line in _pdf_page_text(pdf, i).splitlines():
-                line = line.strip()
-                if line:
-                    snippet = line[:_SNIPPET_CHARS]
-                    break
-            index.append({"page": i + 1, "snippet": snippet})
+        return _page_index(len(pdf), lambda i: _pdf_page_text(pdf, i), base)
     finally:
         pdf.close()
+
+
+def _page_index(count: int, page_text: Callable[[int], str], base: Dict[str, Any]) -> DocumentReadResult:
+    index: List[Dict[str, Any]] = []
+    for i in range(min(count, DOCUMENT_READ_INDEX_PAGES)):
+        snippet = ""
+        for line in page_text(i).splitlines():
+            line = line.strip()
+            if line:
+                snippet = line[:_SNIPPET_CHARS]
+                break
+        index.append({"page": i + 1, "snippet": snippet})
     payload = {
         **base,
         "mode": "index",
@@ -604,7 +756,14 @@ def docx_paragraphs(raw: bytes) -> List[str]:
 
 
 def _docx_read(raw: bytes, pattern: Optional[str], offset: int, base: Dict[str, Any]) -> DocumentReadResult:
-    paragraphs = docx_paragraphs(raw)
+    return _docx_read_paragraphs(docx_paragraphs(raw), pattern, offset, base)
+
+
+def _docx_read_paragraphs(
+    paragraphs: List[str], pattern: Optional[str], offset: int, base: Dict[str, Any]
+) -> DocumentReadResult:
+    """Pattern and text modes over a DOCX's paragraphs, from the document or
+    its text layer (which stores ``docx_paragraphs`` verbatim)."""
     if pattern:
         result = _text_pattern("\n".join(paragraphs), pattern, base, "paragraph")
         result.format = "docx"
@@ -767,8 +926,12 @@ def _grep_lines(
 
 
 def _text_pattern(text: str, pattern: str, base: Dict[str, Any], unit: str) -> DocumentReadResult:
+    return _lines_pattern(text.splitlines(), pattern, base, unit)
+
+
+def _lines_pattern(lines: List[str], pattern: str, base: Dict[str, Any], unit: str) -> DocumentReadResult:
+    """Pattern mode over numbered lines, from the document or its text layer."""
     regex, note = _compile(pattern)
-    lines = text.splitlines()
     clock = _Budget(DOCUMENT_READ_PATTERN_BUDGET_SECONDS)
     matches = _grep_lines(lines, regex, DOCUMENT_READ_MAX_MATCHES, clock)
     payload = {
