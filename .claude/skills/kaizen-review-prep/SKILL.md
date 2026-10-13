@@ -31,7 +31,7 @@ Friday late morning (~10am MT), ~4 hours after `kaizen-research` runs. Phil revi
 4. **Outcomes of the prior review's proposals.** For each proposal in the most recent `docs/kaizen/reviews/*.md`, establish on disk or in git what happened: shipped (name the commit/PR), not started, or superseded. This is the feedback channel — see the Philosophy bullet. Include **open PR branches**, which routinely carry queue entries that refute or narrow what `develop` alone would suggest.
 5. **`docs/kaizen/decisions.md`** (if it exists) — declined items with reasons. Don't re-propose without materially new context.
 6. **Recent activity since last review:**
-   - `git log develop --since="<last review date>" --oneline --no-merges` — what shipped.
+   - `git log origin/develop --since="<last review date>" --oneline --no-merges` — what shipped.
    - `gh pr list --base develop --state merged --search "merged:>$(date -v-7d +%Y-%m-%d)"` — what landed.
    - `gh run list --status=failure --limit 30` — fresh CI failures.
 7. **`CLAUDE.md` + skill inventory** — surface concerns only; never propose unilateral edits to these.
@@ -182,7 +182,7 @@ After Phil reviews and the decisions are logged in the review doc, this skill (o
    For each proposal in the last review doc, resolve shipped / not started / superseded against git and disk — that scorecard opens the new review. Queue entries found on open branches are authoritative over anything re-derived here.
 
 4. **Pull recent activity** (parallel Bash):
-   - `git log develop --since="<last review date>" --oneline --no-merges`
+   - `git log origin/develop --since="<last review date>" --oneline --no-merges`
    - `gh pr list --base develop --state merged --search "merged:>$(date -v-7d +%Y-%m-%d)" --limit 30`
    - `gh run list --status=failure --limit 30`
    - `gh issue list --state open --search "created:>$(date -v-7d +%Y-%m-%d)"`
@@ -211,7 +211,11 @@ After Phil reviews and the decisions are logged in the review doc, this skill (o
 DATE=$(TZ=America/Denver date +'%Y-%m-%d')
 BRANCH="kaizen/review-${DATE}"
 
-git checkout -b "$BRANCH" develop
+# Branch from the remote tip, never local `develop`: the main checkout often
+# sits detached or on another branch, and local `develop` is usually checked
+# out in some other worktree and weeks behind.
+git fetch origin develop
+git checkout -b "$BRANCH" origin/develop
 git add docs/kaizen/
 git commit -m "$(cat <<EOF
 chore(kaizen): weekly review prep ${DATE}

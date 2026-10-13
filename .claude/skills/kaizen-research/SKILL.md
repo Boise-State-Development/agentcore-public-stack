@@ -175,7 +175,7 @@ Friday early morning (~6am MT). `kaizen-review-prep` runs ~4 hours later (~10am 
      answer?
    - **Did anything retire a piece of the substrate?** Name the row of the patterns
      doc §4 table it retires, and what we'd no longer build.
-   - **Did our own code move?** `git log develop --since="7 days ago"` plus a grep for
+   - **Did our own code move?** `git log origin/develop --since="7 days ago"` plus a grep for
      the names the specs promise: `HANDOFF#`, `DELIVERY#`, `apis.shared.handoff`,
      `resolve_turn_agent`, `send_to_conversation`, `consult-`, `strands.multiagent`,
      `Binding.kind` `'agent'`. A landed PR means a spec's **Status** line, phase
@@ -269,7 +269,7 @@ Friday early morning (~6am MT). `kaizen-review-prep` runs ~4 hours later (~10am 
 
 ### Internal (this repo)
 
-13. **Recent commits.** `git log develop --since="7 days ago" --oneline --no-merges`. Cluster by area (`backend/`, `frontend/`, `infrastructure/`). Reverts and high-churn files signal pain points.
+13. **Recent commits.** `git log origin/develop --since="7 days ago" --oneline --no-merges`. Cluster by area (`backend/`, `frontend/`, `infrastructure/`). Reverts and high-churn files signal pain points.
 
 14. **Open PRs + review comments.** `gh pr list --base develop --state open --limit 20`, then `gh pr view <n> --comments` on the top 3 by comment count. Repeated review feedback is a CLAUDE.md or skill-update signal.
 
@@ -474,7 +474,7 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
    - Last 14 days of `CHANGELOG.md` and `RELEASE_NOTES.md`
 
 3. **Inventory internal signals** (parallel Bash calls):
-   - `git log develop --since="7 days ago" --oneline --no-merges`
+   - `git log origin/develop --since="7 days ago" --oneline --no-merges`
    - `gh pr list --base develop --state open --limit 20`
    - `gh issue list --state open --search "created:>$(date -v-7d +%Y-%m-%d)"`
    - `gh run list --status=failure --limit 30`
@@ -507,7 +507,11 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 DATE=$(TZ=America/Denver date +'%Y-%m-%d')
 BRANCH="kaizen/research-${DATE}"
 
-git checkout -b "$BRANCH" develop
+# Branch from the remote tip, never local `develop`: the main checkout often
+# sits detached or on another branch, and local `develop` is usually checked
+# out in some other worktree and weeks behind.
+git fetch origin develop
+git checkout -b "$BRANCH" origin/develop
 git add docs/kaizen/
 git commit -m "$(cat <<EOF
 chore(kaizen): weekly research scan ${DATE}
