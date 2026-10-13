@@ -39,6 +39,7 @@ from apis.shared.files.models import (
     is_presentation_file,
     is_reference_document,
     ALLOWED_MIME_TYPES,
+    LARGE_DOCUMENT_MAX_BYTES,
     MAX_FILES_PER_MESSAGE,
 )
 from .sheet_preview import (
@@ -221,13 +222,22 @@ class FileUploadService:
     def max_size_for(self, filename: str, mime_type: str) -> int:
         """Return the upload size cap that applies to this file.
 
-        Presentations get their own (larger) cap; everything else gets the
-        general limit. Callers must use this rather than reading
-        `max_file_size` directly, or a .pptx under the presentation cap gets
-        rejected by whichever gate was missed.
+        Presentations get their own (larger) cap. With
+        ``LARGE_DOCUMENT_ATTACHMENTS_ENABLED`` on, a document-class file (pdf,
+        docx, txt, md, html) gets ``LARGE_DOCUMENT_MAX_BYTES``: one over the
+        inline limit is attached by reference (``is_reference_document``) and
+        prepared off the request path. Everything else gets the general
+        limit. Callers must use this rather than reading `max_file_size`
+        directly, or a file under its class's cap gets rejected by whichever
+        gate was missed (presign and ``complete_upload`` both read it).
         """
+        from apis.shared.feature_flags import large_document_attachments_enabled
+        from apis.shared.files.document_read import is_document_class
+
         if is_presentation_file(filename, mime_type):
             return self.presentation_max_file_size
+        if large_document_attachments_enabled() and is_document_class(mime_type, filename):
+            return LARGE_DOCUMENT_MAX_BYTES
         return self.max_file_size
 
     # =========================================================================
@@ -770,14 +780,41 @@ class FileUploadService:
             cached=cached,
         )
 
+    @staticmethod
+    def _thumbnail_source_key(file_meta: FileMetadata) -> str:
+        """The object page 1 is rendered from.
+
+        The original, except for a reference-class document (up to 50 MB),
+        whose first page shard is read instead: a few hundred KB rather than
+        the whole original in app-api's memory. Until preparation has written
+        the shards there is nothing small to read, so the card keeps its
+        skeleton (``ThumbnailRenderError`` → 422) rather than pulling 50 MB.
+        """
+        from apis.shared.files import large_document
+
+        if not is_reference_document(file_meta):
+            return file_meta.s3_key
+        if not large_document.is_prepared(file_meta):
+            raise ThumbnailRenderError("Large document is not prepared yet")
+        shards = large_document.shard_ranges(
+            large_document.prepared_page_count(file_meta),
+            large_document.prepared_shard_pages(file_meta),
+        )
+        if not shards:
+            raise ThumbnailRenderError("Large document has no page shards")
+        start, end = shards[0]
+        return large_document.shard_key(file_meta.s3_key, start, end)
+
     async def _render_and_store_thumbnail(
         self, file_meta: FileMetadata, thumb_key: str
     ) -> None:
-        """Stream the original from S3, rasterize page 1, store the PNG."""
+        """Stream the original (or a large document's first page shard) from
+        S3, rasterize page 1, store the PNG."""
+        source_key = self._thumbnail_source_key(file_meta)
         try:
             response = self._s3_client.get_object(
                 Bucket=self.bucket_name,
-                Key=file_meta.s3_key,
+                Key=source_key,
             )
             raw = response["Body"].read()
         except ClientError as e:
