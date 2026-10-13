@@ -602,6 +602,20 @@ class ThumbnailResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
+class SearchStatusResponse(BaseModel):
+    """Response for GET /api/files/{upload_id}/search-status.
+
+    Drives the SPA's large-document chip: ``preparing`` and ``indexing`` (poll
+    again), ``searchable``, ``evicted`` (re-indexing on conversation open, so
+    shown as indexing), ``unavailable`` and ``off`` (read on demand only).
+    """
+
+    upload_id: str = Field(..., alias="uploadId")
+    status: str
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
 class FileResponse(BaseModel):
     """Single file in list response."""
 

@@ -12,6 +12,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import RedirectResponse, Response
 
 from apis.shared.auth import User, get_current_user_from_session
+from apis.shared.feature_flags import attachment_kb_enabled
+from apis.shared.files.attachment_index import search_status
 from apis.shared.files.repository import InvalidCursorError
 from apis.shared.files.models import (
     ImportFileRequest,
@@ -20,6 +22,7 @@ from apis.shared.files.models import (
     CompleteUploadResponse,
     FileResponse,
     PreviewUrlResponse,
+    SearchStatusResponse,
     SheetPreviewResponse,
     TextSnippetResponse,
     ThumbnailResponse,
@@ -339,6 +342,30 @@ async def get_text_snippet(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"File {upload_id} not found or not owned by you",
         )
+
+
+@router.get("/{upload_id}/search-status", response_model=SearchStatusResponse)
+async def get_search_status(
+    upload_id: str,
+    user: User = Depends(get_current_user_from_session),
+    service: FileUploadService = Depends(get_file_upload_service),
+):
+    """
+    Whether a large document can be searched through the attachments KB.
+
+    One row read, no Bedrock call: the status is what the indexing pipeline last
+    wrote on the file (`kbIndex`, docs/specs/large-document-attachments.md §4G).
+    The SPA polls it while the answer is `preparing` or `indexing`.
+    """
+    meta = await service.get_file(user.user_id, upload_id)
+    if meta is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"File {upload_id} not found or not owned by you",
+        )
+    return SearchStatusResponse(
+        upload_id=upload_id, status=search_status(meta, kb_enabled=attachment_kb_enabled())
+    )
 
 
 @router.get("/{upload_id}/sheet-preview", response_model=SheetPreviewResponse)

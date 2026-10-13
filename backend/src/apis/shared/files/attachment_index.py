@@ -195,6 +195,47 @@ def kb_status(meta: Optional[FileMetadata]) -> Optional[str]:
     return status if isinstance(status, str) else None
 
 
+#: Whether a document can be searched, as ``document_read``'s query mode and the
+#: SPA's chip (``GET /files/{id}/search-status``) describe it. Derived from the
+#: row alone, so neither asks Bedrock.
+SEARCH_OFF = "off"
+SEARCH_PREPARING = "preparing"
+SEARCH_INDEXING = "indexing"
+SEARCH_SEARCHABLE = "searchable"
+SEARCH_EVICTED = "evicted"
+SEARCH_UNAVAILABLE = "unavailable"
+
+
+def search_status(meta: Optional[FileMetadata], *, kb_enabled: bool) -> str:
+    """One document's searchability.
+
+    ``off`` when the deployment has no attachments KB or the file is not
+    reference-class (it is never indexed). ``preparing`` until its sidecars are
+    built, because indexing follows preparation. A prepared document with no
+    ``kbIndex`` yet is ``indexing``: the same invocation that finished the
+    preparation is about to ingest it. ``unavailable`` covers a failed
+    preparation or ingest, the per-user cap and a removed document; Tier 1
+    reads are unaffected by any of them. So is a document that was never queued
+    for preparation (``complete_upload`` writes ``pending`` before it returns, so
+    a missing preparation is not a race).
+    """
+    if not kb_enabled or meta is None or not is_reference_document(meta):
+        return SEARCH_OFF
+    preparation = large_document.preparation_status(meta)
+    if preparation in (None, large_document.STATUS_FAILED):
+        return SEARCH_UNAVAILABLE
+    if not large_document.is_prepared(meta):
+        return SEARCH_PREPARING
+    status = kb_status(meta)
+    if status == STATUS_INDEXED:
+        return SEARCH_SEARCHABLE
+    if status in (None, STATUS_QUEUED, STATUS_INDEXING):
+        return SEARCH_INDEXING
+    if status == STATUS_EVICTED:
+        return SEARCH_EVICTED
+    return SEARCH_UNAVAILABLE
+
+
 def is_eligible(meta: Optional[FileMetadata]) -> bool:
     """A READY, reference-class, prepared row. The object's presence is checked separately."""
     if meta is None:

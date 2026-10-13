@@ -111,10 +111,13 @@ def attachment_kb_enabled() -> bool:
     **Opt-in while the feature is in development**: only ``"true"``
     (case-insensitive) enables it.
 
-    Set by CDK from ``CDK_ATTACHMENT_KB_ENABLED`` on the large-document Lambda
-    and app-api, and only together with ``LARGE_DOCUMENT_ATTACHMENTS_ENABLED``
-    (the config refuses one without the other). The Runtime needs it only when
-    ``document_read`` gains its search mode (PR-4).
+    Set by CDK from ``CDK_ATTACHMENT_KB_ENABLED`` on the large-document Lambda,
+    app-api and the Runtime, and only together with
+    ``LARGE_DOCUMENT_ATTACHMENTS_ENABLED`` (the config refuses one without the
+    other). On the Runtime it adds ``document_read``'s ``query`` argument (§4F):
+    one tool-spec change per deployment, never per session. App-api serves the
+    SPA's *Indexing…* / *Searchable* chip from it
+    (``GET /files/{id}/search-status``).
     """
     return os.environ.get("ATTACHMENT_KB_ENABLED", "").strip().lower() == "true"
 
