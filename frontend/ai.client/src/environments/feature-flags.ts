@@ -59,4 +59,11 @@ export interface FeatureFlags {
    * off everywhere until then. Backend: FOLDER_ATTACHMENTS_ENABLED (app-api).
    */
   folderAttachments: boolean;
+  /**
+   * Attachments KB: a large document's chip follows its search index
+   * ("Indexing…", then "Searchable"), polled from `GET /files/{id}/search-status`.
+   * Only meaningful with `largeDocumentAttachments`. Backend: ATTACHMENT_KB_ENABLED
+   * (app-api and the Runtime; the endpoint answers `off` while it is off).
+   */
+  attachmentKb: boolean;
 }

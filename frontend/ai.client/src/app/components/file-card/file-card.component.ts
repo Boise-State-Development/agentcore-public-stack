@@ -1,4 +1,4 @@
-import { Component, ChangeDetectionStrategy, input, output, computed, signal, effect } from '@angular/core';
+import { Component, ChangeDetectionStrategy, input, output, computed, signal, effect, inject, untracked } from '@angular/core';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroDocument,
@@ -12,12 +12,17 @@ import {
 } from '@ng-icons/heroicons/outline';
 import { TooltipDirective } from '../tooltip';
 import {
+  AttachmentSearchStatusService,
   formatBytes,
   isReferenceDocument,
+  largeDocumentChip,
+  LARGE_DOCUMENT_CHIP_COPY,
   resolveMimeType,
+  type LargeDocumentChip,
   type PendingUpload,
   type FileMetadata,
 } from '../../services/file-upload';
+import { FEATURES } from '../../services/features';
 
 /**
  * Check if MIME type is an image
@@ -203,17 +208,19 @@ const DEFAULT_COLORS = {
             Finalizing...
           } @else if (isReference()) {
             <!-- A large document is attached by reference: the model reads the
-                 parts it needs rather than the whole file. The card has room
-                 for the short form; the full chip copy is the tooltip and the
-                 accessible text. -->
+                 parts it needs rather than the whole file, and, with the
+                 attachments KB, can search it once it is indexed. The card has
+                 room for the short form; the full chip copy is the tooltip and
+                 the accessible text. -->
             <span
-              [appTooltip]="'Large document, read on demand'"
+              [appTooltip]="chipCopy().full"
               appTooltipPosition="top"
               data-testid="reference-chip"
+              [attr.data-chip]="chip()"
             >
               {{ formattedSize() }} ·
-              <span class="font-medium text-gray-700 dark:text-gray-300" aria-hidden="true">Read on demand</span>
-              <span class="sr-only">Large document, read on demand</span>
+              <span class="font-medium text-gray-700 dark:text-gray-300" aria-hidden="true">{{ chipCopy().short }}</span>
+              <span class="sr-only">{{ chipCopy().full }}</span>
             </span>
           } @else {
             {{ formattedSize() }}
@@ -278,7 +285,19 @@ export class FileCardComponent {
   /** Image preview URL (data URL for images) */
   readonly imagePreviewUrl = signal<string | null>(null);
 
+  /** Present only while the deployment has the attachments KB. */
+  private readonly searchStatus = inject(FEATURES).attachmentKb ? inject(AttachmentSearchStatusService) : null;
+
   constructor() {
+    // A ready large document follows its search index (one poll per upload,
+    // shared with the message card).
+    effect(() => {
+      const service = this.searchStatus;
+      if (!service || !this.isReference() || !this.isReady()) return;
+      const id = this.uploadId();
+      untracked(() => service.track(id));
+    });
+
     // Effect to load image preview when pendingUpload changes
     effect(() => {
       const pending = this.pendingUpload();
@@ -384,6 +403,15 @@ export class FileCardComponent {
     const mime = pending ? resolveMimeType(pending.file) : this.mimeType();
     return isReferenceDocument(mime, this.sizeBytes());
   });
+
+  /** What the large-document chip says: read on demand, indexing, or searchable. */
+  protected readonly chip = computed<LargeDocumentChip>(() => {
+    const service = this.searchStatus;
+    if (!service || !this.isReady()) return 'read-on-demand';
+    return largeDocumentChip(service.statusFor(this.uploadId()));
+  });
+
+  protected readonly chipCopy = computed(() => LARGE_DOCUMENT_CHIP_COPY[this.chip()]);
 
   protected readonly iconName = computed(() => {
     const mime = this.mimeType();
