@@ -174,7 +174,7 @@ class TestNothingReachesTheSessionExceptionPath:
         files = [_Attachment(f"f{i}.pdf", size=per_file) for i in range(3)]
         sheet = _Attachment("data.xlsx", content_type=XLSX_MIME, size=6 * MB)
 
-        inline, tabular, _, oversized = _partition_attachments(files + [sheet])
+        inline, tabular, _, oversized, _ = _partition_attachments(files + [sheet])
         assert oversized == [] and inline == files and tabular == [sheet]
 
         kept, over, requested = _apply_inline_byte_budget(

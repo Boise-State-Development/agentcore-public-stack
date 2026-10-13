@@ -1,8 +1,8 @@
 # Large document attachments: attach by reference, search through a managed KB
 
-**Status:** Draft, 2026-10-12. Nothing built. Decisions recorded in §9 (size
-limit, ingest source, page numbers, retention, per-user cap). PR-0 is being done
-as its own change, separately from this spec's PRs.
+**Status:** Tier 1 in progress. PR-0 (#1560) and PR-1 (#1573) merged; PR-2 (the
+turn path and the raised limits) is the next change. Decisions recorded in §9
+(size limit, ingest source, page numbers, retention, per-user cap).
 **Motivating gap:** a user cannot attach a document over 4 MB to a conversation.
 The SPA rejects it on the client, so it never reaches the server and no metric
 anywhere records the demand.
@@ -168,13 +168,21 @@ Turn: _partition_attachments → reference list (no S3 fetch)
    handle (`render_digest(..., include_handle=True)`) when `preparation == ready`.
    Otherwise a fixed stub:
    `<document-reference name="…" upload_id="…" size_bytes="…" status="preparing"/>`.
+   `status` reads the row's `preparation`: `preparing` (pending, or not yet
+   written), `failed`, or `ready` when the row is prepared but has no digest
+   (`DOCUMENT_DIGEST_ENABLED=false`). As with the digest, `upload_id` is omitted
+   when the turn has no `document_read`. The rendering lives in
+   `apis/shared/files/reference_attachments.py`.
    **The turn path never builds a digest.** A lazy digest of a 50 MB file is seconds
    of CPU before the first token.
 4. `_build_attachment_guidance` ([routes.py:1602](../../backend/src/apis/inference_api/chat/routes.py:1602))
    gets a reference sentence, in the style of the spreadsheet one:
    *"`policy-manual.pdf` (38 MB) is too large to read in full. It is available
    through `document_read`: use `pattern` to find the relevant pages, then
-   `page_range` to read them."*
+   `page_range` to read them."* As shipped it is an instruction that names the
+   call and the id ("To answer from it, call `document_read` with `upload_id` …"):
+   on dev, Haiku 4.5 told the user it saw no file when the tool was merely
+   available, and called it only when told to.
 5. **Prompt-cache contract.** The digest text is rendered once, at attach time,
    into the persisted user message. Restore reads the persisted text back and
    finds no `document` block to strip, so history stays byte-stable. A digest that
@@ -327,6 +335,15 @@ A copy of the `conversations` KB design, applied to attachments:
   refresh on focus) is a PR-4 detail.
 - Upload progress already exists. A 50 MB PUT goes straight to S3, so no API body
   limit applies.
+- The chip is classified on size and MIME type alone, the two thresholds
+  `is_reference_document` uses, so it needs no request and shows from the moment
+  the upload finishes. The composer card reads "38 MB · Read on demand", with the
+  full copy as its tooltip and accessible text; the message card shows the full
+  chip.
+- **Thumbnails.** A reference-class PDF's card thumbnail is rendered from its
+  first page shard, never from the original, which would put up to 50 MB in
+  app-api's memory per card. Until preparation is ready the card keeps its
+  skeleton.
 
 ### Feature flags
 

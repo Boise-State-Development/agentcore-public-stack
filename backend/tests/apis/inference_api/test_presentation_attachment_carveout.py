@@ -69,7 +69,7 @@ class TestIsPresentationFile:
 class TestPartitionAttachments:
     def test_pptx_is_diverted_not_inlined(self):
         deck = _Attachment("deck.pptx", PPTX_MIME)
-        inline, tabular, presentations, oversized = _partition_attachments([deck])
+        inline, tabular, presentations, oversized, _ = _partition_attachments([deck])
 
         assert presentations == [deck]
         assert inline == []
@@ -80,7 +80,7 @@ class TestPartitionAttachments:
         # The size gate must not get a vote: a 12-byte deck is still a deck,
         # and "too big" would be the wrong explanation for skipping it.
         deck = _Attachment("small.pptx", PPTX_MIME, bytes_="AAAA")
-        inline, _, presentations, oversized = _partition_attachments([deck])
+        inline, _, presentations, oversized, _ = _partition_attachments([deck])
 
         assert presentations == [deck]
         assert oversized == []
@@ -88,7 +88,7 @@ class TestPartitionAttachments:
 
     def test_ordinary_documents_still_inline(self):
         pdf = _Attachment("report.pdf", "application/pdf", bytes_="AAAA")
-        _, _, presentations, _ = _partition_attachments([pdf])
+        _, _, presentations, _, _ = _partition_attachments([pdf])
         assert presentations == []
 
     def test_mixed_batch_lands_in_the_right_buckets(self):
@@ -96,7 +96,7 @@ class TestPartitionAttachments:
         sheet = _Attachment("data.xlsx", XLSX_MIME)
         deck = _Attachment("deck.pptx", PPTX_MIME)
 
-        inline, tabular, presentations, oversized = _partition_attachments(
+        inline, tabular, presentations, oversized, _ = _partition_attachments(
             [pdf, sheet, deck]
         )
 

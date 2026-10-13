@@ -61,7 +61,7 @@ describe('FileAttachmentBadgeComponent click routing', () => {
     'application/vnd.openxmlformats-officedocument.presentationml.presentation';
   const PDF_MIME = 'application/pdf';
 
-  async function mount(filename: string, mimeType: string) {
+  async function mount(filename: string, mimeType: string, sizeBytes = 1024) {
     const opened: unknown[] = [];
     const windowOpen = vi.fn();
     vi.stubGlobal('open', windowOpen);
@@ -94,7 +94,7 @@ describe('FileAttachmentBadgeComponent click routing', () => {
       uploadId: 'up1',
       filename,
       mimeType,
-      sizeBytes: 1024,
+      sizeBytes,
     });
     fixture.detectChanges();
     await fixture.whenStable();
@@ -151,5 +151,29 @@ describe('FileAttachmentBadgeComponent click routing', () => {
     expect(
       pdf.fixture.nativeElement.querySelector('button').getAttribute('aria-label'),
     ).toBe('Open paper.pdf');
+  });
+
+  describe('large document chip', () => {
+    const MB = 1024 * 1024;
+    const chip = (fixture: { nativeElement: HTMLElement }) =>
+      fixture.nativeElement.querySelector('[data-testid="reference-chip"]');
+
+    it('marks a document over the inline limit as read on demand', async () => {
+      const { fixture } = await mount('policy-manual.pdf', PDF_MIME, 38 * MB);
+
+      expect(chip(fixture)?.textContent?.trim()).toBe('Large document, read on demand');
+    });
+
+    it('leaves an inline-size document unmarked', async () => {
+      const { fixture } = await mount('paper.pdf', PDF_MIME, 4 * MB);
+
+      expect(chip(fixture)).toBeNull();
+    });
+
+    it('never marks a large deck, which has its own tools', async () => {
+      const { fixture } = await mount('deck.pptx', PPTX_MIME, 20 * MB);
+
+      expect(chip(fixture)).toBeNull();
+    });
   });
 });

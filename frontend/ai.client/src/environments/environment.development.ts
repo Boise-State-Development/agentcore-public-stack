@@ -17,5 +17,6 @@ export const environment = {
         userGrants: true,
         sessionPrewarm: true,
         clientTurnTiming: true,
+        largeDocumentAttachments: true,
     } satisfies FeatureFlags,
 };

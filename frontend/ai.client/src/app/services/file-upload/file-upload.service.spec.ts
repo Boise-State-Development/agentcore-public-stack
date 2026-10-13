@@ -14,10 +14,23 @@ import {
   QuotaExceededError,
   MAX_FILE_SIZE_BYTES,
   PPTX_MAX_FILE_SIZE_BYTES,
+  LARGE_DOCUMENT_MAX_FILE_SIZE_BYTES,
   maxFileSizeFor,
+  isReferenceDocument,
   ALLOWED_EXTENSIONS
 } from './file-upload.service';
 import { ConfigService } from '../config.service';
+import { FEATURES } from '../features';
+
+const FLAG_OFF = { largeDocumentAttachments: false };
+const FLAG_ON = { largeDocumentAttachments: true };
+
+/** A File that reports `size` without allocating it (a 50 MB string is slow). */
+function sizedFile(name: string, type: string, size: number): File {
+  const file = new File(['x'], name, { type });
+  Object.defineProperty(file, 'size', { value: size });
+  return file;
+}
 
 describe('FileUploadService', () => {
   let service: FileUploadService;
@@ -34,7 +47,8 @@ describe('FileUploadService', () => {
       providers: [
         provideHttpClient(),
         provideHttpClientTesting(),
-        { provide: ConfigService, useValue: mockConfigService }
+        { provide: ConfigService, useValue: mockConfigService },
+        { provide: FEATURES, useValue: FLAG_OFF }
       ]
     });
 
@@ -155,6 +169,32 @@ describe('FileUploadService', () => {
           type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
         });
         expect(() => service.validateFile(file)).not.toThrow();
+      });
+
+      it('should reject a large PDF while large-document attachments are off', () => {
+        const file = sizedFile('manual.pdf', 'application/pdf', 38 * 1024 * 1024);
+        expect(() => service.validateFile(file)).toThrow(FileTooLargeError);
+      });
+
+      it('should accept a large PDF and name the real ceiling when the flag is on', () => {
+        TestBed.resetTestingModule();
+        TestBed.configureTestingModule({
+          providers: [
+            provideHttpClient(),
+            provideHttpClientTesting(),
+            { provide: ConfigService, useValue: mockConfigService },
+            { provide: FEATURES, useValue: FLAG_ON }
+          ]
+        });
+        const flagged = TestBed.inject(FileUploadService);
+        httpMock = TestBed.inject(HttpTestingController);
+
+        expect(() =>
+          flagged.validateFile(sizedFile('manual.pdf', 'application/pdf', 38 * 1024 * 1024))
+        ).not.toThrow();
+        expect(() =>
+          flagged.validateFile(sizedFile('manual.pdf', 'application/pdf', 51 * 1024 * 1024))
+        ).toThrow('Maximum: 50 MB');
       });
 
       it('should still reject a .pptx above the presentation cap', () => {
@@ -468,20 +508,87 @@ describe('FileUploadService', () => {
       describe('maxFileSizeFor', () => {
         it('should return the general cap for ordinary files', () => {
           const file = new File(['c'], 'doc.pdf', { type: 'application/pdf' });
-          expect(maxFileSizeFor(file)).toBe(MAX_FILE_SIZE_BYTES);
+          expect(maxFileSizeFor(file, FLAG_OFF)).toBe(MAX_FILE_SIZE_BYTES);
         });
 
         it('should return the presentation cap by MIME type', () => {
           const file = new File(['c'], 'deck.pptx', {
             type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
           });
-          expect(maxFileSizeFor(file)).toBe(PPTX_MAX_FILE_SIZE_BYTES);
+          expect(maxFileSizeFor(file, FLAG_OFF)).toBe(PPTX_MAX_FILE_SIZE_BYTES);
         });
 
         it('should return the presentation cap by extension when MIME is empty', () => {
           const file = new File(['c'], 'deck.pptx', { type: '' });
-          expect(maxFileSizeFor(file)).toBe(PPTX_MAX_FILE_SIZE_BYTES);
+          expect(maxFileSizeFor(file, FLAG_OFF)).toBe(PPTX_MAX_FILE_SIZE_BYTES);
         });
+
+        it('should return the large-document ceiling for every document class when the flag is on', () => {
+          const documents: [string, string][] = [
+            ['manual.pdf', 'application/pdf'],
+            ['handbook.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+            ['log.txt', 'text/plain'],
+            ['notes.md', 'text/markdown'],
+            ['page.html', 'text/html'],
+            // The browser reported nothing; the extension decides, as presign will.
+            ['scan.pdf', ''],
+          ];
+          for (const [name, type] of documents) {
+            expect(maxFileSizeFor(new File(['c'], name, { type }), FLAG_ON)).toBe(
+              LARGE_DOCUMENT_MAX_FILE_SIZE_BYTES
+            );
+          }
+        });
+
+        it('should keep spreadsheets, images and decks on their own caps when the flag is on', () => {
+          expect(maxFileSizeFor(new File(['c'], 'data.csv', { type: 'text/csv' }), FLAG_ON)).toBe(
+            MAX_FILE_SIZE_BYTES
+          );
+          expect(
+            maxFileSizeFor(
+              new File(['c'], 'sales.xlsx', {
+                type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+              }),
+              FLAG_ON
+            )
+          ).toBe(MAX_FILE_SIZE_BYTES);
+          expect(maxFileSizeFor(new File(['c'], 'photo.png', { type: 'image/png' }), FLAG_ON)).toBe(
+            MAX_FILE_SIZE_BYTES
+          );
+          expect(maxFileSizeFor(new File(['c'], 'deck.pptx', { type: '' }), FLAG_ON)).toBe(
+            PPTX_MAX_FILE_SIZE_BYTES
+          );
+        });
+
+        it('should not exceed the backend large-document ceiling', () => {
+          // LARGE_DOCUMENT_MAX_BYTES in backend/src/apis/shared/files/models.py.
+          expect(LARGE_DOCUMENT_MAX_FILE_SIZE_BYTES).toBe(50 * 1024 * 1024);
+        });
+      });
+
+      describe('isReferenceDocument', () => {
+        const MB = 1024 * 1024;
+
+        it('should be a document over the inline limit and within the ceiling', () => {
+          expect(isReferenceDocument('application/pdf', 4 * MB)).toBe(false);
+          expect(isReferenceDocument('application/pdf', 4 * MB + 1)).toBe(true);
+          expect(isReferenceDocument('application/pdf', 50 * MB)).toBe(true);
+          expect(isReferenceDocument('application/pdf', 50 * MB + 1)).toBe(false);
+        });
+
+        it('should never be a spreadsheet, deck or image', () => {
+          expect(isReferenceDocument('text/csv', 10 * MB)).toBe(false);
+          expect(
+            isReferenceDocument(
+              'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+              10 * MB
+            )
+          ).toBe(false);
+          expect(isReferenceDocument('image/png', 10 * MB)).toBe(false);
+        });
+      });
+
+      describe('maxFileSizeFor (presentation cap)', () => {
 
         it('should not exceed the backend presentation cap', () => {
           // The backend is the enforcing side; if the UI cap were larger it

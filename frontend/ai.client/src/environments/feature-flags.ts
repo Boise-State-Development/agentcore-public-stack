@@ -46,4 +46,11 @@ export interface FeatureFlags {
    * `POST /telemetry/turn-timing` 404s while off).
    */
   clientTurnTiming: boolean;
+  /**
+   * Large document attachments: pdf, docx, txt, md and html files up to 50 MB
+   * (instead of 4 MB) are accepted and attached by reference, with a "Large
+   * document, read on demand" chip. Backend: LARGE_DOCUMENT_ATTACHMENTS_ENABLED
+   * (app-api; presign refuses a document over 4 MB while off).
+   */
+  largeDocumentAttachments: boolean;
 }
