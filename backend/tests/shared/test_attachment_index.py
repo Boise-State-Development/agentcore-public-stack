@@ -417,7 +417,9 @@ class TestReindexOnOpen:
         async def go():
             await file_repository.create_file(_row("mine", kb={"status": "evicted"}))
             await file_repository.create_file(_row("theirs", kb={"status": "evicted"}, user="user-2"))
-            return await attachment_reindex.requeue_evicted_attachments(SESSION, USER)
+            # The fixture's repository, not the process-wide singleton: an earlier
+            # test may have built that against another table.
+            return await attachment_reindex.requeue_evicted_attachments(SESSION, USER, repository=file_repository)
 
         assert run(go()) == 1
         assert sent == [("https://sqs.invalid/q", USER, ["mine"])]
