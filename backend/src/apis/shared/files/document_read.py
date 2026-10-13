@@ -442,7 +442,7 @@ async def search_documents(
     never as an error: Tier 1 reads work whatever the index says. A knowledge
     base that is missing or failing degrades the same way.
     """
-    from .attachment_index import SEARCH_SEARCHABLE, search_status
+    from .attachment_index import SEARCH_SEARCHABLE, is_text_indexed, search_status
     from .attachment_search import search_attachments
 
     _require_identity(user_id, session_id)
@@ -473,6 +473,19 @@ async def search_documents(
         payload["upload_id"] = upload_id
     if not_searchable:
         payload["not_searchable"] = not_searchable
+    partial = [m for m in searchable if is_text_indexed(m)]
+    if partial:
+        payload["images_pending"] = [
+            {
+                "upload_id": m.upload_id,
+                "filename": m.filename,
+                "message": (
+                    f"'{m.filename}' is searchable by its text; its images and scanned pages "
+                    "are still being indexed. page_range reads show every page in full."
+                ),
+            }
+            for m in partial
+        ]
 
     if not searchable:
         payload.update(results=[], count=0, hint=_search_fallback_hint(candidates))

@@ -189,6 +189,8 @@ class TestSearchStatus:
     @pytest.mark.parametrize("row,expected", [
         (_row(kb="indexed"), "searchable"),
         (_row(kb="indexing"), "indexing"),
+        (_row(kb=None).model_copy(update={"kb_index": {"status": "indexing", "textIndexedAt": "t"}}), "searchable"),
+        (_row(kb=None).model_copy(update={"kb_index": {"status": "evicted", "textIndexedAt": "t"}}), "evicted"),
         (_row(kb="queued"), "indexing"),
         (_row(kb=None), "indexing"),                     # prepared; the same invocation ingests next
         (_row(prep="pending", kb=None), "preparing"),
@@ -236,6 +238,18 @@ class TestQueryMode:
         assert result.mode == "query" and result.hits == 1 and result.bytes_returned == len("30 days")
         assert result.payload["results"] == [{"upload_id": "up-1", "filename": "manual.pdf", "page": 12, "text": "30 days"}]
         assert "page_range" in result.payload["hint"]
+
+    def test_a_text_indexed_document_is_searched_and_its_pending_images_noted(self, repo, monkeypatch):
+        partial = _row("up-1", kb=None).model_copy(
+            update={"kb_index": {"status": "indexing", "textIndexedAt": "2026-10-13T00:00:00+00:00"}}
+        )
+        repo.repo = FakeRepo(partial, _row("up-2", filename="b.pdf"))
+        search = AsyncMock(return_value=[])
+        monkeypatch.setattr(search_mod, "search_attachments", search)
+        payload = _query().payload
+        search.assert_awaited_once()
+        assert [e["upload_id"] for e in payload["images_pending"]] == ["up-1"]
+        assert "not_searchable" not in payload
 
     def test_documents_not_searchable_are_listed_with_their_status_alongside_hits(self, repo, monkeypatch):
         repo.repo = FakeRepo(_row("up-1"), _row("up-2", kb="indexing", filename="b.pdf"))
