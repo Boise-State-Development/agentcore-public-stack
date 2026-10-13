@@ -44,6 +44,8 @@ def pid(project, monkeypatch) -> str:
     monkeypatch.setattr(document_routes, "generate_upload_url", AsyncMock(return_value=("https://s3/put", "k")))
     monkeypatch.setattr(document_routes, "_resolve_kb_usage", AsyncMock(return_value=None))
     monkeypatch.setattr(knowledge_routes, "generate_download_url", AsyncMock(return_value="https://s3/get"))
+    # As if the harness's knowledge base were born managed (tested on its own below).
+    monkeypatch.setattr(knowledge_routes, "_require_managed_knowledge", AsyncMock())
     return created.project_id
 
 
@@ -226,3 +228,68 @@ def test_an_archived_project_takes_no_new_schedules(pid, harness_id, project):
         json={"sourceType": "drive_file", "sourceRef": doc, "interval": "daily"},
     )
     assert response.status_code == 409
+
+
+
+# ---- a project only ever founds a managed knowledge base ---------------------
+
+
+@pytest.fixture()
+def kb(monkeypatch):
+    """The born-managed trigger, the KB record and the corpus probe, as the check sees them."""
+    from types import SimpleNamespace
+
+    from apis.shared.kb_backend import records
+
+    state = SimpleNamespace(record=None, born=AsyncMock(return_value=False))
+    monkeypatch.setattr(knowledge_routes, "begin_born_managed", state.born)
+    monkeypatch.setattr(records, "get_kb_record", lambda assistant_id, app_kb_id: state.record)
+    return state
+
+
+def _check(harness_id: str = "ast-h"):
+    from types import SimpleNamespace
+
+    harness = SimpleNamespace(assistant_id=harness_id, owner_id="u-owner")
+    return asyncio.run(knowledge_routes._require_managed_knowledge(harness))
+
+
+def test_a_projects_first_file_starts_a_managed_knowledge_base(kb):
+    kb.record = {"retrievalEngine": "managed"}  # what the trigger just declared
+    _check()
+    kb.born.assert_awaited_once_with("ast-h", owner_user_id="u-owner")
+
+
+def test_a_project_never_founds_a_classic_knowledge_base(kb):
+    from fastapi import HTTPException
+
+    # The trigger answered legacy (MANAGED_KB_NEW_DEFAULT off, or the start failed).
+    with pytest.raises(HTTPException) as refused:
+        _check()
+    assert refused.value.status_code == 503
+
+
+def test_a_project_never_adds_to_a_classic_knowledge_base(kb):
+    from fastapi import HTTPException
+
+    # A harness that already holds classic documents: the trigger leaves it legacy.
+    with pytest.raises(HTTPException) as refused:
+        _check()
+    assert refused.value.status_code == 503
+
+
+def test_a_project_adds_to_its_built_managed_knowledge_base(kb):
+    kb.record = {"retrievalEngine": "managed", "awsKbId": "kb", "awsDataSourceId": "ds"}
+    _check()
+
+
+def test_the_check_guards_every_way_a_project_adds_files(pid, monkeypatch):
+    from fastapi import HTTPException
+
+    refuse = AsyncMock(side_effect=HTTPException(status_code=503, detail="no"))
+    monkeypatch.setattr(knowledge_routes, "_require_managed_knowledge", refuse)
+    base = f"/projects/{pid}/knowledge"
+    assert _upload(EDITOR, pid).status_code == 503
+    assert client(EDITOR).post(f"{base}/crawl", json={"url": "https://example.com/"}).status_code == 503
+    assert client(EDITOR).post(f"{base}/import", json={"connectorId": "gdrive", "files": [{"fileId": "f", "name": "a"}]}).status_code == 503
+    assert refuse.await_count == 3

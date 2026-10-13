@@ -72,18 +72,12 @@ def is_provisioning_managed(record: Optional[Dict[str, Any]]) -> bool:
     thought a record was ready while the trigger thought it was provisioning, the
     consumer would dead-letter the first document.
 
-    Tests the engine AND the absence of the AWS identifiers rather than
-    ``provisioningState`` alone, because the identifiers are what ingestion
-    actually needs. ``provisioningState`` flips to ``active`` in the same write
-    that attaches them (``records.attach_aws_ids``), so the two cannot disagree —
-    but reading the thing that is used keeps it that way.
+    The definition is :func:`apis.shared.kb_backend.records.awaiting_provisioning`,
+    which the crawler shares.
     """
-    from apis.shared.kb_backend.records import ENGINE_MANAGED, resolve_engine
+    from apis.shared.kb_backend.records import awaiting_provisioning
 
-    if resolve_engine(record) != ENGINE_MANAGED:
-        return False
-    record = record or {}
-    return not (record.get("awsKbId") and record.get("awsDataSourceId"))
+    return awaiting_provisioning(record)
 
 
 async def begin_born_managed(
@@ -142,6 +136,18 @@ async def begin_born_managed(
             exc_info=True,
         )
         return False
+
+
+async def initial_document_status(assistant_id: str, *, owner_user_id: str) -> str:
+    """The status a document added now starts at, starting born-managed if it is owed.
+
+    For the paths that add documents without a presigned upload: a connector
+    import and a web crawl's root page. Without this, a knowledge base whose first
+    document came from one of them was never born managed, and once it held a
+    document it stayed legacy for good.
+    """
+    provisioning = await begin_born_managed(assistant_id, owner_user_id=owner_user_id)
+    return STATUS_PROVISIONING if provisioning else "uploading"
 
 
 async def _start(assistant_id: str, owner_user_id: str, visibility: str) -> bool:

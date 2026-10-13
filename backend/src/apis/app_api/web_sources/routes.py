@@ -119,7 +119,7 @@ async def start_crawl(
     threading through — and `imported_by_user_id`/`started_by_user_id` stay
     the *acting* user, which is the point of recording them.
     """
-    await _require_edit_permission(assistant_id, current_user)
+    owner_id = await _require_edit_permission(assistant_id, current_user)
 
     try:
         normalized = assert_url_is_public(request.url)
@@ -150,6 +150,11 @@ async def start_crawl(
             ),
         )
 
+    # A crawl can be an agent's first knowledge, so it starts born-managed
+    # provisioning like a first upload does. Imported here: the kb-sync image
+    # carries this package but not kb_upgrade.
+    from apis.app_api.kb_upgrade.born_managed import initial_document_status
+
     document_id = _generate_document_id()
     provisional_filename = f"{_sanitize_filename(url_extension_hint(normalized))}.html"
     s3_key = _get_s3_key(assistant_id, document_id, provisional_filename)
@@ -160,6 +165,7 @@ async def start_crawl(
         size_bytes=0,
         s3_key=s3_key,
         document_id=document_id,
+        status=await initial_document_status(assistant_id, owner_user_id=owner_id),
         provenance=DocumentProvenance(
             source_connector_id="web",
             source_adapter_key="http",
