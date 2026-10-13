@@ -90,6 +90,7 @@ export interface AppConfig {
   skills: SkillsConfig;
   skillAuthoring: SkillAuthoringConfig;
   wordTrackedChanges: WordTrackedChangesConfig;
+  largeDocumentAttachments: LargeDocumentAttachmentsConfig;
   agents: AgentsConfig;
   agentMarketplace: AgentMarketplaceConfig;
   dictation: DictationConfig;
@@ -663,6 +664,23 @@ export interface SkillAuthoringConfig {
  * numbers must match `document_read`'s. No SPA switch.
  */
 export interface WordTrackedChangesConfig {
+  enabled: boolean;
+}
+
+/**
+ * Large document attachments (docs/specs/large-document-attachments.md): a
+ * pdf, docx, txt, md or html attachment over the 4 MB inline limit is attached
+ * by reference and read through `document_read` from sidecars a preparation
+ * Lambda builds. **Opt-in while in development**: off unless
+ * CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED=true (or a
+ * `largeDocumentAttachments.enabled: true` cdk.json context). While off, the
+ * `LargeDocumentPrepareConstruct` (prepare queue, its dead-letter queue, the
+ * Lambda) is not synthesized at all. Sets LARGE_DOCUMENT_ATTACHMENTS_ENABLED
+ * and, while on, the prepare queue's URL on **app-api only**: the Runtime reads
+ * a prepared file by its row, never by a switch, so it spends none of its
+ * environment budget.
+ */
+export interface LargeDocumentAttachmentsConfig {
   enabled: boolean;
 }
 
@@ -1459,6 +1477,13 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_WORD_TRACKED_CHANGES_ENABLED
         ? process.env.CDK_WORD_TRACKED_CHANGES_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('wordTrackedChanges')?.enabled ?? false,
+    },
+    largeDocumentAttachments: {
+      // Opt-in while in development, same parsing as skillAuthoring above:
+      // '' (an unset workflow variable) and anything but "true" are off.
+      enabled: process.env.CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED
+        ? process.env.CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('largeDocumentAttachments')?.enabled ?? false,
     },
     agents: {
       // Default ON with a kill switch (house style, mirroring memorySpaces /

@@ -33,6 +33,7 @@ import * as kms from 'aws-cdk-lib/aws-kms';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
+import * as sqs from 'aws-cdk-lib/aws-sqs';
 
 export interface PlatformComputeRefs {
   // ── Network
@@ -94,6 +95,9 @@ export interface PlatformComputeRefs {
   conversationArchiveBucket: s3.IBucket;
   fileUploadBucket: s3.IBucket;
   fileUploadTable: dynamodb.ITable;
+  /** Large-document prepare queue; app-api sends to it from complete_upload.
+   *  Absent unless `largeDocumentAttachments.enabled`. */
+  largeDocumentPrepareQueue?: sqs.IQueue;
 
   // ── RAG
   ragDocumentsBucket: s3.IBucket;

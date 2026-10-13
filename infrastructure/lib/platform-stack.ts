@@ -67,6 +67,7 @@ import { ArtifactsDistributionConstruct } from './constructs/artifacts/artifacts
 import { SkillResourcesConstruct } from './constructs/skills/skill-resources-construct';
 import { MemorySpacesConstruct } from './constructs/memory/memory-spaces-construct';
 import { MemoryMaintenanceConstruct } from './constructs/memory/memory-maintenance-construct';
+import { LargeDocumentPrepareConstruct } from './constructs/large-document/large-document-prepare-construct';
 
 // AgentCore (Memory, Code Interpreter, Browser, Gateway).
 // Pure infrastructure — no code, no out-of-band updates needed.
@@ -283,6 +284,7 @@ export class PlatformStack extends cdk.Stack {
   private _kbMigration?: KbMigrationConstruct;
   private _conversationIndex?: ConversationIndexConstruct;
   private _memoryMaintenance!: MemoryMaintenanceConstruct;
+  private _largeDocumentPrepare?: LargeDocumentPrepareConstruct;
   private _tokenEnrichment?: TokenEnrichmentConstruct;
   private _platformCostSync?: PlatformCostSyncConstruct;
   private readonly _spaBucketConstruct: SpaBucketConstruct;
@@ -461,6 +463,21 @@ export class PlatformStack extends cdk.Stack {
     const fileUpload = new FileUploadConstruct(this, 'FileUpload', { config });
     this.fileUploadBucket = fileUpload.bucket;
     this.fileUploadTable = fileUpload.table;
+
+    // ============================================================
+    // Large-document preparation (docs/specs/large-document-attachments.md
+    // §4C). Not synthesized unless the deployment opts in: no queue, no
+    // Lambda, no alarms. app-api gets the queue URL and a send grant through
+    // PlatformComputeRefs.largeDocumentPrepareQueue below.
+    // ============================================================
+    if (config.largeDocumentAttachments.enabled) {
+      this._largeDocumentPrepare = new LargeDocumentPrepareConstruct(this, 'LargeDocumentPrepare', {
+        config,
+        userFilesBucket: this.fileUploadBucket,
+        userFilesTable: this.fileUploadTable,
+        alarmTopic: this.alarmTopic,
+      });
+    }
 
     const sharedConversations = new SharedConversationsConstruct(
       this,
@@ -935,6 +952,7 @@ export class PlatformStack extends cdk.Stack {
       conversationArchiveBucket: this.conversationArchiveBucket,
       fileUploadBucket: this.fileUploadBucket,
       fileUploadTable: this.fileUploadTable,
+      largeDocumentPrepareQueue: this._largeDocumentPrepare?.queue,
       ragDocumentsBucket: this.ragDocumentsBucket,
       ragAssistantsTable: this.ragAssistantsTable,
       ragVectorBucketName: this.ragVectorBucketName,
@@ -1133,6 +1151,9 @@ export class PlatformStack extends cdk.Stack {
           : []),
         ...(this._conversationIndex
           ? [{ name: 'conversation-index', queue: this._conversationIndex.deadLetterQueue }]
+          : []),
+        ...(this._largeDocumentPrepare
+          ? [{ name: 'large-document-prepare', queue: this._largeDocumentPrepare.deadLetterQueue }]
           : []),
       ],
     });
