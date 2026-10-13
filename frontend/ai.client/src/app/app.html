@@ -129,8 +129,9 @@
     [class.artifact-pane-open]="artifactPanelOpen()">
     <main class="flex h-dvh flex-col">
       <!-- Scrollable Content. The id is a stable hook for code that reads
-           or sets the scroll position (session scroll save/restore) — the
-           window itself no longer scrolls now that this container is real. -->
+           or sets the scroll position (RouteScrollService across routes, and
+           the session page's own save/restore) — the window itself no longer
+           scrolls now that this container is real. -->
       <div id="app-scroll-container" class="flex-1 overflow-y-auto">
         <!-- A minimal-chrome route (e.g. a shared artifact) opts out of
              the centred, padded content box so its own layout can fill

@@ -14,11 +14,16 @@ export const routes: Routes = [
         path: '',
         loadComponent: () => import('./session/session.page').then(m => m.ConversationPage),
         canActivate: [authGuard],
+        // The conversation page positions the scroll container itself (remembered
+        // offset per conversation, latest turn, stick-to-bottom while streaming),
+        // so navigation scroll handling (RouteScrollService) leaves it alone.
+        data: { scroll: 'self' },
     },
     {
         path: 's/:sessionId',
         loadComponent: () => import('./session/session.page').then(m => m.ConversationPage),
         canActivate: [authGuard],
+        data: { scroll: 'self' },
     },
     {
         path: 'auth/first-boot',
