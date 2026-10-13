@@ -257,7 +257,10 @@ A copy of the `conversations` KB design, applied to attachments:
 - **Pipeline:**
   - prepare (C) enqueues `index` on success;
   - S3 *Object Deleted* events on `user-files/` originals go through an EventBridge
-    rule into the same index queue. This needs `eventBridgeEnabled` on the
+    rule into the same index queue. The rule excludes sidecar and thumbnail keys
+    (`anything-but` wildcards on `*/_derived/*` and `*/_thumb.png`), so deleting a
+    500-page PDF queues one message, not ~55; it scopes by bucket rather than by a
+    `user-files/` prefix, which EventBridge cannot AND with the exclusion. This needs `eventBridgeEnabled` on the
     user-files bucket, which is an in-place property change. That one rule covers
     user delete, session cascade delete and lifecycle expiry;
   - consumer mapping `BATCH_SIZE 10`, `MAX_CONCURRENCY 2`, for the reason recorded
@@ -315,7 +318,7 @@ pipeline would have cost about 17 (D7). The PR-1 pipeline carries it instead:
 | §4E piece | As built |
 |---|---|
 | Index queue + consumer (`maxConcurrency` 2) | The prepare queue and Lambda. A preparation that ends `ready` ingests in the same invocation. `{"action": "index" \| "check"}` messages re-sync or poll one upload. The prepare event source drops to 2 in flight while the KB is on, which also caps concurrent preparations at 2 |
-| EventBridge delete rule on `user-files/` | An S3 *Object Deleted* rule targeting the prepare queue. The handler ignores sidecar and thumbnail keys (`parse_original_key`). The bucket's EventBridge delivery is set through its own CloudFormation property rather than CDK's notification custom resource, which would cost two more resources |
+| EventBridge delete rule on `user-files/` | An S3 *Object Deleted* rule targeting the prepare queue, matching originals only: sidecar and thumbnail keys are excluded in the pattern, and the handler still ignores any key that is not an original (`parse_original_key`). The bucket's EventBridge delivery is set through its own CloudFormation property rather than CDK's notification custom resource, which would cost two more resources |
 | Daily reconciler Lambda + schedule | A schedule rule that puts `{"action": "reconcile"}` on the same queue. It walks the KB's documents: it removes orphans and documents no longer eligible, settles statuses the checks missed, and evicts inactive documents |
 | Last-use timestamp, written at most once a day | Not written. Inactivity is the session's `lastMessageAt`, which every turn already maintains (a `document_read` call is always inside a turn), or the last (re-)index, whichever is later. Nothing is added to the turn path |
 | `byte_cap` record `AST#attachments` / `OWNER#{user_id}` | That record, plus a `BYTES#{user_id}#{upload_id}` marker per document, written in one transaction: reserved once, refused over the cap, released exactly once. `byte_cap`'s own functions are keyed on an assistant's `KB#` record, so they are not reused |

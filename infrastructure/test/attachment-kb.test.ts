@@ -167,7 +167,7 @@ describe('the attachments KB in PlatformStack', () => {
     expect(deleted.EventPattern).toMatchObject({
       source: ['aws.s3'],
       'detail-type': ['Object Deleted'],
-      detail: { object: { key: [{ prefix: 'user-files/' }] } },
+      detail: { object: { key: [{ 'anything-but': { wildcard: ['*/_derived/*', '*/_thumb.png'] } }] } },
     });
     expect(reconcile.ScheduleExpression).toBe('cron(40 9 * * ? *)');
     expect(JSON.parse(reconcile.Targets[0].Input)).toEqual({ action: 'reconcile' });
