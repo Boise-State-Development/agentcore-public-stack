@@ -99,6 +99,26 @@ def large_document_attachments_enabled() -> bool:
     return os.environ.get("LARGE_DOCUMENT_ATTACHMENTS_ENABLED", "").strip().lower() == "true"
 
 
+def attachment_kb_enabled() -> bool:
+    """Whether prepared large documents are indexed into the shared
+    ``attachments`` managed knowledge base (large-document spec §4E, Tier 2).
+
+    On, the large-document pipeline ingests each prepared reference-class
+    original by its S3 location, removes it when the file is deleted, evicts it
+    after ``ATTACHMENT_KB_RETENTION_DAYS`` of inactivity, and app-api re-queues a
+    conversation's evicted documents when the conversation is opened. Off,
+    nothing is indexed and every index message is acknowledged untouched.
+    **Opt-in while the feature is in development**: only ``"true"``
+    (case-insensitive) enables it.
+
+    Set by CDK from ``CDK_ATTACHMENT_KB_ENABLED`` on the large-document Lambda
+    and app-api, and only together with ``LARGE_DOCUMENT_ATTACHMENTS_ENABLED``
+    (the config refuses one without the other). The Runtime needs it only when
+    ``document_read`` gains its search mode (PR-4).
+    """
+    return os.environ.get("ATTACHMENT_KB_ENABLED", "").strip().lower() == "true"
+
+
 def scheduled_runs_enabled() -> bool:
     """Whether the scheduled-runs surface is enabled for this environment.
 

@@ -289,14 +289,13 @@ case "$SERVICE" in
             "backend/src/lambdas/large_document_prepare"
             "backend/src/apis/shared/files"
             "backend/src/apis/shared/observability"
+            "backend/src/apis/shared/kb_backend"
         )
         MANIFESTS=(
             "backend/src/apis/shared/__init__.py"
             "backend/src/apis/shared/timestamps.py"
             "backend/src/apis/shared/aws_clients.py"
             "backend/src/apis/shared/feature_flags.py"
-            "backend/src/apis/shared/kb_backend/__init__.py"
-            "backend/src/apis/shared/kb_backend/docx_revisions.py"
         )
         PLATFORM="linux/arm64"
         SSM_KEY="/${CDK_PROJECT_PREFIX}/large-document-prepare/image-tag"

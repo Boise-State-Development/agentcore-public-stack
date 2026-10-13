@@ -32,6 +32,19 @@ dead-letter queue.
 
 **Deleted while preparing.** The final write is conditional on the row; when it
 fails the file was deleted meanwhile, so this deletes the sidecars it wrote.
+
+**The attachments knowledge base (§4E, Tier 2).** With ``ATTACHMENT_KB_ENABLED``
+on, the same queue also carries the index pipeline (``apis/shared/files/
+attachment_index.py``), because the stack had no room for a second one:
+
+* a preparation that ends ``ready`` indexes the original in the same invocation;
+* ``{"action": "index" | "check", "user_id", "upload_id"}`` re-syncs or polls one
+  upload;
+* an S3 *Object Deleted* event for an original (EventBridge) removes its document;
+* ``{"action": "reconcile"}`` (a daily schedule) sweeps the knowledge base.
+
+An index failure never undoes a preparation: Tier 1 does not depend on Tier 2.
+With the flag off, every index message is acknowledged untouched.
 """
 
 from __future__ import annotations
@@ -47,6 +60,7 @@ from typing import Any, BinaryIO, Dict, List, Optional, Tuple, Union
 from botocore.exceptions import BotoCoreError, ClientError
 
 from apis.shared.aws_clients import get_client
+from apis.shared.feature_flags import attachment_kb_enabled
 from apis.shared.files import large_document
 from apis.shared.files.document_digest import build_digest, document_digest_enabled, record_digest
 from apis.shared.files.document_read import _open_pdf, _pdf_page_text, document_format_for, docx_paragraphs
@@ -282,21 +296,112 @@ async def prepare_upload(
 
 
 # ---------------------------------------------------------------------------
+# The attachments knowledge base
+# ---------------------------------------------------------------------------
+
+
+async def index_after_prepare(user_id: str, upload_id: str, indexer: Any = None) -> str:
+    """Index a freshly prepared upload. Never raises: a failure queues a retry
+    (``{"action": "index"}``) and the preparation stands either way."""
+    from apis.shared.files import attachment_index
+
+    indexer = indexer or attachment_index.Indexer()
+    try:
+        return await attachment_index.sync_upload(indexer, user_id, upload_id)
+    except Exception:  # noqa: BLE001 - Tier 1 never waits on Tier 2
+        logger.warning("large-document-prepare: indexing failed; queued a retry", exc_info=True)
+        try:
+            indexer.send({"action": "index", "user_id": user_id, "upload_id": upload_id}, 60)
+        except Exception:  # noqa: BLE001 - the daily reconcile cannot see an unindexed row, so say so
+            logger.error("large-document-prepare: index retry could not be queued", exc_info=True)
+        return "index_retry_queued"
+
+
+async def _run_index_message(message: Dict[str, Any]) -> str:
+    from apis.shared.files import attachment_index
+
+    indexer = attachment_index.Indexer()
+    kind = message["kind"]
+    if kind == "reconcile":
+        counts = await attachment_index.reconcile(indexer)
+        return f"reconciled {counts}"
+    if kind == "check":
+        return await attachment_index.check_upload(indexer, message["user_id"], message["upload_id"], message["attempt"])
+    if kind == "deleted":
+        return await attachment_index.sync_upload(
+            indexer, message["user_id"], message["upload_id"], session_id=message["session_id"]
+        )
+    return await attachment_index.sync_upload(indexer, message["user_id"], message["upload_id"], force=message["force"])
+
+
+# ---------------------------------------------------------------------------
 # SQS entrypoint
 # ---------------------------------------------------------------------------
 
 
-def _parse(body: str) -> Optional[Tuple[str, str]]:
+def _ids(message: Dict[str, Any]) -> Optional[Tuple[str, str]]:
+    user_id, upload_id = message.get("user_id"), message.get("upload_id")
+    if not (isinstance(user_id, str) and user_id and isinstance(upload_id, str) and upload_id):
+        return None
+    return user_id, upload_id
+
+
+def _parse(body: str) -> Optional[Dict[str, Any]]:
+    """The message's kind and fields, or None when it is malformed.
+
+    Kinds: ``prepare`` (``{user_id, upload_id}``, from app-api), ``index`` and
+    ``check`` (from this pipeline and app-api's re-index on open), ``deleted``
+    (an S3 Object Deleted event for an original) and ``reconcile`` (the daily
+    schedule).
+    """
     try:
         message = json.loads(body)
     except (TypeError, ValueError):
         return None
     if not isinstance(message, dict):
         return None
-    user_id, upload_id = message.get("user_id"), message.get("upload_id")
-    if not (isinstance(user_id, str) and user_id and isinstance(upload_id, str) and upload_id):
+
+    if message.get("source") == "aws.s3" and message.get("detail-type") == "Object Deleted":
+        from apis.shared.files.attachment_index import parse_original_key
+
+        key = str(((message.get("detail") or {}).get("object") or {}).get("key") or "")
+        parsed_key = parse_original_key(key)
+        if parsed_key is None:
+            return {"kind": "ignored"}  # a sidecar, a thumbnail, or not an upload
+        user_id, session_id, upload_id = parsed_key
+        return {"kind": "deleted", "user_id": user_id, "session_id": session_id, "upload_id": upload_id}
+
+    action = message.get("action")
+    if action == "reconcile":
+        return {"kind": "reconcile"}
+    ids = _ids(message)
+    if ids is None:
         return None
-    return user_id, upload_id
+    if action is None:
+        return {"kind": "prepare", "user_id": ids[0], "upload_id": ids[1]}
+    if action == "index":
+        return {"kind": "index", "user_id": ids[0], "upload_id": ids[1], "force": bool(message.get("force"))}
+    if action == "check":
+        try:
+            attempt = max(1, int(message.get("attempt") or 1))
+        except (TypeError, ValueError):
+            attempt = 1
+        return {"kind": "check", "user_id": ids[0], "upload_id": ids[1], "attempt": attempt}
+    return None
+
+
+async def _handle(message: Dict[str, Any], final_attempt: bool) -> str:
+    kind = message["kind"]
+    if kind == "ignored":
+        return "ignored"
+    if kind == "prepare":
+        outcome = await prepare_upload(message["user_id"], message["upload_id"], final_attempt=final_attempt)
+        if outcome == "ready" and attachment_kb_enabled():
+            outcome += f", index: {await index_after_prepare(message['user_id'], message['upload_id'])}"
+        return outcome
+    if not attachment_kb_enabled():
+        return "attachment KB off; acknowledged"
+    return await _run_index_message(message)
 
 
 def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
@@ -314,10 +419,8 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         except (TypeError, ValueError):
             receive_count = 1
         try:
-            outcome = asyncio.run(
-                prepare_upload(*parsed, final_attempt=receive_count >= MAX_RECEIVE_COUNT)
-            )
-            logger.info("large-document-prepare: %s -> %s", message_id, outcome)
+            outcome = asyncio.run(_handle(parsed, final_attempt=receive_count >= MAX_RECEIVE_COUNT))
+            logger.info("large-document-prepare: %s (%s) -> %s", message_id, parsed["kind"], outcome)
         except Exception:  # noqa: BLE001 - one upload never fails its neighbours
             logger.exception("large-document-prepare: %s will be retried", message_id)
             if message_id:

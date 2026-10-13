@@ -48,6 +48,7 @@ from apis.app_api.artifacts.service import get_artifact_share_service
 from apis.shared.conversation_archive import delete_session_archive
 from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.feature_flags import (
+    attachment_kb_enabled,
     response_feedback_enabled,
     mid_turn_steering_enabled,
     browser_takeover_enabled,
@@ -580,6 +581,7 @@ async def get_session_messages_endpoint(
     session_id: str,
     limit: Optional[int] = Query(None, ge=1, le=1000, description="Maximum number of messages to return"),
     next_token: Optional[str] = Query(None, description="Pagination token for retrieving the next page of results"),
+    background_tasks: BackgroundTasks = None,
     current_user: User = Depends(get_current_user_from_session)
 ):
     """
@@ -618,6 +620,14 @@ async def get_session_messages_endpoint(
         )
 
         logger.info("Successfully retrieved session messages")
+
+        # Opening a conversation re-indexes its evicted large documents
+        # (large-document spec §4E), after the response and only on the first
+        # page, so a scroll back through history does not re-send.
+        if next_token is None and background_tasks is not None and attachment_kb_enabled():
+            from apis.app_api.files.attachment_reindex import requeue_evicted_attachments
+
+            background_tasks.add_task(requeue_evicted_attachments, session_id, user_id)
 
         return response
 

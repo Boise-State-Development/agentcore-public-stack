@@ -214,6 +214,39 @@ class FileUploadRepository:
             logger.error(f"Error updating file preparation {upload_id}: {e}")
             raise
 
+    async def update_file_kb_index(
+        self, user_id: str, upload_id: str, kb_index: dict
+    ) -> Optional[FileMetadata]:
+        """Store the attachments-KB ``kbIndex`` map on an existing file row.
+
+        ``None`` when the row no longer exists: the file was deleted, and the
+        caller's delete path (not this write) owns what happens to its index.
+        Never recreates a deleted row.
+        """
+        return self.update_file_kb_index_sync(user_id, upload_id, kb_index)
+
+    def update_file_kb_index_sync(
+        self, user_id: str, upload_id: str, kb_index: dict
+    ) -> Optional[FileMetadata]:
+        """Synchronous body of :meth:`update_file_kb_index`."""
+        try:
+            response = self._table.update_item(
+                Key={"PK": f"USER#{user_id}", "SK": f"FILE#{upload_id}"},
+                UpdateExpression="SET kbIndex = :kb, updatedAt = :now",
+                ExpressionAttributeValues={
+                    ":kb": self._convert_floats_to_decimals(dict(kb_index)),
+                    ":now": utc_now_iso(),
+                },
+                ConditionExpression="attribute_exists(PK)",
+                ReturnValues="ALL_NEW",
+            )
+            return FileMetadata.from_dynamo_item(response["Attributes"])
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                return None
+            logger.error(f"Error updating file kbIndex {upload_id}: {e}")
+            raise
+
     async def delete_file(self, user_id: str, upload_id: str) -> Optional[FileMetadata]:
         """
         Delete a file metadata record.

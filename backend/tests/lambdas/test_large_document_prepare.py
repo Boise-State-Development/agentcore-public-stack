@@ -283,3 +283,87 @@ class TestHandler:
         with patch.object(handler, "prepare_upload", side_effect=fake):
             handler.lambda_handler(self._event(json.dumps({"user_id": "u1", "upload_id": "x"}), receive_count=count), None)
         assert seen["final"] is final
+
+
+class TestAttachmentKbMessages:
+    """PR-3: the same queue carries the attachments-KB pipeline (spec §4E)."""
+
+    def _event(self, *bodies):
+        return {"Records": [{"messageId": f"m{i}", "body": b, "attributes": {}} for i, b in enumerate(bodies)]}
+
+    @staticmethod
+    def _s3_deleted(key: str) -> str:
+        return json.dumps({
+            "source": "aws.s3",
+            "detail-type": "Object Deleted",
+            "detail": {"bucket": {"name": "b"}, "object": {"key": key}, "reason": "DeleteObject"},
+        })
+
+    @pytest.mark.parametrize(
+        "body,expected",
+        [
+            (json.dumps({"user_id": "u", "upload_id": "x"}), {"kind": "prepare", "user_id": "u", "upload_id": "x"}),
+            (json.dumps({"action": "index", "user_id": "u", "upload_id": "x"}),
+             {"kind": "index", "user_id": "u", "upload_id": "x", "force": False}),
+            (json.dumps({"action": "index", "user_id": "u", "upload_id": "x", "force": True}),
+             {"kind": "index", "user_id": "u", "upload_id": "x", "force": True}),
+            (json.dumps({"action": "check", "user_id": "u", "upload_id": "x", "attempt": 3}),
+             {"kind": "check", "user_id": "u", "upload_id": "x", "attempt": 3}),
+            (json.dumps({"action": "reconcile"}), {"kind": "reconcile"}),
+        ],
+    )
+    def test_message_kinds(self, body, expected):
+        assert handler._parse(body) == expected
+
+    def test_a_deleted_original_names_its_upload_and_a_deleted_sidecar_is_ignored(self):
+        assert handler._parse(self._s3_deleted("user-files/u/s/up/manual.pdf")) == {
+            "kind": "deleted", "user_id": "u", "session_id": "s", "upload_id": "up",
+        }
+        assert handler._parse(self._s3_deleted("user-files/u/s/up/_derived/pages-0001-0010.pdf")) == {"kind": "ignored"}
+
+    @pytest.mark.parametrize("body", [json.dumps({"action": "index", "user_id": "u"}), json.dumps({"action": "nope", "user_id": "u", "upload_id": "x"})])
+    def test_malformed_index_messages_are_dropped(self, body):
+        assert handler._parse(body) is None
+
+    def test_with_the_flag_off_index_messages_are_acknowledged_untouched(self, monkeypatch):
+        monkeypatch.delenv("ATTACHMENT_KB_ENABLED", raising=False)
+        with patch.object(handler, "_run_index_message") as run_index:
+            result = handler.lambda_handler(
+                self._event(json.dumps({"action": "reconcile"}), self._s3_deleted("user-files/u/s/up/a.pdf")), None
+            )
+        assert result == {"batchItemFailures": []}
+        run_index.assert_not_called()
+
+    def test_a_ready_preparation_indexes_when_the_flag_is_on(self, monkeypatch):
+        monkeypatch.setenv("ATTACHMENT_KB_ENABLED", "true")
+        calls = []
+
+        async def prepare(user_id, upload_id, final_attempt=False):
+            return "ready"
+
+        async def index(user_id, upload_id, indexer=None):
+            calls.append((user_id, upload_id))
+            return "indexing"
+
+        with patch.object(handler, "prepare_upload", side_effect=prepare), patch.object(handler, "index_after_prepare", side_effect=index):
+            handler.lambda_handler(self._event(json.dumps({"user_id": "u", "upload_id": "x"})), None)
+        assert calls == [("u", "x")]
+
+    def test_an_index_failure_queues_a_retry_and_never_fails_the_preparation(self):
+        sent = []
+
+        class Boom:
+            def send(self, body, delay=0):
+                sent.append((body, delay))
+
+        async def sync(indexer, user_id, upload_id, **kw):
+            raise RuntimeError("throttled")
+
+        from apis.shared.files import attachment_index
+
+        with patch.object(attachment_index, "sync_upload", side_effect=sync):
+            import asyncio
+
+            outcome = asyncio.run(handler.index_after_prepare("u", "x", indexer=Boom()))
+        assert outcome == "index_retry_queued"
+        assert sent == [({"action": "index", "user_id": "u", "upload_id": "x"}, 60)]
