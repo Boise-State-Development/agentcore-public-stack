@@ -20,7 +20,7 @@ export const environment = {
         largeDocumentAttachments: true,
         folderAttachments: true,
         attachmentKb: true,
-        // Off until the `development` GitHub environment sets CDK_FOLDER_SYNC_ENABLED.
-        folderSync: false,
+        // The `development` GitHub environment sets CDK_FOLDER_SYNC_ENABLED=true.
+        folderSync: true,
     } satisfies FeatureFlags,
 };
