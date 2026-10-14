@@ -134,6 +134,16 @@ const SHELL_RESIZE_MS = 200;
 const IDLE_PLACEHOLDER = 'How can I help you today?';
 
 /**
+ * The Shared Project a conversation runs in, as the composer shows it. The
+ * name is the project's own, read from the project list, never the harness
+ * Agent's, which keeps the name the project was created with.
+ */
+export interface ComposerProject {
+  projectId: string;
+  name: string;
+}
+
+/**
  * Where dictated text goes: the composer's text either side of the caret (or
  * selection, which dictation replaces) when the user pressed Dictate.
  */
@@ -447,6 +457,13 @@ export class ChatInputComponent {
    */
   readonly showScopePicker = input<boolean>(false);
 
+  /**
+   * The project this conversation runs in, or null. Named in the placeholder:
+   * a project task has no launch card, so the empty box is what says where
+   * the first message goes.
+   */
+  readonly project = input<ComposerProject | null>(null);
+
   private readonly messageInput = viewChild<ElementRef<HTMLTextAreaElement>>('messageInput');
   private readonly fileInput = viewChild<ElementRef<HTMLInputElement>>('fileInput');
   private readonly shell = viewChild<ElementRef<HTMLElement>>('shell');
@@ -662,10 +679,20 @@ export class ChatInputComponent {
     if (this.queueHeld()) {
       return 'Send a follow-up — it goes in when you answer above';
     }
-    if (!this.isLoading()) return IDLE_PLACEHOLDER;
+    if (!this.isLoading()) return this.idlePlaceholder();
     return this.canSteer()
       ? 'Send a follow-up — it goes in at the next step'
       : 'Send a follow-up — it goes out when this response finishes';
+  });
+
+  /**
+   * The resting line, and so also where the hint rotation settles. In a
+   * project it names the project, so the box says where a message goes
+   * before anything is typed into it.
+   */
+  private readonly idlePlaceholder = computed(() => {
+    const project = this.project();
+    return project ? `Ask anything in ${project.name}…` : IDLE_PLACEHOLDER;
   });
 
   /**
@@ -837,7 +864,7 @@ export class ChatInputComponent {
       : false;
 
   protected readonly composerHints = computed<string[]>(() => {
-    const hints = [IDLE_PLACEHOLDER];
+    const hints = [this.idlePlaceholder()];
     if (this.showAgentMentions() && this.mentionService.mentionable().length > 0) {
       hints.push('Type @ to hand this turn to one of your agents');
     }

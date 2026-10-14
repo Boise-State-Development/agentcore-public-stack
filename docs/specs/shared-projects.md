@@ -501,7 +501,7 @@ Each PR targets `develop`, lands behind `PROJECTS_ENABLED` (opt-in while in deve
   **1.8b (as built):**
   - Tabs are now Overview · Tasks · Files · Members · Settings.
   - **Tasks** (`project-tasks.component.ts`):
-    - "Your tasks" pages `GET /tasks` (20 per page) with "Show more". Each task opens `/s/{id}?assistantId={harnessAgentId}`.
+    - "Your tasks" pages `GET /tasks` (20 per page) with "Show more". Each task opens `/s/{id}?project={projectId}` (originally `?assistantId={harnessAgentId}`; see `composer-project-folder-picker.md` §3.4, which still resolves).
     - "Shared with the project" lists `GET /shared-tasks` and opens each entry in `/shared/{shareId}`.
     - "Continue in my own task" calls `POST /shares/{id}/export`. It opens the fork on the project's agent, unless the project is archived; then the backend returns a plain session.
     - Revoke (only when `isMine`) confirms, calls `DELETE /shares/{id}`, then re-reads the list, because the pointer can fall back to an older share of the same task.

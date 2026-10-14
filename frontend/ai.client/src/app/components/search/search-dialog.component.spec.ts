@@ -292,6 +292,23 @@ describe('SearchDialogComponent', () => {
     expect(navigate).toHaveBeenCalledWith(['/s', 's1'], { queryParams: { assistantId: 'ast-9', m: 'msg-s1-6' } });
   });
 
+  it('opens a project task by its project, never its harness Agent', () => {
+    configure();
+    const root = render();
+    type(root, 'budget');
+    vi.advanceTimersByTime(LEXICAL_DEBOUNCE_MS);
+    respond('lexical', {
+      results: [
+        { sessionId: 's1', title: 'Budget review', lastMessageAt: iso, archived: false, assistantId: 'harness-1', projectId: 'prj_1', messageId: 'msg-s1-6', alsoMatched: [], matchKind: 'title', snippet: 'x' },
+      ],
+      textSearchAvailable: true,
+    });
+
+    key(root, 'ArrowDown');
+    key(root, 'Enter');
+    expect(navigate).toHaveBeenCalledWith(['/s', 's1'], { queryParams: { project: 'prj_1', m: 'msg-s1-6' } });
+  });
+
   it('an action opens its page', () => {
     configure();
     const root = render();

@@ -47,8 +47,9 @@ Options, in order:
 
 ### 3.4 What picking does
 
-- **A project** sets `assistantId=<harnessAgentId>` on the current URL, the same binding every Agent launcher uses. The launch card appears, the draft text and staged attachments stay, and the first turn stamps `preferences.projectId` as it does from the project page. No backend change.
-- **No project** clears `assistantId`.
+- **A project** sets `project=<projectId>` on the current URL (and clears any `assistantId`). The session page resolves the project to its harness Agent (`ConversationBindingService`: the project list, else one `GET /projects/{id}`) and sends the harness as the turn's `assistant_id`, so the backend is unchanged: it still derives the project from the harness, and the first turn stamps `preferences.projectId` as it does from the project page. The empty state shows the greeting, not the harness's launch card, and the composer's placeholder names the project ("Ask anything in {project}…"). The draft text and staged attachments stay.
+- **No project** clears `project` (and `assistantId`).
+- **Why `?project=` and not the harness id.** A project conversation runs on a hidden Agent, and an earlier revision put that Agent on the URL like any other (`?assistantId=<harnessAgentId>`). That leaked the harness into every link, and made "is this a project?" a reverse lookup over the project list. Every project link now uses `?project=`: the picker, the project page's tasks, the sidebar and search (from `preferences.projectId`), a model switch, New task, and the redirect that fills in a bare `/s/:id`. An older link with a harness in `assistantId` still opens the project and is rewritten to `?project=` once the project is known. A message sent while a `?project=` is still resolving waits for it rather than going out unbound.
 - **A folder** goes through the composer's existing folder attach: one card, polled until it settles, sent as `folder_attachment_ids`.
 - **A recent folder** (PR-2) attaches the same Drive folder afresh to this conversation. The files are downloaded and prepared again: folder rows belong to one conversation, by design (`drive-folder-attachments.md` §9). §5 is the answer for folders people return to.
 

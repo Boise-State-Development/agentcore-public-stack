@@ -187,8 +187,8 @@ export class ProjectTasksComponent {
   protected readonly busyAction = signal<'continue' | 'revoke' | null>(null);
 
   protected readonly archived = computed(() => this.project().status === 'archived');
-  /** A task opens on the project's agent, like the sidebar's `getSessionQueryParams`. */
-  protected readonly taskQueryParams = computed(() => ({ assistantId: this.project().harnessAgentId }));
+  /** A task opens in the project (`?project=`), like the sidebar's `getSessionQueryParams`. */
+  protected readonly taskQueryParams = computed(() => ({ project: this.project().projectId }));
 
   private readonly projectId = computed(() => this.project().projectId);
 

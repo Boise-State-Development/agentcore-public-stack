@@ -1,7 +1,5 @@
 import { Component, ChangeDetectionStrategy, computed, inject, input, signal } from '@angular/core';
-import { toSignal } from '@angular/core/rxjs-interop';
-import { ActivatedRoute, Router } from '@angular/router';
-import { map } from 'rxjs';
+import { Router } from '@angular/router';
 import { CdkMenuTrigger, CdkMenu, CdkMenuItem } from '@angular/cdk/menu';
 import { ConnectedPosition } from '@angular/cdk/overlay';
 import { NgIcon, provideIcons } from '@ng-icons/core';
@@ -14,7 +12,7 @@ import {
 } from '../../admin/manage-models/models/managed-model.model';
 import { ModelOptionComponent } from './components/model-option.component';
 import { FEATURES } from '../../services/features';
-import { ProjectsService } from '../../projects/services/projects.service';
+import { ConversationBindingService } from '../../session/services/session/conversation-binding.service';
 
 /**
  * What picking a different model does to the open conversation. A model switch
@@ -282,32 +280,29 @@ export class ModelDropdownComponent {
   protected modelService = inject(ModelService);
   protected sessionService = inject(SessionService);
   private router = inject(Router);
-  private route = inject(ActivatedRoute);
   private features = inject(FEATURES);
-  private projectsService = inject(ProjectsService);
+  private binding = inject(ConversationBindingService);
 
   /**
-   * The Agent this conversation is bound to. The URL's `assistantId` is the
-   * session page's single source of truth for that binding (its self-heal
-   * effect fills it in from the session's preferences), so it is read from
-   * there rather than from a second copy that could disagree.
+   * The Agent this conversation is bound to. The URL is the session page's
+   * single source of truth for that binding (its self-heal effect fills it in
+   * from the session's preferences): `?assistantId=`, or `?project=` resolved
+   * to the project's harness. Read from there rather than from a second copy
+   * that could disagree.
    */
-  private readonly boundAgentId = toSignal(
-    this.route.queryParamMap.pipe(map(params => params.get('assistantId'))),
-    { initialValue: null },
-  );
+  private readonly boundAgentId = this.binding.boundAgentId;
 
   /**
-   * The project whose harness this conversation runs on, or null. The harness
-   * is an ordinary Agent id on the URL, so it is told apart by the project list
-   * (which the sidebar loads), falling back to the session's own preferences.
+   * The project whose harness this conversation runs on, or null: the URL's
+   * project, falling back to the session's own preferences for an older link
+   * that names the harness before the project list has loaded.
    */
   private readonly boundProjectId = computed<string | null>(() => {
     if (!this.features.projects) return null;
+    const bound = this.binding.boundProject();
+    if (bound) return bound.projectId;
     const agentId = this.boundAgentId();
     if (!agentId) return null;
-    const listed = this.projectsService.projects$().find(p => p.harnessAgentId === agentId);
-    if (listed) return listed.projectId;
     const prefs = this.sessionService.currentSession().preferences;
     return prefs?.assistantId === agentId ? (prefs.projectId ?? null) : null;
   });
@@ -435,8 +430,9 @@ export class ModelDropdownComponent {
     this.modelService.setSelectedModel(model);
     if (!startsNew) return;
 
-    const assistantId = this.boundAgentId();
-    this.router.navigate(['/'], { queryParams: assistantId ? { assistantId } : {} });
+    this.router.navigate(['/'], {
+      queryParams: this.binding.queryParamsFor(this.boundAgentId(), this.boundProjectId()),
+    });
   }
 
   protected isSelected(model: ManagedModel): boolean {

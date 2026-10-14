@@ -10,13 +10,12 @@ import {
   output,
   signal,
 } from '@angular/core';
-import { toSignal } from '@angular/core/rxjs-interop';
 import { Dialog } from '@angular/cdk/dialog';
 import { CdkConnectedOverlay, CdkOverlayOrigin, ConnectedPosition } from '@angular/cdk/overlay';
 import { ActivatedRoute, Router } from '@angular/router';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroCheck, heroChevronDown, heroFolder, heroFolderPlus, heroPlus, heroRectangleStack, heroXMark } from '@ng-icons/heroicons/outline';
-import { firstValueFrom, map } from 'rxjs';
+import { firstValueFrom } from 'rxjs';
 import {
   AttachSelection,
   FileSourceBrowserDialogComponent,
@@ -33,6 +32,10 @@ import {
 } from '../../../projects/components/create-project-dialog.component';
 import { Project } from '../../../projects/models/project.model';
 import { ProjectsService } from '../../../projects/services/projects.service';
+import {
+  BindingQueryParams,
+  ConversationBindingService,
+} from '../../services/session/conversation-binding.service';
 import { FEATURES } from '../../../services/features';
 import { FolderAttachmentService, RecentFolder } from '../../../services/folder-attachments';
 
@@ -70,8 +73,8 @@ export function folderKey(connectorId: string, providerFolderId: string): string
  *
  * Scopes the work before the first message: bind the conversation to a Shared
  * Project, or attach a Drive folder. The two are different kinds of scope (spec
- * §2): a project binds the whole conversation through its harness Agent, the
- * same `assistantId` URL binding every Agent launcher uses, while a folder is an
+ * §2): a project binds the whole conversation through its harness Agent, named
+ * on the URL by the project (`?project=`, see `ConversationBindingService`), while a folder is an
  * attachment on this message, handed to the composer exactly as the `+` menu's
  * "Attach this folder" is.
  *
@@ -211,6 +214,7 @@ export class ComposerScopePickerComponent {
   private readonly injector = inject(Injector);
   private readonly features = inject(FEATURES);
   private readonly projectsService = inject(ProjectsService);
+  private readonly binding = inject(ConversationBindingService);
   private readonly fileSourceService = inject(FileSourceService);
   private readonly folderAttachments = inject(FolderAttachmentService);
 
@@ -269,26 +273,15 @@ export class ComposerScopePickerComponent {
   });
 
   /**
-   * The Agent the new conversation is bound to. The URL's `assistantId` is the
-   * session page's single source of truth for that binding, as the model
-   * picker reads it.
+   * The project the new conversation is bound to: the URL's `?project=` (or an
+   * older link's harness `assistantId`), which the session page treats as the
+   * single source of truth, as the model picker does. The name shown is the
+   * project's, never the harness Agent's, which goes stale when a project is
+   * renamed.
    */
-  private readonly boundAgentId = toSignal(
-    this.route.queryParamMap.pipe(map(params => params.get('assistantId'))),
-    { initialValue: null },
+  protected readonly selectedProject = computed<Project | null>(() =>
+    this.projectsOn() ? this.binding.boundProject() : null,
   );
-
-  /**
-   * The project whose harness that Agent is, told apart by the project list.
-   * The name shown is the project's, never the harness Agent's, which goes
-   * stale when a project is renamed.
-   */
-  protected readonly selectedProject = computed<Project | null>(() => {
-    if (!this.projectsOn()) return null;
-    const agentId = this.boundAgentId();
-    if (!agentId) return null;
-    return this.projectsService.projects$().find(p => p.harnessAgentId === agentId) ?? null;
-  });
 
   /** Active projects only: a new conversation in an archived one is refused. */
   private readonly startableProjects = computed(() =>
@@ -381,11 +374,13 @@ export class ComposerScopePickerComponent {
   });
 
   constructor() {
-    // A project already chosen on the URL needs the list to show its name. The
-    // sidebar loads it only when some conversation is in a project, so load it
-    // here when it has never been loaded; otherwise wait for the popover.
+    // A `?project=` resolves on its own (ConversationBindingService fetches
+    // it). An older link naming an Agent can only be told to be a project's
+    // harness by the list, which the sidebar loads only when some
+    // conversation is in a project, so load it here when it has never been
+    // loaded; otherwise wait for the popover.
     effect(() => {
-      if (this.boundAgentId() && this.projectsOn()) this.ensureProjects();
+      if (this.binding.queryAssistantId() && this.projectsOn()) this.ensureProjects();
     });
   }
 
@@ -488,7 +483,7 @@ export class ComposerScopePickerComponent {
     this.close(true);
     switch (option.kind) {
       case 'clear':
-        this.bindAgent(null);
+        this.navigateBinding({ project: null, assistantId: null });
         return;
       case 'project':
         this.bindProject(option.project);
@@ -513,13 +508,14 @@ export class ComposerScopePickerComponent {
   }
 
   /**
-   * Bind the new conversation to a project: its harness Agent on the URL, the
-   * binding every Agent launcher uses. The page stays where it is, so the draft
-   * and anything staged on the composer stay too.
+   * Bind the new conversation to a project: `?project=` on the URL, which the
+   * session page resolves to the project's harness Agent and sends as the
+   * turn's Agent. Replaces any Agent already chosen. The page stays where it
+   * is, so the draft and anything staged on the composer stay too.
    */
   private bindProject(project: Project): void {
     if (project.projectId === this.selectedProject()?.projectId) return;
-    this.bindAgent(project.harnessAgentId);
+    this.navigateBinding(this.binding.queryParamsFor(project.harnessAgentId, project.projectId));
   }
 
   /**
@@ -528,10 +524,10 @@ export class ComposerScopePickerComponent {
    * its message box on first render. That is where the person goes next, and
    * the same landing an Agent launcher gives, so nothing here moves focus.
    */
-  private bindAgent(assistantId: string | null): void {
+  private navigateBinding(queryParams: BindingQueryParams): void {
     void this.router.navigate([], {
       relativeTo: this.route,
-      queryParams: { assistantId },
+      queryParams,
       queryParamsHandling: 'merge',
     });
   }

@@ -51,6 +51,8 @@ function setup(options: {
   hasSession?: boolean;
   /** The URL's `assistantId` — the conversation's bound Agent. */
   assistantId?: string | null;
+  /** The URL's `?project=`. */
+  projectId?: string | null;
   projects?: Partial<Project>[];
   preferences?: SessionPreferences;
   projectsEnabled?: boolean;
@@ -83,7 +85,10 @@ function setup(options: {
     currentSession: signal({ sessionId: options.hasSession ? 's1' : '', preferences: options.preferences }),
   };
   const queryParams = new BehaviorSubject(
-    convertToParamMap(options.assistantId ? { assistantId: options.assistantId } : {}),
+    convertToParamMap({
+      ...(options.assistantId ? { assistantId: options.assistantId } : {}),
+      ...(options.projectId ? { project: options.projectId } : {}),
+    }),
   );
   const navigate = vi.fn();
 
@@ -356,7 +361,7 @@ describe('ModelDropdownComponent', () => {
       pick(fixture, 'Beta');
 
       expect(setSelectedModel).toHaveBeenCalledWith(twoModels[1]);
-      expect(navigate).toHaveBeenCalledWith(['/'], { queryParams: {} });
+      expect(navigate).toHaveBeenCalledWith(['/'], { queryParams: { project: null, assistantId: null } });
     });
 
     it('starts a new task in the same project from a project task (B8)', () => {
@@ -370,14 +375,26 @@ describe('ModelDropdownComponent', () => {
       });
       pick(fixture, 'Beta');
 
-      expect(navigate).toHaveBeenCalledWith(['/'], { queryParams: { assistantId: 'harness-1' } });
+      expect(navigate).toHaveBeenCalledWith(['/'], { queryParams: { project: 'p1', assistantId: null } });
+    });
+
+    it('keeps a `?project=` conversation in its project, by project id', () => {
+      const { fixture, navigate } = setup({
+        featured: twoModels,
+        hasSession: true,
+        projectId: 'p1',
+        projects: [project],
+      });
+      pick(fixture, 'Beta');
+
+      expect(navigate).toHaveBeenCalledWith(['/'], { queryParams: { project: 'p1', assistantId: null } });
     });
 
     it('starts a new session with the same agent from an agent conversation', () => {
       const { fixture, navigate } = setup({ featured: twoModels, hasSession: true, assistantId: 'agent-7' });
       pick(fixture, 'Beta');
 
-      expect(navigate).toHaveBeenCalledWith(['/'], { queryParams: { assistantId: 'agent-7' } });
+      expect(navigate).toHaveBeenCalledWith(['/'], { queryParams: { project: null, assistantId: 'agent-7' } });
     });
 
     it('stays put when re-picking the current model', () => {

@@ -69,12 +69,13 @@ describe('ProjectTasksComponent', () => {
     return { fixture, el: fixture.nativeElement as HTMLElement };
   }
 
-  it('lists the caller’s tasks, each opening on the project’s agent', async () => {
+  it('lists the caller’s tasks, each opening in the project', async () => {
     const { el } = await render();
     expect(api.tasks).toHaveBeenCalledWith('prj_1', 20, null);
     const link = el.querySelector<HTMLAnchorElement>('a[href^="/s/"]');
     expect(link?.textContent).toContain('Draft the memo');
-    expect(link?.getAttribute('href')).toBe('/s/s1?assistantId=ast-1');
+    // The project, not its hidden harness Agent: the session page resolves one to the other.
+    expect(link?.getAttribute('href')).toBe('/s/s1?project=prj_1');
   });
 
   it('pages with the value cursor and appends', async () => {
@@ -122,7 +123,7 @@ describe('ProjectTasksComponent', () => {
     expect(rows.find(r => r.textContent?.includes('Roster diff'))!.querySelector('[data-testid="scheduled-tag"]')).toBeNull();
   });
 
-  it('continues a shared task as a fork on the project’s agent', async () => {
+  it('continues a shared task as a fork in the project', async () => {
     shares.exportSharedConversation.mockResolvedValue({ sessionId: 'fork_1', title: 'Term dates (shared)' });
     const router = TestBed.inject(Router);
     const navigate = vi.spyOn(router, 'navigate').mockResolvedValue(true);
@@ -132,7 +133,7 @@ describe('ProjectTasksComponent', () => {
     await fixture.whenStable();
     expect(shares.exportSharedConversation).toHaveBeenCalledWith('sh_2', { suppressErrorToast: true });
     expect(sessions.refreshSessions).toHaveBeenCalled();
-    expect(navigate).toHaveBeenCalledWith(['/s', 'fork_1'], { queryParams: { assistantId: 'ast-1' } });
+    expect(navigate).toHaveBeenCalledWith(['/s', 'fork_1'], { queryParams: { project: 'prj_1' } });
   });
 
   it('forks from an archived project without the agent (the backend returns a plain session)', async () => {

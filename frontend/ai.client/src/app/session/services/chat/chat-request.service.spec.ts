@@ -434,7 +434,7 @@ describe('ChatRequestService', () => {
       await service.submitChatRequest('@Grader hi', null, undefined, 'assistant1', 'agent-9');
 
       const navigation = mockRouter.navigate.mock.calls[0];
-      expect(navigation[1].queryParams).toEqual({ assistantId: 'assistant1' });
+      expect(navigation[1].queryParams).toEqual({ project: null, assistantId: 'assistant1' });
     });
 
     it('an unmentioned turn carries no flag at all', async () => {

@@ -32,6 +32,9 @@ import { McpAppConsentService } from './services/mcp-apps/mcp-app-consent.servic
 import { Dialog } from '@angular/cdk/dialog';
 import { AssistantService } from '../assistants/services/assistant.service';
 import { Assistant } from '../assistants/models/assistant.model';
+import { FEATURES } from '../services/features';
+import { ComposerProject } from './components/chat-input/chat-input.component';
+import { ConversationBindingService } from './services/session/conversation-binding.service';
 import { AgentService } from '../agents/services/agent.service';
 import { AgentMentionService } from '../agents/services/agent-mention.service';
 import { routeMention } from './services/chat/mention-routing';
@@ -91,6 +94,8 @@ export class ConversationPage implements OnDestroy {
   private composerDrafts = inject(ComposerDraftStorageService);
   private agentMentionService = inject(AgentMentionService);
   private toast = inject(ToastService);
+  private features = inject(FEATURES);
+  private binding = inject(ConversationBindingService);
   private platformId = inject(PLATFORM_ID);
   private isBrowser = isPlatformBrowser(this.platformId);
 
@@ -128,10 +133,11 @@ export class ConversationPage implements OnDestroy {
   private lastJumpedTo: string | null = null;
 
   sessionId = signal<string | null>(null);
-  assistantIdFromQuery = signal<string | null>(null);
 
   assistant = signal<Assistant | null>(null);
   assistantError = signal<string | null>(null);
+  /** The empty state's error line: the Agent's load, else a `?project=` that would not resolve. */
+  readonly bindingError = computed(() => this.assistantError() ?? this.binding.projectError());
   // Agent Designer: the governed Agent behind this conversation (agentId ==
   // assistantId), when the /agents surface is enabled and it resolves. Drives
   // the per-primitive picker locks; null for plain chat or a legacy assistant.
@@ -225,10 +231,35 @@ export class ConversationPage implements OnDestroy {
     embeddedMode: false,
   };
 
+  /**
+   * The Shared Project this conversation runs in, for the composer's
+   * placeholder and the empty state's layout. The URL names it (`?project=`,
+   * resolved by `ConversationBindingService`), so a project picked from the
+   * composer shows at once rather than after its harness Agent loads, under the
+   * project's current name. An older link that names the harness in
+   * `assistantId` resolves through the project list; until that list loads, the
+   * loaded harness's own `projectId` stands in, with the harness's (possibly
+   * older) name. That fallback only trusts an Agent matching the URL: on a
+   * switch, `assistant()` still holds the previous one until the new load lands.
+   */
+  readonly composerProject = computed<ComposerProject | null>(() => {
+    const bound = this.binding.boundProject();
+    if (bound) return { projectId: bound.projectId, name: bound.name };
+    const assistant = this.assistant();
+    if (
+      this.features.projects &&
+      assistant?.projectId &&
+      assistant.assistantId === this.binding.boundAgentId()
+    ) {
+      return { projectId: assistant.projectId, name: assistant.name };
+    }
+    return null;
+  });
+
   // Computed signal to determine if assistant can be closed
-  // Only allow closing if: no messages exist AND assistant is from query param (not session preferences)
+  // Only allow closing if: no messages exist AND the binding is on the URL (not session preferences)
   readonly canCloseAssistant = computed(() => {
-    return !this.hasMessages() && !!this.assistantIdFromQuery() && !!this.assistant();
+    return !this.hasMessages() && this.binding.hasUrlBinding() && !!this.assistant();
   });
 
   // Show skeleton when loading a session that matches current route and has no messages yet
@@ -339,7 +370,9 @@ export class ConversationPage implements OnDestroy {
       }
     });
 
-    // Single source of truth: the URL's `assistantId` query parameter.
+    // Single source of truth: the URL's binding — `?assistantId=` for an
+    // Agent, `?project=` for a Shared Project, whose harness Agent
+    // `ConversationBindingService` resolves.
     //
     // The URL is authoritative for which assistant is attached to the
     // current view. Session preferences on the backend still record the
@@ -350,7 +383,7 @@ export class ConversationPage implements OnDestroy {
     // entire class of races around metadata fetch timing and component
     // recreation (see #205).
     effect(() => {
-      const queryAssistantId = this.assistantIdFromQuery();
+      const queryAssistantId = this.binding.boundAgentId();
       const loadedAssistant = this.assistant();
 
       if (queryAssistantId) {
@@ -382,35 +415,49 @@ export class ConversationPage implements OnDestroy {
       this.clearAgentBindingLocks();
     });
 
-    // Self-heal effect: when the user lands on `/s/:id` without an
-    // `assistantId` query param but the session's stored preferences carry
-    // one (bookmarks, legacy URLs, shared session links), redirect to the
-    // same session with the param filled in. From that point on, the URL
-    // is the sole source of truth for the assistant-loading effect above.
+    // Self-heal effect: when the user lands on `/s/:id` without a binding
+    // on the URL but the session's stored preferences carry one (bookmarks,
+    // legacy URLs, shared session links), redirect to the same session with
+    // it filled in: `?project=` for a project task, else `?assistantId=`.
+    // From that point on, the URL is the sole source of truth for the
+    // assistant-loading effect above.
     //
     // Intentionally narrow: we only redirect when the URL is empty. If the
-    // URL already carries an `assistantId`, we trust it — including when
-    // it differs from preferences (the backend will reject a conflict on
-    // the next message).
+    // URL already carries a binding, we trust it — including when it
+    // differs from preferences (the backend will reject a conflict on the
+    // next message).
     effect(() => {
       const session = this.sessionConversation();
-      const sessionAssistantId = session?.preferences?.assistantId;
+      const preferences = session?.preferences;
       const currentSessionId = this.sessionId();
-      const queryAssistantId = this.assistantIdFromQuery();
 
       if (
         currentSessionId &&
         session?.sessionId === currentSessionId &&
-        sessionAssistantId &&
-        !queryAssistantId
+        (preferences?.assistantId || preferences?.projectId) &&
+        !this.binding.hasUrlBinding()
       ) {
         this.router.navigate([], {
           relativeTo: this.route,
-          queryParams: { assistantId: sessionAssistantId },
+          queryParams: this.binding.queryParamsFor(preferences.assistantId, preferences.projectId),
           queryParamsHandling: 'merge',
           replaceUrl: true,
         });
       }
+    });
+
+    // An older link names a project's harness Agent in `assistantId`. It
+    // resolves as-is; this only rewrites the address to `?project=`, the one
+    // shape a project conversation's URL takes, once the project is known.
+    effect(() => {
+      const project = this.binding.boundProject();
+      if (!project || this.binding.queryProjectId() || !this.binding.queryAssistantId()) return;
+      this.router.navigate([], {
+        relativeTo: this.route,
+        queryParams: this.binding.queryParamsFor(project.harnessAgentId, project.projectId),
+        queryParamsHandling: 'merge',
+        replaceUrl: true,
+      });
     });
 
     // Subscribe to route parameter changes.
@@ -578,15 +625,13 @@ export class ConversationPage implements OnDestroy {
       }
     });
 
-    // Subscribe to query parameter changes for assistantId, and for `m` — the
-    // turn a search result points at. A new `m` on the conversation already
+    // Subscribe to query parameter changes for `m` — the turn a search
+    // result points at. (The binding params are read by
+    // ConversationBindingService.) A new `m` on the conversation already
     // open (no route-param change, so no restore) scrolls straight to it; on a
     // fresh navigation the element is not rendered yet, so this misses and
     // restoreScrollPosition handles it once the messages land.
     this.queryParamSubscription = this.route.queryParamMap.subscribe(params => {
-      const assistantId = params.get('assistantId');
-      this.assistantIdFromQuery.set(assistantId);
-
       const messageId = params.get('m');
       const sessionId = this.sessionId();
       if (this.isBrowser && messageId && sessionId) {
@@ -704,19 +749,29 @@ export class ConversationPage implements OnDestroy {
       });
   }
 
-  onMessageSubmitted(message: { content: string, timestamp: Date, fileUploadIds?: string[], mentionAgentId?: string, invokedSkillIds?: string[], folders?: FolderAttachmentData[] }) {
+  async onMessageSubmitted(message: { content: string, timestamp: Date, fileUploadIds?: string[], mentionAgentId?: string, invokedSkillIds?: string[], folders?: FolderAttachmentData[] }) {
     // Use the effective session ID (route sessionId or staged sessionId)
     const sessionIdToUse = this.effectiveSessionId();
 
-    // The URL's `assistantId` query param is the sole source of truth. It's
-    // set on initial navigation (assistant card, share link) and kept in
-    // sync by the self-heal redirect in the constructor for existing
-    // sessions opened without one. Falling back to the in-memory
-    // `assistant()` signal guards the brief window during the `/` → `/s/:id`
-    // route transition where the component is recreated and the query
-    // param hasn't yet propagated to the new instance.
-    const boundAssistantId =
-      this.assistantIdFromQuery() || this.assistant()?.assistantId || undefined;
+    // The URL's binding is the sole source of truth. It's set on initial
+    // navigation (assistant card, project, share link) and kept in sync by
+    // the self-heal redirect in the constructor for existing sessions opened
+    // without one. Falling back to the in-memory `assistant()` signal guards
+    // the brief window during the `/` → `/s/:id` route transition where the
+    // component is recreated and the query param hasn't yet propagated to the
+    // new instance.
+    //
+    // A `?project=` still resolving to its harness is waited for: sent now,
+    // the message would go out unbound and start a plain chat. Only that case
+    // awaits, so every other send stays synchronous.
+    const urlAgentId = this.binding.projectPending()
+      ? await this.binding.resolveBoundAgentId()
+      : this.binding.boundAgentId();
+    if (this.binding.queryProjectId() && !urlAgentId) {
+      this.toast.error('This project isn’t available', 'Your message was not sent.');
+      return;
+    }
+    const boundAssistantId = urlAgentId || this.assistant()?.assistantId || undefined;
 
     // An `@`-mention means "talk to this Agent", and always yields a conversation the
     // Agent keeps its tools in — never the one-turn borrow that used to leave the *next*
@@ -783,7 +838,7 @@ export class ConversationPage implements OnDestroy {
   onContinueRequested() {
     const sessionIdToUse = this.effectiveSessionId();
     const assistantIdToUse =
-      this.assistantIdFromQuery() || this.assistant()?.assistantId || undefined;
+      this.binding.boundAgentId() || this.assistant()?.assistantId || undefined;
     this.chatRequestService
       .continueTruncatedTurn(sessionIdToUse, assistantIdToUse)
       .catch((error) => {
@@ -865,10 +920,10 @@ export class ConversationPage implements OnDestroy {
       this.sessionService.addSessionToCache(sessionId, userId);
       // Carry the assistant id forward if one is attached to this view —
       // keeps the URL the single source of truth after voice ends.
-      const assistantId = this.assistantIdFromQuery() || this.assistant()?.assistantId;
+      const assistantId = this.binding.boundAgentId() || this.assistant()?.assistantId;
       this.router.navigate(['s', sessionId], {
         replaceUrl: true,
-        queryParams: assistantId ? { assistantId } : {},
+        queryParams: this.binding.queryParamsFor(assistantId),
       });
     }
 
@@ -993,12 +1048,12 @@ export class ConversationPage implements OnDestroy {
   }
 
   /**
-   * Clear assistantId from URL query parameters
+   * Clear the binding (`assistantId` or `project`) from URL query parameters
    */
   private clearAssistantIdFromUrl(): void {
     this.router.navigate([], {
       relativeTo: this.route,
-      queryParams: { assistantId: null },
+      queryParams: { assistantId: null, project: null },
       queryParamsHandling: 'merge'
     });
   }
@@ -1016,16 +1071,17 @@ export class ConversationPage implements OnDestroy {
       // Already on a new session page — just reset signals to clear messages
       this.assistant.set(null);
       this.assistantError.set(null);
-      // Re-set assistantId query param to trigger the assistant load effect
+      // Re-set the binding query param to trigger the assistant load effect
       this.router.navigate(['/'], {
-        queryParams: { assistantId },
+        queryParams: this.binding.queryParamsFor(assistantId),
         queryParamsHandling: 'replace',
       });
       return;
     }
 
     // Navigate from an existing session to a fresh one with the assistant
-    this.router.navigate(['/'], { queryParams: { assistantId } });
+    // (`?project=` when it is a project's harness)
+    this.router.navigate(['/'], { queryParams: this.binding.queryParamsFor(assistantId) });
   }
 
   /**

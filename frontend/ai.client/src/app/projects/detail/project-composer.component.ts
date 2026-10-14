@@ -2,6 +2,7 @@ import { ChangeDetectionStrategy, Component, computed, inject, input, signal } f
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroArrowUp } from '@ng-icons/heroicons/outline';
 import { ChatRequestService } from '../../session/services/chat/chat-request.service';
+import { ConversationBindingService } from '../../session/services/session/conversation-binding.service';
 import { Project } from '../models/project.model';
 
 /**
@@ -59,6 +60,7 @@ import { Project } from '../models/project.model';
 })
 export class ProjectComposerComponent {
   private chatRequest = inject(ChatRequestService);
+  private binding = inject(ConversationBindingService);
 
   readonly project = input.required<Project>();
   /** What the task will run on, shown beneath the composer; null hides it. */
@@ -86,6 +88,8 @@ export class ProjectComposerComponent {
     this.sending.set(true);
     this.sendError.set(null);
     try {
+      // Known to the binding first, so the new conversation opens as `?project=`.
+      this.binding.knowProject(this.project());
       await this.chatRequest.submitChatRequest(this.draft().trim(), null, undefined, this.project().harnessAgentId);
       this.draft.set('');
     } catch {
