@@ -860,8 +860,7 @@ export class KnowledgeBaseSectionComponent implements OnDestroy {
         this.toast.error('Unexpected response from the server.');
         return;
       }
-      this.consentService.requestConsent(source.providerId, result.authorizationUrl);
-      void this.consentService.openConsentPopup(source.providerId);
+      void this.consentService.startUserConsent(source.providerId, result.authorizationUrl);
       this.connectPhase.set('awaiting');
     } catch (error) {
       this.connectingProviderId.set(null);
@@ -1501,8 +1500,7 @@ export class KnowledgeBaseSectionComponent implements OnDestroy {
         this.toast.error('Unexpected response from the server.');
         return;
       }
-      this.consentService.requestConsent(providerId, result.authorizationUrl);
-      void this.consentService.openConsentPopup(providerId);
+      void this.consentService.startUserConsent(providerId, result.authorizationUrl);
       this.reconnectAwaiting = true;
     } catch (error) {
       this.finishReconnect();

@@ -64,8 +64,7 @@ describe('ProjectFilesComponent', () => {
     completion: signal(null),
     inFlightProviders: signal(new Set<string>()),
     acknowledgeCompletion: vi.fn(),
-    requestConsent: vi.fn(),
-    openConsentPopup: vi.fn(),
+    startUserConsent: vi.fn(),
   };
   const toast = { success: vi.fn(), error: vi.fn() };
 
@@ -284,8 +283,7 @@ describe('ProjectFilesComponent', () => {
     const button = Array.from(el.querySelectorAll('button')).find(b => b.textContent?.includes('Connect to Google Drive'))!;
     button.click();
     await fixture.whenStable();
-    expect(consent.requestConsent).toHaveBeenCalledWith('gdrive', 'https://accounts/consent');
-    expect(consent.openConsentPopup).toHaveBeenCalledWith('gdrive');
+    expect(consent.startUserConsent).toHaveBeenCalledWith('gdrive', 'https://accounts/consent');
     expect(dialog.open).not.toHaveBeenCalled();
   });
 

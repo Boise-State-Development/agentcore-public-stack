@@ -100,8 +100,7 @@ function quietCollaborators() {
         completion: signal(null),
         inFlightProviders: signal(new Set<string>()),
         acknowledgeCompletion: vi.fn(),
-        openConsentPopup: vi.fn(),
-        requestConsent: vi.fn(),
+        startUserConsent: vi.fn(),
       },
     },
   ];

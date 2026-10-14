@@ -58,7 +58,14 @@ describe('ComposerAddMenuComponent', () => {
   let disconnect: ReturnType<typeof vi.fn>;
   let completion: ReturnType<typeof signal<unknown>>;
   let inFlightProviders: ReturnType<typeof signal<Set<string>>>;
-  let consent: { requestConsent: ReturnType<typeof vi.fn>; openConsentPopup: ReturnType<typeof vi.fn>; acknowledgeCompletion: ReturnType<typeof vi.fn> };
+  let consent: {
+    startUserConsent: ReturnType<typeof vi.fn>;
+    openConsentPopup: ReturnType<typeof vi.fn>;
+    isBlocked: ReturnType<typeof vi.fn>;
+    acknowledgeCompletion: ReturnType<typeof vi.fn>;
+  };
+  let connectorsLoading: ReturnType<typeof signal<boolean>>;
+  let connectorList: ReturnType<typeof signal<unknown[] | undefined>>;
   let agentLocked: ReturnType<typeof signal<boolean>>;
   let tools: ReturnType<typeof signal<Tool[]>>;
   let states: Record<string, 'connected' | 'disconnected' | 'unknown'>;
@@ -76,15 +83,22 @@ describe('ComposerAddMenuComponent', () => {
     disconnect = vi.fn(async () => undefined);
     completion = signal<unknown>(null);
     inFlightProviders = signal(new Set<string>());
+    // The real service marks the provider in flight while its popup is open.
+    const openPopup = vi.fn(async (id: string) => {
+      inFlightProviders.update((set) => new Set(set).add(id));
+      return true;
+    });
     consent = {
-      requestConsent: vi.fn(),
-      // The real service marks the provider in flight while its popup is open.
-      openConsentPopup: vi.fn(async (id: string) => {
-        inFlightProviders.update((set) => new Set(set).add(id));
-        return true;
-      }),
+      startUserConsent: vi.fn(async (id: string) => openPopup(id)),
+      openConsentPopup: openPopup,
+      isBlocked: vi.fn(() => false),
       acknowledgeCompletion: vi.fn(),
     };
+    connectorsLoading = signal(false);
+    connectorList = signal<unknown[] | undefined>([
+      { providerId: 'google', displayName: 'Google', providerType: 'google', iconName: 'x', scopes: [] },
+      { providerId: 'slack', displayName: 'Slack', providerType: 'slack', iconName: 'x', scopes: [] },
+    ]);
     agentLocked = signal(false);
     tools = signal<Tool[]>([
       tool({ toolId: 'web_search', displayName: 'Web Search', isEnabled: true }),
@@ -114,12 +128,7 @@ describe('ComposerAddMenuComponent', () => {
         {
           provide: UserConnectorsService,
           useValue: {
-            connectorsResource: {
-              value: signal([
-                { providerId: 'google', displayName: 'Google', providerType: 'google', iconName: 'x', scopes: [] },
-                { providerId: 'slack', displayName: 'Slack', providerType: 'slack', iconName: 'x', scopes: [] },
-              ]),
-            },
+            connectorsResource: { value: connectorList, isLoading: connectorsLoading },
             ensureLoaded: vi.fn(),
             initiateConsent,
             disconnect,
@@ -130,6 +139,7 @@ describe('ComposerAddMenuComponent', () => {
           useValue: {
             ensure: ensureStatus,
             stateFor: (id: string) => states[id] ?? 'unknown',
+            isKnown: (id: string) => id in states,
             markConnected,
             markDisconnected,
           },
@@ -340,8 +350,8 @@ describe('ComposerAddMenuComponent', () => {
     await settle();
 
     expect(initiateConsent).toHaveBeenCalledWith('slack');
-    expect(consent.requestConsent).toHaveBeenCalledWith('slack', 'https://auth.example/x');
-    expect(consent.openConsentPopup).toHaveBeenCalledWith('slack');
+    // User-initiated, so the conversation draws no consent card for it.
+    expect(consent.startUserConsent).toHaveBeenCalledWith('slack', 'https://auth.example/x');
     expect(row().textContent).toContain('Awaiting consent');
     expect(row().getAttribute('aria-disabled')).toBe('true');
     // The menu stays open through it.
@@ -353,6 +363,67 @@ describe('ComposerAddMenuComponent', () => {
     expect(consent.acknowledgeCompletion).toHaveBeenCalled();
     expect(row().getAttribute('aria-disabled')).toBeNull();
     expect(row().textContent).not.toContain('Awaiting consent');
+    expect(TestBed.inject(ToastService).success).toHaveBeenCalledWith('Slack connected.');
+  });
+
+  it('a blocked popup offers to open the sign-in again from a click', async () => {
+    consent.startUserConsent.mockResolvedValueOnce(false);
+    consent.isBlocked.mockReturnValue(true);
+    await openMenu();
+    await openSubmenu('composer-add-connectors');
+    const connectorsMenu = () => overlay('composer-connectors-menu')!;
+    const row = () => connectorsMenu().querySelector('[data-connector-id="slack"]') as HTMLButtonElement;
+
+    row().click();
+    await settle();
+
+    expect(row().textContent).toContain('Pop-up blocked');
+    // Not busy: flipping it again retries from the start.
+    expect(row().getAttribute('aria-disabled')).toBeNull();
+    const retry = connectorsMenu().querySelector('[data-retry-connector-id="slack"]') as HTMLButtonElement;
+    expect(retry.getAttribute('aria-label')).toBe('Open sign-in for Slack');
+
+    retry.click();
+    await settle();
+
+    expect(consent.openConsentPopup).toHaveBeenCalledWith('slack');
+    // The menu stays open, and the row reads as any sign-in in flight.
+    expect(row().textContent).toContain('Awaiting consent');
+    expect(connectorsMenu().querySelector('[data-retry-connector-id="slack"]')).toBeNull();
+    // A completion while blocked still settles the row and says so.
+    completion.set({ providerId: 'slack', status: 'success' });
+    await settle();
+    expect(consent.acknowledgeCompletion).toHaveBeenCalled();
+    expect(TestBed.inject(ToastService).success).toHaveBeenCalledWith('Slack connected.');
+  });
+
+  it('draws placeholder rows while the connector list loads', async () => {
+    connectorList.set(undefined);
+    connectorsLoading.set(true);
+    await openMenu();
+    await openSubmenu('composer-add-connectors');
+
+    const connectorsMenu = overlay('composer-connectors-menu')!;
+    const loading = connectorsMenu.querySelector('[data-testid="composer-connectors-loading"]')!;
+    expect(loading.getAttribute('role')).toBe('status');
+    expect(loading.textContent).toContain('Loading connectors');
+    expect(connectorsMenu.textContent).not.toContain('No connectors available');
+  });
+
+  it('a row whose status has not been probed yet is a skeleton, not a switch', async () => {
+    delete states['slack'];
+    await openMenu();
+    await openSubmenu('composer-add-connectors');
+    const row = overlay('composer-connectors-menu')!.querySelector('[data-connector-id="slack"]') as HTMLButtonElement;
+
+    expect(row.querySelector('[data-testid="connector-state-skeleton"]')).not.toBeNull();
+    expect(row.textContent).toContain('Checking connection');
+    expect(row.getAttribute('aria-busy')).toBe('true');
+    expect(row.getAttribute('aria-disabled')).toBe('true');
+
+    row.click();
+    await settle();
+    expect(initiateConsent).not.toHaveBeenCalled();
   });
 
   it('a consent already vaulted switches on without a popup', async () => {
@@ -363,7 +434,7 @@ describe('ComposerAddMenuComponent', () => {
     (overlay('composer-connectors-menu')!.querySelector('[data-connector-id="slack"]') as HTMLButtonElement).click();
     await settle();
 
-    expect(consent.openConsentPopup).not.toHaveBeenCalled();
+    expect(consent.startUserConsent).not.toHaveBeenCalled();
     expect(markConnected).toHaveBeenCalledWith('slack');
   });
 

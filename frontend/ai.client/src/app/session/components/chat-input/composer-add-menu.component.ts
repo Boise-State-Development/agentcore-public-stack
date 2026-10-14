@@ -43,10 +43,14 @@ import { MAX_FILES_PER_MESSAGE } from '../../../services/file-upload';
 import { SkillCommand, SkillCommandService } from '../../../services/skill/skill-command.service';
 import { ToastService } from '../../../services/toast/toast.service';
 import { Tool, ToolService, isRetiring } from '../../../services/tool/tool.service';
-import { MenuToggleItemDirective } from './menu-toggle-item.directive';
+import { MenuKeepOpenItemDirective, MenuToggleItemDirective } from './menu-toggle-item.directive';
 
-/** What a connector row is doing while its switch is not yet settled. */
-type ConnectorPhase = 'initiating' | 'awaiting' | 'disconnecting';
+/**
+ * What a connector row is doing while its switch is not yet settled.
+ * `blocked` is the one that is not busy: the browser refused the popup, so the
+ * row offers to open it again from a click, which the browser will allow.
+ */
+type ConnectorPhase = 'initiating' | 'awaiting' | 'blocked' | 'disconnecting';
 
 /**
  * The composer's `+` menu: everything a person can add to the message or
@@ -57,6 +61,8 @@ type ConnectorPhase = 'initiating' | 'awaiting' | 'disconnecting';
  * mapped to a file-source adapter, such as Google Drive), then the three
  * Customize tabs as submenus — Skills to run, Tools to switch on or off, and
  * Connectors as switches too: on runs the consent popup, off disconnects. The
+ * sign-in is a user-initiated one, so the conversation never draws a consent
+ * card for it; the row carries its progress and a toast its outcome. The
  * `/` and `@` autocompletes stay; this is the discoverable path to the same
  * things.
  *
@@ -73,7 +79,15 @@ type ConnectorPhase = 'initiating' | 'awaiting' | 'disconnecting';
 @Component({
   selector: 'app-composer-add-menu',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CdkMenu, CdkMenuItem, CdkMenuTrigger, MenuToggleItemDirective, NgIcon, TooltipDirective],
+  imports: [
+    CdkMenu,
+    CdkMenuItem,
+    CdkMenuTrigger,
+    MenuKeepOpenItemDirective,
+    MenuToggleItemDirective,
+    NgIcon,
+    TooltipDirective,
+  ],
   providers: [
     provideIcons({
       heroArrowTopRightOnSquare,
@@ -141,6 +155,11 @@ export class ComposerAddMenuComponent {
     () => this.connectorsService.connectorsResource.value() ?? [],
   );
 
+  /** The list itself is still on its way: draw placeholder rows, not "none". */
+  protected readonly connectorsLoading = computed(
+    () => this.connectorsService.connectorsResource.isLoading() && this.connectors().length === 0,
+  );
+
   /**
    * What a connector row is in the middle of, keyed by provider. `initiating`
    * is the consent request in flight, `awaiting` the popup open, `disconnecting`
@@ -183,12 +202,18 @@ export class ComposerAddMenuComponent {
     effect(() => {
       const completion = this.consentService.completion();
       if (!completion?.providerId) return;
-      if (this.connectorPhases()[completion.providerId] !== 'awaiting') return;
+      const phase = this.connectorPhases()[completion.providerId];
+      if (phase !== 'awaiting' && phase !== 'blocked') return;
       this.consentService.acknowledgeCompletion();
       this.clearPhase(completion.providerId);
       if (completion.status !== 'success') {
         this.toast.error('Could not connect', completion.error ?? 'The sign-in did not complete.');
+        return;
       }
+      // The menu may have closed while the person was in the popup; the
+      // toast is how they learn it worked.
+      const name = this.connectors().find((c) => c.providerId === completion.providerId)?.displayName;
+      this.toast.success(`${name ?? 'Connector'} connected.`);
     });
 
     // A popup closed without finishing drops out of `inFlightProviders`; the
@@ -305,6 +330,8 @@ export class ComposerAddMenuComponent {
         return 'Starting…';
       case 'awaiting':
         return 'Awaiting consent';
+      case 'blocked':
+        return 'Pop-up blocked';
       case 'disconnecting':
         return 'Disconnecting…';
       default:
@@ -326,7 +353,17 @@ export class ComposerAddMenuComponent {
 
   /** A row mid-flight is not a switch until the flight lands. */
   protected connectorBusy(connector: UserConnector): boolean {
-    return connector.providerId in this.connectorPhases();
+    const phase = this.connectorPhases()[connector.providerId];
+    return phase !== undefined && phase !== 'blocked';
+  }
+
+  /** No status probe has answered yet: the row is a skeleton, not a switch. */
+  protected connectorProbing(connector: UserConnector): boolean {
+    return !this.connectorStatus.isKnown(connector.providerId);
+  }
+
+  protected connectorBlocked(connector: UserConnector): boolean {
+    return this.connectorPhases()[connector.providerId] === 'blocked';
   }
 
   /**
@@ -338,7 +375,7 @@ export class ComposerAddMenuComponent {
    * applies and lives there.
    */
   protected toggleConnector(connector: UserConnector): void {
-    if (this.connectorBusy(connector)) return;
+    if (this.connectorBusy(connector) || this.connectorProbing(connector)) return;
     if (this.isConnected(connector)) {
       void this.disconnect(connector);
     } else {
@@ -361,14 +398,35 @@ export class ComposerAddMenuComponent {
         this.toast.error('Could not connect', 'Unexpected response from the server.');
         return;
       }
-      this.consentService.requestConsent(id, result.authorizationUrl);
-      void this.consentService.openConsentPopup(id);
-      this.setPhase(id, 'awaiting');
+      // Awaited only for its answer: with a URL in hand the popup opens
+      // before the first await inside, so a click-started open stays one.
+      const opened = await this.consentService.startUserConsent(id, result.authorizationUrl);
+      if (opened) {
+        this.setPhase(id, 'awaiting');
+      } else if (this.consentService.isBlocked(id)) {
+        this.setPhase(id, 'blocked');
+      } else {
+        this.clearPhase(id);
+        this.toast.error('Could not connect', 'Could not start the sign-in.');
+      }
     } catch (err: unknown) {
       this.clearPhase(id);
       const detail = (err as { error?: { detail?: string } })?.error?.detail;
       this.toast.error('Could not connect', detail ?? 'Could not start the sign-in.');
     }
+  }
+
+  /**
+   * Open the sign-in again after the browser blocked it. The first attempt
+   * opened the popup after a network round trip, which can cost the click its
+   * permission to open one; this runs straight from a click, with the URL the
+   * first attempt stored, so the browser lets it through.
+   */
+  protected retrySignIn(connector: UserConnector): void {
+    const id = connector.providerId;
+    void this.consentService.openConsentPopup(id).then((opened) => {
+      if (opened) this.setPhase(id, 'awaiting');
+    });
   }
 
   private async disconnect(connector: UserConnector): Promise<void> {

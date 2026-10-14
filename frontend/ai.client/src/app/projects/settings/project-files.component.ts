@@ -775,8 +775,7 @@ export class ProjectFilesComponent {
         this.toast.error('Unexpected response from the server.');
         return;
       }
-      this.consentService.requestConsent(source.providerId, result.authorizationUrl);
-      void this.consentService.openConsentPopup(source.providerId);
+      void this.consentService.startUserConsent(source.providerId, result.authorizationUrl);
       this.connectPhase.set('awaiting');
     } catch (err) {
       this.resetConnect();
@@ -934,8 +933,7 @@ export class ProjectFilesComponent {
         this.toast.error('Unexpected response from the server.');
         return;
       }
-      this.consentService.requestConsent(providerId, result.authorizationUrl);
-      void this.consentService.openConsentPopup(providerId);
+      void this.consentService.startUserConsent(providerId, result.authorizationUrl);
       this.reconnectAwaiting = true;
     } catch (err) {
       this.finishReconnect();
