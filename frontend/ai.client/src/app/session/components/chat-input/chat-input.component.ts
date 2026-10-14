@@ -442,9 +442,10 @@ export class ChatInputComponent {
 
   /**
    * The conversation layout: one row — attach, text, speech controls — with
-   * the model picker and the cost/context line moved beneath the shell. False
-   * (the default) is the roomy empty-state composer, which keeps the picker in
-   * its own bar. The container sets this once the conversation has messages.
+   * the cost/context meter beside the model picker beneath the shell. False
+   * (the default) is the roomy empty-state composer, text above a control
+   * bar; its model picker sits beneath the shell too, so the two layouts
+   * match. The container sets this once the conversation has messages.
    */
   readonly compact = input<boolean>(false);
 
@@ -784,15 +785,6 @@ export class ChatInputComponent {
     if (this.showStop() && this.compact() && !this.isCoarsePointer()) return 'Esc to stop';
     return null;
   });
-
-  /**
-   * Whether the line beneath the shell renders. Always in compact — it holds
-   * the model picker — and in the empty state only while there is a status to
-   * say, since the empty state has no cost yet and keeps its picker in the bar.
-   */
-  protected readonly showMetaLine = computed(
-    () => this.compact() || this.statusHint() !== null || this.scopePickerOffered(),
-  );
 
   /**
    * Whether the line holds "Project or folder": a new conversation whose page

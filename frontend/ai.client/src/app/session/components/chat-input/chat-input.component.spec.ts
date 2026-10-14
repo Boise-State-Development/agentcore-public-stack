@@ -1958,9 +1958,10 @@ describe('ChatInputComponent — compact layout, touch and first-send handoff', 
     expect(component['unfolded']()).toBe(false);
   });
 
-  it('keeps the model picker in the bar in the empty state and moves it under the shell in compact', () => {
+  it('puts the model picker under the shell in both the empty state and compact', () => {
     render(false);
-    expect(fixture.nativeElement.querySelector('.composer-tools app-model-dropdown')).not.toBeNull();
+    expect(fixture.nativeElement.querySelector('.composer-tools app-model-dropdown')).toBeNull();
+    expect(fixture.nativeElement.querySelector('app-model-dropdown[size="compact"]')).not.toBeNull();
 
     fixture.componentRef.setInput('compact', true);
     fixture.detectChanges();
