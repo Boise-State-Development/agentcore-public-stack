@@ -502,6 +502,37 @@ differ only in `searchable`. `score` reports per class: majority of k, exact
 McNemar, `n` on every row, plus tool calls, `query` use, tokens and dollars per
 turn.
 
+**First readout (dev, 2026-10-13, Haiku 4.5, k = 3, 21 questions; majority of
+three per question):**
+
+| Class | Tier 1 | Tier 1 + search | Tier 1 $/turn, s | Tier 2 $/turn, s |
+|---|---|---|---|---|
+| text | 6/6 | 5/6 | 0.039, 19 | 0.053, 24 |
+| scanned | 3/5 | **5/5** | 0.101, 26 | **0.022, 7** |
+| layout | 5/5 | 5/5 | 0.015, 6 | 0.015, 6 |
+| docx (with the excerpt fix) | 5/5 | 5/5 | 0.013, 4 | 0.018, 4 |
+
+- **Only the scanned class separates.** Tier 1 reaches a scanned page only by
+  paging through page images (87k input tokens a turn), and still missed two of
+  five facts. Search found all five, at a fifth of the cost and a quarter of the
+  time. With five questions this is not significant (exact McNemar p = 0.5; even
+  five of five discordant would be 0.0625), so the scanned set needs about 15
+  questions before it can settle the decision.
+- **Layout does not need search.** `pattern` finds a table's label, and the
+  `page_range` read of that page shows the model the table as drawn.
+- **The docx gap was a Tier 1 bug.** The first run had Word at 1/5 against 4/5.
+  `pattern` returned each matching line cut to its first 200 characters, and a
+  Word paragraph is one line, so a match past that point came back without the
+  match in it. With the excerpt cut around the match (a separate fix), Tier 1 is
+  15 of 15 turns.
+- **The model under-uses `query`.** The reference guidance says "first with
+  `pattern`", so Tier 2 called `query` in 5 of 18 text turns and on scanned
+  documents only after `pattern` had failed. Guidance that names search when the
+  deployment has it is worth testing as an arm.
+- Grading reads only the reply's final `Answer:` line. An earlier run that
+  checked the whole reply failed correct answers that mentioned a distractor as
+  context. That run is discarded.
+
 **Cost**, per session through `GET /admin/costs/sessions/{id}/calls`: a reference
 session's prefix should look like an offloaded-document session (digest ≤ 1,500
 tokens), not like an inline one.
