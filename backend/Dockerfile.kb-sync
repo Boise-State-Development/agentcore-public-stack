@@ -66,6 +66,13 @@ COPY backend/src/apis/shared/assistants/ ${LAMBDA_TASK_ROOT}/apis/shared/assista
 # the owner-checked get_assistant), so this is import closure only: no projects
 # table access, env var or IAM grant is needed here.
 COPY backend/src/apis/shared/projects/ ${LAMBDA_TASK_ROOT}/apis/shared/projects/
+# files/ — the drive_folder path (assistant-kb-sync.md §11) lists a folder
+# through file_sources/folder_walk.py, which takes the chat allowlist from
+# files/models.py and the folder-attachment walk caps from
+# files/folder_attachments.py. The package __init__ reaches repository,
+# file_resolver and workspace: boto3 and pydantic only, so this adds files,
+# not dependencies.
+COPY backend/src/apis/shared/files/ ${LAMBDA_TASK_ROOT}/apis/shared/files/
 COPY backend/src/apis/app_api/file_sources/ ${LAMBDA_TASK_ROOT}/apis/app_api/file_sources/
 COPY backend/src/apis/app_api/documents/ ${LAMBDA_TASK_ROOT}/apis/app_api/documents/
 COPY backend/src/apis/app_api/web_sources/ ${LAMBDA_TASK_ROOT}/apis/app_api/web_sources/

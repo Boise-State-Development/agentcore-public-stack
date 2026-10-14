@@ -2,11 +2,14 @@
 
 from .models import (
     DUE_INDEX_PK,
+    FolderRunSummary,
     SyncInterval,
     SyncPolicy,
     SyncPolicyState,
     SyncRunResult,
     SyncSourceType,
+    folder_source_ref,
+    parse_folder_source_ref,
 )
 from .service import (
     DuplicateSyncPolicy,
@@ -16,6 +19,7 @@ from .service import (
     delete_sync_policies_for_assistant,
     delete_sync_policies_for_source,
     delete_sync_policy,
+    exclude_folder_file,
     get_sync_policy,
     list_due_policies,
     list_sync_policies,
@@ -28,6 +32,7 @@ from .service import (
 __all__ = [
     "DUE_INDEX_PK",
     "DuplicateSyncPolicy",
+    "FolderRunSummary",
     "SyncInterval",
     "SyncPolicy",
     "SyncPolicyLimitExceeded",
@@ -39,10 +44,13 @@ __all__ = [
     "delete_sync_policies_for_assistant",
     "delete_sync_policies_for_source",
     "delete_sync_policy",
+    "exclude_folder_file",
+    "folder_source_ref",
     "get_sync_policy",
     "list_due_policies",
     "list_sync_policies",
     "max_policies_per_assistant",
+    "parse_folder_source_ref",
     "rearm_policy",
     "record_sync_result",
     "set_policy_state",
