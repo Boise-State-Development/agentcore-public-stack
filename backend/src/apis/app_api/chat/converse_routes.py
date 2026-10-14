@@ -43,12 +43,14 @@ from apis.shared import quota as shared_quota
 from apis.shared.rbac.service import get_app_role_service
 from apis.shared.costs.calculator import CostCalculator
 from apis.shared.costs.pricing_config import create_pricing_snapshot
+from apis.shared.observability import fingerprint_canonical_json
 from apis.shared.sessions.metadata import store_message_metadata
 from apis.shared.sessions.models import (
     MessageMetadata,
     TokenUsage,
     ModelInfo,
     Attribution,
+    PricingSnapshot,
 )
 
 from apis.shared.models.bedrock_responses import build_bedrock_responses_model
@@ -148,8 +150,59 @@ async def _build_user_from_api_key(validated_key) -> User:
         roles=profile.roles or [],
     )
 
+def _prefix_fingerprints(request: ConverseRequest) -> dict:
+    """Prompt-cache prefix hashes for one api-converse request.
+
+    Same field names as the runtime's ``PrefixFingerprintHook``, so the admin
+    cost anatomy reads these rows like any other. Two more fields make the
+    predecessor match in ``_derive_cache_observability`` work for a stateless
+    caller, whose requests all share one ``api-converse-<key>`` pseudo-session:
+
+    - ``messagesHash``: this request's whole message list.
+    - ``extendsMessagesHashes``: the message lists of the earlier requests
+      this one's prompt starts with: a byte-identical re-send (all of
+      ``messages``) or the next turn of a client-held conversation (all but
+      the assistant reply and the new user message). Only a predecessor in
+      this list could have left a cache entry for this request to read.
+
+    The request carries no toolConfig, so ``toolConfigHash`` is the hash of an
+    empty tool list, as the runtime hook would compute for an agent with none.
+    """
+    params = _build_converse_params(request)
+    messages = params["messages"]
+    return {
+        "toolConfigHash": fingerprint_canonical_json([]),
+        "systemPromptHash": fingerprint_canonical_json(params.get("system", [])),
+        "historyHash": fingerprint_canonical_json(messages[:-1]),
+        "messageCount": len(messages),
+        "messagesHash": fingerprint_canonical_json(messages),
+        "extendsMessagesHashes": [
+            fingerprint_canonical_json(messages),
+            fingerprint_canonical_json(messages[:-2]),
+        ],
+    }
+
+
+def _pricing_snapshot_model(pricing: dict) -> Optional[PricingSnapshot]:
+    """Validate the pricing dict for ``ModelInfo``, or None if it doesn't fit.
+
+    ``wastedUsd`` reads the cache rates off this snapshot. A dict that does
+    not validate costs the row its snapshot, never the row itself.
+    """
+    try:
+        return PricingSnapshot.model_validate(pricing)
+    except Exception:
+        logger.warning("Pricing snapshot did not validate; recording cost without it")
+        return None
+
+
 async def _record_cost(
-    user_id: str, model_id: str, usage: dict, key_id: str, provider: str = "bedrock"
+    user_id: str,
+    model_id: str,
+    usage: dict,
+    key_id: str,
+    request: ConverseRequest,
+    provider: str = "bedrock",
 ) -> None:
     """Calculate and store cost metadata for an api-converse request.
 
@@ -178,6 +231,7 @@ async def _record_cost(
             modelId=model_id,
             modelName=model_id,
             provider=provider,
+            pricing_snapshot=_pricing_snapshot_model(pricing),
         )
 
         attribution = Attribution(
@@ -191,6 +245,7 @@ async def _record_cost(
             model_info=model_info,
             attribution=attribution,
             cost=total_cost,
+            prefixFingerprints=_prefix_fingerprints(request),
         )
 
         await store_message_metadata(
@@ -390,6 +445,7 @@ async def _stream_converse(
     if state["usage"]:
         await _record_cost(
             user_id=user_id, model_id=request.model_id, usage=state["usage"], key_id=key_id,
+            request=request,
         )
 
 
@@ -502,7 +558,7 @@ async def _stream_openai_surface(
     if state["usage"]:
         await _record_cost(
             user_id=user_id, model_id=request.model_id, usage=state["usage"],
-            key_id=key_id, provider=provider,
+            key_id=key_id, request=request, provider=provider,
         )
 
 
@@ -548,7 +604,7 @@ async def _openai_surface_converse(
     if usage:
         await _record_cost(
             user_id=user_id, model_id=request.model_id, usage=usage,
-            key_id=key_id, provider=provider,
+            key_id=key_id, request=request, provider=provider,
         )
 
     return ConverseResponse(
@@ -804,6 +860,7 @@ async def api_converse(
             model_id=request.model_id,
             usage=usage,
             key_id=validated_key.key_id,
+            request=request,
         )
 
     return ConverseResponse(

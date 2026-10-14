@@ -442,6 +442,10 @@ def _derive_cache_observability(
     `@`-mention does — and it reported genuine TTL expiries as avoidable waste,
     inflating the metric that exists to catch nondeterministic prefix assembly.
 
+    A row whose fingerprints carry ``extendsMessagesHashes`` (api-converse)
+    also needs the predecessor's ``messagesHash`` to be in that list, and with
+    no such predecessor it classifies as ``first_write``.
+
     The stream coordinator writes a turn's rows sequentially in call order,
     so within a multi-call turn each call sees its predecessor. Returns {}
     when there is no token usage to classify or on any failure — derivation
@@ -517,16 +521,37 @@ def _derive_cache_observability(
         # only a wider read of rows we were already indexing.
         own_prints = getattr(message_metadata, "prefixFingerprints", None) or {}
         own_key = (own_prints.get("toolConfigHash"), own_prints.get("systemPromptHash"))
+        # Stateless callers (api-converse) opt into a stricter predecessor: a
+        # row counts only if its whole message list is one this call's prompt
+        # extends. Their rows share a per-key pseudo-session, where the same
+        # system prompt does not mean the same prefix — a batch client sends
+        # one system prompt with a different message each time, and there is
+        # nothing to read. The runtime never sets this key, so chat rows are
+        # matched exactly as before.
+        extends = own_prints.get("extendsMessagesHashes")
+        stateless = isinstance(extends, list)
         match_row: Optional[Dict[str, Any]] = None
         comparable = all(part is not None for part in own_key)
         if comparable:
             for row in prev_items:  # already newest-first
                 row_prints = row.get("prefixFingerprints") or {}
-                if (row_prints.get("toolConfigHash"), row_prints.get("systemPromptHash")) == own_key:
-                    match_row = row
-                    break
+                if (row_prints.get("toolConfigHash"), row_prints.get("systemPromptHash")) != own_key:
+                    continue
+                if stateless and row_prints.get("messagesHash") not in extends:
+                    continue
+                match_row = row
+                break
 
-        if not comparable:
+        previous_call_exists = prev_row is not None
+        if stateless and comparable and match_row is None:
+            # No earlier request in the window is a prefix of this one, so no
+            # cache entry existed for it to read: this is that prefix's first
+            # write. `miss_ttl_expired` would assert an entry had existed and
+            # lapsed, which for an unrelated stateless request is a guess.
+            previous_call_exists = False
+            classify_gap = None
+            prev_cached_prefix = None
+        elif not comparable:
             # No fingerprints on this call (hook disabled, or a non-Bedrock
             # provider): fall back to the previous call, which is what this
             # derivation did before #753.
@@ -560,7 +585,7 @@ def _derive_cache_observability(
         status = classify_cache_status(
             cache_read_tokens=cache_read,
             cache_write_tokens=cache_write,
-            previous_call_exists=prev_row is not None,
+            previous_call_exists=previous_call_exists,
             gap_seconds=classify_gap,
             previous_cached_prefix_tokens=prev_cached_prefix,
             ttl_seconds=ttl_seconds,
