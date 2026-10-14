@@ -97,6 +97,11 @@ conversation there. The choice is fixed once you send the first message.
 Where folder attachments are on, the same list also shows the Google Drive
 folders you attached recently: pick one to attach it to the new conversation.
 
+A folder you keep coming back to can become a project. On a message that
+carries the folder, select **Save as project** beside its name. The new project
+gets a copy of the folder's files in its Files. Files added to the folder or
+changed in Drive later aren't picked up.
+
 ## Next steps
 
 - [Set up a project](/agentcore-public-stack/user-guide/projects/set-up/): create it,
