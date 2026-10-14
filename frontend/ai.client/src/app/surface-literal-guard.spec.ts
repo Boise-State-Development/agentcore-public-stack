@@ -16,18 +16,18 @@
 // (the brand-configurable neutral ramp — see generate-surface-theme.ts),
 // or `var(--color-{role}-*)` for a brand accent.
 import { describe, expect, it } from 'vitest';
-import * as fs from 'fs';
 import * as path from 'path';
 import { fromProjectRoot } from '../testing/project-root';
+import { readSourceTree, SOURCE_TREE_SCAN_TIMEOUT_MS } from '../testing/source-tree';
 
 describe('surface literal hygiene', () => {
+  // Scans all of src/app, so it takes the scan timeout, not the 5 s default
+  // (see source-tree.ts).
   it('src/app should not use literal white/black/hex values in background declarations (Prism okaidia exempted)', () => {
     // Documented exception: the Prism okaidia code-editor theme's fixed
     // background, intentionally decoupled from the app's light/dark mode
     // (see artifact-source.component.ts's header comment).
     const ALLOWLISTED_HEX = ['#272822'];
-
-    const SKIP_PATTERNS = [/\.spec\.ts$/i, /generated[\\/]/i];
 
     // Matches inline CSS `background: white;` / `background-color: #f1f2f4;`
     // declarations, and Tailwind arbitrary-value bracket syntax
@@ -43,27 +43,19 @@ describe('surface literal hygiene', () => {
     const commentPatterns = [/\/\/.*/g, /\/\*[\s\S]*?\*\//g, /<!--[\s\S]*?-->/g];
 
     const appDir = fromProjectRoot('src/app');
-    const files: string[] = [];
-
-    function walkDir(dir: string): void {
-      const entries = fs.readdirSync(dir, { withFileTypes: true });
-      for (const entry of entries) {
-        const fullPath = path.join(dir, entry.name);
-        if (SKIP_PATTERNS.some((p) => p.test(fullPath))) continue;
-        if (entry.isDirectory()) {
-          walkDir(fullPath);
-        } else if (/\.(ts|css|html)$/.test(entry.name)) {
-          files.push(fullPath);
-        }
-      }
-    }
-
-    walkDir(appDir);
+    const files = readSourceTree(appDir, {
+      extensions: ['.ts', '.css', '.html'],
+      skipDirs: ['generated'],
+      skipFile: (name) => /\.spec\.ts$/i.test(name),
+    });
 
     const violations: Array<{ file: string; line: number; match: string }> = [];
 
-    for (const file of files) {
-      const content = fs.readFileSync(file, 'utf-8');
+    for (const { path: file, content } of files) {
+      // Both patterns need one of these substrings, and most files have
+      // neither, so this skips the per-line pass for them.
+      if (!/background|bg-\[/i.test(content)) continue;
+
       const lines = content.split('\n');
 
       for (let lineNum = 0; lineNum < lines.length; lineNum++) {
@@ -101,5 +93,5 @@ describe('surface literal hygiene', () => {
 
       expect(violations, message).toHaveLength(0);
     }
-  });
+  }, SOURCE_TREE_SCAN_TIMEOUT_MS);
 });

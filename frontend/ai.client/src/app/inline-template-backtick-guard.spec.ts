@@ -19,29 +19,24 @@
 //
 // The fix is always the same: write the identifier without backticks.
 import { describe, expect, it } from 'vitest';
-import * as fs from 'fs';
 import * as path from 'path';
 import { fromProjectRoot } from '../testing/project-root';
+import { readSourceTree, SOURCE_TREE_SCAN_TIMEOUT_MS } from '../testing/source-tree';
 
 /**
- * Walk `dir` for component sources, skipping generated output and specs.
+ * Component sources under src/app, skipping generated output and specs.
  *
  * Specs are excluded for the same reason `surface-literal-guard.spec.ts`
  * excludes them: they are not compiled by the Angular compiler, and a
  * spec that quotes the pattern it looks for — this one does — would
  * otherwise report itself.
  */
-function collect(dir: string, out: string[] = []): string[] {
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      if (entry.name === 'node_modules' || entry.name === 'generated') continue;
-      collect(full, out);
-    } else if (entry.name.endsWith('.ts') && !entry.name.endsWith('.spec.ts')) {
-      out.push(full);
-    }
-  }
-  return out;
+function componentSources() {
+  return readSourceTree(fromProjectRoot('src/app'), {
+    extensions: ['.ts'],
+    skipDirs: ['generated'],
+    skipFile: (name) => name.endsWith('.spec.ts'),
+  });
 }
 
 /**
@@ -60,12 +55,12 @@ function endOfLiteral(source: string, start: number): number {
 }
 
 describe('inline template hygiene', () => {
+  // Scans all of src/app, so it takes the scan timeout, not the 5 s default
+  // (see source-tree.ts).
   it('no component template: or styles: block contains a backtick', () => {
     const offenders: string[] = [];
 
-    for (const file of collect(fromProjectRoot('src/app'))) {
-      const source = fs.readFileSync(file, 'utf8');
-
+    for (const { path: file, content: source } of componentSources()) {
       for (const key of ['template: `', 'styles: `']) {
         let cursor = 0;
         while (true) {
@@ -103,5 +98,5 @@ describe('inline template hygiene', () => {
         'its errors name the wrong cause. Drop the backticks:\n' +
         offenders.join('\n'),
     ).toEqual([]);
-  });
+  }, SOURCE_TREE_SCAN_TIMEOUT_MS);
 });

@@ -31,9 +31,9 @@
 // matcher fails loudly instead of passing a dirty tree.
 
 import { describe, expect, it } from 'vitest';
-import * as fs from 'fs';
 import * as path from 'path';
 import { fromProjectRoot } from '../testing/project-root';
+import { readSourceTree, SOURCE_TREE_SCAN_TIMEOUT_MS } from '../testing/source-tree';
 
 // Banned palettes — these are fully migrated and must never appear.
 const BANNED_PALETTES = [
@@ -129,43 +129,31 @@ function findPaletteViolations(content: string, file: string): ScanResult {
 }
 
 describe('color token hygiene', () => {
+  // Scans all of src/app, so it takes the scan timeout, not the 5 s default
+  // (see source-tree.ts).
   it('src/app should not use raw Tailwind palettes (ratchet enforcement)', () => {
     // Files to skip:
     // - *.spec.ts (tests themselves)
     // - chart-colors.constants.ts (resolved colors for Chart.js, not Tailwind utilities)
     // - generated/* (machine-written, excluded from enforcement)
-    const SKIP_PATTERNS = [
-      /\.spec\.ts$/i,
-      /chart-colors\.constants\.ts$/i,
-      /generated[\\/]/i,
-    ];
+    const SKIP_FILES = [/\.spec\.ts$/i, /^chart-colors\.constants\.ts$/i];
 
     const appDir = fromProjectRoot('src/app');
-    const files: string[] = [];
-
-    function walkDir(dir: string): void {
-      const entries = fs.readdirSync(dir, { withFileTypes: true });
-      for (const entry of entries) {
-        const fullPath = path.join(dir, entry.name);
-        if (SKIP_PATTERNS.some((p) => p.test(fullPath))) {
-          continue;
-        }
-        if (entry.isDirectory()) {
-          walkDir(fullPath);
-        } else if (/\.(ts|html)$/.test(entry.name)) {
-          files.push(fullPath);
-        }
-      }
-    }
-
-    walkDir(appDir);
+    const files = readSourceTree(appDir, {
+      extensions: ['.ts', '.html'],
+      skipDirs: ['generated'],
+      skipFile: (name) => SKIP_FILES.some((p) => p.test(name)),
+    });
 
     const violations: PaletteViolation[] = [];
     const unusedExceptions = new Set(GRADIENT_EXCEPTION_FILES);
 
-    for (const file of files) {
-      const relativePath = path.relative(appDir, file);
-      const result = findPaletteViolations(fs.readFileSync(file, 'utf-8'), relativePath);
+    for (const { relativePath, content } of files) {
+      // Most files use no banned palette at all. Stripping comments and the
+      // gradient exemption only ever remove matches, so a file whose raw
+      // text has none has nothing to report. search() ignores lastIndex.
+      if (content.search(UTILITY_REGEX) === -1) continue;
+      const result = findPaletteViolations(content, relativePath);
       violations.push(...result.violations);
       if (result.usedGradientException) {
         unusedExceptions.delete(relativePath.split(path.sep).join('/'));
@@ -191,7 +179,7 @@ describe('color token hygiene', () => {
       [...unusedExceptions],
       'GRADIENT_EXCEPTION_FILES entries that no longer exempt anything — remove them:'
     ).toHaveLength(0);
-  });
+  }, SOURCE_TREE_SCAN_TIMEOUT_MS);
 });
 
 describe('findPaletteViolations (guard self-test)', () => {
