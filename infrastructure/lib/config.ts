@@ -711,9 +711,9 @@ export interface AttachmentKbConfig {
  * `folderAttachments.enabled: true` cdk.json context), and refused without
  * `largeDocumentAttachments.enabled`, because a folder file is read through
  * the prepare Lambda's sidecars: without that pipeline there is nothing to
- * read a small file through. Sets FOLDER_ATTACHMENTS_ENABLED on app-api only
- * (the routes and the expansion task); the Runtime's copy arrives with the
- * manifest (PR-B). No resources.
+ * read a small file through. Sets FOLDER_ATTACHMENTS_ENABLED on app-api (the
+ * routes and the expansion task) and, only while on, on the AgentCore Runtime
+ * (a turn's folder manifests). No resources.
  */
 export interface FolderAttachmentsConfig {
   enabled: boolean;

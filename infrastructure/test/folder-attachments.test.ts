@@ -2,8 +2,8 @@
  * Folder attachments, PR-A (docs/specs/drive-folder-attachments.md §4.8). Pinned:
  *   - CDK_FOLDER_ATTACHMENTS_ENABLED is opt-in, and refused without large-document
  *     attachments (a folder's files are read through the prepare Lambda's sidecars);
- *   - on, it sets FOLDER_ATTACHMENTS_ENABLED on app-api only, adds no resource, and
- *     leaves the Runtime's environment untouched (the Runtime's copy is PR-B).
+ *   - on, it sets FOLDER_ATTACHMENTS_ENABLED on app-api and the Runtime and adds no
+ *     resource; off, the Runtime spends no environment bytes on it (PR-B).
  */
 import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
@@ -110,12 +110,15 @@ describe('folder attachments in PlatformStack', () => {
   const docsOnly = synth({ largeDocumentAttachments: { enabled: true } });
   const withFolders = synth({ largeDocumentAttachments: { enabled: true }, folderAttachments: { enabled: true } });
 
-  it('gives app-api the flag, and the Runtime nothing', () => {
+  it('gives app-api the flag, and the Runtime the flag only while on', () => {
     expect(appApiEnv(withFolders).FOLDER_ATTACHMENTS_ENABLED).toBe('true');
     expect(appApiEnv(docsOnly).FOLDER_ATTACHMENTS_ENABLED).toBe('false');
     const runtimeEnv = (t: Template) =>
       (Object.values(t.findResources('AWS::BedrockAgentCore::Runtime'))[0] as any).Properties.EnvironmentVariables;
-    expect(runtimeEnv(withFolders)).toEqual(runtimeEnv(docsOnly));
+    expect(runtimeEnv(withFolders).FOLDER_ATTACHMENTS_ENABLED).toBe('true');
+    expect(runtimeEnv(docsOnly)).not.toHaveProperty('FOLDER_ATTACHMENTS_ENABLED');
+    const { FOLDER_ATTACHMENTS_ENABLED: _flag, ...rest } = runtimeEnv(withFolders);
+    expect(rest).toEqual(runtimeEnv(docsOnly));
   });
 
   it('adds no resource', () => {
