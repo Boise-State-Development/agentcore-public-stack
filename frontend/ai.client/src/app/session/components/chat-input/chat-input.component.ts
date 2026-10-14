@@ -70,7 +70,7 @@ import { FolderAttachmentData } from '../../services/models/message.model';
 import { folderDataFromRow } from '../../services/session/folder-manifest';
 import { ComposerFolder, FolderCardComponent } from './folder-card.component';
 import { ComposerAddMenuComponent } from './composer-add-menu.component';
-import { ComposerScopePickerComponent } from './composer-scope-picker.component';
+import { ComposerScopePickerComponent, folderKey } from './composer-scope-picker.component';
 import { FEATURES } from '../../../services/features';
 import { ToastService } from '../../../services/toast/toast.service';
 import { ToolService } from '../../../services/tool/tool.service';
@@ -541,6 +541,18 @@ export class ChatInputComponent {
   /** Folders whose id the send can carry: attached, not still being created, not failed to attach. */
   private readonly sendableFolders = computed(() =>
     this.attachedFolders().filter(folder => folder.phase === 'attached' && !!folder.folderAttachId),
+  );
+
+  /**
+   * The source folders on this message, keyed as the picker's recent list is,
+   * so the picker never offers one a second time. A card still being created
+   * has no row yet and is missed for that fraction of a second.
+   */
+  protected readonly attachedFolderKeys = computed(() =>
+    this.attachedFolders()
+      .map(folder => folder.row)
+      .filter((row): row is NonNullable<typeof row> => row !== null)
+      .map(row => folderKey(row.connectorId, row.providerFolderId)),
   );
 
   /** How many more folders this message can take; zero hides "Attach this folder". */

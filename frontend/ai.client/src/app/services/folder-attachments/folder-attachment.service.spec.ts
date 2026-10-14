@@ -116,6 +116,17 @@ describe('FolderAttachmentService', () => {
     expect((await refreshed).refreshing).toBe(true);
   });
 
+  it('lists recent folders, outside any conversation, with a limit', async () => {
+    const recent = service.listRecent(3);
+    const req = http.expectOne((r) => r.url === '/api/folders/recent');
+    expect(req.request.method).toBe('GET');
+    expect(req.request.params.get('limit')).toBe('3');
+    req.flush({
+      folders: [{ connectorId: 'google-drive', connectorName: 'Google Drive', providerFolderId: 'f1', folderName: 'Course', folderPath: 'My Drive/Course', lastAttachedAt: '2026-10-14T00:00:00Z' }],
+    });
+    expect((await recent).map((f) => f.providerFolderId)).toEqual(['f1']);
+  });
+
   it('treats a row already gone as removed', async () => {
     const removed = service.remove('s-1', 'gone');
     http.expectOne('/api/sessions/s-1/folders/gone').flush({ detail: 'Folder attachment not found' }, { status: 404, statusText: 'Not Found' });

@@ -680,6 +680,7 @@
         <app-composer-scope-picker
           [remainingFiles]="remainingFileSlots()"
           [remainingFolders]="remainingFolderSlots()"
+          [attachedFolderKeys]="attachedFolderKeys()"
           [disabled]="isDictating()"
           (sourceFolderPicked)="onSourceFolderPicked($event)"
           (sourceFilesPicked)="onSourceFilesPicked($event)"

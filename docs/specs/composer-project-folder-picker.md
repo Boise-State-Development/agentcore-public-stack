@@ -1,6 +1,6 @@
 # Project or folder: a picker beneath a new conversation's composer
 
-**Status:** proposed (2026-10-14). PR-1 ships with this spec. **Depends on:** Shared Projects (`shared-projects.md`, `features.projects`) and Drive folder attachments PR-A to PR-C (`drive-folder-attachments.md`, `features.folderAttachments`). **Flags:** none of its own; each half rides the flag of the feature it starts.
+**Status:** PR-1 merged (2026-10-14, with this spec); PR-2 in review. **Depends on:** Shared Projects (`shared-projects.md`, `features.projects`) and Drive folder attachments PR-A to PR-C (`drive-folder-attachments.md`, `features.folderAttachments`). **Flags:** none of its own; each half rides the flag of the feature it starts.
 
 ## 1. Problem
 
@@ -41,7 +41,7 @@ Options, in order:
 
 1. **No project**, only while a project is chosen. Clears it.
 2. **Projects**: the caller's active projects, own and shared, most recently updated first, filtered by name. Archived projects are left out, because a new conversation in one is refused. The chosen project is marked selected.
-3. **Recent folders** (PR-2): folders the user has attached before, one row per Drive folder, newest first, with the Drive path underneath.
+3. **Recent folders** (PR-2): folders the user has attached before, one row per Drive folder, newest first, with the Drive path underneath. Filtered with the projects, by name or path. Only folders whose file source the user can still see are offered (the `GET /file-sources` list, which also supplies the connector the attach needs), and never one already on this message. The list is read again on every open, so a folder attached a moment ago comes first.
 4. **New project**: opens the existing create dialog, then binds the new conversation to the new project. The composer keeps its text.
 5. **Add folder from {source}**: one row per file source the `+` menu lists, opening the same browser in its attach mode. Shown only while the message has room for a folder.
 
@@ -66,8 +66,8 @@ Nothing here touches the turn path or the prompt. A project binds through the ha
 
 | PR | Scope | User-visible |
 |---|---|---|
-| **PR-1** | This spec. The picker on the empty-state composer: projects, No project, New project, Add folder from {source} | Yes, where `features.projects` or `features.folderAttachments` is on |
-| **PR-2** | Recent folders: `GET /folders/recent` in app-api (one query on the caller's `FOLDER#` rows, deduplicated by Drive folder id, behind `FOLDER_ATTACHMENTS_ENABLED`), and the picker rows | Yes, with folders on |
+| **PR-1** (merged) | This spec. The picker on the empty-state composer: projects, No project, New project, Add folder from {source} | Yes, where `features.projects` or `features.folderAttachments` is on |
+| **PR-2** (in review) | Recent folders: `GET /folders/recent?limit=` in app-api (default 8, at most 20), and the picker rows. One key query on the caller's own partition (`PK=USER#{user}`, the `FOLDER#` sort prefix), newest first because folder ids lead with a millisecond timestamp, projecting only the six attributes shown and never the file list. One row per `(connector, folder id)`, named from its newest row. The read stops at the limit or at 100 rows, so a folder attached to many conversations cannot make it unbounded. Behind `FOLDER_ATTACHMENTS_ENABLED`, authenticated before the flag's 404. No new index: deleting a conversation already deletes its folder rows, so its folders drop out | Yes, with folders on |
 | **PR-3** | Save as project (§5) | Yes |
 
 ## 5. Follow-up: a folder people return to
