@@ -39,21 +39,31 @@ export class FolderRefreshService {
    *   already running, 404 when the folder is no longer attached)
    */
   async refresh(folder: FolderAttachmentData): Promise<FolderAttachment> {
-    const sessionId = this.chatState.viewedSessionId();
-    if (!sessionId) {
-      throw new FolderAttachmentError('Open the conversation to refresh its folder.', 0);
-    }
-    let folderAttachId = folder.folderAttachId;
-    if (!folderAttachId) {
-      const match = (await this.folders.list(sessionId)).find((row) => row.folderName === folder.name);
-      if (!match) {
-        throw new FolderAttachmentError('This folder is no longer attached to the conversation.', 404);
-      }
-      folderAttachId = match.folderAttachId;
-    }
+    const { sessionId, folderAttachId } = await this.locate(folder);
     const row = await this.folders.refresh(sessionId, folderAttachId);
     this.handoff.set({ sessionId, row });
     return row;
+  }
+
+  /**
+   * The conversation on screen and the folder row a sent chip stands for. A
+   * chip rebuilt from history knows the folder's name but not its id, so the
+   * id comes from the conversation's folder list (newest first).
+   *
+   * @throws FolderAttachmentError (0 with no conversation open, 404 when the
+   *   folder is no longer attached)
+   */
+  async locate(folder: FolderAttachmentData): Promise<{ sessionId: string; folderAttachId: string }> {
+    const sessionId = this.chatState.viewedSessionId();
+    if (!sessionId) {
+      throw new FolderAttachmentError('Open the conversation to use its folder.', 0);
+    }
+    if (folder.folderAttachId) return { sessionId, folderAttachId: folder.folderAttachId };
+    const match = (await this.folders.list(sessionId)).find((row) => row.folderName === folder.name);
+    if (!match) {
+      throw new FolderAttachmentError('This folder is no longer attached to the conversation.', 404);
+    }
+    return { sessionId, folderAttachId: match.folderAttachId };
   }
 
   /** The composer took the handoff. */

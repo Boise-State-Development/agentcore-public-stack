@@ -72,6 +72,23 @@ export interface FolderAttachment {
   stale: boolean;
 }
 
+/**
+ * A source folder the user attached before, as `GET /folders/recent` returns it:
+ * one per folder, newest first, with what a new attach needs and nothing of the
+ * conversation it came from (docs/specs/composer-project-folder-picker.md §3.3).
+ */
+export interface RecentFolder {
+  connectorId: string;
+  connectorName: string | null;
+  providerFolderId: string;
+  folderName: string;
+  folderPath: string | null;
+  lastAttachedAt: string;
+}
+
+/** How many recent folders the picker asks for. The server allows at most 20. */
+export const RECENT_FOLDERS_LIMIT = 8;
+
 /** Body of `POST /sessions/{id}/folders`. */
 export interface AttachFolderRequest {
   connectorId: string;
@@ -215,6 +232,20 @@ export class FolderAttachmentService {
       return body.folders;
     } catch (err) {
       throw this.toError(err, 'Could not list the folders.');
+    }
+  }
+
+  /** The source folders the user attached most recently, one per folder, newest first. */
+  async listRecent(limit = RECENT_FOLDERS_LIMIT): Promise<RecentFolder[]> {
+    try {
+      const body = await firstValueFrom(
+        this.http.get<{ folders: RecentFolder[] }>(`${this.config.appApiUrl()}/folders/recent`, {
+          params: { limit },
+        }),
+      );
+      return body.folders;
+    } catch (err) {
+      throw this.toError(err, 'Could not list your recent folders.');
     }
   }
 

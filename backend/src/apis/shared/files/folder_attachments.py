@@ -105,6 +105,16 @@ ERROR_LISTING_FAILED = "listing_failed"
 ERROR_QUOTA_EXCEEDED = "quota_exceeded"
 
 
+#: Recent folders the composer's picker offers
+#: (``docs/specs/composer-project-folder-picker.md`` §3.3): how many distinct
+#: folders by default and at most, and how many rows one listing reads at most
+#: to find them, so a folder attached to many conversations cannot make the
+#: read unbounded.
+RECENT_FOLDERS_DEFAULT_LIMIT = 8
+RECENT_FOLDERS_MAX_LIMIT = 20
+RECENT_FOLDERS_MAX_ROWS = 100
+
+
 def folder_attach_id_from_source(source: Optional[str]) -> Optional[str]:
     """The folder a file row came from: its ``source`` is
     ``connector:{connector_id}:folder:{folder_attach_id}``."""
@@ -169,6 +179,25 @@ class RefreshSummary(BaseModel):
     added: int = 0
     removed_from_source: int = Field(0, alias="removedFromSource")
     failed: int = 0
+
+
+class RecentFolder(BaseModel):
+    """A source folder the user has attached before, for the picker's
+    "Recent folders" rows (composer-project-folder-picker spec §3.3).
+
+    One per ``(connector_id, provider_folder_id)``, named from its newest row.
+    Carries what a new attach needs and nothing of the conversation it came
+    from: no session id, no files.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    connector_id: str = Field(..., alias="connectorId")
+    connector_name: Optional[str] = Field(None, alias="connectorName")
+    provider_folder_id: str = Field(..., alias="providerFolderId")
+    folder_name: str = Field(..., alias="folderName")
+    folder_path: Optional[str] = Field(None, alias="folderPath")
+    last_attached_at: str = Field(..., alias="lastAttachedAt")
 
 
 class FolderAttachment(BaseModel):

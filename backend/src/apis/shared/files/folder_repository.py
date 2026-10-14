@@ -16,7 +16,14 @@ from typing import Any, Dict, List, Optional
 from botocore.exceptions import ClientError
 
 from apis.shared.aws_clients import get_dynamodb_table
-from apis.shared.files.folder_attachments import FolderAttachment, FolderCounts, FolderFileEntry, RefreshSummary
+from apis.shared.files.folder_attachments import (
+    RECENT_FOLDERS_MAX_ROWS,
+    FolderAttachment,
+    FolderCounts,
+    FolderFileEntry,
+    RecentFolder,
+    RefreshSummary,
+)
 from apis.shared.timestamps import utc_now_iso
 
 logger = logging.getLogger(__name__)
@@ -168,6 +175,61 @@ class FolderAttachmentRepository:
             logger.error("Error listing folder attachments for a session: %s", e)
             raise
         return [FolderAttachment.from_dynamo_item(item) for item in items]
+
+    #: Rows per page of the recent-folders query: most users fill the list
+    #: from the first page.
+    _RECENT_PAGE_SIZE = 25
+
+    async def list_recent_folders(
+        self, user_id: str, limit: int, *, max_rows: int = RECENT_FOLDERS_MAX_ROWS
+    ) -> List[RecentFolder]:
+        """The user's most recently attached source folders, one per folder.
+
+        A key query on the user's own partition (``PK=USER#{user}``, the
+        ``FOLDER#`` sort prefix). Folder ids lead with a millisecond timestamp,
+        so a descending read is newest first. Only the few attributes the
+        picker shows are projected, never the file list, and the read stops at
+        ``limit`` distinct folders or ``max_rows`` rows, whichever comes first.
+        A conversation's rows go when it is deleted, so its folders drop out.
+        """
+        params: Dict[str, Any] = {
+            "KeyConditionExpression": "PK = :pk AND begins_with(SK, :sk_prefix)",
+            "ExpressionAttributeValues": {":pk": f"USER#{user_id}", ":sk_prefix": "FOLDER#"},
+            "ProjectionExpression": "connectorId, connectorName, providerFolderId, folderName, folderPath, createdAt",
+            "ScanIndexForward": False,
+            "Limit": min(self._RECENT_PAGE_SIZE, max_rows),
+        }
+        recent: List[RecentFolder] = []
+        seen: set = set()
+        read = 0
+        try:
+            while True:
+                response = self._table.query(**params)
+                for item in response.get("Items", []):
+                    read += 1
+                    key = (item.get("connectorId"), item.get("providerFolderId"))
+                    if None in key or key in seen:
+                        continue
+                    seen.add(key)
+                    recent.append(
+                        RecentFolder(
+                            connector_id=key[0],
+                            connector_name=item.get("connectorName"),
+                            provider_folder_id=key[1],
+                            folder_name=item.get("folderName") or "Folder",
+                            folder_path=item.get("folderPath"),
+                            last_attached_at=item.get("createdAt") or "",
+                        )
+                    )
+                    if len(recent) >= limit:
+                        return recent
+                if read >= max_rows or "LastEvaluatedKey" not in response:
+                    return recent
+                params["ExclusiveStartKey"] = response["LastEvaluatedKey"]
+                params["Limit"] = min(self._RECENT_PAGE_SIZE, max_rows - read)
+        except ClientError as e:
+            logger.error("Error listing recent folder attachments: %s", e)
+            raise
 
     async def delete_session_folders(self, session_id: str) -> List[FolderAttachment]:
         """Delete a session's folder rows (the file rows go through the file cascade)."""

@@ -14,6 +14,7 @@ import { CreateProjectDialogComponent } from '../../../projects/components/creat
 import { Project } from '../../../projects/models/project.model';
 import { ProjectsService } from '../../../projects/services/projects.service';
 import { FEATURES } from '../../../services/features';
+import { FolderAttachmentService, RecentFolder } from '../../../services/folder-attachments';
 import { ComposerScopePickerComponent } from './composer-scope-picker.component';
 
 const DRIVE: FileSourceConnector = {
@@ -41,6 +42,18 @@ function project(over: Partial<Project>): Project {
   };
 }
 
+function recent(over: Partial<RecentFolder>): RecentFolder {
+  return {
+    connectorId: 'google',
+    connectorName: 'Google Drive',
+    providerFolderId: 'drive-a',
+    folderName: 'Syllabi',
+    folderPath: 'My Drive/Syllabi',
+    lastAttachedAt: '2026-10-14T00:00:00Z',
+    ...over,
+  };
+}
+
 const PROJECTS: Project[] = [
   project({}),
   project({ projectId: 'p2', name: 'Grant proposal', harnessAgentId: 'harness-2', role: 'editor' }),
@@ -58,6 +71,7 @@ describe('ComposerScopePickerComponent', () => {
   let queryParams: BehaviorSubject<ReturnType<typeof convertToParamMap>>;
   let projects: ReturnType<typeof signal<Project[]>>;
   let available: ReturnType<typeof signal<boolean | null>>;
+  let listRecent: ReturnType<typeof vi.fn>;
 
   interface BuildOptions {
     projectsFlag?: boolean;
@@ -68,6 +82,8 @@ describe('ComposerScopePickerComponent', () => {
     projectId?: string | null;
     available?: boolean | null;
     list?: Project[];
+    recentFolders?: RecentFolder[] | Error;
+    attachedFolderKeys?: string[];
   }
 
   async function build(opts: BuildOptions = {}): Promise<void> {
@@ -88,6 +104,11 @@ describe('ComposerScopePickerComponent', () => {
       available.set(true);
     });
     listFileSources = vi.fn(async () => [DRIVE]);
+    const recentAnswer = opts.recentFolders ?? [];
+    listRecent = vi.fn(async () => {
+      if (recentAnswer instanceof Error) throw recentAnswer;
+      return recentAnswer;
+    });
     queryParams = new BehaviorSubject(
       convertToParamMap({
         ...(assistantId ? { assistantId } : {}),
@@ -112,6 +133,7 @@ describe('ComposerScopePickerComponent', () => {
           },
         },
         { provide: FileSourceService, useValue: { listFileSources } },
+        { provide: FolderAttachmentService, useValue: { listRecent } },
       ],
     }).compileComponents();
 
@@ -119,6 +141,7 @@ describe('ComposerScopePickerComponent', () => {
     component = fixture.componentInstance;
     fixture.componentRef.setInput('remainingFiles', 5);
     fixture.componentRef.setInput('remainingFolders', remainingFolders);
+    fixture.componentRef.setInput('attachedFolderKeys', opts.attachedFolderKeys ?? []);
     fixture.detectChanges();
   }
 
@@ -350,6 +373,87 @@ describe('ComposerScopePickerComponent', () => {
       dialogResult = selection;
       optionEls().find(el => el.textContent?.includes('Add folder'))!.click();
       await vi.waitFor(() => expect(picked).toEqual([selection]));
+    });
+  });
+
+  describe('recent folders', () => {
+    const SYLLABI = recent({});
+    const CONTRACTS = recent({ providerFolderId: 'drive-b', folderName: 'Contracts', folderPath: null });
+    const OTHER_SOURCE = recent({ connectorId: 'sharepoint', providerFolderId: 'sp-1', folderName: 'Hidden' });
+
+    async function openWithRecent(opts: BuildOptions = {}): Promise<void> {
+      await build({ recentFolders: [SYLLABI, CONTRACTS, OTHER_SOURCE], ...opts });
+      await openPanel();
+      await vi.waitFor(() => expect(listRecent).toHaveBeenCalled());
+      await vi.waitFor(() => expect(optionLabels().some(l => l.startsWith('Add folder'))).toBe(true));
+      fixture.detectChanges();
+    }
+
+    it('sit between the projects and the actions, through sources the user can still see', async () => {
+      await openWithRecent();
+      expect(optionLabels()).toEqual([
+        'Course redesign',
+        'Grant proposalShared with you',
+        'SyllabiMy Drive/Syllabi',
+        'ContractsGoogle Drive',
+        'New project',
+        'Add folder from Google Drive',
+      ]);
+      expect(listRecent).toHaveBeenCalledTimes(1);
+    });
+
+    it('leave out a folder already on this message', async () => {
+      await openWithRecent({ attachedFolderKeys: ['google:drive-a'] });
+      expect(optionLabels().some(l => l.startsWith('Syllabi'))).toBe(false);
+      expect(optionLabels().some(l => l.startsWith('Contracts'))).toBe(true);
+    });
+
+    it('filter with the projects, by name or path', async () => {
+      await openWithRecent();
+      type('my drive');
+      expect(optionLabels()).toEqual(['SyllabiMy Drive/Syllabi', 'New project', 'Add folder from Google Drive']);
+      type('nothing here');
+      expect(document.querySelector('[data-testid="composer-scope-no-match"]')?.textContent).toContain('No project or folder matches');
+      expect(document.querySelector('[data-testid="composer-scope-panel"] [aria-live]')?.textContent).toContain('0 matches');
+    });
+
+    it('attach the folder afresh when picked', async () => {
+      await openWithRecent();
+      const picked: FolderAttachSelection[] = [];
+      component.sourceFolderPicked.subscribe(s => picked.push(s));
+      optionEls().find(el => el.textContent?.startsWith('Contracts'))!.click();
+      expect(picked).toEqual([
+        { connector: DRIVE, folder: { folderId: 'drive-b', folderName: 'Contracts', folderPath: 'Contracts' } },
+      ]);
+      expect(dialogOpen).not.toHaveBeenCalled();
+    });
+
+    it('are read again on every open, so a folder just attached comes first', async () => {
+      await openWithRecent();
+      key('Escape');
+      await openPanel();
+      await vi.waitFor(() => expect(listRecent).toHaveBeenCalledTimes(2));
+    });
+
+    it('cost nothing on hover once read, and nothing at all while folders are off', async () => {
+      await build({ recentFolders: [SYLLABI] });
+      trigger()!.dispatchEvent(new Event('pointerenter'));
+      await vi.waitFor(() => expect(listRecent).toHaveBeenCalledTimes(1));
+      trigger()!.dispatchEvent(new Event('pointerenter'));
+      await fixture.whenStable();
+      expect(listRecent).toHaveBeenCalledTimes(1);
+      TestBed.resetTestingModule();
+      await build({ remainingFolders: 0, recentFolders: [SYLLABI] });
+      trigger()!.dispatchEvent(new Event('pointerenter'));
+      await openPanel();
+      expect(listRecent).not.toHaveBeenCalled();
+    });
+
+    it('leave Add folder working when the list cannot be read', async () => {
+      await build({ recentFolders: new Error('boom') });
+      await openPanel();
+      await vi.waitFor(() => expect(optionLabels()).toContain('Add folder from Google Drive'));
+      expect(optionEls().some(el => el.getAttribute('data-testid') === 'composer-scope-option-recent-folder')).toBe(false);
     });
   });
 });

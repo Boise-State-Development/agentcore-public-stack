@@ -199,6 +199,14 @@ describe('ChatInputComponent — Drive folders', () => {
       expect(picker()).not.toBeNull();
     });
 
+    it('hands the picker the folders already on the message, so it offers none twice', async () => {
+      await rebuild(true, false, true);
+      const keys = () => (component as unknown as { attachedFolderKeys: () => string[] }).attachedFolderKeys();
+      expect(keys()).toEqual([]);
+      await attach();
+      expect(keys()).toEqual(['google-drive:drive-f']);
+    });
+
     it('is not drawn when the page does not ask, in a thread, or with nothing to offer', async () => {
       await rebuild(true, true, false);
       expect(picker()).toBeNull();
