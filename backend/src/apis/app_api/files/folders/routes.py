@@ -5,7 +5,8 @@
     DELETE /sessions/{session_id}/folders/{folder_attach_id}    remove it and its files
     POST   /sessions/{session_id}/folders/{folder_attach_id}/resume   re-run a lost walk
 
-All 404 while ``FOLDER_ATTACHMENTS_ENABLED`` is off. Attach and resume resolve
+All 404 to a signed-in user while ``FOLDER_ATTACHMENTS_ENABLED`` is off
+(401 unauthenticated regardless). Attach and resume resolve
 the connector exactly as ``GET /connectors/{id}/browse`` does (404 unknown or
 not a file source, 403 not visible to the user, 409 needs consent, 503
 identity unavailable), then hand the adapter and the user's vaulted token to
@@ -42,17 +43,21 @@ from apis.app_api.files.folders.service import (
 logger = logging.getLogger(__name__)
 
 
-def require_folder_attachments() -> None:
-    """404 while the flag is off, so the surface does not exist."""
+async def require_folder_attachments_user(
+    user: User = Depends(get_current_user_from_session),
+) -> User:
+    """The signed-in user, or 404 while the flag is off.
+
+    Authentication runs first (the ``memory_spaces`` pattern), so an
+    unauthenticated call is a 401 whatever the flag, and the surface only
+    reads as absent to a signed-in user while it is off.
+    """
     if not folder_attachments_enabled():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    return user
 
 
-router = APIRouter(
-    prefix="/sessions",
-    tags=["folder-attachments"],
-    dependencies=[Depends(require_folder_attachments)],
-)
+router = APIRouter(prefix="/sessions", tags=["folder-attachments"])
 
 
 class AttachFolderRequest(BaseModel):
@@ -79,7 +84,7 @@ class FolderAttachmentResponse(FolderAttachment):
 async def attach_folder(
     session_id: str,
     request: AttachFolderRequest,
-    user: User = Depends(get_current_user_from_session),
+    user: User = Depends(require_folder_attachments_user),
     service: FolderAttachmentService = Depends(get_folder_attachment_service),
     provider_repo: OAuthProviderRepository = Depends(get_provider_repository),
     role_service: AppRoleService = Depends(get_app_role_service),
@@ -112,7 +117,7 @@ async def attach_folder(
 async def get_folder_attachment(
     session_id: str,
     folder_attach_id: str,
-    user: User = Depends(get_current_user_from_session),
+    user: User = Depends(require_folder_attachments_user),
     service: FolderAttachmentService = Depends(get_folder_attachment_service),
 ) -> FolderAttachmentResponse:
     """The folder row: status, counts and the files attached so far."""
@@ -126,7 +131,7 @@ async def get_folder_attachment(
 async def delete_folder_attachment(
     session_id: str,
     folder_attach_id: str,
-    user: User = Depends(get_current_user_from_session),
+    user: User = Depends(require_folder_attachments_user),
     service: FolderAttachmentService = Depends(get_folder_attachment_service),
 ) -> Response:
     """Remove the folder and every file it attached (S3, sidecars, index)."""
@@ -143,7 +148,7 @@ async def delete_folder_attachment(
 async def resume_folder_attachment(
     session_id: str,
     folder_attach_id: str,
-    user: User = Depends(get_current_user_from_session),
+    user: User = Depends(require_folder_attachments_user),
     service: FolderAttachmentService = Depends(get_folder_attachment_service),
     provider_repo: OAuthProviderRepository = Depends(get_provider_repository),
     role_service: AppRoleService = Depends(get_app_role_service),
