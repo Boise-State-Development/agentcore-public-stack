@@ -12,7 +12,8 @@ import {
 } from '@angular/core';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroArrowPath, heroArrowTurnDownRight, heroExclamationCircle } from '@ng-icons/heroicons/outline';
-import { ContentBlock, Message, FileAttachmentData } from '../../../services/models/message.model';
+import { ContentBlock, Message, FileAttachmentData, FolderAttachmentData } from '../../../services/models/message.model';
+import { FolderAttachmentChipComponent } from './folder-attachment/folder-attachment-chip.component';
 import { FileAttachmentBadgeComponent, ImageAttachmentGroupComponent } from './file-attachment';
 import { MentionTextComponent } from './mention-text.component';
 import { LocalSettingsService } from '../../../../services/local-settings.service';
@@ -28,10 +29,10 @@ const MAX_HEIGHT_PX = 200;
 @Component({
   selector: 'app-user-message',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FileAttachmentBadgeComponent, ImageAttachmentGroupComponent, MentionTextComponent, NgIcon],
+  imports: [FileAttachmentBadgeComponent, FolderAttachmentChipComponent, ImageAttachmentGroupComponent, MentionTextComponent, NgIcon],
   viewProviders: [provideIcons({ heroArrowTurnDownRight, heroExclamationCircle, heroArrowPath })],
   template: `
-    @if (hasTextContent() || hasFileAttachments()) {
+    @if (hasTextContent() || hasFileAttachments() || folderAttachments().length > 0) {
       <div class="group relative flex w-full flex-col items-end gap-2">
         <!-- Hover-revealed sent-at subtitle (positioned above the topmost slot) -->
         @if (formattedSentAt()) {
@@ -114,6 +115,15 @@ const MAX_HEIGHT_PX = 200;
           <div class="flex max-w-[80%] flex-wrap justify-end gap-2">
             @for (attachment of nonImageAttachments(); track attachment.uploadId) {
               <app-file-attachment-badge [attachment]="attachment" />
+            }
+          </div>
+        }
+
+        <!-- Drive folders (drive-folder spec §4.7): one chip each, expanding to its files -->
+        @if (folderAttachments().length > 0) {
+          <div class="flex max-w-[80%] flex-wrap justify-end gap-2">
+            @for (folder of folderAttachments(); track $index) {
+              <app-folder-attachment-chip [folder]="folder" />
             }
           </div>
         }
@@ -239,6 +249,12 @@ export class UserMessageComponent implements AfterViewInit, OnDestroy {
       .filter((block: ContentBlock) => block.type === 'fileAttachment' && block.fileAttachment)
       .map((block: ContentBlock) => block.fileAttachment as FileAttachmentData);
   });
+
+  folderAttachments = computed((): FolderAttachmentData[] =>
+    this.message()
+      .content.filter((block: ContentBlock) => block.type === 'folderAttachment' && block.folderAttachment)
+      .map((block: ContentBlock) => block.folderAttachment as FolderAttachmentData),
+  );
 
   imageAttachments = computed((): FileAttachmentData[] =>
     this.fileAttachments().filter((a) => isImageMimeType(a.mimeType)),

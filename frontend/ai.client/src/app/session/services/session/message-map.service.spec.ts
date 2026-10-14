@@ -53,6 +53,16 @@ describe('MessageMapService', () => {
     expect(service).toBeTruthy();
   });
 
+  describe('a message with a Drive folder', () => {
+    it('puts the folder chip after the files and before the text', () => {
+      const folder = { folderAttachId: 'fa-1', name: 'Course', source: 'Drive', status: 'ready', fileCount: 1, files: ['a.pdf'], moreCount: 0 };
+      const file = { uploadId: 'u1', filename: 'n.pdf', mimeType: 'application/pdf', sizeBytes: 1 };
+      const message = service.addUserMessage('s1', 'what is due?', [file], [folder]);
+      expect(message.content.map((b) => b.type)).toEqual(['fileAttachment', 'folderAttachment', 'text']);
+      expect(message.content[1].folderAttachment).toEqual(folder);
+    });
+  });
+
   describe('a message that was not sent', () => {
     it('marks it with the reason, as a new object so OnPush bubbles re-render', () => {
       const sent = service.addUserMessage('s1', 'first');

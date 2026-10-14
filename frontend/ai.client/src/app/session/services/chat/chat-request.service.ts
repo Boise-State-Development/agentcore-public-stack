@@ -14,7 +14,7 @@ import { ModelService } from '../model/model.service';
 import { ToolService } from '../../../services/tool/tool.service';
 import { SkillService } from '../../../services/skill/skill.service';
 import { FileUploadService } from '../../../services/file-upload';
-import { FileAttachmentData } from '../models/message.model';
+import { FileAttachmentData, FolderAttachmentData } from '../models/message.model';
 import { OAuthConsentService } from '../../../services/oauth-consent/oauth-consent.service';
 import { SteeringService } from './steering.service';
 import {
@@ -126,6 +126,7 @@ export class ChatRequestService implements OnDestroy {
     assistantId?: string,
     mentionAgentId?: string,
     invokedSkillIds?: string[],
+    folders?: FolderAttachmentData[],
   ): Promise<void> {
     // Ensure conversation exists and get its ID
     // Update URL to reflect current conversation
@@ -177,7 +178,7 @@ export class ChatRequestService implements OnDestroy {
     const fileAttachments = this.getFileAttachments(fileUploadIds);
 
     // Create and add user message with file attachments
-    const userMessage = this.messageMapService.addUserMessage(sessionId, userInput, fileAttachments);
+    const userMessage = this.messageMapService.addUserMessage(sessionId, userInput, fileAttachments, folders);
     // If this send is the retry a down-thumb asked for, link it to the thumb
     // (an index on the feedback row — never the text).
     this.messageFeedbackService.consumePendingRetry(sessionId, userMessage);
@@ -204,6 +205,7 @@ export class ChatRequestService implements OnDestroy {
         assistantId,
         mentionAgentId,
         invokedSkillIds,
+        (folders ?? []).flatMap((folder) => (folder.folderAttachId ? [folder.folderAttachId] : [])),
       );
       this.turnTiming.describe(sessionId, {
         // The selected model even when the request omits it as the default.
@@ -478,6 +480,7 @@ export class ChatRequestService implements OnDestroy {
     assistantId?: string,
     mentionAgentId?: string,
     invokedSkillIds?: string[],
+    folderAttachmentIds?: string[],
   ) {
     const selectedModel = this.modelService.getSelectedModel();
 
@@ -533,6 +536,13 @@ export class ChatRequestService implements OnDestroy {
     // Add file upload IDs if present
     if (fileUploadIds && fileUploadIds.length > 0) {
       requestObject['file_upload_ids'] = fileUploadIds;
+    }
+
+    // Attached Drive folders (drive-folder spec §4.4). Each is ONE attachment
+    // against the per-message cap; its files are never on `file_upload_ids`.
+    // Omitted when empty so a plain turn's payload is unchanged.
+    if (folderAttachmentIds && folderAttachmentIds.length > 0) {
+      requestObject['folder_attachment_ids'] = folderAttachmentIds;
     }
 
     // Add assistant ID if present

@@ -126,6 +126,33 @@ describe('ChatRequestService', () => {
     );
   });
 
+  describe('folder attachments', () => {
+    const folder = {
+      folderAttachId: 'fa-1',
+      name: 'Course',
+      source: 'Google Drive',
+      status: 'ready',
+      fileCount: 2,
+      files: ['a.pdf', 'b.pdf'],
+      moreCount: 0,
+    };
+
+    it('sends the folder ids and gives the bubble its chip', async () => {
+      const messageMap = TestBed.inject(MessageMapService) as any;
+      await service.submitChatRequest('Hello', 'session1', undefined, undefined, undefined, undefined, [folder]);
+
+      expect(mockChatHttpService.sendChatRequest).toHaveBeenCalledWith(
+        expect.objectContaining({ folder_attachment_ids: ['fa-1'] }),
+      );
+      expect(messageMap.addUserMessage).toHaveBeenCalledWith('session1', 'Hello', undefined, [folder]);
+    });
+
+    it('omits the field on a turn without folders', async () => {
+      await service.submitChatRequest('Hello', 'session1');
+      expect(mockChatHttpService.sendChatRequest.mock.calls[0][0]).not.toHaveProperty('folder_attachment_ids');
+    });
+  });
+
   describe('session prewarm', () => {
     it('a new conversation starts on the id the page warmed, registered like any new one', async () => {
       const prewarm = TestBed.inject(SessionPrewarmService);

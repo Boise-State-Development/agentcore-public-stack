@@ -54,9 +54,10 @@ export interface FeatureFlags {
    */
   largeDocumentAttachments: boolean;
   /**
-   * Folder attachments (docs/specs/drive-folder-attachments.md): attach a Google
-   * Drive folder to a conversation as one attachment. No UI reads it yet (PR-C);
-   * off everywhere until then. Backend: FOLDER_ATTACHMENTS_ENABLED (app-api).
+   * Folder attachments (docs/specs/drive-folder-attachments.md): "Attach this
+   * folder" in the composer's Drive browser, the folder card, and the folder chip
+   * on a sent message. Backend: FOLDER_ATTACHMENTS_ENABLED on app-api (the
+   * routes) and the AgentCore Runtime (the manifest); keep them in step.
    */
   folderAttachments: boolean;
   /**

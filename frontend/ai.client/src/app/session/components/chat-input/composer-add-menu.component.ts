@@ -31,6 +31,8 @@ import {
   FileSourceBrowserDialogComponent,
   FileSourceBrowserDialogData,
   FileSourceBrowserDialogResult,
+  FolderAttachSelection,
+  isFolderAttachSelection,
 } from '../../../assistants/components/file-source-browser-dialog.component';
 import { FileSourceConnector } from '../../../assistants/models/file-source.model';
 import { FileSourceService } from '../../../assistants/services/file-source.service';
@@ -118,6 +120,12 @@ export class ComposerAddMenuComponent {
 
   /** How many more files the message can take; zero disables the file rows. */
   readonly remainingFiles = input<number>(MAX_FILES_PER_MESSAGE);
+  /**
+   * How many more folders the message can take (drive-folder spec §4.5). Zero,
+   * the default, hides "Attach this folder" in the browser: a composer that
+   * cannot send folders never offers one.
+   */
+  readonly remainingFolders = input<number>(0);
   /** Offer the Skills submenu. Off where the composer hides `/` commands too. */
   readonly showSkills = input<boolean>(true);
   /** The whole trigger, e.g. while dictating. */
@@ -127,6 +135,8 @@ export class ComposerAddMenuComponent {
   readonly pickFromDevice = output<void>();
   /** Files chosen from a connected file source, for the composer to attach. */
   readonly sourceFilesPicked = output<AttachSelection>();
+  /** A whole folder chosen in the browser, for the composer to attach as one item. */
+  readonly sourceFolderPicked = output<FolderAttachSelection>();
   /** A skill to write into the message as its `/command`. */
   readonly skillPicked = output<SkillCommand>();
 
@@ -260,14 +270,23 @@ export class ComposerAddMenuComponent {
     }
     const ref = this.dialog.open<FileSourceBrowserDialogResult, FileSourceBrowserDialogData>(
       FileSourceBrowserDialogComponent,
-      { data: { connector: source, mode: 'attach', maxFiles: this.remainingFiles() } },
+      {
+        data: {
+          connector: source,
+          mode: 'attach',
+          maxFiles: this.remainingFiles(),
+          allowFolder: this.remainingFolders() > 0,
+        },
+      },
     );
     const result = await firstValueFrom(ref.closed);
     // Consent may have landed while the dialog was open; the row's state is
     // only decoration, but a stale "Not connected" would send the person
     // through the browser's connect prompt a second time.
     void this.loadFileSources(true);
-    if (result && 'files' in result && result.files.length > 0) {
+    if (isFolderAttachSelection(result)) {
+      this.sourceFolderPicked.emit(result);
+    } else if (result && 'files' in result && result.files.length > 0) {
       this.sourceFilesPicked.emit(result);
     }
   }

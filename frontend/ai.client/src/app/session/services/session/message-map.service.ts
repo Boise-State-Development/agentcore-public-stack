@@ -1,6 +1,7 @@
 // services/message-map.service.ts (updated integration)
 import { EffectRef, Injectable, Injector, Signal, WritableSignal, signal, effect, inject } from '@angular/core';
-import { ContentBlock, FileAttachmentData, Message } from '../models/message.model';
+import { ContentBlock, FileAttachmentData, FolderAttachmentData, Message } from '../models/message.model';
+import { parseFolderManifests } from './folder-manifest';
 import { StreamParserService } from '../chat/stream-parser.service';
 import { PendingInterrupt, SessionService } from './session.service';
 import { FileUploadService, FileMetadata } from '../../../services/file-upload';
@@ -221,7 +222,12 @@ export class MessageMapService {
    * @param content - The text content of the message
    * @param fileAttachments - Optional array of file attachment metadata
    */
-  addUserMessage(sessionId: string, content: string, fileAttachments?: FileAttachmentData[]): Message {
+  addUserMessage(
+    sessionId: string,
+    content: string,
+    fileAttachments?: FileAttachmentData[],
+    folderAttachments?: FolderAttachmentData[],
+  ): Message {
     // Get current message count for this session to compute ID
     const currentMessages = this.messageMap()[sessionId]?.() ?? [];
     const messageIndex = currentMessages.length;
@@ -240,6 +246,12 @@ export class MessageMapService {
           fileAttachment: attachment
         });
       }
+    }
+
+    // Folder chips after the files: a folder is one attachment, shown as one
+    // chip however many files it holds (drive-folder spec §4.7).
+    for (const folder of folderAttachments ?? []) {
+      contentBlocks.push({ type: 'folderAttachment', folderAttachment: folder });
     }
 
     // Add text content block
@@ -677,8 +689,20 @@ export class MessageMapService {
       // Process each content block
       const newContent: ContentBlock[] = [];
       const fileAttachmentBlocks: ContentBlock[] = [];
+      const folderAttachmentBlocks: ContentBlock[] = [];
 
-      for (const block of message.content) {
+      for (const rawBlock of message.content) {
+        let block = rawBlock;
+        // A folder's manifest sits in the stored text, ahead of the files
+        // marker; read it back as a chip and take it out of the text.
+        if (block.type === 'text' && block.text && block.text.includes('<folder ')) {
+          const parsed = parseFolderManifests(block.text);
+          for (const folder of parsed.folders) {
+            folderAttachmentBlocks.push({ type: 'folderAttachment', folderAttachment: folder });
+          }
+          block = { ...block, text: parsed.text };
+          if (!parsed.text) continue;
+        }
         if (block.type === 'text' && block.text) {
           // Check for attached files marker
           const match = block.text.match(ATTACHED_FILES_PATTERN);
@@ -713,11 +737,11 @@ export class MessageMapService {
         }
       }
 
-      // Return message with file attachments first, then other content
-      if (fileAttachmentBlocks.length > 0) {
+      // Return message with file attachments first, then folders, then other content
+      if (fileAttachmentBlocks.length > 0 || folderAttachmentBlocks.length > 0) {
         return {
           ...message,
-          content: [...fileAttachmentBlocks, ...newContent]
+          content: [...fileAttachmentBlocks, ...folderAttachmentBlocks, ...newContent]
         };
       }
 
