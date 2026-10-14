@@ -177,6 +177,13 @@ describe('ArtifactPanelComponent', () => {
     expect(viewerInstance()!.inert()).toBe(true);
   });
 
+  it('gives the rail back when it is destroyed with the page', () => {
+    const close = TestBed.inject(ArtifactStateService).closeArtifactPanel;
+    expect(close).not.toHaveBeenCalled();
+    fixture.destroy();
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
   describe('rename and delete', () => {
     const panel = () =>
       fixture.componentInstance as unknown as Record<string, any>;
