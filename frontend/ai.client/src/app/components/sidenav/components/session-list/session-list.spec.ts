@@ -341,6 +341,19 @@ describe('SessionList', () => {
       ]);
     });
 
+    it('opens a project task as `?project=`, and any other Agent conversation by its Agent', async () => {
+      const component = await createComponent();
+      expect(component['getSessionQueryParams'](task('b', 'prj_1'))).toEqual({ project: 'prj_1' });
+      expect(component['getSessionQueryParams']({ ...plain('c'), preferences: { assistantId: 'agent-7' } })).toEqual({ assistantId: 'agent-7' });
+      expect(component['getSessionQueryParams'](plain('a'))).toBeNull();
+    });
+
+    it('opens a project task by its Agent in a build with Projects off', async () => {
+      TestBed.overrideProvider(FEATURES, { useValue: { projects: false } });
+      const component = await createComponent();
+      expect(component['getSessionQueryParams'](task('b', 'prj_1'))).toEqual({ assistantId: 'ast' });
+    });
+
     it('lists project tasks as plain rows, loads no names, and offers no project share in a build with Projects off', async () => {
       TestBed.overrideProvider(FEATURES, { useValue: { projects: false } });
       mockSessionService.mergedSessionsResource.set({ sessions: [plain('a'), task('b', 'prj_1')], nextToken: null });

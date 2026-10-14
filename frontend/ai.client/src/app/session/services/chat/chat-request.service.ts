@@ -8,6 +8,7 @@ import { MessageMapService } from '../session/message-map.service';
 import { MessageFeedbackService } from '../session/message-feedback.service';
 import { SessionService } from '../session/session.service';
 import { SessionPrewarmService } from '../session/session-prewarm.service';
+import { ConversationBindingService } from '../session/conversation-binding.service';
 import { TurnTimingService } from './turn-timing.service';
 import { UserService } from '../../../auth/user.service';
 import { ModelService } from '../model/model.service';
@@ -76,6 +77,7 @@ export class ChatRequestService implements OnDestroy {
   private failedSends = inject(FailedSendService);
   private systemPromptsService = inject(SystemPromptsService);
   private router = inject(Router);
+  private readonly binding = inject(ConversationBindingService);
   // TODO: Inject proper logging service
 
   constructor() {
@@ -171,7 +173,7 @@ export class ChatRequestService implements OnDestroy {
       this.systemPromptsService.bindToSession(sessionId);
     }
 
-    // Preserve assistantId in URL when navigating to new session
+    // Preserve the binding in the URL when navigating to the new session
     this.navigateToSession(sessionId, assistantId);
 
     // Get file attachment metadata for display in user message
@@ -414,14 +416,14 @@ export class ChatRequestService implements OnDestroy {
   /**
    * Navigates to the conversation route
    * @param sessionId The conversation ID to navigate to
-   * @param assistantId Optional assistant ID to preserve in query params
+   * @param assistantId Optional assistant ID to preserve in query params:
+   *   `?project=` when it is a project's harness, else `?assistantId=`
    */
   private navigateToSession(sessionId: string, assistantId?: string): void {
-    // Build query params - only include assistantId if it has a value
-    const queryParams: Record<string, string> = {};
-    if (assistantId) {
-      queryParams['assistantId'] = assistantId;
-    }
+    // Merged, not replaced, so `m` and the like survive. Without an Agent the
+    // binding params are left as they are, as before.
+    const binding = this.binding.queryParamsFor(assistantId);
+    const queryParams: Record<string, string | null> = assistantId ? { ...binding } : {};
 
     this.router.navigate(['s', sessionId], {
       replaceUrl: true,

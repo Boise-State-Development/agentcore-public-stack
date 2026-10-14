@@ -36,6 +36,7 @@ import {
 } from '@ng-icons/heroicons/outline';
 import { DialogDismissDirective } from '../dialog/dialog-dismiss.directive';
 import { FEATURES } from '../../services/features';
+import { bindingQueryParams } from '../../session/services/session/conversation-binding.service';
 import { SessionService } from '../../session/services/session/session.service';
 import { SidenavService } from '../../services/sidenav/sidenav.service';
 import { SessionMetadata } from '../../session/services/models/session-metadata.model';
@@ -117,6 +118,8 @@ interface ConversationRow {
   archived: boolean;
   messageId: string | null;
   assistantId: string | null;
+  /** Set on a project task: it opens as `?project=` rather than by its harness Agent. */
+  projectId: string | null;
   /** The best turn plus any `alsoMatched` ones; 0 for a title-only row. */
   matchCount: number;
 }
@@ -212,6 +215,7 @@ function fromLoadedSession(session: SessionMetadata): ConversationRow {
     archived: session.status === 'archived',
     messageId: null,
     assistantId: session.preferences?.assistantId ?? null,
+    projectId: session.preferences?.projectId ?? null,
     matchCount: 0,
   };
 }
@@ -260,6 +264,7 @@ function fromSearchResult(result: ConversationSearchResult): ConversationRow {
     archived: result.archived,
     messageId: result.messageId ?? null,
     assistantId: result.assistantId ?? null,
+    projectId: result.projectId ?? null,
     matchCount: result.messageId ? 1 + result.alsoMatched.length : 0,
   };
 }
@@ -720,7 +725,9 @@ export class SearchDialogComponent {
     }
     if (row.kind === 'conversation') {
       const queryParams: Record<string, string> = {};
-      if (row.assistantId) queryParams['assistantId'] = row.assistantId;
+      const binding = bindingQueryParams(row.assistantId, row.projectId, this.features.projects);
+      if (binding.project) queryParams['project'] = binding.project;
+      else if (binding.assistantId) queryParams['assistantId'] = binding.assistantId;
       if (row.messageId) queryParams['m'] = row.messageId;
       const loaded = this.sessions().find(s => s.sessionId === row.sessionId);
       if (loaded) this.sessionService.currentSession.set(loaded);

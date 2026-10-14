@@ -62,7 +62,10 @@ describe('ComposerScopePickerComponent', () => {
   interface BuildOptions {
     projectsFlag?: boolean;
     remainingFolders?: number;
+    /** An older link's harness Agent on the URL. */
     assistantId?: string | null;
+    /** The URL's `?project=`. */
+    projectId?: string | null;
     available?: boolean | null;
     list?: Project[];
   }
@@ -72,6 +75,7 @@ describe('ComposerScopePickerComponent', () => {
       projectsFlag = true,
       remainingFolders = 2,
       assistantId = null,
+      projectId = null,
       list = PROJECTS,
     } = opts;
     navigate = vi.fn(async () => true);
@@ -84,7 +88,12 @@ describe('ComposerScopePickerComponent', () => {
       available.set(true);
     });
     listFileSources = vi.fn(async () => [DRIVE]);
-    queryParams = new BehaviorSubject(convertToParamMap(assistantId ? { assistantId } : {}));
+    queryParams = new BehaviorSubject(
+      convertToParamMap({
+        ...(assistantId ? { assistantId } : {}),
+        ...(projectId ? { project: projectId } : {}),
+      }),
+    );
 
     await TestBed.configureTestingModule({
       imports: [ComposerScopePickerComponent],
@@ -169,6 +178,12 @@ describe('ComposerScopePickerComponent', () => {
     });
 
     it("shows the chosen project's name, from the project list", async () => {
+      await build({ projectId: 'p2' });
+      expect(trigger()!.textContent).toContain('Grant proposal');
+      expect(trigger()!.getAttribute('aria-label')).toContain('Project: Grant proposal');
+    });
+
+    it('still recognises an older link that names the harness Agent', async () => {
       await build({ assistantId: 'harness-2' });
       expect(trigger()!.textContent).toContain('Grant proposal');
       expect(trigger()!.getAttribute('aria-label')).toContain('Project: Grant proposal');
@@ -260,22 +275,23 @@ describe('ComposerScopePickerComponent', () => {
   });
 
   describe('picking', () => {
-    it('binds a project through its harness Agent on the current URL', async () => {
+    it('binds a project by its id on the current URL, never its harness Agent', async () => {
       await build();
       await openPanel();
       key('ArrowDown');
       key('Enter');
+      // `assistantId: null` too, so a merge drops an Agent chosen before the project.
       expect(navigate).toHaveBeenCalledWith([], expect.objectContaining({
-        queryParams: { assistantId: 'harness-2' },
+        queryParams: { project: 'p2', assistantId: null },
         queryParamsHandling: 'merge',
       }));
     });
 
     it('clears the project with No project', async () => {
-      await build({ assistantId: 'harness-1' });
+      await build({ projectId: 'p1' });
       await openPanel();
       optionEls()[0].click();
-      expect(navigate).toHaveBeenCalledWith([], expect.objectContaining({ queryParams: { assistantId: null } }));
+      expect(navigate).toHaveBeenCalledWith([], expect.objectContaining({ queryParams: { project: null, assistantId: null } }));
     });
 
     it('does nothing when the chosen project is picked again', async () => {
@@ -292,7 +308,7 @@ describe('ComposerScopePickerComponent', () => {
       optionEls().find(el => el.textContent?.includes('New project'))!.click();
       await vi.waitFor(() => expect(navigate).toHaveBeenCalled());
       expect(dialogOpen.mock.calls[0][0]).toBe(CreateProjectDialogComponent);
-      expect(navigate).toHaveBeenCalledWith([], expect.objectContaining({ queryParams: { assistantId: 'harness-9' } }));
+      expect(navigate).toHaveBeenCalledWith([], expect.objectContaining({ queryParams: { project: 'p9', assistantId: null } }));
     });
 
     it('binds nothing when the create dialog is cancelled', async () => {

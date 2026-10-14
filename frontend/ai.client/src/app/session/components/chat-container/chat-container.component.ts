@@ -170,7 +170,7 @@ export class ChatContainerComponent {
   showScopePicker = input<boolean>(false);
   /**
    * The Shared Project this conversation runs in, resolved by the session page
-   * (it knows the URL's `assistantId` before the harness Agent has loaded).
+   * (it resolves the URL's `?project=` before the harness Agent has loaded).
    * The empty state then shows the greeting, with the composer's placeholder
    * naming the project, instead of the harness Agent's launch card.
    */
