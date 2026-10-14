@@ -10,6 +10,7 @@ import {
   untracked,
   afterNextRender,
   DestroyRef,
+  EffectRef,
   ElementRef,
   Injector,
 } from '@angular/core';
@@ -56,11 +57,15 @@ import {
 import {
   FOLDER_POLL_DELAYS_MS,
   FOLDER_POLL_MAX_MS,
+  FolderAttachment,
   FolderAttachmentError,
   FolderAttachmentService,
+  FolderRefreshService,
   MAX_FOLDERS_PER_MESSAGE,
   isSettledStatus,
 } from '../../../services/folder-attachments';
+import { UserConnectorsService } from '../../../settings/connectors/services/user-connectors.service';
+import { OAuthConsentService } from '../../../services/oauth-consent/oauth-consent.service';
 import { FolderAttachmentData } from '../../services/models/message.model';
 import { folderDataFromRow } from '../../services/session/folder-manifest';
 import { ComposerFolder, FolderCardComponent } from './folder-card.component';
@@ -331,6 +336,7 @@ export class ChatInputComponent {
   private readonly fileUploadService = inject(FileUploadService);
   private readonly fileSourceService = inject(FileSourceService);
   private readonly folderAttachments = inject(FolderAttachmentService);
+  private readonly folderRefresh = inject(FolderRefreshService);
   private readonly features = inject(FEATURES);
   private readonly toastService = inject(ToastService);
   private readonly steering = inject(SteeringService);
@@ -1406,7 +1412,23 @@ export class ChatInputComponent {
 
     inject(DestroyRef).onDestroy(() => this.cancelDictation());
     // A folder card's poll must not outlive the composer that shows it.
-    inject(DestroyRef).onDestroy(() => this.stopAllFolderPolls());
+    inject(DestroyRef).onDestroy(() => {
+      this.stopAllFolderPolls();
+      this.consentWatch?.destroy();
+    });
+
+    // A folder refreshed from its chip on a sent message (spec §4.6) comes
+    // onto this composer as a card, so the next message carries a manifest of
+    // the folder as it is now. Only for this conversation, only once.
+    effect(() => {
+      const handoff = this.folderRefresh.handoff();
+      const sessionId = this.sessionId();
+      if (!handoff || !sessionId || handoff.sessionId !== sessionId) return;
+      untracked(() => {
+        this.folderRefresh.take();
+        this.adoptRefreshedFolder(handoff.row);
+      });
+    });
   }
 
   private focusInput(): void {
@@ -1897,6 +1919,92 @@ export class ChatInputComponent {
         this.toastService.error('Folder', "Couldn't remove the folder's files. They will be deleted with the conversation.");
       });
     }
+  }
+
+  /**
+   * Reconnect the folder's connector, then pick the walk up where it stopped.
+   *
+   * The consent services are resolved here rather than injected: only a card
+   * whose token lapsed ever needs them, and the composer is constructed far
+   * more often than that.
+   */
+  async onFolderConnect(localId: string): Promise<void> {
+    const folder = this.attachedFolders().find(f => f.localId === localId);
+    const providerId = folder?.row?.connectorId;
+    if (!folder || !providerId) return;
+    const connectors = this.injector.get(UserConnectorsService);
+    const consent = this.injector.get(OAuthConsentService);
+    try {
+      const result = await connectors.initiateConsent(providerId);
+      if (result.connected) {
+        await this.onFolderRetry(localId);
+        return;
+      }
+      if (!result.authorizationUrl) {
+        this.toastService.error('Folder', 'Unexpected response from the server.');
+        return;
+      }
+      this.watchConsent(consent, providerId, localId);
+      void consent.startUserConsent(providerId, result.authorizationUrl);
+    } catch (err) {
+      this.toastService.error('Folder', err instanceof Error ? err.message : "Couldn't start connecting.");
+    }
+  }
+
+  /** The popup's outcome for this provider: resume the folder on success. */
+  private consentWatch: EffectRef | null = null;
+
+  private watchConsent(consent: OAuthConsentService, providerId: string, localId: string): void {
+    this.consentWatch?.destroy();
+    this.consentWatch = effect(
+      () => {
+        const completion = consent.completion();
+        if (!completion || completion.providerId !== providerId) return;
+        untracked(() => {
+          consent.acknowledgeCompletion();
+          this.consentWatch?.destroy();
+          this.consentWatch = null;
+          if (completion.status === 'success') {
+            void this.onFolderRetry(localId);
+          } else {
+            this.toastService.error('Folder', completion.error ?? 'Could not connect Google Drive.');
+          }
+        });
+      },
+      { injector: this.injector },
+    );
+  }
+
+  /** A folder refreshed elsewhere becomes this composer's card, polling until it settles. */
+  private adoptRefreshedFolder(row: FolderAttachment): void {
+    const existing = untracked(this.attachedFolders).find(f => f.folderAttachId === row.folderAttachId);
+    if (existing) {
+      this.updateFolder(existing.localId, { row, phase: 'attached', error: null });
+      this.startFolderPoll(existing.localId);
+      return;
+    }
+    if (untracked(this.remainingFolderSlots) <= 0) {
+      this.toastService.warning(
+        'Folder limit',
+        'The folder is refreshing, but this message has no room for it. Remove an attachment to add it.',
+      );
+      return;
+    }
+    const localId = `folder:${row.folderAttachId}`;
+    this.attachedFolders.update(list => [
+      ...list,
+      {
+        localId,
+        folderAttachId: row.folderAttachId,
+        sessionId: row.sessionId,
+        name: row.folderName,
+        source: row.connectorName ?? row.connectorId,
+        row,
+        phase: 'attached',
+        error: null,
+      },
+    ]);
+    this.startFolderPoll(localId);
   }
 
   /** Re-run a walk that stopped short (consent, quota, a listing error). */

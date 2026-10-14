@@ -74,7 +74,15 @@ export interface ComposerFolder {
       </div>
 
       <div class="flex shrink-0 items-center gap-1">
-        @if (canRetry()) {
+        @if (needsConsent()) {
+          <button
+            type="button"
+            (click)="onConnect($event)"
+            class="rounded-md px-2 py-0.5 text-xs font-medium text-primary-700 ring-1 ring-primary-300 hover:bg-primary-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-300 dark:ring-primary-700 dark:hover:bg-primary-900/40"
+          >
+            Connect<span class="sr-only"> {{ folder().source }} to read {{ folder().name }}</span>
+          </button>
+        } @else if (canRetry()) {
           <button
             type="button"
             (click)="onRetry($event)"
@@ -106,6 +114,14 @@ export class FolderCardComponent {
   readonly remove = output<string>();
   /** The card's `localId`: re-run a walk that stopped short. */
   readonly retry = output<string>();
+  /** The card's `localId`: reconnect the folder's source, then resume. */
+  readonly connect = output<string>();
+
+  /** The source's token lapsed: Connect, not Try again, is what helps. */
+  protected readonly needsConsent = computed(() => {
+    const row = this.folder().row;
+    return !!row && row.status !== 'expanding' && row.error === 'needs_consent';
+  });
 
   protected readonly isError = computed(() => {
     const folder = this.folder();
@@ -139,6 +155,11 @@ export class FolderCardComponent {
   protected onRemove(event: Event): void {
     event.stopPropagation();
     this.remove.emit(this.folder().localId);
+  }
+
+  protected onConnect(event: Event): void {
+    event.stopPropagation();
+    this.connect.emit(this.folder().localId);
   }
 
   protected onRetry(event: Event): void {

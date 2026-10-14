@@ -216,6 +216,32 @@ class FileUploadRepository:
             logger.error(f"Error updating file preparation {upload_id}: {e}")
             raise
 
+    async def replace_file_content_fields(
+        self, user_id: str, upload_id: str, size_bytes: int
+    ) -> Optional[FileMetadata]:
+        """A READY file's bytes were replaced at the same key: record the new
+        size and drop what described the old bytes (``digest``, ``preparation``).
+
+        The upload id, key, name and ``kbIndex`` stay: the id is what earlier
+        turns cite, and the next preparation re-ingests under the same KB
+        document id. ``None`` when the row is gone or not READY.
+        """
+        try:
+            response = self._table.update_item(
+                Key={"PK": f"USER#{user_id}", "SK": f"FILE#{upload_id}"},
+                UpdateExpression="SET sizeBytes = :size, updatedAt = :now REMOVE digest, preparation",
+                ExpressionAttributeNames={"#status": "status"},
+                ExpressionAttributeValues={":size": size_bytes, ":now": utc_now_iso(), ":ready": FileStatus.READY.value},
+                ConditionExpression="attribute_exists(PK) AND #status = :ready",
+                ReturnValues="ALL_NEW",
+            )
+            return FileMetadata.from_dynamo_item(response["Attributes"])
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                return None
+            logger.error(f"Error replacing file content fields {upload_id}: {e}")
+            raise
+
     async def update_file_kb_index(
         self, user_id: str, upload_id: str, kb_index: dict
     ) -> Optional[FileMetadata]:
@@ -514,6 +540,22 @@ class FileUploadRepository:
             return UserFileQuota.from_dynamo_item(response["Attributes"])
         except ClientError as e:
             logger.error(f"Error incrementing quota for user {user_id}: {e}")
+            raise
+
+    async def adjust_quota_bytes(self, user_id: str, delta_bytes: int) -> UserFileQuota:
+        """Add ``delta_bytes`` (negative to release) to the quota's byte total
+        without counting a file: a file's bytes replaced in place
+        (``FileUploadService.replace_file_content``) is still one file."""
+        try:
+            response = self._table.update_item(
+                Key={"PK": f"USER#{user_id}", "SK": "QUOTA"},
+                UpdateExpression="SET userId = :userId, updatedAt = :now ADD totalBytes :delta",
+                ExpressionAttributeValues={":userId": user_id, ":now": utc_now_iso(), ":delta": delta_bytes},
+                ReturnValues="ALL_NEW",
+            )
+            return UserFileQuota.from_dynamo_item(response["Attributes"])
+        except ClientError as e:
+            logger.error(f"Error adjusting quota for user {user_id}: {e}")
             raise
 
     async def decrement_quota(self, user_id: str, size_bytes: int) -> UserFileQuota:
