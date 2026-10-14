@@ -16,6 +16,14 @@ the same bytes.
 **Bounded.** At most ``FOLDER_MANIFEST_MAX_ENTRIES`` lines per folder, then a
 count of the rest; ``document_read`` with no arguments lists every file.
 
+**A cross-package contract.** The SPA reads this text back to rebuild the
+folder chip on a reloaded message (``frontend/ai.client/src/app/session/
+services/session/folder-manifest.ts``): the ``<folder …>`` attributes, one
+entry per line with the path before the first `` — ``, the ``… and N more``
+line, and the guidance line's three openings. Change the format on both sides
+together; ``tests/shared/test_folder_manifest.py`` and the SPA's
+``folder-manifest.spec.ts`` pin the same strings.
+
 Folder and file names are the user's own. They reach the model (that is the
 point) but never a log line or a metric: :func:`record_folder_manifests` emits
 counts only.
