@@ -22,5 +22,6 @@ export const environment = {
         sessionPrewarm: false,
         clientTurnTiming: false,
         largeDocumentAttachments: false,
+        folderAttachments: false,
     } satisfies FeatureFlags,
 };

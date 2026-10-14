@@ -92,6 +92,7 @@ export interface AppConfig {
   wordTrackedChanges: WordTrackedChangesConfig;
   largeDocumentAttachments: LargeDocumentAttachmentsConfig;
   attachmentKb: AttachmentKbConfig;
+  folderAttachments: FolderAttachmentsConfig;
   agents: AgentsConfig;
   agentMarketplace: AgentMarketplaceConfig;
   dictation: DictationConfig;
@@ -699,6 +700,22 @@ export interface LargeDocumentAttachmentsConfig {
  * itself is created on first ingest, never by CloudFormation.
  */
 export interface AttachmentKbConfig {
+  enabled: boolean;
+}
+
+/**
+ * Folder attachments (docs/specs/drive-folder-attachments.md): a conversation
+ * can attach a Google Drive folder, whose readable files app-api imports as
+ * session files delivered by reference whatever their size. **Opt-in while in
+ * development**: off unless CDK_FOLDER_ATTACHMENTS_ENABLED=true (or a
+ * `folderAttachments.enabled: true` cdk.json context), and refused without
+ * `largeDocumentAttachments.enabled`, because a folder file is read through
+ * the prepare Lambda's sidecars: without that pipeline there is nothing to
+ * read a small file through. Sets FOLDER_ATTACHMENTS_ENABLED on app-api only
+ * (the routes and the expansion task); the Runtime's copy arrives with the
+ * manifest (PR-B). No resources.
+ */
+export interface FolderAttachmentsConfig {
   enabled: boolean;
 }
 
@@ -1509,6 +1526,12 @@ export function loadConfig(scope: cdk.App): AppConfig {
         ? process.env.CDK_ATTACHMENT_KB_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('attachmentKb')?.enabled ?? false,
     },
+    folderAttachments: {
+      // Opt-in while in development, same parsing as attachmentKb.
+      enabled: process.env.CDK_FOLDER_ATTACHMENTS_ENABLED
+        ? process.env.CDK_FOLDER_ATTACHMENTS_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('folderAttachments')?.enabled ?? false,
+    },
     agents: {
       // Default ON with a kill switch (house style, mirroring memorySpaces /
       // scheduledRuns): the workflow forwards an EMPTY STRING when unset, so treat
@@ -2147,6 +2170,13 @@ function validateConfig(config: AppConfig): void {
     throw new Error(
       'CDK_ATTACHMENT_KB_ENABLED=true requires CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED=true: '
       + 'the attachments knowledge base is fed by the large-document preparation pipeline.',
+    );
+  }
+  // A folder's files are read through the prepare Lambda's sidecars.
+  if (config.folderAttachments.enabled && !config.largeDocumentAttachments.enabled) {
+    throw new Error(
+      'CDK_FOLDER_ATTACHMENTS_ENABLED=true requires CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED=true: '
+      + 'a folder\'s files are delivered by reference and read from the sidecars the large-document pipeline prepares.',
     );
   }
 
