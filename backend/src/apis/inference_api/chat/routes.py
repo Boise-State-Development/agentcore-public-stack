@@ -34,6 +34,7 @@ from apis.shared.feature_flags import (
     kb_search_ahead_enabled,
     agents_enabled,
     attachment_turn_guard_enabled,
+    folder_attachments_enabled,
     inline_attachment_persist_enabled,
     memory_spaces_enabled,
     mid_turn_steering_enabled,
@@ -46,6 +47,13 @@ from apis.shared.files.models import (
     INLINE_ATTACHMENTS_MAX_TOTAL_BYTES,
     MAX_FILES_PER_MESSAGE,
     TEXT_ONLY_DOCUMENTS_MAX_CHARS,
+    is_tabular_file,
+)
+from apis.shared.files.folder_attachments import FOLDERS_PER_MESSAGE, FolderAttachment
+from apis.shared.files.folder_manifest import (
+    attached_entries,
+    record_folder_manifests,
+    render_folders_section,
 )
 from apis.shared.files.reference_attachments import (
     ReferenceAttachment,
@@ -2369,6 +2377,11 @@ class TurnAttachments:
     # stub in the user message, stays in the marker, and counts toward the
     # per-message file cap (applied to the ids before they were resolved).
     reference_documents: list = field(default_factory=list)
+    # Attached Drive folders (``FolderAttachment`` rows, drive-folder spec
+    # §4.4): each counted ONE against the per-message cap, read by one
+    # ``GetItem``, never by S3. Each reaches the model as a manifest in the
+    # user message; its files are already session files.
+    folders: list = field(default_factory=list)
     # Inline (base64 ``files``) spreadsheets/decks that could not be stored as
     # session files — ``PersistFailure`` entries (file + user-facing reason).
     # Dropped from the turn: not diverted, not in the marker, named in the note.
@@ -2423,6 +2436,66 @@ async def _persist_inline_diverted(
         [f for f in diverted_presentations if id(f) not in failed],
         failures,
     )
+
+
+#: A folder attach id is ``{ms_hex}_{uuid16}`` (``new_folder_attach_id``). Anything
+#: longer is not one, and never reaches a key.
+_FOLDER_ATTACH_ID_MAX_LEN = 64
+
+
+def _requested_folder_ids(input_data: InvocationRequest) -> tuple[list[str], int]:
+    """The turn's folder ids, deduped in order, held to ``FOLDERS_PER_MESSAGE``.
+
+    Returns ``(kept, dropped)``. Empty while ``FOLDER_ATTACHMENTS_ENABLED`` is
+    off: the field is ignored, exactly as before it existed.
+    """
+    raw = input_data.folder_attachment_ids or []
+    if not raw or not folder_attachments_enabled():
+        return [], 0
+    seen: set[str] = set()
+    ids: list[str] = []
+    for value in raw:
+        if not isinstance(value, str) or not value or len(value) > _FOLDER_ATTACH_ID_MAX_LEN or value in seen:
+            continue
+        seen.add(value)
+        ids.append(value)
+    cap = max(0, FOLDERS_PER_MESSAGE)
+    return ids[:cap], max(0, len(ids) - cap)
+
+
+async def _resolve_turn_folders(user_id: str, session_id: str, folder_ids: list[str]) -> list:
+    """This turn's folder rows: one ``GetItem`` each, in parallel worker threads.
+
+    Owner-scoped by the key (``USER#{user_id}``), and a row from another
+    conversation is dropped: its files are that conversation's, which this
+    turn's ``document_read`` cannot list. A missing row (the user removed the
+    folder) is dropped too. Never raises: a folder that cannot be read costs the
+    turn its manifest, not the turn.
+    """
+    if not folder_ids:
+        return []
+    from apis.shared.files.folder_repository import get_folder_attachment_repository
+
+    repository = get_folder_attachment_repository()
+    results = await asyncio.gather(
+        *(asyncio.to_thread(repository.get_sync, user_id, fid) for fid in folder_ids),
+        return_exceptions=True,
+    )
+    folders: list = []
+    for result in results:
+        if isinstance(result, BaseException):
+            logger.warning("Folder attachment row could not be read; manifest skipped", exc_info=result)
+            continue
+        if result is None or result.session_id != session_id:
+            logger.info("Folder attachment not found in this conversation; manifest skipped")
+            continue
+        folders.append(result)
+    return folders
+
+
+def _folders_have(folders: list, predicate) -> bool:
+    """Whether any attached entry of any folder satisfies ``predicate(name, mime)``."""
+    return any(predicate(e.name, e.mime_type) for f in folders for e in attached_entries(f))
 
 
 async def _resolve_turn_attachments(
@@ -2520,12 +2593,30 @@ async def _resolve_turn_attachments(
             dropped_over_count_names,
             dropped_over_count_total,
         ) = _apply_message_file_cap(all_files, upload_ids_to_resolve, MAX_FILES_PER_MESSAGE)
-        if dropped_over_count_total:
-            logger.warning(
-                "Dropped %d attachment(s) over the %d-per-message cap",
-                dropped_over_count_total,
-                MAX_FILES_PER_MESSAGE,
-            )
+
+    # Folders (drive-folder spec §4.4, §9 D1): each one counts ONE against the
+    # same cap, after the files, whatever its file count. Never on a resume or
+    # a continuation: those replay a turn whose message was already built.
+    folder_ids: list[str] = []
+    if not is_resume and not is_continuation:
+        folder_ids, dropped_folders = _requested_folder_ids(input_data)
+        dropped_over_count_total += dropped_folders
+        if turn_guard_on and MAX_FILES_PER_MESSAGE > 0:
+            budget = max(0, MAX_FILES_PER_MESSAGE - len(all_files) - len(upload_ids_to_resolve))
+            dropped_over_count_total += max(0, len(folder_ids) - budget)
+            folder_ids = folder_ids[:budget]
+    if turn_guard_on and dropped_over_count_total:
+        logger.warning(
+            "Dropped %d attachment(s) over the %d-per-message cap",
+            dropped_over_count_total,
+            MAX_FILES_PER_MESSAGE,
+        )
+    # Started now so its GetItems overlap the uploads' S3 reads below.
+    folders_task = (
+        asyncio.create_task(_resolve_turn_folders(user_id, input_data.session_id, folder_ids))
+        if folder_ids
+        else None
+    )
 
     # Whether THIS turn attached something `document_read` can actually read.
     # Classified here, from the resolved uploads, rather than inferred from
@@ -2556,6 +2647,15 @@ async def _resolve_turn_attachments(
         except Exception:
             logger.warning("Failed to resolve file upload IDs", exc_info=True)
             # Continue without files rather than failing the request
+
+    folders: list = await folders_task if folders_task is not None else []
+    if folders:
+        logger.info("Attached %d folder(s) by manifest (no S3 read on the turn path)", len(folders))
+        # A folder holding a readable document needs `document_read` on this
+        # turn, classified from the row exactly as an upload is.
+        turn_has_document = turn_has_document or _folders_have(
+            folders, lambda name, mime: is_document_class(mime, name)
+        )
 
     # Deduplicate files by (filename, content_type) before partitioning.
     # The same file can arrive via both `files` (direct base64) and
@@ -2666,6 +2766,7 @@ async def _resolve_turn_attachments(
         marker_names=attachment_marker_names,
         unpersisted_inline=unpersisted_inline,
         reference_documents=reference_documents,
+        folders=folders,
     )
 
 
@@ -4656,7 +4757,8 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 current_user,
                 user_id,
                 agent_tools_override,
-                turn_has_tabular=bool(attachments.diverted_tabular),
+                turn_has_tabular=bool(attachments.diverted_tabular)
+                or _folders_have(attachments.folders, is_tabular_file),
             )
 
             # An Agent's skill bindings replace the request's skills for this turn so
@@ -4871,6 +4973,20 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             # restored history stays byte-stable (large-document spec §4B.5).
             if reference_documents_section:
                 final_message = f"{final_message}\n\n{reference_documents_section}"
+            # Folder manifests (drive-folder spec §4.4): the same contract. A
+            # pure function of each row as read on this turn, so a folder still
+            # expanding is listed as far as it got and never rewritten later.
+            folders_section = render_folders_section(
+                attachments.folders,
+                document_read_available=document_read_available,
+                spreadsheet_tools=bool(effective_enabled_tools)
+                and bool({"analyze_spreadsheet", "list_spreadsheets"}.intersection(effective_enabled_tools)),
+                presentation_tools=bool(effective_enabled_tools)
+                and bool(POWERPOINT_PRESENTATION_TOOL_IDS.intersection(effective_enabled_tools)),
+            )
+            if folders_section:
+                final_message = f"{final_message}\n\n{folders_section}"
+                record_folder_manifests(attachments.folders, folders_section)
             if extracted_documents_section:
                 final_message = f"{final_message}\n\n{extracted_documents_section}"
             if tabular_inventory:

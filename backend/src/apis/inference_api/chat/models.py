@@ -120,6 +120,11 @@ class InvocationRequest(BaseModel):
     enabled_tools: Optional[List[str]] = None  # User-specific tool preferences
     files: Optional[List[FileContent]] = None  # Direct file content (base64-encoded)
     file_upload_ids: Optional[List[str]] = None  # Upload IDs to resolve from S3
+    # Attached Drive folders (docs/specs/drive-folder-attachments.md §4.4): folder
+    # attach ids from app-api's `POST /sessions/{id}/folders`. Each counts ONE
+    # against the per-message cap and reaches the model as a manifest; its files
+    # are never on `file_upload_ids`. Ignored while FOLDER_ATTACHMENTS_ENABLED is off.
+    folder_attachment_ids: Optional[List[str]] = None
     provider: Optional[str] = None  # LLM provider: "bedrock", "openai", or "gemini"
     max_tokens: Optional[int] = None  # Maximum tokens to generate
     # Per-request canonical inference param overrides (temperature, top_p,

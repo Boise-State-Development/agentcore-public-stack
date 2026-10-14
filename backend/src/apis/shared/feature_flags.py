@@ -130,11 +130,13 @@ def folder_attachments_enabled() -> bool:
     development**: only ``"true"`` (case-insensitive) enables it; unset, empty
     or anything else is off.
 
-    app-api only in PR-A. CDK sets it from ``CDK_FOLDER_ATTACHMENTS_ENABLED``
-    and refuses it without ``CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED``: a folder
-    file is read through the prepare Lambda's sidecars, so without that
-    pipeline there is nothing to read small files through. The Runtime's copy
-    (``folder_attachment_ids`` resolution) arrives with the manifest, PR-B.
+    Read on app-api (the routes) and on the AgentCore Runtime (a turn's
+    ``folder_attachment_ids``: off, the field is ignored and no manifest is
+    rendered). CDK sets it from ``CDK_FOLDER_ATTACHMENTS_ENABLED`` on both, the
+    Runtime's copy only while on, and refuses it without
+    ``CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED``: a folder file is read through
+    the prepare Lambda's sidecars, so without that pipeline there is nothing to
+    read small files through.
     """
     return os.environ.get("FOLDER_ATTACHMENTS_ENABLED", "").strip().lower() == "true"
 

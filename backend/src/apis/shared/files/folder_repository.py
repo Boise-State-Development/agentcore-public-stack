@@ -13,9 +13,9 @@ import logging
 import os
 from typing import Any, Dict, List, Optional
 
-import boto3
 from botocore.exceptions import ClientError
 
+from apis.shared.aws_clients import get_dynamodb_table
 from apis.shared.files.folder_attachments import FolderAttachment, FolderCounts, FolderFileEntry
 from apis.shared.timestamps import utc_now_iso
 
@@ -29,8 +29,9 @@ class FolderAttachmentRepository:
 
     def __init__(self, table_name: Optional[str] = None):
         self.table_name = table_name or os.environ.get("DYNAMODB_USER_FILES_TABLE_NAME", "user-files")
-        self._dynamodb = boto3.resource("dynamodb")
-        self._table = self._dynamodb.Table(self.table_name)
+        # The process-cached resource: the Runtime reads folder rows on the
+        # turn path, where constructing a resource is ~47 ms the first time.
+        self._table = get_dynamodb_table(self.table_name)
 
     @staticmethod
     def _key(user_id: str, folder_attach_id: str) -> Dict[str, str]:
@@ -50,6 +51,11 @@ class FolderAttachmentRepository:
             raise
 
     async def get(self, user_id: str, folder_attach_id: str) -> Optional[FolderAttachment]:
+        return self.get_sync(user_id, folder_attach_id)
+
+    def get_sync(self, user_id: str, folder_attach_id: str) -> Optional[FolderAttachment]:
+        """One ``GetItem``. Synchronous so the turn path can run it in a worker
+        thread (``asyncio.to_thread``) instead of blocking the event loop."""
         try:
             response = self._table.get_item(Key=self._key(user_id, folder_attach_id))
         except ClientError as e:

@@ -67,6 +67,15 @@ FOLDER_PROGRESS_EVERY = 5
 #: Row lifetime, as file rows.
 FOLDER_TTL_SECONDS = 365 * 24 * 60 * 60
 
+#: Folders one message may carry (spec §4.5). Each counts as ONE attachment
+#: against ``MAX_FILES_PER_MESSAGE``, whatever its file count (§9 D1).
+FOLDERS_PER_MESSAGE = int(os.environ.get("FOLDER_ATTACH_MAX_PER_MESSAGE", 2))
+
+#: Entries a folder's manifest lists before it says how many more there are
+#: (spec §4.4). About 30 tokens each: 50 entries is ~1,500 tokens, paid once in
+#: the turn that attaches the folder and then cached as history.
+FOLDER_MANIFEST_MAX_ENTRIES = int(os.environ.get("FOLDER_MANIFEST_MAX_ENTRIES", 50))
+
 # ---------------------------------------------------------------------------
 # Statuses
 # ---------------------------------------------------------------------------
@@ -141,6 +150,9 @@ class FolderAttachment(BaseModel):
     session_id: str = Field(..., alias="sessionId")
     user_id: str = Field(..., alias="userId")
     connector_id: str = Field(..., alias="connectorId")
+    connector_name: Optional[str] = Field(
+        None, alias="connectorName", description="The connector's display name when attached (the manifest's `source`)"
+    )
     provider_folder_id: str = Field(..., alias="providerFolderId")
     folder_name: str = Field(..., alias="folderName")
     folder_path: Optional[str] = Field(None, alias="folderPath", description="Breadcrumb path from the browser, display only")

@@ -195,6 +195,7 @@ class TestAttach:
         body = response.json()
         assert body["status"] == "expanding" and body["stale"] is False
         assert body["sessionId"] == "sess-1" and body["connectorId"] == "google"
+        assert body["connectorName"] == "Google Drive"  # the manifest's `source`, frozen at attach
         assert body["providerFolderId"] == "drive-folder-1"
         assert body["folderName"] == "BIO 101" and body["folderPath"] == "My Drive/BIO 101"
         assert body["counts"] == {"listed": 0, "attached": 0, "skippedType": 0, "skippedSize": 0, "failed": 0, "truncated": False}
