@@ -14,6 +14,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.models import User
 from apis.shared.assistants.service import resolve_assistant_permission
+from apis.shared.feature_flags import folder_sync_enabled
+from apis.shared.sync_policies.models import parse_folder_source_ref
 from apis.shared.sync_policies.service import (
     DuplicateSyncPolicy,
     RunNowCooldown,
@@ -57,9 +59,32 @@ async def _require_edit_permission(assistant_id: str, current_user: User) -> str
     return assistant.owner_id
 
 
+async def _validate_folder_source(source_ref: str, current_user: User) -> None:
+    """A ``drive_folder`` source (spec §11.1): the flag is on, the reference
+    names a connector and a folder, and the caller can use that connector as a
+    file source, since every run fetches with their credentials. The folder
+    itself is the worker's to find: a run on a folder that is gone counts a
+    not-found strike."""
+    if not folder_sync_enabled():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Folder sync is not enabled")
+    parsed = parse_folder_source_ref(source_ref)
+    if parsed is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A folder sync source is {connectorId}:{folderId}",
+        )
+    # Function-local: file_sources.service pulls FastAPI, like this module.
+    from apis.app_api.file_sources.service import resolve_file_source
+    from apis.shared.oauth.provider_repository import get_provider_repository
+    from apis.shared.rbac.service import get_app_role_service
+
+    await resolve_file_source(parsed[0], current_user, get_provider_repository(), get_app_role_service())
+
+
 def _validate_source(assistant_id: str, source_type: str, source_ref: str) -> None:
     """The source must exist before a schedule can cover it; drive_file
-    sources additionally need import provenance to re-fetch from."""
+    sources additionally need import provenance to re-fetch from, and must
+    not already be kept fresh by a folder policy."""
     source = records.get_source_item(assistant_id, source_type, source_ref)
     if source is None or source.get("status") == "deleting":
         raise HTTPException(
@@ -71,6 +96,11 @@ def _validate_source(assistant_id: str, source_type: str, source_ref: str) -> No
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Device-uploaded documents have no external source to sync from",
         )
+    if source_type == "drive_file" and source.get("syncPolicyId"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This file is already kept in sync with its folder",
+        )
 
 
 @router.post("", response_model=SyncPolicyResponse, status_code=status.HTTP_201_CREATED)
@@ -80,8 +110,13 @@ async def create_policy(
     current_user: User = Depends(get_current_user_from_session),
 ) -> SyncPolicyResponse:
     await _require_edit_permission(assistant_id, current_user)
-    _validate_source(assistant_id, request.source_type, request.source_ref)
+    if request.source_type == "drive_folder":
+        await _validate_folder_source(request.source_ref, current_user)
+    else:
+        _validate_source(assistant_id, request.source_type, request.source_ref)
 
+    # Only a folder carries a display name; every other source is named by its record.
+    folder_name = {"source_name": request.source_name} if request.source_type == "drive_folder" else {}
     try:
         policy = await create_sync_policy(
             assistant_id=assistant_id,
@@ -89,6 +124,7 @@ async def create_policy(
             source_ref=request.source_ref,
             interval=request.interval,
             created_by_user_id=current_user.user_id,
+            **folder_name,
         )
     except DuplicateSyncPolicy:
         raise HTTPException(
@@ -165,6 +201,9 @@ async def delete_policy(
         from apis.app_api.web_sources.crawl_repository import restore_crawl_ttl
 
         await restore_crawl_ttl(assistant_id=assistant_id, crawl_id=policy.source_ref)
+    elif policy.source_type == "drive_folder":
+        # The folder's documents stay, as ordinary imported files.
+        records.clear_sync_policy_back_pointers(assistant_id, policy_id)
     else:
         records.clear_document_sync_policy_id(assistant_id, policy.source_ref)
 

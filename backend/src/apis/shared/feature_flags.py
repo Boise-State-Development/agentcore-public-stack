@@ -144,6 +144,27 @@ def folder_attachments_enabled() -> bool:
     return os.environ.get("FOLDER_ATTACHMENTS_ENABLED", "").strip().lower() == "true"
 
 
+def folder_sync_enabled() -> bool:
+    """Whether KB sync can keep a knowledge base in step with a Drive folder
+    (``drive_folder`` policies, ``docs/specs/assistant-kb-sync.md`` §11).
+
+    On, app-api accepts a ``drive_folder`` sync policy, and the kb-sync
+    dispatcher and worker run them: each run re-lists the folder, re-ingests
+    changed files, imports new ones and marks files gone from the folder. Off,
+    creating one is refused (400) and the dispatcher re-arms a due folder
+    policy one interval out without running it, so existing policies wait
+    rather than starve the sweep. **Opt-in while the feature is in
+    development**: only ``"true"`` (case-insensitive) enables it.
+
+    Read on app-api and on both kb-sync Lambdas; CDK sets it on all three from
+    ``CDK_FOLDER_SYNC_ENABLED``. The SPA's matching switch is
+    ``features.folderSync`` (the "Keep in sync with the folder" option on Save
+    as project). A **feature switch** once finished: it widens what a schedule
+    can fetch and ingest on a user's behalf.
+    """
+    return os.environ.get("FOLDER_SYNC_ENABLED", "").strip().lower() == "true"
+
+
 def scheduled_runs_enabled() -> bool:
     """Whether the scheduled-runs surface is enabled for this environment.
 

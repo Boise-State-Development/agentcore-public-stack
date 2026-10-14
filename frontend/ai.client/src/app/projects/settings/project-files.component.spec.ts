@@ -4,7 +4,7 @@ import { HttpErrorResponse } from '@angular/common/http';
 import { Dialog } from '@angular/cdk/dialog';
 import { signal } from '@angular/core';
 import { of, throwError } from 'rxjs';
-import { ProjectFilesComponent, formatBytes } from './project-files.component';
+import { ProjectFilesComponent, folderConnectorId, folderRunSummaryText, formatBytes } from './project-files.component';
 import { ProjectApiService } from '../services/project-api.service';
 import { DocumentService, DocumentUploadError } from '../../assistants/services/document.service';
 import { Project, ProjectDocument } from '../models/project.model';
@@ -382,6 +382,123 @@ describe('ProjectFilesComponent', () => {
     expect(dialog.open).toHaveBeenCalledWith(ExtractedContentDialogComponent, expect.objectContaining({
       data: { target: PROJECT_TARGET, documentId: 'a', filename: 'a.pdf' },
     }));
+  });
+
+  // ---- folder sync (assistant-kb-sync spec §11) ----
+
+  const FOLDER_REF = 'gdrive:folder-1';
+
+  function folderPolicy(over: Partial<SyncPolicy> = {}): SyncPolicy {
+    return policy({
+      policyId: 'syn-folder', sourceType: 'drive_folder', sourceRef: FOLDER_REF, sourceName: 'My Drive/Readings',
+      lastSyncAt: '2026-10-13T00:00:00Z', lastResult: 'changed',
+      lastRunSummary: {
+        listed: 12, unchanged: 9, updated: 2, added: 1, removedFromSource: 1, failed: 0, skipped: 0, deferred: 0, truncated: false,
+      },
+      ...over,
+    });
+  }
+
+  /** render(), then let the editor-only schedule load land. */
+  async function renderWithSchedules(project: Project = PROJECT) {
+    const rendered = await render(project);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    rendered.fixture.detectChanges();
+    return rendered;
+  }
+
+  const inFolder = doc('h', {
+    filename: 'Week 3.pdf', sourceConnectorId: 'gdrive', sourceFileId: 'f-2', sourceAdapterKey: 'google-drive', syncPolicyId: 'syn-folder',
+  });
+
+  it('lists the folders the project is kept in sync with, with the last run in words', async () => {
+    fileSources.listFileSources.mockResolvedValue([{ providerId: 'gdrive', displayName: 'Google Drive', iconName: 'drive', connected: true }]);
+    syncPolicies.listPolicies.mockResolvedValue([folderPolicy(), policy()]);
+    api.files.mockReturnValue(of({ documents: [drive, inFolder], nextToken: null, canEdit: true }));
+    const { el } = await renderWithSchedules();
+
+    const folders = el.querySelector('[data-testid="synced-folders"]')!;
+    expect(folders.textContent).toContain('My Drive/Readings');
+    expect(folders.textContent).toContain('12 files in the folder · last sync: 2 updated, 1 added, 1 no longer in the folder');
+    expect(folders.querySelectorAll('app-sync-policy-control').length).toBe(1);
+    expect(el.textContent).toContain('Synced folders');
+  });
+
+  it('shows a folder’s file as kept in sync by the folder, with no schedule of its own', async () => {
+    syncPolicies.listPolicies.mockResolvedValue([folderPolicy()]);
+    api.files.mockReturnValue(of({ documents: [inFolder, drive], nextToken: null, canEdit: true }));
+    const { el } = await renderWithSchedules();
+
+    expect(el.textContent).toContain('Kept in sync with My Drive/Readings');
+    // One control for the folder and one for the other imported file; none on the folder's file.
+    expect(el.querySelectorAll('app-sync-policy-control').length).toBe(2);
+  });
+
+  it('marks a file the folder no longer holds, for viewers too', async () => {
+    api.files.mockReturnValue(of({ documents: [{ ...inFolder, removedFromSource: true }], nextToken: null, canEdit: false }));
+    const { el } = await render({ ...PROJECT, role: 'viewer' });
+    expect(el.textContent).toContain('No longer in the folder');
+  });
+
+  it('asks before it stops syncing a folder, and keeps the schedule when the answer is no', async () => {
+    syncPolicies.listPolicies.mockResolvedValue([folderPolicy()]);
+    api.files.mockReturnValue(of({ documents: [inFolder], nextToken: null, canEdit: true }));
+    const { component } = await renderWithSchedules();
+
+    dialog.open.mockReturnValue({ closed: of(false) });
+    await component.onFolderIntervalSelected(folderPolicy(), 'manual');
+    expect(syncPolicies.deletePolicy).not.toHaveBeenCalled();
+    expect(component.syncPolicyFor(FOLDER_REF)?.policyId).toBe('syn-folder');
+
+    dialog.open.mockReturnValue({ closed: of(true) });
+    syncPolicies.deletePolicy.mockResolvedValue(undefined);
+    const loads = api.files.mock.calls.length;
+    await component.onFolderIntervalSelected(folderPolicy(), 'manual');
+    expect(syncPolicies.deletePolicy).toHaveBeenCalledWith(PROJECT_TARGET, 'syn-folder');
+    expect(component.syncPolicyFor(FOLDER_REF)).toBeNull();
+    expect(api.files.mock.calls.length).toBe(loads + 1);
+  });
+
+  it('changes a folder’s interval without asking', async () => {
+    syncPolicies.listPolicies.mockResolvedValue([folderPolicy()]);
+    syncPolicies.updatePolicy.mockResolvedValue(folderPolicy({ interval: 'daily' }));
+    const { component } = await renderWithSchedules();
+    await component.onFolderIntervalSelected(folderPolicy(), 'daily');
+    expect(dialog.open).not.toHaveBeenCalled();
+    expect(syncPolicies.updatePolicy).toHaveBeenCalledWith(PROJECT_TARGET, 'syn-folder', { interval: 'daily' });
+  });
+
+  it('reconnects a folder’s connection from its schedule', async () => {
+    syncPolicies.listPolicies.mockResolvedValue([folderPolicy({ state: 'paused_reauth' })]);
+    connectors.initiateConsent.mockResolvedValue({ connected: false, authorizationUrl: 'https://accounts.example/consent' });
+    const { component } = await renderWithSchedules();
+    await component.onSyncReconnect(FOLDER_REF);
+    expect(connectors.initiateConsent).toHaveBeenCalledWith('gdrive');
+    expect(consent.startUserConsent).toHaveBeenCalledWith('gdrive', 'https://accounts.example/consent');
+  });
+
+  it('says that deleting a folder’s file keeps it out of the folder’s next sync', async () => {
+    syncPolicies.listPolicies.mockResolvedValue([folderPolicy()]);
+    api.files.mockReturnValue(of({ documents: [inFolder], nextToken: null, canEdit: true }));
+    dialog.open.mockReturnValue({ closed: of(false) });
+    const { fixture, el } = await renderWithSchedules();
+    el.querySelector<HTMLButtonElement>('button[aria-label="Delete Week 3.pdf"]')!.click();
+    await fixture.whenStable();
+    expect(dialog.open.mock.calls[0][1].data.message).toContain('Syncing with the folder won’t add it back.');
+  });
+
+  it('puts a folder run into words', () => {
+    expect(folderRunSummaryText(null)).toBeNull();
+    const base = { listed: 1, unchanged: 1, updated: 0, added: 0, removedFromSource: 0, failed: 0, skipped: 0, deferred: 0, truncated: false };
+    expect(folderRunSummaryText(base)).toBe('1 file in the folder · up to date at the last sync');
+    expect(folderRunSummaryText({ ...base, listed: 140, truncated: true, failed: 1, skipped: 2, deferred: 30 })).toBe(
+      '140 files in the folder (more than are checked) · last sync: 1 file couldn’t be fetched, 2 files too large, 30 waiting for the next sync',
+    );
+  });
+
+  it('reads the connector out of a folder’s source', () => {
+    expect(folderConnectorId('tenant:gdrive:folder-1')).toBe('tenant:gdrive');
+    expect(folderConnectorId('no-separator')).toBeNull();
   });
 
   it('formats sizes', () => {

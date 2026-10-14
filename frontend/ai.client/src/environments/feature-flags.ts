@@ -67,4 +67,12 @@ export interface FeatureFlags {
    * (app-api and the Runtime; the endpoint answers `off` while it is off).
    */
   attachmentKb: boolean;
+  /**
+   * Folder sync (docs/specs/assistant-kb-sync.md §11): Save as project offers
+   * "Keep in sync with the folder" with an interval, and a project's Files page
+   * lists the folders it is kept in step with. Only meaningful with `projects`
+   * and `folderAttachments`. Backend: FOLDER_SYNC_ENABLED (app-api refuses a
+   * folder schedule while off; the kb-sync Lambdas carry it too).
+   */
+  folderSync: boolean;
 }

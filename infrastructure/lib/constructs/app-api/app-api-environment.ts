@@ -400,6 +400,9 @@ export function buildAppApiEnvironment(
     // Folder attachments (opt-in while in development): the
     // /sessions/{id}/folders routes and the expansion task. app-api only.
     FOLDER_ATTACHMENTS_ENABLED: config.folderAttachments.enabled ? 'true' : 'false',
+    // Folder sync (opt-in while in development): app-api accepts a
+    // `drive_folder` KB sync policy. The kb-sync Lambdas carry it too.
+    FOLDER_SYNC_ENABLED: config.folderSync.enabled ? 'true' : 'false',
     ...(params.largeDocumentPrepareQueueUrl
       ? { LARGE_DOCUMENT_PREPARE_QUEUE_URL: params.largeDocumentPrepareQueueUrl }
       : {}),

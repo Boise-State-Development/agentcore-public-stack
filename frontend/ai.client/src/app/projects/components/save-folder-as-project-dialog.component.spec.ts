@@ -2,6 +2,8 @@ import { TestBed } from '@angular/core/testing';
 import { Dialog } from '@angular/cdk/dialog';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { expectNamedDialog, openInCdkDialog } from '../../../testing/cdk-dialog';
+import { environment } from '../../../environments/environment';
+import { FEATURES } from '../../services/features';
 import {
   FolderAttachment,
   FolderAttachmentService,
@@ -37,8 +39,10 @@ describe('SaveFolderAsProjectDialogComponent', () => {
   let locate: ReturnType<typeof vi.fn>;
   let get: ReturnType<typeof vi.fn>;
   let save: ReturnType<typeof vi.fn>;
+  let folderSync: boolean;
 
   beforeEach(() => {
+    folderSync = false;
     locate = vi.fn().mockResolvedValue({ sessionId: 's-1', folderAttachId: 'fa-1' });
     get = vi.fn().mockResolvedValue(row([entry('a'), entry('b')]));
     save = vi.fn().mockResolvedValue({ project: PROJECT, imported: 2, notImported: 0, error: null });
@@ -47,6 +51,7 @@ describe('SaveFolderAsProjectDialogComponent', () => {
         { provide: FolderRefreshService, useValue: { locate } },
         { provide: FolderAttachmentService, useValue: { get } },
         { provide: SaveFolderAsProjectService, useValue: { save } },
+        { provide: FEATURES, useFactory: () => ({ ...environment.features, folderSync }) },
       ],
     });
   });
@@ -91,6 +96,7 @@ describe('SaveFolderAsProjectDialogComponent', () => {
     expect(save.mock.calls[0][1]).toBe('BIO 101 syllabi');
     expect(save.mock.calls[0][2]).toBe('Files from the folder “My Drive/Syllabi” in Google Drive.');
     expect(closed[0]).toEqual({ project: PROJECT, imported: 2, notImported: 0, error: null });
+    expect(save.mock.calls[0][3]).toEqual({ syncInterval: null });
   });
 
   it('cannot save a folder with no readable files', async () => {
@@ -122,5 +128,65 @@ describe('SaveFolderAsProjectDialogComponent', () => {
     expect(q('[data-testid="save-folder-submit"]')).toBeNull();
     q<HTMLButtonElement>('[data-testid="save-folder-open-partial"]')!.click();
     expect(closed[0]?.error).toBe('Reconnect Google Drive');
+  });
+
+  describe('keep in sync with the folder', () => {
+    it('is not offered while folder sync is off', async () => {
+      const { q } = await open();
+      expect(q('[data-testid="save-folder-sync"]')).toBeNull();
+    });
+
+    it('is offered off, and saving without it makes a copy', async () => {
+      folderSync = true;
+      const { ref, q } = await open();
+      const closed: SaveFolderAsProjectDialogResult[] = [];
+      ref.closed.subscribe((r) => closed.push(r));
+      expect(q<HTMLInputElement>('#save-folder-project-sync')!.checked).toBe(false);
+      expect(q('#save-folder-project-interval')).toBeNull();
+      expect(q('[data-testid="save-folder-copy-note"]')!.textContent).toContain('keeps a copy');
+      q<HTMLButtonElement>('[data-testid="save-folder-submit"]')!.click();
+      await vi.waitFor(() => expect(closed).toHaveLength(1));
+      expect(save.mock.calls[0][3]).toEqual({ syncInterval: null });
+    });
+
+    it('when ticked, asks how often and saves with that interval', async () => {
+      folderSync = true;
+      const { ref, q, refresh } = await open();
+      const closed: SaveFolderAsProjectDialogResult[] = [];
+      ref.closed.subscribe((r) => closed.push(r));
+      q<HTMLInputElement>('#save-folder-project-sync')!.click();
+      refresh();
+      const interval = q<HTMLSelectElement>('#save-folder-project-interval')!;
+      expect(interval.value).toBe('weekly');
+      expect(q('label[for="save-folder-project-interval"]')).not.toBeNull();
+      expect(q('[data-testid="save-folder-copy-note"]')!.textContent).toContain('follow the folder');
+      interval.value = 'daily';
+      interval.dispatchEvent(new Event('change'));
+      refresh();
+      q<HTMLButtonElement>('[data-testid="save-folder-submit"]')!.click();
+      await vi.waitFor(() => expect(closed).toHaveLength(1));
+      expect(save.mock.calls[0][3]).toEqual({ syncInterval: 'daily' });
+    });
+
+    it('says the project is a copy when its schedule could not be created, and offers to open it', async () => {
+      folderSync = true;
+      save.mockResolvedValue({
+        project: PROJECT, imported: 2, notImported: 0, error: null, syncPolicy: null, syncError: 'Folder sync is not enabled',
+      });
+      const { ref, q, refresh } = await open();
+      const closed: SaveFolderAsProjectDialogResult[] = [];
+      ref.closed.subscribe((r) => closed.push(r));
+      q<HTMLInputElement>('#save-folder-project-sync')!.click();
+      refresh();
+      q<HTMLButtonElement>('[data-testid="save-folder-submit"]')!.click();
+      await vi.waitFor(() => expect(save).toHaveBeenCalled());
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      refresh();
+      expect(q('[role="alert"]')!.textContent).toContain(
+        'The project was saved as a copy, but it is not kept in sync with the folder: Folder sync is not enabled',
+      );
+      q<HTMLButtonElement>('[data-testid="save-folder-open-partial"]')!.click();
+      expect(closed[0]?.syncError).toBe('Folder sync is not enabled');
+    });
   });
 });

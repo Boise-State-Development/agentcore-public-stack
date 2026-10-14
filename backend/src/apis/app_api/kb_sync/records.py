@@ -41,7 +41,14 @@ def get_document_item(assistant_id: str, document_id: str) -> Optional[Dict[str,
 
 
 def get_source_item(assistant_id: str, source_type: str, source_ref: str) -> Optional[Dict[str, Any]]:
-    """The source record backing a sync policy (DOC# or CRAWL#)."""
+    """The source record backing a sync policy (DOC# or CRAWL#).
+
+    A ``drive_folder`` policy has none: its source lives in the provider, and
+    whether it still exists is the worker's question (spec §11.1). Callers
+    branch on that type before asking here.
+    """
+    if source_type == "drive_folder":
+        raise ValueError("a drive_folder policy has no source record in the assistants table")
     sk_prefix = "DOC#" if source_type == "drive_file" else "CRAWL#"
     return get_item(f"AST#{assistant_id}", f"{sk_prefix}{source_ref}")
 
@@ -61,6 +68,41 @@ def list_document_items(assistant_id: str) -> list:
         if not last_key:
             return items
         kwargs["ExclusiveStartKey"] = last_key
+
+
+def set_document_removed_from_source(
+    assistant_id: str, document_id: str, removed: bool, at: Optional[str] = None
+) -> None:
+    """Mark (or unmark) a folder policy's document as no longer in its folder.
+
+    Marking never deletes anything (spec §11.3 step 6): the document stays in
+    the knowledge base, and the Files page shows the mark so an editor decides.
+    """
+    key = {"PK": f"AST#{assistant_id}", "SK": f"DOC#{document_id}"}
+    if removed:
+        _table().update_item(
+            Key=key,
+            UpdateExpression="SET removedFromSource = :t, removedFromSourceAt = :at",
+            ExpressionAttributeValues={":t": True, ":at": at},
+        )
+    else:
+        _table().update_item(Key=key, UpdateExpression="REMOVE removedFromSource, removedFromSourceAt")
+
+
+def clear_sync_policy_back_pointers(assistant_id: str, policy_id: str) -> int:
+    """Remove ``policy_id``'s back-pointer (and folder mark) from every document
+    carrying it, when a ``drive_folder`` policy is deleted. The documents stay,
+    as ordinary imported files. Returns how many were cleared."""
+    cleared = 0
+    for item in list_document_items(assistant_id):
+        if item.get("syncPolicyId") != policy_id:
+            continue
+        _table().update_item(
+            Key={"PK": f"AST#{assistant_id}", "SK": f"DOC#{item['documentId']}"},
+            UpdateExpression="REMOVE syncPolicyId, removedFromSource, removedFromSourceAt",
+        )
+        cleared += 1
+    return cleared
 
 
 def set_document_miss_count(assistant_id: str, document_id: str, count: int) -> None:

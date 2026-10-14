@@ -193,6 +193,9 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     folderAttachments: {
       enabled: false,
     },
+    folderSync: {
+      enabled: false,
+    },
     agents: {
       enabled: false,
     },

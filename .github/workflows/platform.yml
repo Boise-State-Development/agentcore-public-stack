@@ -340,6 +340,11 @@ jobs:
       # and only together with CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED (synth
       # fails otherwise). Sets the flag on app-api and the Runtime; no resources.
       CDK_FOLDER_ATTACHMENTS_ENABLED: ${{ vars.CDK_FOLDER_ATTACHMENTS_ENABLED }}
+      # Folder sync: a project saved from a Drive folder can keep its Files in
+      # step with the folder (docs/specs/assistant-kb-sync.md §11). Opt-in while
+      # in development. Sets the flag on app-api and both kb-sync Lambdas; no
+      # resources. The SPA's matching switch is `features.folderSync`.
+      CDK_FOLDER_SYNC_ENABLED: ${{ vars.CDK_FOLDER_SYNC_ENABLED }}
       # SageMaker fine-tuning. The tables, bucket, SageMaker role and IAM
       # grants deploy unconditionally, but these two decide whether the feature
       # is reachable and how it is rationed, and neither was forwarded before —

@@ -642,8 +642,13 @@ async def delete_document(
         # Delete any sync policy covering this document so the schedule
         # cannot outlive its source (drive_file policies use the document
         # id as source_ref; crawl policies are cascaded with the CrawlJob)
-        from apis.shared.sync_policies.service import delete_sync_policies_for_source
+        from apis.shared.sync_policies.service import delete_sync_policies_for_source, exclude_folder_file
         await delete_sync_policies_for_source(assistant_id, document_id)
+        # A folder policy's file someone removed stays removed: its next run
+        # would otherwise find it in the folder and import it again
+        # (assistant-kb-sync.md §11.4). A no-op for any other policy.
+        if document.sync_policy_id and document.source_file_id:
+            await exclude_folder_file(assistant_id, document.sync_policy_id, document.source_file_id)
 
         # Fire-and-forget cleanup (response already sent as 204)
         asyncio.ensure_future(

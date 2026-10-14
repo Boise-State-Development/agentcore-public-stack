@@ -93,6 +93,7 @@ export interface AppConfig {
   largeDocumentAttachments: LargeDocumentAttachmentsConfig;
   attachmentKb: AttachmentKbConfig;
   folderAttachments: FolderAttachmentsConfig;
+  folderSync: FolderSyncConfig;
   agents: AgentsConfig;
   agentMarketplace: AgentMarketplaceConfig;
   dictation: DictationConfig;
@@ -716,6 +717,19 @@ export interface AttachmentKbConfig {
  * (a turn's folder manifests). No resources.
  */
 export interface FolderAttachmentsConfig {
+  enabled: boolean;
+}
+
+/**
+ * Folder sync (docs/specs/assistant-kb-sync.md §11): a `drive_folder` KB sync
+ * policy keeps a knowledge base (a project saved from a Drive folder) in step
+ * with that folder on the existing kb-sync dispatcher and worker. **Opt-in while
+ * in development**: off unless CDK_FOLDER_SYNC_ENABLED=true (or a
+ * `folderSync.enabled: true` cdk.json context). Sets FOLDER_SYNC_ENABLED on
+ * app-api (creating a folder policy) and on both kb-sync Lambdas (running one).
+ * No resources: the worker already holds every grant a folder run uses.
+ */
+export interface FolderSyncConfig {
   enabled: boolean;
 }
 
@@ -1531,6 +1545,12 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_FOLDER_ATTACHMENTS_ENABLED
         ? process.env.CDK_FOLDER_ATTACHMENTS_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('folderAttachments')?.enabled ?? false,
+    },
+    folderSync: {
+      // Opt-in while in development, same parsing as folderAttachments.
+      enabled: process.env.CDK_FOLDER_SYNC_ENABLED
+        ? process.env.CDK_FOLDER_SYNC_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('folderSync')?.enabled ?? false,
     },
     agents: {
       // Default ON with a kill switch (house style, mirroring memorySpaces /

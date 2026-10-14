@@ -16,7 +16,15 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
-from .models import DUE_INDEX_PK, SyncInterval, SyncPolicy, SyncPolicyState, SyncRunResult, SyncSourceType
+from .models import (
+    DUE_INDEX_PK,
+    FolderRunSummary,
+    SyncInterval,
+    SyncPolicy,
+    SyncPolicyState,
+    SyncRunResult,
+    SyncSourceType,
+)
 from apis.shared.timestamps import to_iso
 
 logger = logging.getLogger(__name__)
@@ -28,6 +36,10 @@ INTERVAL_DELTAS = {
 }
 
 DEFAULT_MAX_POLICIES_PER_ASSISTANT = 10
+
+#: Provider file ids one ``drive_folder`` policy remembers as removed by
+#: someone. Far above the folder walk's own cap; bounds the item regardless.
+MAX_EXCLUDED_FILE_IDS = 500
 
 
 class SyncPolicyLimitExceeded(Exception):
@@ -85,12 +97,14 @@ async def create_sync_policy(
     source_ref: str,
     interval: SyncInterval,
     created_by_user_id: str,
+    source_name: Optional[str] = None,
 ) -> SyncPolicy:
     """Create an active sync policy due one interval from now.
 
     Enforces the per-assistant policy cap and one-policy-per-source
     uniqueness (both checked against the current policy list — bounded by
-    the cap, so the scan is cheap).
+    the cap, so the scan is cheap). ``source_name`` is a ``drive_folder``
+    policy's display path.
     """
     existing = await list_sync_policies(assistant_id)
     if len(existing) >= max_policies_per_assistant():
@@ -108,6 +122,7 @@ async def create_sync_policy(
         source_ref=source_ref,
         interval=interval,
         state="active",
+        source_name=source_name,
         next_sync_at=compute_next_sync_at(interval),
         created_by_user_id=created_by_user_id,
         created_at=now,
@@ -272,17 +287,26 @@ async def rearm_policy(
         raise
 
 
-async def record_sync_result(assistant_id: str, policy_id: str, result: SyncRunResult, not_found: bool = False) -> None:
+async def record_sync_result(
+    assistant_id: str,
+    policy_id: str,
+    result: SyncRunResult,
+    not_found: bool = False,
+    summary: Optional[FolderRunSummary] = None,
+) -> None:
     """Record a completed run's outcome and maintain the breaker counters.
 
     Success-ish results (changed/unchanged/skipped) reset both streaks;
     "failed" increments consecutiveFailures, plus consecutiveNotFound when
     the failure was a definitive source-gone (404). Clears the in-flight
-    run stamp either way.
+    run stamp either way. A ``drive_folder`` run also stores its counts.
     """
     now = _get_current_timestamp()
     values = {":now": now, ":result": result}
     set_parts = ["lastSyncAt = :now", "lastResult = :result", "updatedAt = :now"]
+    if summary is not None:
+        set_parts.append("lastRunSummary = :summary")
+        values[":summary"] = summary.model_dump(by_alias=True)
 
     if result == "failed":
         values[":one"] = 1
@@ -301,6 +325,38 @@ async def record_sync_result(assistant_id: str, policy_id: str, result: SyncRunR
         UpdateExpression="SET " + ", ".join(set_parts) + " REMOVE syncRunStartedAt",
         ExpressionAttributeValues=values,
     )
+
+
+async def exclude_folder_file(assistant_id: str, policy_id: str, file_id: str) -> bool:
+    """Remember that someone removed a ``drive_folder`` policy's file from the
+    knowledge base, so its runs never import it again (spec §11.4).
+
+    A string-set ``ADD``, conditioned on the policy existing, being a folder
+    policy, and holding fewer than :data:`MAX_EXCLUDED_FILE_IDS` ids. Returns
+    False when the condition refused it (a ``drive_file`` policy, a deleted
+    one, or a full set); never raises for that.
+    """
+    from botocore.exceptions import ClientError
+
+    try:
+        _get_table().update_item(
+            Key={"PK": f"AST#{assistant_id}", "SK": f"SYNCPOL#{policy_id}"},
+            UpdateExpression="ADD excludedFileIds :ids SET updatedAt = :now",
+            ConditionExpression=(
+                "sourceType = :folder AND (attribute_not_exists(excludedFileIds) OR size(excludedFileIds) < :max)"
+            ),
+            ExpressionAttributeValues={
+                ":ids": {file_id},
+                ":now": _get_current_timestamp(),
+                ":folder": "drive_folder",
+                ":max": MAX_EXCLUDED_FILE_IDS,
+            },
+        )
+        return True
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            return False
+        raise
 
 
 # ── Reauth markers ───────────────────────────────────────────────────────────

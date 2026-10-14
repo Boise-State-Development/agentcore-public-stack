@@ -399,3 +399,101 @@ class TestTimestampFormat:
             # Round-trips to an aware datetime the way JS `Date` accepts.
             parsed = datetime.fromisoformat(ts.replace("Z", "+00:00"))
             assert parsed.tzinfo is not None
+
+
+class TestDriveFolderPolicies:
+    """``drive_folder`` (assistant-kb-sync.md §11): one policy per folder,
+    a display name, the removed-file set, and the run summary."""
+
+    async def test_source_ref_round_trip_splits_on_the_last_colon(self):
+        from apis.shared.sync_policies.models import folder_source_ref, parse_folder_source_ref
+
+        ref = folder_source_ref("tenant:google-workspace", "1AbC_dEf-9")
+        assert ref == "tenant:google-workspace:1AbC_dEf-9"
+        assert parse_folder_source_ref(ref) == ("tenant:google-workspace", "1AbC_dEf-9")
+
+    @pytest.mark.parametrize("ref", ["no-separator", ":folder", "connector:", ""])
+    async def test_malformed_source_ref_is_none(self, ref):
+        from apis.shared.sync_policies.models import parse_folder_source_ref
+
+        assert parse_folder_source_ref(ref) is None
+
+    async def test_create_keeps_the_folder_name_and_counts_one_against_the_cap(self, assistants_table, monkeypatch):
+        monkeypatch.setenv("KB_SYNC_MAX_POLICIES_PER_ASSISTANT", "2")
+        policy = await create_sync_policy(
+            assistant_id=ASSISTANT_ID, source_type="drive_folder", source_ref="gw:folder-1",
+            interval="weekly", created_by_user_id=USER_ID, source_name="Readings/Week 3",
+        )
+        fetched = await get_sync_policy(ASSISTANT_ID, policy.policy_id)
+        assert fetched.source_type == "drive_folder"
+        assert fetched.source_name == "Readings/Week 3"
+        assert fetched.excluded_file_ids is None
+        await _make_policy("doc-1")
+        with pytest.raises(SyncPolicyLimitExceeded):
+            await _make_policy("doc-2")
+
+    async def test_one_policy_per_folder(self, assistants_table):
+        await _make_policy("gw:folder-1", source_type="drive_folder")
+        with pytest.raises(DuplicateSyncPolicy):
+            await _make_policy("gw:folder-1", source_type="drive_folder")
+
+    async def test_record_result_stores_the_run_summary(self, assistants_table):
+        from apis.shared.sync_policies.models import FolderRunSummary
+
+        policy = await _make_policy("gw:folder-1", source_type="drive_folder")
+        await record_sync_result(
+            ASSISTANT_ID, policy.policy_id, "changed",
+            summary=FolderRunSummary(listed=12, updated=2, added=1, removed_from_source=1, deferred=3),
+        )
+        fetched = await get_sync_policy(ASSISTANT_ID, policy.policy_id)
+        assert fetched.last_result == "changed"
+        assert fetched.last_run_summary.listed == 12
+        assert fetched.last_run_summary.removed_from_source == 1
+        assert fetched.last_run_summary.deferred == 3
+
+    async def test_exclude_folder_file_adds_to_the_set(self, assistants_table):
+        from apis.shared.sync_policies.service import exclude_folder_file
+
+        policy = await _make_policy("gw:folder-1", source_type="drive_folder")
+        assert await exclude_folder_file(ASSISTANT_ID, policy.policy_id, "file-a")
+        assert await exclude_folder_file(ASSISTANT_ID, policy.policy_id, "file-b")
+        assert await exclude_folder_file(ASSISTANT_ID, policy.policy_id, "file-a")  # idempotent
+        fetched = await get_sync_policy(ASSISTANT_ID, policy.policy_id)
+        assert sorted(fetched.excluded_file_ids) == ["file-a", "file-b"]
+
+    async def test_exclude_is_a_no_op_for_a_drive_file_policy_or_a_missing_one(self, assistants_table):
+        from apis.shared.sync_policies.service import exclude_folder_file
+
+        policy = await _make_policy("doc-1")
+        assert not await exclude_folder_file(ASSISTANT_ID, policy.policy_id, "file-a")
+        assert (await get_sync_policy(ASSISTANT_ID, policy.policy_id)).excluded_file_ids is None
+        assert not await exclude_folder_file(ASSISTANT_ID, "syn-missing", "file-a")
+        assert await get_sync_policy(ASSISTANT_ID, "syn-missing") is None
+
+    async def test_exclude_stops_at_the_cap(self, assistants_table, monkeypatch):
+        from apis.shared.sync_policies import service
+
+        monkeypatch.setattr(service, "MAX_EXCLUDED_FILE_IDS", 2)
+        policy = await _make_policy("gw:folder-1", source_type="drive_folder")
+        assert await service.exclude_folder_file(ASSISTANT_ID, policy.policy_id, "a")
+        assert await service.exclude_folder_file(ASSISTANT_ID, policy.policy_id, "b")
+        assert not await service.exclude_folder_file(ASSISTANT_ID, policy.policy_id, "c")
+
+
+@pytest.mark.parametrize("value", ["true", "TRUE", " True "])
+async def test_folder_sync_flag_on(monkeypatch, value):
+    from apis.shared.feature_flags import folder_sync_enabled
+
+    monkeypatch.setenv("FOLDER_SYNC_ENABLED", value)
+    assert folder_sync_enabled()
+
+
+@pytest.mark.parametrize("value", [None, "", "false", "1", "yes"])
+async def test_folder_sync_flag_defaults_off(monkeypatch, value):
+    from apis.shared.feature_flags import folder_sync_enabled
+
+    if value is None:
+        monkeypatch.delenv("FOLDER_SYNC_ENABLED", raising=False)
+    else:
+        monkeypatch.setenv("FOLDER_SYNC_ENABLED", value)
+    assert not folder_sync_enabled()

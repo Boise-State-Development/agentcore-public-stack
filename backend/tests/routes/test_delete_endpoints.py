@@ -152,6 +152,46 @@ class TestDocumentDeleteEndpoint:
         assert resp.status_code == 204
         sync_policy_cascades.for_source.assert_awaited_once_with(ASSISTANT_ID, "doc-001")
 
+    @pytest.mark.parametrize(
+        "fields, expected",
+        [
+            ({"syncPolicyId": "syn-folder", "sourceFileId": "drive-file-1"}, ("syn-folder", "drive-file-1")),
+            ({"sourceFileId": "drive-file-1"}, None),
+            ({"syncPolicyId": "syn-folder"}, None),
+        ],
+    )
+    def test_delete_keeps_a_folder_file_from_coming_back(self, app, fields, expected):
+        """A folder policy's file someone removed is excluded from its runs
+        (assistant-kb-sync.md §11.4); a document no policy covers excludes nothing."""
+        doc = _make_document(**fields)
+        routes_module = "apis.app_api.documents.routes"
+
+        with patch(
+            f"{routes_module}.resolve_assistant_permission",
+            new_callable=AsyncMock,
+            return_value=_owner_resolve(USER_ID),
+        ), patch(
+            f"{DOC_SERVICE}.soft_delete_document",
+            new_callable=AsyncMock,
+            return_value=doc,
+        ), patch(
+            f"{CLEANUP_SERVICE}.cleanup_document_resources",
+            new_callable=AsyncMock,
+        ), patch(
+            f"{SYNC_POLICY_SERVICE}.exclude_folder_file",
+            new_callable=AsyncMock,
+            return_value=True,
+        ) as exclude, patch(
+            "asyncio.ensure_future",
+        ):
+            resp = TestClient(app).delete(f"/assistants/{ASSISTANT_ID}/documents/doc-001")
+
+        assert resp.status_code == 204
+        if expected is None:
+            exclude.assert_not_awaited()
+        else:
+            exclude.assert_awaited_once_with(ASSISTANT_ID, *expected)
+
     def test_delete_returns_404_when_not_found(self, app):
         """Req 1.5: Returns 404 when soft_delete_document returns None."""
         routes_module = "apis.app_api.documents.routes"

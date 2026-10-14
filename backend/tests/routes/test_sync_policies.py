@@ -448,3 +448,161 @@ class TestRunNow:
         ):
             response = self._post(app)
         assert response.status_code == 429
+
+
+FOLDER_REF = "google-workspace:folder-abc"
+FILE_SOURCE_MODULE = "apis.app_api.file_sources.service"
+
+
+class TestFolderPolicy:
+    """``drive_folder`` policies (assistant-kb-sync.md §11): one per folder,
+    behind FOLDER_SYNC_ENABLED, checked against the caller's file source."""
+
+    def _post(self, app, source_ref=FOLDER_REF, **extra):
+        return TestClient(app).post(
+            f"/assistants/{ASSISTANT_ID}/sync-policies",
+            json={"sourceType": "drive_folder", "sourceRef": source_ref, "interval": "weekly", **extra},
+        )
+
+    @pytest.fixture
+    def folder_sync_on(self, monkeypatch):
+        monkeypatch.setenv("FOLDER_SYNC_ENABLED", "true")
+
+    @pytest.fixture
+    def file_source_ok(self):
+        resolve = AsyncMock(return_value=(SimpleNamespace(provider_id="google-workspace"), SimpleNamespace()))
+        with (
+            patch(f"{FILE_SOURCE_MODULE}.resolve_file_source", resolve),
+            patch("apis.shared.oauth.provider_repository.get_provider_repository", MagicMock()),
+            patch("apis.shared.rbac.service.get_app_role_service", MagicMock()),
+        ):
+            yield resolve
+
+    @pytest.mark.parametrize("value", [None, "", "false", "yes"])
+    def test_flag_off_400(self, app, monkeypatch, value):
+        _override_user(app)
+        if value is None:
+            monkeypatch.delenv("FOLDER_SYNC_ENABLED", raising=False)
+        else:
+            monkeypatch.setenv("FOLDER_SYNC_ENABLED", value)
+        create = AsyncMock()
+        with (
+            patch(f"{ROUTES_MODULE}.resolve_assistant_permission", _resolve("owner")),
+            patch(f"{ROUTES_MODULE}.create_sync_policy", create),
+        ):
+            response = self._post(app)
+        assert response.status_code == 400
+        create.assert_not_awaited()
+
+    def test_flag_off_still_authenticates_first(self, app, monkeypatch):
+        monkeypatch.delenv("FOLDER_SYNC_ENABLED", raising=False)
+        mock_no_auth(app)
+        assert self._post(app).status_code == 401
+
+    @pytest.mark.parametrize("ref", ["no-separator", ":folder-only", "connector-only:"])
+    def test_malformed_ref_400(self, app, folder_sync_on, file_source_ok, ref):
+        _override_user(app)
+        with patch(f"{ROUTES_MODULE}.resolve_assistant_permission", _resolve("owner")):
+            response = self._post(app, source_ref=ref)
+        assert response.status_code == 400
+        file_source_ok.assert_not_awaited()
+
+    def test_connector_the_caller_cannot_use_is_refused(self, app, folder_sync_on):
+        from fastapi import HTTPException
+
+        _override_user(app)
+        denied = AsyncMock(side_effect=HTTPException(status_code=403, detail="no access"))
+        create = AsyncMock()
+        with (
+            patch(f"{ROUTES_MODULE}.resolve_assistant_permission", _resolve("owner")),
+            patch(f"{FILE_SOURCE_MODULE}.resolve_file_source", denied),
+            patch("apis.shared.oauth.provider_repository.get_provider_repository", MagicMock()),
+            patch("apis.shared.rbac.service.get_app_role_service", MagicMock()),
+            patch(f"{ROUTES_MODULE}.create_sync_policy", create),
+        ):
+            response = self._post(app)
+        assert response.status_code == 403
+        create.assert_not_awaited()
+
+    def test_create_201_with_folder_name_and_no_source_record(self, app, folder_sync_on, file_source_ok):
+        _override_user(app)
+        policy = _make_policy(sourceType="drive_folder", sourceRef=FOLDER_REF, sourceName="Readings/Week 3")
+        get_source = MagicMock()
+        update_fields = MagicMock()
+        with (
+            patch(f"{ROUTES_MODULE}.resolve_assistant_permission", _resolve("editor")),
+            patch(f"{ROUTES_MODULE}.records.get_source_item", get_source),
+            patch(f"{ROUTES_MODULE}.records.update_document_sync_fields", update_fields),
+            patch(f"{ROUTES_MODULE}.create_sync_policy", AsyncMock(return_value=policy)) as create,
+        ):
+            response = self._post(app, sourceName="Readings/Week 3")
+
+        assert response.status_code == 201
+        body = response.json()
+        assert body["sourceType"] == "drive_folder"
+        assert body["sourceName"] == "Readings/Week 3"
+        create.assert_awaited_once_with(
+            assistant_id=ASSISTANT_ID,
+            source_type="drive_folder",
+            source_ref=FOLDER_REF,
+            interval="weekly",
+            created_by_user_id=USER_ID,
+            source_name="Readings/Week 3",
+        )
+        assert file_source_ok.await_args.args[0] == "google-workspace"
+        get_source.assert_not_called()
+        update_fields.assert_not_called()
+
+    def test_list_carries_the_last_run_summary(self, app):
+        _override_user(app)
+        policy = _make_policy(
+            sourceType="drive_folder",
+            sourceRef=FOLDER_REF,
+            lastRunSummary={"listed": 12, "updated": 2, "added": 1, "removedFromSource": 1},
+        )
+        with (
+            patch(f"{ROUTES_MODULE}.resolve_assistant_permission", _resolve("owner")),
+            patch(f"{ROUTES_MODULE}.list_sync_policies", AsyncMock(return_value=[policy])),
+        ):
+            response = TestClient(app).get(f"/assistants/{ASSISTANT_ID}/sync-policies")
+        summary = response.json()["policies"][0]["lastRunSummary"]
+        assert summary["listed"] == 12
+        assert summary["removedFromSource"] == 1
+        assert summary["deferred"] == 0
+
+    def test_drive_file_policy_on_a_folder_covered_document_409(self, app):
+        _override_user(app)
+        create = AsyncMock()
+        with (
+            patch(f"{ROUTES_MODULE}.resolve_assistant_permission", _resolve("owner")),
+            patch(
+                f"{ROUTES_MODULE}.records.get_source_item",
+                return_value={**DRIVE_SOURCE, "syncPolicyId": "syn-folder"},
+            ),
+            patch(f"{ROUTES_MODULE}.create_sync_policy", create),
+        ):
+            response = TestClient(app).post(
+                f"/assistants/{ASSISTANT_ID}/sync-policies",
+                json={"sourceType": "drive_file", "sourceRef": "doc-001", "interval": "daily"},
+            )
+        assert response.status_code == 409
+        create.assert_not_awaited()
+
+    def test_delete_clears_back_pointers_and_keeps_documents(self, app):
+        _override_user(app)
+        policy = _make_policy(sourceType="drive_folder", sourceRef=FOLDER_REF)
+        clear_folder = MagicMock(return_value=3)
+        clear_one = MagicMock()
+        with (
+            patch(f"{ROUTES_MODULE}.resolve_assistant_permission", _resolve("owner")),
+            patch(f"{ROUTES_MODULE}.get_sync_policy", AsyncMock(return_value=policy)),
+            patch(f"{ROUTES_MODULE}.delete_sync_policy", AsyncMock(return_value=True)),
+            patch(f"{ROUTES_MODULE}.delete_reauth_marker", AsyncMock()),
+            patch(f"{ROUTES_MODULE}.records.clear_sync_policy_back_pointers", clear_folder),
+            patch(f"{ROUTES_MODULE}.records.clear_document_sync_policy_id", clear_one),
+        ):
+            response = TestClient(app).delete(f"/assistants/{ASSISTANT_ID}/sync-policies/{POLICY_ID}")
+
+        assert response.status_code == 204
+        clear_folder.assert_called_once_with(ASSISTANT_ID, POLICY_ID)
+        clear_one.assert_not_called()

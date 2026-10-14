@@ -129,6 +129,8 @@ case "$SERVICE" in
             # document_service releases a managed-KB byte reservation.
             "backend/src/apis/shared/observability"
             "backend/src/apis/app_api/file_sources"
+            # files/ — the drive_folder path's walk caps and type allowlist.
+            "backend/src/apis/shared/files"
             "backend/src/apis/app_api/documents"
             "backend/src/apis/app_api/web_sources"
             "backend/src/apis/shared/sync_policies"

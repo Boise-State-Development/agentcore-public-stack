@@ -1,6 +1,6 @@
 # Project or folder: a picker beneath a new conversation's composer
 
-**Status:** PR-1 and PR-2 merged (2026-10-14); PR-3 in review; folder sync (§5.3) proposed. **Depends on:** Shared Projects (`shared-projects.md`, `features.projects`) and Drive folder attachments PR-A to PR-C (`drive-folder-attachments.md`, `features.folderAttachments`). **Flags:** none of its own; each half rides the flag of the feature it starts.
+**Status:** PR-1 to PR-3 merged (2026-10-14); PR-4, folder sync (§5.3), in review. **Depends on:** Shared Projects (`shared-projects.md`, `features.projects`) and Drive folder attachments PR-A to PR-C (`drive-folder-attachments.md`, `features.folderAttachments`). **Flags:** none of its own for PR-1 to PR-3; each half rides the flag of the feature it starts. Folder sync (PR-4) has its own: `FOLDER_SYNC_ENABLED` / `CDK_FOLDER_SYNC_ENABLED`, `features.folderSync`, in development, default off.
 
 ## 1. Problem
 
@@ -69,8 +69,8 @@ Nothing here touches the turn path or the prompt. A project binds through the ha
 |---|---|---|
 | **PR-1** (merged) | This spec. The picker on the empty-state composer: projects, No project, New project, Add folder from {source} | Yes, where `features.projects` or `features.folderAttachments` is on |
 | **PR-2** (merged) | Recent folders: `GET /folders/recent?limit=` in app-api (default 8, at most 20), and the picker rows. One key query on the caller's own partition (`PK=USER#{user}`, the `FOLDER#` sort prefix), newest first because folder ids lead with a millisecond timestamp, projecting only the six attributes shown and never the file list. One row per `(connector, folder id)`, named from its newest row. The read stops at the limit or at 100 rows, so a folder attached to many conversations cannot make it unbounded. Behind `FOLDER_ATTACHMENTS_ENABLED`, authenticated before the flag's 404. No new index: deleting a conversation already deletes its folder rows, so its folders drop out | Yes, with folders on |
-| **PR-3** (in review) | Save as project, a copy (§5.1, §5.2): a button on a sent folder chip; SPA only, over `POST /projects` and the project's Drive import | Yes, with projects and folders on |
-| **PR-4** (proposed) | Folder sync for a saved project (§5.3): a `drive_folder` source in KB sync | Yes |
+| **PR-3** (merged) | Save as project, a copy (§5.1, §5.2): a button on a sent folder chip; SPA only, over `POST /projects` and the project's Drive import | Yes, with projects and folders on |
+| **PR-4** (in review) | Folder sync for a saved project (§5.3): a `drive_folder` source type in KB sync (`assistant-kb-sync.md` §11): one policy per folder on the existing dispatcher and worker, no new AWS resources. Save as project offers "Keep in sync with the folder" with an interval; the project's Files page shows the folder's schedule and marks files no longer in the folder. Behind `FOLDER_SYNC_ENABLED` / `features.folderSync` | Yes, with projects, folders and folder sync on |
 
 ## 5. A folder people return to: Save as project
 
@@ -93,16 +93,20 @@ A failed create leaves nothing behind. A failed import after the create does not
 
 No backend change: every step is a route that exists, with its own authorization, audit and born-managed knowledge-base provisioning. Folder paths are not kept; a project's Files are one flat list.
 
-### 5.3 Keeping a saved project in step with its folder (proposed, PR-4)
+### 5.3 Keeping a saved project in step with its folder (PR-4)
 
-The copy goes stale as the Drive folder changes. KB sync (`assistant-kb-sync.md`) cannot keep it fresh as built:
+The copy goes stale as the Drive folder changes. KB sync (`assistant-kb-sync.md`) could not keep it fresh as first built:
 
-- **Its source is one file.** A `drive_file` policy re-fetches one imported document. A file added to the folder later has no document and no policy, so nothing would ever bring it in.
+- **Its source was one file.** A `drive_file` policy re-fetches one imported document. A file added to the folder later has no document and no policy, so nothing would ever bring it in.
 - **Policies are capped at 10 per Agent** (`KB_SYNC_MAX_POLICIES_PER_ASSISTANT`), a runaway safeguard (§7 of that spec). A project's Files belong to its harness Agent, so a 40-file folder cannot have one policy per file.
 
-The fit is a third source type, **`drive_folder`**: one policy per folder, whatever its file count, on the existing sweeper and worker. Each run re-lists the folder (the expansion's walk and caps), re-fetches changed files through the existing per-file path (version, then content hash), imports new ones, and marks files gone from the folder rather than deleting them. It inherits every safeguard (interval enum, circuit breaker, inactivity pause, reauth pause) and adds a per-run file cap. Save as project would then offer "Keep in sync with the folder" with an interval.
+So KB sync gains a third source type, **`drive_folder`**, designed in `assistant-kb-sync.md` §11: one policy per folder, whatever its file count, on the existing sweeper and worker.
 
-It is a change to the KB sync worker image and the import path the worker would need, so it is its own PR with its own review of the safeguards, not part of PR-3.
+- **The policy** names the folder by `{connector}:{folder id}` and keeps its path for display. Its documents are the ones it has stamped: files it imported, and the copies Save as project made, adopted on the first run by their Drive provenance, without downloading them again.
+- **Each run** checks the folder still exists, re-lists it with the folder-attachment walk and caps, re-fetches a file only when its Drive version moved and then only re-ingests when its bytes' hash moved, imports new files as documents with provenance, and marks files no longer in the folder ("No longer in the folder") without deleting them. A file someone removes from the project stays removed.
+- **Safeguards:** every one in that spec's §7 (interval enum, circuit breaker, inactivity pause, reauth pause, liveness), plus per-run caps (50 downloads, 250 MB, 12 minutes); work past a cap waits for the next run.
+
+**In the SPA.** The Save as project dialog offers **Keep in sync with the folder** with Daily, Weekly or Monthly (default Weekly) while `features.folderSync` is on. After the import, it creates the policy (`POST /projects/{id}/knowledge/sync-policies` with `sourceType: "drive_folder"`). A policy that cannot be created does not undo the project: the dialog says the project was saved as a copy and why it is not syncing. The project's Files page lists the folder under **Synced folders** with the usual sync control (interval, Sync now, pause, resume, reconnect, stop syncing) and the last run's counts.
 
 ## 6. Decisions
 
@@ -110,4 +114,4 @@ It is a change to the KB sync worker image and the import path the worker would 
 2. **One project and up to two folders**, not one choice of either (§2).
 3. **New conversations only.** A project cannot change after the first turn, and a thread already has the `+` menu for folders.
 4. **No flag of its own.** Each half is gated by the feature it starts. Save as project needs both projects and folder attachments on.
-5. **Save as project is a copy until folder sync exists** (§5.3). Per-file sync policies cannot cover a folder: they miss new files and hit the 10-per-Agent cap.
+5. **Save as project is a copy unless the folder is synced** (§5.3). Per-file sync policies cannot cover a folder: they miss new files and hit the 10-per-Agent cap. A `drive_folder` policy can, and it is opt-in per save.
