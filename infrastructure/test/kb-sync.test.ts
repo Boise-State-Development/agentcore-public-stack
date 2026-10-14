@@ -6,12 +6,15 @@ import { KbSyncConstruct } from '../lib/constructs/kb-sync/kb-sync-construct';
 import { RagDataConstruct } from '../lib/constructs/rag/rag-data-construct';
 import { createMockConfig, MOCK_ACCOUNT, MOCK_REGION } from './helpers/mock-config';
 
-function synth(kbSyncEnabled: boolean): Template {
+function synth(kbSyncEnabled: boolean, folderSyncEnabled = false): Template {
   const app = new cdk.App();
   const stack = new cdk.Stack(app, 'Test', {
     env: { account: MOCK_ACCOUNT, region: MOCK_REGION },
   });
-  const config = createMockConfig({ kbSync: { enabled: kbSyncEnabled } });
+  const config = createMockConfig({
+    kbSync: { enabled: kbSyncEnabled },
+    folderSync: { enabled: folderSyncEnabled },
+  });
   const ragData = new RagDataConstruct(stack, 'RagData', { config });
   const oauthProvidersTable = new dynamodb.Table(stack, 'OAuthProviders', {
     partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
@@ -154,6 +157,30 @@ describe('KbSyncConstruct', () => {
           S3_ASSISTANTS_DOCUMENTS_BUCKET_NAME: Match.anyValue(),
         }),
       },
+    });
+  });
+
+  describe('folder sync (drive_folder policies, assistant-kb-sync.md §11)', () => {
+    const handlers = ['apis.app_api.kb_sync.dispatcher.lambda_handler', 'apis.app_api.kb_sync.worker.lambda_handler'];
+
+    it.each(handlers)('FOLDER_SYNC_ENABLED is "false" on %s by default (in development, opt-in)', (handler) => {
+      t.hasResourceProperties('AWS::Lambda::Function', {
+        ImageConfig: { Command: [handler] },
+        Environment: { Variables: Match.objectLike({ FOLDER_SYNC_ENABLED: 'false' }) },
+      });
+    });
+
+    it.each(handlers)('FOLDER_SYNC_ENABLED is "true" on %s when folderSync.enabled', (handler) => {
+      synth(true, true).hasResourceProperties('AWS::Lambda::Function', {
+        ImageConfig: { Command: [handler] },
+        Environment: { Variables: Match.objectLike({ FOLDER_SYNC_ENABLED: 'true' }) },
+      });
+    });
+
+    it('adds no resources: the worker already holds every grant a folder run uses', () => {
+      const off = synth(true, false).toJSON().Resources as Record<string, { Type: string }>;
+      const on = synth(true, true).toJSON().Resources as Record<string, { Type: string }>;
+      expect(Object.keys(on).sort()).toEqual(Object.keys(off).sort());
     });
   });
 

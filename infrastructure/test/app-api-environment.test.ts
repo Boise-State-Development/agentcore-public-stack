@@ -87,6 +87,14 @@ describe('buildAppApiEnvironment — session prewarm', () => {
   });
 });
 
+describe('buildAppApiEnvironment — folder sync', () => {
+  it('forwards the flag, off by default', () => {
+    expect(buildAppApiEnvironment(createMockConfig(), stubParams()).FOLDER_SYNC_ENABLED).toBe('false');
+    const on = buildAppApiEnvironment(createMockConfig({ folderSync: { enabled: true } }), stubParams());
+    expect(on.FOLDER_SYNC_ENABLED).toBe('true');
+  });
+});
+
 describe('buildAppApiEnvironment — client turn timing', () => {
   it('forwards the flag, off by default', () => {
     expect(buildAppApiEnvironment(createMockConfig(), stubParams()).CLIENT_TURN_TIMING_ENABLED).toBe('false');
