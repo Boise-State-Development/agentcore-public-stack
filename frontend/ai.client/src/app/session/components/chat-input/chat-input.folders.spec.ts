@@ -48,6 +48,7 @@ class SteeringServiceStub {
 class SkillCommandServiceStub {
   readonly commands = signal<SkillCommand[]>([]);
   readonly loading = signal(false);
+  readonly agentLocked = signal(false);
   async load(): Promise<void> {}
   search(): SkillCommand[] { return []; }
   bySlugOrUndefined(): SkillCommand | undefined { return undefined; }

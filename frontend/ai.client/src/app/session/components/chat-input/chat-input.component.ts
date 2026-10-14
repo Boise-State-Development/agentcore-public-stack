@@ -465,6 +465,17 @@ export class ChatInputComponent {
    */
   readonly project = input<ComposerProject | null>(null);
 
+  /**
+   * Whether `@` hands a turn to another Agent here. Never in a project: a
+   * project's messages run on its harness — the project's instructions,
+   * memory, tools and skills — and a mention would run the turn on a personal
+   * Agent with none of them, inside the project's conversation. The switch
+   * would also re-write the cached prefix for that turn.
+   */
+  protected readonly agentMentionsOffered = computed(
+    () => this.showAgentMentions() && this.project() === null,
+  );
+
   private readonly messageInput = viewChild<ElementRef<HTMLTextAreaElement>>('messageInput');
   private readonly fileInput = viewChild<ElementRef<HTMLInputElement>>('fileInput');
   private readonly shell = viewChild<ElementRef<HTMLElement>>('shell');
@@ -857,11 +868,16 @@ export class ChatInputComponent {
 
   protected readonly composerHints = computed<string[]>(() => {
     const hints = [this.idlePlaceholder()];
-    if (this.showAgentMentions() && this.mentionService.mentionable().length > 0) {
+    if (this.agentMentionsOffered() && this.mentionService.mentionable().length > 0) {
       hints.push('Type @ to hand this turn to one of your agents');
     }
     if (this.showSkillCommands() && this.skillCommandService.commands().length > 0) {
-      hints.push('Type / to run one of your skills');
+      // A project that binds skills offers its own, not the member's.
+      hints.push(
+        this.project() && this.skillCommandService.agentLocked()
+          ? "Type / to run one of this project's skills"
+          : 'Type / to run one of your skills',
+      );
     }
     return hints;
   });
@@ -1131,7 +1147,7 @@ export class ChatInputComponent {
    */
   readonly isMentionMenuOpen = computed(
     () =>
-      this.showAgentMentions() &&
+      this.agentMentionsOffered() &&
       this.mentionToken() !== null &&
       this.mentionedAgent() === null &&
       this.mentionService.mentionable().length > 0,
@@ -1317,6 +1333,18 @@ export class ChatInputComponent {
       untracked(() => this.syncDraft(key, draft));
     });
 
+    // Picking a project after an `@`-mention un-hands the turn: the `@Name`
+    // stays in the text as prose, but the send must not carry the Agent past
+    // a project that offers no mentions.
+    effect(() => {
+      if (this.agentMentionsOffered()) return;
+      untracked(() => {
+        this.mentionedAgent.set(null);
+        this.pendingMentionAgentId.set(null);
+        this.mentionToken.set(null);
+      });
+    });
+
     // Re-bind a restored `@`-mention once the candidate list arrives.
     //
     // The draft stores the Agent's id, not the row: a name, icon or tagline
@@ -1328,7 +1356,7 @@ export class ChatInputComponent {
     effect(() => {
       const candidates = this.mentionService.mentionable();
       const wanted = this.pendingMentionAgentId();
-      if (!wanted || candidates.length === 0) return;
+      if (!wanted || candidates.length === 0 || !this.agentMentionsOffered()) return;
       const match = candidates.find(agent => agent.agentId === wanted);
       untracked(() => {
         this.pendingMentionAgentId.set(null);
@@ -2222,7 +2250,7 @@ export class ChatInputComponent {
    * and it ends at whitespace or a second `@`.
    */
   private syncMentionToken(textarea: HTMLTextAreaElement): void {
-    if (!this.showAgentMentions()) {
+    if (!this.agentMentionsOffered()) {
       return;
     }
     const caret = textarea.selectionStart ?? textarea.value.length;
@@ -2581,7 +2609,7 @@ export class ChatInputComponent {
     this.isFocused.set(true);
     // Warm the `@` candidates before the first keystroke needs them — both sources are
     // session-cached, so this costs one request per session and makes the menu instant.
-    if (this.showAgentMentions()) {
+    if (this.agentMentionsOffered()) {
       void this.mentionService.load();
     }
     if (this.showSkillCommands()) {

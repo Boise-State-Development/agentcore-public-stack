@@ -93,6 +93,7 @@ const SKILLS: SkillCommand[] = [
 class SkillCommandServiceStub {
   readonly commands = signal<SkillCommand[]>(SKILLS);
   readonly loading = signal(false);
+  readonly agentLocked = signal(false);
   async load(): Promise<void> {}
   search(query: string): SkillCommand[] {
     const needle = query.trim().toLowerCase();
@@ -2841,5 +2842,55 @@ describe('ChatInputComponent — a project conversation', () => {
     fixture.componentRef.setInput('compact', true);
     setProject();
     expect(textarea.getAttribute('placeholder')).toBe('Ask anything in Biology 101…');
+  });
+
+  function hints(): string[] {
+    return (fixture.componentInstance as unknown as { composerHints: () => string[] }).composerHints();
+  }
+
+  function type(value: string): void {
+    textarea.value = value;
+    textarea.setSelectionRange(value.length, value.length);
+    textarea.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+  }
+
+  it('never suggests `@`: a project runs its own harness, not a personal Agent', () => {
+    expect(hints().some((hint) => hint.includes('Type @'))).toBe(true);
+    setProject();
+    expect(hints().some((hint) => hint.includes('Type @'))).toBe(false);
+  });
+
+  it('keeps the `@` menu shut in a project', () => {
+    setProject();
+    type('@');
+    expect(fixture.componentInstance.isMentionMenuOpen()).toBe(false);
+  });
+
+  it('drops a mention picked before the project was, so the send cannot leave the project', () => {
+    const component = fixture.componentInstance;
+    type('@');
+    component.onMentionPicked(AGENTS[0]);
+    fixture.detectChanges();
+    expect(component.mentionedAgent()).not.toBeNull();
+
+    setProject();
+    expect(component.mentionedAgent()).toBeNull();
+
+    const sent: { mentionAgentId?: string }[] = [];
+    component.messageSubmitted.subscribe((event) => sent.push(event));
+    component.submitChatRequest();
+    expect(sent[0].mentionAgentId).toBeUndefined();
+  });
+
+  it("offers `/` as the project's skills when the project binds its own", () => {
+    (TestBed.inject(SkillCommandService) as unknown as SkillCommandServiceStub).agentLocked.set(true);
+    setProject();
+    expect(hints()).toContain("Type / to run one of this project's skills");
+  });
+
+  it("offers `/` as the member's own skills when the project binds none", () => {
+    setProject();
+    expect(hints()).toContain('Type / to run one of your skills');
   });
 });
