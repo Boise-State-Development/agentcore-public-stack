@@ -10,10 +10,12 @@ refresh token is deleted in the revoke write).
 from __future__ import annotations
 
 import time
+from types import SimpleNamespace
 
 import pytest
 from botocore.exceptions import ClientError
 
+import apis.shared.harness.grants as grants_module
 from apis.shared.harness.auth import CognitoRefreshBearerAuth, HeadlessAuthError
 from apis.shared.harness.grants import (
     HEADLESS_GRANT_MAX_AGE_DAYS,
@@ -24,6 +26,17 @@ from apis.shared.sessions_bff.refresh import CognitoRefreshError, RefreshResult
 
 NOW = int(time.time())
 MAX_AGE_SECONDS = HEADLESS_GRANT_MAX_AGE_DAYS * 24 * 60 * 60
+
+
+@pytest.fixture(autouse=True)
+def _grants_clock_at_now(monkeypatch):
+    """Stop the grants module's clock at NOW.
+
+    NOW is fixed at collection, but the service reads the live clock, so in a
+    long full-suite run the fixture grants (``ttl=NOW + 1000``) would read as
+    expired by the time these tests execute.
+    """
+    monkeypatch.setattr(grants_module, "time", SimpleNamespace(time=lambda: float(NOW)))
 
 
 class FakeTable:
