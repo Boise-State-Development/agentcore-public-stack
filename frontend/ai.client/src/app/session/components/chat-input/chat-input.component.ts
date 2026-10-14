@@ -65,6 +65,7 @@ import { FolderAttachmentData } from '../../services/models/message.model';
 import { folderDataFromRow } from '../../services/session/folder-manifest';
 import { ComposerFolder, FolderCardComponent } from './folder-card.component';
 import { ComposerAddMenuComponent } from './composer-add-menu.component';
+import { ComposerScopePickerComponent } from './composer-scope-picker.component';
 import { FEATURES } from '../../../services/features';
 import { ToastService } from '../../../services/toast/toast.service';
 import { ToolService } from '../../../services/tool/tool.service';
@@ -306,7 +307,7 @@ function dedupeAttachments(attachments: StoredAttachment[]): StoredAttachment[] 
 
 @Component({
   selector: 'app-chat-input',
-  imports: [AgentNoticeBannerComponent, AnnouncementBannerComponent, CdkMenu, CdkMenuItem, CdkMenuTrigger, ComposerAddMenuComponent, FormsModule, ModelDropdownComponent, NgIcon, QuotaWarningBannerComponent, StorageQuotaBannerComponent, TooltipDirective, FileCardComponent, FolderCardComponent, AgentMentionMenuComponent, SkillCommandMenuComponent, SpinnerComponent],
+  imports: [AgentNoticeBannerComponent, AnnouncementBannerComponent, CdkMenu, CdkMenuItem, CdkMenuTrigger, ComposerAddMenuComponent, ComposerScopePickerComponent, FormsModule, ModelDropdownComponent, NgIcon, QuotaWarningBannerComponent, StorageQuotaBannerComponent, TooltipDirective, FileCardComponent, FolderCardComponent, AgentMentionMenuComponent, SkillCommandMenuComponent, SpinnerComponent],
   // `relative` is the anchor the announcement banner floats against — it sits
   // `bottom-full` of this host, above the quota tabs and clear of the composer.
   host: { class: 'relative block' },
@@ -430,6 +431,15 @@ export class ChatInputComponent {
    * its own bar. The container sets this once the conversation has messages.
    */
   readonly compact = input<boolean>(false);
+
+  /**
+   * Offer "Project or folder" on the line beneath a new conversation's
+   * composer (docs/specs/composer-project-folder-picker.md). Opt-in, like
+   * `allowFolderAttachments`: only the conversation page's empty state sets
+   * it, never a thread (`compact`) and never an embedded preview. The picker
+   * hides itself when neither projects nor folders have anything to offer.
+   */
+  readonly showScopePicker = input<boolean>(false);
 
   private readonly messageInput = viewChild<ElementRef<HTMLTextAreaElement>>('messageInput');
   private readonly fileInput = viewChild<ElementRef<HTMLInputElement>>('fileInput');
@@ -735,7 +745,22 @@ export class ChatInputComponent {
    * the model picker — and in the empty state only while there is a status to
    * say, since the empty state has no cost yet and keeps its picker in the bar.
    */
-  protected readonly showMetaLine = computed(() => this.compact() || this.statusHint() !== null);
+  protected readonly showMetaLine = computed(
+    () => this.compact() || this.statusHint() !== null || this.scopePickerOffered(),
+  );
+
+  /**
+   * Whether the line holds "Project or folder": a new conversation whose page
+   * asked for it, with projects or folders switched on. The picker makes the
+   * final call on what it has to offer; this only keeps an empty line from
+   * rendering where it could have nothing.
+   */
+  protected readonly scopePickerOffered = computed(
+    () =>
+      this.showScopePicker() &&
+      !this.compact() &&
+      (this.features.projects || this.remainingFolderSlots() > 0),
+  );
 
   /**
    * Padding shared by the textarea, the highlight mirror behind it and the
