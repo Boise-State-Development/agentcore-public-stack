@@ -71,6 +71,13 @@ export interface FileSourceBrowserDialogData {
    * composer allows five per message, less what is already attached.
    */
   maxFiles?: number;
+  /**
+   * `attach` mode only: offer "Attach this folder" beside Attach, so the whole
+   * folder the user is in becomes one attachment (drive-folder spec §4.1). The
+   * composer sets it only while folder attachments are on and the message has
+   * room for another folder.
+   */
+  allowFolder?: boolean;
 }
 
 /** A destination folder chosen in `pick-folder` mode. */
@@ -87,12 +94,34 @@ export interface AttachSelection {
   files: ImportFileRef[];
 }
 
+/** A whole folder chosen in `attach` mode ("Attach this folder"). */
+export interface FolderAttachSelection {
+  connector: FileSourceConnector;
+  folder: {
+    folderId: string;
+    folderName: string;
+    /** The breadcrumb path to it, for display only. */
+    folderPath: string;
+  };
+}
+
+/** Whether an `attach`-mode result is a folder rather than files. */
+export function isFolderAttachSelection(
+  result: FileSourceBrowserDialogResult | undefined,
+): result is FolderAttachSelection {
+  return !!result && !Array.isArray(result) && 'folder' in result;
+}
+
 /**
  * Closed value: the imported {@link Document} records in `import` mode, a
  * {@link FolderSelection} in `pick-folder` mode, an {@link AttachSelection}
  * in `attach` mode, or `undefined` if cancelled.
  */
-export type FileSourceBrowserDialogResult = Document[] | FolderSelection | AttachSelection;
+export type FileSourceBrowserDialogResult =
+  | Document[]
+  | FolderSelection
+  | AttachSelection
+  | FolderAttachSelection;
 
 type DialogView = 'sources' | 'browser';
 type ConnectPhase = 'initiating' | 'awaiting';
@@ -193,6 +222,8 @@ export class FileSourceBrowserDialogComponent {
   protected readonly isAttach = this.mode === 'attach';
   /** `attach` mode: the most files the composer will take from this pick. */
   protected readonly maxFiles: number | null = this.isAttach ? (this.data.maxFiles ?? null) : null;
+  /** `attach` mode: whether the folder the user is in can be attached whole. */
+  protected readonly allowFolder = this.isAttach && this.data.allowFolder === true;
 
   /** True when the dialog was opened targeting a single connector. */
   protected readonly lockedToConnector = !!this.data.connector;
@@ -284,6 +315,15 @@ export class FileSourceBrowserDialogComponent {
   /** True once the user has drilled into a folder/root they can select. */
   protected readonly canPickCurrentFolder = computed(
     () => this.currentFolderId() !== null && !this.browserLoading(),
+  );
+
+  /**
+   * `attach` mode: the folder the user is in can go as one attachment. Not
+   * from search results (there is no "current folder" there), and not while
+   * files are ticked, so the two actions never compete for one click.
+   */
+  protected readonly canAttachCurrentFolder = computed(
+    () => this.allowFolder && this.canPickCurrentFolder() && this.activeSearch() === null,
   );
 
   constructor() {
@@ -509,6 +549,27 @@ export class FileSourceBrowserDialogComponent {
         next.set(entry.id, { fileId: entry.id, name: entry.name });
       }
       return next;
+    });
+  }
+
+  /**
+   * `attach` mode: hand the whole current folder to the composer, which
+   * attaches it as one item (app-api expands it into files in the background).
+   */
+  protected attachCurrentFolder(): void {
+    const connector = this.connector();
+    const folderId = this.currentFolderId();
+    if (!connector || folderId === null || !this.canAttachCurrentFolder()) {
+      return;
+    }
+    const folderName = this.currentFolderName() || 'Folder';
+    const names = this.breadcrumbs().map((crumb) => crumb.name);
+    if (names[names.length - 1] !== folderName) {
+      names.push(folderName);
+    }
+    this.dialogRef.close({
+      connector,
+      folder: { folderId, folderName, folderPath: names.join('/') },
     });
   }
 

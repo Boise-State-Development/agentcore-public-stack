@@ -78,6 +78,17 @@ export interface StoredAttachment {
   sizeBytes: number;
 }
 
+/**
+ * A Drive folder attached to the composer and not sent yet (drive-folder spec
+ * §4.7). The id is all the send needs; the name and source paint the card on
+ * first frame, and the composer re-reads the row to bring its status current.
+ */
+export interface StoredFolder {
+  folderAttachId: string;
+  name: string;
+  source: string;
+}
+
 /** A composer's unsent state for one conversation. */
 export interface StoredComposerDraft {
   text: string;
@@ -91,6 +102,8 @@ export interface StoredComposerDraft {
   queued?: string[];
   /** Files attached to the composer or to a queued follow-up, not yet sent. */
   attachments?: StoredAttachment[];
+  /** Folders attached to the composer or to a queued follow-up, not yet sent. */
+  folders?: StoredFolder[];
   /**
    * The conversation those uploads were filed under. For a sent conversation
    * this is its own id; for one still unsent it is the client-minted staged id,
@@ -112,7 +125,18 @@ export function isEmptyDraft(draft: StoredComposerDraft): boolean {
   return (
     !draft.text.trim() &&
     (draft.queued?.length ?? 0) === 0 &&
-    (draft.attachments?.length ?? 0) === 0
+    (draft.attachments?.length ?? 0) === 0 &&
+    (draft.folders?.length ?? 0) === 0
+  );
+}
+
+/** Whether a parsed value is shaped like a stored folder. */
+function isStoredFolder(value: unknown): value is StoredFolder {
+  const candidate = value as Partial<StoredFolder> | null;
+  return (
+    typeof candidate?.folderAttachId === 'string' &&
+    typeof candidate.name === 'string' &&
+    typeof candidate.source === 'string'
   );
 }
 
@@ -275,6 +299,7 @@ export class ComposerDraftStorageService {
         attachments: Array.isArray(value.attachments)
           ? value.attachments.filter(isStoredAttachment)
           : undefined,
+        folders: Array.isArray(value.folders) ? value.folders.filter(isStoredFolder) : undefined,
         attachmentSessionId:
           typeof value.attachmentSessionId === 'string'
             ? value.attachmentSessionId

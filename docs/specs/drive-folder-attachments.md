@@ -1,6 +1,6 @@
 # Attach a Google Drive folder to a conversation
 
-**Status:** PR-A shipped to dev (2026-10-14); PR-B in review. **Depends on:** the composer `+` menu and `POST /files/import` (`composer-add-menu.md`), large-document attachments PR-1 and PR-2 (`large-document-attachments.md`), and, for search, the attachments KB (PR-3, PR-4). **Flag:** `FOLDER_ATTACHMENTS_ENABLED` / `CDK_FOLDER_ATTACHMENTS_ENABLED`, `features.folderAttachments`, in development, default off.
+**Status:** PR-A and PR-B shipped to dev (2026-10-14); PR-C (the SPA) in review. **Depends on:** the composer `+` menu and `POST /files/import` (`composer-add-menu.md`), large-document attachments PR-1 and PR-2 (`large-document-attachments.md`), and, for search, the attachments KB (PR-3, PR-4). **Flag:** `FOLDER_ATTACHMENTS_ENABLED` / `CDK_FOLDER_ATTACHMENTS_ENABLED`, `features.folderAttachments`, in development, default off.
 
 ## 1. Problem
 

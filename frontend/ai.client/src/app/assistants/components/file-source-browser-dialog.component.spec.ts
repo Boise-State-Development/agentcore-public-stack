@@ -340,3 +340,62 @@ describe('FileSourceBrowserDialogComponent', () => {
     });
   });
 });
+
+describe('FileSourceBrowserDialogComponent — attach a whole folder', () => {
+  beforeEach(() => TestBed.resetTestingModule());
+  afterEach(() => TestBed.resetTestingModule());
+
+  function folderButton(fixture: { nativeElement: HTMLElement }): HTMLButtonElement | null {
+    return fixture.nativeElement.querySelector('[data-testid="file-source-attach-folder"]');
+  }
+
+  async function enterFolder(component: Record<string, never>, fixture: { detectChanges(): void }) {
+    await (component['openFolder'] as (id: string, name: string) => Promise<void>)('fold-1', 'Week 1');
+    fixture.detectChanges();
+  }
+
+  it('is not offered unless the composer allows a folder', async () => {
+    const { fixture, component } = setup(
+      { browse: vi.fn().mockResolvedValue({ entries: [], breadcrumbs: [{ id: 'root', name: 'My Drive' }], nextCursor: null }) },
+      { connector: CONNECTED, mode: 'attach', maxFiles: 5 },
+    );
+    await enterFolder(component, fixture);
+    expect(folderButton(fixture)).toBeNull();
+  });
+
+  it('closes with the folder, its name and its breadcrumb path', async () => {
+    const { fixture, component, dialogRef } = setup(
+      {
+        listRoots: vi.fn().mockResolvedValue([{ id: 'root', name: 'My Drive' }, { id: 'shared', name: 'Shared' }]),
+        browse: vi.fn().mockResolvedValue({ entries: [], breadcrumbs: [{ id: 'root', name: 'My Drive' }], nextCursor: null }),
+      },
+      { connector: CONNECTED, mode: 'attach', maxFiles: 5, allowFolder: true },
+    );
+    await vi.waitFor(() => expect((component['roots'] as () => unknown[])()).toHaveLength(2));
+    fixture.detectChanges();
+    // At the roots list there is no current folder yet.
+    expect(folderButton(fixture)?.disabled).toBe(true);
+
+    await enterFolder(component, fixture);
+    const button = folderButton(fixture)!;
+    expect(button.disabled).toBe(false);
+    expect(button.getAttribute('aria-label')).toBe('Attach the folder Week 1');
+    button.click();
+
+    expect(dialogRef.close).toHaveBeenCalledWith({
+      connector: CONNECTED,
+      folder: { folderId: 'fold-1', folderName: 'Week 1', folderPath: 'My Drive/Week 1' },
+    });
+  });
+
+  it('is disabled while files are ticked', async () => {
+    const { fixture, component } = setup(
+      { browse: vi.fn().mockResolvedValue({ entries: [fileEntry({ id: 'a', name: 'a.pdf', mimeType: 'application/pdf' })], breadcrumbs: [], nextCursor: null }) },
+      { connector: CONNECTED, mode: 'attach', maxFiles: 5, allowFolder: true },
+    );
+    await enterFolder(component, fixture);
+    (component['toggleSelect'] as (e: FileEntry) => void)(fileEntry({ id: 'a', name: 'a.pdf', mimeType: 'application/pdf' }));
+    fixture.detectChanges();
+    expect(folderButton(fixture)?.disabled).toBe(true);
+  });
+});

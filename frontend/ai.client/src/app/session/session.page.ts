@@ -5,7 +5,7 @@ import { Subscription } from 'rxjs';
 import { v4 as uuidv4 } from 'uuid';
 import { ChatRequestService } from './services/chat/chat-request.service';
 import { MessageMapService } from './services/session/message-map.service';
-import { Message } from './services/models/message.model';
+import { FolderAttachmentData, Message } from './services/models/message.model';
 import { SessionService } from './services/session/session.service';
 import { SessionPrewarmService } from './services/session/session-prewarm.service';
 import { ScrollPositionService } from './services/session/scroll-position.service';
@@ -704,7 +704,7 @@ export class ConversationPage implements OnDestroy {
       });
   }
 
-  onMessageSubmitted(message: { content: string, timestamp: Date, fileUploadIds?: string[], mentionAgentId?: string, invokedSkillIds?: string[] }) {
+  onMessageSubmitted(message: { content: string, timestamp: Date, fileUploadIds?: string[], mentionAgentId?: string, invokedSkillIds?: string[], folders?: FolderAttachmentData[] }) {
     // Use the effective session ID (route sessionId or staged sessionId)
     const sessionIdToUse = this.effectiveSessionId();
 
@@ -749,7 +749,8 @@ export class ConversationPage implements OnDestroy {
       message.fileUploadIds,
       routed.assistantId,
       undefined,
-      message.invokedSkillIds
+      message.invokedSkillIds,
+      message.folders,
     ).catch((error) => {
       console.error('Error sending chat request:', error);
     });

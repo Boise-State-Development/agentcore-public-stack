@@ -140,6 +140,14 @@
               (retry)="onFileRetry($event)"
             />
           }
+          <!-- Drive folders: one card each, whatever their file count (drive-folder spec §4.7) -->
+          @for (folder of attachedFolders(); track folder.localId) {
+            <app-folder-card
+              [folder]="folder"
+              (remove)="onFolderRemove($event)"
+              (retry)="onFolderRetry($event)"
+            />
+          }
         </div>
       </div>
     }
@@ -299,6 +307,8 @@
             [disabled]="isDictating()"
             (pickFromDevice)="openFilePicker()"
             (sourceFilesPicked)="onSourceFilesPicked($event)"
+            [remainingFolders]="remainingFolderSlots()"
+            (sourceFolderPicked)="onSourceFolderPicked($event)"
             (skillPicked)="insertSkillCommand($event)"
           />
         }

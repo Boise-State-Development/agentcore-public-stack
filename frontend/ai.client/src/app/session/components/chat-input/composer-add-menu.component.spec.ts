@@ -225,11 +225,31 @@ describe('ComposerAddMenuComponent', () => {
 
     expect(dialogOpen).toHaveBeenCalledTimes(1);
     expect(dialogOpen.mock.calls[0][1]).toEqual({
-      data: { connector: DRIVE, mode: 'attach', maxFiles: 3 },
+      data: { connector: DRIVE, mode: 'attach', maxFiles: 3, allowFolder: false },
     });
     expect(picked).toHaveBeenCalledWith(dialogResult);
     // The catalog is re-read afterwards: consent may have landed in the dialog.
     expect(listFileSources).toHaveBeenCalledTimes(2);
+  });
+
+  it('offers "Attach this folder" when the message has room, and emits a folder pick', async () => {
+    const files = vi.fn();
+    const folder = vi.fn();
+    component.sourceFilesPicked.subscribe(files);
+    component.sourceFolderPicked.subscribe(folder);
+    fixture.componentRef.setInput('remainingFiles', 3);
+    fixture.componentRef.setInput('remainingFolders', 1);
+    dialogResult = { connector: DRIVE, folder: { folderId: 'fold-1', folderName: 'Week 1', folderPath: 'My Drive/Week 1' } };
+    await openMenu();
+
+    (menu()!.querySelector('[data-testid="composer-add-source-google"]') as HTMLButtonElement).click();
+    await settle();
+
+    expect(dialogOpen.mock.calls[0][1]).toEqual({
+      data: { connector: DRIVE, mode: 'attach', maxFiles: 3, allowFolder: true },
+    });
+    expect(folder).toHaveBeenCalledWith(dialogResult);
+    expect(files).not.toHaveBeenCalled();
   });
 
   it('a cancelled browser emits nothing', async () => {
