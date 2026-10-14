@@ -1,6 +1,15 @@
 import { ChangeDetectionStrategy, Component, computed, inject, input, signal } from '@angular/core';
+import { Dialog } from '@angular/cdk/dialog';
+import { Router } from '@angular/router';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroArrowPath, heroChevronDown, heroFolder } from '@ng-icons/heroicons/outline';
+import { heroArrowPath, heroChevronDown, heroFolder, heroRectangleStack } from '@ng-icons/heroicons/outline';
+import { firstValueFrom } from 'rxjs';
+import {
+  SaveFolderAsProjectDialogComponent,
+  SaveFolderAsProjectDialogData,
+  SaveFolderAsProjectDialogResult,
+} from '../../../../../projects/components/save-folder-as-project-dialog.component';
+import { TooltipDirective } from '../../../../../components/tooltip';
 import type { FolderAttachmentData } from '../../../../services/models/message.model';
 import { FEATURES } from '../../../../../services/features';
 import { FolderAttachmentError, FolderRefreshService } from '../../../../../services/folder-attachments';
@@ -15,8 +24,8 @@ import { ToastService } from '../../../../../services/toast/toast.service';
 @Component({
   selector: 'app-folder-attachment-chip',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon],
-  providers: [provideIcons({ heroArrowPath, heroChevronDown, heroFolder })],
+  imports: [NgIcon, TooltipDirective],
+  providers: [provideIcons({ heroArrowPath, heroChevronDown, heroFolder, heroRectangleStack })],
   template: `
     <div
       class="w-72 max-w-full overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800"
@@ -59,6 +68,21 @@ import { ToastService } from '../../../../../services/toast/toast.service';
           <ng-icon name="heroArrowPath" class="size-4" [class.animate-spin]="refreshing()" aria-hidden="true" />
         </button>
       }
+      @if (canSaveAsProject) {
+        <!-- Save as project (composer-project-folder-picker spec §5): a
+             project of its own with this folder's files, for a folder the
+             person keeps coming back to. -->
+        <button
+          type="button"
+          (click)="saveAsProject()"
+          class="flex w-10 shrink-0 items-center justify-center border-l border-gray-200 text-gray-500 hover:bg-gray-50 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-700 dark:text-gray-400 dark:hover:bg-gray-700/50 dark:hover:text-gray-200"
+          [attr.aria-label]="'Save ' + folder().name + ' as a project'"
+          appTooltip="Save as project"
+          data-testid="folder-chip-save-project"
+        >
+          <ng-icon name="heroRectangleStack" class="size-4" aria-hidden="true" />
+        </button>
+      }
       </div>
       @if (expanded()) {
         <ul [id]="listId" class="max-h-56 overflow-y-auto border-t border-gray-200 px-3 py-2 text-xs/5 text-gray-700 dark:border-gray-700 dark:text-gray-300">
@@ -79,11 +103,16 @@ export class FolderAttachmentChipComponent {
   private static nextId = 0;
   private readonly folderRefresh = inject(FolderRefreshService);
   private readonly toast = inject(ToastService);
+  private readonly dialog = inject(Dialog);
+  private readonly router = inject(Router);
+  private readonly features = inject(FEATURES);
 
   readonly folder = input.required<FolderAttachmentData>();
 
   /** Refresh is part of the folder feature; without it the chip only lists files. */
-  protected readonly canRefresh = inject(FEATURES).folderAttachments;
+  protected readonly canRefresh = this.features.folderAttachments;
+  /** The folder's row comes from the folder routes, and the project from Projects: both must be on. */
+  protected readonly canSaveAsProject = this.features.folderAttachments && this.features.projects;
   protected readonly refreshing = signal(false);
 
   protected readonly expanded = signal(false);
@@ -117,5 +146,29 @@ export class FolderAttachmentChipComponent {
     } finally {
       this.refreshing.set(false);
     }
+  }
+
+  /**
+   * Open "Save as project". On success the person stays in the conversation;
+   * the toast opens the new project.
+   */
+  protected async saveAsProject(): Promise<void> {
+    const ref = this.dialog.open<SaveFolderAsProjectDialogResult, SaveFolderAsProjectDialogData>(
+      SaveFolderAsProjectDialogComponent,
+      { data: { folder: this.folder() } },
+    );
+    const result = await firstValueFrom(ref.closed);
+    if (!result) return;
+    const projectId = result.project.projectId;
+    const open = { label: 'Open project', handler: () => void this.router.navigate(['/projects', projectId]) };
+    if (result.error) {
+      void this.router.navigate(['/projects', projectId]);
+      return;
+    }
+    this.toast.success(
+      'Saved as project',
+      `${result.project.name}: ${result.imported} ${result.imported === 1 ? 'file is' : 'files are'} being added to its Files.`,
+      { action: open },
+    );
   }
 }
