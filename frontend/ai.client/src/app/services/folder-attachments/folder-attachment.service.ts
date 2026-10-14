@@ -29,8 +29,22 @@ export interface FolderFileEntry {
   mimeType: string;
   sizeBytes: number | null;
   uploadId: string | null;
-  status: 'pending' | 'attached' | 'failed' | 'skipped_size';
+  status: 'pending' | 'attached' | 'failed' | 'skipped_size' | 'removed';
   error: string | null;
+  /** Provider version stamp and content hash when attached (refresh's change gates). */
+  etag?: string | null;
+  contentHash?: string | null;
+  /** Still attached and readable, but gone from the folder at the last refresh. */
+  removedFromSource?: boolean;
+}
+
+/** What the last refresh did (spec §4.6). */
+export interface RefreshSummary {
+  unchanged: number;
+  updated: number;
+  added: number;
+  removedFromSource: number;
+  failed: number;
 }
 
 /** The folder row, as `GET /sessions/{id}/folders/{folderAttachId}` returns it. */
@@ -48,6 +62,10 @@ export interface FolderAttachment {
   counts: FolderCounts;
   files: FolderFileEntry[];
   snapshotAt: string | null;
+  /** True while a refresh (not the first expansion) is walking the folder. */
+  refreshing?: boolean;
+  refreshedAt?: string | null;
+  lastRefresh?: RefreshSummary | null;
   createdAt: string;
   updatedAt: string;
   /** Expanding, but untouched past the server's timeout: the task is gone and needs `resume`. */
@@ -110,6 +128,7 @@ export function folderStatusLabel(row: FolderAttachment): string {
   const attached = row.counts.attached;
   const listed = row.counts.listed;
   if (row.status === 'expanding') {
+    if (row.refreshing) return 'Checking for changes…';
     return listed > 0 ? `Adding ${attached} of ${listed}…` : 'Reading folder…';
   }
   if (row.status === 'failed' && attached === 0) {
@@ -117,10 +136,25 @@ export function folderStatusLabel(row: FolderAttachment): string {
   }
   const files = `${attached} ${attached === 1 ? 'file' : 'files'}`;
   const skipped = skippedFolderCount(row);
+  let label: string;
   if (row.status === 'ready' || skipped === 0) {
-    return row.counts.truncated ? `${files} (limit reached)` : files;
+    label = row.counts.truncated ? `${files} (limit reached)` : files;
+  } else {
+    label = `${attached} of ${listed} files · ${skipped} skipped`;
   }
-  return `${attached} of ${listed} files · ${skipped} skipped`;
+  const refreshed = refreshSummaryLabel(row);
+  return refreshed ? `${label} · ${refreshed}` : label;
+}
+
+/** What the last refresh changed: "1 updated, 2 new", or "up to date". Empty before any refresh. */
+export function refreshSummaryLabel(row: FolderAttachment): string {
+  const summary = row.lastRefresh;
+  if (!summary || !row.refreshedAt) return '';
+  const parts: string[] = [];
+  if (summary.updated) parts.push(`${summary.updated} updated`);
+  if (summary.added) parts.push(`${summary.added} new`);
+  if (summary.removedFromSource) parts.push(`${summary.removedFromSource} gone from the folder`);
+  return parts.length > 0 ? parts.join(', ') : 'up to date';
 }
 
 /** Why files were left out, one clause each, for the card's tooltip. Empty when none were. */
@@ -171,6 +205,27 @@ export class FolderAttachmentService {
     } catch (err) {
       const error = this.toError(err, 'Could not remove the folder.');
       if (error.status !== 404) throw error;
+    }
+  }
+
+  /** This user's folders in a conversation, newest first. */
+  async list(sessionId: string): Promise<FolderAttachment[]> {
+    try {
+      const body = await firstValueFrom(this.http.get<{ folders: FolderAttachment[] }>(this.url(sessionId)));
+      return body.folders;
+    } catch (err) {
+      throw this.toError(err, 'Could not list the folders.');
+    }
+  }
+
+  /** Re-list the folder and bring its files up to date (spec §4.6). Returns the row refreshing. */
+  async refresh(sessionId: string, folderAttachId: string): Promise<FolderAttachment> {
+    try {
+      return await firstValueFrom(
+        this.http.post<FolderAttachment>(`${this.url(sessionId, folderAttachId)}/refresh`, {}),
+      );
+    } catch (err) {
+      throw this.toError(err, 'Could not refresh the folder.');
     }
   }
 
