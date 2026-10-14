@@ -1106,12 +1106,33 @@ def _grep_lines(
     for i, line in enumerate(lines):
         if len(out) >= budget or (clock is not None and clock.out_of_time()):
             break
-        if not regex.search(line):
+        text = line.strip()
+        match = regex.search(text)
+        if not match:
             continue
         before = [ln.strip()[:_LINE_CHARS] for ln in lines[max(0, i - _CONTEXT_LINES): i]]
         after = [ln.strip()[:_LINE_CHARS] for ln in lines[i + 1: i + 1 + _CONTEXT_LINES]]
-        out.append({"line": i + 1, "text": line.strip()[:_LINE_CHARS], "before": before, "after": after})
+        out.append({"line": i + 1, "text": _excerpt(text, match), "before": before, "after": after})
     return out
+
+
+def _excerpt(text: str, match: "re.Match[str]") -> str:
+    """The matched line, at most ``_LINE_CHARS``, cut around the match.
+
+    A Word paragraph or an unwrapped text line is one "line" and runs to
+    thousands of characters. Cutting it from the start returned text that did
+    not contain the match whenever the match sat past the first ``_LINE_CHARS``,
+    so the model saw a hit it could not read and gave up ("not stated"). Found
+    by the large-document quality harness: four Word-document facts at the end
+    of long paragraphs were answered 1 time in 12.
+    """
+    if len(text) <= _LINE_CHARS:
+        return text
+    span = match.end() - match.start()
+    start = max(0, match.start() - max(0, _LINE_CHARS - span) // 2)
+    start = min(start, len(text) - _LINE_CHARS)
+    end = start + _LINE_CHARS
+    return ("…" if start > 0 else "") + text[start:end] + ("…" if end < len(text) else "")
 
 
 def _text_pattern(text: str, pattern: str, base: Dict[str, Any], unit: str) -> DocumentReadResult:

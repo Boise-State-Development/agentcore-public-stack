@@ -305,6 +305,35 @@ class TestDocxAndText:
         assert result.format == "docx"
 
     @pytest.mark.asyncio
+    async def test_a_match_late_in_a_long_paragraph_is_in_the_returned_text(self, stored):
+        # A Word paragraph is one line; cutting it from the start hid any match
+        # past the first 200 characters, so the model saw a hit it could not read.
+        filler = "The records office archives meeting minutes through the internal portal. " * 8
+        stored(_meta(filename="handbook.docx", mime=self.DOCX_MIME),
+               build_docx(["Intro", filler + "Each member may borrow up to 17 items at any one time.", "Close"]))
+        result = await dr.read_document("u1", "s1", "up-1", pattern=r"up to \d+ items")
+        (match,) = result.payload["matches"]
+        assert "up to 17 items" in match["text"]
+        assert match["text"].startswith("…") and len(match["text"]) <= dr._LINE_CHARS + 2
+
+    @pytest.mark.parametrize("line,pattern,expected", [
+        ("short line with fish", "fish", "short line with fish"),
+        ("x" * 300 + "fish" + "y" * 300, "fish", None),
+        ("fish" + "y" * 500, "fish", None),
+        ("x" * 500 + "fish", "fish", None),
+    ])
+    def test_excerpt_is_bounded_and_always_holds_the_match(self, line, pattern, expected):
+        import re
+
+        excerpt = dr._excerpt(line, re.search(pattern, line))
+        if expected is not None:
+            assert excerpt == expected
+            return
+        assert pattern in excerpt and len(excerpt.strip("…")) == dr._LINE_CHARS
+        assert excerpt.startswith("…") == (not line.startswith(pattern))
+        assert excerpt.endswith("…") == (not line.endswith(pattern))
+
+    @pytest.mark.asyncio
     async def test_page_range_on_a_non_pdf_is_rejected(self, stored):
         stored(_meta(filename="memo.docx", mime=self.DOCX_MIME), build_docx(["x"]))
         with pytest.raises(WorkspaceValidationError):
