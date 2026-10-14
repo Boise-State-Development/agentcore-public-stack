@@ -28,7 +28,7 @@ import { ToastService } from '../../../../../services/toast/toast.service';
         (click)="toggle()"
         [attr.aria-expanded]="expanded()"
         [attr.aria-controls]="listId"
-        class="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:hover:bg-gray-700/50"
+        class="flex min-w-0 flex-1 items-center gap-3 px-3 py-2 text-left hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:hover:bg-gray-700/50"
       >
         <span class="flex size-9 shrink-0 items-center justify-center rounded-md border border-primary-200 bg-primary-50 text-primary-700 dark:border-primary-700 dark:bg-primary-900/40 dark:text-primary-300">
           <ng-icon name="heroFolder" class="size-5" aria-hidden="true" />
