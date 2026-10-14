@@ -30,6 +30,7 @@ import { BrandingService } from '../../../../branding/branding.service';
 class ChatInputStub {
   readonly sessionId = input<string | null>(null);
   readonly allowFolderAttachments = input<boolean>(false);
+  readonly showScopePicker = input<boolean>(false);
   readonly draftKey = input<string | null>(null);
   readonly isChatLoading = input<boolean>(false);
   readonly showFileControls = input<boolean>(true);

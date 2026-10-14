@@ -109,10 +109,10 @@ describe('ChatInputComponent — Drive folders', () => {
   };
   let steering: SteeringServiceStub;
   let submitted: { content: string; folders?: { folderAttachId?: string; fileCount: number }[] }[];
-  let features: { folderAttachments: boolean; largeDocumentAttachments: boolean };
+  let features: { folderAttachments: boolean; largeDocumentAttachments: boolean; projects: boolean };
 
-  async function build(flag = true, allow = true): Promise<void> {
-    features = { folderAttachments: flag, largeDocumentAttachments: false };
+  async function build(flag = true, allow = true, projects = false): Promise<void> {
+    features = { folderAttachments: flag, largeDocumentAttachments: false, projects };
     folders = {
       attach: vi.fn().mockResolvedValue(row()),
       get: vi.fn().mockResolvedValue(READY_ROW),
@@ -176,6 +176,38 @@ describe('ChatInputComponent — Drive folders', () => {
     component.onSourceFolderPicked(PICK);
     await vi.waitFor(() => expect(cards()[0]?.phase).toBe('attached'));
   }
+
+  describe('the "Project or folder" picker beneath the composer', () => {
+    const picker = (): HTMLElement | null =>
+      fixture.nativeElement.querySelector('app-composer-scope-picker');
+
+    async function rebuild(flag: boolean, projects: boolean, show: boolean, compact = false): Promise<void> {
+      TestBed.resetTestingModule();
+      await build(flag, true, projects);
+      fixture.componentRef.setInput('showScopePicker', show);
+      fixture.componentRef.setInput('compact', compact);
+      fixture.detectChanges();
+    }
+
+    it('sits on the line beneath a new conversation when its page asks for it', async () => {
+      await rebuild(true, false, true);
+      expect(picker()).not.toBeNull();
+    });
+
+    it('shows with projects alone, folders off', async () => {
+      await rebuild(false, true, true);
+      expect(picker()).not.toBeNull();
+    });
+
+    it('is not drawn when the page does not ask, in a thread, or with nothing to offer', async () => {
+      await rebuild(true, true, false);
+      expect(picker()).toBeNull();
+      await rebuild(true, true, true, true);
+      expect(picker()).toBeNull();
+      await rebuild(false, false, true);
+      expect(picker()).toBeNull();
+    });
+  });
 
   describe('the slot a folder takes', () => {
     it('offers no folder while the flag is off or the parent does not send them', async () => {

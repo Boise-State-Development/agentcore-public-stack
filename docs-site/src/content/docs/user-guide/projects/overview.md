@@ -89,6 +89,12 @@ archives or restores it, deletes it once archived, or lets you leave it.
 Project conversations also appear in the main sidebar, grouped under a small
 heading with the project's name.
 
+You can also start one without opening the project. In a new conversation,
+**Project or folder** beneath the message box lists your projects: pick one and
+the conversation runs in it, keeping anything you have already typed. **No
+project** undoes the choice, and **New project** creates one and starts the
+conversation there. The choice is fixed once you send the first message.
+
 ## Next steps
 
 - [Set up a project](/agentcore-public-stack/user-guide/projects/set-up/): create it,

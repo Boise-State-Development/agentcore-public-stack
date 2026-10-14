@@ -162,6 +162,12 @@ export class ChatContainerComponent {
    * preview and the marketplace test drive do not, so they never offer one.
    */
   allowFolderAttachments = input<boolean>(false);
+  /**
+   * Offer "Project or folder" beneath the full-page empty state's composer
+   * (docs/specs/composer-project-folder-picker.md). Only the session page sets
+   * it; a thread and the embedded previews never show it.
+   */
+  showScopePicker = input<boolean>(false);
 
   // Optional inputs
 
