@@ -533,6 +533,39 @@ three per question):**
   checked the whole reply failed correct answers that mentioned a distractor as
   context. That run is discarded.
 
+**Second readout (dev, 2026-10-13, Haiku 4.5, k = 3, 31 questions, 279 turns,
+$9.77), with the `pattern` excerpt fix in all arms, 15 scanned questions, and a
+third arm, `tier2-guided`, whose guidance names `query` first.** Turn accuracy
+and dollars per turn:
+
+| Class | Tier 1 | Tier 2 | Tier 2, guided |
+|---|---|---|---|
+| text (18 turns) | 72%, $0.038 | 89%, $0.036 | 89%, $0.027 |
+| scanned (45) | 80%, $0.122, 28 s | **100%, $0.019**, 8 s | **100%, $0.0095**, 4 s |
+| layout (15) | 100%, $0.015 | 100%, $0.015 | 100%, $0.011 |
+| docx (15) | 100%, $0.014 | 93%, $0.015 | 93%, $0.010 |
+| **all (93)** | **85%, $0.071** | **97%, $0.021** | **97%, $0.013** |
+
+- **Search is never worse and is much cheaper.** Tier 2 matches or beats Tier 1 on
+  question majority in every class. On scanned documents Tier 1 gets there by
+  paging through page images (8 calls, 107k input tokens a turn) and still fails
+  one turn in five. With search, every turn is right, at a thirteenth of the
+  cost when the guidance names it.
+- **Not significant at the question level, and it can't be.** Tier 1 is usually
+  right in the end by brute force, so there are only three discordant scanned
+  questions (exact McNemar p = 0.25). The difference is reliability (80% vs 100%
+  of turns), cost and latency, and those are large.
+- **Naming search in the guidance is a free improvement.** Without it, Tier 2's
+  first call was `pattern` in 93 of 93 turns; with it, `query` in 93 of 93.
+  Accuracy is unchanged, and cost per turn falls 38% overall (by half on
+  scanned) with a median of one tool call.
+- **Storage is small next to the token saving.** At $5 per GB-month, a 35 MB
+  document costs about $0.18 a month to keep indexed. On scanned documents,
+  search saves about $0.11 per question, so two questions a month pay for it.
+- The remaining misses are the model naming both a value and its distractor
+  ("11 days for regular staff, 3 for casual"). That is a fair failure for a
+  question that asks for one value, and it is the same in every arm.
+
 **Cost**, per session through `GET /admin/costs/sessions/{id}/calls`: a reference
 session's prefix should look like an offloaded-document session (digest ≤ 1,500
 tokens), not like an inline one.
