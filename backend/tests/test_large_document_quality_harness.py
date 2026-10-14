@@ -140,16 +140,6 @@ class TestAsk:
     def test_only_the_final_answer_line_is_scored(self, reply, line):
         assert final_answer(reply) == line
 
-    def test_the_guided_arm_names_search_and_refuses_a_changed_sentence(self):
-        from large_document_quality.ask import guide_to_search
-
-        production = ("_`x.pdf` (7 MB) is attached... call `document_read` with `upload_id` `u`: first with "
-                      "`pattern` to find the relevant pages, then with `page_range` to read them._")
-        guided = guide_to_search(production)
-        assert "first with `query`" in guided and "or `pattern` to find the relevant pages" in guided
-        with pytest.raises(ValueError):
-            guide_to_search("call `document_read` and search it")
-
     def test_the_user_message_is_the_one_the_chat_route_builds(self, monkeypatch):
         from large_document_quality import ask
         from apis.shared.files import large_document

@@ -6,10 +6,11 @@ The only difference between the arms is the tool the model gets:
   it (digest, ``pattern``, ``page_range``, index and text modes);
 * ``tier2`` — the same tool with the ``query`` argument
   (``make_document_read_tool(..., searchable=True)``);
-* ``tier2-guided`` — ``tier2`` with the attachment guidance naming search. The
-  production sentence says "first with ``pattern``", which a first readout found
-  steers the model away from ``query``. This arm tests a proposed wording
-  (:func:`guide_to_search`); it is not what production sends.
+* ``tier2-guided`` — ``tier2`` with the attachment guidance naming search first,
+  which is what production sends when the deployment has the attachments KB
+  (``_build_attachment_guidance(search_available=True)``). ``tier2`` keeps the
+  earlier "first with ``pattern``" sentence, which the second readout measured
+  against it.
 
 Everything else is held fixed and taken from production code: the tool itself,
 reading the deployed rows, sidecars and knowledge base; the user message, built
@@ -117,23 +118,6 @@ def _mode(tool_input: Dict[str, Any]) -> str:
     return "index"
 
 
-#: The production guidance's instruction, and the proposed one the guided arm sends.
-_PATTERN_FIRST = "first with `pattern` to find the relevant"
-_SEARCH_FIRST = (
-    "first with `query` (a plain-language search, which also covers scanned pages) "
-    "or `pattern` to find the relevant"
-)
-
-
-def guide_to_search(guidance: str) -> str:
-    """The guidance with search named first. Raises when the production sentence
-    no longer contains the instruction this arm rewrites, so a wording change
-    there cannot silently turn the guided arm into a copy of ``tier2``."""
-    if _PATTERN_FIRST not in guidance:
-        raise ValueError("the attachment guidance no longer says 'first with `pattern`'; update the guided arm")
-    return guidance.replace(_PATTERN_FIRST, _SEARCH_FIRST)
-
-
 async def user_message(question: Question, doc: Dict[str, Any], *, guided: bool = False) -> str:
     """The question as the chat route would send it with this attachment on the turn."""
     from apis.inference_api.chat.routes import _build_attachment_guidance
@@ -142,9 +126,9 @@ async def user_message(question: Question, doc: Dict[str, Any], *, guided: bool 
 
     meta = await get_file_upload_repository().get_file(doc["userId"], doc["uploadId"])
     refs = [ReferenceAttachment(meta=meta)]
-    guidance = _build_attachment_guidance([], [], [], [], references=refs, document_read_available=True)
-    if guided:
-        guidance = guide_to_search(guidance)
+    guidance = _build_attachment_guidance(
+        [], [], [], [], references=refs, document_read_available=True, search_available=guided
+    )
     section = render_references_section(refs, include_handle=True)
     return "\n\n".join(part for part in (question.question, guidance, section) if part)
 
