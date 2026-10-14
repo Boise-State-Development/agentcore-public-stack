@@ -8,7 +8,7 @@ Supports the pre-signed URL upload flow for S3.
 import os
 from datetime import datetime, timezone
 from enum import Enum
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field, ConfigDict
 from apis.shared.timestamps import from_iso, to_iso
@@ -174,17 +174,28 @@ LARGE_DOCUMENT_MAX_BYTES = int(
     os.environ.get("LARGE_DOCUMENT_MAX_BYTES", 50 * 1024 * 1024)  # 50MB
 )
 
+# How a file row reaches the model (drive-folder spec §4.3). ``inline`` is the
+# default and what every row written before the field existed reads as: the
+# size rule alone decides. ``reference`` is set at import for a file from an
+# attached folder, so it is prepared and read on demand whatever its size.
+DELIVERY_INLINE = "inline"
+DELIVERY_REFERENCE = "reference"
+Delivery = Literal["inline", "reference"]
+
 
 def is_reference_document(meta: "FileMetadata") -> bool:
     """Whether ``meta`` is attached by reference rather than inline.
 
     The one predicate for the reference class (large-document spec §4): a
-    document ``document_read`` can read (pdf, docx, txt, md, html) whose size is
+    document ``document_read`` can read (pdf, docx, txt, md, html) that either
+    was stored with ``delivery="reference"`` (a file from an attached folder,
+    drive-folder spec §4.3: by reference whatever its size) or whose size is
     over ``INLINE_DOCUMENT_MAX_BYTES`` and at most ``LARGE_DOCUMENT_MAX_BYTES``.
     Such a file never rides inline: the upload enqueues it for preparation
     instead of building a digest in-process, and ``document_read`` reads its
-    ``_derived/`` sidecars. Smaller documents stay inline-class; larger ones are
-    refused at upload.
+    ``_derived/`` sidecars. Other documents stay inline-class; larger ones are
+    refused at upload. ``delivery`` never promotes a spreadsheet, a deck or an
+    image: those have no sidecars to read, and their tools read the original.
     """
     # Function-local: document_read imports this module, and the format
     # classification (tabular and presentation carve-outs included) must stay
@@ -193,6 +204,8 @@ def is_reference_document(meta: "FileMetadata") -> bool:
 
     if document_format_for(meta.mime_type, meta.filename) is None:
         return False
+    if meta.delivery == DELIVERY_REFERENCE:
+        return True
     return INLINE_DOCUMENT_MAX_BYTES < meta.size_bytes <= LARGE_DOCUMENT_MAX_BYTES
 
 
@@ -284,6 +297,13 @@ class FileMetadata(BaseModel):
     # never part of an access decision.
     source: str = Field(default="upload", description="Origin of the file")
 
+    # How the file reaches the model (drive-folder spec §4.3): ``inline`` lets
+    # the size rule decide, as every row did before this field; ``reference``
+    # makes a document-class file reference-class whatever its size, so it is
+    # prepared and read through ``document_read``. Set once at import, never
+    # changed. Absent on older rows, which read as ``inline``.
+    delivery: Delivery = Field(default=DELIVERY_INLINE, description="inline or reference delivery")
+
     # DocumentDigest (docs/specs/document-context-offload.md §4A), built once
     # when a document upload completes and stored as a plain map — see
     # ``apis.shared.files.document_digest``. ``None`` = never generated (files
@@ -352,6 +372,8 @@ class FileMetadata(BaseModel):
             "updatedAt": to_iso(self.updated_at),
             "ttl": ttl_value,
         }
+        if self.delivery != DELIVERY_INLINE:
+            item["delivery"] = self.delivery
         if self.digest:
             item["digest"] = self.digest
         if self.preparation:
@@ -377,6 +399,11 @@ class FileMetadata(BaseModel):
             s3_bucket=item.get("s3Bucket", ""),
             status=item.get("status", FileStatus.PENDING),
             source=item.get("source", "upload"),
+            delivery=(
+                DELIVERY_REFERENCE
+                if item.get("delivery") == DELIVERY_REFERENCE
+                else DELIVERY_INLINE
+            ),
             created_at=from_iso(created_at) if created_at else datetime.now(timezone.utc),
             updated_at=from_iso(updated_at) if updated_at else datetime.now(timezone.utc),
             ttl=item.get("ttl"),

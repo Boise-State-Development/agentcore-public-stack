@@ -37,6 +37,8 @@ class FileUploadRepository:
     Key Patterns:
     - File: PK=USER#{userId}, SK=FILE#{uploadId}
     - Quota: PK=USER#{userId}, SK=QUOTA
+    - Folder attachment: PK=USER#{userId}, SK=FOLDER#{folderAttachId}
+      (``folder_repository.py``; the file listings key on ``FILE#``)
 
     GSI (SessionIndex):
     - GSI1PK=CONV#{sessionId}, GSI1SK=FILE#{uploadId}
@@ -377,12 +379,16 @@ class FileUploadRepository:
         running event loop it cannot re-enter, and needs the session's upload
         rows to rehydrate stripped documents. boto3 is synchronous anyway; the
         async method is a thin wrapper over this.
+
+        Keyed to the ``FILE#`` sort prefix: a folder attachment's row shares
+        the session partition (``GSI1SK=FOLDER#…``, ``folder_repository``) and
+        is not a file.
         """
         try:
             query_params = {
                 "IndexName": "SessionIndex",
-                "KeyConditionExpression": "GSI1PK = :pk",
-                "ExpressionAttributeValues": {":pk": f"CONV#{session_id}"},
+                "KeyConditionExpression": "GSI1PK = :pk AND begins_with(GSI1SK, :sk_prefix)",
+                "ExpressionAttributeValues": {":pk": f"CONV#{session_id}", ":sk_prefix": "FILE#"},
                 "ScanIndexForward": False,
             }
 
@@ -428,8 +434,8 @@ class FileUploadRepository:
         try:
             query_params = {
                 "IndexName": "SessionIndex",
-                "KeyConditionExpression": "GSI1PK = :pk",
-                "ExpressionAttributeValues": {":pk": f"CONV#{session_id}"},
+                "KeyConditionExpression": "GSI1PK = :pk AND begins_with(GSI1SK, :sk_prefix)",
+                "ExpressionAttributeValues": {":pk": f"CONV#{session_id}", ":sk_prefix": "FILE#"},
                 "ProjectionExpression": projection,
                 "ExpressionAttributeNames": names,
             }
