@@ -106,7 +106,7 @@ export function folderKey(connectorId: string, providerFolderId: string): string
         aria-haspopup="dialog"
         [attr.aria-expanded]="open()"
         [attr.aria-label]="selectedProject() ? 'Project: ' + selectedProject()!.name + '. Change project or add a folder' : null"
-        class="relative -left-2 inline-flex min-w-0 max-w-full items-center gap-1 rounded-lg px-2 py-1 text-xs/5 text-gray-600 hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-300 dark:hover:bg-white/10 dark:hover:text-white"
+        class="inline-flex min-w-0 max-w-full items-center gap-1 rounded-full bg-gray-50 px-2.5 py-0.5 text-xs/5 text-gray-600 ring-1 ring-gray-200 ring-inset transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white/5 dark:text-gray-300 dark:ring-white/10 dark:hover:bg-white/10 dark:hover:text-white"
         data-testid="composer-scope-trigger"
       >
         @if (selectedProject(); as project) {

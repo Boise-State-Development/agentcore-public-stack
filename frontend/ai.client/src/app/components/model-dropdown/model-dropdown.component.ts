@@ -342,6 +342,14 @@ export class ModelDropdownComponent {
    */
   readonly size = input<'default' | 'compact'>('default');
 
+  /**
+   * Which way the compact picker's menu prefers to open. Up suits a thread's
+   * composer pinned to the bottom of the viewport; down suits the empty
+   * state's, which sits mid-page with the room beneath it. Either flips when
+   * the preferred side is cramped.
+   */
+  readonly menuOpens = input<'up' | 'down'>('up');
+
   protected readonly triggerSizeClass = computed(() =>
     this.size() === 'compact' ? 'gap-1 px-2 py-1 text-xs/5' : 'gap-1.5 px-3 py-1.5 text-sm/5',
   );
@@ -351,18 +359,19 @@ export class ModelDropdownComponent {
   );
 
   // Menu positioning - below the trigger's left edge, flipping above when there
-  // is no room; the compact picker prefers above its right edge (see `size`).
-  protected readonly menuPositions = computed<ConnectedPosition[]>(() =>
-    this.size() === 'compact'
-      ? [
-          { originX: 'end', originY: 'top', overlayX: 'end', overlayY: 'bottom', offsetY: -8 },
-          { originX: 'end', originY: 'bottom', overlayX: 'end', overlayY: 'top', offsetY: 8 },
-        ]
-      : [
-          { originX: 'start', originY: 'bottom', overlayX: 'start', overlayY: 'top', offsetY: 8 },
-          { originX: 'start', originY: 'top', overlayX: 'start', overlayY: 'bottom', offsetY: -8 },
-        ],
-  );
+  // is no room; the compact picker anchors to its right edge, above or below
+  // as `menuOpens` prefers.
+  protected readonly menuPositions = computed<ConnectedPosition[]>(() => {
+    if (this.size() === 'compact') {
+      const above: ConnectedPosition = { originX: 'end', originY: 'top', overlayX: 'end', overlayY: 'bottom', offsetY: -8 };
+      const below: ConnectedPosition = { originX: 'end', originY: 'bottom', overlayX: 'end', overlayY: 'top', offsetY: 8 };
+      return this.menuOpens() === 'up' ? [above, below] : [below, above];
+    }
+    return [
+      { originX: 'start', originY: 'bottom', overlayX: 'start', overlayY: 'top', offsetY: 8 },
+      { originX: 'start', originY: 'top', overlayX: 'start', overlayY: 'bottom', offsetY: -8 },
+    ];
+  });
 
   // Submenus fly out to the right of their parent row, flipping to the left
   // when there isn't room — the picker sits in the composer, which can be
