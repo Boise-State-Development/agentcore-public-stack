@@ -19,6 +19,13 @@ pending, steered into a running turn, or waking an idle conversation. Sections 9
 session starts another: the target conversation's title, a live one-line status built from the tool summaries and
 `agent_status` the SPA already holds per session, and the whole card as the link to it (§4.3). No new event and no
 model call; two short display fields on `HANDOFF#` make it survive a reload.
+**Amendment (2026-10-14, later): relayed prompts and artifacts on a delivery.** A target that pauses for OAuth
+consent, a tool approval or an `ask_user_question` no longer only *points* the user at the target. Its prompt is
+**relayed** into the source thread, under the handoff row, and can be answered there; the answer resumes the target
+in the background (§4.3, "Relayed prompts"). The prompt still belongs to the target, the relay is written by the
+platform from the pending interrupt, not by a model, and it never enters the source's model history. Separately, a
+delivery can now carry **artifact references** as well as text, so a result that is an artifact (a rubric, a
+report) can come back as itself rather than as a paragraph about it (§4.8, "Artifacts on a delivery").
 **Targets branch:** `develop`
 **Related:**
 - `docs/specs/agent-marketplace.md` §D11 — the 2026-09-14 revision that made a mention *bind* (#1115)
@@ -159,7 +166,8 @@ copy, code and row keys, for two reasons:
 | **Handoff row** | The linked card in the original thread that tracks a handoff: target title, status, live status line (§4.3) | Replayed as `handoffs` on `GET /messages` |
 | **Bring back result** / **Send to *{title}*** | Returning a handoff's result to the original thread, from either end | `kind: "send_back"` |
 | **Suggested handoff** | A chip the model offers (§4.4) | `suggest_handoff`, `handoff_suggested` |
-| **Delivery** | Text from one of the user's conversations, landed in another with its source named (§4.8) | `DELIVERY#<deliveryId>`, the `deliveries` request field |
+| **Relayed prompt** | A target's pending interrupt prompt, shown in the source thread under its handoff row and answerable there (§4.3) | Replayed as `handoffs[].relayedPrompts` on `GET /messages` |
+| **Delivery** | Text from one of the user's conversations, landed in another with its source named, optionally with references to artifacts made there (§4.8) | `DELIVERY#<deliveryId>`, the `deliveries` request field |
 | **Linked conversations** | A conversation, the one it was handed off from, and the ones handed off from it (§9.2) | `spawnedFrom` + `HANDOFF#.targetSessionId` |
 | **Message** | Phase 2: a delivery the *agent* sent | `send_to_conversation`, `origin: "agent"` |
 | **Consult** | Phase 1: the Agent runs in place | `CONSULT#` |
@@ -182,7 +190,8 @@ User-facing copy: "Hand off to *Rubric Builder*", "Handed off to *Rubric Builder
 | Background execution | **Client-driven.** The SPA runs the target's turn as a second stream. It lives as long as the tab (§4.6) |
 | Model-suggested handoffs | `suggest_handoff` tool, **non-blocking** (returns immediately; the turn continues). Constant spec. No Agent list in the schema |
 | Linking | The target session records `spawnedFrom: {sessionId, handoffId}`. The source's `HANDOFF#` row records `targetSessionId` and `status` |
-| How a result goes back | A **delivery** (§4.8): a persisted `DELIVERY#` row on the receiving conversation, shown as a card on its composer and carried by the user's next send. It never starts a turn and never enters a running one |
+| When the target needs the user | Its prompt (consent, approval, question) is **relayed** into the source thread under the handoff row and can be answered there, resuming the target in the background. A browser sign-in links to the target instead. The relay is built from the pending interrupt by the platform, never written by a model, and never enters the source's history (§4.3) |
+| How a result goes back | A **delivery** (§4.8): a persisted `DELIVERY#` row on the receiving conversation, shown as a card on its composer and carried by the user's next send. It can reference artifacts the sending conversation made. It never starts a turn and never enters a running one |
 | Flags | Backend `HANDOFFS_ENABLED`, SPA `FEATURES.handoffs` (both default **off** in development); `suggest_handoff` separately gated by `HANDOFF_SUGGESTIONS_ENABLED` |
 
 ### 4.2 Phase 0a — Handoff with context
@@ -353,7 +362,7 @@ it can't.
 
 | Layer | Reaches the user when | What it shows |
 |---|---|---|
-| **The row, the unread dot and a toast** | They're in the app, on any page | Toast: "*Rubric Builder* finished · Open", or amber "*Rubric Builder* needs your input · Open", which stays until dismissed |
+| **The row, the unread dot and a toast** | They're in the app, on any page | Toast: "*Rubric Builder* finished · Open", or amber "*Rubric Builder* needs your input · Answer", which stays until dismissed and opens the relayed prompt (see "Relayed prompts" below) |
 | **The in-app inbox (the bell)** | They missed the toast, reloaded, or come back later | An inbox entry per state change that needs them |
 | **A browser notification** | The tab is open but hidden: another tab, another app | The same one line, from the operating system |
 
@@ -399,12 +408,101 @@ Web Push would only ever announce a stopped run. It becomes worth building with 
 scheduled runs have the same "your result is ready and you're not here" problem, so it should be built once for
 both.
 
-**Interrupt prompts stay with the target.** The notification tells the user where to go; the prompt itself is
-answered there. A consent, approval, question or sign-in prompt from the target's stream is held for that session
-and shown when the user opens it. It must never render over the source thread. ⚠️ Verify first: the
-concurrent-streaming refactor gated artifacts, compaction and MCP App state to the viewed session, but left the
-OAuth, tool-approval, quota and error services session-tagged or global. Confirm each one scopes to its own
-session before 0a ships.
+**Relayed prompts.** *Amended 2026-10-14.* The prompt belongs to the target: its interrupt, its paused turn, its
+resume. But a handoff runs in the background precisely so the user can stay in the source, and a background run
+that stops on the user is the stall §7 warns about (`HandoffNeedsInput`). So the source thread **relays** the
+prompt: it shows it under the handoff row, labelled with the target, and lets the user answer it there.
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│ ●  Rubric for BIO 101 lab reports                                      › │   ← amber mark
+│    Rubric Builder · Waiting for you to connect Canvas                    │
+└──────────────────────────────────────────────────────────────────────────┘
+   Rubric Builder needs you to connect Canvas to keep going.
+   [ Connect Canvas ]   Open conversation
+```
+
+The example end to end:
+
+1. In *Course planning*, the user hands off "draft a rubric for this" to Rubric Builder and stays put.
+2. Rubric Builder calls a Canvas tool. `OAuthConsentHook` pauses its turn, the target's stream ends with
+   `oauth_required` carrying an `interruptId`, and the `PendingInterrupt` breadcrumb is persisted, all exactly as
+   for any turn.
+3. The row turns amber and its status line reads "Waiting for you to connect Canvas". Beneath it, the relayed
+   prompt appears with **Connect Canvas**.
+4. The user presses Connect. The consent flow runs as it does anywhere in the app, then the SPA resumes the
+   **target's** paused turn: the ordinary resume request, with that `interruptId`, on the target's session. The
+   target streams in the background again and the row goes back to *running*. The relayed prompt collapses to
+   "Connected · Rubric Builder resumed".
+5. When the target finishes, the row is *done* and Bring back result is offered, as before.
+
+**What can be answered from the source.**
+
+| Interrupt | In the source | Why |
+|---|---|---|
+| OAuth consent (`oauth_required` with `interruptId`) | **Connect *{provider}*** | The token is the user's, not the conversation's. Consenting from anywhere vaults the same token, and the resume picks it up |
+| Tool approval | **Approve** / **Deny**, with the tool and its arguments shown as the target would show them | The decision needs only what the approval prompt already carries |
+| `ask_user_question` | The same picker, **plus Open conversation** | The questions are structured and self-contained, but some answers need the target's context; the link is never hidden |
+| Browser sign-in (`browser_login_required`) | **Open conversation** only | A live browser stream with a deadline is the target's screen, not a card. The relay says "Rubric Builder needs you to sign in to *{site}*" and links there |
+| A pre-flight `oauth_required` (no `interruptId`) | Not relayed | Nothing is paused, so nothing waits on the user. The tool is missing from the target's turn, which the target's own Connect prompt explains |
+
+Several pending prompts from one pause (two providers, say) relay as one block listing each, deduplicated by
+`providerId` the way the SPA already deduplicates `oauth_required`.
+
+**The platform writes the relay; no model does.** When the relay is needed, the target's turn is paused and its
+model can't write anything. Asking the model to announce the pause *before* pausing would cost a model call to say
+less precisely what the interrupt payload already says exactly. So the relay is rendered from the pending
+interrupt: the provider, the tool and its arguments, or the questions. It is free, it can't be wrong about what
+the target is waiting on, and it can't carry text a web page planted in the target's context. Agent-written
+messages are a different thing, for results and progress, and are Phase 2 (§9).
+
+**It never enters the source's model history.** The relay is UI: it comes from the source's `HANDOFF#` row and the
+target's `PendingInterrupt` breadcrumbs, and it is replayed on `GET /sessions/{sourceId}/messages` as
+`handoffs[].relayedPrompts`, beside `waitingOn`. It is never a Converse message on the source, so the source's
+model never reads it and the source's cached prefix doesn't move. A handoff that pauses five times for approvals
+adds nothing to the source's prompt. The answer goes only to the target, as an `interrupt_responses` entry on the
+target's own resume, the one path that has always answered an interrupt.
+
+**Live and on replay.** While the target streams in this tab, the SPA holds its pending prompts per session, so the
+relay appears as soon as the target's `done` block lands. After a reload, the replay reads the target's
+`PendingInterrupt` breadcrumbs through the source's `GET /messages`, owner-scoped on `(session, user)` for both
+sessions. That read happens only for a handoff whose status is `needs_input`, and only on `GET /messages`, so it is
+never on the turn path.
+
+**Rules.**
+
+- **It never interrupts a running source turn.** If the source is streaming when the target pauses, the row turns
+  amber at once (it is live state), but the relayed prompt waits until the source's turn ends, so it can't land in
+  the middle of an assistant reply. This is the opposite of steering, which exists to reach a running turn; a relay
+  is for the user, not the source's model.
+- **It is labelled as the target's, and lives in the row.** The relay names the target Agent and sits under that
+  handoff's row, never in the source composer's own prompt slot. If the source has a pending prompt of its own at
+  the same time, the two are unmistakable: one is in the thread's prompt slot, the other inside a handoff row.
+- **First answer wins.** The user can answer from the source row or from the target itself (another tab, another
+  device). Both resolve the same `interruptId`, and the resume route already refuses an id it doesn't know or has
+  consumed. The losing surface turns that refusal into "Already answered" and refreshes, never into an error. Either
+  answer clears the relay on both surfaces.
+- **It expires with its interrupt.** When the target's paused turn is cleared (a fresh turn there supersedes it,
+  #874), the relay goes with it. Nothing is left waiting in the source for an interrupt that no longer exists.
+- **It answers nothing on its own.** The relay is a place for the user to answer; it never pre-fills an answer,
+  never carries a default, and no delivery or agent message ever answers it (§9.6).
+
+**Notifications point where the answer is.** For a relayable prompt, the `handoff_needs_input` inbox entry, the
+amber toast and the browser notification open the **source** thread, scrolled to the row, because that is where the
+user can answer without losing their place. For a browser sign-in they open the target, as before. The amber toast's
+action reads "Answer" for a relayable prompt and "Open" for a sign-in.
+
+⚠️ **Verify first, and now a hard prerequisite.** The concurrent-streaming refactor gated artifacts, compaction and
+MCP App state to the viewed session, but left the OAuth, tool-approval, quota and error services session-tagged or
+global. Before 0a ships, confirm each one scopes to its own session. A relay is a *deliberate* rendering of the
+target's prompt in the source, keyed by `handoffId` and the target's session id; it is only safe if nothing renders
+the target's prompt in the source *by accident*, as though the source itself were waiting. The test is the same as
+before: a target's prompt never renders in the source's own prompt slot.
+
+⚠️ **Verify first: resuming a session the user isn't viewing.** The resume request is session-addressed, and the
+streaming layer already keeps a non-viewed session's stream running. Confirm the resume path (its snapshot lookup,
+the lease, `seed_steer_queue`) behaves identically when the resumed session is not `viewedSessionId`, and that the
+consent flow's return lands back in the source rather than navigating to the target.
 
 Both send-back paths below create a **delivery** (§4.8). They differ only in which end the user starts from.
 
@@ -571,6 +669,11 @@ EMF, under the existing PromptCache namespace so the cost dashboard can show it:
 - `HandoffOpenedWhileRunning`: the user opened the target before it finished
 - `HandoffNotified` by channel (`inbox`, `browser`), and `HandoffNotificationOpened` by channel
 - `HandoffBrowserPermission` by outcome (`granted`, `denied`, `dismissed`)
+- `RelayedPromptShown` by interrupt kind, and `RelayedPromptAnswered` by kind and surface (`source`, `target`). A
+  high `source` share is the relay earning its place; a high `target` share says users want the target's context
+  before answering
+- `RelayedPromptConflict`: an answer refused because the other surface answered first
+- `DeliveryArtifacts`: references per delivery, and `DeliveryArtifactOpened` from the card or the sent bubble
 - `SendBack` by origin (`row` for Bring back result, `target` for Send to *{title}*), with `openedTargetFirst`
 - `DeliveryCreated` / `DeliveryAttached` / `DeliveryDismissed` by `origin` (`user`, later `agent`), and
   `DeliveryEdited`
@@ -601,6 +704,7 @@ running one.** It waits until the user sends.
 | `handoffId?` | The handoff it belongs to, when there is one |
 | `origin` | `user` (Phase 0) or `agent` (Phase 2) |
 | `text`, `textHash` | The body, bounded at `SEND_BACK_MAX_TOKENS` |
+| `artifacts` | Up to `DELIVERY_MAX_ARTIFACTS = 5` references `{artifactId, version, title, contentType}` to artifacts the sending conversation made (see "Artifacts on a delivery" below). References only, never bodies |
 | `status` | `pending` → `attached` \| `dismissed`. Phase 2b adds `claimed` (§9.4) |
 | `attachedVia`, `attachedAt`, `edited` | How and when it reached the model (`turn` in Phase 0; `steer` or `wake` in Phase 2) |
 | `hop` | The hop of the turn that sent it, for Phase 2c's loop budget (§9.5). Always 0 for `origin: user` |
@@ -650,6 +754,46 @@ existing history, the system prompt or `toolConfig`.
 **Why a row, not a composer draft.** A card produced in one conversation has to appear in another, possibly on a
 different device. `ComposerDraftStorageService` is `localStorage`, per browser. A row also gives Phase 2 one place
 for exactly-once, metering and replay, instead of a second inbox built later.
+
+**Artifacts on a delivery.** *Added 2026-10-14.* Often the result of a handoff *is* an artifact: Rubric Builder's
+answer is the rubric it made, not the paragraph that introduces it. A text-only delivery brings back the paragraph
+and leaves the rubric behind. So a delivery can carry **references** to artifacts the sending conversation made.
+
+- **Which artifacts.** Bring back result offers the artifacts produced by the assistant message it returns (the
+  artifact HEAD row's `produced_by_message_index`, already written by the artifact service). Send to *{title}*'s review
+  sheet lists the same, each removable, so the user sees exactly what goes. Phase 2's `send_to_conversation` names
+  them by id (§9.3).
+- **Only the sender's own artifacts.** `create_delivery` checks that each artifact belongs to the user *and* was
+  made in the sending conversation (its HEAD row's `SessionIndex` key is `SESSION#{fromSessionId}`). Artifacts are
+  keyed by user, not by conversation, so without the second check a delivery shaped by an injected page could pull
+  in any artifact the user owns from an unrelated conversation. This is §9.2's reach rule applied to artifacts.
+- **References, never bodies.** An artifact is a whole HTML or Markdown document; inlining it would put thousands of
+  tokens into the receiving conversation's history for good, most of which the next answer doesn't need. The block
+  names each artifact on one line inside the existing wrapper:
+
+  ```
+  <handoff_context from_conversation="{fromTitle}">
+  The user brought this context from another of their conversations.
+  …text…
+  <artifact id="…" version="3" title="BIO 101 lab report rubric" type="text/html"/>
+  </handoff_context>
+  ```
+
+  That is tens of tokens per artifact, appended past the history cachePoint like the rest of the block.
+- **The user sees the artifact itself.** The delivery card, and the sent bubble after it, show each reference as an
+  artifact chip that opens the artifact viewer. Artifacts are the user's, so it opens from any of their
+  conversations; a deleted artifact renders as "No longer available" rather than a broken link.
+- **The pinned version is the one sent.** The reference carries the version at send time. If the sender's
+  conversation revises the artifact later, the chip says "Newer version available" and opens the latest; the model
+  was shown the version that was sent.
+- ⚠️ **The receiving model can't read an artifact today.** The agent has `create_artifact` and `update_artifact`,
+  and `update_artifact` is keyed by user, so the source's agent *can* revise a returned artifact by id. But there is
+  no read tool, so a revision would mean regenerating the document without seeing it. Until there is one, the
+  reference tells the receiving model what exists and lets it point the user at it, which is the honest Phase 0
+  scope. A bounded `read_artifact` tool is §13's open question 14; its spec would be a constant in `toolConfig`
+  (a one-time fleet-wide cache write) and its result bounded by offset, as `workspace_read` is.
+- **Shared Projects.** Unchanged: a delivery into a project task is refused in v1, so an artifact can't reach other
+  members this way. Sharing an artifact with a project stays the existing share flow.
 
 ---
 
@@ -899,7 +1043,9 @@ v1 does not resume across a consult:
 - `ask_user_question` and `request_user_login` are not registered on consult agents in v1. Both exist only to
   pause.
 
-v2 would add a `consult` `PendingInterrupt` kind that points at the consult session.
+v2 would add a `consult` `PendingInterrupt` kind that points at the consult session. *(2026-10-14:)* §4.3's relayed
+prompt is the likely UI for it: the consult card would relay the consult session's prompt and resume that session,
+exactly as a handoff row relays its target's.
 
 ### 8.8 Stop, steering, the lease
 
@@ -1002,7 +1148,8 @@ per-conversation "allow messages from…" setting is the way to widen this later
     "type": "object",
     "properties": {
       "to":      {"type": "string", "description": "\"parent\" for the conversation this one was handed off from, or the title or Agent name of a conversation handed off from this one"},
-      "message": {"type": "string", "maxLength": 8000, "description": "Self-contained text. The other conversation has not seen this one"}
+      "message": {"type": "string", "maxLength": 8000, "description": "Self-contained text. The other conversation has not seen this one"},
+      "artifact_ids": {"type": "array", "items": {"type": "string"}, "maxItems": 5, "description": "Optional: ids of artifacts you made in this conversation to send with the message"}
     },
     "required": ["to", "message"]
   }
@@ -1011,6 +1158,12 @@ per-conversation "allow messages from…" setting is the way to widen this later
 
 - **Non-blocking.** The handler resolves `to`, calls `create_delivery`, chooses the landing, and returns at once.
   It never pauses through `ToolContext.interrupt`.
+- **Artifacts by reference.** `artifact_ids` go through §4.8's checks: each must be the user's and made in *this*
+  conversation. An id that fails is dropped and named in the result ("Sent without *{id}*: it wasn't made in this
+  conversation"), rather than failing the whole message.
+- **Not for pauses.** A paused turn can't call tools, and the pause is relayed by the platform (§4.3). The tool is
+  for results and progress the agent chooses to send: a finished draft, an artifact, or "I've drafted the rubric;
+  I'll need Canvas access to post it", sent before the tool call that will need it.
 - **Addressing is resolved server-side.** `parent`, then an exact title or Agent name, then case-insensitive. If
   nothing matches or more than one does, the result lists up to 10 valid targets, as Claude Code's errors list valid
   names. No target list ever goes in the schema (the `suggest_handoff` rule, §4.4).
@@ -1110,8 +1263,8 @@ has started", and the only one that spends money while nobody is watching.
 1. **One user, linked conversations.** `create_delivery` checks both sessions on `(session, user)` and the link. A
    Shared Project task is refused as a target and as a sender.
 2. **The receiver keeps its own grants.** The sender's tools, model, skills and grants never travel. A message is
-   text: no attachments, no tool calls, artifacts named only by id, which the receiver can open only with its own
-   tools.
+   text plus artifact references (§4.8): no attachments, no tool calls, and no artifact bodies. The user can open a
+   referenced artifact from the card; the receiving model can act on it only with its own tools.
 3. **Nothing answers for the user.** A delivery is never an `interrupt_responses` entry, is never attached to a
    resume, is never steered into a paused turn, and is never carried over by `seed_steer_queue`. Tool approvals in a
    woken turn still pause. This is our version of Claude Code's rule against permission laundering: no conversation
@@ -1177,6 +1330,14 @@ has started", and the only one that spends money while nobody is watching.
   (CDK assertion test).
 - **Send-back prefix stability.** The source's `toolConfigHash` and `systemPromptHash` are byte-identical before
   and after a send-back turn.
+- **Relayed prompts.** `GET /messages` on the source returns `relayedPrompts` only for a `needs_input` handoff,
+  read from the target's `PendingInterrupt` breadcrumbs and owner-scoped on `(session, user)` for both sessions
+  (another user's target → no relay, not an error). A relayed and answered pause leaves the source's
+  `toolConfigHash`, `systemPromptHash` and `historyHash` unchanged: nothing reaches the source's model.
+- **Artifact references.** `create_delivery` refuses an artifact another user owns or one made in a different
+  conversation (`SessionIndex` key ≠ the sender's), keeps the version pinned at send, and stops at
+  `DELIVERY_MAX_ARTIFACTS`. The rendered block carries one line per artifact and no body, and an artifact title
+  containing a wrapper tag can't close the block.
 - **Deliveries.**
   - `create_delivery` refuses a session another user owns, and a Shared Project task, on either end.
   - Replay returns pending deliveries only, in `createdAt` order.
@@ -1198,7 +1359,19 @@ has started", and the only one that spends money while nobody is watching.
     background, falls back in the order §4.3 gives, and reads `statusLine` / `waitingOn` on replay.
   - The row's title follows the target's title, including a rename. The card is one link with one tab stop, and
     Bring back result is a sibling button, not inside it.
-  - A target's interrupt prompt never renders over the source thread.
+  - A target's interrupt prompt never renders in the source's own prompt slot. It renders only as a relayed
+    prompt under its handoff row, labelled with the target.
+  - Relayed prompts, per kind: Connect resumes the target's session with its `interruptId` and leaves
+    `viewedSessionId` and the route on the source; Approve / Deny and the question picker do the same; a browser
+    sign-in offers only Open conversation; a pre-flight `oauth_required` is not relayed.
+  - A relay that lands while the source is streaming waits for the source's turn to end; the row's amber mark does
+    not.
+  - First answer wins: answering in the target clears the relay; answering from the source after the target was
+    answered shows "Already answered", never an error (drive the real resume guard's refusal).
+  - A relay replays after reload from `handoffs[].relayedPrompts`, and disappears once the target's paused turn is
+    superseded.
+  - Delivery cards and sent bubbles render artifact chips that open the viewer, "No longer available" for a deleted
+    artifact, and "Newer version available" when the sender revised it.
   - The bell shows with `features.handoffs` alone, and renders the three handoff kinds.
   - Entries are marked read by opening the target or bringing a result back, and at once when the change lands in
     view.
@@ -1220,6 +1393,8 @@ has started", and the only one that spends money while nobody is watching.
   its first handoff (fingerprint hash).
 - **2a.** An agent-sent card is not attached by default; once attached it is wrapped as `<conversation_message>`
   and never as `<handoff_context>`.
+- **Artifacts.** An `artifact_ids` entry made in another conversation is dropped and named in the tool result; the
+  rest of the message is still sent.
 - **2b.** A delivery entry is wrapped as `<conversation_message>` and never as `<user_message_during_turn>`. Drive
   the real `AfterToolsEvent` interrupt path: the injection is discarded, the claim lapses with the lease, and the
   card is pending again. A claim lost to an attach from another tab is skipped and cleared. A paused target never
@@ -1248,16 +1423,24 @@ has started", and the only one that spends money while nobody is watching.
 - **PR-0.3b — Notifications.** The three `handoff_*` inbox kinds, written by inference-api after `done`; the scoped
   `PutItem` grant; the bell shown with `features.handoffs` and rendering the new kinds; read-state rules; browser
   notifications through the Notification API, with the in-context permission ask.
+- **PR-0.3c — Relayed prompts.** Settle the two §4.3 verify-firsts (interrupt-service scoping, resuming a session
+  that isn't viewed), then: `relayedPrompts` on the source's `GET /messages`; the relay under the row for consent,
+  approval and questions, and the link-only relay for a browser sign-in; resume of the target from the source;
+  first-answer-wins handling; notifications that open the source for a relayable prompt.
 - **PR-0.4 — Send back over delivery.** `create_delivery` and the `DELIVERY#` store in `apis.shared.handoff`, with
   wrapper-tag neutralising; the `deliveries` request field and its acceptance in the same prelude phase as
   `handoff_context`; replay as `deliveries`; the dismiss route. Bring back result on a `done` row; Send to
-  *{title}* through the review sheet, without navigating; delivery cards on the composer.
+  *{title}* through the review sheet, without navigating; delivery cards on the composer. Artifact references on
+  both paths, with the sender-conversation check and chips on the card and the sent bubble.
 - **PR-0.5 — `suggest_handoff`.** Tool, `handoff_suggested` event, chip UI that opens the review sheet, replay,
   `CLAUDE.md` SSE table. Marginal CountTokens measured and recorded in the PR.
 - **Dev validation.**
   - A mid-thread mention with an edited card, previewed, sent, and finished while the user stays in the source.
   - A handoff that needs OAuth consent: *needs your input* on the row and in the bell, a browser notification with
-    the tab hidden, and the prompt only in the target.
+    the tab hidden, Connect pressed from the source's relayed prompt, and the target resuming in the background
+    while the user stays in the source. Repeat with a tool approval, and once answering in the target instead.
+  - A handoff whose result is an artifact: Bring back result carries it as a chip, the source's model names it in
+    its reply, and the source's `C#` rows show no prefix change beyond the appended block.
   - A tab closed mid-run: *stopped*, a `handoff_stopped` entry in the bell on the next visit, and Continue works
     in the target.
   - Bring back result, and a send-back from the target that stays in the target and is waiting on the source's
@@ -1277,8 +1460,8 @@ has started", and the only one that spends money while nobody is watching.
   Stop mid-consult; parent rows show `hit` with unchanged hashes; measured costs replace §8.10's estimates.
 
 **Phase 2** (after §7.1; each step after the previous one's numbers)
-- **PR-2.1 — `send_to_conversation` + 2a.** Catalog entry, handler, link resolution, limits, `origin: agent`
-  cards with Attach, the `<conversation_message>` wrapper, the `conversation_message` inbox kind, the handoff row's
+- **PR-2.1 — `send_to_conversation` + 2a.** Catalog entry, handler, link resolution, limits, `artifact_ids`
+  through §4.8's checks, `origin: agent` cards with Attach, the `<conversation_message>` wrapper, the `conversation_message` inbox kind, the handoff row's
   "sent a message" state. Marginal CountTokens in the PR. `CONVERSATION_MESSAGES_ENABLED` off.
 - **PR-2.2 — 2b.** Delivery entries on the steer inbox; claim, commit and lapse in `SteeringHook`; the
   `seed_steer_queue` exclusion; `delivery_applied` and its `CLAUDE.md` row; the claim write's measured cost at a
@@ -1330,6 +1513,21 @@ has started", and the only one that spends money while nobody is watching.
   wait.
 - **L. Frame a steered message as the user's** (reuse `<user_message_during_turn>`). It would tell the model the
   user said something they didn't. Rejected (§9.6).
+- **M. Keep every interrupt prompt in the target only** (this spec before 2026-10-14). Safe, but a background
+  handoff that stops on the user then needs a trip to the target and back for a one-click consent, which is the
+  stall `HandoffNeedsInput` measures. Replaced by the relayed prompt (§4.3); the target remains where the prompt
+  lives and where a browser sign-in is answered.
+- **N. Have the target's agent message the source about a pause** (a `send_to_conversation` before pausing, or a
+  delivery the pause creates). A paused turn can't write; a message written before the pause costs a model call to
+  say less exactly what the interrupt payload already says; and a delivery would enter the source's model history,
+  where an approval loop would leave one message per pause in the cached prefix for good. Rejected: the platform
+  relays the pause, and agent messages stay for results (§9).
+- **O. Show a relayed prompt in the source composer's own prompt slot.** One place for every prompt, but it makes
+  the target's pause look like the source's, which is the exact failure §4.3's scoping check guards against.
+  Rejected: the relay lives in the handoff row.
+- **P. Inline artifact bodies in a delivery.** The model could read the artifact without a tool, but a whole
+  document would enter the receiver's history permanently, at model rates on every later turn, whether or not the
+  conversation needs it again. Rejected for references plus, if needed, a bounded `read_artifact` (§13 Q14).
 
 ## 13. Open questions
 
@@ -1359,6 +1557,14 @@ has started", and the only one that spends money while nobody is watching.
 12. **2b with nobody watching.** A background handoff can be streaming in a tab the user isn't looking at. Should a
     steer into a conversation the user isn't viewing wait for 2c's cohort decision, since in practice it is just as
     unattended?
+13. **Relaying `ask_user_question`.** Consent and approvals are self-contained; a question sometimes isn't. Should
+    a relayed question start collapsed behind "Answer here" with Open conversation as the primary action, and
+    switch to inline by default only if `RelayedPromptAnswered` by surface shows users answer questions from the
+    source?
+14. **A `read_artifact` tool.** Artifact references tell the receiving model what exists but not what it says, and
+    `update_artifact` lets it overwrite a document it can't read. Is a bounded, offset-paged `read_artifact` worth
+    its one-time fleet-wide `toolConfig` write? It would help well beyond handoffs (revising an artifact from an
+    earlier turn after compaction, say), so it may belong in the artifacts spec rather than here.
 
 **Decided (2026-09-27):** review before sending is required, and the handoff never sends immediately. This replaces
 the earlier open question about auto-send.
@@ -1366,3 +1572,9 @@ the earlier open question about auto-send.
 **Decided (2026-10-12):** send-back is a persisted delivery, not composer state, and Send to *{title}* doesn't
 navigate. A Phase 0 delivery never starts a turn and never enters a running one. Agent-sent messages reach linked
 conversations only.
+
+**Decided (2026-10-14):** a target's interrupt prompt is relayed into the source thread under its handoff row and
+can be answered there (consent, approval, questions; a browser sign-in links to the target). The prompt still
+belongs to the target, the relay is rendered by the platform from the pending interrupt and never written by a
+model, and it never enters the source's model history. Agents still message back, and can now send artifacts by
+reference, through deliveries: user-pressed in Phase 0, agent-sent in Phase 2.
