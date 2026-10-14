@@ -27,7 +27,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
 from large_document_quality import fixtures as fx  # noqa: E402
-from large_document_quality.ask import Job, _mode, jobs  # noqa: E402
+from large_document_quality.ask import Job, _mode, final_answer, jobs  # noqa: E402
 from large_document_quality.score import compare, operations, outcomes  # noqa: E402
 
 from apis.shared.files.document_read import _open_pdf, _pdf_page_text, docx_paragraphs  # noqa: E402
@@ -124,6 +124,15 @@ class TestAsk:
     def test_tool_calls_are_classified_by_mode(self, tool_input, mode):
         assert _mode(tool_input) == mode
 
+    @pytest.mark.parametrize("reply,line", [
+        ("Casual staff get 3 days, but you can carry over 11.\n\nAnswer: 11 days", "11 days"),
+        ("Found it.\n**Answer:** $61 per month", "$61 per month"),
+        ("Answer: first\nmore text\nAnswer: last", "last"),
+        ("The document says 17 items.", None),
+    ])
+    def test_only_the_final_answer_line_is_scored(self, reply, line):
+        assert final_answer(reply) == line
+
     def test_the_user_message_is_the_one_the_chat_route_builds(self, monkeypatch):
         from large_document_quality import ask
         from apis.shared.files import large_document
@@ -150,6 +159,7 @@ class TestAsk:
 
 def _row(arm, qid, doc, correct, sample=0, wording="paraphrase", modes=("pattern",)):
     return {"arm": arm, "qid": qid, "doc": doc, "wording": wording, "sample": sample, "correct": correct,
+            "answerLine": "x",
             "modes": list(modes), "usage": {"inputTokens": 1000}, "costUsd": 0.001, "seconds": 2.0, "error": None}
 
 

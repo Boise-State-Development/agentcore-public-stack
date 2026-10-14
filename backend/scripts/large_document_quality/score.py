@@ -65,6 +65,7 @@ def operations(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         out.append({
             "arm": arm, "class": cls, "turns": len(group),
             "errors": sum(1 for r in group if r.get("error")),
+            "noAnswerLine": sum(1 for r in group if r.get("answerLine") is None),
             "medianToolCalls": median(len(r["modes"]) for r in group),
             "queryTurns": sum(1 for r in group if "query" in r["modes"]),
             "pageReadTurns": sum(1 for r in group if "page_range" in r["modes"]),

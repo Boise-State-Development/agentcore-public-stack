@@ -24,6 +24,7 @@ calls by mode, the token usage and the wall time.
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
@@ -38,10 +39,23 @@ MAX_TOOL_CALLS = 10
 
 SYSTEM_PROMPT = (
     "You are a helpful assistant. The user has attached a document to this conversation. "
-    "Answer their question from the document. Finish with a short answer of one or two "
-    "sentences that states the specific value, name or date they asked for. If the "
-    "document does not say, tell them so."
+    "Answer their question from the document. End your reply with one final line of the "
+    "form 'Answer: <the specific value, name or date they asked for>', with nothing else "
+    "on that line. If the document does not say, end with 'Answer: not stated'."
 )
+
+#: The scored line. Prose before it may cite a distractor as context ("casual staff
+#: get 3 days"); only this line has to name the right value and no other.
+_ANSWER_LINE = re.compile(r"^[\s*_#>-]*answer[\s*_]*:[\s*_]*(.+?)[\s*_.]*$", re.IGNORECASE)
+
+
+def final_answer(text: str) -> Optional[str]:
+    """The last ``Answer: …`` line of a reply, or ``None`` when there is none."""
+    for line in reversed((text or "").splitlines()):
+        match = _ANSWER_LINE.match(line.strip())
+        if match:
+            return match.group(1).strip()
+    return None
 
 #: Per-MTok input/output, Regional (us.*) rates. Source of truth is curated-models.ts;
 #: these only size the pre-flight estimate and the report's cost column.
@@ -155,9 +169,13 @@ async def run_job(job: Job, doc: Dict[str, Any], model_id: str, region: str,
         error = f"{type(exc).__name__}: {exc}"[:300]
 
     q = job.question
+    line = final_answer(answer)
+    # No Answer line: score the whole reply, and say so in the row.
+    scored = line if line is not None else answer
     return {
         "key": job.key, "arm": job.arm, "qid": q.qid, "doc": q.doc, "wording": q.wording, "sample": job.sample,
-        "answer": answer, "correct": bool(answer) and is_correct(answer, q.expected, q.forbidden),
+        "answer": answer, "answerLine": line,
+        "correct": bool(scored) and is_correct(scored, q.expected, q.forbidden),
         "toolCalls": calls, "modes": [c["mode"] for c in calls], "usage": usage,
         "costUsd": cost_usd(usage, model_id), "seconds": round(time.time() - started, 2),
         "error": error, "modelId": model_id,

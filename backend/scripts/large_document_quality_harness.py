@@ -248,11 +248,11 @@ def cmd_score(args: argparse.Namespace) -> int:
               f"{r['onlyControl']:5d} {r['onlyTreatment']:5d}  {r['p']:6.3f}")
     ops = operations(rows)
     print()
-    print(f"{'arm':5} {'class':8} {'turns':>5} {'err':>3} {'calls':>5} {'query':>5} {'pages':>5} "
+    print(f"{'arm':5} {'class':8} {'turns':>5} {'err':>3} {'noAns':>5} {'calls':>5} {'query':>5} {'pages':>5} "
           f"{'in tok':>7} {'$/turn':>7} {'sec':>5}")
     for r in ops:
         usd = f"{r['usdPerTurn']:.4f}" if r["usdPerTurn"] is not None else "   —"
-        print(f"{r['arm']:5} {r['class']:8} {r['turns']:5d} {r['errors']:3d} {r['medianToolCalls']:5.1f} "
+        print(f"{r['arm']:5} {r['class']:8} {r['turns']:5d} {r['errors']:3d} {r['noAnswerLine']:5d} {r['medianToolCalls']:5.1f} "
               f"{r['queryTurns']:5d} {r['pageReadTurns']:5d} {r['medianInputTokens']:7.0f} {usd:>7} "
               f"{r['medianSeconds']:5.1f}")
     (out / "score.json").write_text(json.dumps({"compare": table, "operations": ops}, indent=2), encoding="utf-8")
