@@ -151,3 +151,70 @@ class TestFileContentReplace:
         assert (quota.total_bytes, quota.file_count) == (125, 1)
         quota = await file_repository.adjust_quota_bytes("u1", -50)
         assert (quota.total_bytes, quota.file_count) == (75, 1)
+
+
+class TestRecentFolders:
+    """``list_recent_folders``: the picker's "Recent folders" rows."""
+
+    @pytest.mark.asyncio
+    async def test_newest_first_one_per_folder_named_from_its_newest_row(self, folder_repository):
+        await folder_repository.create(_folder("0001", session_id="s1", provider_folder_id="drive-a", folder_name="Old name",
+                                               folder_path="My Drive/Old name", created_at="2026-10-01T00:00:00Z"))
+        await folder_repository.create(_folder("0002", session_id="s2", provider_folder_id="drive-b", folder_name="Contracts",
+                                               created_at="2026-10-02T00:00:00Z"))
+        await folder_repository.create(_folder("0003", session_id="s3", provider_folder_id="drive-a", folder_name="Syllabi",
+                                               folder_path="My Drive/Syllabi", connector_name="Google Drive",
+                                               created_at="2026-10-03T00:00:00Z"))
+
+        recent = await folder_repository.list_recent_folders("u1", 8)
+
+        assert [r.provider_folder_id for r in recent] == ["drive-a", "drive-b"]
+        first = recent[0]
+        assert first.folder_name == "Syllabi" and first.folder_path == "My Drive/Syllabi"
+        assert first.connector_id == "google" and first.connector_name == "Google Drive"
+        assert first.last_attached_at == "2026-10-03T00:00:00Z"
+
+    @pytest.mark.asyncio
+    async def test_the_same_folder_id_under_two_connectors_is_two_folders(self, folder_repository):
+        await folder_repository.create(_folder("0001", connector_id="drive-staff", provider_folder_id="root"))
+        await folder_repository.create(_folder("0002", connector_id="drive-student", provider_folder_id="root"))
+        recent = await folder_repository.list_recent_folders("u1", 8)
+        assert {r.connector_id for r in recent} == {"drive-staff", "drive-student"}
+
+    @pytest.mark.asyncio
+    async def test_owner_scoped_and_blind_to_file_rows(self, folder_repository, file_repository):
+        await folder_repository.create(_folder("0001", user_id="u1"))
+        await folder_repository.create(_folder("0002", user_id="u2", provider_folder_id="drive-other"))
+        await file_repository.create_file(_file("f1", user_id="u1"))
+        recent = await folder_repository.list_recent_folders("u1", 8)
+        assert [r.provider_folder_id for r in recent] == ["drive-1"]
+        assert await folder_repository.list_recent_folders("u3", 8) == []
+
+    @pytest.mark.asyncio
+    async def test_stops_at_the_limit(self, folder_repository):
+        for i in range(5):
+            await folder_repository.create(_folder(f"000{i}", session_id=f"s{i}", provider_folder_id=f"drive-{i}"))
+        recent = await folder_repository.list_recent_folders("u1", 2)
+        assert [r.provider_folder_id for r in recent] == ["drive-4", "drive-3"]
+
+    @pytest.mark.asyncio
+    async def test_the_read_is_bounded_by_rows_not_only_by_folders(self, folder_repository):
+        # One folder attached to many conversations, then an older one: a read
+        # capped at 10 rows sees only the first folder and stops, rather than
+        # walking the partition to fill the list.
+        await folder_repository.create(_folder("0000", session_id="old", provider_folder_id="drive-old"))
+        for i in range(1, 31):
+            await folder_repository.create(_folder(f"{i:04d}", session_id=f"s{i}", provider_folder_id="drive-hot"))
+        capped = await folder_repository.list_recent_folders("u1", 8, max_rows=10)
+        assert [r.provider_folder_id for r in capped] == ["drive-hot"]
+        full = await folder_repository.list_recent_folders("u1", 8)
+        assert [r.provider_folder_id for r in full] == ["drive-hot", "drive-old"]
+
+    @pytest.mark.asyncio
+    async def test_a_deleted_conversations_folders_drop_out(self, folder_repository):
+        await folder_repository.create(_folder("0001", session_id="s1", provider_folder_id="drive-a"))
+        await folder_repository.create(_folder("0002", session_id="s2", provider_folder_id="drive-b"))
+        await folder_repository.delete_session_folders("s2")
+        recent = await folder_repository.list_recent_folders("u1", 8)
+        assert [r.provider_folder_id for r in recent] == ["drive-a"]
+

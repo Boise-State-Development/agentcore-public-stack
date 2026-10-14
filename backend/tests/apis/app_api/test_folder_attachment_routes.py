@@ -27,7 +27,7 @@ from apis.app_api.files.folders import routes
 from apis.app_api.files.folders import service as folder_service_module
 from apis.app_api.files.folders.service import FolderAttachmentService
 from apis.shared.auth.models import User
-from apis.shared.files.folder_attachments import FolderAttachment, FolderCounts, FolderFileEntry
+from apis.shared.files.folder_attachments import FolderAttachment, FolderCounts, FolderFileEntry, RecentFolder
 from apis.shared.oauth.agentcore_identity import TokenResult, WorkloadTokenUnavailableError
 from apis.shared.oauth.models import OAuthProvider, OAuthProviderType
 from apis.shared.oauth.provider_repository import get_provider_repository
@@ -61,6 +61,8 @@ class _Rows:
 
     def __init__(self) -> None:
         self.rows: Dict[tuple, FolderAttachment] = {}
+        self.recent: Dict[str, list] = {}
+        self.recent_calls: List[tuple] = []
 
     async def create(self, folder):  # type: ignore[no-untyped-def]
         self.rows[(folder.user_id, folder.folder_attach_id)] = folder.model_copy(deep=True)
@@ -88,6 +90,10 @@ class _Rows:
 
     async def list_session_folders(self, session_id):  # type: ignore[no-untyped-def]
         return [r.model_copy(deep=True) for r in self.rows.values() if r.session_id == session_id]
+
+    async def list_recent_folders(self, user_id, limit):  # type: ignore[no-untyped-def]
+        self.recent_calls.append((user_id, limit))
+        return list(self.recent.get(user_id, []))[:limit]
 
 
 def _user(user_id: str = "alice") -> User:
@@ -117,6 +123,7 @@ def build(monkeypatch):
     def _build(*, providers=None, identity_result=None, identity_error=None, rows=None):
         app = FastAPI()
         app.include_router(routes.router)
+        app.include_router(routes.recent_router)
         app.dependency_overrides[routes.get_current_user_from_session] = _user
 
         providers = providers if providers is not None else [_provider()]
@@ -185,7 +192,8 @@ class TestFlag:
         assert client.get("/sessions/sess-1/folders/fa-1").status_code == 404
         assert client.delete("/sessions/sess-1/folders/fa-1").status_code == 404
         assert client.post("/sessions/sess-1/folders/fa-1/resume").status_code == 404
-        assert rows.rows == {} and scheduled == []
+        assert client.get("/folders/recent").status_code == 404
+        assert rows.rows == {} and scheduled == [] and rows.recent_calls == []
 
 
 class TestAttach:
@@ -391,3 +399,39 @@ class TestRefreshAndList:
         body = client.get("/sessions/sess-1/folders").json()
         assert [f["folderAttachId"] for f in body["folders"]] == ["fa-1"]
         assert body["folders"][0]["files"][0]["uploadId"] == "up-1"
+
+
+class TestRecent:
+    def _recent(self, folder_id: str, name: str) -> RecentFolder:
+        return RecentFolder(connector_id="google", connector_name="Google Drive", provider_folder_id=folder_id,
+                            folder_name=name, folder_path=f"My Drive/{name}", last_attached_at="2026-10-14T00:00:00Z")
+
+    def test_returns_the_callers_recent_folders_and_nothing_of_their_conversations(self, build):
+        rows = _Rows()
+        rows.recent["alice"] = [self._recent("drive-a", "Syllabi"), self._recent("drive-b", "Contracts")]
+        rows.recent["bob"] = [self._recent("drive-z", "Bob's")]
+        client, *_ = build(rows=rows)
+
+        response = client.get("/folders/recent")
+
+        assert response.status_code == 200, response.text
+        folders = response.json()["folders"]
+        assert [f["providerFolderId"] for f in folders] == ["drive-a", "drive-b"]
+        assert folders[0] == {
+            "connectorId": "google",
+            "connectorName": "Google Drive",
+            "providerFolderId": "drive-a",
+            "folderName": "Syllabi",
+            "folderPath": "My Drive/Syllabi",
+            "lastAttachedAt": "2026-10-14T00:00:00Z",
+        }
+        assert rows.recent_calls == [("alice", 8)]
+
+    def test_limit_is_passed_through_and_bounded(self, build):
+        rows = _Rows()
+        client, *_ = build(rows=rows)
+        assert client.get("/folders/recent?limit=3").status_code == 200
+        assert rows.recent_calls == [("alice", 3)]
+        assert client.get("/folders/recent?limit=0").status_code == 422
+        assert client.get("/folders/recent?limit=21").status_code == 422
+

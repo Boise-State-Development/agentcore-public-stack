@@ -10,6 +10,7 @@ from apis.shared.auth import User
 from apis.shared.files.folder_attachments import (
     FOLDER_STATUS_EXPANDING,
     FolderAttachment,
+    RecentFolder,
     new_folder_attach_id,
 )
 from apis.shared.files.folder_repository import (
@@ -140,6 +141,10 @@ class FolderAttachmentService:
     async def list_for_session(self, user_id: str, session_id: str) -> List[FolderAttachment]:
         """This user's folders in a conversation, newest first."""
         return [f for f in await self.repository.list_session_folders(session_id) if f.user_id == user_id]
+
+    async def list_recent(self, user_id: str, limit: int) -> List[RecentFolder]:
+        """The source folders this user attached most recently, one per folder."""
+        return await self.repository.list_recent_folders(user_id, limit)
 
     def _schedule(
         self, folder: FolderAttachment, adapter: FileSourceAdapter, access_token: str, *, refresh: bool = False
