@@ -107,12 +107,18 @@ export class ConversationPage implements OnDestroy {
   }
 
   /**
-   * The conversation whose scroll position we're currently tracking.
-   * Captured into ScrollPositionService the moment the user navigates away
-   * (route change or component teardown) — see the scroll policy note on
-   * the route subscription.
+   * The conversation the viewport was last reset for, so a route-param
+   * re-emission for the same one does not reset it again — see the scroll
+   * policy note on the route subscription.
    */
   private lastViewedSessionId: string | null = null;
+
+  /**
+   * Set in ngOnDestroy, so a restore still waiting on its animation frames
+   * neither scrolls the page that replaced this one nor re-tracks this
+   * conversation in ScrollPositionService.
+   */
+  private destroyed = false;
 
   /**
    * The `?m=` message last scrolled to (conversation search's jump-to-message),
@@ -415,18 +421,18 @@ export class ConversationPage implements OnDestroy {
     // per-session sync effect), and the backend completes and persists the
     // turn either way. Only the Stop button aborts, and only its own session.
     //
-    // Scroll policy on conversation change: remember where the user was in
-    // the conversation they're leaving, reset to the top while the next one
-    // loads (the leftover window offset is meaningless against different
-    // content), then restore below — remembered position if we have one,
-    // otherwise anchor the latest turn (restoreScrollPosition).
+    // Scroll policy on conversation change: ScrollPositionService has
+    // already remembered where the user was in the conversation they're
+    // leaving (at NavigationStart, while it was still on screen). Stop
+    // tracking it, reset to the top while the next one loads (the leftover
+    // offset is meaningless against different content), then restore below —
+    // remembered position if we have one, otherwise anchor the latest turn
+    // (restoreScrollPosition).
     this.routeSubscription = this.route.paramMap.subscribe(async params => {
       const id = params.get('sessionId');
 
       if (this.isBrowser && this.lastViewedSessionId !== id) {
-        if (this.lastViewedSessionId) {
-          this.scrollPositions.save(this.lastViewedSessionId, this.scrollContainer?.scrollTop ?? 0);
-        }
+        this.scrollPositions.untrack();
         this.scrollContainer?.scrollTo({ top: 0, behavior: 'auto' });
       }
       this.lastViewedSessionId = id;
@@ -592,17 +598,16 @@ export class ConversationPage implements OnDestroy {
   }
 
   ngOnDestroy() {
+    this.destroyed = true;
     // Leaving the conversation page: returning to this tab later warms nothing.
     this.sessionPrewarm.clearCurrent();
     // Leaving the conversation view entirely (e.g. to an admin page, or the
-    // `/` ↔ `/s/:id` transitions that recreate this component) — remember
-    // where the user was so navigating back restores it.
-    if (this.isBrowser) {
-      const id = this.sessionId();
-      if (id) {
-        this.scrollPositions.save(id, this.scrollContainer?.scrollTop ?? 0);
-      }
-    }
+    // `/` ↔ `/s/:id` transitions that recreate this component). Where the
+    // user was is already remembered — reading it here would be too late, as
+    // the router has removed this page's DOM before calling ngOnDestroy, so
+    // the container has clamped to 0. Stop tracking so the next page's
+    // navigations are not recorded against this conversation.
+    this.scrollPositions.untrack();
     this.routeSubscription?.unsubscribe();
     this.queryParamSubscription?.unsubscribe();
   }
@@ -618,14 +623,19 @@ export class ConversationPage implements OnDestroy {
    * Runs two animation frames after the messages landed in the map so the
    * message DOM (and the last-turn min-height that provides the scroll
    * room) has committed and the full scroll height exists; bails if the
-   * user has already navigated elsewhere.
+   * user has already navigated elsewhere. Once positioned, the conversation
+   * is tracked: ScrollPositionService remembers its offset as each
+   * navigation starts.
    */
   private restoreScrollPosition(sessionId: string): void {
     if (!this.isBrowser) return;
 
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
-        if (this.sessionId() !== sessionId) return;
+        if (this.destroyed || this.sessionId() !== sessionId) return;
+
+        // From here on, leaving remembers this conversation's offset.
+        this.scrollPositions.track(sessionId);
 
         // Opened from a search result: the matching turn wins over any
         // remembered position. Falls through when that turn is not rendered.
