@@ -11,6 +11,14 @@ import { CdkMenuItem, CdkMenuItemCheckbox, CdkMenuItemSelectable } from '@angula
  * subclass makes every trigger keep the menu open. Escape, a click outside
  * and the other items still close it as usual.
  *
+ * It is also a controlled checkbox. CDK's flips its own `checked` on every
+ * trigger, but these rows bind `cdkMenuItemChecked` to real state (a tool's
+ * preference, a connector's connection), and that state may not change: a
+ * sign-in abandoned, a disconnect or a save that fails. The binding's value
+ * is then the same as before, Angular never writes it again, and
+ * `aria-checked` would disagree with the row until the next real change. So
+ * a trigger leaves `checked` alone; only the binding moves it.
+ *
  * Everything else — `role="menuitemcheckbox"`, `aria-checked` from
  * `cdkMenuItemChecked`, arrow-key navigation, `cdkMenuItemTriggered` — is
  * inherited. The providers are redeclared because Angular does not inherit
@@ -25,7 +33,9 @@ import { CdkMenuItem, CdkMenuItemCheckbox, CdkMenuItemSelectable } from '@angula
 })
 export class MenuToggleItemDirective extends CdkMenuItemCheckbox {
   override trigger(options?: { keepOpen: boolean }): void {
+    const checked = this.checked;
     super.trigger({ ...options, keepOpen: true });
+    this.checked = checked;
   }
 }
 
