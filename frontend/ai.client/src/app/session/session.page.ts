@@ -32,6 +32,9 @@ import { McpAppConsentService } from './services/mcp-apps/mcp-app-consent.servic
 import { Dialog } from '@angular/cdk/dialog';
 import { AssistantService } from '../assistants/services/assistant.service';
 import { Assistant } from '../assistants/models/assistant.model';
+import { ProjectsService } from '../projects/services/projects.service';
+import { FEATURES } from '../services/features';
+import { ComposerProject } from './components/chat-input/chat-input.component';
 import { AgentService } from '../agents/services/agent.service';
 import { AgentMentionService } from '../agents/services/agent-mention.service';
 import { routeMention } from './services/chat/mention-routing';
@@ -91,6 +94,8 @@ export class ConversationPage implements OnDestroy {
   private composerDrafts = inject(ComposerDraftStorageService);
   private agentMentionService = inject(AgentMentionService);
   private toast = inject(ToastService);
+  private projectsService = inject(ProjectsService);
+  private features = inject(FEATURES);
   private platformId = inject(PLATFORM_ID);
   private isBrowser = isPlatformBrowser(this.platformId);
 
@@ -224,6 +229,30 @@ export class ConversationPage implements OnDestroy {
     showFileControls: true,
     embeddedMode: false,
   };
+
+  /**
+   * The Shared Project this conversation runs in, for the composer's
+   * placeholder and the empty state's layout. Matched on the URL's
+   * `assistantId` against the project list first, so a project picked from
+   * the composer shows at once rather than after the harness Agent loads, and
+   * so the name is the project's current one. Falls back to the loaded
+   * harness's `projectId` when the list has not loaded, with the harness's
+   * (possibly older) name. The fallback only trusts an Agent that matches the
+   * URL: on a switch, `assistant()` still holds the previous one until the new
+   * load lands.
+   */
+  readonly composerProject = computed<ComposerProject | null>(() => {
+    if (!this.features.projects) return null;
+    const assistant = this.assistant();
+    const agentId = this.assistantIdFromQuery() ?? assistant?.assistantId ?? null;
+    if (!agentId) return null;
+    const listed = this.projectsService.projects$().find(p => p.harnessAgentId === agentId);
+    if (listed) return { projectId: listed.projectId, name: listed.name };
+    if (assistant?.assistantId === agentId && assistant.projectId) {
+      return { projectId: assistant.projectId, name: assistant.name };
+    }
+    return null;
+  });
 
   // Computed signal to determine if assistant can be closed
   // Only allow closing if: no messages exist AND assistant is from query param (not session preferences)

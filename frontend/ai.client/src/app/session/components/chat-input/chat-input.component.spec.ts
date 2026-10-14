@@ -2756,3 +2756,89 @@ describe('ChatInputComponent — the `+` menu hand-offs', () => {
     expect(component.userInput()).toBe('/brand-voice ');
   });
 });
+
+/**
+ * A project conversation's composer: with no launch card, the placeholder is
+ * what names where a message goes.
+ */
+describe('ChatInputComponent — a project conversation', () => {
+  let fixture: ComponentFixture<ChatInputComponent>;
+  let textarea: HTMLTextAreaElement;
+
+  const PROJECT = { projectId: 'p1', name: 'Biology 101' };
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [ChatInputComponent],
+      providers: [
+        { provide: AgentMentionService, useClass: MentionServiceStub },
+        { provide: SkillCommandService, useClass: SkillCommandServiceStub },
+        {
+          provide: FileUploadService,
+          useValue: {
+            pendingUploadsList: signal([]),
+            hasActivePendingUploads: signal(false),
+            readyUploadIds: signal([]),
+            readyUploads: signal([]),
+            clearReadyUploads: () => undefined,
+            clearPendingUpload: () => undefined,
+            listSessionFiles: async () => [],
+            registerKnownFile: () => undefined,
+          },
+        },
+        { provide: ToastService, useValue: { error: () => undefined, warning: () => undefined, info: () => undefined } },
+        { provide: ToolService, useValue: {} },
+        { provide: ModelService, useClass: ModelServiceStub },
+        {
+          provide: VoiceChatService,
+          useValue: {
+            status: signal('idle'),
+            isVoiceActive: signal(false),
+            agentTranscript: signal(''),
+          },
+        },
+        { provide: SystemPromptsService, useValue: { activePrompt: signal(null) } },
+        { provide: Router, useValue: { navigate: () => Promise.resolve(true) } },
+        { provide: SteeringService, useClass: SteeringServiceStub },
+      ],
+    })
+      .overrideComponent(ChatInputComponent, {
+        set: { imports: [], schemas: [NO_ERRORS_SCHEMA] },
+      })
+      .compileComponents();
+
+    fixture = TestBed.createComponent(ChatInputComponent);
+    fixture.componentRef.setInput('showFileControls', false);
+    fixture.componentRef.setInput('showVoiceControl', false);
+    fixture.componentRef.setInput('autoFocus', false);
+    fixture.detectChanges();
+
+    textarea = fixture.nativeElement.querySelector('textarea') as HTMLTextAreaElement;
+  });
+
+  function setProject(): void {
+    fixture.componentRef.setInput('project', PROJECT);
+    fixture.detectChanges();
+  }
+
+  it('keeps the usual placeholder outside a project', () => {
+    expect(textarea.getAttribute('placeholder')).toBe('How can I help you today?');
+  });
+
+  it('names the project in the placeholder', () => {
+    setProject();
+    expect(textarea.getAttribute('placeholder')).toBe('Ask anything in Biology 101…');
+  });
+
+  it('starts the hint rotation on the project line, so it settles there too', () => {
+    setProject();
+    const hint = fixture.nativeElement.querySelector('.composer-hint') as HTMLElement | null;
+    expect(hint?.textContent?.trim()).toBe('Ask anything in Biology 101…');
+  });
+
+  it('names the project in a thread too', () => {
+    fixture.componentRef.setInput('compact', true);
+    setProject();
+    expect(textarea.getAttribute('placeholder')).toBe('Ask anything in Biology 101…');
+  });
+});

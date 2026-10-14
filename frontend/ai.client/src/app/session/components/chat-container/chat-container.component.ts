@@ -12,7 +12,7 @@ import {
 import { NgTemplateOutlet } from '@angular/common';
 import { FolderAttachmentData, Message } from '../../services/models/message.model';
 import { MessageListComponent } from '../message-list/message-list.component';
-import { ChatInputComponent } from '../chat-input/chat-input.component';
+import { ChatInputComponent, ComposerProject } from '../chat-input/chat-input.component';
 import { AnimatedTextComponent } from '../../../components/animated-text';
 import { ParagraphSkeletonComponent } from '../../../components/paragraph-skeleton';
 import { Topnav } from '../../../components/topnav/topnav';
@@ -168,6 +168,13 @@ export class ChatContainerComponent {
    * it; a thread and the embedded previews never show it.
    */
   showScopePicker = input<boolean>(false);
+  /**
+   * The Shared Project this conversation runs in, resolved by the session page
+   * (it knows the URL's `assistantId` before the harness Agent has loaded).
+   * The empty state then shows the greeting, with the composer's placeholder
+   * naming the project, instead of the harness Agent's launch card.
+   */
+  project = input<ComposerProject | null>(null);
 
   // Optional inputs
 
