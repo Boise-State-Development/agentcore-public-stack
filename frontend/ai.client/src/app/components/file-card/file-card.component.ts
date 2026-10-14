@@ -198,7 +198,7 @@ const DEFAULT_COLORS = {
           @if (isError()) {
             <span class="text-state-danger-500 dark:text-state-danger-400">{{ errorMessage() }}</span>
           } @else if (isUploading()) {
-            Uploading... {{ progress() }}%
+            {{ uploadingLabel() }}
           } @else if (isCompleting()) {
             Finalizing...
           } @else if (isReference()) {
@@ -221,8 +221,8 @@ const DEFAULT_COLORS = {
         </p>
       </div>
 
-      <!-- Progress bar (during upload) -->
-      @if (isUploading() && progress() < 100) {
+      <!-- Progress bar (during upload); a server-side fetch has no percentage to show -->
+      @if (isUploading() && progress() < 100 && !pendingUpload()?.statusLabel) {
         <div class="absolute bottom-0 left-0 right-0 h-0.5 overflow-hidden rounded-b-lg bg-gray-200 dark:bg-gray-700">
           <div
             class="h-full bg-primary-500 transition-all duration-200"
@@ -368,6 +368,10 @@ export class FileCardComponent {
   });
 
   protected readonly isUploading = computed(() => this.status() === 'uploading');
+  /** The in-progress line: the caller's own wording, or the upload percentage. */
+  protected readonly uploadingLabel = computed(
+    () => this.pendingUpload()?.statusLabel ?? `Uploading... ${this.progress()}%`,
+  );
   protected readonly isCompleting = computed(() => this.status() === 'completing');
   protected readonly isError = computed(() => this.status() === 'error');
   protected readonly isReady = computed(() => this.status() === 'ready');

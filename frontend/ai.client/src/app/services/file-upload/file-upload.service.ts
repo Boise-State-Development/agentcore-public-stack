@@ -121,17 +121,63 @@ export function maxFileSizeFor(
   file: File,
   features: Pick<FeatureFlags, 'largeDocumentAttachments'>,
 ): number {
+  return attachmentSizeLimitFor(file.name, file.type, features);
+}
+
+/**
+ * The same cap, for a file known only by name and MIME type: an entry in a
+ * connected file source's listing, before it is downloaded.
+ */
+export function attachmentSizeLimitFor(
+  filename: string,
+  mimeType: string,
+  features: Pick<FeatureFlags, 'largeDocumentAttachments'>,
+): number {
   const isPptx =
-    file.name.toLowerCase().endsWith('.pptx') ||
-    file.type ===
-      'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+    filename.toLowerCase().endsWith('.pptx') ||
+    mimeType === 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
   if (isPptx) {
     return PPTX_MAX_FILE_SIZE_BYTES;
   }
-  if (features.largeDocumentAttachments && isDocumentClassMimeType(resolveMimeType(file))) {
+  if (
+    features.largeDocumentAttachments &&
+    isDocumentClassMimeType(resolveMimeTypeFor(filename, mimeType))
+  ) {
     return LARGE_DOCUMENT_MAX_FILE_SIZE_BYTES;
   }
   return MAX_FILE_SIZE_BYTES;
+}
+
+/** The shape of a file-source listing entry the composer needs to judge. */
+export interface AttachableSourceFile {
+  name: string;
+  mimeType?: string | null;
+  /** What the file downloads as when an export changes it (a Google Doc → .docx). */
+  downloadMimeType?: string | null;
+  /** Unknown (null) for a provider-native document until it is exported. */
+  sizeBytes?: number | null;
+}
+
+/**
+ * Whether a file listed by a connected file source can be attached to a
+ * conversation: its downloaded type is one the chat accepts, and its size,
+ * when the provider knows it, is within that type's cap. Mirrors the checks
+ * `processFiles` runs on a device upload, so the browser greys a file out
+ * instead of letting the import fail after the download. The backend
+ * re-checks both once the bytes are in hand.
+ */
+export function isAttachableSourceFile(
+  file: AttachableSourceFile,
+  features: Pick<FeatureFlags, 'largeDocumentAttachments'>,
+): boolean {
+  const mime = resolveMimeTypeFor(file.name, file.downloadMimeType || file.mimeType || '');
+  if (!isAllowedMimeType(mime)) {
+    return false;
+  }
+  if (file.sizeBytes != null && file.sizeBytes > attachmentSizeLimitFor(file.name, mime, features)) {
+    return false;
+  }
+  return true;
 }
 
 /**
@@ -251,6 +297,12 @@ export interface PendingUpload {
   status: 'uploading' | 'completing' | 'ready' | 'error';
   progress: number;
   error?: string;
+  /**
+   * What the card says while `uploading`, instead of "Uploading... n%". Set
+   * when the bytes never leave this browser — a file app-api fetches from a
+   * connected file source — so there is no upload and no percentage to show.
+   */
+  statusLabel?: string;
 }
 
 /**
@@ -359,10 +411,15 @@ const EXTENSION_TO_MIME_TYPE: Record<string, string> = {
  * spreadsheet stored that way never reaches the analysis tools.
  */
 export function resolveMimeType(file: File): string {
-  if (isAllowedMimeType(file.type)) {
-    return file.type;
+  return resolveMimeTypeFor(file.name, file.type);
+}
+
+/** `resolveMimeType` for a file known by name and reported type only. */
+export function resolveMimeTypeFor(filename: string, mimeType: string): string {
+  if (isAllowedMimeType(mimeType)) {
+    return mimeType;
   }
-  return EXTENSION_TO_MIME_TYPE[getFileExtension(file.name)] ?? file.type;
+  return EXTENSION_TO_MIME_TYPE[getFileExtension(filename)] ?? mimeType;
 }
 
 /**
@@ -440,7 +497,21 @@ export class FileUploadService {
         createdAt: new Date().toISOString(),
       };
     }
-    return null;
+    return this.knownFiles.get(uploadId) ?? null;
+  }
+
+  /**
+   * Files the composer holds as server metadata rather than an upload from
+   * this browser: one restored from a draft, or one app-api fetched from a
+   * connected file source. The thread's user message draws its attachment
+   * cards from `getReadyFileById`, so without this a file that never went
+   * through `uploadFile` sent fine but showed no card.
+   */
+  private readonly knownFiles = new Map<string, FileMetadata>();
+
+  /** Make `getReadyFileById` answer for a file whose bytes never left this browser. */
+  registerKnownFile(file: FileMetadata): void {
+    this.knownFiles.set(file.uploadId, file);
   }
 
   /**

@@ -17,6 +17,8 @@ import {
   LARGE_DOCUMENT_MAX_FILE_SIZE_BYTES,
   maxFileSizeFor,
   isReferenceDocument,
+  isAttachableSourceFile,
+  resolveMimeTypeFor,
   ALLOWED_EXTENSIONS
 } from './file-upload.service';
 import { ConfigService } from '../config.service';
@@ -468,6 +470,15 @@ describe('FileUploadService', () => {
         const result = service.getReadyFileById('nonexistent');
         expect(result).toBeNull();
       });
+
+      it('answers for a registered file that never uploaded from this browser', () => {
+        const meta = {
+          uploadId: 'imported-1', filename: 'Notes.docx', mimeType: 'application/x', sizeBytes: 9,
+          sessionId: 's1', s3Uri: 's3://b/k', status: 'ready' as const, createdAt: '',
+        };
+        service.registerKnownFile(meta);
+        expect(service.getReadyFileById('imported-1')).toEqual(meta);
+      });
     });
 
     describe('utility functions', () => {
@@ -563,6 +574,42 @@ describe('FileUploadService', () => {
         it('should not exceed the backend large-document ceiling', () => {
           // LARGE_DOCUMENT_MAX_BYTES in backend/src/apis/shared/files/models.py.
           expect(LARGE_DOCUMENT_MAX_FILE_SIZE_BYTES).toBe(50 * 1024 * 1024);
+        });
+      });
+
+      describe('isAttachableSourceFile (a file-source listing entry)', () => {
+        const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+
+        it('accepts a type the chat takes, within its cap', () => {
+          expect(isAttachableSourceFile({ name: 'a.pdf', mimeType: 'application/pdf', sizeBytes: 1024 }, FLAG_OFF)).toBe(true);
+        });
+
+        it('judges a provider-native document on what it downloads as', () => {
+          const gdoc = { name: 'Notes', mimeType: 'application/vnd.google-apps.document', downloadMimeType: DOCX, sizeBytes: null };
+          expect(isAttachableSourceFile(gdoc, FLAG_OFF)).toBe(true);
+          const form = { name: 'Survey', mimeType: 'application/vnd.google-apps.form', sizeBytes: null };
+          expect(isAttachableSourceFile(form, FLAG_OFF)).toBe(false);
+        });
+
+        it('refuses a type the chat does not take', () => {
+          expect(isAttachableSourceFile({ name: 'a.zip', mimeType: 'application/zip', sizeBytes: 10 }, FLAG_OFF)).toBe(false);
+        });
+
+        it('falls back to the extension when the provider reports a vague type', () => {
+          expect(isAttachableSourceFile({ name: 'notes.md', mimeType: 'application/octet-stream', sizeBytes: 10 }, FLAG_OFF)).toBe(true);
+          expect(resolveMimeTypeFor('notes.md', 'application/octet-stream')).toBe('text/markdown');
+        });
+
+        it('applies the class cap, which the large-document flag raises for documents', () => {
+          const big = { name: 'scan.pdf', mimeType: 'application/pdf', sizeBytes: 10 * 1024 * 1024 };
+          expect(isAttachableSourceFile(big, FLAG_OFF)).toBe(false);
+          expect(isAttachableSourceFile(big, FLAG_ON)).toBe(true);
+          const deck = { name: 'deck.pptx', mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', sizeBytes: 10 * 1024 * 1024 };
+          expect(isAttachableSourceFile(deck, FLAG_OFF)).toBe(true);
+        });
+
+        it('lets an unknown size through for the backend to judge', () => {
+          expect(isAttachableSourceFile({ name: 'a.pdf', mimeType: 'application/pdf' }, FLAG_OFF)).toBe(true);
         });
       });
 

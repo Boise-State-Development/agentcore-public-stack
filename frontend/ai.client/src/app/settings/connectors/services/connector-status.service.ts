@@ -55,6 +55,11 @@ export class ConnectorStatusService {
     this.states.update((current) => ({ ...current, [providerId]: 'connected' }));
   }
 
+  /** The mirror of `markConnected`, after a disconnect the user asked for. */
+  markDisconnected(providerId: string): void {
+    this.states.update((current) => ({ ...current, [providerId]: 'disconnected' }));
+  }
+
   /** Drop a provider's cached state so the next `ensure` re-probes it. */
   invalidate(providerId: string): void {
     this.states.update((current) => {

@@ -65,5 +65,14 @@ class FileSourceAdapter(ABC):
         """Search the source by free-text query, one page at a time."""
 
     @abstractmethod
-    async def download(self, access_token: str, file_id: str) -> DownloadedFile:
-        """Fetch a file's bytes, exporting provider-native docs as needed."""
+    async def download(
+        self, access_token: str, file_id: str, max_bytes: Optional[int] = None
+    ) -> DownloadedFile:
+        """Fetch a file's bytes, exporting provider-native docs as needed.
+
+        `max_bytes`, when given, is a hard ceiling: the adapter raises
+        `FileSourceTooLargeError` rather than return (or keep buffering) a
+        larger file. A provider that reports the size up front checks it
+        before fetching anything; an export whose size is unknown until it
+        streams stops at the cap.
+        """

@@ -48,7 +48,7 @@ function setup(
     openConsentPopup: vi.fn().mockResolvedValue(true),
     acknowledgeCompletion: vi.fn(),
   };
-  const toast = { error: vi.fn(), success: vi.fn() };
+  const toast = { error: vi.fn(), success: vi.fn(), info: vi.fn() };
 
   TestBed.resetTestingModule();
   TestBed.configureTestingModule({
@@ -204,6 +204,82 @@ describe('FileSourceBrowserDialogComponent', () => {
     });
   });
 
+  describe('attach mode (the composer\'s "Add from …")', () => {
+    const LISTING = {
+      entries: [
+        fileEntry({ id: 'pdf', name: 'report.pdf', mimeType: 'application/pdf', sizeBytes: 1024 }),
+        // A Google Doc has no bytes until exported; what matters is what it exports as.
+        fileEntry({
+          id: 'gdoc',
+          name: 'Quarterly Notes',
+          mimeType: 'application/vnd.google-apps.document',
+          downloadMimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          sizeBytes: null,
+        }),
+        fileEntry({ id: 'zip', name: 'archive.zip', mimeType: 'application/zip', sizeBytes: 10 }),
+        fileEntry({ id: 'huge', name: 'scan.pdf', mimeType: 'application/pdf', sizeBytes: 60 * 1024 * 1024 }),
+        fileEntry({ id: 'form', name: 'Survey', mimeType: 'application/vnd.google-apps.form', selectable: false }),
+      ],
+      breadcrumbs: [],
+      nextCursor: null,
+    };
+
+    function setupAttach(maxFiles = 5) {
+      return setup(
+        { browse: vi.fn().mockResolvedValue(LISTING) },
+        { connector: CONNECTED, mode: 'attach', maxFiles },
+      );
+    }
+
+    it('greys out what a conversation cannot take, judged on the downloaded type and size', async () => {
+      const { component } = setupAttach();
+      await vi.waitFor(() =>
+        expect((component['displayedEntries'] as () => FileEntry[])()).toHaveLength(5),
+      );
+
+      const shown = (component['displayedEntries'] as () => FileEntry[])();
+      const selectable = Object.fromEntries(shown.map((e) => [e.id, e.selectable]));
+      expect(selectable).toEqual({ pdf: true, gdoc: true, zip: false, huge: false, form: false });
+      expect((component['hasUnattachableEntries'] as () => boolean)()).toBe(true);
+    });
+
+    it('closes with the connector and the chosen files for the composer to import', async () => {
+      const { component, dialogRef, fileSourceService } = setupAttach();
+      await vi.waitFor(() =>
+        expect((component['displayedEntries'] as () => FileEntry[])()).toHaveLength(5),
+      );
+      const shown = (component['displayedEntries'] as () => FileEntry[])();
+
+      (component['toggleSelect'] as (e: FileEntry) => void)(shown[0]);
+      (component['toggleSelect'] as (e: FileEntry) => void)(shown[1]);
+      (component['toggleSelect'] as (e: FileEntry) => void)(shown[2]); // not selectable
+      (component['confirmSelection'] as () => void)();
+
+      expect(fileSourceService.importDocuments).not.toHaveBeenCalled();
+      expect(dialogRef.close).toHaveBeenCalledWith({
+        connector: CONNECTED,
+        files: [
+          { fileId: 'pdf', name: 'report.pdf' },
+          { fileId: 'gdoc', name: 'Quarterly Notes' },
+        ],
+      });
+    });
+
+    it('stops at the message\'s remaining file slots', async () => {
+      const { component, toast } = setupAttach(1);
+      await vi.waitFor(() =>
+        expect((component['displayedEntries'] as () => FileEntry[])()).toHaveLength(5),
+      );
+      const shown = (component['displayedEntries'] as () => FileEntry[])();
+
+      (component['toggleSelect'] as (e: FileEntry) => void)(shown[0]);
+      (component['toggleSelect'] as (e: FileEntry) => void)(shown[1]);
+
+      expect((component['selectedCount'] as () => number)()).toBe(1);
+      expect(toast.info).toHaveBeenCalledWith('File limit', expect.stringContaining('1 more file'));
+    });
+  });
+
   describe('opened through CDK Dialog', () => {
     function configure() {
       TestBed.resetTestingModule();
@@ -244,6 +320,15 @@ describe('FileSourceBrowserDialogComponent', () => {
         { data: { target: 'AST-1' } },
       );
       expectNamedDialog(container, { name: 'Import from a connector' });
+    });
+
+    it('names the attach browser after the connector', async () => {
+      configure();
+      const { container } = await openInCdkDialog<FileSourceBrowserDialogComponent, FileSourceBrowserDialogData>(
+        FileSourceBrowserDialogComponent,
+        { data: { connector: CONNECTED, mode: 'attach', maxFiles: 5 } },
+      );
+      expectNamedDialog(container, { name: 'Add from Google Drive' });
     });
 
     it('names the folder picker after its purpose', async () => {

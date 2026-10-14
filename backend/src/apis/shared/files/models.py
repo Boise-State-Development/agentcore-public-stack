@@ -439,6 +439,21 @@ class PresignRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
+class ImportFileRequest(BaseModel):
+    """Request body for POST /api/files/import.
+
+    Attach a file from a connected file source (a connector an admin mapped
+    to a file-source adapter) to a conversation. app-api downloads it with
+    the user's vaulted OAuth token and stores it exactly as a device upload.
+    """
+
+    session_id: str = Field(..., validation_alias="sessionId", description="Conversation session ID")
+    connector_id: str = Field(..., validation_alias="connectorId", min_length=1, description="File-source connector id")
+    file_id: str = Field(..., validation_alias="fileId", min_length=1, description="Provider-side file id")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
 # =============================================================================
 # API Response Models
 # =============================================================================

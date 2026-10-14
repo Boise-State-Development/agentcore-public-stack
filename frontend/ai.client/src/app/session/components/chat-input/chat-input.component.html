@@ -121,6 +121,18 @@
               (remove)="onFileRemove($event)"
             />
           }
+          <!--
+            Files on their way from a connected file source. app-api fetches
+            them, so the card shows a label rather than a percentage; a
+            finished one moves into `restoredAttachments` above as metadata.
+          -->
+          @for (upload of importingAttachments(); track upload.uploadId) {
+            <app-file-card
+              [pendingUpload]="upload"
+              (remove)="onFileRemove($event)"
+              (retry)="onFileRetry($event)"
+            />
+          }
           @for (upload of pendingUploads(); track upload.uploadId) {
             <app-file-card
               [pendingUpload]="upload"
@@ -260,27 +272,35 @@
         }
       </div>
 
-      <!-- Leading control: attach -->
+      <!--
+        Leading control: the `+` menu — files from the device or a connected
+        file source, then Skills, Tools and Connectors as submenus
+        (`ComposerAddMenuComponent`). The device picker stays a native input,
+        hidden: the menu's first row clicks it, so the browser's own dialog
+        and its `accept` filter are unchanged. `hidden` rather than `sr-only`
+        because the menu row is the accessible path now; a second, invisible
+        tab stop for the same action would only confuse.
+      -->
       <div class="composer-lead flex items-center" role="group" aria-label="Message options">
         @if (showFileControls()) {
-          <div
-            class="flex size-10 items-center justify-center rounded-lg text-gray-500 dark:text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-white/5 dark:hover:text-gray-300 focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-[var(--color-primary)]"
-            appTooltip="Attach file"
-            appTooltipPosition="top"
-          >
-            <input
-              type="file"
-              class="sr-only"
-              (change)="onFileSelect($event)"
-              id="chat-input-file-upload"
-              [accept]="acceptedFileTypes"
-              multiple
-              aria-label="Attach a file"
-            />
-            <label for="chat-input-file-upload" class="flex size-full cursor-pointer items-center justify-center">
-              <ng-icon name="heroPlus" class="size-5" aria-hidden="true" />
-            </label>
-          </div>
+          <input
+            #fileInput
+            type="file"
+            class="hidden"
+            tabindex="-1"
+            (change)="onFileSelect($event)"
+            id="chat-input-file-upload"
+            [accept]="acceptedFileTypes"
+            multiple
+          />
+          <app-composer-add-menu
+            [remainingFiles]="remainingFileSlots()"
+            [showSkills]="showSkillCommands()"
+            [disabled]="isDictating()"
+            (pickFromDevice)="openFilePicker()"
+            (sourceFilesPicked)="onSourceFilesPicked($event)"
+            (skillPicked)="insertSkillCommand($event)"
+          />
         }
       </div>
 

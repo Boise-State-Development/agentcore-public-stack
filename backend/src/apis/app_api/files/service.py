@@ -38,6 +38,7 @@ from apis.shared.files.models import (
     is_allowed_mime_type,
     is_presentation_file,
     is_reference_document,
+    ALLOWED_EXTENSIONS,
     ALLOWED_MIME_TYPES,
     LARGE_DOCUMENT_MAX_BYTES,
     MAX_FILES_PER_MESSAGE,
@@ -288,13 +289,8 @@ class FileUploadService:
                 required_space=request.size_bytes,
             )
 
-        # Generate upload ID (timestamp-prefixed UUID for sortable uniqueness)
-        # Format: {timestamp_hex}_{uuid} for chronological sorting
-        timestamp_hex = format(int(datetime.now(timezone.utc).timestamp() * 1000), 'x')
-        upload_id = f"{timestamp_hex}_{uuid.uuid4().hex[:16]}"
-
-        # Build S3 key
-        s3_key = f"user-files/{user_id}/{request.session_id}/{upload_id}/{request.filename}"
+        upload_id = self._new_upload_id()
+        s3_key = self._s3_key_for(user_id, request.session_id, upload_id, request.filename)
 
         # Create pending metadata record
         file_meta = FileMetadata(
@@ -413,19 +409,7 @@ class FileUploadService:
         # Increment quota
         await self.repository.increment_quota(user_id, file_meta.size_bytes)
 
-        # DocumentDigest, off the request path (offload spec §4A / PR-2):
-        # documents get an outline + abstract persisted on their row so a
-        # later turn can carry the digest instead of the bytes. Non-documents
-        # (spreadsheets, decks, images) and the kill switch skip it. The
-        # response does not wait for it.
-        #
-        # A reference-class document (large-document spec §4A) is never read
-        # here: the preparation Lambda builds its digest along with the
-        # sidecars, so app-api never holds a 50 MB object in memory.
-        if is_reference_document(file_meta):
-            await self._enqueue_preparation(file_meta)
-        else:
-            self._schedule_digest(file_meta)
+        await self._after_upload_ready(file_meta)
 
         logger.info("Completed file upload")
 
@@ -436,6 +420,145 @@ class FileUploadService:
             filename=file_meta.filename,
             size_bytes=file_meta.size_bytes,
         )
+
+    # =========================================================================
+    # Import from a file source (the composer's "Add from Google Drive")
+    # =========================================================================
+
+    def max_download_bytes(self) -> int:
+        """The largest size any upload class may be: the cap to download under.
+
+        A file-source import is sized only once its bytes are in hand (an
+        exported Google Doc has no size until it streams), so the adapter is
+        told the widest cap and `import_file` applies the file's own class
+        cap afterwards. Bounds memory to one over-cap file at most.
+        """
+        from apis.shared.feature_flags import large_document_attachments_enabled
+
+        caps = [self.max_file_size, self.presentation_max_file_size]
+        if large_document_attachments_enabled():
+            caps.append(LARGE_DOCUMENT_MAX_BYTES)
+        return max(caps)
+
+    async def import_file(
+        self,
+        user_id: str,
+        session_id: str,
+        filename: str,
+        mime_type: str,
+        content: bytes,
+        source: str = "upload",
+    ) -> FileMetadata:
+        """Store bytes fetched server-side as a ready attachment.
+
+        The presign flow in one call, for a file whose bytes app-api already
+        holds (downloaded from a connected file source): the same type, size
+        and quota gates as `request_presigned_url`, then the object is PUT
+        from here and the row goes straight to READY with the same post-ready
+        step as `complete_upload` (digest or large-document preparation).
+
+        A provider's MIME type is taken at its word when it is one we accept,
+        and resolved from the filename's extension otherwise, exactly as the
+        SPA does for a device upload whose browser reported no type.
+
+        Raises:
+            InvalidFileTypeError: neither the MIME type nor the extension is accepted
+            FileTooLargeError: over the cap for its class
+            QuotaExceededError: would exceed the user's storage quota
+            FileUploadError: the object could not be stored
+        """
+        resolved_mime = self._resolve_import_mime_type(filename, mime_type)
+        size_bytes = len(content)
+
+        size_limit = self.max_size_for(filename, resolved_mime)
+        if size_bytes > size_limit:
+            raise FileTooLargeError(size_bytes, size_limit)
+
+        quota = await self.repository.get_user_quota(user_id)
+        if quota.total_bytes + size_bytes > self.user_quota_bytes:
+            raise QuotaExceededError(
+                current_usage=quota.total_bytes,
+                max_allowed=self.user_quota_bytes,
+                required_space=size_bytes,
+            )
+
+        upload_id = self._new_upload_id()
+        s3_key = self._s3_key_for(user_id, session_id, upload_id, filename)
+        file_meta = FileMetadata(
+            upload_id=upload_id,
+            user_id=user_id,
+            session_id=session_id,
+            filename=filename,
+            mime_type=resolved_mime,
+            size_bytes=size_bytes,
+            s3_key=s3_key,
+            s3_bucket=self.bucket_name,
+            status=FileStatus.PENDING,
+            source=source,
+        )
+        # PENDING first, as a presigned upload would be, so a PUT that fails
+        # leaves a row the existing cleanup paths already understand.
+        await self.repository.create_file(file_meta)
+
+        try:
+            await asyncio.to_thread(
+                self._s3_client.put_object,
+                Bucket=self.bucket_name,
+                Key=s3_key,
+                Body=content,
+                ContentType=resolved_mime,
+            )
+        except ClientError as e:
+            logger.error(f"Failed to store imported file {upload_id}: {e}")
+            await self.repository.update_file_status(user_id, upload_id, FileStatus.FAILED)
+            raise FileUploadError("The file could not be stored. Try again.")
+
+        await self.repository.update_file_status(user_id, upload_id, FileStatus.READY)
+        file_meta.status = FileStatus.READY
+        await self.repository.increment_quota(user_id, size_bytes)
+        await self._after_upload_ready(file_meta)
+
+        logger.info("Imported file from a file source")
+        return file_meta
+
+    @staticmethod
+    def _resolve_import_mime_type(filename: str, mime_type: str) -> str:
+        """An accepted MIME type for an imported file, or raise."""
+        if is_allowed_mime_type(mime_type):
+            return mime_type
+        lower = filename.lower()
+        for ext, resolved in ALLOWED_EXTENSIONS.items():
+            if lower.endswith(ext):
+                return resolved
+        raise InvalidFileTypeError(mime_type or "unknown")
+
+    @staticmethod
+    def _new_upload_id() -> str:
+        """A timestamp-prefixed id (`{ms_hex}_{uuid16}`) so ids sort by time."""
+        timestamp_hex = format(int(datetime.now(timezone.utc).timestamp() * 1000), 'x')
+        return f"{timestamp_hex}_{uuid.uuid4().hex[:16]}"
+
+    @staticmethod
+    def _s3_key_for(user_id: str, session_id: str, upload_id: str, filename: str) -> str:
+        return f"user-files/{user_id}/{session_id}/{upload_id}/{filename}"
+
+    async def _after_upload_ready(self, file_meta: FileMetadata) -> None:
+        """What every READY upload gets, however its bytes arrived.
+
+        DocumentDigest, off the request path (offload spec §4A / PR-2):
+        documents get an outline + abstract persisted on their row so a
+        later turn can carry the digest instead of the bytes. Non-documents
+        (spreadsheets, decks, images) and the kill switch skip it. The
+        response does not wait for it.
+
+        A reference-class document (large-document spec §4A) is never read
+        here: the preparation Lambda builds its digest along with the
+        sidecars, so app-api never holds a 50 MB object in memory.
+        """
+        if is_reference_document(file_meta):
+            await self._enqueue_preparation(file_meta)
+        else:
+            self._schedule_digest(file_meta)
 
     # =========================================================================
     # Preview URL
