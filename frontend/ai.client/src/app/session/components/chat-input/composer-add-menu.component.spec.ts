@@ -310,6 +310,27 @@ describe('ComposerAddMenuComponent', () => {
     expect(menu()).not.toBeNull();
   });
 
+  it("a tool switch follows the tool's state, not the click", async () => {
+    // The save lands: the preference flips, and the row with it.
+    toggleTool.mockImplementationOnce(async (id: string) => {
+      tools.update((list) => list.map((t) => (t.toolId === id ? { ...t, isEnabled: !t.isEnabled } : t)));
+    });
+    await openMenu();
+    await openSubmenu('composer-add-tools');
+    const row = () => overlay('composer-tools-menu')!.querySelector('[data-tool-id="analyze_spreadsheet"]') as HTMLButtonElement;
+
+    row().click();
+    await settle();
+    expect(row().getAttribute('aria-checked')).toBe('true');
+
+    // The save fails: nothing changed, so the row must not claim it did.
+    toggleTool.mockRejectedValueOnce(new Error('Network down'));
+    row().click();
+    await settle();
+    expect(row().getAttribute('aria-checked')).toBe('true');
+    expect(TestBed.inject(ToastService).error).toHaveBeenCalledWith('Could not update the tool', 'Network down');
+  });
+
   it('locks a pinned tool, and every tool while an Agent dictates the set', async () => {
     await openMenu();
     await openSubmenu('composer-add-tools');
@@ -451,6 +472,8 @@ describe('ComposerAddMenuComponent', () => {
 
     expect(row().textContent).toContain('Not connected');
     expect(row().getAttribute('aria-disabled')).toBeNull();
+    // The click must not leave the checkbox claiming "on": the binding owns it.
+    expect(row().getAttribute('aria-checked')).toBe('false');
   });
 
   it('switching a connector off disconnects it and keeps the menu open', async () => {
