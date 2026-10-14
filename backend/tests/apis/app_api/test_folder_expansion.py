@@ -24,7 +24,8 @@ from apis.app_api.file_sources.models import (
     SourceRoot,
 )
 from apis.app_api.files.folders import expansion
-from apis.app_api.files.folders.expansion import ExpansionDeps, attachable_mime_for, expand_folder
+from apis.app_api.file_sources.folder_walk import attachable_mime_for
+from apis.app_api.files.folders.expansion import ExpansionDeps, expand_folder
 from apis.app_api.files.service import FileTooLargeError, QuotaExceededError
 from apis.shared.files.folder_attachments import (
     FolderAttachment,

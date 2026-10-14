@@ -33,9 +33,8 @@ import asyncio
 import hashlib
 import logging
 import time
-from collections import deque
 from dataclasses import dataclass, field
-from typing import Deque, List, Optional, Set, Tuple
+from typing import List, Optional, Set, Tuple
 
 from apis.shared.feature_flags import large_document_attachments_enabled
 from apis.shared.files.document_read import is_document_class
@@ -65,17 +64,15 @@ from apis.shared.files.folder_attachments import (
 )
 from apis.shared.files.folder_repository import FolderAttachmentRepository
 from apis.shared.files.models import (
-    ALLOWED_EXTENSIONS,
     DELIVERY_INLINE,
     DELIVERY_REFERENCE,
-    is_allowed_mime_type,
 )
 from apis.shared.timestamps import utc_now_iso
 
 from apis.app_api.file_sources.adapter import FileSourceAdapter
+from apis.app_api.file_sources.folder_walk import WALK_AUTH, walk_folder
 from apis.app_api.file_sources.models import (
     FileEntry,
-    FileEntryType,
     FileSourceAuthError,
     FileSourceError,
     FileSourceTooLargeError,
@@ -94,31 +91,6 @@ logger = logging.getLogger(__name__)
 def folder_file_source(connector_id: str, folder_attach_id: str) -> str:
     """The ``source`` written on a folder file's row: ``connector:{id}:folder:{fid}``."""
     return f"connector:{connector_id}:folder:{folder_attach_id}"
-
-
-def attachable_mime_for(entry: FileEntry) -> Optional[str]:
-    """The accepted MIME type a browse entry downloads as, or ``None``.
-
-    The composer's rule server-side, narrowed to what has an on-demand reader:
-    the downloaded type (``download_mime_type`` for an export, else the
-    provider's) must be in the chat allowlist, resolved from the name's
-    extension when the provider reported none, and not an image. Everything
-    else in the allowlist is document class, tabular or a deck, and each has
-    a tool that reads it on demand.
-    """
-    if entry.type != FileEntryType.FILE or not entry.selectable:
-        return None
-    mime = (entry.download_mime_type or entry.mime_type or "").lower().split(";")[0].strip()
-    resolved: Optional[str] = mime if is_allowed_mime_type(mime) else None
-    if resolved is None:
-        lower = (entry.name or "").lower()
-        for ext, candidate in ALLOWED_EXTENSIONS.items():
-            if lower.endswith(ext):
-                resolved = candidate
-                break
-    if resolved is None or resolved.startswith("image/"):
-        return None
-    return resolved
 
 
 def delivery_for(filename: str, mime_type: str) -> str:
@@ -283,59 +255,28 @@ async def _finish(
 
 
 async def _walk_folder(root_id: str, deps: ExpansionDeps, skip_ids: Set[str], *, keep: int) -> _Walk:
-    """Breadth-first over ``browse``, one page at a time, bounded by the caps."""
-    walk = _Walk()
-    queue: Deque[Tuple[str, str]] = deque([(root_id, "")])
-    pages = 0
-    room = deps.max_files - keep
-
-    while queue:
-        folder_id, prefix = queue.popleft()
-        cursor: Optional[str] = None
-        while True:
-            if pages >= deps.max_pages:
-                walk.truncated = True
-                return walk
-            try:
-                page = await deps.adapter.browse(deps.access_token, folder_id, cursor)
-            except FileSourceAuthError:
-                walk.error = ERROR_NEEDS_CONSENT
-                return walk
-            except FileSourceError as e:
-                logger.warning("Folder listing failed: %s", type(e).__name__)
-                walk.error = ERROR_LISTING_FAILED
-                return walk
-            pages += 1
-
-            for entry in page.entries:
-                if entry.type == FileEntryType.FOLDER:
-                    queue.append((entry.id, f"{prefix}{entry.name}/"))
-                    continue
-                walk.listed += 1
-                if entry.id in skip_ids:
-                    continue
-                mime = attachable_mime_for(entry)
-                if mime is None:
-                    walk.skipped_type += 1
-                    continue
-                if len(walk.entries) >= room:
-                    walk.truncated = True
-                    return walk
-                walk.entries.append(_new_entry(entry, prefix, mime, deps))
-
-            cursor = page.next_cursor
-            if not cursor:
-                break
+    """List the folder through the shared walk (``file_sources/folder_walk.py``),
+    bounded by the caps, and turn each accepted file into a pending entry."""
+    listing = await walk_folder(
+        deps.adapter, deps.access_token, root_id,
+        max_files=deps.max_files - keep, max_pages=deps.max_pages, skip_ids=skip_ids,
+    )
+    walk = _Walk(listed=listing.listed, skipped_type=listing.skipped_type, truncated=listing.truncated)
+    if listing.error == WALK_AUTH:
+        walk.error = ERROR_NEEDS_CONSENT
+    elif listing.error is not None:
+        walk.error = ERROR_LISTING_FAILED
+    walk.entries = [_new_entry(f.entry, f.relative_path, f.mime_type, deps) for f in listing.files]
     return walk
 
 
-def _new_entry(entry: FileEntry, prefix: str, mime: str, deps: ExpansionDeps) -> FolderFileEntry:
+def _new_entry(entry: FileEntry, relative_path: str, mime: str, deps: ExpansionDeps) -> FolderFileEntry:
     """A pending entry, or one already ``skipped_size`` when the provider's
     reported size is over the file's class cap (nothing is fetched)."""
     item = FolderFileEntry(
         provider_file_id=entry.id,
         name=entry.name,
-        relative_path=f"{prefix}{entry.name}",
+        relative_path=relative_path,
         mime_type=mime,
         size_bytes=entry.size_bytes,
         etag=entry.etag,
