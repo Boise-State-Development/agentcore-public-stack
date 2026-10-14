@@ -8,6 +8,7 @@ import {
   FilePreviewHttpService,
 } from '../../../../services/file-preview/file-preview-http.service';
 import { DOCX_MIME } from '../../../../services/file-preview/file-preview.model';
+import { DockedPaneService } from '../../../../services/docked-pane/docked-pane.service';
 import { ConfigService } from '../../../../../services/config.service';
 
 const renderAsync = vi.fn();
@@ -177,5 +178,22 @@ describe('FilePreviewPanelComponent', () => {
 
     expect(fetchDocument).toHaveBeenLastCalledWith('up2');
     expect(fixture.nativeElement.textContent).toContain('notes.docx');
+  });
+
+  it('gives the rail back when it is destroyed with the page', async () => {
+    await openPreview();
+    fixture.destroy();
+
+    expect(state.openFile()).toBeNull();
+    expect(TestBed.inject(DockedPaneService).isOpen()).toBe(false);
+  });
+
+  it('leaves a rail the artifact pane took when it is destroyed', async () => {
+    await openPreview();
+    const rail = TestBed.inject(DockedPaneService);
+    rail.claim('artifact');
+    fixture.destroy();
+
+    expect(rail.owner()).toBe('artifact');
   });
 });

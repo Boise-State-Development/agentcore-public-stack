@@ -1,6 +1,7 @@
 import {
   ChangeDetectionStrategy,
   Component,
+  DestroyRef,
   computed,
   effect,
   inject,
@@ -301,6 +302,10 @@ export class FilePreviewPanelComponent {
 
       void this.load(ref.uploadId);
     });
+
+    // Same rule as the artifact pane: leaving for a page with no message
+    // list must give the rail back, or the shell keeps its gutter.
+    inject(DestroyRef).onDestroy(() => this.previewState.close());
   }
 
   private reset(): void {

@@ -1,6 +1,7 @@
 import {
   ChangeDetectionStrategy,
   Component,
+  DestroyRef,
   ElementRef,
   computed,
   effect,
@@ -454,6 +455,14 @@ export class ArtifactPanelComponent {
       this.view.set('preview');
       void this.load();
     });
+
+    // The rail is held only while a pane that draws it is mounted. A
+    // session change resets it (`ArtifactStateService.reset()`), but
+    // leaving the conversation for a page with no message list (a
+    // project, settings, admin) only destroys this component — and the
+    // shell kept reserving the gutter for a pane that was gone. Owner-
+    // gated, so it cannot close a .docx preview that took the rail.
+    inject(DestroyRef).onDestroy(() => this.artifactState.closeArtifactPanel());
   }
 
   protected onHandlePointerDown(e: PointerEvent): void {
