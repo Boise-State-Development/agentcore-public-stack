@@ -33,6 +33,7 @@ from apis.shared.feature_flags import (
     agent_preparing_phase_enabled,
     kb_search_ahead_enabled,
     agents_enabled,
+    attachment_kb_enabled,
     attachment_turn_guard_enabled,
     folder_attachments_enabled,
     inline_attachment_persist_enabled,
@@ -1633,6 +1634,15 @@ def _attachment_marker_names(all_files: list, oversized_inline: list) -> list:
     return [f.filename for f in all_files if f.filename not in oversized_names]
 
 
+def _reference_search_available(document_read_available: bool) -> bool:
+    """Whether this turn's ``document_read`` has its ``query`` argument.
+
+    Read from the same switch ``make_document_read_tool`` reads, so the
+    attachment guidance never names a mode the tool lacks.
+    """
+    return document_read_available and attachment_kb_enabled()
+
+
 def _build_attachment_guidance(
     diverted_tabular: list,
     diverted_presentations: list,
@@ -1647,6 +1657,7 @@ def _build_attachment_guidance(
     unreadable_documents: list | None = None,
     references: list | None = None,
     document_read_available: bool = True,
+    search_available: bool = False,
 ) -> str:
     """Return a short markdown addendum describing how attachments will be
     handled, to append to the user's message so the agent (and the user)
@@ -1667,6 +1678,8 @@ def _build_attachment_guidance(
     ``references`` are large documents attached by reference (large-document
     spec §4B.4): not skipped, but readable only in parts, through
     ``document_read`` when this turn has it (``document_read_available``).
+    ``search_available`` is whether that tool has its ``query`` argument (the
+    deployment's attachments KB, §4F); the sentence then names search first.
     """
     parts: list[str] = []
 
@@ -1683,14 +1696,24 @@ def _build_attachment_guidance(
             parts.append(f"{lead} Reading parts of it is not available in this conversation._")
             continue
         call = f"call `document_read` with `upload_id` `{ref.upload_id}`"
+        # Search named first when the tool has it. Measured with the quality
+        # harness (spec §6, second readout): with "first with `pattern`" the
+        # model opened with pattern in 93 of 93 turns and reached a scanned
+        # page by paging through images; naming search made it open with query
+        # in 93 of 93, at the same accuracy and 38% less cost per turn.
+        find = (
+            "first with `query` (a plain-language search, which also covers scanned pages) or `pattern`"
+            if search_available
+            else "first with `pattern`"
+        )
         if ref.format == "pdf":
             parts.append(
-                f"{lead} To answer from it, {call}: first with `pattern` to find the "
+                f"{lead} To answer from it, {call}: {find} to find the "
                 f"relevant pages, then with `page_range` to read them._"
             )
         else:
             parts.append(
-                f"{lead} To answer from it, {call}: first with `pattern` to find the "
+                f"{lead} To answer from it, {call}: {find} to find the "
                 f"relevant passages, then read on from there._"
             )
 
@@ -4952,6 +4975,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 unreadable_documents=attachments.unreadable_documents,
                 references=attachments.reference_documents,
                 document_read_available=document_read_available,
+                search_available=_reference_search_available(document_read_available),
             )
             # When multiple spreadsheets are visible, ship the full inventory
             # up front so the agent can disambiguate intentionally instead of

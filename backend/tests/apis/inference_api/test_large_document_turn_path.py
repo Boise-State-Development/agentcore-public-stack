@@ -355,6 +355,46 @@ class TestGuidance:
         assert "document_read" not in text and "upload_id" not in text
         assert "too large to include in full" in text
 
+    def test_with_search_a_pdf_names_query_first(self):
+        ref = ReferenceAttachment(meta=_meta())
+
+        text = routes._build_attachment_guidance([], [], [], None, references=[ref], search_available=True)
+
+        assert text == (
+            "_`policy-manual.pdf` (38 MB) is attached but too large to include in full, so "
+            "its content is not in this message. To answer from it, call `document_read` "
+            "with `upload_id` `up-1`: first with `query` (a plain-language search, which also "
+            "covers scanned pages) or `pattern` to find the relevant pages, then with "
+            "`page_range` to read them._"
+        )
+
+    def test_with_search_a_non_pdf_names_query_first(self):
+        ref = ReferenceAttachment(meta=_meta(filename="handbook.docx", mime_type=DOCX, size_bytes=int(12.4 * MB)))
+
+        text = routes._build_attachment_guidance([], [], [], None, references=[ref], search_available=True)
+
+        assert "first with `query`" in text and "or `pattern` to find the relevant passages" in text
+        assert "page_range" not in text
+
+    def test_search_is_never_named_without_document_read(self):
+        ref = ReferenceAttachment(meta=_meta())
+
+        text = routes._build_attachment_guidance(
+            [], [], [], None, references=[ref], document_read_available=False, search_available=True
+        )
+
+        assert "query" not in text and "document_read" not in text
+
+    @pytest.mark.parametrize("flag", ["true", "", "false"])
+    def test_the_guidance_and_the_tool_agree_on_search(self, monkeypatch, flag):
+        from agents.builtin_tools.document_read_tool import make_document_read_tool
+
+        monkeypatch.setenv("ATTACHMENT_KB_ENABLED", flag)
+        tool_has_query = "query" in make_document_read_tool("s1", "u1").tool_spec["inputSchema"]["json"]["properties"]
+
+        assert routes._reference_search_available(True) is tool_has_query
+        assert routes._reference_search_available(False) is False
+
     def test_no_references_no_sentence(self):
         assert routes._build_attachment_guidance([], [], [], None) == ""
 
