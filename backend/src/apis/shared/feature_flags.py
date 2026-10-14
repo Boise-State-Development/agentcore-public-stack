@@ -119,6 +119,26 @@ def attachment_kb_enabled() -> bool:
     return os.environ.get("ATTACHMENT_KB_ENABLED", "").strip().lower() == "true"
 
 
+def folder_attachments_enabled() -> bool:
+    """Whether a conversation can attach a Google Drive folder
+    (``docs/specs/drive-folder-attachments.md``).
+
+    On, app-api mounts ``POST/GET/DELETE /sessions/{id}/folders`` and runs the
+    expansion task that lists the folder and imports each readable file as a
+    session file delivered by reference, whatever its size. Off, the routes
+    404 and nothing is expanded. **Opt-in while the feature is in
+    development**: only ``"true"`` (case-insensitive) enables it; unset, empty
+    or anything else is off.
+
+    app-api only in PR-A. CDK sets it from ``CDK_FOLDER_ATTACHMENTS_ENABLED``
+    and refuses it without ``CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED``: a folder
+    file is read through the prepare Lambda's sidecars, so without that
+    pipeline there is nothing to read small files through. The Runtime's copy
+    (``folder_attachment_ids`` resolution) arrives with the manifest, PR-B.
+    """
+    return os.environ.get("FOLDER_ATTACHMENTS_ENABLED", "").strip().lower() == "true"
+
+
 def scheduled_runs_enabled() -> bool:
     """Whether the scheduled-runs surface is enabled for this environment.
 
