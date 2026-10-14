@@ -225,3 +225,130 @@ class TestMaxDownloadBytes:
 
         monkeypatch.setenv("LARGE_DOCUMENT_ATTACHMENTS_ENABLED", "true")
         assert service.max_download_bytes() == LARGE_DOCUMENT_MAX_BYTES
+
+
+@pytest.mark.asyncio
+class TestReplaceFileContent:
+    """A refreshed folder file (drive-folder spec §4.6): new bytes at the same
+    upload id and key, the old derivatives dropped, preparation run again."""
+
+    def _ready(self, size=3, mime="application/pdf", name="a.pdf"):
+        from apis.shared.files.models import FileMetadata
+
+        return FileMetadata(
+            upload_id="up-1", user_id="u1", session_id="s1", filename=name, mime_type=mime, size_bytes=size,
+            s3_key=f"user-files/u1/s1/up-1/{name}", s3_bucket="bucket", status=FileStatus.READY,
+            source="connector:google:folder:fa-1", delivery="reference",
+        )
+
+    async def test_writes_the_same_key_moves_quota_by_the_difference_and_re_prepares(self, monkeypatch):
+        monkeypatch.setenv("LARGE_DOCUMENT_ATTACHMENTS_ENABLED", "true")
+        monkeypatch.setenv("LARGE_DOCUMENT_PREPARE_QUEUE_URL", QUEUE_URL)
+        service, repository, s3, sqs, _ = _service()
+        meta = self._ready(size=3)
+        repository.replace_file_content_fields = AsyncMock(return_value=meta.model_copy(update={"size_bytes": 5}))
+        repository.adjust_quota_bytes = AsyncMock()
+        repository.update_file_preparation = AsyncMock(return_value=meta)
+        derived = []
+        monkeypatch.setattr(service, "_delete_derived_objects", lambda m: derived.append(m.upload_id))
+        monkeypatch.setattr(service, "_delete_thumbnail_object", lambda m: derived.append("thumb"))
+
+        updated = await service.replace_file_content(meta, b"12345", "application/pdf")
+
+        s3.put_object.assert_called_once_with(Bucket="bucket", Key=meta.s3_key, Body=b"12345", ContentType="application/pdf")
+        repository.replace_file_content_fields.assert_awaited_once_with("u1", "up-1", 5)
+        repository.adjust_quota_bytes.assert_awaited_once_with("u1", 2)
+        repository.increment_quota.assert_not_awaited()  # still one file
+        assert derived == ["thumb", "up-1"]
+        sqs.send_message.assert_called_once()  # a reference document is prepared again
+        assert updated.size_bytes == 5 and updated.upload_id == "up-1"
+
+    async def test_growth_past_the_quota_is_refused_before_any_write(self):
+        service, repository, s3, _, _ = _service(used_bytes=10, quota_bytes=11)
+        repository.replace_file_content_fields = AsyncMock()
+        with pytest.raises(QuotaExceededError):
+            await service.replace_file_content(self._ready(size=1), b"xxxx", "application/pdf")
+        s3.put_object.assert_not_called()
+        repository.replace_file_content_fields.assert_not_awaited()
+
+    async def test_shrinking_needs_no_quota_check(self):
+        service, repository, _, _, _ = _service(used_bytes=11, quota_bytes=11)
+        meta = self._ready(size=10)
+        repository.replace_file_content_fields = AsyncMock(return_value=meta.model_copy(update={"size_bytes": 2}))
+        repository.adjust_quota_bytes = AsyncMock()
+        await service.replace_file_content(meta, b"xy", "application/pdf")
+        repository.adjust_quota_bytes.assert_awaited_once_with("u1", -8)
+
+    async def test_over_its_class_cap_is_refused(self):
+        service, _, s3, _, _ = _service()
+        with pytest.raises(FileTooLargeError):
+            await service.replace_file_content(self._ready(), b"x" * (GENERAL_CAP + 1), "application/pdf")
+        s3.put_object.assert_not_called()
+
+    async def test_a_row_gone_meanwhile_is_not_found(self):
+        from apis.app_api.files.service import FileNotFoundError as UploadNotFound
+
+        service, repository, _, _, _ = _service()
+        repository.replace_file_content_fields = AsyncMock(return_value=None)
+        repository.adjust_quota_bytes = AsyncMock()
+        with pytest.raises(UploadNotFound):
+            await service.replace_file_content(self._ready(), b"abc", "application/pdf")
+        repository.adjust_quota_bytes.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+class TestDeleteMarksTheFolderEntry:
+    """Deleting a folder's file elsewhere (the Files page) marks its entry
+    ``removed`` (drive-folder spec §4.9); removing the whole folder does not."""
+
+    def _setup(self, monkeypatch, source="connector:google:folder:fa-1"):
+        from apis.shared.files import folder_repository
+        from apis.shared.files.folder_attachments import FolderAttachment, FolderCounts, FolderFileEntry
+        from apis.shared.files.models import FileMetadata
+
+        service, repository, _, _, _ = _service()
+        meta = FileMetadata(
+            upload_id="up-1", user_id="u1", session_id="s1", filename="a.pdf", mime_type="application/pdf",
+            size_bytes=3, s3_key="k/a.pdf", s3_bucket="bucket", status=FileStatus.READY, source=source,
+        )
+        repository.get_file = AsyncMock(return_value=meta)
+        repository.delete_file = AsyncMock(return_value=meta)
+        repository.decrement_quota = AsyncMock()
+        monkeypatch.setattr(service, "_delete_thumbnail_object", lambda m: None)
+        monkeypatch.setattr(service, "_delete_derived_objects", lambda m: None)
+        folder = FolderAttachment(
+            folder_attach_id="fa-1", session_id="s1", user_id="u1", connector_id="google", provider_folder_id="p",
+            folder_name="F", counts=FolderCounts(listed=2, attached=2),
+            files=[
+                FolderFileEntry(provider_file_id="d1", name="a.pdf", relative_path="a.pdf", mime_type="application/pdf", upload_id="up-1", status="attached"),
+                FolderFileEntry(provider_file_id="d2", name="b.pdf", relative_path="b.pdf", mime_type="application/pdf", upload_id="up-2", status="attached"),
+            ],
+        )
+        folders = MagicMock()
+        folders.get = AsyncMock(return_value=folder)
+        folders.update = AsyncMock()
+        monkeypatch.setattr(folder_repository, "get_folder_attachment_repository", lambda: folders)
+        return service, folders
+
+    async def test_marks_the_entry_removed_and_recounts(self, monkeypatch):
+        service, folders = self._setup(monkeypatch)
+        assert await service.delete_file("u1", "up-1") is True
+        folders.get.assert_awaited_once_with("u1", "fa-1")
+        kwargs = folders.update.await_args.kwargs
+        assert [(f.provider_file_id, f.status) for f in kwargs["files"]] == [("d1", "removed"), ("d2", "attached")]
+        assert kwargs["counts"].attached == 1
+
+    async def test_removing_the_whole_folder_skips_it(self, monkeypatch):
+        service, folders = self._setup(monkeypatch)
+        await service.delete_file("u1", "up-1", from_folder_removal=True)
+        folders.get.assert_not_awaited()
+
+    async def test_an_ordinary_upload_touches_no_folder(self, monkeypatch):
+        service, folders = self._setup(monkeypatch, source="upload")
+        await service.delete_file("u1", "up-1")
+        folders.get.assert_not_awaited()
+
+    async def test_a_folder_lookup_failure_never_fails_the_delete(self, monkeypatch):
+        service, folders = self._setup(monkeypatch)
+        folders.get.side_effect = RuntimeError("throttled")
+        assert await service.delete_file("u1", "up-1") is True

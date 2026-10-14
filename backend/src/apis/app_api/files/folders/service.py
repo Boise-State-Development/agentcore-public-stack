@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Optional, Set
+from typing import List, Optional, Set
 
 from apis.shared.auth import User
 from apis.shared.files.folder_attachments import (
@@ -18,7 +18,7 @@ from apis.shared.files.folder_repository import (
 )
 
 from apis.app_api.file_sources.adapter import FileSourceAdapter
-from apis.app_api.files.folders.expansion import ExpansionDeps, expand_folder
+from apis.app_api.files.folders.expansion import ExpansionDeps, expand_folder, refresh_folder
 from apis.app_api.files.service import FileUploadService, get_file_upload_service
 
 logger = logging.getLogger(__name__)
@@ -99,7 +99,7 @@ class FolderAttachmentService:
             if not entry.upload_id:
                 continue
             try:
-                await self.upload_service.delete_file(user_id, entry.upload_id)
+                await self.upload_service.delete_file(user_id, entry.upload_id, from_folder_removal=True)
             except Exception:  # noqa: BLE001 - best-effort, like the session cascade
                 logger.warning("Failed to delete a folder file", exc_info=True)
         await self.repository.delete(user_id, folder_attach_id)
@@ -121,14 +121,37 @@ class FolderAttachmentService:
         logger.info("Folder attachment expansion resumed")
         return row
 
-    def _schedule(self, folder: FolderAttachment, adapter: FileSourceAdapter, access_token: str) -> "asyncio.Task[object]":
+    async def refresh(self, folder: FolderAttachment, adapter: FileSourceAdapter, access_token: str) -> FolderAttachment:
+        """Re-list the folder and bring its files up to date (spec §4.6).
+
+        The caller has checked :meth:`is_running`. The row goes ``expanding``
+        with ``refreshing`` set until the task settles it.
+        """
+        row = await self.repository.update(
+            folder.user_id, folder.folder_attach_id,
+            status=FOLDER_STATUS_EXPANDING, refreshing=True, clear_error=True,
+        )
+        if row is None:
+            return folder
+        self._schedule(row, adapter, access_token, refresh=True)
+        logger.info("Folder attachment refresh scheduled")
+        return row
+
+    async def list_for_session(self, user_id: str, session_id: str) -> List[FolderAttachment]:
+        """This user's folders in a conversation, newest first."""
+        return [f for f in await self.repository.list_session_folders(session_id) if f.user_id == user_id]
+
+    def _schedule(
+        self, folder: FolderAttachment, adapter: FileSourceAdapter, access_token: str, *, refresh: bool = False
+    ) -> "asyncio.Task[object]":
         deps = ExpansionDeps(
             adapter=adapter,
             access_token=access_token,
             repository=self.repository,
             upload_service=self.upload_service,
         )
-        task = asyncio.get_running_loop().create_task(expand_folder(folder, deps))
+        work = refresh_folder(folder, deps) if refresh else expand_folder(folder, deps)
+        task = asyncio.get_running_loop().create_task(work)
         self._tasks.add(task)
         self._running.add(folder.folder_attach_id)
 

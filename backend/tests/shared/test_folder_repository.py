@@ -106,3 +106,48 @@ class TestFolderRowsStayOutOfFileListings:
         await folder_repository.create(_folder("fa-1"))
         files, _ = await file_repository.list_user_files("u1")
         assert [f.upload_id for f in files] == ["f1"]
+
+
+class TestRefreshFields:
+    @pytest.mark.asyncio
+    async def test_refresh_state_and_entry_stamps_round_trip(self, folder_repository):
+        from apis.shared.files.folder_attachments import RefreshSummary
+
+        await folder_repository.create(_folder())
+        files = [FolderFileEntry(provider_file_id="d1", name="a.pdf", relative_path="a.pdf", mime_type="application/pdf",
+                                 size_bytes=3, upload_id="up-1", status="attached", etag="v2", content_hash="abc",
+                                 removed_from_source=True)]
+        row = await folder_repository.update(
+            "u1", "fa-1", status="expanding", refreshing=True, files=files,
+        )
+        assert row.refreshing is True
+        row = await folder_repository.update(
+            "u1", "fa-1", status="ready", refreshing=False, refreshed_at="2026-10-14T16:00:00Z",
+            last_refresh=RefreshSummary(unchanged=1, updated=2, added=3, removed_from_source=1, failed=0),
+        )
+        assert row.refreshing is False and row.refreshed_at == "2026-10-14T16:00:00Z"
+        assert row.last_refresh.updated == 2 and row.last_refresh.removed_from_source == 1
+        entry = (await folder_repository.get("u1", "fa-1")).files[0]
+        assert (entry.etag, entry.content_hash, entry.removed_from_source) == ("v2", "abc", True)
+
+
+class TestFileContentReplace:
+    @pytest.mark.asyncio
+    async def test_new_size_and_the_old_derivatives_dropped(self, file_repository):
+        meta = _file("f1").model_copy(update={"digest": {"abstract": "old"}, "preparation": {"status": "ready"}})
+        await file_repository.create_file(meta)
+        updated = await file_repository.replace_file_content_fields("u1", "f1", 99)
+        assert updated.size_bytes == 99 and updated.digest is None and updated.preparation is None
+        assert updated.upload_id == "f1" and updated.s3_key == meta.s3_key
+
+    @pytest.mark.asyncio
+    async def test_a_missing_row_is_none(self, file_repository):
+        assert await file_repository.replace_file_content_fields("u1", "nope", 1) is None
+
+    @pytest.mark.asyncio
+    async def test_quota_bytes_move_without_counting_a_file(self, file_repository):
+        await file_repository.increment_quota("u1", 100)
+        quota = await file_repository.adjust_quota_bytes("u1", 25)
+        assert (quota.total_bytes, quota.file_count) == (125, 1)
+        quota = await file_repository.adjust_quota_bytes("u1", -50)
+        assert (quota.total_bytes, quota.file_count) == (75, 1)

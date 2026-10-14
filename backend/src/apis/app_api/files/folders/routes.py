@@ -4,6 +4,8 @@
     GET    /sessions/{session_id}/folders/{folder_attach_id}    poll the row
     DELETE /sessions/{session_id}/folders/{folder_attach_id}    remove it and its files
     POST   /sessions/{session_id}/folders/{folder_attach_id}/resume   re-run a lost walk
+    POST   /sessions/{session_id}/folders/{folder_attach_id}/refresh  bring the files up to date
+    GET    /sessions/{session_id}/folders                       the conversation's folders
 
 All 404 to a signed-in user while ``FOLDER_ATTACHMENTS_ENABLED`` is off
 (401 unauthenticated regardless). Attach and resume resolve
@@ -167,4 +169,59 @@ async def resume_folder_attachment(
     provider, adapter = await resolve_file_source(folder.connector_id, user, provider_repo, role_service)
     access_token = await require_file_source_token(provider, user.user_id)
     row = await service.resume(folder, adapter, access_token)
+    return FolderAttachmentResponse.from_row(row)
+
+
+class FolderAttachmentListResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    folders: list[FolderAttachmentResponse]
+
+
+@router.get(
+    "/{session_id}/folders",
+    response_model=FolderAttachmentListResponse,
+    response_model_by_alias=True,
+)
+async def list_folder_attachments(
+    session_id: str,
+    user: User = Depends(require_folder_attachments_user),
+    service: FolderAttachmentService = Depends(get_folder_attachment_service),
+) -> FolderAttachmentListResponse:
+    """The caller's folders in this conversation, newest first. The SPA finds a
+    reloaded message's folder here: the manifest it parses names the folder but
+    carries no id."""
+    rows = await service.list_for_session(user.user_id, session_id)
+    return FolderAttachmentListResponse(folders=[FolderAttachmentResponse.from_row(row) for row in rows])
+
+
+@router.post(
+    "/{session_id}/folders/{folder_attach_id}/refresh",
+    response_model=FolderAttachmentResponse,
+    response_model_by_alias=True,
+)
+async def refresh_folder_attachment(
+    session_id: str,
+    folder_attach_id: str,
+    user: User = Depends(require_folder_attachments_user),
+    service: FolderAttachmentService = Depends(get_folder_attachment_service),
+    provider_repo: OAuthProviderRepository = Depends(get_provider_repository),
+    role_service: AppRoleService = Depends(get_app_role_service),
+) -> FolderAttachmentResponse:
+    """Re-list the folder in its source and bring its files up to date
+    (spec §4.6): changed files are replaced in place under the same upload id,
+    new ones imported, and ones gone from the folder marked
+    ``removedFromSource``. Returns the row ``expanding`` with ``refreshing``
+    set; poll ``GET`` until it settles.
+
+    409 while this process is still expanding or refreshing the folder.
+    """
+    folder = await service.get(user.user_id, session_id, folder_attach_id)
+    if folder is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Folder attachment not found")
+    if service.is_running(folder_attach_id):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This folder is still being expanded")
+    provider, adapter = await resolve_file_source(folder.connector_id, user, provider_repo, role_service)
+    access_token = await require_file_source_token(provider, user.user_id)
+    row = await service.refresh(folder, adapter, access_token)
     return FolderAttachmentResponse.from_row(row)

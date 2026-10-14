@@ -19,7 +19,8 @@ count of the rest; ``document_read`` with no arguments lists every file.
 **A cross-package contract.** The SPA reads this text back to rebuild the
 folder chip on a reloaded message (``frontend/ai.client/src/app/session/
 services/session/folder-manifest.ts``): the ``<folder …>`` attributes, one
-entry per line with the path before the first `` — ``, the ``… and N more``
+entry per line with the path before the first `` — `` (segments after it,
+such as ``removed from …``, are free to grow), the ``… and N more``
 line, and the guidance line's three openings. Change the format on both sides
 together; ``tests/shared/test_folder_manifest.py`` and the SPA's
 ``folder-manifest.spec.ts`` pin the same strings.
@@ -125,6 +126,9 @@ def render_folder_manifest(folder: FolderAttachment, *, include_handle: bool) ->
             parts.append(f"upload_id={_body(entry.upload_id or '')}")
         parts.append(human_size(entry.size_bytes))
         parts.append(entry_format(entry))
+        if entry.removed_from_source:
+            # Still attached and readable; the folder no longer has it (§4.6).
+            parts.append(f"removed from {_body(folder.connector_name or 'the source')}")
         lines.append("  " + " — ".join(parts))
     more = len(entries) - FOLDER_MANIFEST_MAX_ENTRIES
     if more > 0:
