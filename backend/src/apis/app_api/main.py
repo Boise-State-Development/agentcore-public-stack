@@ -230,6 +230,7 @@ from apis.app_api.projects.schedule_routes import router as project_schedules_ro
 from apis.app_api.projects.routes import router as projects_router
 from apis.app_api.tools.routes import router as tools_router
 from apis.app_api.files.routes import router as files_router
+from apis.app_api.files.folders.routes import router as folder_attachments_router
 from apis.app_api.assistants.routes import router as assistants_router
 from apis.app_api.agent_designer.routes import router as agents_router
 from apis.app_api.documents.routes import router as documents_router
@@ -259,6 +260,7 @@ app.include_router(bff_auth_router)  # BFF Token Handler auth routes (Phase 3, d
 app.include_router(api_keys_router)
 app.include_router(session_search_router)  # GET /sessions/search; 404s while CONVERSATION_SEARCH_ENABLED is off
 app.include_router(sessions_router)
+app.include_router(folder_attachments_router)  # /sessions/{id}/folders (drive-folder PR-A); 404s while FOLDER_ATTACHMENTS_ENABLED is off
 app.include_router(admin_router)
 app.include_router(assistants_router)
 app.include_router(agents_router)  # Agent Designer /agents surface; 404s while AGENTS_API_ENABLED off

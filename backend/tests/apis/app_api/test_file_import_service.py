@@ -194,6 +194,30 @@ class TestImportFile:
         assert sqs.send_message.call_args.kwargs["QueueUrl"] == QUEUE_URL
 
 
+    async def test_reference_delivery_queues_a_small_document_for_preparation(self, monkeypatch):
+        # A folder file (drive-folder spec §4.3): by reference whatever its size.
+        monkeypatch.setenv("LARGE_DOCUMENT_ATTACHMENTS_ENABLED", "true")
+        monkeypatch.setenv("LARGE_DOCUMENT_PREPARE_QUEUE_URL", QUEUE_URL)
+        service, repository, _, sqs, created = _service()
+
+        meta = await service.import_file(
+            "u1", "s1", "syllabus.pdf", "application/pdf", b"%PDF small",
+            source="connector:google:folder:fa-1", delivery="reference",
+        )
+
+        assert meta.size_bytes < INLINE_DOCUMENT_MAX_BYTES
+        assert created[0].delivery == "reference"
+        assert created[0].source == "connector:google:folder:fa-1"
+        repository.update_file_preparation.assert_awaited_once()
+        sqs.send_message.assert_called_once()
+
+    async def test_delivery_defaults_to_inline(self):
+        service, _, _, sqs, created = _service()
+        await service.import_file("u1", "s1", "a.pdf", "application/pdf", b"%PDF")
+        assert created[0].delivery == "inline"
+        sqs.send_message.assert_not_called()
+
+
 class TestMaxDownloadBytes:
     def test_is_the_widest_class_cap(self, monkeypatch):
         service, *_ = _service()

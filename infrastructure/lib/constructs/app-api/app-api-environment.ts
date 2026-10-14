@@ -397,6 +397,9 @@ export function buildAppApiEnvironment(
     // The attachments knowledge base (opt-in while in development): opening a
     // conversation re-queues its evicted large documents for indexing.
     ATTACHMENT_KB_ENABLED: config.attachmentKb.enabled ? 'true' : 'false',
+    // Folder attachments (opt-in while in development): the
+    // /sessions/{id}/folders routes and the expansion task. app-api only.
+    FOLDER_ATTACHMENTS_ENABLED: config.folderAttachments.enabled ? 'true' : 'false',
     ...(params.largeDocumentPrepareQueueUrl
       ? { LARGE_DOCUMENT_PREPARE_QUEUE_URL: params.largeDocumentPrepareQueueUrl }
       : {}),

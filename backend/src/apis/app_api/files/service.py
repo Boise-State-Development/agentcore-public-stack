@@ -21,6 +21,8 @@ from apis.shared.timestamps import to_iso
 
 from apis.shared.files.content_disposition import build_content_disposition
 from apis.shared.files.models import (
+    DELIVERY_INLINE,
+    Delivery,
     FileMetadata,
     FileStatus,
     PresignRequest,
@@ -448,6 +450,7 @@ class FileUploadService:
         mime_type: str,
         content: bytes,
         source: str = "upload",
+        delivery: Delivery = DELIVERY_INLINE,
     ) -> FileMetadata:
         """Store bytes fetched server-side as a ready attachment.
 
@@ -460,6 +463,13 @@ class FileUploadService:
         A provider's MIME type is taken at its word when it is one we accept,
         and resolved from the filename's extension otherwise, exactly as the
         SPA does for a device upload whose browser reported no type.
+
+        `delivery` is stored on the row (drive-folder spec §4.3): `reference`
+        makes a document-class file reference-class whatever its size, so the
+        post-ready step enqueues it for preparation instead of digesting it
+        here. Callers pass it only while `LARGE_DOCUMENT_ATTACHMENTS_ENABLED`
+        is on; without the prepare pipeline there is nothing to read a
+        reference through.
 
         Raises:
             InvalidFileTypeError: neither the MIME type nor the extension is accepted
@@ -495,6 +505,7 @@ class FileUploadService:
             s3_bucket=self.bucket_name,
             status=FileStatus.PENDING,
             source=source,
+            delivery=delivery,
         )
         # PENDING first, as a presigned upload would be, so a PUT that fails
         # leaves a row the existing cleanup paths already understand.
@@ -1293,6 +1304,16 @@ class FileUploadService:
         """
         # Get all files for this session first
         files = await self.repository.list_session_files(session_id, status=None)
+
+        # A folder attachment's row shares the session partition under its own
+        # prefix (drive-folder spec §4.2); its files are among ``files`` and
+        # the row itself goes here. Best-effort, like every step below.
+        try:
+            from apis.shared.files.folder_repository import get_folder_attachment_repository
+
+            await get_folder_attachment_repository().delete_session_folders(session_id)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Failed to cascade delete folder attachments for session {session_id}: {e}")
 
         if not files:
             logger.info(f"No files to cascade delete for session {session_id}")

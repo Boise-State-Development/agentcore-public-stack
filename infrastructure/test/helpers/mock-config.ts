@@ -190,6 +190,9 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     attachmentKb: {
       enabled: false,
     },
+    folderAttachments: {
+      enabled: false,
+    },
     agents: {
       enabled: false,
     },

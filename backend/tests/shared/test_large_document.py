@@ -273,7 +273,9 @@ class TestPdfParity:
         await setup(_meta(), build_pdf(PAGES))
         out = await read(page_range="9-12")
         _, fetched = out["prepared"]
-        assert fetched == [
+        # The covering shards are fetched in parallel threads, so their
+        # order is scheduling's, not the code's.
+        assert sorted(fetched) == [
             "user-files/u1/s1/up-1/_derived/pages-0001-0010.pdf",
             "user-files/u1/s1/up-1/_derived/pages-0011-0020.pdf",
         ]

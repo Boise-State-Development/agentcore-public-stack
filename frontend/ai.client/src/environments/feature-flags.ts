@@ -53,4 +53,10 @@ export interface FeatureFlags {
    * (app-api; presign refuses a document over 4 MB while off).
    */
   largeDocumentAttachments: boolean;
+  /**
+   * Folder attachments (docs/specs/drive-folder-attachments.md): attach a Google
+   * Drive folder to a conversation as one attachment. No UI reads it yet (PR-C);
+   * off everywhere until then. Backend: FOLDER_ATTACHMENTS_ENABLED (app-api).
+   */
+  folderAttachments: boolean;
 }

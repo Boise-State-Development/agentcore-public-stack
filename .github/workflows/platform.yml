@@ -335,6 +335,11 @@ jobs:
       # bucket's EventBridge notification; the knowledge base is created on
       # first ingest and billed at $5/GB-month of indexed source bytes.
       CDK_ATTACHMENT_KB_ENABLED: ${{ vars.CDK_ATTACHMENT_KB_ENABLED }}
+      # Folder attachments: a conversation can attach a Google Drive folder
+      # (docs/specs/drive-folder-attachments.md). Opt-in while in development,
+      # and only together with CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED (synth
+      # fails otherwise). Sets the flag on app-api only; no resources.
+      CDK_FOLDER_ATTACHMENTS_ENABLED: ${{ vars.CDK_FOLDER_ATTACHMENTS_ENABLED }}
       # SageMaker fine-tuning. The tables, bucket, SageMaker role and IAM
       # grants deploy unconditionally, but these two decide whether the feature
       # is reachable and how it is rationed, and neither was forwarded before —
