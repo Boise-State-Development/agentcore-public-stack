@@ -164,17 +164,29 @@ class DocumentReadResult:
 # ---------------------------------------------------------------------------
 
 
+#: ``source`` of a file imported from an attached folder:
+#: ``connector:{connector_id}:folder:{folder_attach_id}`` (app-api's expansion).
+_FOLDER_SOURCE_MARK = ":folder:"
+
+
 async def list_session_documents(user_id: str, session_id: str) -> Dict[str, Any]:
-    """The session's READY documents the tool can read, newest first."""
+    """The session's READY documents the tool can read, newest first.
+
+    A file from an attached folder also carries ``path``: the folder's name and
+    the file's path inside it (drive-folder spec §4.4), so a model that lost the
+    manifest to compaction can still find its way around the folder.
+    """
     _require_identity(user_id, session_id)
     files = await get_file_upload_repository().list_session_files(session_id, status=FileStatus.READY)
     documents: List[Dict[str, Any]] = []
+    folder_files = False
     for meta in files:
         if meta.user_id != user_id:
             continue
         fmt = document_format_for(meta.mime_type, meta.filename)
         if fmt is None:
             continue
+        folder_files = folder_files or _FOLDER_SOURCE_MARK in (meta.source or "")
         documents.append(
             {
                 "upload_id": meta.upload_id,
@@ -184,7 +196,37 @@ async def list_session_documents(user_id: str, session_id: str) -> Dict[str, Any
                 "modes": _modes_for(fmt),
             }
         )
+    if folder_files:
+        paths = await _folder_paths(user_id, session_id)
+        for doc in documents:
+            path = paths.get(doc["upload_id"])
+            if path:
+                doc["path"] = path
     return {"documents": documents, "count": len(documents)}
+
+
+async def _folder_paths(user_id: str, session_id: str) -> Dict[str, str]:
+    """``upload_id`` → ``folder name/relative path`` for the session's folder files.
+
+    One ``SessionIndex`` query, only when the listing holds a folder file. Never
+    raises: without it the listing is what it was before folders existed.
+    """
+    try:
+        from apis.shared.files.folder_attachments import ENTRY_ATTACHED
+        from apis.shared.files.folder_repository import get_folder_attachment_repository
+
+        folders = await get_folder_attachment_repository().list_session_folders(session_id)
+    except Exception:  # noqa: BLE001
+        logger.warning("Folder paths unavailable for the document listing", exc_info=True)
+        return {}
+    paths: Dict[str, str] = {}
+    for folder in folders:
+        if folder.user_id != user_id:
+            continue
+        for entry in folder.files:
+            if entry.status == ENTRY_ATTACHED and entry.upload_id:
+                paths[entry.upload_id] = f"{folder.folder_name}/{entry.relative_path}"
+    return paths
 
 
 def _modes_for(fmt: str) -> List[str]:

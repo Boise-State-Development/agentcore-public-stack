@@ -401,6 +401,10 @@ export class InferenceAgentCoreConstruct extends Construct {
         // Word tracked changes (in development, default off). Spread in only
         // while on, like skill authoring; must match app-api's copy.
         ...(config.wordTrackedChanges.enabled ? { WORD_TRACKED_CHANGES_ENABLED: 'true' } : {}),
+        // Folder attachments (in development, default off): a turn's
+        // folder_attachment_ids are resolved and rendered as manifests. Spread in
+        // only while on, like the two above; app-api carries its own copy.
+        ...(config.folderAttachments.enabled ? { FOLDER_ATTACHMENTS_ENABLED: 'true' } : {}),
         // Agent Designer harness resolution: the runtime resolves an Agent's
         // bindings + modelConfig at invocation. Default off, mirrors app-api.
         AGENTS_API_ENABLED: config.agents.enabled ? 'true' : 'false',

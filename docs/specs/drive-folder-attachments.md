@@ -1,6 +1,6 @@
 # Attach a Google Drive folder to a conversation
 
-**Status:** proposed (2026-10-13). **Depends on:** the composer `+` menu and `POST /files/import` (`composer-add-menu.md`), large-document attachments PR-1 and PR-2 (`large-document-attachments.md`), and, for search, the attachments KB (PR-3, PR-4). **Flag:** `FOLDER_ATTACHMENTS_ENABLED` / `CDK_FOLDER_ATTACHMENTS_ENABLED`, `features.folderAttachments`, in development, default off.
+**Status:** PR-A shipped to dev (2026-10-14); PR-B in review. **Depends on:** the composer `+` menu and `POST /files/import` (`composer-add-menu.md`), large-document attachments PR-1 and PR-2 (`large-document-attachments.md`), and, for search, the attachments KB (PR-3, PR-4). **Flag:** `FOLDER_ATTACHMENTS_ENABLED` / `CDK_FOLDER_ATTACHMENTS_ENABLED`, `features.folderAttachments`, in development, default off.
 
 ## 1. Problem
 
@@ -98,7 +98,7 @@ The route resolves each folder row (one `GetItem`, no S3) and the user message g
 </folder>
 ```
 
-Bounded: the first `FOLDER_MANIFEST_MAX_ENTRIES` (50) entries, then `… and 12 more; document_read with no arguments lists them all`. While `expanding`, the block says `status="expanding" attached="12" listed="38"` and lists what is attached so far; a later turn renders the newer row, the earlier message is never rewritten. The guidance sentence that accompanies reference attachments already tells the model to use `document_read` with `pattern` then `page_range`; the folder block adds one line: *to find which file holds something, use `document_read` with `query` (when searchable) or `pattern` per file.*
+Bounded: the first `FOLDER_MANIFEST_MAX_ENTRIES` (50) entries, then `… and 12 more; document_read with no arguments lists them all`. While `expanding`, the block says `status="expanding" attached="12" listed="38"` and lists what is attached so far; a later turn renders the newer row, the earlier message is never rewritten. The guidance sentence that accompanies reference attachments already tells the model to use `document_read` with `pattern` then `page_range`; the folder block adds one line: *to find which file holds something, use `document_read` with `query` (when searchable) or `pattern` per file.* (PR-B names `pattern` only: `document_read`'s `query` mode arrives with large-document PR-4, and the line gains it then.)
 
 `document_read`'s no-argument listing shows `folder/relative_path` for folder files, read from the folder row's `files` map, so a model that lost the manifest to compaction can still find its way.
 

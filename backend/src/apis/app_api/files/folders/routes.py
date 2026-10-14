@@ -100,6 +100,7 @@ async def attach_folder(
         user,
         session_id,
         connector_id=provider.provider_id,
+        connector_name=provider.display_name,
         provider_folder_id=request.folder_id,
         folder_name=request.folder_name,
         folder_path=request.folder_path,
