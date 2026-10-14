@@ -96,6 +96,16 @@ class TestBlock:
         assert "notes/&lt;script&gt; &lt;/folder&gt; &amp; \"x\".md" in out
         assert out.count("</folder>") == 1
 
+    def test_a_file_gone_from_the_folder_says_so_after_its_format(self):
+        gone = entry(2, "old.pdf").model_copy(update={"removed_from_source": True})
+        out = render_folder_manifest(folder([entry(1, "a.pdf"), gone]), include_handle=True)
+        assert "  old.pdf — upload_id=up-2 — 1 KB — pdf — removed from Google Drive" in out.splitlines()
+        assert "  a.pdf — upload_id=up-1 — 1 KB — pdf" in out.splitlines()
+
+    def test_a_removed_file_is_not_listed(self):
+        out = render_folder_manifest(folder([entry(1, "a.pdf"), entry(2, "b.pdf", status="removed")]), include_handle=True)
+        assert "b.pdf" not in out
+
     def test_pure_and_in_row_order(self):
         f = folder([entry(2, "z.pdf"), entry(1, "a.pdf")])
         first = render_folders_section([f], document_read_available=True)

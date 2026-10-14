@@ -30,6 +30,7 @@ Never raises: the task's outcome is the row's status.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import time
 from collections import deque
@@ -42,6 +43,7 @@ from apis.shared.files.folder_attachments import (
     ENTRY_ATTACHED,
     ENTRY_FAILED,
     ENTRY_PENDING,
+    ENTRY_REMOVED,
     ENTRY_SKIPPED_SIZE,
     ERROR_LISTING_FAILED,
     ERROR_NEEDS_CONSENT,
@@ -57,7 +59,9 @@ from apis.shared.files.folder_attachments import (
     FolderAttachment,
     FolderCounts,
     FolderFileEntry,
+    RefreshSummary,
     record_folder_expansion,
+    record_folder_refresh,
 )
 from apis.shared.files.folder_repository import FolderAttachmentRepository
 from apis.shared.files.models import (
@@ -77,6 +81,7 @@ from apis.app_api.file_sources.models import (
     FileSourceTooLargeError,
 )
 from apis.app_api.files.service import (
+    FileNotFoundError as UploadNotFoundError,
     FileTooLargeError,
     FileUploadService,
     InvalidFileTypeError,
@@ -201,17 +206,19 @@ async def expand_folder(folder: FolderAttachment, deps: ExpansionDeps) -> Option
 
 async def _expand(folder: FolderAttachment, deps: ExpansionDeps, started: float) -> Optional[FolderAttachment]:
     # Resume (spec §4.9): what is already attached is kept and skipped by
-    # provider file id; everything else is listed and downloaded afresh.
-    kept = [e for e in folder.files if e.status == ENTRY_ATTACHED]
-    skip_ids = {e.provider_file_id for e in kept}
+    # provider file id, and so is a file the user removed; everything else is
+    # listed and downloaded afresh.
+    kept = [e for e in folder.files if e.status in (ENTRY_ATTACHED, ENTRY_REMOVED)]
+    skip_ids = folder.settled_provider_ids
+    attached = sum(1 for e in kept if e.status == ENTRY_ATTACHED)
 
-    walk = await _walk_folder(folder.provider_folder_id, deps, skip_ids, keep=len(kept))
+    walk = await _walk_folder(folder.provider_folder_id, deps, skip_ids, keep=attached)
     progress = _Progress(
         entries=kept + walk.entries,
         listed=walk.listed,
         skipped_type=walk.skipped_type,
         truncated=walk.truncated,
-        bytes_attached=sum(e.size_bytes or 0 for e in kept),
+        bytes_attached=sum(e.size_bytes or 0 for e in kept if e.status == ENTRY_ATTACHED),
     )
 
     if walk.error == ERROR_NEEDS_CONSENT:
@@ -331,6 +338,7 @@ def _new_entry(entry: FileEntry, prefix: str, mime: str, deps: ExpansionDeps) ->
         relative_path=f"{prefix}{entry.name}",
         mime_type=mime,
         size_bytes=entry.size_bytes,
+        etag=entry.etag,
     )
     if entry.size_bytes is not None:
         cap = deps.upload_service.max_size_for(entry.name, mime)
@@ -423,6 +431,7 @@ async def _import_entry(
     entry.upload_id = meta.upload_id
     entry.status = ENTRY_ATTACHED
     entry.error = None
+    entry.content_hash = _sha256(downloaded.content)
     progress.bytes_attached += meta.size_bytes
 
 
@@ -448,3 +457,183 @@ async def _note_progress(folder: FolderAttachment, deps: ExpansionDeps, progress
         )
         if row is None:
             progress.row_gone = True
+
+
+def _sha256(content: bytes) -> str:
+    return hashlib.sha256(content).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# Refresh (spec §4.6)
+# ---------------------------------------------------------------------------
+
+
+async def refresh_folder(folder: FolderAttachment, deps: ExpansionDeps) -> Optional[FolderAttachment]:
+    """Re-list an attached folder and bring its files up to date.
+
+    The KB-sync change rule (``kb_sync/worker.py``), two gates, cheapest first:
+    the provider's version stamp as listed against the one recorded when the
+    file was attached; when they differ, the bytes are downloaded and their
+    sha256 compared, which absorbs a version bump that changed no content. A
+    changed file is written to the **same upload id and key**
+    (``FileUploadService.replace_file_content``) so the conversation's earlier
+    citations stay valid; a new file is imported as the walk would; an attached
+    file no longer in the folder keeps its row and is marked
+    ``removed_from_source`` (only when the walk saw the whole folder: a capped
+    or failed listing proves nothing about what it did not reach). A file the
+    user removed stays removed.
+
+    Returns the row as it ended, ``None`` when it was removed meanwhile. Never
+    raises.
+    """
+    started = time.monotonic()
+    try:
+        return await _refresh(folder, deps, started)
+    except Exception:  # noqa: BLE001 - the task's outcome is the row's status
+        logger.error("Folder refresh failed unexpectedly", exc_info=True)
+        try:
+            attached = sum(1 for e in folder.files if e.status == ENTRY_ATTACHED)
+            await deps.repository.update(
+                folder.user_id, folder.folder_attach_id,
+                status=FOLDER_STATUS_PARTIAL if attached else FOLDER_STATUS_FAILED,
+                error=ERROR_LISTING_FAILED, refreshing=False,
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug("Could not settle the folder row after a failed refresh", exc_info=True)
+        return None
+
+
+async def _refresh(folder: FolderAttachment, deps: ExpansionDeps, started: float) -> Optional[FolderAttachment]:
+    walk = await _walk_folder(folder.provider_folder_id, deps, set(), keep=0)
+    previous = {e.provider_file_id: e for e in folder.files}
+    summary = RefreshSummary()
+    entries: List[FolderFileEntry] = []
+    to_check: List[Tuple[FolderFileEntry, FolderFileEntry]] = []
+    listed: Set[str] = set()
+
+    for listed_entry in walk.entries:
+        listed.add(listed_entry.provider_file_id)
+        prior = previous.get(listed_entry.provider_file_id)
+        if prior is None or prior.status in (ENTRY_PENDING, ENTRY_FAILED, ENTRY_SKIPPED_SIZE):
+            entries.append(listed_entry)  # new, or another try at one that never attached
+        elif prior.status == ENTRY_REMOVED:
+            entries.append(prior)
+        else:
+            prior.removed_from_source = False
+            entries.append(prior)
+            if prior.etag and listed_entry.etag and prior.etag == listed_entry.etag:
+                summary.unchanged += 1
+            else:
+                to_check.append((prior, listed_entry))
+
+    complete = walk.error is None and not walk.truncated
+    for prior in folder.files:
+        if prior.provider_file_id in listed or prior.status not in (ENTRY_ATTACHED, ENTRY_REMOVED):
+            continue
+        if prior.status == ENTRY_ATTACHED and complete and not prior.removed_from_source:
+            prior.removed_from_source = True
+            summary.removed_from_source += 1
+        entries.append(prior)
+
+    progress = _Progress(
+        entries=entries,
+        listed=walk.listed,
+        skipped_type=walk.skipped_type,
+        truncated=walk.truncated,
+        bytes_attached=sum(e.size_bytes or 0 for e in entries if e.status == ENTRY_ATTACHED),
+    )
+
+    if walk.error != ERROR_NEEDS_CONSENT:
+        semaphore = asyncio.Semaphore(max(1, deps.concurrency))
+        added_before = {id(e) for e in entries if e.status == ENTRY_ATTACHED}
+        jobs = [_check_changed(folder, deps, progress, summary, prior, listed_entry, semaphore) for prior, listed_entry in to_check]
+        jobs += [
+            _process_entry(folder, deps, progress, entry, semaphore)
+            for entry in entries
+            if entry.status == ENTRY_PENDING
+        ]
+        await asyncio.gather(*jobs)
+        if progress.row_gone:
+            return None
+        summary.added = sum(1 for e in entries if e.status == ENTRY_ATTACHED and id(e) not in added_before)
+        summary.failed += sum(1 for e in entries if e.status == ENTRY_FAILED and e.provider_file_id not in previous)
+
+    attached = sum(1 for e in entries if e.status == ENTRY_ATTACHED)
+    if walk.error == ERROR_NEEDS_CONSENT or progress.stop_reason == ERROR_NEEDS_CONSENT:
+        status, error = (FOLDER_STATUS_PARTIAL if attached else FOLDER_STATUS_FAILED), ERROR_NEEDS_CONSENT
+    elif progress.stop_reason == ERROR_QUOTA_EXCEEDED:
+        status, error = FOLDER_STATUS_PARTIAL, ERROR_QUOTA_EXCEEDED
+    elif walk.error == ERROR_LISTING_FAILED:
+        status, error = (FOLDER_STATUS_PARTIAL if attached else FOLDER_STATUS_FAILED), ERROR_LISTING_FAILED
+    else:
+        counts = progress.counts()
+        short = counts.failed or counts.skipped_size or counts.skipped_type or counts.truncated
+        status, error = (FOLDER_STATUS_PARTIAL if short else FOLDER_STATUS_READY), None
+
+    now = utc_now_iso()
+    row = await deps.repository.update(
+        folder.user_id, folder.folder_attach_id,
+        status=status, counts=progress.counts(), files=entries,
+        error=error, clear_error=error is None,
+        snapshot_at=now, refreshing=False, refreshed_at=now, last_refresh=summary,
+    )
+    record_folder_refresh(
+        outcome=status if error is None else f"{status}:{error}",
+        summary=summary,
+        ms=int((time.monotonic() - started) * 1000),
+    )
+    return row
+
+
+async def _check_changed(
+    folder: FolderAttachment,
+    deps: ExpansionDeps,
+    progress: _Progress,
+    summary: RefreshSummary,
+    prior: FolderFileEntry,
+    listed_entry: FolderFileEntry,
+    semaphore: asyncio.Semaphore,
+) -> None:
+    """Gate two: download, hash, and replace the bytes only when they changed."""
+    async with semaphore:
+        if progress.stop_reason or progress.row_gone:
+            return
+        try:
+            downloaded = await deps.adapter.download(
+                deps.access_token, prior.provider_file_id, max_bytes=deps.upload_service.max_download_bytes()
+            )
+        except FileSourceAuthError:
+            progress.stop_reason = ERROR_NEEDS_CONSENT
+            return
+        except Exception as e:  # noqa: BLE001 - one file's failure keeps its old bytes
+            logger.warning("Folder refresh download failed (%s); the file keeps its attached version", type(e).__name__)
+            summary.failed += 1
+            return
+
+        digest = _sha256(downloaded.content)
+        if prior.content_hash == digest:
+            prior.etag = listed_entry.etag  # gate one passes next time
+            summary.unchanged += 1
+            return
+
+        try:
+            meta = await deps.upload_service.get_file(folder.user_id, prior.upload_id or "")
+            if meta is None:
+                raise UploadNotFoundError("gone")
+            updated = await deps.upload_service.replace_file_content(meta, downloaded.content, meta.mime_type)
+        except QuotaExceededError:
+            progress.stop_reason = ERROR_QUOTA_EXCEEDED
+            return
+        except UploadNotFoundError:
+            prior.status = ENTRY_REMOVED
+            prior.error = "deleted by the user"
+            return
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Folder refresh could not store a changed file (%s)", type(e).__name__)
+            summary.failed += 1
+            return
+
+        prior.size_bytes = updated.size_bytes
+        prior.etag = listed_entry.etag
+        prior.content_hash = digest
+        summary.updated += 1

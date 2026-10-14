@@ -1,6 +1,6 @@
 # Attach a Google Drive folder to a conversation
 
-**Status:** PR-A and PR-B shipped to dev (2026-10-14); PR-C (the SPA) in review. **Depends on:** the composer `+` menu and `POST /files/import` (`composer-add-menu.md`), large-document attachments PR-1 and PR-2 (`large-document-attachments.md`), and, for search, the attachments KB (PR-3, PR-4). **Flag:** `FOLDER_ATTACHMENTS_ENABLED` / `CDK_FOLDER_ATTACHMENTS_ENABLED`, `features.folderAttachments`, in development, default off.
+**Status:** PR-A, PR-B and PR-C shipped to dev (2026-10-14); PR-D (Refresh) in review. **Depends on:** the composer `+` menu and `POST /files/import` (`composer-add-menu.md`), large-document attachments PR-1 and PR-2 (`large-document-attachments.md`), and, for search, the attachments KB (PR-3, PR-4). **Flag:** `FOLDER_ATTACHMENTS_ENABLED` / `CDK_FOLDER_ATTACHMENTS_ENABLED`, `features.folderAttachments`, in development, default off.
 
 ## 1. Problem
 
@@ -119,7 +119,7 @@ The caps are deliberately below the quota so one folder cannot consume a user's 
 
 ### 4.6 Refresh
 
-The folder card offers **Refresh**. `POST /sessions/{id}/folders/{fid}/refresh` re-lists the folder and, for each file, applies the KB-sync change rule: a binary with the same `md5Checksum`, or a native document with the same `modifiedTime`, is unchanged; a changed file is re-downloaded to the **same upload id's key** (new bytes, `preparation` reset to pending, re-prepared and, when indexed, re-ingested); a new file is imported; a removed file keeps its row (the conversation may cite it) and is marked `removed_from_source` in the manifest. A refresh in a later message renders a fresh manifest in that message. No schedule: a conversation is not a sync target, and `assistant-kb-sync.md` already covers the recurring case for knowledge bases.
+The folder card offers **Refresh**. `POST /sessions/{id}/folders/{fid}/refresh` re-lists the folder and, for each file, applies the KB-sync change rule: a binary with the same `md5Checksum`, or a native document with the same `modifiedTime`, is unchanged; a changed file is re-downloaded to the **same upload id's key** (new bytes, `preparation` reset to pending, re-prepared and, when indexed, re-ingested); a new file is imported; a removed file keeps its row (the conversation may cite it) and is marked `removed_from_source` in the manifest. A refresh in a later message renders a fresh manifest in that message. (As built: the KB-sync worker's actual gates are Drive's `version`, then a sha256 of the downloaded bytes, rather than `md5Checksum`/`modifiedTime`; refresh records both per file at import and uses the same two gates. Refresh starts from the folder chip on a sent message and puts the folder back on the composer, since the composer's card exists only until the message is sent.) No schedule: a conversation is not a sync target, and `assistant-kb-sync.md` already covers the recurring case for knowledge bases.
 
 ### 4.7 The SPA
 

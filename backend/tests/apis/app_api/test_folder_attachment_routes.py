@@ -75,7 +75,7 @@ class _Rows:
         if row is None:
             return None
         data = row.model_dump()
-        for key in ("status", "error"):
+        for key in ("status", "error", "refreshing"):
             if fields.get(key) is not None:
                 data[key] = fields[key]
         if fields.get("clear_error"):
@@ -85,6 +85,9 @@ class _Rows:
 
     async def delete(self, user_id, folder_attach_id):  # type: ignore[no-untyped-def]
         return self.rows.pop((user_id, folder_attach_id), None)
+
+    async def list_session_folders(self, session_id):  # type: ignore[no-untyped-def]
+        return [r.model_copy(deep=True) for r in self.rows.values() if r.session_id == session_id]
 
 
 def _user(user_id: str = "alice") -> User:
@@ -253,7 +256,8 @@ class TestGet:
         assert body["status"] == "partial" and body["error"] == "quota_exceeded"
         assert body["counts"]["truncated"] is True
         assert body["files"][0] == {"providerFileId": "d1", "name": "a.pdf", "relativePath": "week 1/a.pdf", "mimeType": "application/pdf",
-                                    "sizeBytes": 5, "uploadId": "up-1", "status": "attached", "error": None}
+                                    "sizeBytes": 5, "uploadId": "up-1", "status": "attached", "error": None,
+                                    "etag": None, "contentHash": None, "removedFromSource": False}
         assert body["stale"] is False
 
     def test_404_for_a_missing_row_or_another_session(self, build):
@@ -337,3 +341,53 @@ class TestResume:
     def test_404_when_missing(self, build):
         client, *_ = build()
         assert client.post("/sessions/sess-1/folders/fa-1/resume").status_code == 404
+
+
+class TestRefreshAndList:
+    def _rows(self) -> _Rows:
+        rows = _Rows()
+        rows.rows[("alice", "fa-1")] = _row(status="ready", files=[
+            FolderFileEntry(provider_file_id="d1", name="a.pdf", relative_path="a.pdf", mime_type="application/pdf", upload_id="up-1", status="attached")])
+        rows.rows[("alice", "fa-2")] = _row(folder_attach_id="fa-2", session_id="other")
+        rows.rows[("bob", "fa-3")] = _row(folder_attach_id="fa-3", user_id="bob")
+        return rows
+
+    def test_refresh_marks_the_row_refreshing_and_schedules_the_walk(self, build, monkeypatch):
+        refreshed: list = []
+
+        def fake_refresh(folder, deps):  # type: ignore[no-untyped-def]
+            refreshed.append((folder, deps))
+
+            async def _done():
+                return None
+
+            return _done()
+
+        monkeypatch.setattr(folder_service_module, "refresh_folder", fake_refresh)
+        client, rows, _, scheduled, adapter = build(rows=self._rows())
+
+        body = client.post("/sessions/sess-1/folders/fa-1/refresh").json()
+
+        assert body["status"] == "expanding" and body["refreshing"] is True
+        assert scheduled == []  # the refresh walk, not a first expansion
+        folder, deps = refreshed[0]
+        assert folder.folder_attach_id == "fa-1" and deps.adapter is adapter and deps.access_token == "vault-token"
+
+    def test_refresh_is_409_while_running_and_needs_consent(self, build):
+        client, *_ = build(rows=self._rows())
+        FolderAttachmentService._running.add("fa-1")
+        assert client.post("/sessions/sess-1/folders/fa-1/refresh").status_code == 409
+        FolderAttachmentService._running.discard("fa-1")
+        client, *_ = build(rows=self._rows(), identity_result=TokenResult(authorization_url="https://auth.example/x"))
+        assert client.post("/sessions/sess-1/folders/fa-1/refresh").status_code == 409
+
+    def test_refresh_404_for_another_session_or_user(self, build):
+        client, *_ = build(rows=self._rows())
+        assert client.post("/sessions/sess-1/folders/fa-2/refresh").status_code == 404
+        assert client.post("/sessions/sess-1/folders/fa-3/refresh").status_code == 404
+
+    def test_list_returns_this_users_folders_in_this_conversation(self, build):
+        client, *_ = build(rows=self._rows())
+        body = client.get("/sessions/sess-1/folders").json()
+        assert [f["folderAttachId"] for f in body["folders"]] == ["fa-1"]
+        assert body["folders"][0]["files"][0]["uploadId"] == "up-1"

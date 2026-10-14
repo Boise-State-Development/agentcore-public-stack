@@ -93,13 +93,24 @@ ENTRY_PENDING = "pending"
 ENTRY_ATTACHED = "attached"
 ENTRY_FAILED = "failed"
 ENTRY_SKIPPED_SIZE = "skipped_size"
-EntryStatus = Literal["pending", "attached", "failed", "skipped_size"]
+#: The user deleted the file (Files page, a file card): its row is gone, so it
+#: is not readable, and neither resume nor refresh brings it back.
+ENTRY_REMOVED = "removed"
+EntryStatus = Literal["pending", "attached", "failed", "skipped_size", "removed"]
 
 #: Why a row ended ``failed`` or ``partial`` short of its files. Codes, never
 #: provider messages.
 ERROR_NEEDS_CONSENT = "needs_consent"
 ERROR_LISTING_FAILED = "listing_failed"
 ERROR_QUOTA_EXCEEDED = "quota_exceeded"
+
+
+def folder_attach_id_from_source(source: Optional[str]) -> Optional[str]:
+    """The folder a file row came from: its ``source`` is
+    ``connector:{connector_id}:folder:{folder_attach_id}``."""
+    if not source or ":folder:" not in source:
+        return None
+    return source.rsplit(":folder:", 1)[1] or None
 
 
 def new_folder_attach_id() -> str:
@@ -139,6 +150,25 @@ class FolderFileEntry(BaseModel):
     upload_id: Optional[str] = Field(None, alias="uploadId", description="The session file row, once attached")
     status: EntryStatus = Field(ENTRY_PENDING)
     error: Optional[str] = Field(None, description="Short reason, when failed or skipped")
+    # Change detection for refresh (spec §4.6), the KB-sync rule: the provider's
+    # version stamp as listed (Drive `version`), then a sha256 of the bytes
+    # attached, which absorbs version bumps that changed no content.
+    etag: Optional[str] = Field(None, description="Provider version stamp when attached")
+    content_hash: Optional[str] = Field(None, alias="contentHash", description="sha256 of the bytes attached")
+    #: Still attached and readable, but no longer in the folder at the last refresh.
+    removed_from_source: bool = Field(False, alias="removedFromSource")
+
+
+class RefreshSummary(BaseModel):
+    """What the last refresh did, for the card's line (spec §4.6)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    unchanged: int = 0
+    updated: int = 0
+    added: int = 0
+    removed_from_source: int = Field(0, alias="removedFromSource")
+    failed: int = 0
 
 
 class FolderAttachment(BaseModel):
@@ -161,6 +191,10 @@ class FolderAttachment(BaseModel):
     counts: FolderCounts = Field(default_factory=FolderCounts)
     files: List[FolderFileEntry] = Field(default_factory=list)
     snapshot_at: Optional[str] = Field(None, alias="snapshotAt", description="When the listing was taken (refresh, §4.6)")
+    #: True while a refresh (not a first expansion) is walking the folder.
+    refreshing: bool = False
+    refreshed_at: Optional[str] = Field(None, alias="refreshedAt")
+    last_refresh: Optional[RefreshSummary] = Field(None, alias="lastRefresh")
     created_at: str = Field(default_factory=utc_now_iso, alias="createdAt")
     updated_at: str = Field(default_factory=utc_now_iso, alias="updatedAt")
     ttl: Optional[int] = Field(None, description="Unix epoch for TTL expiration")
@@ -169,6 +203,11 @@ class FolderAttachment(BaseModel):
     def attached_provider_ids(self) -> set:
         """Provider file ids already attached: what ``resume`` skips (§4.9)."""
         return {f.provider_file_id for f in self.files if f.status == ENTRY_ATTACHED}
+
+    @property
+    def settled_provider_ids(self) -> set:
+        """Attached, or removed by the user: what neither resume nor refresh re-imports."""
+        return {f.provider_file_id for f in self.files if f.status in (ENTRY_ATTACHED, ENTRY_REMOVED)}
 
     def is_stale(self, now: Optional[datetime] = None, timeout_seconds: int = FOLDER_EXPANSION_TIMEOUT) -> bool:
         """An ``expanding`` row nothing has touched for the timeout.
@@ -225,6 +264,44 @@ def _plain(value: Any) -> Any:
 # ---------------------------------------------------------------------------
 # Metric (spec §6)
 # ---------------------------------------------------------------------------
+
+
+def record_folder_refresh(*, outcome: str, summary: "RefreshSummary", ms: int) -> None:
+    """One content-free ``FolderRefresh`` EMF record per refresh. Never raises."""
+    logger.info(
+        "folder_attachment_refreshed: outcome=%s unchanged=%d updated=%d added=%d removed_from_source=%d failed=%d ms=%d",
+        outcome, summary.unchanged, summary.updated, summary.added, summary.removed_from_source, summary.failed, ms,
+    )
+    try:
+        from apis.shared.observability.emf import emit_emf_metrics
+        from apis.shared.observability.prompt_cache import prompt_cache_observability_enabled
+
+        if not prompt_cache_observability_enabled():
+            return
+        emit_emf_metrics(
+            "AgentCoreStack/Compaction",
+            metrics={
+                "FolderRefresh": 1,
+                "FolderRefreshUnchanged": int(summary.unchanged),
+                "FolderRefreshUpdated": int(summary.updated),
+                "FolderRefreshAdded": int(summary.added),
+                "FolderRefreshRemovedFromSource": int(summary.removed_from_source),
+                "FolderRefreshFailed": int(summary.failed),
+                "FolderRefreshMs": int(ms),
+            },
+            properties={"outcome": outcome},
+            units={
+                "FolderRefresh": "Count",
+                "FolderRefreshUnchanged": "Count",
+                "FolderRefreshUpdated": "Count",
+                "FolderRefreshAdded": "Count",
+                "FolderRefreshRemovedFromSource": "Count",
+                "FolderRefreshFailed": "Count",
+                "FolderRefreshMs": "Milliseconds",
+            },
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.debug("FolderRefresh EMF skipped: %s", e)
 
 
 def record_folder_expansion(*, outcome: str, counts: FolderCounts, bytes_attached: int, ms: int) -> None:

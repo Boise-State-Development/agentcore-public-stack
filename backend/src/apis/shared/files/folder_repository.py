@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional
 from botocore.exceptions import ClientError
 
 from apis.shared.aws_clients import get_dynamodb_table
-from apis.shared.files.folder_attachments import FolderAttachment, FolderCounts, FolderFileEntry
+from apis.shared.files.folder_attachments import FolderAttachment, FolderCounts, FolderFileEntry, RefreshSummary
 from apis.shared.timestamps import utc_now_iso
 
 logger = logging.getLogger(__name__)
@@ -75,6 +75,9 @@ class FolderAttachmentRepository:
         error: Optional[str] = None,
         clear_error: bool = False,
         snapshot_at: Optional[str] = None,
+        refreshing: Optional[bool] = None,
+        refreshed_at: Optional[str] = None,
+        last_refresh: Optional["RefreshSummary"] = None,
     ) -> Optional[FolderAttachment]:
         """Set the given fields and ``updatedAt`` on an existing row.
 
@@ -99,6 +102,15 @@ class FolderAttachmentRepository:
         if snapshot_at is not None:
             sets.append("snapshotAt = :snapshot_at")
             values[":snapshot_at"] = snapshot_at
+        if refreshing is not None:
+            sets.append("refreshing = :refreshing")
+            values[":refreshing"] = refreshing
+        if refreshed_at is not None:
+            sets.append("refreshedAt = :refreshed_at")
+            values[":refreshed_at"] = refreshed_at
+        if last_refresh is not None:
+            sets.append("lastRefresh = :last_refresh")
+            values[":last_refresh"] = last_refresh.model_dump(by_alias=True)
         if error is not None:
             names["#error"] = "error"
             sets.append("#error = :error")

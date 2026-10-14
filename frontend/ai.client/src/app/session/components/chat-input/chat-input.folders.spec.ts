@@ -10,7 +10,10 @@ import {
   FolderAttachment,
   FolderAttachmentError,
   FolderAttachmentService,
+  FolderRefreshService,
 } from '../../../services/folder-attachments';
+import { UserConnectorsService } from '../../../settings/connectors/services/user-connectors.service';
+import { OAuthConsentService } from '../../../services/oauth-consent/oauth-consent.service';
 import { SystemPromptsService } from '../../../services/system-prompts/system-prompts.service';
 import { ToastService } from '../../../services/toast/toast.service';
 import { ToolService } from '../../../services/tool/tool.service';
@@ -364,5 +367,112 @@ describe('ChatInputComponent — Drive folders', () => {
       });
       await vi.waitFor(() => expect(cards()).toEqual([]));
     });
+  });
+});
+
+describe('ChatInputComponent — a refreshed folder and Connect', () => {
+  let fixture: ComponentFixture<ChatInputComponent>;
+  let component: ChatInputComponent;
+  let refresh: { handoff: ReturnType<typeof signal<unknown>>; take: () => void };
+  let connectors: { initiateConsent: ReturnType<typeof vi.fn> };
+  let consent: { completion: ReturnType<typeof signal<unknown>>; startUserConsent: ReturnType<typeof vi.fn>; acknowledgeCompletion: ReturnType<typeof vi.fn> };
+  let folders: { get: ReturnType<typeof vi.fn>; resume: ReturnType<typeof vi.fn>; attach: ReturnType<typeof vi.fn>; remove: ReturnType<typeof vi.fn> };
+
+  beforeEach(async () => {
+    const handoff = signal<unknown>(null);
+    refresh = { handoff, take: () => handoff.set(null) };
+    connectors = { initiateConsent: vi.fn() };
+    consent = { completion: signal<unknown>(null), startUserConsent: vi.fn().mockResolvedValue(true), acknowledgeCompletion: vi.fn() };
+    folders = {
+      get: vi.fn().mockResolvedValue(READY_ROW),
+      resume: vi.fn().mockResolvedValue(row()),
+      attach: vi.fn(),
+      remove: vi.fn(),
+    };
+    await TestBed.configureTestingModule({
+      imports: [ChatInputComponent],
+      providers: [
+        { provide: AgentMentionService, useClass: MentionServiceStub },
+        { provide: SkillCommandService, useClass: SkillCommandServiceStub },
+        {
+          provide: FileUploadService,
+          useValue: {
+            pendingUploadsList: signal([]), hasActivePendingUploads: signal(false), readyUploadIds: signal([]),
+            readyUploads: computed(() => []), clearReadyUploads: () => undefined, clearPendingUpload: () => undefined,
+            listSessionFiles: async () => [], registerKnownFile: () => undefined,
+          },
+        },
+        { provide: FolderAttachmentService, useValue: folders },
+        { provide: FolderRefreshService, useValue: refresh },
+        { provide: UserConnectorsService, useValue: connectors },
+        { provide: OAuthConsentService, useValue: consent },
+        { provide: FEATURES, useValue: { folderAttachments: true, largeDocumentAttachments: false } },
+        { provide: ToastService, useValue: { error: vi.fn(), warning: vi.fn(), info: vi.fn() } },
+        { provide: ToolService, useValue: {} },
+        { provide: ModelService, useClass: ModelServiceStub },
+        { provide: VoiceChatService, useValue: { status: signal('idle'), isVoiceActive: signal(false), agentTranscript: signal('') } },
+        { provide: SystemPromptsService, useValue: { activePrompt: signal(null) } },
+        { provide: Router, useValue: { navigate: () => Promise.resolve(true) } },
+        { provide: SteeringService, useClass: SteeringServiceStub },
+      ],
+    })
+      .overrideComponent(ChatInputComponent, { set: { imports: [], schemas: [NO_ERRORS_SCHEMA] } })
+      .compileComponents();
+    fixture = TestBed.createComponent(ChatInputComponent);
+    component = fixture.componentInstance;
+    fixture.componentRef.setInput('showFileControls', false);
+    fixture.componentRef.setInput('showVoiceControl', false);
+    fixture.componentRef.setInput('autoFocus', false);
+    fixture.componentRef.setInput('sessionId', 'sess-1');
+    fixture.componentRef.setInput('allowFolderAttachments', true);
+    fixture.detectChanges();
+  });
+
+  afterEach(() => {
+    TestBed.resetTestingModule();
+    localStorage.clear();
+  });
+
+  it('adopts a folder refreshed in this conversation as a card, and polls it', async () => {
+    refresh.handoff.set({ sessionId: 'sess-1', row: row({ status: 'expanding', refreshing: true }) });
+    fixture.detectChanges();
+    expect(component.attachedFolders()).toEqual([
+      expect.objectContaining({ folderAttachId: 'fa-1', phase: 'attached', name: 'Course' }),
+    ]);
+    expect(refresh.handoff()).toBeNull();
+    await vi.waitFor(() => expect(folders.get).toHaveBeenCalledWith('sess-1', 'fa-1'), { timeout: 4000 });
+  });
+
+  it('ignores a refresh from another conversation', () => {
+    refresh.handoff.set({ sessionId: 'other', row: row() });
+    fixture.detectChanges();
+    expect(component.attachedFolders()).toEqual([]);
+    expect(refresh.handoff()).not.toBeNull();
+  });
+
+  it('Connect runs the consent popup and resumes the folder when it succeeds', async () => {
+    refresh.handoff.set({ sessionId: 'sess-1', row: row({ status: 'failed', error: 'needs_consent' }) });
+    fixture.detectChanges();
+    const card = component.attachedFolders()[0];
+    connectors.initiateConsent.mockResolvedValue({ connected: false, authorizationUrl: 'https://auth.example/x' });
+
+    await component.onFolderConnect(card.localId);
+    expect(connectors.initiateConsent).toHaveBeenCalledWith('google-drive');
+    expect(consent.startUserConsent).toHaveBeenCalledWith('google-drive', 'https://auth.example/x');
+    expect(folders.resume).not.toHaveBeenCalled();
+
+    consent.completion.set({ providerId: 'google-drive', status: 'success' });
+    fixture.detectChanges();
+    await vi.waitFor(() => expect(folders.resume).toHaveBeenCalledWith('sess-1', 'fa-1'));
+    expect(consent.acknowledgeCompletion).toHaveBeenCalled();
+  });
+
+  it('Connect resumes at once when the vault already has a token', async () => {
+    refresh.handoff.set({ sessionId: 'sess-1', row: row({ status: 'failed', error: 'needs_consent' }) });
+    fixture.detectChanges();
+    connectors.initiateConsent.mockResolvedValue({ connected: true });
+    await component.onFolderConnect(component.attachedFolders()[0].localId);
+    expect(consent.startUserConsent).not.toHaveBeenCalled();
+    expect(folders.resume).toHaveBeenCalledWith('sess-1', 'fa-1');
   });
 });

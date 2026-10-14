@@ -120,10 +120,10 @@ class FakeRepository:
         if self.deleted:
             return None
         data = self.row.model_dump()
-        for key in ("status", "counts", "files", "error", "snapshot_at"):
+        for key in ("status", "counts", "files", "error", "snapshot_at", "refreshing", "refreshed_at", "last_refresh"):
             if fields.get(key) is not None:
                 value = fields[key]
-                if key == "counts":
+                if key in ("counts", "last_refresh"):
                     value = value.model_dump()
                 if key == "files":
                     value = [f.model_dump() for f in value]
@@ -139,6 +139,18 @@ class FakeUploadService:
         self.calls: List[dict] = []
         self.errors: Dict[str, Exception] = {}
         self._n = 0
+        self.rows: Dict[str, FileMetadata] = {}
+        self.replaced: List[tuple] = []
+        self.replace_error: Optional[Exception] = None
+
+    async def get_file(self, user_id, upload_id):  # type: ignore[no-untyped-def]
+        return self.rows.get(upload_id)
+
+    async def replace_file_content(self, meta, content, mime_type):  # type: ignore[no-untyped-def]
+        if self.replace_error:
+            raise self.replace_error
+        self.replaced.append((meta.upload_id, content))
+        return meta.model_copy(update={"size_bytes": len(content)})
 
     def max_download_bytes(self) -> int:
         return 50 * MB
@@ -151,11 +163,13 @@ class FakeUploadService:
         if kw["filename"] in self.errors:
             raise self.errors[kw["filename"]]
         self._n += 1
-        return FileMetadata(
+        meta = FileMetadata(
             upload_id=f"up-{self._n}", user_id=kw["user_id"], session_id=kw["session_id"],
             filename=kw["filename"], mime_type=kw["mime_type"], size_bytes=len(kw["content"]),
             s3_key="k", s3_bucket="b", status=FileStatus.READY, source=kw["source"], delivery=kw["delivery"],
         )
+        self.rows[meta.upload_id] = meta
+        return meta
 
 
 def _folder(**overrides) -> FolderAttachment:
@@ -460,3 +474,159 @@ class TestResumeAndProgress:
         assert calls[0]["counts"] == FolderCounts(listed=2, attached=1, skipped_type=1)
         assert calls[0]["bytes_attached"] == 7
         assert calls[0]["ms"] >= 0
+
+
+# ---------------------------------------------------------------------------
+# Version stamps, removed files and refresh (spec §4.6, §4.9)
+# ---------------------------------------------------------------------------
+
+import hashlib
+
+from apis.app_api.files.folders.expansion import refresh_folder
+
+
+def _sha(content: bytes) -> str:
+    return hashlib.sha256(content).hexdigest()
+
+
+def stamped(id: str, name: str, version: str, size: int = 100, mime: str = "application/pdf") -> FileEntry:
+    return file_entry(id, name, mime, size, etag=version)
+
+
+class TestStamps:
+    async def test_an_attached_file_records_its_version_and_hash(self):
+        tree = {"root": [stamped("a", "a.pdf", "v1", 5)]}
+        adapter = TreeAdapter(tree)
+        adapter.content["a"] = b"hello"
+        row, *_ = await run(tree, adapter=adapter)
+        assert row.files[0].etag == "v1"
+        assert row.files[0].content_hash == _sha(b"hello")
+
+    async def test_resume_never_brings_back_a_file_the_user_removed(self):
+        removed = FolderFileEntry(provider_file_id="a", name="a.pdf", relative_path="a.pdf", mime_type="application/pdf",
+                                  upload_id="up-old", status="removed", error="deleted by the user")
+        tree = {"root": [file_entry("a", "a.pdf"), file_entry("b", "b.pdf")]}
+        row, adapter, *_ = await run(tree, folder=_folder(files=[removed]))
+        assert adapter.downloads == ["b"]
+        assert [(f.provider_file_id, f.status) for f in row.files] == [("a", "removed"), ("b", "attached")]
+
+
+def _attached(id: str, version: str, content: bytes, path: str | None = None, upload: str | None = None) -> FolderFileEntry:
+    return FolderFileEntry(
+        provider_file_id=id, name=f"{id}.pdf", relative_path=path or f"{id}.pdf", mime_type="application/pdf",
+        size_bytes=len(content), upload_id=upload or f"up-{id}", status="attached", etag=version, content_hash=_sha(content),
+    )
+
+
+async def refresh(tree, files, *, adapter=None, uploads=None, **caps):
+    adapter = adapter or TreeAdapter(tree)
+    uploads = uploads or FakeUploadService()
+    for entry in files:
+        if entry.upload_id and entry.status == "attached":
+            uploads.rows[entry.upload_id] = FileMetadata(
+                upload_id=entry.upload_id, user_id="alice", session_id="sess-1", filename=entry.name,
+                mime_type=entry.mime_type, size_bytes=entry.size_bytes or 0, s3_key="k", s3_bucket="b",
+                status=FileStatus.READY, source="connector:google:folder:fa-1", delivery="reference",
+            )
+    folder = _folder(files=files, counts=FolderCounts(listed=len(files), attached=len(files)), status="expanding", refreshing=True)
+    repo = FakeRepository(folder)
+    row = await refresh_folder(folder, _deps(adapter, repo, uploads, **caps))
+    return row, adapter, repo, uploads
+
+
+class TestRefresh:
+    async def test_an_unchanged_version_downloads_nothing(self):
+        files = [_attached("a", "v1", b"aaa")]
+        row, adapter, _, uploads = await refresh({"root": [stamped("a", "a.pdf", "v1")]}, files)
+        assert adapter.downloads == [] and uploads.replaced == []
+        assert row.last_refresh.unchanged == 1 and row.last_refresh.updated == 0
+        assert row.status == "ready" and row.refreshing is False and row.refreshed_at is not None
+
+    async def test_a_version_bump_with_the_same_bytes_only_advances_the_stamp(self):
+        files = [_attached("a", "v1", b"aaa")]
+        adapter = TreeAdapter({"root": [stamped("a", "a.pdf", "v2", 3)]})
+        adapter.content["a"] = b"aaa"
+        row, adapter, _, uploads = await refresh(None, files, adapter=adapter)
+        assert adapter.downloads == ["a"] and uploads.replaced == []
+        assert row.files[0].etag == "v2"
+        assert row.last_refresh.unchanged == 1
+
+    async def test_changed_bytes_are_replaced_under_the_same_upload_id(self):
+        files = [_attached("a", "v1", b"aaa")]
+        adapter = TreeAdapter({"root": [stamped("a", "a.pdf", "v2", 4)]})
+        adapter.content["a"] = b"bbbb"
+        row, _, _, uploads = await refresh(None, files, adapter=adapter)
+        assert uploads.replaced == [("up-a", b"bbbb")]
+        entry = row.files[0]
+        assert (entry.upload_id, entry.etag, entry.content_hash, entry.size_bytes) == ("up-a", "v2", _sha(b"bbbb"), 4)
+        assert row.last_refresh.updated == 1
+        assert uploads.calls == []  # no new import
+
+    async def test_a_file_without_a_stamp_is_checked_by_its_bytes(self):
+        legacy = _attached("a", "v1", b"aaa").model_copy(update={"etag": None, "content_hash": None})
+        adapter = TreeAdapter({"root": [stamped("a", "a.pdf", "v1", 3)]})
+        adapter.content["a"] = b"aaa"
+        row, _, _, uploads = await refresh(None, [legacy], adapter=adapter)
+        # No hash to compare: the bytes are taken as changed and written in place once.
+        assert uploads.replaced == [("up-a", b"aaa")]
+        assert row.files[0].content_hash == _sha(b"aaa") and row.files[0].etag == "v1"
+
+    async def test_a_new_file_is_imported_and_counted(self):
+        files = [_attached("a", "v1", b"aaa")]
+        row, adapter, _, uploads = await refresh({"root": [stamped("a", "a.pdf", "v1"), stamped("n", "n.pdf", "v1")]}, files)
+        assert adapter.downloads == ["n"]
+        assert [c["filename"] for c in uploads.calls] == ["n.pdf"]
+        assert [f.provider_file_id for f in row.files] == ["a", "n"]
+        assert row.last_refresh.added == 1 and row.counts.attached == 2
+
+    async def test_a_file_gone_from_the_folder_keeps_its_row_and_is_marked(self):
+        files = [_attached("a", "v1", b"aaa"), _attached("gone", "v1", b"ggg")]
+        row, *_ = await refresh({"root": [stamped("a", "a.pdf", "v1")]}, files)
+        gone = next(f for f in row.files if f.provider_file_id == "gone")
+        assert gone.status == "attached" and gone.removed_from_source is True and gone.upload_id == "up-gone"
+        assert row.last_refresh.removed_from_source == 1
+
+    async def test_a_capped_listing_marks_nothing_removed(self):
+        files = [_attached("a", "v1", b"aaa"), _attached("b", "v1", b"bbb")]
+        tree = {"root": [stamped("a", "a.pdf", "v1"), stamped("b", "b.pdf", "v1"), stamped("c", "c.pdf", "v1")]}
+        row, *_ = await refresh(tree, files, max_files=1)
+        assert not any(f.removed_from_source for f in row.files)
+        assert row.counts.truncated is True
+
+    async def test_a_failed_listing_marks_nothing_removed_and_keeps_every_file(self):
+        files = [_attached("a", "v1", b"aaa"), _attached("b", "v1", b"bbb", path="sub/b.pdf")]
+        tree = {"root": [stamped("a", "a.pdf", "v1"), folder_entry("sub", "sub")], "sub": []}
+        adapter = TreeAdapter(tree)
+        adapter.browse_errors["sub"] = FileSourceError("502")
+        row, *_ = await refresh(None, files, adapter=adapter)
+        assert [f.provider_file_id for f in row.files] == ["a", "b"]
+        assert not any(f.removed_from_source for f in row.files)
+        assert row.status == "partial" and row.error == "listing_failed" and row.refreshing is False
+
+    async def test_a_file_the_user_removed_stays_removed(self):
+        removed = _attached("a", "v1", b"aaa").model_copy(update={"status": "removed"})
+        row, adapter, _, uploads = await refresh({"root": [stamped("a", "a.pdf", "v2")]}, [removed])
+        assert adapter.downloads == [] and uploads.calls == [] and row.files[0].status == "removed"
+
+    async def test_a_revoked_token_keeps_the_attached_files(self):
+        files = [_attached("a", "v1", b"aaa")]
+        adapter = TreeAdapter({"root": []})
+        adapter.browse_errors["root"] = FileSourceAuthError("401")
+        row, *_ = await refresh(None, files, adapter=adapter)
+        assert row.status == "partial" and row.error == "needs_consent"
+        assert row.files[0].status == "attached" and row.files[0].removed_from_source is False
+
+    async def test_quota_while_replacing_stops_with_partial(self):
+        files = [_attached("a", "v1", b"aaa")]
+        adapter = TreeAdapter({"root": [stamped("a", "a.pdf", "v2", 5)]})
+        adapter.content["a"] = b"bbbbb"
+        uploads = FakeUploadService()
+        uploads.replace_error = QuotaExceededError(current_usage=1, max_allowed=1, required_space=1)
+        row, *_ = await refresh(None, files, adapter=adapter, uploads=uploads)
+        assert row.status == "partial" and row.error == "quota_exceeded"
+        assert row.files[0].content_hash == _sha(b"aaa")  # kept its attached version
+
+    async def test_the_metric_records_the_summary(self):
+        files = [_attached("a", "v1", b"aaa")]
+        await refresh({"root": [stamped("a", "a.pdf", "v1"), stamped("n", "n.pdf", "v1")]}, files)
+        # record_folder_refresh is real here: just make sure the run did not raise.

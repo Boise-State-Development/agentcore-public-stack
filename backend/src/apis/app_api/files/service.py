@@ -532,6 +532,68 @@ class FileUploadService:
         logger.info("Imported file from a file source")
         return file_meta
 
+    async def replace_file_content(
+        self,
+        file_meta: FileMetadata,
+        content: bytes,
+        mime_type: str,
+    ) -> FileMetadata:
+        """New bytes for an existing READY file, at the **same upload id and key**.
+
+        A refreshed folder file (drive-folder spec §4.6): the conversation may
+        cite this upload id, so the id, key, name and ``delivery`` stay and only
+        the bytes change. Whatever described the old bytes goes (thumbnail,
+        ``_derived/`` sidecars, digest, preparation) and the post-ready step runs
+        again, so a reference document is re-prepared and, when indexed,
+        re-ingested under its same KB document id. The quota moves by the size
+        difference, never by a file.
+
+        Raises:
+            FileTooLargeError: the new bytes are over the file's class cap
+            QuotaExceededError: the growth would exceed the user's quota
+            FileNotFoundError: the row is gone or no longer READY
+            FileUploadError: the object could not be stored
+        """
+        size_bytes = len(content)
+        size_limit = self.max_size_for(file_meta.filename, file_meta.mime_type)
+        if size_bytes > size_limit:
+            raise FileTooLargeError(size_bytes, size_limit)
+
+        delta = size_bytes - file_meta.size_bytes
+        if delta > 0:
+            quota = await self.repository.get_user_quota(file_meta.user_id)
+            if quota.total_bytes + delta > self.user_quota_bytes:
+                raise QuotaExceededError(
+                    current_usage=quota.total_bytes,
+                    max_allowed=self.user_quota_bytes,
+                    required_space=delta,
+                )
+
+        try:
+            await asyncio.to_thread(
+                self._s3_client.put_object,
+                Bucket=file_meta.s3_bucket,
+                Key=file_meta.s3_key,
+                Body=content,
+                ContentType=file_meta.mime_type,
+            )
+        except ClientError as e:
+            logger.error(f"Failed to store replaced content for {file_meta.upload_id}: {e}")
+            raise FileUploadError("The file could not be stored. Try again.")
+
+        self._delete_thumbnail_object(file_meta)
+        self._delete_derived_objects(file_meta)
+        updated = await self.repository.replace_file_content_fields(
+            file_meta.user_id, file_meta.upload_id, size_bytes
+        )
+        if updated is None:
+            raise FileNotFoundError(f"File '{file_meta.upload_id}' is gone")
+        if delta:
+            await self.repository.adjust_quota_bytes(file_meta.user_id, delta)
+        await self._after_upload_ready(updated)
+        logger.info("Replaced a file's content in place")
+        return updated
+
     @staticmethod
     def _resolve_import_mime_type(filename: str, mime_type: str) -> str:
         """An accepted MIME type for an imported file, or raise."""
@@ -1148,13 +1210,19 @@ class FileUploadService:
         """
         return await self.repository.get_file(user_id, upload_id)
 
-    async def delete_file(self, user_id: str, upload_id: str) -> bool:
+    async def delete_file(self, user_id: str, upload_id: str, *, from_folder_removal: bool = False) -> bool:
         """
         Delete a file (S3 object and metadata).
+
+        A file a folder attached is marked ``removed`` in its folder row
+        (drive-folder spec §4.9), so the manifest stops listing it and neither
+        resume nor refresh brings it back. ``from_folder_removal`` skips that
+        when the folder itself is being removed: its row is about to go too.
 
         Args:
             user_id: The owner's user ID
             upload_id: The upload identifier
+            from_folder_removal: Called while removing the whole folder
 
         Returns:
             True if deleted, False if not found
@@ -1186,8 +1254,42 @@ class FileUploadService:
         if deleted and file_meta.status == FileStatus.READY:
             await self.repository.decrement_quota(user_id, file_meta.size_bytes)
 
+        if deleted and not from_folder_removal:
+            await self._mark_removed_from_folder(file_meta)
+
         logger.info("Deleted file")
         return True
+
+    async def _mark_removed_from_folder(self, file_meta: FileMetadata) -> None:
+        """A folder file the user deleted: its entry becomes ``removed``. Never raises."""
+        from apis.shared.files.folder_attachments import (
+            ENTRY_ATTACHED,
+            ENTRY_REMOVED,
+            folder_attach_id_from_source,
+        )
+
+        folder_attach_id = folder_attach_id_from_source(file_meta.source)
+        if not folder_attach_id:
+            return
+        try:
+            from apis.shared.files.folder_repository import get_folder_attachment_repository
+
+            repository = get_folder_attachment_repository()
+            folder = await repository.get(file_meta.user_id, folder_attach_id)
+            if folder is None:
+                return
+            changed = False
+            for entry in folder.files:
+                if entry.upload_id == file_meta.upload_id and entry.status == ENTRY_ATTACHED:
+                    entry.status = ENTRY_REMOVED
+                    entry.error = "deleted by the user"
+                    changed = True
+            if not changed:
+                return
+            folder.counts.attached = sum(1 for e in folder.files if e.status == ENTRY_ATTACHED)
+            await repository.update(file_meta.user_id, folder_attach_id, counts=folder.counts, files=folder.files)
+        except Exception:  # noqa: BLE001 - the delete already happened
+            logger.warning("Could not mark a deleted file removed in its folder", exc_info=True)
 
     async def list_user_files(
         self,

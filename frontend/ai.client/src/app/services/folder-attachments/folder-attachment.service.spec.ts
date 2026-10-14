@@ -46,6 +46,15 @@ describe('folder labels', () => {
     expect(folderStatusLabel(r)).toBe(label);
   });
 
+  it('says a refresh is checking, then what it changed', () => {
+    expect(folderStatusLabel(row({ status: 'expanding', refreshing: true }))).toBe('Checking for changes…');
+    const done = { refreshedAt: '2026-10-14T16:00:00Z' };
+    expect(folderStatusLabel(row({ ...done, lastRefresh: { unchanged: 6, updated: 0, added: 0, removedFromSource: 0, failed: 0 } }))).toBe('6 files · up to date');
+    expect(folderStatusLabel(row({ ...done, lastRefresh: { unchanged: 3, updated: 1, added: 2, removedFromSource: 1, failed: 0 } }))).toBe(
+      '6 files · 1 updated, 2 new, 1 gone from the folder',
+    );
+  });
+
   it('names each reason something was left out', () => {
     expect(folderSkipReasons(row({ error: 'quota_exceeded' }, { skippedType: 2, skippedSize: 1, failed: 1, truncated: true }))).toBe(
       '2 not a type the assistant can read (images, other formats); 1 too large; 1 could not be downloaded; the folder has more files than one attachment takes; your file storage is full',
@@ -94,6 +103,17 @@ describe('FolderAttachmentService', () => {
     expect(del.request.method).toBe('DELETE');
     del.flush(null, { status: 204, statusText: 'No Content' });
     await removed;
+  });
+
+  it('lists the conversation\'s folders and refreshes one', async () => {
+    const listed = service.list('s-1');
+    http.expectOne('/api/sessions/s-1/folders').flush({ folders: [row()] });
+    expect((await listed).map((f) => f.folderAttachId)).toEqual(['fa-1']);
+    const refreshed = service.refresh('s-1', 'fa-1');
+    const req = http.expectOne('/api/sessions/s-1/folders/fa-1/refresh');
+    expect(req.request.method).toBe('POST');
+    req.flush(row({ status: 'expanding', refreshing: true }));
+    expect((await refreshed).refreshing).toBe(true);
   });
 
   it('treats a row already gone as removed', async () => {
