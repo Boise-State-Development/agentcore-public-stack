@@ -229,6 +229,9 @@ export class ChatRequestService implements OnDestroy {
             assistantId,
             mentionAgentId,
             invokedSkillIds,
+            // Every argument of the original send, or a retry quietly drops
+            // what this one carried (dev, 2026-10-14: a folder's manifest).
+            folders,
           ),
         );
       }
