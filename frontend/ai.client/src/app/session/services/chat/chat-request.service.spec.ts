@@ -513,6 +513,28 @@ describe('ChatRequestService', () => {
       expect(TestBed.inject(FailedSendService).canRetry('msg-session1-6')).toBe(false);
     });
 
+    it('a retry resends the folders too, and the bubble keeps its chip', async () => {
+      // Dev, 2026-10-14: a send refused with a 409 was retried without its
+      // folder, so the model answered that it had no access to the folder.
+      const folder = { folderAttachId: 'fa-1', name: 'Course', source: 'Drive', status: 'ready', fileCount: 2, files: ['a.pdf', 'b.pdf'], moreCount: 0 };
+      mockChatHttpService.sendChatRequest.mockRejectedValueOnce(
+        new StreamNotStartedError('A response was still finishing for this conversation.', 409),
+      );
+      await service
+        .submitChatRequest('Hello', 'session1', ['up-1'], undefined, undefined, undefined, [folder])
+        .catch(() => undefined);
+
+      TestBed.inject(FailedSendService).retry('msg-session1-6');
+      await vi.waitFor(() => expect(mockChatHttpService.sendChatRequest).toHaveBeenCalledTimes(2));
+
+      expect(mockChatHttpService.sendChatRequest.mock.calls[1][0]).toMatchObject({
+        file_upload_ids: ['up-1'],
+        folder_attachment_ids: ['fa-1'],
+      });
+      const messageMap = TestBed.inject(MessageMapService) as any;
+      expect(messageMap.addUserMessage).toHaveBeenLastCalledWith('session1', 'Hello', undefined, [folder]);
+    });
+
     it('a failure after the stream opened is not marked — the agent saw the message', async () => {
       mockChatHttpService.sendChatRequest.mockRejectedValueOnce(new Error('network dropped'));
 
