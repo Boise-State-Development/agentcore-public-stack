@@ -480,6 +480,28 @@ Ship Tier 2 if arm 2 measurably beats arm 1 on the scanned and layout classes;
 §13 of the managed-KB evaluation predicts it will. If it doesn't, Tier 1 is enough
 and the paid infrastructure is not justified.
 
+**The harness** is `backend/scripts/large_document_quality_harness.py`
+(`large_document_quality/`, test `tests/test_large_document_quality_harness.py`).
+Its fixtures are synthetic and deterministic, one per class, each over 4 MB:
+
+| Class | Fixture | What makes it that class |
+|---|---|---|
+| text | 300-page policy manual, 7.3 MB | A real text layer; two facts wrap across a line, so a literal `pattern` can miss them |
+| scanned | 40-page inspection report, 6.8 MB | Image-only pages: our text layer is empty |
+| layout | 24-page brochure, 5.3 MB | Tables and a sidebar drawn out of reading order: the text layer lists every label before any value |
+| docx | Member handbook, 15.1 MB | Mostly one embedded image; facts in paragraphs |
+
+21 questions, each with an authored answer on a known page, distractor values
+planted elsewhere (`forbidden`), and a `literal` / `paraphrase` tag. The fixtures
+are seeded into a deployed environment as a synthetic user's uploads, so the real
+prepare Lambda and the real knowledge base process them. Then `probe` checks,
+free, what each tier can reach: the real `pattern` read against the real
+`Retrieve`. `ask` runs one fresh agent turn per (arm, question, sample), with the
+production `document_read` and the user message the chat route builds; the arms
+differ only in `searchable`. `score` reports per class: majority of k, exact
+McNemar, `n` on every row, plus tool calls, `query` use, tokens and dollars per
+turn.
+
 **Cost**, per session through `GET /admin/costs/sessions/{id}/calls`: a reference
 session's prefix should look like an offloaded-document session (digest ≤ 1,500
 tokens), not like an inline one.
