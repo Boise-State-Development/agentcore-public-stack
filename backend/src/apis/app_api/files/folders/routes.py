@@ -6,6 +6,7 @@
     POST   /sessions/{session_id}/folders/{folder_attach_id}/resume   re-run a lost walk
     POST   /sessions/{session_id}/folders/{folder_attach_id}/refresh  bring the files up to date
     GET    /sessions/{session_id}/folders                       the conversation's folders
+    GET    /folders/recent                                      the user's recently attached folders
 
 All 404 to a signed-in user while ``FOLDER_ATTACHMENTS_ENABLED`` is off
 (401 unauthenticated regardless). Attach and resume resolve
@@ -21,12 +22,17 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from apis.shared.auth import User, get_current_user_from_session
 from apis.shared.feature_flags import folder_attachments_enabled
-from apis.shared.files.folder_attachments import FolderAttachment
+from apis.shared.files.folder_attachments import (
+    RECENT_FOLDERS_DEFAULT_LIMIT,
+    RECENT_FOLDERS_MAX_LIMIT,
+    FolderAttachment,
+    RecentFolder,
+)
 from apis.shared.oauth.provider_repository import (
     OAuthProviderRepository,
     get_provider_repository,
@@ -60,6 +66,9 @@ async def require_folder_attachments_user(
 
 
 router = APIRouter(prefix="/sessions", tags=["folder-attachments"])
+#: Not under a conversation: what the picker beneath a new conversation's
+#: composer offers before there is one (composer-project-folder-picker spec §4).
+recent_router = APIRouter(prefix="/folders", tags=["folder-attachments"])
 
 
 class AttachFolderRequest(BaseModel):
@@ -225,3 +234,24 @@ async def refresh_folder_attachment(
     access_token = await require_file_source_token(provider, user.user_id)
     row = await service.refresh(folder, adapter, access_token)
     return FolderAttachmentResponse.from_row(row)
+
+
+class RecentFoldersResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    folders: list[RecentFolder]
+
+
+@recent_router.get("/recent", response_model=RecentFoldersResponse, response_model_by_alias=True)
+async def list_recent_folders(
+    limit: int = Query(RECENT_FOLDERS_DEFAULT_LIMIT, ge=1, le=RECENT_FOLDERS_MAX_LIMIT),
+    user: User = Depends(require_folder_attachments_user),
+    service: FolderAttachmentService = Depends(get_folder_attachment_service),
+) -> RecentFoldersResponse:
+    """The source folders the caller attached most recently, newest first, one
+    per folder. Each carries what a new attach needs (connector, folder id,
+    name, path) and nothing of the conversation it came from. Picking one
+    attaches it afresh through ``POST /sessions/{id}/folders``, which checks the
+    connector and consent again; a folder whose connector the caller can no
+    longer see is filtered out by the SPA against ``GET /file-sources``."""
+    return RecentFoldersResponse(folders=await service.list_recent(user.user_id, limit))

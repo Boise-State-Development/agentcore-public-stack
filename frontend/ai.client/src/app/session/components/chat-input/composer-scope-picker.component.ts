@@ -15,7 +15,7 @@ import { Dialog } from '@angular/cdk/dialog';
 import { CdkConnectedOverlay, CdkOverlayOrigin, ConnectedPosition } from '@angular/cdk/overlay';
 import { ActivatedRoute, Router } from '@angular/router';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroCheck, heroChevronDown, heroFolderPlus, heroPlus, heroRectangleStack, heroXMark } from '@ng-icons/heroicons/outline';
+import { heroCheck, heroChevronDown, heroFolder, heroFolderPlus, heroPlus, heroRectangleStack, heroXMark } from '@ng-icons/heroicons/outline';
 import { firstValueFrom, map } from 'rxjs';
 import {
   AttachSelection,
@@ -34,18 +34,34 @@ import {
 import { Project } from '../../../projects/models/project.model';
 import { ProjectsService } from '../../../projects/services/projects.service';
 import { FEATURES } from '../../../services/features';
+import { FolderAttachmentService, RecentFolder } from '../../../services/folder-attachments';
 
-/** One row of the listbox. Projects filter by name; the actions always show. */
+/** One row of the listbox. Projects and recent folders filter; the actions always show. */
 type ScopeOption =
   | { kind: 'clear'; key: string; label: string }
   | { kind: 'project'; key: string; label: string; detail: string | null; project: Project }
+  | { kind: 'recent-folder'; key: string; label: string; detail: string | null; folder: RecentFolder; source: FileSourceConnector }
   | { kind: 'new-project'; key: string; label: string }
   | { kind: 'add-folder'; key: string; label: string; source: FileSourceConnector };
 
 let nextPickerId = 0;
 
-function isAction(option: ScopeOption): boolean {
-  return option.kind === 'new-project' || option.kind === 'add-folder';
+/** The listbox's sections, in order; a rule is drawn where one gives way to the next. */
+function sectionOf(option: ScopeOption): 'projects' | 'folders' | 'actions' {
+  switch (option.kind) {
+    case 'clear':
+    case 'project':
+      return 'projects';
+    case 'recent-folder':
+      return 'folders';
+    default:
+      return 'actions';
+  }
+}
+
+/** The key the composer and the recent list share for one source folder. */
+export function folderKey(connectorId: string, providerFolderId: string): string {
+  return `${connectorId}:${providerFolderId}`;
 }
 
 /**
@@ -71,7 +87,7 @@ function isAction(option: ScopeOption): boolean {
   selector: 'app-composer-scope-picker',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [CdkConnectedOverlay, CdkOverlayOrigin, NgIcon],
-  providers: [provideIcons({ heroCheck, heroChevronDown, heroFolderPlus, heroPlus, heroRectangleStack, heroXMark })],
+  providers: [provideIcons({ heroCheck, heroChevronDown, heroFolder, heroFolderPlus, heroPlus, heroRectangleStack, heroXMark })],
   host: { class: 'contents' },
   template: `
     @if (visible()) {
@@ -137,8 +153,8 @@ function isAction(option: ScopeOption): boolean {
           </div>
           <p class="sr-only" aria-live="polite">{{ matchAnnouncement() }}</p>
           <ul [id]="listboxId" role="listbox" [attr.aria-label]="triggerLabel()" class="max-h-80 overflow-y-auto p-1.5">
-            @if (noProjectMatch()) {
-              <li role="presentation" class="px-2.5 py-2 text-sm/6 text-gray-600 dark:text-gray-400" data-testid="composer-scope-no-match">No project matches “{{ query().trim() }}”.</li>
+            @if (noMatch()) {
+              <li role="presentation" class="px-2.5 py-2 text-sm/6 text-gray-600 dark:text-gray-400" data-testid="composer-scope-no-match">{{ noMatchLabel() }} “{{ query().trim() }}”.</li>
             }
             @for (option of options(); track option.key; let i = $index) {
               @if (separatorBefore(i)) {
@@ -161,6 +177,9 @@ function isAction(option: ScopeOption): boolean {
                   @case ('project') {
                     <ng-icon name="heroRectangleStack" class="size-4 shrink-0 text-gray-500 dark:text-gray-400" aria-hidden="true" />
                   }
+                  @case ('recent-folder') {
+                    <ng-icon name="heroFolder" class="size-4 shrink-0 text-gray-500 dark:text-gray-400" aria-hidden="true" />
+                  }
                   @case ('new-project') {
                     <ng-icon name="heroPlus" class="size-4 shrink-0 text-gray-500 dark:text-gray-400" aria-hidden="true" />
                   }
@@ -170,7 +189,7 @@ function isAction(option: ScopeOption): boolean {
                 }
                 <span class="min-w-0 flex-1">
                   <span class="block truncate">{{ option.label }}</span>
-                  @if (option.kind === 'project' && option.detail) {
+                  @if ((option.kind === 'project' || option.kind === 'recent-folder') && option.detail) {
                     <span class="block truncate text-xs/5 text-gray-600 dark:text-gray-400">{{ option.detail }}</span>
                   }
                 </span>
@@ -193,6 +212,7 @@ export class ComposerScopePickerComponent {
   private readonly features = inject(FEATURES);
   private readonly projectsService = inject(ProjectsService);
   private readonly fileSourceService = inject(FileSourceService);
+  private readonly folderAttachments = inject(FolderAttachmentService);
 
   /** How many more files the message can take, handed to the browser for its own file picks. */
   readonly remainingFiles = input<number>(0);
@@ -200,6 +220,11 @@ export class ComposerScopePickerComponent {
   readonly remainingFolders = input<number>(0);
   /** The whole trigger, e.g. while dictating. */
   readonly disabled = input<boolean>(false);
+  /**
+   * Folders already on this message, as `folderKey`s, so a recent folder is
+   * not offered a second time beside its own card.
+   */
+  readonly attachedFolderKeys = input<readonly string[]>([]);
 
   /** A folder chosen in the browser ("Attach this folder"), for the composer to attach. */
   readonly sourceFolderPicked = output<FolderAttachSelection>();
@@ -216,6 +241,8 @@ export class ComposerScopePickerComponent {
   protected readonly active = signal(0);
   protected readonly fileSources = signal<FileSourceConnector[]>([]);
   private fileSourcesLoaded = false;
+  protected readonly recentFolders = signal<RecentFolder[]>([]);
+  private recentLoaded = false;
 
   /** The popover opens downward from the line beneath the composer, flipping up when cramped. */
   protected readonly positions: ConnectedPosition[] = [
@@ -236,9 +263,10 @@ export class ComposerScopePickerComponent {
     return this.projectsOn() ? 'Project' : 'Folder';
   });
 
-  protected readonly filterLabel = computed(() =>
-    this.projectsOn() ? 'Search projects' : 'Add a folder',
-  );
+  protected readonly filterLabel = computed(() => {
+    if (this.projectsOn() && this.foldersOn()) return 'Search projects and folders';
+    return this.projectsOn() ? 'Search projects' : 'Search folders';
+  });
 
   /**
    * The Agent the new conversation is bound to. The URL's `assistantId` is the
@@ -282,8 +310,22 @@ export class ComposerScopePickerComponent {
           project,
         });
       }
-      rows.push({ kind: 'new-project', key: 'new-project', label: 'New project' });
     }
+    if (this.foldersOn()) {
+      for (const row of this.offeredRecentFolders()) {
+        const haystack = `${row.folder.folderName} ${row.folder.folderPath ?? ''}`.toLowerCase();
+        if (q && !haystack.includes(q)) continue;
+        rows.push({
+          kind: 'recent-folder',
+          key: `recent:${folderKey(row.folder.connectorId, row.folder.providerFolderId)}`,
+          label: row.folder.folderName,
+          detail: row.folder.folderPath ?? row.folder.connectorName ?? row.source.displayName,
+          folder: row.folder,
+          source: row.source,
+        });
+      }
+    }
+    if (this.projectsOn()) rows.push({ kind: 'new-project', key: 'new-project', label: 'New project' });
     if (this.foldersOn()) {
       for (const source of this.fileSources()) {
         rows.push({
@@ -297,17 +339,45 @@ export class ComposerScopePickerComponent {
     return rows;
   });
 
-  protected readonly noProjectMatch = computed(
-    () =>
-      this.projectsOn() &&
-      this.query().trim() !== '' &&
-      !this.options().some(o => o.kind === 'project'),
+  /**
+   * Recent folders the composer can take now: through a file source the user
+   * can still see (the list `GET /file-sources` gives, which also supplies the
+   * connector the attach needs), and not already on this message.
+   */
+  private readonly offeredRecentFolders = computed(() => {
+    const sources = new Map(this.fileSources().map(source => [source.providerId, source]));
+    const attached = new Set(this.attachedFolderKeys());
+    const offered: { folder: RecentFolder; source: FileSourceConnector }[] = [];
+    for (const folder of this.recentFolders()) {
+      const source = sources.get(folder.connectorId);
+      if (!source || attached.has(folderKey(folder.connectorId, folder.providerFolderId))) continue;
+      offered.push({ folder, source });
+    }
+    return offered;
+  });
+
+  /** How many filterable rows (projects, recent folders) the filter left. */
+  private readonly matchCount = computed(
+    () => this.options().filter(o => o.kind === 'project' || o.kind === 'recent-folder').length,
   );
+
+  protected readonly noMatch = computed(
+    () =>
+      (this.projectsOn() || this.offeredRecentFolders().length > 0) &&
+      this.query().trim() !== '' &&
+      this.matchCount() === 0,
+  );
+
+  protected readonly noMatchLabel = computed(() => {
+    const folders = this.offeredRecentFolders().length > 0;
+    if (this.projectsOn() && folders) return 'No project or folder matches';
+    return this.projectsOn() ? 'No project matches' : 'No folder matches';
+  });
 
   protected readonly matchAnnouncement = computed(() => {
     if (!this.query().trim()) return '';
-    const count = this.options().filter(o => o.kind === 'project').length;
-    return `${count} ${count === 1 ? 'project matches' : 'projects match'}`;
+    const count = this.matchCount();
+    return `${count} ${count === 1 ? 'match' : 'matches'}`;
   });
 
   constructor() {
@@ -319,9 +389,10 @@ export class ComposerScopePickerComponent {
     });
   }
 
-  /** Hover or focus on the trigger: start the file-source list so its rows are there on open. */
+  /** Hover or focus on the trigger: start the folder lists so their rows are there on open. */
   protected prefetch(): void {
     void this.loadFileSources();
+    if (!this.recentLoaded) void this.loadRecentFolders();
   }
 
   protected toggle(): void {
@@ -334,6 +405,8 @@ export class ComposerScopePickerComponent {
     this.open.set(true);
     this.ensureProjects();
     void this.loadFileSources();
+    // Every open, not once: a folder attached a moment ago belongs at the top.
+    void this.loadRecentFolders();
   }
 
   /** Close the popover; `refocus` returns focus to the trigger (Escape, a pick). */
@@ -354,7 +427,7 @@ export class ComposerScopePickerComponent {
   /** A rule between the projects and the actions beneath them (New project, Add folder). */
   protected separatorBefore(i: number): boolean {
     const rows = this.options();
-    return i > 0 && isAction(rows[i]) && !isAction(rows[i - 1]);
+    return i > 0 && sectionOf(rows[i]) !== sectionOf(rows[i - 1]);
   }
 
   /** Escape from anywhere in the panel, not only the filter. */
@@ -423,6 +496,16 @@ export class ComposerScopePickerComponent {
       case 'new-project':
         await this.createProject();
         return;
+      case 'recent-folder':
+        this.sourceFolderPicked.emit({
+          connector: option.source,
+          folder: {
+            folderId: option.folder.providerFolderId,
+            folderName: option.folder.folderName,
+            folderPath: option.folder.folderPath ?? option.folder.folderName,
+          },
+        });
+        return;
       case 'add-folder':
         await this.addFolder(option.source);
         return;
@@ -488,6 +571,26 @@ export class ComposerScopePickerComponent {
     if (!this.projectsOn()) return;
     if (this.projectsService.available$() !== null || this.projectsService.loading$()) return;
     void this.projectsService.load();
+  }
+
+  /** One request at a time, like the file sources: hover and open both ask. */
+  private recentInFlight: Promise<void> | null = null;
+
+  private loadRecentFolders(): Promise<void> {
+    if (!this.foldersOn()) return Promise.resolve();
+    if (this.recentInFlight) return this.recentInFlight;
+    this.recentInFlight = (async () => {
+      try {
+        this.recentFolders.set(await this.folderAttachments.listRecent());
+        this.recentLoaded = true;
+      } catch {
+        // Recent folders are a shortcut; without them "Add folder" still works.
+        this.recentFolders.set([]);
+      } finally {
+        this.recentInFlight = null;
+      }
+    })();
+    return this.recentInFlight;
   }
 
   /** One request at a time: hover, focus and open all ask for the same list. */

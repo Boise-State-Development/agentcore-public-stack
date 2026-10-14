@@ -94,6 +94,8 @@ You can also start one without opening the project. In a new conversation,
 the conversation runs in it, keeping anything you have already typed. **No
 project** undoes the choice, and **New project** creates one and starts the
 conversation there. The choice is fixed once you send the first message.
+Where folder attachments are on, the same list also shows the Google Drive
+folders you attached recently: pick one to attach it to the new conversation.
 
 ## Next steps
 
