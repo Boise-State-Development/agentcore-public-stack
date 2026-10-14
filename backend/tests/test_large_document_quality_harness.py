@@ -99,6 +99,13 @@ class TestFixtures:
                     assert _flat(bad) in whole, (q.qid, bad)
                     assert not any(_flat(bad) == _flat(e) for e in q.expected)
         assert any("96,300" in fact for fact in fx._SCANNED_FACTS.values())
+        assert any("every 2 weeks" in fact for fact in fx._SCANNED_FACTS.values())
+
+    def test_every_scanned_question_has_a_planted_sheet(self, built):
+        planted = set(fx._SCANNED_FACTS)
+        questions = built["scanned"].questions
+        assert len(questions) == 15
+        assert all(q.page in planted for q in questions)
 
     def test_a_literal_question_reuses_the_phrase_a_pattern_search_would_find(self, built):
         for f in built.values():
@@ -133,6 +140,16 @@ class TestAsk:
     def test_only_the_final_answer_line_is_scored(self, reply, line):
         assert final_answer(reply) == line
 
+    def test_the_guided_arm_names_search_and_refuses_a_changed_sentence(self):
+        from large_document_quality.ask import guide_to_search
+
+        production = ("_`x.pdf` (7 MB) is attached... call `document_read` with `upload_id` `u`: first with "
+                      "`pattern` to find the relevant pages, then with `page_range` to read them._")
+        guided = guide_to_search(production)
+        assert "first with `query`" in guided and "or `pattern` to find the relevant pages" in guided
+        with pytest.raises(ValueError):
+            guide_to_search("call `document_read` and search it")
+
     def test_the_user_message_is_the_one_the_chat_route_builds(self, monkeypatch):
         from large_document_quality import ask
         from apis.shared.files import large_document
@@ -151,6 +168,9 @@ class TestAsk:
         monkeypatch.setattr("apis.shared.files.repository.get_file_upload_repository", lambda: Repo())
         message = asyncio.run(ask.user_message(fx._MANUAL_QUESTIONS[0],
                                                {"userId": "u", "uploadId": "up-1"}))
+        guided = asyncio.run(ask.user_message(fx._MANUAL_QUESTIONS[0], {"userId": "u", "uploadId": "up-1"},
+                                              guided=True))
+        assert "first with `query`" in guided and "first with `query`" not in message
         question, guidance, reference = message.split("\n\n")
         assert question == fx._MANUAL_QUESTIONS[0].question
         assert "call `document_read` with `upload_id` `up-1`" in guidance
@@ -176,6 +196,7 @@ class TestScore:
         rows += [_row("tier1", "t0", "manual", True, wording="literal"), _row("tier2", "t0", "manual", True,
                                                                              wording="literal")]
         table = {(r["class"], r["wording"]): r for r in compare(rows)}
+        assert table[("scanned", "all")]["controlCorrect"] == 0
         scanned = table[("scanned", "all")]
         assert scanned["n"] == 6 and scanned["tier1"] == 0 and scanned["tier2"] == 6
         assert scanned["onlyTreatment"] == 6 and scanned["p"] == pytest.approx(2 / 64)

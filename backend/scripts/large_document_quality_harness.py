@@ -234,28 +234,35 @@ def cmd_ask(args: argparse.Namespace) -> int:
 
 
 def cmd_score(args: argparse.Namespace) -> int:
-    from large_document_quality.score import compare, operations
+    from large_document_quality.score import PAIRS, compare, operations
 
     out = Path(args.out)
     rows = [r for r in _read_jsonl(out / "results.jsonl") if not r.get("error")]
     if not rows:
         print("no results yet", file=sys.stderr)
         return 1
-    table = compare(rows)
-    print(f"{'class':8} {'wording':10} {'n':>3}  {'tier1':>5} {'tier2':>5}  {'only1':>5} {'only2':>5}  {'p':>6}")
-    for r in table:
-        print(f"{r['class']:8} {r['wording']:10} {r['n']:3d}  {r['tier1']:5d} {r['tier2']:5d}  "
-              f"{r['onlyControl']:5d} {r['onlyTreatment']:5d}  {r['p']:6.3f}")
+    arms = {r["arm"] for r in rows}
+    tables = []
+    for control, treatment in PAIRS:
+        if control not in arms or treatment not in arms:
+            continue
+        table = compare(rows, control=control, treatment=treatment)
+        tables.extend(table)
+        print(f"\n{control} vs {treatment}")
+        print(f"{'class':8} {'wording':10} {'n':>3}  {'ctrl':>5} {'treat':>5}  {'onlyC':>5} {'onlyT':>5}  {'p':>6}")
+        for r in table:
+            print(f"{r['class']:8} {r['wording']:10} {r['n']:3d}  {r['controlCorrect']:5d} {r['treatmentCorrect']:5d}  "
+                  f"{r['onlyControl']:5d} {r['onlyTreatment']:5d}  {r['p']:6.3f}")
     ops = operations(rows)
     print()
-    print(f"{'arm':5} {'class':8} {'turns':>5} {'err':>3} {'noAns':>5} {'calls':>5} {'query':>5} {'pages':>5} "
+    print(f"{'arm':12} {'class':8} {'turns':>5} {'err':>3} {'noAns':>5} {'calls':>5} {'query':>5} {'pages':>5} "
           f"{'in tok':>7} {'$/turn':>7} {'sec':>5}")
     for r in ops:
         usd = f"{r['usdPerTurn']:.4f}" if r["usdPerTurn"] is not None else "   —"
-        print(f"{r['arm']:5} {r['class']:8} {r['turns']:5d} {r['errors']:3d} {r['noAnswerLine']:5d} {r['medianToolCalls']:5.1f} "
+        print(f"{r['arm']:12} {r['class']:8} {r['turns']:5d} {r['errors']:3d} {r['noAnswerLine']:5d} {r['medianToolCalls']:5.1f} "
               f"{r['queryTurns']:5d} {r['pageReadTurns']:5d} {r['medianInputTokens']:7.0f} {usd:>7} "
               f"{r['medianSeconds']:5.1f}")
-    (out / "score.json").write_text(json.dumps({"compare": table, "operations": ops}, indent=2), encoding="utf-8")
+    (out / "score.json").write_text(json.dumps({"compare": tables, "operations": ops}, indent=2), encoding="utf-8")
     return 0
 
 
@@ -310,7 +317,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p = sub.add_parser("ask")
     common(p)
     p.add_argument("--model-id", default=DEFAULT_MODEL)
-    p.add_argument("--arms", default="tier1,tier2")
+    p.add_argument("--arms", default="tier1,tier2,tier2-guided")
     p.add_argument("--k", type=int, default=3)
     p.add_argument("--temperature", type=float, default=None)
     p.add_argument("--concurrency", type=int, default=4)

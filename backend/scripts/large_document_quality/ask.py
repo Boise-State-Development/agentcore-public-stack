@@ -5,7 +5,11 @@ The only difference between the arms is the tool the model gets:
 * ``tier1`` — ``document_read`` as a deployment without the attachments KB has
   it (digest, ``pattern``, ``page_range``, index and text modes);
 * ``tier2`` — the same tool with the ``query`` argument
-  (``make_document_read_tool(..., searchable=True)``).
+  (``make_document_read_tool(..., searchable=True)``);
+* ``tier2-guided`` — ``tier2`` with the attachment guidance naming search. The
+  production sentence says "first with ``pattern``", which a first readout found
+  steers the model away from ``query``. This arm tests a proposed wording
+  (:func:`guide_to_search`); it is not what production sends.
 
 Everything else is held fixed and taken from production code: the tool itself,
 reading the deployed rows, sidecars and knowledge base; the user message, built
@@ -33,7 +37,7 @@ from compaction_quality.score import is_correct
 
 from .fixtures import Question
 
-ARMS = ("tier1", "tier2")
+ARMS = ("tier1", "tier2", "tier2-guided")
 
 MAX_TOOL_CALLS = 10
 
@@ -113,7 +117,24 @@ def _mode(tool_input: Dict[str, Any]) -> str:
     return "index"
 
 
-async def user_message(question: Question, doc: Dict[str, Any]) -> str:
+#: The production guidance's instruction, and the proposed one the guided arm sends.
+_PATTERN_FIRST = "first with `pattern` to find the relevant"
+_SEARCH_FIRST = (
+    "first with `query` (a plain-language search, which also covers scanned pages) "
+    "or `pattern` to find the relevant"
+)
+
+
+def guide_to_search(guidance: str) -> str:
+    """The guidance with search named first. Raises when the production sentence
+    no longer contains the instruction this arm rewrites, so a wording change
+    there cannot silently turn the guided arm into a copy of ``tier2``."""
+    if _PATTERN_FIRST not in guidance:
+        raise ValueError("the attachment guidance no longer says 'first with `pattern`'; update the guided arm")
+    return guidance.replace(_PATTERN_FIRST, _SEARCH_FIRST)
+
+
+async def user_message(question: Question, doc: Dict[str, Any], *, guided: bool = False) -> str:
     """The question as the chat route would send it with this attachment on the turn."""
     from apis.inference_api.chat.routes import _build_attachment_guidance
     from apis.shared.files.reference_attachments import ReferenceAttachment, render_references_section
@@ -122,6 +143,8 @@ async def user_message(question: Question, doc: Dict[str, Any]) -> str:
     meta = await get_file_upload_repository().get_file(doc["userId"], doc["uploadId"])
     refs = [ReferenceAttachment(meta=meta)]
     guidance = _build_attachment_guidance([], [], [], [], references=refs, document_read_available=True)
+    if guided:
+        guidance = guide_to_search(guidance)
     section = render_references_section(refs, include_handle=True)
     return "\n\n".join(part for part in (question.question, guidance, section) if part)
 
@@ -134,7 +157,7 @@ async def run_job(job: Job, doc: Dict[str, Any], model_id: str, region: str,
 
     from agents.builtin_tools.document_read_tool import make_document_read_tool
 
-    tool = make_document_read_tool(doc["sessionId"], doc["userId"], searchable=job.arm == "tier2")
+    tool = make_document_read_tool(doc["sessionId"], doc["userId"], searchable=job.arm != "tier1")
     config: Dict[str, Any] = {"model_id": model_id, "max_tokens": 2048}
     if temperature is not None:
         config["temperature"] = temperature
@@ -154,7 +177,7 @@ async def run_job(job: Job, doc: Dict[str, Any], model_id: str, region: str,
 
     agent.hooks.add_callback(BeforeToolCallEvent, on_tool)
 
-    message = await user_message(job.question, doc)
+    message = await user_message(job.question, doc, guided=job.arm == "tier2-guided")
     started = time.time()
     error = None
     answer = ""

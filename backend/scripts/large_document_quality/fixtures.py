@@ -204,12 +204,24 @@ def build_manual(seed: int, pages: int = 300) -> Fixture:
 # ---------------------------------------------------------------------------
 
 _SCANNED_FACTS: Dict[int, str] = {
+    3: "Survey reference number: HV-SR-5512.",
     6: "Bridge 14-C load rating: 32 tonnes.",
+    8: "Deck surfacing on the Elm Street footbridge was last replaced in 2017.",
+    13: "Scour depth measured at pier 2 was 1.4 metres.",
     15: "The culvert at Marsh Lane is scheduled for replacement in March 2029.",
+    18: "The weight restriction sign on Quarry Road must be relocated 60 metres north.",
+    20: "Traffic management for the night works will be provided by Corrin Haulage Ltd.",
     22: "Inspector of record for this survey: Dafydd Kestrel.",
+    25: "Corrosion was found on 7 of the 22 bearing plates.",
+    27: "Lead paint abatement is required before any repainting of the Mill Creek truss.",
     29: "Estimated repair cost for the north abutment: $418,600.",
+    31: "After hours, structural incidents go to the duty engineer on 0800 447 219.",
+    33: "Total inspection programme budget for the year: $1.27 million.",
     35: "Recommended inspection interval is reduced from 24 months to 9 months.",
+    38: "Vegetation clearance around the abutments is scheduled every 6 weeks during summer.",
+    # Distractors: same subjects, different values.
     11: "Estimated repair cost for the south wingwall: $96,300.",
+    40: "Litter collection at the river access point is scheduled every 2 weeks.",
 }
 
 _SCANNED_QUESTIONS = [
@@ -223,6 +235,26 @@ _SCANNED_QUESTIONS = [
              ("418,600", "418600"), ("96,300",), 29, r"north abutment"),
     Question("scan-interval", "scanned", "paraphrase", "How often should the structure be inspected from now on?",
              ("9 months", "nine months"), (), 35, r"inspection interval"),
+    Question("scan-reference", "scanned", "literal", "What is the survey reference number?",
+             ("HV-SR-5512",), (), 3, r"Survey reference number"),
+    Question("scan-deck", "scanned", "paraphrase", "When did the Elm Street footbridge last get a new deck surface?",
+             ("2017",), (), 8, r"Elm Street"),
+    Question("scan-scour", "scanned", "paraphrase", "How deep was the erosion around the second pier?",
+             ("1.4 metres", "1.4 m", "1.4 meters"), (), 13, r"Scour depth"),
+    Question("scan-sign", "scanned", "paraphrase", "How far does the weight limit sign on Quarry Road need to move?",
+             ("60 metres", "60 m", "60 meters"), (), 18, r"Quarry Road"),
+    Question("scan-traffic", "scanned", "paraphrase", "Which company is handling traffic control during the overnight work?",
+             ("Corrin",), (), 20, r"Traffic management"),
+    Question("scan-bearings", "scanned", "paraphrase", "How many of the bearing plates had rust on them?",
+             ("7",), ("22 bearing plates had",), 25, r"bearing plates"),
+    Question("scan-truss", "scanned", "paraphrase", "What has to happen before the Mill Creek truss can be repainted?",
+             ("lead paint",), (), 27, r"Mill Creek"),
+    Question("scan-afterhours", "scanned", "paraphrase", "Who do I call if something goes wrong with a structure at night?",
+             ("0800 447 219", "447 219"), (), 31, r"duty engineer"),
+    Question("scan-budget", "scanned", "literal", "What is the total inspection programme budget for the year?",
+             ("1.27 million", "1.27m", "1270000"), (), 33, r"inspection programme budget"),
+    Question("scan-vegetation", "scanned", "paraphrase", "How often is plant growth cleared near the abutments in summer?",
+             ("6 weeks", "six weeks"), ("2 weeks",), 38, r"Vegetation clearance"),
 ]
 
 
@@ -241,15 +273,19 @@ def _scan_page(rng: random.Random, number: int, fact: Optional[str]) -> bytes:
     lines: List[str] = []
     for i in range(7):
         text = _paragraph(rng, rng.randint(2, 4))
-        if fact and i == 3:
+        if fact and i == 1:
             text = f"{text} {fact}"
         lines.extend(pdf.wrap(text, 10, 470))
         lines.append("")
+    drawn: List[str] = []
     for line in lines:
         if y > height - 140:
             break
         draw.text((110, y), line, font=body, fill=rng.randint(15, 45))
+        drawn.append(line)
         y += 34
+    if fact and fact.split()[-1] not in " ".join(drawn):
+        raise ValueError(f"sheet {number}: the planted fact fell below the drawn area")
     page = page.rotate(rng.uniform(-0.6, 0.6), resample=PILImage.BICUBIC, fillcolor=250)
     noise = PILImage.effect_noise((width, height), 18).convert("L")
     page = PILImage.blend(page, noise, 0.08).filter(ImageFilter.GaussianBlur(0.5))

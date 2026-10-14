@@ -30,6 +30,10 @@ def outcomes(rows: Iterable[Dict[str, Any]]) -> Dict[Tuple[str, str], bool]:
     return {key: sum(v) * 2 > len(v) for key, v in grouped.items()}
 
 
+#: The comparisons reported, when both arms are in the results.
+PAIRS = (("tier1", "tier2"), ("tier1", "tier2-guided"), ("tier2", "tier2-guided"))
+
+
 def compare(rows: List[Dict[str, Any]], *, control: str = "tier1", treatment: str = "tier2") -> List[Dict[str, Any]]:
     """One row per class (and ``wording`` within it): accuracy per arm, discordant counts, p."""
     meta = {r["qid"]: (CLASS_OF_DOC.get(r["doc"], r["doc"]), r["wording"]) for r in rows}
@@ -47,8 +51,9 @@ def compare(rows: List[Dict[str, Any]], *, control: str = "tier1", treatment: st
         only_control = sum(result[(control, q)] and not result[(treatment, q)] for q in qids)
         only_treatment = sum(result[(treatment, q)] and not result[(control, q)] for q in qids)
         table.append({
-            "class": cls, "wording": wording, "n": len(qids),
-            control: a, treatment: b, "onlyControl": only_control, "onlyTreatment": only_treatment,
+            "control": control, "treatment": treatment, "class": cls, "wording": wording, "n": len(qids),
+            control: a, treatment: b, "controlCorrect": a, "treatmentCorrect": b,
+            "onlyControl": only_control, "onlyTreatment": only_treatment,
             "p": mcnemar_exact(only_control, only_treatment),
         })
     return table
