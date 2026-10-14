@@ -17,6 +17,10 @@
       <h2 appDialogTitle class="text-base/7 font-semibold text-gray-900 dark:text-white">
         @if (isPicker) {
           Choose a destination folder
+        } @else if (isAttach && view() === 'browser' && connector(); as conn) {
+          Add from {{ conn.displayName }}
+        } @else if (isAttach) {
+          Add from a file source
         } @else if (view() === 'browser' && connector(); as conn) {
           {{ conn.displayName }}
         } @else {
@@ -289,6 +293,12 @@
             }
           </ul>
 
+          @if (isAttach && hasUnattachableEntries()) {
+            <p class="mt-2 text-xs/5 text-gray-400 dark:text-gray-500">
+              Greyed-out files are types or sizes a conversation can't take.
+            </p>
+          }
+
           @if (nextCursor()) {
             <button
               type="button"
@@ -337,7 +347,13 @@
             </button>
           </div>
         } @else {
-          <span class="text-sm/6 text-gray-500 dark:text-gray-400">{{ selectedCount() }} selected</span>
+          <span class="text-sm/6 text-gray-500 dark:text-gray-400">
+            @if (maxFiles !== null) {
+              {{ selectedCount() }} of {{ maxFiles }} selected
+            } @else {
+              {{ selectedCount() }} selected
+            }
+          </span>
           <div class="flex items-center gap-2">
             <button
               type="button"
@@ -348,13 +364,17 @@
             </button>
             <button
               type="button"
-              (click)="importSelected()"
+              (click)="confirmSelection()"
               [disabled]="selectedCount() === 0 || importing()"
               class="inline-flex items-center gap-1.5 rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
+              data-testid="file-source-confirm"
             >
               @if (importing()) {
                 <app-spinner size="sm" variant="on-solid" label="Importing" />
                 Importing…
+              } @else if (isAttach) {
+                <ng-icon name="heroPaperClip" class="size-4" />
+                Attach {{ selectedCount() > 0 ? selectedCount() : '' }}
               } @else {
                 <ng-icon name="heroArrowDownTray" class="size-4" />
                 Import {{ selectedCount() > 0 ? selectedCount() : '' }}

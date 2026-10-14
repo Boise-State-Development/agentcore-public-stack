@@ -461,8 +461,8 @@ export class ExportDialogComponent implements OnInit {
       hasBackdrop: false,
     });
     const result = await firstValueFrom(ref.closed);
-    // Cancelled, or closed in import mode (never happens here) — leave as-is.
-    if (!result || Array.isArray(result)) {
+    // Cancelled, or closed in another mode (never happens here) — leave as-is.
+    if (!result || !('folderId' in result)) {
       return;
     }
     const selection: FolderSelection = result;

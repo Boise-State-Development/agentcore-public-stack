@@ -44,8 +44,13 @@ import {
   ALLOWED_EXTENSIONS,
   maxFileSizeFor,
   MAX_FILES_PER_MESSAGE,
-  formatBytes
+  formatBytes,
+  resolveMimeTypeFor,
 } from '../../../services/file-upload';
+import { FileSourceService } from '../../../assistants/services/file-source.service';
+import { FileSourceConnector, ImportFileRef } from '../../../assistants/models/file-source.model';
+import { AttachSelection } from '../../../assistants/components/file-source-browser-dialog.component';
+import { ComposerAddMenuComponent } from './composer-add-menu.component';
 import { FEATURES } from '../../../services/features';
 import { ToastService } from '../../../services/toast/toast.service';
 import { ToolService } from '../../../services/tool/tool.service';
@@ -271,7 +276,7 @@ function dedupeAttachments(attachments: StoredAttachment[]): StoredAttachment[] 
 
 @Component({
   selector: 'app-chat-input',
-  imports: [AgentNoticeBannerComponent, AnnouncementBannerComponent, CdkMenu, CdkMenuItem, CdkMenuTrigger, FormsModule, ModelDropdownComponent, NgIcon, QuotaWarningBannerComponent, StorageQuotaBannerComponent, TooltipDirective, FileCardComponent, AgentMentionMenuComponent, SkillCommandMenuComponent, SpinnerComponent],
+  imports: [AgentNoticeBannerComponent, AnnouncementBannerComponent, CdkMenu, CdkMenuItem, CdkMenuTrigger, ComposerAddMenuComponent, FormsModule, ModelDropdownComponent, NgIcon, QuotaWarningBannerComponent, StorageQuotaBannerComponent, TooltipDirective, FileCardComponent, AgentMentionMenuComponent, SkillCommandMenuComponent, SpinnerComponent],
   // `relative` is the anchor the announcement banner floats against — it sits
   // `bottom-full` of this host, above the quota tabs and clear of the composer.
   host: { class: 'relative block' },
@@ -294,6 +299,7 @@ function dedupeAttachments(attachments: StoredAttachment[]): StoredAttachment[] 
 export class ChatInputComponent {
   // Service injection
   private readonly fileUploadService = inject(FileUploadService);
+  private readonly fileSourceService = inject(FileSourceService);
   private readonly features = inject(FEATURES);
   private readonly toastService = inject(ToastService);
   private readonly steering = inject(SteeringService);
@@ -387,6 +393,7 @@ export class ChatInputComponent {
   readonly compact = input<boolean>(false);
 
   private readonly messageInput = viewChild<ElementRef<HTMLTextAreaElement>>('messageInput');
+  private readonly fileInput = viewChild<ElementRef<HTMLInputElement>>('fileInput');
   private readonly shell = viewChild<ElementRef<HTMLElement>>('shell');
   private readonly highlightMirror = viewChild<ElementRef<HTMLElement>>('highlightMirror');
 
@@ -446,12 +453,36 @@ export class ChatInputComponent {
 
   // File upload state from service
   readonly pendingUploads = this.fileUploadService.pendingUploadsList;
-  readonly hasActivePendingUploads = this.fileUploadService.hasActivePendingUploads;
   readonly readyUploadIds = this.fileUploadService.readyUploadIds;
 
   /**
-   * Files attached in an earlier visit to this conversation, rebuilt from the
-   * stored draft.
+   * Files on their way from a connected file source (the `+` menu's "Add from
+   * Google Drive"), one card each.
+   *
+   * Composer-local rather than in `FileUploadService`: that service's list is
+   * uploads from this browser, with a `File` to send and a percentage to show,
+   * and it feeds the draft and the send. An import has neither — app-api
+   * fetches the bytes — so it rides here until the server answers with the
+   * file's metadata, at which point it joins `restoredAttachments` and is an
+   * ordinary attachment from then on. The placeholder `File` carries only the
+   * name, for the card. `uploadId` is a local `source:` id until then.
+   */
+  readonly importingAttachments = signal<PendingUpload[]>([]);
+
+  /** What each in-flight or failed import was asked for, by its local id (for retry). */
+  private readonly importRequests = new Map<string, { connector: FileSourceConnector; file: ImportFileRef }>();
+
+  /** An upload or an import still in flight: Enter waits, and so does the queue. */
+  readonly hasActivePendingUploads = computed(
+    () =>
+      this.fileUploadService.hasActivePendingUploads() ||
+      this.importingAttachments().some(upload => upload.status === 'uploading'),
+  );
+
+  /**
+   * Attachments the composer holds as server metadata rather than a local
+   * upload: files attached in an earlier visit, rebuilt from the stored draft,
+   * and files imported from a connected file source once app-api has them.
    *
    * Metadata, not an upload: the bytes are already in S3 and the id is all the
    * send needs, so there is nothing to re-upload and no `File` to hold. They
@@ -459,10 +490,10 @@ export class ChatInputComponent {
    * the file browser passes it — which is why restoring one costs no changes
    * to the card.
    *
-   * Painted straight from storage so the cards are there on first frame, then
-   * reconciled against the server (see `reconcileRestoredAttachments`), which
-   * is what makes a stale or hand-edited id disappear instead of failing at
-   * send time.
+   * Restored ones are painted straight from storage so the cards are there on
+   * first frame, then reconciled against the server (see
+   * `reconcileRestoredAttachments`), which is what makes a stale or hand-edited
+   * id disappear instead of failing at send time.
    */
   readonly restoredAttachments = signal<FileMetadata[]>([]);
 
@@ -481,7 +512,21 @@ export class ChatInputComponent {
 
   // Computed: show file attachments area
   readonly showFileAttachments = computed(
-    () => this.pendingUploads().length > 0 || this.restoredAttachments().length > 0,
+    () =>
+      this.pendingUploads().length > 0 ||
+      this.restoredAttachments().length > 0 ||
+      this.importingAttachments().length > 0,
+  );
+
+  /** How many more files this message can take, counting what is on its way. */
+  readonly remainingFileSlots = computed(() =>
+    Math.max(
+      0,
+      MAX_FILES_PER_MESSAGE -
+        this.pendingUploads().length -
+        this.restoredAttachments().length -
+        this.importingAttachments().length,
+    ),
   );
 
   /**
@@ -1411,11 +1456,13 @@ export class ChatInputComponent {
     this.closeMentionMenu();
     this.closeSkillMenu();
 
-    this.restoredAttachments.set(
-      (draft.attachments ?? []).map(attachment =>
-        toFileMetadata(attachment, draft.attachmentSessionId ?? ''),
-      ),
+    const restored = (draft.attachments ?? []).map(attachment =>
+      toFileMetadata(attachment, draft.attachmentSessionId ?? ''),
     );
+    // So the sent message shows a card for a file attached in an earlier
+    // visit, which `FileUploadService` never saw upload.
+    for (const file of restored) this.fileUploadService.registerKnownFile(file);
+    this.restoredAttachments.set(restored);
     void this.reconcileRestoredAttachments(draft.attachmentSessionId);
 
     const textarea = this.messageInput()?.nativeElement;
@@ -1730,6 +1777,48 @@ export class ChatInputComponent {
     }
   }
 
+  /** The `+` menu's "Add files or photos": open the browser's own picker. */
+  openFilePicker(): void {
+    this.fileInput()?.nativeElement.click();
+  }
+
+  /**
+   * The `+` menu's "Add from …": the user picked files in a connected file
+   * source's browser. Each is fetched by app-api and attached to the
+   * conversation; this composer shows a card per file while that happens.
+   */
+  onSourceFilesPicked(selection: AttachSelection): void {
+    void this.processSourceFiles(selection.connector, selection.files);
+  }
+
+  /**
+   * The `+` menu's Skills row: write the skill's `/command` into the message.
+   *
+   * At the caret, padded so it never fuses with the text either side of it,
+   * and followed by a space so the user can carry on typing. The literal
+   * `/slug` is the binding, exactly as a pick from the `/` autocomplete is
+   * (see `onSkillPicked`).
+   */
+  insertSkillCommand(command: SkillCommand): void {
+    const textarea = this.messageInput()?.nativeElement;
+    const current = textarea?.value ?? this.userInput();
+    const caret = textarea?.selectionStart ?? current.length;
+    const before = current.slice(0, caret);
+    const after = current.slice(textarea?.selectionEnd ?? caret);
+    const lead = before.length > 0 && !/\s$/.test(before) ? ' ' : '';
+    const replacement = `${lead}/${command.slug} `;
+    const next = before + replacement + after;
+
+    this.userInput.set(next);
+    this.closeSkillMenu();
+    if (!textarea) return;
+    textarea.value = next;
+    const caretAfter = before.length + replacement.length;
+    textarea.setSelectionRange(caretAfter, caretAfter);
+    textarea.focus();
+    this.autoResize(textarea);
+  }
+
   async onFileSelect(event: Event) {
     const input = event.target as HTMLInputElement;
     if (!input.files || input.files.length === 0) {
@@ -1747,17 +1836,23 @@ export class ChatInputComponent {
    */
   onFileRemove(uploadId: string): void {
     // A restored card has no live upload behind it, so it comes off this list
-    // instead. Removing from both is safe and saves the caller knowing which
-    // kind of card it clicked.
+    // instead. Removing from all three is safe and saves the caller knowing
+    // which kind of card it clicked.
     this.restoredAttachments.update(list =>
       list.filter(attachment => attachment.uploadId !== uploadId),
     );
+    // An import that is still in flight cannot be cancelled server-side;
+    // forgetting its request is what tells the completion to delete the file.
+    this.importRequests.delete(uploadId);
+    this.removeImporting(uploadId);
     this.fileUploadService.clearPendingUpload(uploadId);
   }
 
   /** Release every attachment on the composer — what a send or a queue clears. */
   private clearAttachments(): void {
     this.restoredAttachments.set([]);
+    this.importingAttachments.set([]);
+    this.importRequests.clear();
     this.fileUploadService.clearReadyUploads();
   }
 
@@ -1767,6 +1862,13 @@ export class ChatInputComponent {
   async onFileRetry(pendingUpload: PendingUpload): Promise<void> {
     const sessionId = this.sessionId();
     if (!sessionId) {
+      return;
+    }
+
+    // A failed import is asked for again, under the same card.
+    const importRequest = this.importRequests.get(pendingUpload.uploadId);
+    if (importRequest) {
+      await this.importSourceFile(sessionId, importRequest.connector, importRequest.file, pendingUpload.uploadId);
       return;
     }
 
@@ -2369,6 +2471,120 @@ export class ChatInputComponent {
         const message = err instanceof Error ? err.message : 'Upload failed';
         this.toastService.error('Upload Failed', `${file.name}: ${message}`);
       }
+    }
+  }
+
+  /**
+   * Attach files chosen in a connected file source's browser.
+   *
+   * Mirrors `processFiles`: stage a session first (the placeholder `File`
+   * carries only the name — the page uses the event to mint a session, never
+   * the bytes), then check the per-message count, then start every import at
+   * once so the cards fill in as app-api answers. Type and size were judged
+   * in the browser from the listing, and are judged again by the backend
+   * once the bytes are in hand.
+   */
+  private async processSourceFiles(connector: FileSourceConnector, files: ImportFileRef[]): Promise<void> {
+    for (const file of files) {
+      this.fileAttached.emit(new File([], file.name));
+    }
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const sessionId = this.sessionId();
+    if (!sessionId) {
+      this.toastService.error('Upload Error', 'Failed to create session for file upload.');
+      return;
+    }
+
+    const remaining = this.remainingFileSlots();
+    if (files.length > remaining) {
+      this.toastService.warning(
+        'File Limit',
+        `Maximum ${MAX_FILES_PER_MESSAGE} files per message. You can add ${remaining} more.`,
+      );
+      return;
+    }
+
+    await Promise.all(files.map(file => this.importSourceFile(sessionId, connector, file)));
+  }
+
+  /**
+   * One file-source import: a card the moment it starts, metadata when it
+   * lands, an error with Retry when it does not.
+   */
+  private async importSourceFile(
+    sessionId: string,
+    connector: FileSourceConnector,
+    file: ImportFileRef,
+    uploadId = `source:${uuidv4()}`,
+  ): Promise<void> {
+    const pending: PendingUpload = {
+      file: new File([], file.name, { type: resolveMimeTypeFor(file.name, '') }),
+      uploadId,
+      status: 'uploading',
+      progress: 0,
+      statusLabel: `Adding from ${connector.displayName}…`,
+    };
+    this.importRequests.set(uploadId, { connector, file });
+    this.upsertImporting(pending);
+
+    let attached: FileMetadata;
+    try {
+      attached = await this.fileSourceService.attachToConversation(sessionId, connector.providerId, file.fileId);
+    } catch (err) {
+      // Still wanted? A card removed mid-flight has nothing to report to.
+      if (!this.importRequests.has(uploadId)) return;
+      const message = err instanceof Error ? err.message : 'Could not add the file';
+      this.upsertImporting({ ...pending, status: 'error', error: message });
+      return;
+    }
+
+    if (!this.importRequests.has(uploadId)) {
+      // Removed while app-api was fetching it: the file landed in the
+      // conversation's storage anyway, so take it back out.
+      void this.fileUploadService.deleteFile(attached.uploadId).catch(() => undefined);
+      return;
+    }
+    this.importRequests.delete(uploadId);
+    this.removeImporting(uploadId);
+    // The thread's user message draws its cards through the upload service.
+    this.fileUploadService.registerKnownFile(attached);
+    this.restoredAttachments.update(list => [...list, attached]);
+    this.noteTextOnlyModelFor(attached.filename);
+  }
+
+  private upsertImporting(upload: PendingUpload): void {
+    this.importingAttachments.update(list => {
+      const index = list.findIndex(item => item.uploadId === upload.uploadId);
+      if (index < 0) return [...list, upload];
+      const next = [...list];
+      next[index] = upload;
+      return next;
+    });
+  }
+
+  private removeImporting(uploadId: string): void {
+    this.importingAttachments.update(list => list.filter(item => item.uploadId !== uploadId));
+  }
+
+  /**
+   * The notices `processFiles` gives a device upload when the turn's model
+   * reads text only, for a file whose real name is known only once app-api
+   * has fetched it (a Google Doc arrives as a .docx).
+   */
+  private noteTextOnlyModelFor(filename: string): void {
+    if (!isTextOnlyModel(this.modelService.selectedModel())) return;
+    const ext = filename.substring(filename.lastIndexOf('.')).toLowerCase();
+    if (IMAGE_EXTENSIONS.includes(ext)) {
+      this.toastService.info(
+        'Images will be skipped',
+        "This model can't see images, so they won't be sent to it. Switch models to ask about an image."
+      );
+    } else if (TEXT_EXTRACTED_EXTENSIONS.includes(ext)) {
+      this.toastService.info(
+        'This model reads text only',
+        "The document's text will be extracted and sent instead. Layout and images are lost."
+      );
     }
   }
 

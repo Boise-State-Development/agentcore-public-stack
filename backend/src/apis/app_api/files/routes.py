@@ -14,9 +14,11 @@ from fastapi.responses import RedirectResponse, Response
 from apis.shared.auth import User, get_current_user_from_session
 from apis.shared.files.repository import InvalidCursorError
 from apis.shared.files.models import (
+    ImportFileRequest,
     PresignRequest,
     PresignResponse,
     CompleteUploadResponse,
+    FileResponse,
     PreviewUrlResponse,
     SheetPreviewResponse,
     TextSnippetResponse,
@@ -25,6 +27,18 @@ from apis.shared.files.models import (
     QuotaResponse,
     QuotaExceededError as QuotaExceededModel,
     ALLOWED_MIME_TYPES,
+)
+from apis.shared.oauth.provider_repository import (
+    OAuthProviderRepository,
+    get_provider_repository,
+)
+from apis.shared.rbac.service import AppRoleService, get_app_role_service
+
+from apis.app_api.file_sources.models import FileSourceError, FileSourceTooLargeError
+from apis.app_api.file_sources.service import (
+    http_error_for_file_source_error,
+    require_file_source_token,
+    resolve_file_source,
 )
 from .service import (
     get_file_upload_service,
@@ -154,6 +168,94 @@ async def complete_upload(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(e),
         )
+
+
+@router.post("/import", response_model=FileResponse)
+async def import_file_from_source(
+    request: ImportFileRequest,
+    user: User = Depends(get_current_user_from_session),
+    service: FileUploadService = Depends(get_file_upload_service),
+    provider_repo: OAuthProviderRepository = Depends(get_provider_repository),
+    role_service: AppRoleService = Depends(get_app_role_service),
+):
+    """
+    Attach a file from a connected file source to a conversation.
+
+    The composer's "Add from Google Drive": app-api resolves the connector
+    to its file-source adapter (the same gating as `/connectors/{id}/browse`),
+    downloads the file with the user's vaulted OAuth token, and stores it as
+    a ready upload with the device-upload type, size and quota rules. The
+    response is the file's metadata, the shape `GET /files` lists.
+
+    One file per call, so the SPA can show each file's own progress and
+    retry one that failed. The download is capped at the largest size any
+    upload class allows, so an oversized file is refused before it is
+    buffered.
+
+    **Errors:** 409 when the connector needs consent, 400 for an unsupported
+    type or an oversized file, 403 when the user's storage quota is full,
+    502 when the file source cannot be reached.
+    """
+    provider, adapter = await resolve_file_source(
+        request.connector_id, user, provider_repo, role_service
+    )
+    access_token = await require_file_source_token(provider, user.user_id)
+
+    try:
+        downloaded = await adapter.download(
+            access_token, request.file_id, max_bytes=service.max_download_bytes()
+        )
+    except FileSourceTooLargeError:
+        cap_mb = service.max_download_bytes() // (1024 * 1024)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"File exceeds {cap_mb}MB limit",
+        )
+    except FileSourceError as err:
+        logger.warning(
+            "File-source download failed for connector %s: %s",
+            scrub_log(request.connector_id),
+            scrub_log(err),
+        )
+        raise http_error_for_file_source_error(err)
+
+    try:
+        file_meta = await service.import_file(
+            user_id=user.user_id,
+            session_id=request.session_id,
+            filename=downloaded.filename,
+            mime_type=downloaded.content_type,
+            content=downloaded.content,
+            source=f"connector:{provider.provider_id}",
+        )
+    except InvalidFileTypeError as e:
+        logger.warning(f"Unsupported file type imported by user {user.name}: {e.mime_type}")
+        allowed = ", ".join(ALLOWED_MIME_TYPES.values())
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported file type: {e.mime_type}. Supported: {allowed}",
+        )
+    except FileTooLargeError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"File exceeds {e.max_size // (1024*1024)}MB limit",
+        )
+    except QuotaExceededError as e:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=QuotaExceededModel(
+                current_usage=e.current_usage,
+                max_allowed=e.max_allowed,
+                required_space=e.required_space,
+            ).model_dump(by_alias=True),
+        )
+    except FileUploadError as e:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(e),
+        )
+
+    return FileResponse.from_metadata(file_meta)
 
 
 @router.get("/{upload_id}/preview-url", response_model=PreviewUrlResponse)

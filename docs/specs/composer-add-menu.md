@@ -1,0 +1,51 @@
+# The composer's `+` menu and attaching files from a connected file source
+
+**Status:** shipped (no flag). **Surfaces:** the chat composer (`ChatInputComponent`), the file-source browser dialog, `POST /files/import`.
+
+## 1. Problem
+
+The `+` button beside the message box opened the device file picker and nothing else. Users asked to attach files from Google Drive, which the platform could already browse for knowledge-base imports and conversation exports but not for a conversation. More broadly, the things a person can add to a message or change about how it is answered (skills, tools, connectors) lived only on the Customize pages and behind the `/` and `@` autocompletes, with no discoverable entry point from the composer. The claude.ai composer's `+` menu is the model.
+
+## 2. What ships
+
+The `+` button opens a CDK menu (`ComposerAddMenuComponent`) with, in order:
+
+| Row | What it does |
+|---|---|
+| **Add files or photos** | Clicks the composer's hidden `<input type="file">`, so the browser's own dialog and `accept` filter are unchanged. |
+| **Add from {connector}** (one per file source) | Opens `FileSourceBrowserDialogComponent` in its new `attach` mode on that connector. Rows exist only for connectors `GET /file-sources` lists: enabled, mapped by an admin to a file-source adapter, visible to the user's roles. |
+| **Skills ›** | The skills the user has turned on (`SkillCommandService.commands`, the same set the `/` menu offers and the turn discloses). Picking one writes `/slug ` into the message at the caret. Ends in **Manage skills** → `/customize/skills`. Hidden where the composer hides `/` commands (`showSkillCommands`). |
+| **Tools ›** | Every tool the picker would show, by name, as `menuitemcheckbox` rows that flip through `ToolService.toggleTool`. The submenu stays open while several are flipped (`MenuToggleItemDirective`, §4). A row is locked where an Agent dictates the set, an admin pinned the tool, or a retiring tool is off, the same rules as Customize → Tools. Ends in **Manage tools**. |
+| **Connectors ›** | Each connector as a switch with its connection state from `ConnectorStatusService` (probed on first open, cached for the session). On runs the consent popup through `OAuthConsentService`, exactly as the Connectors page and the file-source browser do, and the `/oauth-complete` completion settles the row; off calls the disconnect endpoint, with no confirmation (a switch is its own, and it is reversible). The submenu stays open through both. Ends in **Manage connectors**. |
+
+Lists load when the menu opens, not when the composer renders: `GET /file-sources` asks AgentCore Identity for each connector's token state, and most composers are never opened here.
+
+The `+` control is hidden wherever `showFileControls` is false (the marketplace test drive), as the picker was.
+
+### Attaching from a file source
+
+1. The dialog's `attach` mode multi-selects files and closes with `{connector, files}`; it imports nothing itself. It greys out any file a conversation can't take, judged on **what the file downloads as** (`downloadMimeType`, new on browse entries: a Google Doc exports to `.docx`, a Sheet to `.xlsx`, Slides and Drawings to `.pdf`) against the chat's MIME allowlist, and on its size against the class cap (`attachmentSizeLimitFor`, the same cap a device upload gets, including the large-document raise behind `features.largeDocumentAttachments`). A size Drive doesn't report (every native document) passes to the backend to judge. The pick is capped at `maxFiles`, the message's remaining slots out of five.
+2. The composer emits `fileAttached` with a name-only placeholder `File` per pick, exactly as a device upload does, so the page stages a session; then starts every import at once.
+3. Each file is a card in `importingAttachments` ("Adding from Google Drive…", `PendingUpload.statusLabel`) while `POST /files/import` runs, one call per file. On success the response (`FileResponse`, the `GET /files` shape) joins `restoredAttachments`: from then on it is an ordinary metadata-backed attachment, written into the draft, reconciled against the server on return, and sent by id. It is also registered with `FileUploadService.registerKnownFile`, because the thread's user message draws its attachment cards through `getReadyFileById`, which otherwise knows only uploads from this browser. Draft-restored attachments are registered the same way, which closes a pre-existing gap where they sent but showed no card. On failure the card shows the error with Retry, which re-runs the same import under the same card. A card removed mid-flight deletes the file once it lands, so storage holds nothing the message won't send.
+4. `POST /files/import` resolves the connector exactly as `/connectors/{id}/browse` does (`resolve_file_source`, `require_file_source_token`: 404 unknown or unmapped, 403 not visible, 409 needs consent, 503 no workload context), downloads through the adapter under a byte cap, and calls `FileUploadService.import_file`: the presign gates (type, class size cap, quota), a PENDING row, the S3 PUT, READY, the quota increment, then the same post-ready step as `complete_upload` (digest in-process, or the large-document preparation queue for a reference-class document). The row's `source` is `connector:{provider_id}`, display-only.
+
+### The download cap
+
+A file-source import is sized only once its bytes are in hand, and an exported Google Doc has no size until it streams. So the route hands the adapter the widest cap any upload class allows (`max_download_bytes`: 4 MB general, 25 MB decks, 50 MB documents while large-document attachments are on), and `import_file` applies the file's own class cap afterwards. The Drive adapter refuses an over-cap binary from Drive's `size` field before fetching a byte, and streams exports and binaries of unknown size, stopping at the cap (`FileSourceTooLargeError` → 400). Memory is bounded to one over-cap file at most, and that only for the band between a class cap and the widest cap.
+
+`download(access_token, file_id, max_bytes=None)` is the contract change; the knowledge-base import and KB sync call it without a cap, as before.
+
+## 3. Decisions
+
+- **No feature flag.** The source rows exist only where an administrator has mapped a connector to a file-source adapter, which is already the deployment's choice; the rest of the menu reads lists the app loads anyway. A deployment with no file source sees a menu of device upload plus the three Customize submenus.
+- **One file per `POST /files/import` call.** The composer shows a card per file with its own error and Retry, and the request stays bounded. A batch endpoint would hide which file failed and hold several downloads in one request.
+- **Imported files become `restoredAttachments`, not `FileUploadService` entries.** That service's list is uploads from this browser: it has a `File` to send and a percentage to show, and it feeds the draft and the send. An import has neither. Routing the finished import through the metadata-backed list reuses the draft persistence, reconciliation and send paths without a third kind of attachment.
+- **The menu is its own component.** `ChatInputComponent` is large and its specs stub every child. Keeping the menu's seven services out of the composer leaves those specs untouched and gives the menu a focused spec of its own. The composer only receives `pickFromDevice`, `sourceFilesPicked` and `skillPicked`.
+- **Tool toggles keep the menu open.** CDK closes the whole menu tree on any trigger unless the caller passes `keepOpen`, which only its own Space handler does. `MenuToggleItemDirective` subclasses `CdkMenuItemCheckbox` and forces `keepOpen`, redeclaring the `CdkMenuItem`/`CdkMenuItemSelectable` providers the menu finds its items through. Everything else (`role`, `aria-checked`, arrow keys) is inherited.
+- **Connectors rows are switches.** Connecting runs the same consent popup and completion handling as the Customize → Connectors page and the file-source browser (`initiateConsent` → `requestConsent` + `openConsentPopup` → `completion`), so a connector can be switched on without leaving the composer. Off disconnects without the page's confirmation dialog: the switch is the confirmation and the action is reversible. The page keeps the longer note about revoking the app at the provider.
+- **Nothing here touches the prompt.** Attachments reach the model exactly as device uploads do; the menu adds no system-prompt or `toolConfig` content. Toggling a tool from the menu is the Customize toggle, with the same prefix consequences on the next turn.
+
+## 4. Tests
+
+- Backend: `tests/apis/app_api/test_file_import_route.py` (gating, the cap handed to the adapter, error mapping), `test_file_import_service.py` (gates, row lifecycle, digest and preparation), `test_file_sources_google_drive.py::TestDownloadCap` and `::TestDownloadMimeType`.
+- Frontend: `composer-add-menu.component.spec.ts` (rows, hand-offs, submenus, keep-open, locks, connector states), the `+` menu hand-offs describe in `chat-input.component.spec.ts` (cards, retry, mid-flight removal, limits, skill insertion), the attach-mode describe in `file-source-browser-dialog.component.spec.ts`, and `isAttachableSourceFile` in `file-upload.service.spec.ts`.

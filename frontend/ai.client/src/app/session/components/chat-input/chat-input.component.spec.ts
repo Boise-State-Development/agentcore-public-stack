@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentMentionService, MentionableAgent } from '../../../agents/services/agent-mention.service';
 import { SkillCommand, SkillCommandService } from '../../../services/skill/skill-command.service';
 import { FileMetadata, FileUploadService } from '../../../services/file-upload';
+import { FileSourceService } from '../../../assistants/services/file-source.service';
 import { SystemPromptsService } from '../../../services/system-prompts/system-prompts.service';
 import { ToastService } from '../../../services/toast/toast.service';
 import { ToolService } from '../../../services/tool/tool.service';
@@ -144,6 +145,7 @@ describe('ChatInputComponent — the `@` menu keyboard path (D11)', () => {
             clearReadyUploads: () => undefined,
             clearPendingUpload: () => undefined,
             listSessionFiles: async () => [],
+            registerKnownFile: () => undefined,
           },
         },
         { provide: ToastService, useValue: { error: () => undefined, warning: () => undefined, info: () => undefined } },
@@ -298,6 +300,7 @@ describe('ChatInputComponent — the `/` skill-command menu', () => {
             clearReadyUploads: () => undefined,
             clearPendingUpload: () => undefined,
             listSessionFiles: async () => [],
+            registerKnownFile: () => undefined,
           },
         },
         { provide: ToastService, useValue: { error: () => undefined, warning: () => undefined, info: () => undefined } },
@@ -467,6 +470,7 @@ describe('ChatInputComponent — queueing a follow-up mid-stream', () => {
             clearReadyUploads: () => undefined,
             clearPendingUpload: () => undefined,
             listSessionFiles: async () => [],
+            registerKnownFile: () => undefined,
           },
         },
         { provide: ToastService, useValue: { error: () => undefined, warning: () => undefined, info: () => undefined } },
@@ -727,6 +731,7 @@ describe('ChatInputComponent — mid-turn steering (PR-5)', () => {
             clearReadyUploads: () => undefined,
             clearPendingUpload: () => undefined,
             listSessionFiles: async () => [],
+            registerKnownFile: () => undefined,
           },
         },
         { provide: ToastService, useValue: { error: () => undefined, warning: () => undefined, info: () => undefined } },
@@ -962,6 +967,7 @@ describe('ChatInputComponent — a queue held behind a paused turn (PR-6)', () =
             clearReadyUploads: () => undefined,
             clearPendingUpload: () => undefined,
             listSessionFiles: async () => [],
+            registerKnownFile: () => undefined,
           },
         },
         { provide: ToastService, useValue: { error: () => undefined, warning: () => undefined, info: () => undefined } },
@@ -1207,6 +1213,7 @@ describe('ChatInputComponent — rotating discovery hints', () => {
             clearReadyUploads: () => undefined,
             clearPendingUpload: () => undefined,
             listSessionFiles: async () => [],
+            registerKnownFile: () => undefined,
           },
         },
         { provide: ToastService, useValue: { error: () => undefined, warning: () => undefined, info: () => undefined } },
@@ -1372,6 +1379,7 @@ describe('ChatInputComponent — composer drafts (feedback retry-with-correction
             clearReadyUploads: () => undefined,
             clearPendingUpload: () => undefined,
             listSessionFiles: async () => [],
+            registerKnownFile: () => undefined,
           },
         },
         { provide: ToastService, useValue: { error: () => undefined, warning: () => undefined, info: () => undefined } },
@@ -1474,6 +1482,7 @@ describe('ChatInputComponent — unsent text survives leaving the conversation',
             clearReadyUploads: () => readyUploads.set([]),
             clearPendingUpload: (uploadId: string) =>
               readyUploads.update((list) => list.filter((u) => u.uploadId !== uploadId)),
+            registerKnownFile: () => undefined,
             listSessionFiles: (sessionId: string) => {
               listedSessions.push(sessionId);
               return listSessionFilesImpl(sessionId);
@@ -1864,6 +1873,7 @@ describe('ChatInputComponent — compact layout, touch and first-send handoff', 
             clearReadyUploads: () => undefined,
             clearPendingUpload: () => undefined,
             listSessionFiles: async () => [],
+            registerKnownFile: () => undefined,
           },
         },
         { provide: ToastService, useValue: { error: () => undefined, warning: () => undefined, info: () => undefined } },
@@ -2088,6 +2098,7 @@ describe('ChatInputComponent — dictation', () => {
             clearReadyUploads: () => undefined,
             clearPendingUpload: () => undefined,
             listSessionFiles: async () => [],
+            registerKnownFile: () => undefined,
           },
         },
         { provide: ToastService, useValue: toast },
@@ -2302,6 +2313,7 @@ describe('ChatInputComponent voice mode options', () => {
             clearReadyUploads: () => undefined,
             clearPendingUpload: () => undefined,
             listSessionFiles: async () => [],
+            registerKnownFile: () => undefined,
           },
         },
         { provide: ToastService, useValue: { error: () => undefined, warning: () => undefined, info: () => undefined } },
@@ -2472,6 +2484,7 @@ describe('ChatInputComponent — attaching to a text-only model', () => {
             clearReadyUploads: () => undefined,
             clearPendingUpload: () => undefined,
             listSessionFiles: async () => [],
+            registerKnownFile: () => undefined,
             uploadFile: async (_sessionId: string, file: File) => {
               uploaded.push(file.name);
             },
@@ -2569,5 +2582,177 @@ describe('ChatInputComponent — attaching to a text-only model', () => {
     model.selectedModel.set({ modelId: 'x', inputModalities: ['TEXT', 'DOCUMENT'] });
     await drop(file('a.pdf', 'application/pdf'));
     expect(infos).toEqual([]);
+  });
+});
+
+describe('ChatInputComponent — the `+` menu hand-offs', () => {
+  let fixture: ComponentFixture<ChatInputComponent>;
+  let component: ChatInputComponent;
+  let attachToConversation: ReturnType<typeof vi.fn>;
+  let deleteFile: ReturnType<typeof vi.fn>;
+  let registerKnownFile: ReturnType<typeof vi.fn>;
+  let attachedEvents: string[];
+
+  const DRIVE = { providerId: 'google', displayName: 'Google Drive', iconName: 'x', connected: true };
+  const META: FileMetadata = {
+    uploadId: 'up-1',
+    filename: 'Quarterly Notes.docx',
+    mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    sizeBytes: 1234,
+    sessionId: 's1',
+    s3Uri: 's3://b/k',
+    status: 'ready',
+    createdAt: '2026-10-13T00:00:00Z',
+  };
+
+  beforeEach(async () => {
+    attachedEvents = [];
+    attachToConversation = vi.fn(async () => META);
+    deleteFile = vi.fn(async () => undefined);
+    registerKnownFile = vi.fn();
+    await TestBed.configureTestingModule({
+      imports: [ChatInputComponent],
+      providers: [
+        { provide: AgentMentionService, useClass: MentionServiceStub },
+        { provide: SkillCommandService, useClass: SkillCommandServiceStub },
+        {
+          provide: FileUploadService,
+          useValue: {
+            pendingUploadsList: signal([]),
+            hasActivePendingUploads: signal(false),
+            readyUploadIds: signal([]),
+            readyUploads: signal([]),
+            clearReadyUploads: () => undefined,
+            clearPendingUpload: () => undefined,
+            listSessionFiles: async () => [],
+            registerKnownFile,
+            deleteFile,
+          },
+        },
+        { provide: FileSourceService, useValue: { attachToConversation } },
+        { provide: ToastService, useValue: { error: () => undefined, warning: () => undefined, info: () => undefined } },
+        { provide: ToolService, useValue: { enabledToolIds: () => [] } },
+        { provide: ModelService, useClass: ModelServiceStub },
+        {
+          provide: VoiceChatService,
+          useValue: { status: signal('idle'), isVoiceActive: signal(false), agentTranscript: signal('') },
+        },
+        { provide: SystemPromptsService, useValue: { activePrompt: signal(null) } },
+        { provide: Router, useValue: { navigate: () => Promise.resolve(true) } },
+        { provide: SteeringService, useClass: SteeringServiceStub },
+      ],
+    })
+      .overrideComponent(ChatInputComponent, { set: { imports: [], schemas: [NO_ERRORS_SCHEMA] } })
+      .compileComponents();
+
+    fixture = TestBed.createComponent(ChatInputComponent);
+    component = fixture.componentInstance;
+    component.fileAttached.subscribe((file) => attachedEvents.push(file.name));
+    fixture.componentRef.setInput('showVoiceControl', false);
+    fixture.componentRef.setInput('autoFocus', false);
+    fixture.componentRef.setInput('sessionId', 's1');
+    fixture.detectChanges();
+  });
+
+  async function flush(): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    fixture.detectChanges();
+  }
+
+  it('shows a card while app-api fetches a file-source file, then holds it as metadata', async () => {
+    let resolve!: (meta: FileMetadata) => void;
+    attachToConversation.mockImplementationOnce(() => new Promise<FileMetadata>((r) => (resolve = r)));
+
+    component.onSourceFilesPicked({ connector: DRIVE, files: [{ fileId: 'f1', name: 'Quarterly Notes' }] });
+    await flush();
+
+    // The page is asked to stage a session, as it is for a device upload.
+    expect(attachedEvents).toEqual(['Quarterly Notes']);
+    expect(attachToConversation).toHaveBeenCalledWith('s1', 'google', 'f1');
+    const importing = component.importingAttachments();
+    expect(importing).toHaveLength(1);
+    expect(importing[0].status).toBe('uploading');
+    expect(importing[0].statusLabel).toBe('Adding from Google Drive…');
+    expect(importing[0].file.name).toBe('Quarterly Notes');
+    expect(component.hasActivePendingUploads()).toBe(true);
+    expect(component.remainingFileSlots()).toBe(4);
+
+    resolve(META);
+    await flush();
+
+    expect(component.importingAttachments()).toEqual([]);
+    expect(component.restoredAttachments()).toEqual([META]);
+    expect(component.attachmentIds()).toEqual(['up-1']);
+    expect(component.hasActivePendingUploads()).toBe(false);
+    // The thread's user message draws its card through the upload service.
+    expect(registerKnownFile).toHaveBeenCalledWith(META);
+  });
+
+  it('keeps a failed import as an error card that Retry asks for again', async () => {
+    attachToConversation.mockRejectedValueOnce(new Error('Google Drive could not be reached'));
+
+    component.onSourceFilesPicked({ connector: DRIVE, files: [{ fileId: 'f1', name: 'a.pdf' }] });
+    await flush();
+
+    const failed = component.importingAttachments()[0];
+    expect(failed.status).toBe('error');
+    expect(failed.error).toBe('Google Drive could not be reached');
+    expect(component.hasActivePendingUploads()).toBe(false);
+
+    await component.onFileRetry(failed);
+    await flush();
+
+    expect(attachToConversation).toHaveBeenCalledTimes(2);
+    expect(component.importingAttachments()).toEqual([]);
+    expect(component.restoredAttachments()).toEqual([META]);
+  });
+
+  it('a card removed mid-flight takes the landed file back out of storage', async () => {
+    let resolve!: (meta: FileMetadata) => void;
+    attachToConversation.mockImplementationOnce(() => new Promise<FileMetadata>((r) => (resolve = r)));
+
+    component.onSourceFilesPicked({ connector: DRIVE, files: [{ fileId: 'f1', name: 'a.pdf' }] });
+    await flush();
+    component.onFileRemove(component.importingAttachments()[0].uploadId);
+    expect(component.importingAttachments()).toEqual([]);
+
+    resolve(META);
+    await flush();
+
+    expect(component.restoredAttachments()).toEqual([]);
+    expect(deleteFile).toHaveBeenCalledWith('up-1');
+  });
+
+  it('refuses a pick that would exceed the per-message limit', async () => {
+    const files = Array.from({ length: 6 }, (_, i) => ({ fileId: `f${i}`, name: `f${i}.pdf` }));
+
+    component.onSourceFilesPicked({ connector: DRIVE, files });
+    await flush();
+
+    expect(attachToConversation).not.toHaveBeenCalled();
+    expect(component.importingAttachments()).toEqual([]);
+  });
+
+  it('writes a picked skill into the message as its /command, padded from the text', () => {
+    const textarea = fixture.nativeElement.querySelector('textarea') as HTMLTextAreaElement;
+    textarea.value = 'Please';
+    textarea.setSelectionRange(6, 6);
+    textarea.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+
+    component.insertSkillCommand(SKILLS[0]);
+
+    expect(component.userInput()).toBe('Please /brand-deck ');
+    expect(textarea.value).toBe('Please /brand-deck ');
+    expect(textarea.selectionStart).toBe('Please /brand-deck '.length);
+
+    component.insertSkillCommand(SKILLS[2]);
+    expect(component.userInput()).toBe('Please /brand-deck /web-research ');
+  });
+
+  it('starts an empty message with the command and no leading space', () => {
+    component.insertSkillCommand(SKILLS[1]);
+    expect(component.userInput()).toBe('/brand-voice ');
   });
 });

@@ -37,6 +37,16 @@ class FileEntry(BaseModel):
     # False for folders and for files that cannot be ingested (e.g. Google
     # Forms). The generic browser greys these out instead of allowing select.
     selectable: bool = Field(True, description="Whether the entry can be picked for import")
+    # The MIME type the file's bytes arrive as when it differs from `mime_type`:
+    # a provider-native document that `download` exports (a Google Doc comes
+    # down as a .docx). None when the file downloads as itself. Lets a caller
+    # with its own type allowlist (the chat composer, which attaches only what
+    # the model can read) decide before downloading.
+    download_mime_type: Optional[str] = Field(
+        None,
+        alias="downloadMimeType",
+        description="MIME type the file downloads as, when an export changes it",
+    )
 
 
 class Breadcrumb(BaseModel):
@@ -92,3 +102,12 @@ class FileSourceAuthError(FileSourceError):
 
 class FileSourceNotFoundError(FileSourceError):
     """The requested file or folder does not exist (404)."""
+
+
+class FileSourceTooLargeError(FileSourceError):
+    """The file is over the byte cap the caller passed to `download`.
+
+    Raised before any bytes are buffered when the provider reports the size
+    up front, and mid-stream otherwise, so a caller's cap bounds memory as
+    well as the stored result.
+    """
