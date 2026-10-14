@@ -27,6 +27,11 @@ Plus a **list** mode (no ``upload_id``) enumerating the session's readable
 documents, and an **index** mode (a PDF with neither range nor pattern) that
 returns the page count and a short per-page snippet index.
 
+A **query** mode (:func:`search_documents`) searches the conversation's large
+documents semantically through the shared ``attachments`` managed KB
+(``attachment_search.py``, the only module that may), when the deployment has it.
+It finds the place; a page-range read then shows the page at full fidelity.
+
 A **prepared** document (a reference-class upload the ``large-document-prepare``
 Lambda has processed; ``large_document.py``) is read from its ``_derived/``
 sidecars instead of the original: the text layer for pattern, text and index,
@@ -157,6 +162,8 @@ class DocumentReadResult:
     bytes_returned: int = 0
     format: Optional[str] = None
     extra_blocks: List[Dict[str, Any]] = field(default_factory=list)
+    #: Search results returned (query mode only).
+    hits: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -383,6 +390,146 @@ async def read_document(
         raw = await _fetch_bytes(meta)
         return await asyncio.to_thread(_text_pattern, raw.decode("utf-8", errors="replace"), pattern_text, base, "line")
     return await _text_read(user_id, upload_id, offset, base, fmt)
+
+
+# ---------------------------------------------------------------------------
+# Semantic search (the attachments managed KB; large-document spec §4F)
+# ---------------------------------------------------------------------------
+
+_SEARCH_NOT_READY = {
+    "preparing": "is still being prepared; it can be searched a few minutes after that.",
+    "indexing": "is still being indexed for search, which takes a few minutes.",
+    "evicted": (
+        "was removed from the search index after a period of inactivity. It is "
+        "re-indexed when this conversation is opened, which takes a few minutes."
+    ),
+    "unavailable": "is not available for search.",
+    "off": "is not indexed for search (only large documents are).",
+}
+
+
+def _not_searchable_entry(meta: FileMetadata, status: str) -> Dict[str, Any]:
+    return {
+        "upload_id": meta.upload_id,
+        "filename": meta.filename,
+        "search_status": status,
+        "message": f"'{meta.filename}' {_SEARCH_NOT_READY[status]}",
+    }
+
+
+def _pattern_suggestion(metas: Sequence[FileMetadata]) -> str:
+    pdf = any(document_format_for(m.mime_type, m.filename) == "pdf" for m in metas)
+    then = "then page_range to read the pages it finds" if pdf else "then read on from the matches"
+    return f"use pattern on the document (a regex over its text), {then}."
+
+
+def _search_fallback_hint(metas: Sequence[FileMetadata]) -> str:
+    return f"Instead, {_pattern_suggestion(metas)}"
+
+
+async def search_documents(
+    user_id: str,
+    session_id: str,
+    query: str,
+    *,
+    upload_id: Optional[str] = None,
+    kb_enabled: bool = True,
+) -> DocumentReadResult:
+    """Semantic search over this conversation's indexed large documents.
+
+    With ``upload_id``, that document only. A document that is not searchable yet
+    (or any more) comes back as its status and the suggestion to use ``pattern``,
+    never as an error: Tier 1 reads work whatever the index says. A knowledge
+    base that is missing or failing degrades the same way.
+    """
+    from .attachment_index import SEARCH_SEARCHABLE, is_text_indexed, search_status
+    from .attachment_search import search_attachments
+
+    _require_identity(user_id, session_id)
+    query_text = (query or "").strip()
+    if not query_text:
+        raise WorkspaceValidationError("query must not be empty")
+
+    if upload_id:
+        meta = await _get_owned_ready_file(user_id, upload_id)
+        if meta.session_id != session_id:
+            raise WorkspaceFileNotFoundError(f"No file with id '{upload_id}' found in this conversation")
+        candidates = [meta]
+    else:
+        files = await get_file_upload_repository().list_session_files(session_id, status=FileStatus.READY)
+        candidates = [
+            m for m in files if m.user_id == user_id and document_format_for(m.mime_type, m.filename) is not None
+        ]
+
+    statuses = {m.upload_id: search_status(m, kb_enabled=kb_enabled) for m in candidates}
+    searchable = [m for m in candidates if statuses[m.upload_id] == SEARCH_SEARCHABLE]
+    not_searchable = [
+        _not_searchable_entry(m, statuses[m.upload_id])
+        for m in candidates
+        if statuses[m.upload_id] != SEARCH_SEARCHABLE
+    ]
+    payload: Dict[str, Any] = {"mode": "query", "query": query_text}
+    if upload_id:
+        payload["upload_id"] = upload_id
+    if not_searchable:
+        payload["not_searchable"] = not_searchable
+    partial = [m for m in searchable if is_text_indexed(m)]
+    if partial:
+        payload["images_pending"] = [
+            {
+                "upload_id": m.upload_id,
+                "filename": m.filename,
+                "message": (
+                    f"'{m.filename}' is searchable by its text; its images and scanned pages "
+                    "are still being indexed. page_range reads show every page in full."
+                ),
+            }
+            for m in partial
+        ]
+
+    if not searchable:
+        payload.update(results=[], count=0, hint=_search_fallback_hint(candidates))
+        if not candidates:
+            payload["hint"] = "This conversation has no documents to search."
+        return DocumentReadResult(mode="query", payload=payload)
+
+    try:
+        hits = await search_attachments(user_id, session_id, query_text, upload_id=upload_id or None)
+    except Exception as exc:  # noqa: BLE001 - a failed search degrades to pattern, never to an error
+        logger.warning("attachment search failed (%s); suggesting pattern", type(exc).__name__)
+        payload.update(
+            results=[], count=0,
+            search_error="Search is unavailable right now.",
+            hint=_search_fallback_hint(searchable),
+        )
+        return DocumentReadResult(mode="query", payload=payload)
+
+    results = [
+        {
+            "upload_id": hit.upload_id,
+            "filename": hit.filename,
+            **({"page": hit.page} if hit.page is not None else {}),
+            "text": hit.text,
+            **({"truncated": True} if hit.truncated else {}),
+        }
+        for hit in hits
+    ]
+    payload.update(results=results, count=len(results))
+    if any(hit.page is not None for hit in hits):
+        payload["hint"] = (
+            "These are excerpts. Read the pages they come from with page_range to see "
+            "them in full, including tables and figures, before answering from them."
+        )
+    elif results:
+        payload["hint"] = "These are excerpts. Use pattern to find the exact passage and its context."
+    else:
+        payload["hint"] = f"Nothing matched. Try other words, or {_pattern_suggestion(searchable)}"
+    return DocumentReadResult(
+        mode="query",
+        payload=payload,
+        bytes_returned=sum(len(r["text"].encode("utf-8")) for r in results),
+        hits=len(results),
+    )
 
 
 async def _text_read(user_id: str, upload_id: str, offset: int, base: Dict[str, Any], fmt: str) -> DocumentReadResult:

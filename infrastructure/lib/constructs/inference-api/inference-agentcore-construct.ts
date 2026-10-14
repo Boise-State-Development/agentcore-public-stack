@@ -405,6 +405,11 @@ export class InferenceAgentCoreConstruct extends Construct {
         // folder_attachment_ids are resolved and rendered as manifests. Spread in
         // only while on, like the two above; app-api carries its own copy.
         ...(config.folderAttachments.enabled ? { FOLDER_ATTACHMENTS_ENABLED: 'true' } : {}),
+        // Attachments KB (in development, default off; large-document spec §4F).
+        // Adds document_read's `query` argument: a tool-spec change once per
+        // deployment, never per session. Spread in only while on, like the ones
+        // above; must match app-api's and the prepare Lambda's copies.
+        ...(config.attachmentKb.enabled ? { ATTACHMENT_KB_ENABLED: 'true' } : {}),
         // Agent Designer harness resolution: the runtime resolves an Agent's
         // bindings + modelConfig at invocation. Default off, mirrors app-api.
         AGENTS_API_ENABLED: config.agents.enabled ? 'true' : 'false',

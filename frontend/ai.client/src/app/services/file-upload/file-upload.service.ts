@@ -257,6 +257,25 @@ export type ThumbnailFetchResult =
   | { status: 'unavailable' };
 
 /**
+ * Whether a large document can be searched through the attachments KB, from
+ * GET /files/{uploadId}/search-status (docs/specs/large-document-attachments.md
+ * §4G). `preparing`, `indexing` and `evicted` (re-indexing because the
+ * conversation was opened) are still moving; the rest are settled.
+ */
+export type AttachmentSearchStatus =
+  | 'off'
+  | 'preparing'
+  | 'indexing'
+  | 'searchable'
+  | 'evicted'
+  | 'unavailable';
+
+export interface SearchStatusResponse {
+  uploadId: string;
+  status: AttachmentSearchStatus;
+}
+
+/**
  * File metadata from list/get operations
  */
 export interface FileMetadata {
@@ -851,6 +870,16 @@ export class FileUploadService {
       }
       return { status: 'unavailable' };
     }
+  }
+
+  /**
+   * Whether a large document is searchable yet. One row read on the server, no
+   * Bedrock call; the attachment chip polls it while the answer is moving.
+   */
+  async getSearchStatus(uploadId: string): Promise<SearchStatusResponse> {
+    return firstValueFrom(
+      this.http.get<SearchStatusResponse>(`${this.baseUrl()}/${uploadId}/search-status`)
+    );
   }
 
   /**

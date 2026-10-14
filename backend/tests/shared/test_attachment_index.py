@@ -303,6 +303,35 @@ class TestCheck:
         assert run(ai.check_upload(env["indexer"], USER, "up-1", 2)) == "rescheduled"
         assert env["sent"] == [({"action": "check", "user_id": USER, "upload_id": "up-1", "attempt": 3}, 300)]
 
+    def test_text_indexed_marks_the_row_searchable_once_and_keeps_polling(self, env):
+        # Measured on dev: TEXT_INDEXED at +80 s, INDEXED at +10 m 47 s on a
+        # 500-page PDF. Search works from the first; `indexed` waits for the second.
+        self._indexing(env)
+        env["agent"].statuses["att#user-1#sess-1#up-1"] = "TEXT_INDEXED"
+
+        assert run(ai.check_upload(env["indexer"], USER, "up-1", 1)) == "rescheduled"
+        row = run(env["repo"].get_file(USER, "up-1"))
+        first = row.kb_index["textIndexedAt"]
+        assert row.kb_index["status"] == ai.STATUS_INDEXING and first
+        assert ai.is_text_indexed(row) and ai.search_status(row, kb_enabled=True) == ai.SEARCH_SEARCHABLE
+
+        run(ai.check_upload(env["indexer"], USER, "up-1", 2))
+        assert run(env["repo"].get_file(USER, "up-1")).kb_index["textIndexedAt"] == first
+
+        env["agent"].statuses["att#user-1#sess-1#up-1"] = "INDEXED"
+        run(ai.check_upload(env["indexer"], USER, "up-1", 3))
+        kb = run(env["repo"].get_file(USER, "up-1")).kb_index
+        assert kb["status"] == ai.STATUS_INDEXED and "textIndexedAt" not in kb
+
+    def test_a_re_index_starts_over_without_the_text_indexed_mark(self, env):
+        self._indexing(env)
+        env["agent"].statuses["att#user-1#sess-1#up-1"] = "TEXT_INDEXED"
+        run(ai.check_upload(env["indexer"], USER, "up-1", 1))
+
+        run(ai.sync_upload(env["indexer"], USER, "up-1", force=True))
+        row = run(env["repo"].get_file(USER, "up-1"))
+        assert not ai.is_text_indexed(row) and ai.search_status(row, kb_enabled=True) == ai.SEARCH_INDEXING
+
     def test_in_flight_past_the_last_check_is_left_to_the_reconcile(self, env):
         self._indexing(env)
         env["agent"].statuses["att#user-1#sess-1#up-1"] = "IN_PROGRESS"
@@ -380,6 +409,18 @@ class TestReconcile:
         assert sorted(env["backend"].deleted) == ["att#user-1#sess-1#idle", "att#user-1#sess-1#orphan"]
         assert run(env["repo"].get_file(USER, "settle")).kb_index["status"] == ai.STATUS_INDEXED
         assert run(env["repo"].get_file(USER, "idle")).kb_index["status"] == ai.STATUS_EVICTED
+
+    def test_text_indexed_left_by_the_checks_is_marked_searchable(self, env):
+        recent = (self.NOW - timedelta(days=1)).isoformat()
+        run(env["put"](_row("slow", kb={"status": "indexing", "submittedAt": recent})))
+        env["activity"]["at"] = self.NOW - timedelta(days=1)
+        env["agent"].listing = [("att#user-1#sess-1#slow", "TEXT_INDEXED")]
+
+        counts = run(ai.reconcile(env["indexer"], now=self.NOW))
+
+        row = run(env["repo"].get_file(USER, "slow"))
+        assert counts["settled"] == 1 and row.kb_index["status"] == ai.STATUS_INDEXING
+        assert ai.search_status(row, kb_enabled=True) == ai.SEARCH_SEARCHABLE
 
     def test_no_knowledge_base_means_nothing_to_do(self, env):
         from apis.shared.kb_backend.managed_backend import ManagedKbNotProvisioned

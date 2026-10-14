@@ -19,5 +19,6 @@ export const environment = {
         clientTurnTiming: true,
         largeDocumentAttachments: true,
         folderAttachments: false,
+        attachmentKb: true,
     } satisfies FeatureFlags,
 };

@@ -39,6 +39,11 @@ Design notes
 * Tool results carrying a native ``document`` block are exempt from the
   tool-result offloader (``core/tool_result_offload.py``): offloading the
   slice the model just asked for would defeat the read.
+* **Search mode** (``query``; ``docs/specs/large-document-attachments.md``
+  §4F) exists only on a deployment with the attachments KB
+  (``ATTACHMENT_KB_ENABLED`` on the Runtime), so the spec is constant per
+  deployment. ``Retrieve`` runs only when the model asks (p50 ~670 ms), never
+  ahead of the first token. Its record adds ``mode=query`` and ``hit_count``.
 """
 
 from __future__ import annotations
@@ -54,6 +59,7 @@ from apis.shared.files.document_read import (
     DocumentReadResult,
     list_session_documents,
     read_document,
+    search_documents,
 )
 from apis.shared.files.workspace import WorkspaceError, WorkspaceStorageNotConfiguredError
 
@@ -82,8 +88,8 @@ def _success(result: DocumentReadResult) -> Dict[str, Any]:
 def record_document_read(result: DocumentReadResult) -> None:
     """One content-free EMF record per successful read. Never raises."""
     logger.info(
-        "document_read: mode=%s format=%s pages=%d bytes=%d",
-        result.mode, result.format, result.pages_returned, result.bytes_returned,
+        "document_read: mode=%s format=%s pages=%d bytes=%d hits=%d",
+        result.mode, result.format, result.pages_returned, result.bytes_returned, result.hits,
     )
     try:
         from apis.shared.observability.prompt_cache import prompt_cache_observability_enabled
@@ -98,23 +104,89 @@ def record_document_read(result: DocumentReadResult) -> None:
                 "DocumentReadPages": int(result.pages_returned),
                 "DocumentReadBytes": int(result.bytes_returned),
             },
-            properties={"mode": result.mode, "format": result.format},
+            properties={
+                "mode": result.mode,
+                "format": result.format,
+                **({"hit_count": int(result.hits)} if result.mode == "query" else {}),
+            },
             units={"DocumentReadPages": "Count", "DocumentReadBytes": "Bytes"},
         )
     except Exception as e:  # noqa: BLE001
         logger.debug("document_read EMF skipped: %s", e)
 
 
-def make_document_read_tool(session_id: str, user_id: str, *, text_only: bool = False):
+def make_document_read_tool(
+    session_id: str,
+    user_id: str,
+    *,
+    text_only: bool = False,
+    searchable: Optional[bool] = None,
+):
     """Create a ``document_read`` tool bound to the given identity.
 
     ``text_only`` is for a model whose catalog row declares TEXT input only:
     page-range reads return text instead of a native document block. The
     tool's spec (name, docstring, parameters) is identical either way, so the
     flag never changes ``toolConfig``.
+
+    ``searchable`` adds the ``query`` argument (semantic search through the
+    shared attachments KB, large-document spec §4F). It defaults to the
+    deployment's ``ATTACHMENT_KB_ENABLED``, which is constant for a deployment and
+    never depends on whether *this* session has an indexed document: the spec
+    changes once, when a deployment turns the KB on, and never flaps per session
+    (PR #1218). Off, the spec is byte-for-byte the one before the search mode
+    existed (pinned by ``test_document_read_search.py``).
     """
     if not session_id or not user_id:
         raise ValueError("document_read requires a session_id and a user_id")
+    if searchable is None:
+        from apis.shared.feature_flags import attachment_kb_enabled
+
+        searchable = attachment_kb_enabled()
+
+    async def _run(
+        upload_id: str,
+        page_range: str,
+        pattern: str,
+        query: str,
+        max_pages: int,
+        offset: int,
+    ) -> Any:
+        try:
+            if query and query.strip():
+                result = await search_documents(
+                    user_id, session_id, query, upload_id=upload_id or None, kb_enabled=searchable
+                )
+            elif not upload_id:
+                listing = await list_session_documents(user_id, session_id)
+                listing["hint"] = (
+                    "Call again with upload_id plus page_range (PDF), pattern, or neither."
+                )
+                result = DocumentReadResult(mode="list", payload=listing)
+            else:
+                result = await read_document(
+                    user_id,
+                    session_id,
+                    upload_id,
+                    page_range=page_range or None,
+                    pattern=pattern or None,
+                    max_pages=max_pages,
+                    offset=offset,
+                    text_only=text_only,
+                )
+        except WorkspaceStorageNotConfiguredError:
+            return _error(_NO_STORAGE_MESSAGE)
+        except WorkspaceError as exc:
+            return _error(f"❌ {exc}")
+        except Exception as exc:  # noqa: BLE001 - surface conversationally, never raise through the loop
+            logger.error("document_read error: %s", exc, exc_info=True)
+            return _error(f"❌ Failed to read document '{upload_id}': {exc}")
+
+        record_document_read(result)
+        return _success(result)
+
+    if searchable:
+        return _make_searchable_tool(_run)
 
     @tool(name=DOCUMENT_READ_TOOL_NAME)
     async def document_read(
@@ -167,34 +239,82 @@ def make_document_read_tool(session_id: str, user_id: str, *, text_only: bool = 
             JSON metadata, plus the requested pages as an attached document
             for page_range reads.
         """
-        try:
-            if not upload_id:
-                listing = await list_session_documents(user_id, session_id)
-                listing["hint"] = (
-                    "Call again with upload_id plus page_range (PDF), pattern, or neither."
-                )
-                result = DocumentReadResult(mode="list", payload=listing)
-            else:
-                result = await read_document(
-                    user_id,
-                    session_id,
-                    upload_id,
-                    page_range=page_range or None,
-                    pattern=pattern or None,
-                    max_pages=max_pages,
-                    offset=offset,
-                    text_only=text_only,
-                )
-        except WorkspaceStorageNotConfiguredError:
-            return _error(_NO_STORAGE_MESSAGE)
-        except WorkspaceError as exc:
-            return _error(f"❌ {exc}")
-        except Exception as exc:  # noqa: BLE001 - surface conversationally, never raise through the loop
-            logger.error("document_read error: %s", exc, exc_info=True)
-            return _error(f"❌ Failed to read document '{upload_id}': {exc}")
+        return await _run(upload_id, page_range, pattern, "", max_pages, offset)
 
-        record_document_read(result)
-        return _success(result)
+    return document_read
+
+
+def _make_searchable_tool(run):
+    """``document_read`` with the ``query`` argument, for a deployment with the KB.
+
+    A separate function rather than a docstring edited at runtime: Strands builds
+    the spec from the signature and docstring at decoration time, and the
+    non-searchable spec must stay exactly as it was.
+    """
+
+    @tool(name=DOCUMENT_READ_TOOL_NAME)
+    async def document_read(
+        upload_id: str = "",
+        page_range: str = "",
+        pattern: str = "",
+        query: str = "",
+        max_pages: int = DOCUMENT_READ_MAX_PAGES,
+        offset: int = 0,
+    ) -> Any:
+        """Read part of a document the user attached to this conversation.
+
+        Use this when a document you need is no longer inline (its content
+        was replaced by a placeholder or digest after the conversation was
+        restored) or when you need specific pages of a long document.
+
+        Modes, by argument:
+        - No arguments: list this conversation's readable documents with
+          their upload_id, format and size.
+        - upload_id + page_range (PDF only, e.g. "4-7"): returns those pages
+          as an attached document at full fidelity (text and page images),
+          at most max_pages per call. The attachment's own page k is
+          original page start+k-1 — cite original page numbers.
+        - upload_id + pattern: case-insensitive regex over the text; returns
+          matching lines with page numbers (PDF) or line/paragraph numbers
+          (text, Word), so you can then read the right pages. Use this first
+          on a long document instead of paging through it.
+        - query (optionally with upload_id): semantic search over this
+          conversation's large documents, or just that one; returns the best
+          matching excerpts with their PDF page numbers. Use it when you know
+          what you are looking for but not the exact words, and for scanned
+          or layout-heavy documents whose text a pattern cannot match. Then
+          read the pages it names with page_range before answering. A
+          document not yet indexed is reported as such: use pattern instead.
+        - upload_id alone: for a PDF, the page count and a per-page snippet
+          index; for text and Word documents, the text itself (bounded —
+          continue with offset = next_offset when truncated).
+
+        Prefer pattern or query, then a narrow page_range, over reading many
+        pages. Spreadsheets are read with analyze_spreadsheet and presentations
+        with read_powerpoint_presentation, not here.
+
+        Args:
+            upload_id: The document's id (from the listing, the attachment
+                note, or an earlier call). Empty to list documents, or with
+                query to search every large document in the conversation.
+            page_range: 1-indexed inclusive page range for PDFs, "start-end"
+                or a single page "5".
+            pattern: Regular expression (case-insensitive) to search for.
+                Do not nest one unbounded quantifier inside another — write
+                "X+" rather than "(X+)+" — because such a pattern can take
+                exponential time; it is searched as literal text instead and
+                the result says so.
+            query: Natural-language search over large documents. When set,
+                page_range and pattern are ignored.
+            max_pages: Cap on pages returned by page_range (default 8, hard
+                cap 20).
+            offset: Byte offset to continue a truncated text read.
+
+        Returns:
+            JSON metadata, plus the requested pages as an attached document
+            for page_range reads.
+        """
+        return await run(upload_id, page_range, pattern, query, max_pages, offset)
 
     return document_read
 

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import {
   FILE_TYPE_STYLES,
@@ -7,8 +8,12 @@ import {
 } from './file-attachment-badge.component';
 import {
   ALLOWED_MIME_TYPES,
+  AttachmentSearchStatusService,
   FileUploadService,
+  type AttachmentSearchStatus,
 } from '../../../../../services/file-upload';
+import { FEATURES } from '../../../../../services/features';
+import { environment } from '../../../../../../environments/environment';
 import { FilePreviewStateService } from '../../../../services/file-preview/file-preview-state.service';
 
 /**
@@ -175,5 +180,89 @@ describe('FileAttachmentBadgeComponent click routing', () => {
 
       expect(chip(fixture)).toBeNull();
     });
+  });
+});
+
+/**
+ * With the attachments KB, the message card's chip follows the search index
+ * (docs/specs/large-document-attachments.md §4G): indexing, then searchable.
+ */
+describe('FileAttachmentBadgeComponent search chip', () => {
+  const MB = 1024 * 1024;
+
+  class FakeSearchStatus {
+    readonly status = signal<AttachmentSearchStatus | null>(null);
+    readonly tracked: string[] = [];
+    statusFor(): AttachmentSearchStatus | null {
+      return this.status();
+    }
+    track(id: string): void {
+      this.tracked.push(id);
+    }
+  }
+
+  async function mount(sizeBytes: number, attachmentKb: boolean) {
+    const fake = new FakeSearchStatus();
+    TestBed.resetTestingModule();
+    await TestBed.configureTestingModule({
+      imports: [FileAttachmentBadgeComponent],
+      providers: [
+        { provide: FEATURES, useValue: { ...environment.features, attachmentKb } },
+        { provide: AttachmentSearchStatusService, useValue: fake },
+        { provide: FilePreviewStateService, useValue: { open: vi.fn() } },
+        {
+          provide: FileUploadService,
+          useValue: {
+            getTextSnippet: vi.fn().mockResolvedValue({ snippet: '' }),
+            getThumbnail: vi.fn().mockResolvedValue({ status: 'unavailable' }),
+          },
+        },
+      ],
+    }).compileComponents();
+    const fixture = TestBed.createComponent(FileAttachmentBadgeComponent);
+    fixture.componentRef.setInput('attachment', {
+      uploadId: 'up1',
+      filename: 'policy-manual.pdf',
+      mimeType: 'application/pdf',
+      sizeBytes,
+    });
+    fixture.detectChanges();
+    await fixture.whenStable();
+    return { fixture, fake };
+  }
+
+  const chipText = (fixture: { nativeElement: HTMLElement }) =>
+    fixture.nativeElement.querySelector('[data-testid="reference-chip"]')?.textContent?.trim();
+
+  it('tracks a large document and follows it from indexing to searchable', async () => {
+    const { fixture, fake } = await mount(38 * MB, true);
+    expect(fake.tracked).toEqual(['up1']);
+    expect(chipText(fixture)).toBe('Large document, read on demand');
+
+    fake.status.set('indexing');
+    fixture.detectChanges();
+    expect(chipText(fixture)).toBe('Large document, indexing for search…');
+
+    fake.status.set('searchable');
+    fixture.detectChanges();
+    expect(chipText(fixture)).toBe('Large document, searchable');
+  });
+
+  it('stays read on demand when the document cannot be indexed', async () => {
+    const { fixture, fake } = await mount(38 * MB, true);
+    fake.status.set('unavailable');
+    fixture.detectChanges();
+    expect(chipText(fixture)).toBe('Large document, read on demand');
+  });
+
+  it('never polls an inline-size document', async () => {
+    const { fake } = await mount(2 * MB, true);
+    expect(fake.tracked).toEqual([]);
+  });
+
+  it('never polls while the deployment has no attachments KB', async () => {
+    const { fixture, fake } = await mount(38 * MB, false);
+    expect(fake.tracked).toEqual([]);
+    expect(chipText(fixture)).toBe('Large document, read on demand');
   });
 });

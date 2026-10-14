@@ -96,6 +96,13 @@ DOC_IN_FLIGHT = frozenset({"STARTING", "PENDING", "IN_PROGRESS", "TEXT_INDEXED"}
 DOC_FAILED = frozenset({"FAILED", "METADATA_UPDATE_FAILED"})
 DOC_GONE = frozenset({"NOT_FOUND", "DELETING", "DELETE_IN_PROGRESS"})
 
+#: In flight, but the text is already retrievable; only image extraction (OCR,
+#: figure descriptions) is still running. Measured on dev 2026-10-13 on a 43.8 MB,
+#: 500-page PDF: TEXT_INDEXED at +80 s, INDEXED at +10 m 47 s. It stays in
+#: ``DOC_IN_FLIGHT`` (``indexed`` means the whole document), and the row records it
+#: as ``textIndexedAt`` so search can start ~10 minutes earlier.
+DOC_TEXT_INDEXED = "TEXT_INDEXED"
+
 #: Delays between status checks, in seconds (SQS caps one delay at 900). About an
 #: hour and a quarter in all; a document still in flight after that is left to
 #: the daily reconcile.
@@ -189,10 +196,61 @@ def kb_index_record(status: str, previous: Optional[dict] = None, **extra: Any) 
     return record
 
 
+def is_text_indexed(meta: Optional[FileMetadata]) -> bool:
+    """Indexing, with its text already searchable (Bedrock reported TEXT_INDEXED)."""
+    kb = getattr(meta, "kb_index", None)
+    return isinstance(kb, dict) and kb.get("status") == STATUS_INDEXING and bool(kb.get("textIndexedAt"))
+
+
 def kb_status(meta: Optional[FileMetadata]) -> Optional[str]:
     kb = getattr(meta, "kb_index", None)
     status = kb.get("status") if isinstance(kb, dict) else None
     return status if isinstance(status, str) else None
+
+
+#: Whether a document can be searched, as ``document_read``'s query mode and the
+#: SPA's chip (``GET /files/{id}/search-status``) describe it. Derived from the
+#: row alone, so neither asks Bedrock.
+SEARCH_OFF = "off"
+SEARCH_PREPARING = "preparing"
+SEARCH_INDEXING = "indexing"
+SEARCH_SEARCHABLE = "searchable"
+SEARCH_EVICTED = "evicted"
+SEARCH_UNAVAILABLE = "unavailable"
+
+
+def search_status(meta: Optional[FileMetadata], *, kb_enabled: bool) -> str:
+    """One document's searchability.
+
+    A document whose text is indexed while its images are still being processed
+    (``textIndexedAt``) is already ``searchable``: text search works from then on,
+    and ``document_read``'s query mode says image content is still pending.
+
+    ``off`` when the deployment has no attachments KB or the file is not
+    reference-class (it is never indexed). ``preparing`` until its sidecars are
+    built, because indexing follows preparation. A prepared document with no
+    ``kbIndex`` yet is ``indexing``: the same invocation that finished the
+    preparation is about to ingest it. ``unavailable`` covers a failed
+    preparation or ingest, the per-user cap and a removed document; Tier 1
+    reads are unaffected by any of them. So is a document that was never queued
+    for preparation (``complete_upload`` writes ``pending`` before it returns, so
+    a missing preparation is not a race).
+    """
+    if not kb_enabled or meta is None or not is_reference_document(meta):
+        return SEARCH_OFF
+    preparation = large_document.preparation_status(meta)
+    if preparation in (None, large_document.STATUS_FAILED):
+        return SEARCH_UNAVAILABLE
+    if not large_document.is_prepared(meta):
+        return SEARCH_PREPARING
+    status = kb_status(meta)
+    if status == STATUS_INDEXED or is_text_indexed(meta):
+        return SEARCH_SEARCHABLE
+    if status in (None, STATUS_QUEUED, STATUS_INDEXING):
+        return SEARCH_INDEXING
+    if status == STATUS_EVICTED:
+        return SEARCH_EVICTED
+    return SEARCH_UNAVAILABLE
 
 
 def is_eligible(meta: Optional[FileMetadata]) -> bool:
@@ -555,6 +613,8 @@ async def check_upload(indexer: Indexer, user_id: str, upload_id: str, attempt: 
         await _set_status(indexer, meta, STATUS_INDEXED, indexedAt=_iso(_now()))
         record_index_outcome("indexed", attempt=attempt)
         return STATUS_INDEXED
+    if status == DOC_TEXT_INDEXED and not is_text_indexed(meta):
+        await _set_status(indexer, meta, STATUS_INDEXING, textIndexedAt=_iso(_now()))
     if status in DOC_FAILED:
         await indexer.delete_document(document_id(user_id, meta.session_id, upload_id))
         await asyncio.to_thread(release_bytes, user_id, upload_id, table=indexer.bytes_table)
@@ -657,6 +717,10 @@ async def reconcile(indexer: Indexer, *, now: Optional[datetime] = None) -> Dict
                 continue
             if status in DOC_INDEXED and kb_status(meta) != STATUS_INDEXED:
                 await _set_status(indexer, meta, STATUS_INDEXED, indexedAt=_iso(now or _now()))
+                meta = await indexer.repository.get_file(user_id, upload_id) or meta
+                counts["settled"] += 1
+            elif status == DOC_TEXT_INDEXED and kb_status(meta) == STATUS_INDEXING and not is_text_indexed(meta):
+                await _set_status(indexer, meta, STATUS_INDEXING, textIndexedAt=_iso(now or _now()))
                 meta = await indexer.repository.get_file(user_id, upload_id) or meta
                 counts["settled"] += 1
             if await evict_if_inactive(indexer, meta, now=now):

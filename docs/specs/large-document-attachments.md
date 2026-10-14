@@ -1,8 +1,9 @@
 # Large document attachments: attach by reference, search through a managed KB
 
 **Status:** Tier 1 shipped to dev (PR-0 #1560, PR-1 #1573, PR-2 #1577, dev-validated
-2026-10-13). Tier 2: PR-3 (the attachments KB, folded into the PR-1 pipeline, §4E
-"As built") is the next change. Decisions recorded in §9 (size limit, ingest source,
+2026-10-13). Tier 2: PR-3 (the attachments KB, folded into the PR-1 pipeline, §4E′;
+#1580 + #1581) merged and dev-validated 2026-10-13, flag on in dev; PR-4 (`query`
+mode + chip, #1583) in review. Decisions recorded in §9 (size limit, ingest source,
 page numbers, retention, per-user cap) and D7.
 **Motivating gap:** a user cannot attach a document over 4 MB to a conversation.
 The SPA rejects it on the client, so it never reaches the server and no metric
@@ -329,7 +330,24 @@ the queue's visibility timeout follows it at six times. The first ingest in an
 environment provisions the KB inside the function: the saga waits up to 300 s for
 ACTIVE.
 
-New resources while on: **2** (the two rules). Everything else is statements on
+New resources while on: **2** (the two rules).
+
+**PR-3 readout on dev (2026-10-13).** A 43.8 MB, 500-page PDF uploaded through the
+SPA was:
+- prepared in 7.3 s;
+- the first ingest of the environment, which provisioned the KB in about 10 s, not
+  the 47–124 s measured earlier;
+- `TEXT_INDEXED` about 80 s after submit, and `INDEXED` at 10 min 47 s, the image
+  extraction across 500 pages taking the rest.
+
+Retrieve, filtered on `andAll(user_id, session_id)`, returned the right
+`_excerpt_page_number` for three of three questions (288, 137, 412), and nothing
+with another user's id. Each hit carried `document_id`, `filename`, `session_id`,
+`upload_id` and `user_id`. Deleting the file released its bytes in under 5 s, and
+the document reached `NOT_FOUND` about 2 min 17 s later; the listing keeps the
+tombstone. A manual `reconcile` ran clean. One delete of a large PDF also sends
+about 55 *Object Deleted* events for its sidecars, all ignored by the handler; a
+follow-up narrows the rule's pattern. Everything else is statements on
 existing roles: the prepare role, and the managed-KB service role (read
 `user-files/*`).
 
@@ -373,12 +391,27 @@ existing roles: the prepare role, and the managed-KB service role (read
   app-api's memory per card. Until preparation is ready the card keeps its
   skeleton.
 
+#### F′ and G′. As built in PR-4
+
+| Spec | As built |
+|---|---|
+| `query` argument, present when the deployment has the KB | A second decorated variant of the tool, chosen by `ATTACHMENT_KB_ENABLED` on the Runtime (spread into its environment only while on, so 0 bytes of the V2 budget when off). Strands builds the spec from the signature and docstring at decoration time, so the non-searchable variant is the unchanged original function: its spec hash is pinned in `test_attachment_search.py`. The searchable spec is about 700 characters longer. `query` takes precedence over `page_range` and `pattern` |
+| Top-k 5, 2,000 characters a chunk, page from `_excerpt_page_number` | As specified, in `apis/shared/files/attachment_search.py`. A hit also carries its filename from the joined row. With pages, the hint says to read them with `page_range` before answering; without (Word, text), to use `pattern` |
+| Isolation, three layers | As specified. Layer 3 reads the row under `USER#{caller}` once per document in the results and requires it READY and in the same session. `tests/architecture/test_attachment_kb_retrieve_boundary.py` also catches `attachment_index.KB_ID` and the literal `"attachments"` |
+| A document that is not indexed returns its status | `search_status()` (`attachment_index.py`) maps the row to `off`, `preparing`, `indexing`, `searchable`, `evicted` or `unavailable`. The session-wide search lists every non-searchable document with its status beside any hits. A missing KB or a `Retrieve` error degrades to the same "use `pattern`" answer, with no error text from Bedrock |
+| A `query` on an evicted document enqueues it | **Not built.** Opening a conversation already re-queues its evicted documents (PR-3), and every SPA turn happens in a conversation the user opened, so the Runtime would need the queue URL in its environment and `sqs:SendMessage` for a case that only arises off the SPA (API keys, scheduled runs). The tool says the document is re-indexed when the conversation is opened |
+| SPA refresh: poll or refresh on focus | Poll. `GET /files/{id}/search-status` (one row read, no Bedrock call), shared by the composer and message cards through `AttachmentSearchStatusService`: one poll per upload, every 10, 15, 20, then 30 s while the status is `preparing`, `indexing` or `evicted`, stopping when it settles, on an error, or after 30 minutes. The chip is *Read on demand* until the first answer and for `off` / `unavailable` |
+| When a document counts as searchable | From Bedrock's `TEXT_INDEXED`, not only `INDEXED`. Measured on dev 2026-10-13 on a 43.8 MB, 500-page PDF: `TEXT_INDEXED` at +80 s, `INDEXED` at +10 m 47 s (image extraction), and with PR-3's check back-off the row only reached `indexed` at about +20 min. `kbIndex.status` keeps meaning the whole document (`indexed` waits for `INDEXED`, as the KB-migration consumer does), but a check or the reconcile that sees `TEXT_INDEXED` stamps `textIndexedAt` on the `indexing` row, and `search_status()` treats that as `searchable`. So the chip and `query` work from the first check, about +2 min. Until `INDEXED`, a query notes per document that images and scanned pages are still being indexed (`images_pending`); `page_range` reads are full-fidelity throughout. A re-index clears the stamp |
+| The guidance sentence (§4B.4) | Names search first when the turn's `document_read` has `query`: "first with `query` (a plain-language search, which also covers scanned pages) or `pattern`", from the same flag the tool reads (`_reference_search_available`). With "first with `pattern`" the model opened with `pattern` in every turn of the quality harness and reached scanned pages by paging through images; naming search cut cost per turn by 38% at the same accuracy (§6, second readout). Fixed per deployment, so it never varies between turns of one deployment; off, the sentence is unchanged |
+| SPA flag | `features.attachmentKb`, so a deployment without the KB never polls. The status service is only injected while it is on |
+| `DocumentRead` gains `mode=query` and `hit_count` | As specified. `hit_count` is a property on query records only |
+
 ### Feature flags
 
 | Flag | Side | Kind | Default |
 |---|---|---|---|
 | `LARGE_DOCUMENT_ATTACHMENTS_ENABLED` / `CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED`, `features.largeDocumentAttachments` | app-api + SPA | Feature switch (widens what users can do, costs Lambda and storage) | **Off** (in development) |
-| `ATTACHMENT_KB_ENABLED` / `CDK_ATTACHMENT_KB_ENABLED` | Prepare Lambda and app-api (PR-3); Runtime from PR-4 | Feature switch (provisions a billed KB) | **Off** (in development) |
+| `ATTACHMENT_KB_ENABLED` / `CDK_ATTACHMENT_KB_ENABLED`, `features.attachmentKb` | Prepare Lambda and app-api (PR-3); Runtime and SPA from PR-4 | Feature switch (provisions a billed KB) | **Off** (in development) |
 
 With the CDK flag off, none of the attachments-KB wiring is synthesized (the two
 rules, the grants, the bucket's EventBridge delivery), so a deployment that never
@@ -411,7 +444,7 @@ too-large message.
 | **PR-1** | `is_reference_document`; preparation Lambda + prepare queue + CDK construct; `_derived/` sidecars; `document_read` reads sidecars; `_derived/` deletion. Behind `CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED` (construct) | No: nothing is reference-class until PR-2 raises the limit |
 | **PR-2** | Raise the limits (SPA, presign); metadata-first resolver; `reference` partition; digest or stub in the user message; guidance sentence; marker names. Flag-gated | Yes, when the flag is on |
 | **PR-3** | Attachments KB: reserved id, EventBridge delete rule, KB role grant on `user-files/*`, daily reconcile (30-day eviction, orphans, stuck statuses), per-user cap, `kbIndex` field, re-index on conversation open. Folded into the PR-1 queue and Lambda (§4E′, D7): 2 new resources. Acceptance: one ~45 MB PDF ingested by `s3Location` (D1). Behind `CDK_ATTACHMENT_KB_ENABLED` | No |
-| **PR-4** | `document_read` `query` mode; `attachment_search.py` and its architecture test; SPA *Indexing* / *Searchable* chip | Yes, when the flag is on |
+| **PR-4** | `document_read` `query` mode; `attachment_search.py` and its architecture test; SPA *Indexing* / *Searchable* chip, polled from `GET /files/{id}/search-status` (§4F′/G′). No new resources | Yes, when the flag is on |
 | **PR-5** | Readout (§6) and the decision to promote either flag | — |
 
 PR-1 lands before PR-2 so that the first large file a user can attach is already
