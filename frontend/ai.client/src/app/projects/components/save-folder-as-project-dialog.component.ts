@@ -2,7 +2,9 @@ import { ChangeDetectionStrategy, Component, OnInit, computed, inject, signal } 
 import { DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { FormControl, FormGroup, ReactiveFormsModule, Validators } from '@angular/forms';
+import { SyncInterval } from '../../assistants/models/sync-policy.model';
 import { DialogShellComponent } from '../../components/dialog/dialog-shell.component';
+import { FEATURES } from '../../services/features';
 import {
   FolderAttachment,
   FolderAttachmentService,
@@ -23,9 +25,9 @@ export interface SaveFolderAsProjectDialogData {
 }
 
 /**
- * The saved project, or `undefined` when cancelled. A result with `error` set
- * means the project was created but some files were not added; the person saw
- * why and chose to open the project anyway.
+ * The saved project, or `undefined` when cancelled. A result with `error` or
+ * `syncError` set means the project was created but some files were not added,
+ * or it is not kept in sync; the person saw why and chose to open it anyway.
  */
 export type SaveFolderAsProjectDialogResult = SaveFolderAsProjectResult | undefined;
 
@@ -33,7 +35,8 @@ const NAME_MAX = 200;
 
 /**
  * "Save as project" for a folder on a sent message
- * (composer-project-folder-picker spec §5, PR-3).
+ * (composer-project-folder-picker spec §5, PR-3), with "Keep in sync with the
+ * folder" while folder sync is on (§5.3, PR-4).
  */
 @Component({
   selector: 'app-save-folder-as-project-dialog',
@@ -72,8 +75,49 @@ const NAME_MAX = 200;
           }
         </div>
 
-        <p class="rounded-xl bg-gray-50 px-3 py-2 text-xs/5 text-gray-600 dark:bg-white/5 dark:text-gray-400">
-          The project keeps a copy of these files. Files added to the folder or changed in it later are not picked up, and folders inside it become one list.
+        @if (syncOffered) {
+          <fieldset class="space-y-2" data-testid="save-folder-sync">
+            <legend class="sr-only">Keeping the project up to date</legend>
+            <div class="flex items-start gap-3">
+              <input
+                id="save-folder-project-sync"
+                type="checkbox"
+                formControlName="keepInSync"
+                aria-describedby="save-folder-project-sync-hint"
+                class="mt-1 size-4 rounded border-gray-300 text-primary-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-800"
+              />
+              <div class="min-w-0 flex-1">
+                <label for="save-folder-project-sync" class="text-sm/6 font-medium text-gray-900 dark:text-white">Keep in sync with the folder</label>
+                <p id="save-folder-project-sync-hint" class="text-xs/5 text-gray-600 dark:text-gray-400">
+                  Uses your {{ sourceName() }} connection to check the folder on a schedule.
+                </p>
+              </div>
+            </div>
+            @if (keepInSync()) {
+              <div class="flex items-center gap-3 pl-7">
+                <label for="save-folder-project-interval" class="text-sm/6 text-gray-700 dark:text-gray-300">Check</label>
+                <select
+                  id="save-folder-project-interval"
+                  formControlName="interval"
+                  class="rounded-2xl border border-gray-300 bg-white py-1.5 pr-8 pl-3 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                >
+                  <!-- Static, so the options exist before the form writes its value
+                       (a looped list renders after it, and the select shows the first). -->
+                  <option value="daily">Daily</option>
+                  <option value="weekly">Weekly</option>
+                  <option value="monthly">Monthly</option>
+                </select>
+              </div>
+            }
+          </fieldset>
+        }
+
+        <p class="rounded-xl bg-gray-50 px-3 py-2 text-xs/5 text-gray-600 dark:bg-white/5 dark:text-gray-400" data-testid="save-folder-copy-note">
+          @if (keepInSync()) {
+            The project's Files follow the folder: changed files are updated, new ones are added, and files taken out of the folder are marked, not deleted. Folders inside it become one list.
+          } @else {
+            The project keeps a copy of these files. Files added to the folder or changed in it later are not picked up, and folders inside it become one list.
+          }
         </p>
 
         @if (error(); as message) {
@@ -127,6 +171,8 @@ export class SaveFolderAsProjectDialogComponent implements OnInit {
   private readonly folders = inject(FolderAttachmentService);
   private readonly saver = inject(SaveFolderAsProjectService);
 
+  /** Folder sync needs the backend switch; the UI offers it only with `features.folderSync`. */
+  protected readonly syncOffered = inject(FEATURES).folderSync;
   protected readonly nameMax = NAME_MAX;
   protected readonly loading = signal(true);
   protected readonly saving = signal(false);
@@ -140,7 +186,12 @@ export class SaveFolderAsProjectDialogComponent implements OnInit {
       nonNullable: true,
       validators: [Validators.required, Validators.maxLength(NAME_MAX), Validators.pattern(/\S/)],
     }),
+    keepInSync: new FormControl(false, { nonNullable: true }),
+    interval: new FormControl<SyncInterval>('weekly', { nonNullable: true }),
   });
+
+  /** Opt-in: a schedule fetches with the saver's own connection, so it is never on by default. */
+  protected readonly keepInSync = signal(false);
 
   protected readonly fileCount = computed(() => {
     const row = this.row();
@@ -159,6 +210,9 @@ export class SaveFolderAsProjectDialogComponent implements OnInit {
 
   constructor() {
     this.form.statusChanges.pipe(takeUntilDestroyed()).subscribe(() => this.nameValid.set(this.form.valid));
+    this.form.controls.keepInSync.valueChanges
+      .pipe(takeUntilDestroyed())
+      .subscribe((value) => this.keepInSync.set(this.syncOffered && value));
   }
 
   async ngOnInit(): Promise<void> {
@@ -178,12 +232,24 @@ export class SaveFolderAsProjectDialogComponent implements OnInit {
     this.saving.set(true);
     this.error.set(null);
     try {
-      const result = await this.saver.save(row, this.form.getRawValue().name.trim(), folderProjectDescription(row));
+      const { name, interval } = this.form.getRawValue();
+      const result = await this.saver.save(row, name.trim(), folderProjectDescription(row), {
+        syncInterval: this.keepInSync() ? interval : null,
+      });
+      const problems: string[] = [];
       if (result.error) {
-        this.partial.set(result);
-        this.error.set(
+        problems.push(
           `The project was created, but ${result.notImported} of ${result.imported + result.notImported} files were not added: ${result.error}`,
         );
+      }
+      if (result.syncError) {
+        problems.push(
+          `${result.error ? 'It' : 'The project was saved as a copy, but it'} is not kept in sync with the folder: ${result.syncError}`,
+        );
+      }
+      if (problems.length) {
+        this.partial.set(result);
+        this.error.set(problems.join(' '));
         return;
       }
       this.dialogRef.close(result);

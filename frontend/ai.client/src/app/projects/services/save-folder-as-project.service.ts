@@ -1,6 +1,8 @@
 import { Injectable, inject } from '@angular/core';
 import { ImportFileRef } from '../../assistants/models/file-source.model';
+import { SyncInterval, SyncPolicy } from '../../assistants/models/sync-policy.model';
 import { FileSourceService } from '../../assistants/services/file-source.service';
+import { SyncPolicyService } from '../../assistants/services/sync-policy.service';
 import { FolderAttachment } from '../../services/folder-attachments';
 import { Project } from '../models/project.model';
 import { ProjectsService } from './projects.service';
@@ -17,6 +19,24 @@ export interface SaveFolderAsProjectResult {
   notImported: number;
   /** Why some files were not imported, when any were not. */
   error: string | null;
+  /** The folder's sync schedule, when one was asked for and created. */
+  syncPolicy: SyncPolicy | null;
+  /** Why a schedule that was asked for could not be created; the project is then a copy. */
+  syncError: string | null;
+}
+
+/** What to do beyond the copy. */
+export interface SaveFolderAsProjectOptions {
+  /** Keep the project in step with the folder at this interval (folder sync). */
+  syncInterval?: SyncInterval | null;
+}
+
+/**
+ * A folder's KB sync source (assistant-kb-sync spec §11.1): the connector it
+ * was attached through, then the provider's folder id.
+ */
+export function folderSyncSourceRef(row: FolderAttachment): string {
+  return `${row.connectorId}:${row.providerFolderId}`;
 }
 
 /**
@@ -48,41 +68,67 @@ export function importableFolderFiles(row: FolderAttachment): ImportFileRef[] {
  * connection.
  *
  * Built only from routes that exist: `POST /projects`, then the project's
- * Drive import, in batches. It is a copy: nothing keeps the project in step
- * with the folder (spec §5 explains why a per-file sync schedule cannot, and
- * what can).
+ * Drive import, in batches. On its own it is a copy. With a sync interval
+ * (folder sync, spec §5.3) it then creates one `drive_folder` schedule on the
+ * project, which keeps its Files in step with the folder: the first run adopts
+ * the copies just imported rather than fetching them again.
  */
 @Injectable({ providedIn: 'root' })
 export class SaveFolderAsProjectService {
   private readonly projects = inject(ProjectsService);
   private readonly fileSources = inject(FileSourceService);
+  private readonly syncPolicies = inject(SyncPolicyService);
 
   /**
-   * Create the project, then import the folder's files into it.
+   * Create the project, import the folder's files into it, then, when asked,
+   * schedule the folder's sync.
    *
-   * A failed create throws and leaves nothing behind. A failed import does not
-   * throw: the project exists by then, so the result says how many files went
-   * in and why the rest did not, and the caller can still open the project.
+   * A failed create throws and leaves nothing behind. A failed import or
+   * schedule does not throw: the project exists by then, so the result says
+   * how many files went in, whether it is kept in sync, and why not, and the
+   * caller can still open the project. A schedule is created even after a
+   * partial import: its first run imports what the copy missed.
    */
-  async save(row: FolderAttachment, name: string, description: string): Promise<SaveFolderAsProjectResult> {
+  async save(
+    row: FolderAttachment,
+    name: string,
+    description: string,
+    options: SaveFolderAsProjectOptions = {},
+  ): Promise<SaveFolderAsProjectResult> {
     const files = importableFolderFiles(row);
     const project = await this.projects.create(name, description);
     let imported = 0;
+    let error: string | null = null;
     for (let start = 0; start < files.length; start += FOLDER_IMPORT_BATCH_SIZE) {
       const batch = files.slice(start, start + FOLDER_IMPORT_BATCH_SIZE);
       try {
         await this.fileSources.importDocuments({ projectId: project.projectId }, row.connectorId, batch);
         imported += batch.length;
       } catch (err) {
-        return {
-          project,
-          imported,
-          notImported: files.length - imported,
-          error: err instanceof Error ? err.message : 'The files could not be added to the project.',
-        };
+        error = err instanceof Error ? err.message : 'The files could not be added to the project.';
+        break;
       }
     }
-    return { project, imported, notImported: 0, error: null };
+
+    let syncPolicy: SyncPolicy | null = null;
+    let syncError: string | null = null;
+    if (options.syncInterval) {
+      try {
+        syncPolicy = await this.syncPolicies.createPolicy(
+          { projectId: project.projectId },
+          {
+            sourceType: 'drive_folder',
+            sourceRef: folderSyncSourceRef(row),
+            interval: options.syncInterval,
+            sourceName: row.folderPath || row.folderName,
+          },
+        );
+      } catch (err) {
+        syncError = err instanceof Error ? err.message : 'The folder could not be scheduled to sync.';
+      }
+    }
+
+    return { project, imported, notImported: files.length - imported, error, syncPolicy, syncError };
   }
 }
 

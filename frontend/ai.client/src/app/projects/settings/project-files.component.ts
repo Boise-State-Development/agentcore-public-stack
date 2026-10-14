@@ -8,6 +8,7 @@ import {
   heroArrowPath,
   heroArrowUpTray,
   heroDocumentText,
+  heroFolder,
   heroGlobeAlt,
   heroLink,
   heroMagnifyingGlass,
@@ -18,7 +19,7 @@ import { Document, DocumentStatus, KbUsage, PROCESSING_STATUSES } from '../../as
 import { KnowledgeTarget } from '../../assistants/models/knowledge-target.model';
 import { FileSourceConnector } from '../../assistants/models/file-source.model';
 import { CrawlJob } from '../../assistants/models/web-source.model';
-import { SyncPolicy, SyncSourceType } from '../../assistants/models/sync-policy.model';
+import { FolderRunSummary, SyncPolicy, SyncSourceType } from '../../assistants/models/sync-policy.model';
 import { FileSourceService } from '../../assistants/services/file-source.service';
 import { WebSourceService } from '../../assistants/services/web-source.service';
 import { SyncPolicyService } from '../../assistants/services/sync-policy.service';
@@ -74,6 +75,31 @@ interface UploadState {
   error?: string;
 }
 
+/**
+ * A folder sync's last run, in words: how many files the folder holds and what
+ * changed (assistant-kb-sync spec §11). `null` before the first run.
+ */
+export function folderRunSummaryText(summary: FolderRunSummary | null | undefined): string | null {
+  if (!summary) return null;
+  const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+  const parts = [
+    summary.updated ? `${summary.updated} updated` : '',
+    summary.added ? `${summary.added} added` : '',
+    summary.removedFromSource ? `${summary.removedFromSource} no longer in the folder` : '',
+    summary.failed ? `${plural(summary.failed, 'file', 'files')} couldn’t be fetched` : '',
+    summary.skipped ? `${plural(summary.skipped, 'file', 'files')} too large` : '',
+    summary.deferred ? `${summary.deferred} waiting for the next sync` : '',
+  ].filter(Boolean);
+  const listed = `${plural(summary.listed, 'file', 'files')} in the folder${summary.truncated ? ' (more than are checked)' : ''}`;
+  return parts.length ? `${listed} · last sync: ${parts.join(', ')}` : `${listed} · up to date at the last sync`;
+}
+
+/** The connector half of a `drive_folder` policy's `{connectorId}:{folderId}`. */
+export function folderConnectorId(sourceRef: string): string | null {
+  const at = sourceRef.lastIndexOf(':');
+  return at > 0 ? sourceRef.slice(0, at) : null;
+}
+
 export function formatBytes(bytes: number): string {
   if (!bytes) return '0 B';
   const units = ['B', 'KB', 'MB', 'GB'];
@@ -105,6 +131,7 @@ export function formatBytes(bytes: number): string {
       heroArrowPath,
       heroArrowUpTray,
       heroDocumentText,
+      heroFolder,
       heroGlobeAlt,
       heroLink,
       heroMagnifyingGlass,
@@ -213,6 +240,36 @@ export function formatBytes(bytes: number): string {
           <p role="alert" class="mt-3 text-sm/6 text-state-danger-600 dark:text-state-danger-400">{{ error() }}</p>
         }
 
+        @if (folderPolicies().length > 0) {
+          <h3 class="mt-4 mb-2 text-sm/6 font-medium text-gray-700 dark:text-gray-300">Synced folders</h3>
+          <ul class="divide-y divide-gray-200 overflow-hidden rounded-2xl border border-gray-200 bg-white dark:divide-gray-700 dark:border-gray-700 dark:bg-gray-800" data-testid="synced-folders">
+            @for (policy of folderPolicies(); track policy.policyId) {
+              <li class="flex items-start gap-3 px-4 py-3">
+                <ng-icon name="heroFolder" class="mt-0.5 size-5 shrink-0 text-gray-500 dark:text-gray-400" aria-hidden="true" />
+                <div class="min-w-0 flex-1">
+                  <p class="truncate text-sm/6 font-medium text-gray-900 dark:text-white">{{ folderLabel(policy) }}</p>
+                  @if (folderRunText(policy); as text) {
+                    <p class="text-xs/5 text-gray-600 dark:text-gray-400">{{ text }}</p>
+                  }
+                  <app-sync-policy-control
+                    class="mt-1.5 block"
+                    [policy]="policy"
+                    [busy]="isSyncBusy(policy.sourceRef)"
+                    [sourceName]="folderLabel(policy)"
+                    [lastSyncedAt]="policy.lastSyncAt ?? null"
+                    [reconnectLabel]="connectorName(policy.sourceRef)"
+                    (intervalSelected)="onFolderIntervalSelected(policy, $event)"
+                    (runNow)="onSyncRunNow(policy.sourceRef)"
+                    (pause)="onSyncPause(policy.sourceRef)"
+                    (resume)="onSyncResume(policy.sourceRef)"
+                    (reconnect)="onSyncReconnect(policy.sourceRef)"
+                  />
+                </div>
+              </li>
+            }
+          </ul>
+        }
+
         @if (webCrawls().length > 0) {
           <h3 class="mt-4 mb-2 text-sm/6 font-medium text-gray-700 dark:text-gray-300">Web sources</h3>
           <ul class="divide-y divide-gray-200 overflow-hidden rounded-2xl border border-gray-200 bg-white dark:divide-gray-700 dark:border-gray-700 dark:bg-gray-800">
@@ -282,7 +339,12 @@ export function formatBytes(bytes: number): string {
                   @if (doc.status === 'failed' && doc.errorMessage) {
                     <p class="text-xs/5 text-state-danger-600 dark:text-state-danger-400">{{ doc.errorMessage }}</p>
                   }
-                  @if (canEdit() && isImported(doc)) {
+                  @if (doc.removedFromSource) {
+                    <p class="text-xs/5 font-medium text-state-warning-700 dark:text-state-warning-400">No longer in the folder</p>
+                  }
+                  @if (folderPolicyFor(doc); as folder) {
+                    <p class="text-xs/5 text-gray-600 dark:text-gray-400">Kept in sync with {{ folderLabel(folder) }}</p>
+                  } @else if (canEdit() && isImported(doc)) {
                     <app-sync-policy-control
                       class="mt-1.5 block"
                       [policy]="syncPolicyFor(doc.documentId)"
@@ -401,6 +463,9 @@ export class ProjectFilesComponent {
   /** Sources (document or crawl ids) with a sync change in flight. */
   private readonly syncBusy = signal<ReadonlySet<string>>(new Set());
   private readonly policiesBySource = computed(() => new Map(this.syncPolicies().map(p => [p.sourceRef, p])));
+  /** Drive folders the project is kept in step with (assistant-kb-sync spec §11), one schedule each. */
+  protected readonly folderPolicies = computed(() => this.syncPolicies().filter(p => p.sourceType === 'drive_folder'));
+  private readonly folderPoliciesById = computed(() => new Map(this.folderPolicies().map(p => [p.policyId, p])));
   /** The connector a sync control's "Reconnect" opened consent for, and that row. */
   private readonly reconnectingProviderId = signal<string | null>(null);
   private reconnectSourceRef: string | null = null;
@@ -504,6 +569,51 @@ export class ProjectFilesComponent {
   /** The file source a document came from, by name ("" when it is no longer offered). */
   protected providerName(doc: Document): string {
     return this.fileSources().find(s => s.providerId === doc.sourceConnectorId)?.displayName ?? '';
+  }
+
+  /** The folder schedule a document belongs to, when one keeps it in sync. */
+  protected folderPolicyFor(doc: Document): SyncPolicy | null {
+    return doc.syncPolicyId ? (this.folderPoliciesById().get(doc.syncPolicyId) ?? null) : null;
+  }
+
+  protected folderLabel(policy: SyncPolicy): string {
+    return policy.sourceName || 'Drive folder';
+  }
+
+  protected folderRunText(policy: SyncPolicy): string | null {
+    return folderRunSummaryText(policy.lastRunSummary);
+  }
+
+  /** The file source behind a schedule, by name ("" when it is no longer offered). */
+  protected connectorName(sourceRef: string): string {
+    const providerId = folderConnectorId(sourceRef);
+    return this.fileSources().find(s => s.providerId === providerId)?.displayName ?? '';
+  }
+
+  /**
+   * Turning a folder's sync off deletes its schedule, and this page cannot make
+   * one again (Save as project does), so it asks first. The files stay.
+   */
+  protected async onFolderIntervalSelected(policy: SyncPolicy, selection: SyncIntervalSelection): Promise<void> {
+    if (selection === 'manual') {
+      const ref = this.dialog.open<boolean>(ConfirmationDialogComponent, {
+        data: {
+          title: 'Stop syncing this folder?',
+          message: `The files from “${this.folderLabel(policy)}” stay in the project, but changes in the folder will no longer reach it.`,
+          confirmText: 'Stop syncing',
+          cancelText: 'Keep syncing',
+          destructive: true,
+        } as ConfirmationDialogData,
+      });
+      if (!(await firstValueFrom(ref.closed))) {
+        // The control already shows "Don't auto-sync"; put the schedule back in view.
+        this.syncPolicies.update(list => [...list]);
+        return;
+      }
+    }
+    await this.onSyncIntervalSelected('drive_folder', policy.sourceRef, selection);
+    // Its files are ordinary imported files now: re-read them without the folder marks.
+    if (selection === 'manual' && !this.syncPolicyFor(policy.sourceRef)) await this.load(this.projectId(), null);
   }
 
   protected statusClass(status: DocumentStatus): string {
@@ -643,7 +753,9 @@ export class ProjectFilesComponent {
     const ref = this.dialog.open<boolean>(ConfirmationDialogComponent, {
       data: {
         title: 'Delete this file?',
-        message: `“${doc.filename}” will be removed for everyone in the project, and the project’s agent will stop using it.`,
+        message: `“${doc.filename}” will be removed for everyone in the project, and the project’s agent will stop using it.${
+          this.folderPolicyFor(doc) ? ' Syncing with the folder won’t add it back.' : ''
+        }`,
         confirmText: 'Delete',
         cancelText: 'Cancel',
         destructive: true,
@@ -908,7 +1020,10 @@ export class ProjectFilesComponent {
 
   /** A schedule paused because its connection lapsed resumes after a fresh consent. */
   protected async onSyncReconnect(sourceRef: string): Promise<void> {
-    const providerId = this.documents().find(d => d.documentId === sourceRef)?.sourceConnectorId;
+    const providerId =
+      this.syncPolicyFor(sourceRef)?.sourceType === 'drive_folder'
+        ? folderConnectorId(sourceRef)
+        : this.documents().find(d => d.documentId === sourceRef)?.sourceConnectorId;
     if (!providerId || providerId === 'web') return;
     this.reconnectingProviderId.set(providerId);
     this.reconnectSourceRef = sourceRef;

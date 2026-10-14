@@ -24,5 +24,6 @@ export const environment = {
         largeDocumentAttachments: false,
         folderAttachments: false,
         attachmentKb: false,
+        folderSync: false,
     } satisfies FeatureFlags,
 };
