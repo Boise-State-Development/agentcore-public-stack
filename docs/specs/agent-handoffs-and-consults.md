@@ -3,7 +3,7 @@
 **Status:** Draft proposal. Not scheduled. **Phase 0 (handoffs) ships first; its numbers decide whether Phase 1
 (consults) is built at all.**
 **Author:** Phil Merrell (drafted with Claude)
-**Date:** 2026-09-24, revised 2026-09-27, amended 2026-10-12
+**Date:** 2026-09-24, revised 2026-09-27, amended 2026-10-12 and 2026-10-14
 **Revision (2026-09-27):** A handoff now runs **in the background** while the user stays in the original thread,
 after a **review step in place** (§4.2). It reports back through a handoff row with *running / needs your input /
 done* states, the in-app inbox and browser notifications (§4.3). The feature is renamed from "task chips" to
@@ -15,6 +15,10 @@ in another, with its source named. Send to *{title}* no longer navigates. A new 
 in a conversation send to the conversations it is linked to by a handoff, the way Claude Code sessions message
 each other. Phase 2 has three ways for a message to land, each with its own flag and its own gate (§7.1):
 pending, steered into a running turn, or waking an idle conversation. Sections 9–12 are renumbered 10–13.
+**Amendment (2026-10-14): the handoff row is a linked card.** Modelled on the card Claude Code shows when a
+session starts another: the target conversation's title, a live one-line status built from the tool summaries and
+`agent_status` the SPA already holds per session, and the whole card as the link to it (§4.3). No new event and no
+model call; two short display fields on `HANDOFF#` make it survive a reload.
 **Targets branch:** `develop`
 **Related:**
 - `docs/specs/agent-marketplace.md` §D11 — the 2026-09-14 revision that made a mention *bind* (#1115)
@@ -152,7 +156,7 @@ copy, code and row keys, for two reasons:
 | Term | Means | In code |
 |---|---|---|
 | **Handoff** | Sending a request, plus reviewed context, to an Agent in a new conversation | `HANDOFF#<handoffId>`, `/sessions/{id}/handoffs`, `HANDOFFS_ENABLED`, `FEATURES.handoffs` |
-| **Handoff row** | The line in the original thread that tracks a handoff (§4.3) | Replayed as `handoffs` on `GET /messages` |
+| **Handoff row** | The linked card in the original thread that tracks a handoff: target title, status, live status line (§4.3) | Replayed as `handoffs` on `GET /messages` |
 | **Bring back result** / **Send to *{title}*** | Returning a handoff's result to the original thread, from either end | `kind: "send_back"` |
 | **Suggested handoff** | A chip the model offers (§4.4) | `suggest_handoff`, `handoff_suggested` |
 | **Delivery** | Text from one of the user's conversations, landed in another with its source named (§4.8) | `DELIVERY#<deliveryId>`, the `deliveries` request field |
@@ -172,7 +176,7 @@ User-facing copy: "Hand off to *Rubric Builder*", "Handed off to *Rubric Builder
 | How context moves | A **context card**: a bounded, deterministic **excerpt** attached to the first message of the target conversation |
 | Review | **Required, in place.** A review sheet opens in the source thread before anything is sent. The full prompt the Agent will receive is one click away |
 | Where the user ends up | **Where they were.** The target conversation starts in the background and appears in the conversation list. The user opens it when they choose |
-| How progress is shown | A **handoff row** in the source thread (*running*, *needs your input*, *done*, *stopped*), the existing unread dot, a toast, an entry in the **in-app inbox** (the bell), and a **browser notification** while the page is hidden. Never a model message |
+| How progress is shown | A **handoff row** in the source thread: a card linking to the target, with its title and a live status line (*running*, *needs your input*, *done*, *stopped*), the existing unread dot, a toast, an entry in the **in-app inbox** (the bell), and a **browser notification** while the page is hidden. Never a model message |
 | Where the excerpt is rendered | **Server-side, once**, by a pure renderer in `apis.shared.handoff`. The SPA never builds it, because Phase 1 needs the same renderer in Python |
 | How the model sees a card | Wrapped block **in the user message**; `displayText` = what the user typed; the card renders as a collapsible panel on the bubble |
 | Background execution | **Client-driven.** The SPA runs the target's turn as a second stream. It lives as long as the tab (§4.6) |
@@ -276,12 +280,68 @@ links to it.
 (`sourceMessageIndex`). It is **UI only**: it comes from the `HANDOFF#` row, is replayed on
 `GET /sessions/{id}/messages` as `handoffs` (like `toolSummaries`), and never enters the model's history.
 
-| State | Row reads | Set by |
-|---|---|---|
-| `running` | "*Rubric Builder* is working on *draft a rubric for this* · Open" | Acceptance on the first turn |
-| `needs_input` | "*Rubric Builder* needs your input · Open" (amber) | The turn ends in an interrupt: OAuth consent, a tool approval, `ask_user_question`, a browser sign-in |
-| `done` | "*Rubric Builder* finished · Open · **Bring back result**" | The turn completes |
-| `stopped` | "*Rubric Builder* stopped · Open" | A `stream_error`, a Stop, or a dropped stream (§4.6) |
+> *Amended 2026-10-14.* The row was a line of text with an "Open" link. It is now a **card that is itself the
+> link** to the target conversation, with the conversation's title and a live status line. The model is the
+> card Claude Code shows in the parent session when it starts a session of its own: one glance says what the
+> other conversation is, what it is doing right now, and where to click to see it. The term stays "handoff
+> row" in code and in this spec, because "card" already names the context card (§4.2) and delivery cards (§4.8).
+
+**What the row looks like.**
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│ ●  Rubric for BIO 101 lab reports                                      › │
+│    Rubric Builder · Found the lab report assignment in BIO 101           │
+└──────────────────────────────────────────────────────────────────────────┘
+   Bring back result                                     (done state only)
+```
+
+- **Title line: the target conversation's title**, the same string its sidenav entry shows, read from the same
+  session-list state so a rename changes both. The card and the new sidenav entry read as one thing in two
+  places. Until `session_title` lands on the target's first turn, the title is the request text, truncated.
+- **Status mark** at the start: a pulsing dot while `running`, amber for `needs_input`, a check for `done`, a
+  muted dot for `stopped`. Colour is never the only signal: the status line names every state that isn't
+  `running`.
+- **Status line**: the Agent's name, then one line that comes from what the SPA already holds per session. No
+  new model call and no new event:
+
+  | State | Status line | Source |
+  |---|---|---|
+  | `running` | The target's latest tool summary ("Found the lab report assignment in BIO 101"); else its `agent_status` ("Using list_assignments", "Thinking"); else "Working on *draft a rubric for this*" | `ToolInsightService.summaryFor` / `.status` for the target's session id. Both are already keyed by session, so a target streaming in the background is covered |
+  | `needs_input` | What it's waiting on: "Waiting for you to connect Canvas", the question's header for `ask_user_question`, "Waiting for your approval to run *{tool}*", "Waiting for you to sign in" | The interrupt kind on the pending prompt (live), `waitingOn` (replay) |
+  | `done` | "Finished · " + the latest tool summary, or "Finished" | Live state, `statusLine` (replay) |
+  | `stopped` | "Stopped", or "Stopped · connection lost" | The `HANDOFF#` status and its reason |
+
+- **The whole card is one link** (`<a routerLink>` to the target), so a click opens the conversation in place,
+  as its sidenav entry does, and Cmd/Ctrl-click opens a new tab because it is a real `href`. It is one tab stop.
+  Its accessible name is "*{title}*, *{Agent}*, *{status line}*".
+- **Bring back result is a sibling button, never inside the link.** A button nested in a link is invalid HTML
+  and announces badly. It shows only in the `done` state, beside the card.
+- **The status line is not a live region.** Announcing every tool batch would talk over the thread the user is
+  reading. State changes are already announced once, politely, by the toast.
+- **Several handoffs from one point** stack in the order they were sent.
+- **The way back.** In the target, the "Context from *Course planning*" label on the first bubble (§4.2) links
+  to the source, so the pair is navigable from either end.
+- **The sidenav entry matches the card.** It already shows the streaming dot. A target in `needs_input` shows
+  the same amber mark, so a waiting handoff is visible from the conversation list too.
+
+**Replay.** A reloaded source has none of the target's live state, so the row reads what the `HANDOFF#` row
+persisted: `status`, plus two short display fields written in the same post-`done` update. `statusLine` is the
+latest tool summary that exists when the target's turn ends, and `waitingOn` is the interrupt kind with its
+display name (provider, tool or question header). Neither field holds request or conversation text. A summary
+that lands after `done` is not carried onto the row: replay then reads "Finished", a loss of detail rather than
+a blank, which is the same contract `TOOL_SUMMARIES_ENABLED=false` has.
+
+**Cost and latency.** Nothing here reaches a prompt or adds a model call. The live line reads state the SPA
+already keeps, and the two fields go into a write that already happens after `done`, so the TTFT path and the
+cacheable prefix are both untouched.
+
+| State | Set by |
+|---|---|
+| `running` | Acceptance on the first turn |
+| `needs_input` | The turn ends in an interrupt: OAuth consent, a tool approval, `ask_user_question`, a browser sign-in |
+| `done` | The turn completes |
+| `stopped` | A `stream_error`, a Stop, or a dropped stream (§4.6) |
 
 While the target is streaming in this tab, the row follows the SPA's live per-session state. The persisted status
 is written by inference-api **after** the turn's `done` block, on the same side of the stream as the `TSUM#` write,
@@ -1134,6 +1194,10 @@ has started", and the only one that spends money while nobody is watching.
   - The no-navigate send leaves `viewedSessionId` and the route on the source.
   - The sheet's card renders, previews, edits and removes; Cancel dismisses.
   - The handoff row renders each state live and on replay from `handoffs`.
+  - The row's status line follows the target's tool summaries and `agent_status` while it streams in the
+    background, falls back in the order §4.3 gives, and reads `statusLine` / `waitingOn` on replay.
+  - The row's title follows the target's title, including a rename. The card is one link with one tab stop, and
+    Bring back result is a sibling button, not inside it.
   - A target's interrupt prompt never renders over the source thread.
   - The bell shows with `features.handoffs` alone, and renders the three handoff kinds.
   - Entries are marked read by opening the target or bringing a result back, and at once when the change lands in
@@ -1177,9 +1241,9 @@ has started", and the only one that spends money while nobody is watching.
   (create, get, dismiss). The create response includes `contextBlock` for the preview. Acceptance happens on the
   first send (PR-0.2), not as a route. Flags off.
 - **PR-0.2 — `handoff_context` on the invocation path.** Wrapper, `displayText`, acceptance, status writes after
-  `done`, EMF.
+  `done` (with `statusLine` and `waitingOn`), EMF.
 - **PR-0.3 — SPA handoff.** A mid-thread mention opens the review sheet (request, context card, full-prompt
-  preview); a no-navigate send; the handoff row with live and replayed states; completion and needs-input toasts;
+  preview); a no-navigate send; the handoff row as a linked card with title and live status line, live and replayed; completion and needs-input toasts;
   the card on sent bubbles; the unload guard. Verify interrupt-service scoping (§4.3) here.
 - **PR-0.3b — Notifications.** The three `handoff_*` inbox kinds, written by inference-api after `done`; the scoped
   `PutItem` grant; the bell shown with `features.handoffs` and rendering the new kinds; read-state rules; browser
