@@ -480,6 +480,92 @@ Ship Tier 2 if arm 2 measurably beats arm 1 on the scanned and layout classes;
 §13 of the managed-KB evaluation predicts it will. If it doesn't, Tier 1 is enough
 and the paid infrastructure is not justified.
 
+**The harness** is `backend/scripts/large_document_quality_harness.py`
+(`large_document_quality/`, test `tests/test_large_document_quality_harness.py`).
+Its fixtures are synthetic and deterministic, one per class, each over 4 MB:
+
+| Class | Fixture | What makes it that class |
+|---|---|---|
+| text | 300-page policy manual, 7.3 MB | A real text layer; two facts wrap across a line, so a literal `pattern` can miss them |
+| scanned | 40-page inspection report, 6.8 MB | Image-only pages: our text layer is empty |
+| layout | 24-page brochure, 5.3 MB | Tables and a sidebar drawn out of reading order: the text layer lists every label before any value |
+| docx | Member handbook, 15.1 MB | Mostly one embedded image; facts in paragraphs |
+
+21 questions, each with an authored answer on a known page, distractor values
+planted elsewhere (`forbidden`), and a `literal` / `paraphrase` tag. The fixtures
+are seeded into a deployed environment as a synthetic user's uploads, so the real
+prepare Lambda and the real knowledge base process them. Then `probe` checks,
+free, what each tier can reach: the real `pattern` read against the real
+`Retrieve`. `ask` runs one fresh agent turn per (arm, question, sample), with the
+production `document_read` and the user message the chat route builds; the arms
+differ only in `searchable`. `score` reports per class: majority of k, exact
+McNemar, `n` on every row, plus tool calls, `query` use, tokens and dollars per
+turn.
+
+**First readout (dev, 2026-10-13, Haiku 4.5, k = 3, 21 questions; majority of
+three per question):**
+
+| Class | Tier 1 | Tier 1 + search | Tier 1 $/turn, s | Tier 2 $/turn, s |
+|---|---|---|---|---|
+| text | 6/6 | 5/6 | 0.039, 19 | 0.053, 24 |
+| scanned | 3/5 | **5/5** | 0.101, 26 | **0.022, 7** |
+| layout | 5/5 | 5/5 | 0.015, 6 | 0.015, 6 |
+| docx (with the excerpt fix) | 5/5 | 5/5 | 0.013, 4 | 0.018, 4 |
+
+- **Only the scanned class separates.** Tier 1 reaches a scanned page only by
+  paging through page images (87k input tokens a turn), and still missed two of
+  five facts. Search found all five, at a fifth of the cost and a quarter of the
+  time. With five questions this is not significant (exact McNemar p = 0.5; even
+  five of five discordant would be 0.0625), so the scanned set needs about 15
+  questions before it can settle the decision.
+- **Layout does not need search.** `pattern` finds a table's label, and the
+  `page_range` read of that page shows the model the table as drawn.
+- **The docx gap was a Tier 1 bug.** The first run had Word at 1/5 against 4/5.
+  `pattern` returned each matching line cut to its first 200 characters, and a
+  Word paragraph is one line, so a match past that point came back without the
+  match in it. With the excerpt cut around the match (a separate fix), Tier 1 is
+  15 of 15 turns.
+- **The model under-uses `query`.** The reference guidance says "first with
+  `pattern`", so Tier 2 called `query` in 5 of 18 text turns and on scanned
+  documents only after `pattern` had failed. Guidance that names search when the
+  deployment has it is worth testing as an arm.
+- Grading reads only the reply's final `Answer:` line. An earlier run that
+  checked the whole reply failed correct answers that mentioned a distractor as
+  context. That run is discarded.
+
+**Second readout (dev, 2026-10-13, Haiku 4.5, k = 3, 31 questions, 279 turns,
+$9.77), with the `pattern` excerpt fix in all arms, 15 scanned questions, and a
+third arm, `tier2-guided`, whose guidance names `query` first.** Turn accuracy
+and dollars per turn:
+
+| Class | Tier 1 | Tier 2 | Tier 2, guided |
+|---|---|---|---|
+| text (18 turns) | 72%, $0.038 | 89%, $0.036 | 89%, $0.027 |
+| scanned (45) | 80%, $0.122, 28 s | **100%, $0.019**, 8 s | **100%, $0.0095**, 4 s |
+| layout (15) | 100%, $0.015 | 100%, $0.015 | 100%, $0.011 |
+| docx (15) | 100%, $0.014 | 93%, $0.015 | 93%, $0.010 |
+| **all (93)** | **85%, $0.071** | **97%, $0.021** | **97%, $0.013** |
+
+- **Search is never worse and is much cheaper.** Tier 2 matches or beats Tier 1 on
+  question majority in every class. On scanned documents Tier 1 gets there by
+  paging through page images (8 calls, 107k input tokens a turn) and still fails
+  one turn in five. With search, every turn is right, at a thirteenth of the
+  cost when the guidance names it.
+- **Not significant at the question level, and it can't be.** Tier 1 is usually
+  right in the end by brute force, so there are only three discordant scanned
+  questions (exact McNemar p = 0.25). The difference is reliability (80% vs 100%
+  of turns), cost and latency, and those are large.
+- **Naming search in the guidance is a free improvement.** Without it, Tier 2's
+  first call was `pattern` in 93 of 93 turns; with it, `query` in 93 of 93.
+  Accuracy is unchanged, and cost per turn falls 38% overall (by half on
+  scanned) with a median of one tool call.
+- **Storage is small next to the token saving.** At $5 per GB-month, a 35 MB
+  document costs about $0.18 a month to keep indexed. On scanned documents,
+  search saves about $0.11 per question, so two questions a month pay for it.
+- The remaining misses are the model naming both a value and its distractor
+  ("11 days for regular staff, 3 for casual"). That is a fair failure for a
+  question that asks for one value, and it is the same in every arm.
+
 **Cost**, per session through `GET /admin/costs/sessions/{id}/calls`: a reference
 session's prefix should look like an offloaded-document session (digest ≤ 1,500
 tokens), not like an inline one.
