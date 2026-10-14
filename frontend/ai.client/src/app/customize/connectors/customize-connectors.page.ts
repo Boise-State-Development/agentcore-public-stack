@@ -347,8 +347,7 @@ export class CustomizeConnectorsPage {
         this.toast.error('Unexpected response from the server.');
         return;
       }
-      this.consentService.requestConsent(providerId, result.authorizationUrl);
-      this.consentService.openConsentPopup(providerId);
+      void this.consentService.startUserConsent(providerId, result.authorizationUrl);
       this.setState(providerId, 'awaiting');
     } catch (err: unknown) {
       console.error('Consent initiation failed', err);

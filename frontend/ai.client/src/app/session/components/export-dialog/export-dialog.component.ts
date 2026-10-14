@@ -544,8 +544,7 @@ export class ExportDialogComponent implements OnInit {
         this.toast.error('Unexpected response from the server.');
         return;
       }
-      this.consentService.requestConsent(target.providerId, result.authorizationUrl);
-      void this.consentService.openConsentPopup(target.providerId);
+      void this.consentService.startUserConsent(target.providerId, result.authorizationUrl);
       this.connectPhase.set('awaiting');
     } catch (err) {
       this.connectingId.set(null);

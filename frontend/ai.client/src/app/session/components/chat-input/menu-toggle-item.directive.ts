@@ -28,3 +28,19 @@ export class MenuToggleItemDirective extends CdkMenuItemCheckbox {
     super.trigger({ ...options, keepOpen: true });
   }
 }
+
+/**
+ * A plain CDK menu item that keeps its menu open when triggered, for an action
+ * whose progress shows in the same menu: the Connectors submenu's "Open
+ * sign-in" row reopens a blocked popup, and the connector's row above it then
+ * reads "Awaiting consent" like any other switch mid-flight.
+ */
+@Directive({
+  selector: '[appMenuKeepOpenItem]',
+  providers: [{ provide: CdkMenuItem, useExisting: MenuKeepOpenItemDirective }],
+})
+export class MenuKeepOpenItemDirective extends CdkMenuItem {
+  override trigger(options?: { keepOpen: boolean }): void {
+    super.trigger({ ...options, keepOpen: true });
+  }
+}

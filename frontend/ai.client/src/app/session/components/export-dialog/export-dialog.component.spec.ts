@@ -51,8 +51,7 @@ function setup(
   const consentService = {
     completion: signal<unknown>(null),
     inFlightProviders: signal(new Set<string>()),
-    requestConsent: vi.fn(),
-    openConsentPopup: vi.fn().mockResolvedValue(true),
+    startUserConsent: vi.fn().mockResolvedValue(true),
     acknowledgeCompletion: vi.fn(),
   };
   const toast = { error: vi.fn(), success: vi.fn() };
@@ -136,7 +135,7 @@ describe('ExportDialogComponent', () => {
     await (component['save'] as () => Promise<void>)();
 
     expect(connectorsService.initiateConsent).toHaveBeenCalledWith('gdrive');
-    expect(consentService.openConsentPopup).toHaveBeenCalledWith('gdrive');
+    expect(consentService.startUserConsent).toHaveBeenCalledWith('gdrive', 'https://auth.example/x');
     // The save itself is deferred until consent completes.
     expect(exportService.exportSession).not.toHaveBeenCalled();
   });

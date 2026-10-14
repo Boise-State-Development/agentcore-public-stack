@@ -44,8 +44,7 @@ function setup(
   const consentService = {
     completion: signal<unknown>(null),
     inFlightProviders: signal(new Set<string>()),
-    requestConsent: vi.fn(),
-    openConsentPopup: vi.fn().mockResolvedValue(true),
+    startUserConsent: vi.fn().mockResolvedValue(true),
     acknowledgeCompletion: vi.fn(),
   };
   const toast = { error: vi.fn(), success: vi.fn(), info: vi.fn() };
@@ -110,7 +109,7 @@ describe('FileSourceBrowserDialogComponent', () => {
 
     await vi.waitFor(() => {
       expect(connectorsService.initiateConsent).toHaveBeenCalledWith('google');
-      expect(consentService.openConsentPopup).toHaveBeenCalledWith('google');
+      expect(consentService.startUserConsent).toHaveBeenCalledWith('google', 'https://auth.example/x');
     });
   });
 

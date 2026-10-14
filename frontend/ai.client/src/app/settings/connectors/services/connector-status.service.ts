@@ -50,6 +50,15 @@ export class ConnectorStatusService {
     return this.states()[providerId] ?? 'unknown';
   }
 
+  /**
+   * Whether a probe has answered for this provider, even if the answer was
+   * `unknown`. False only before the first probe lands, which is what a
+   * loading skeleton waits on: a failed probe is an answer, not a wait.
+   */
+  isKnown(providerId: string): boolean {
+    return providerId in this.states();
+  }
+
   /** Optimistic flip after a consent completes, so the UI reacts immediately. */
   markConnected(providerId: string): void {
     this.states.update((current) => ({ ...current, [providerId]: 'connected' }));

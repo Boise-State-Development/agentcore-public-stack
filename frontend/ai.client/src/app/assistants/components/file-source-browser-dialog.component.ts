@@ -388,8 +388,7 @@ export class FileSourceBrowserDialogComponent {
         this.toast.error('Unexpected response from the server.');
         return;
       }
-      this.consentService.requestConsent(connector.providerId, result.authorizationUrl);
-      void this.consentService.openConsentPopup(connector.providerId);
+      void this.consentService.startUserConsent(connector.providerId, result.authorizationUrl);
       this.connectPhase.set('awaiting');
     } catch (err) {
       this.connectingId.set(null);

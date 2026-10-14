@@ -210,17 +210,33 @@
     data-testid="composer-connectors-menu"
   >
     <div class="max-h-72 overflow-y-auto">
-      @if (connectors().length === 0) {
+      @if (connectorsLoading()) {
+        <div role="status" data-testid="composer-connectors-loading">
+          <span class="sr-only">Loading connectors…</span>
+          @for (row of [1, 2, 3]; track row) {
+            <div class="flex items-center gap-2.5 px-2.5 py-1.5" aria-hidden="true">
+              <span class="size-4 shrink-0 animate-pulse rounded-sm bg-gray-200 motion-reduce:animate-none dark:bg-gray-700"></span>
+              <span class="flex flex-1 flex-col gap-1.5 py-0.5">
+                <span class="h-3 w-24 animate-pulse rounded-sm bg-gray-200 motion-reduce:animate-none dark:bg-gray-700"></span>
+                <span class="h-2.5 w-16 animate-pulse rounded-sm bg-gray-200 motion-reduce:animate-none dark:bg-gray-700"></span>
+              </span>
+              <span class="h-5 w-9 shrink-0 animate-pulse rounded-full bg-gray-200 motion-reduce:animate-none dark:bg-gray-700"></span>
+            </div>
+          }
+        </div>
+      } @else if (connectors().length === 0) {
         <p class="px-2.5 py-2 text-sm/5 text-gray-500 dark:text-gray-400">No connectors available.</p>
       }
       @for (connector of connectors(); track connector.providerId) {
         @let on = isConnected(connector);
         @let busy = connectorBusy(connector);
+        @let probing = connectorProbing(connector);
         <button
           appMenuToggleItem
           type="button"
           [cdkMenuItemChecked]="on"
-          [cdkMenuItemDisabled]="busy"
+          [cdkMenuItemDisabled]="busy || probing"
+          [attr.aria-busy]="probing || null"
           (cdkMenuItemTriggered)="toggleConnector(connector)"
           class="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-sm/5 text-gray-700 outline-hidden hover:bg-gray-50 focus:bg-gray-50 aria-disabled:cursor-wait dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
           [attr.data-connector-id]="connector.providerId"
@@ -232,7 +248,14 @@
           }
           <span class="flex min-w-0 flex-1 flex-col text-left">
             <span class="truncate">{{ connector.displayName }}</span>
-            @if (connectorStateLabel(connector); as state) {
+            @if (probing) {
+              <span class="sr-only">Checking connection…</span>
+              <span
+                class="mt-1 mb-0.5 h-2.5 w-16 animate-pulse rounded-sm bg-gray-200 motion-reduce:animate-none dark:bg-gray-700"
+                aria-hidden="true"
+                data-testid="connector-state-skeleton"
+              ></span>
+            } @else if (connectorStateLabel(connector); as state) {
               <span
                 class="truncate text-xs/4"
                 [class]="on && !busy ? 'text-state-success-700 dark:text-state-success-400' : 'text-gray-500 dark:text-gray-400'"
@@ -242,18 +265,39 @@
             }
           </span>
           <!-- The switch; `aria-checked` on the row carries its state. -->
-          <span
-            class="relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors"
-            [class]="on ? 'bg-primary-accessible' : 'bg-gray-300 dark:bg-gray-600'"
-            [class.opacity-50]="busy"
-            aria-hidden="true"
-          >
+          @if (probing) {
             <span
-              class="inline-block size-4 rounded-full bg-white shadow-sm transition-transform"
-              [class]="on ? 'translate-x-4' : 'translate-x-0.5'"
+              class="h-5 w-9 shrink-0 animate-pulse rounded-full bg-gray-200 motion-reduce:animate-none dark:bg-gray-700"
+              aria-hidden="true"
             ></span>
-          </span>
+          } @else {
+            <span
+              class="relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors"
+              [class]="on ? 'bg-primary-accessible' : 'bg-gray-300 dark:bg-gray-600'"
+              [class.opacity-50]="busy"
+              aria-hidden="true"
+            >
+              <span
+                class="inline-block size-4 rounded-full bg-white shadow-sm transition-transform"
+                [class]="on ? 'translate-x-4' : 'translate-x-0.5'"
+              ></span>
+            </span>
+          }
         </button>
+        @if (connectorBlocked(connector)) {
+          <!-- The browser refused the popup; open it again from this click. -->
+          <button
+            appMenuKeepOpenItem
+            type="button"
+            (cdkMenuItemTriggered)="retrySignIn(connector)"
+            [attr.aria-label]="'Open sign-in for ' + connector.displayName"
+            class="flex w-full items-center gap-2.5 rounded-lg py-1.5 pr-2.5 pl-9 text-left text-xs/4 font-medium text-primary-accessible outline-hidden hover:bg-gray-50 focus:bg-gray-50 dark:text-primary-accessible-dark dark:hover:bg-gray-700 dark:focus:bg-gray-700"
+            [attr.data-retry-connector-id]="connector.providerId"
+          >
+            <ng-icon name="heroArrowTopRightOnSquare" class="size-3.5 shrink-0" aria-hidden="true" />
+            Open sign-in
+          </button>
+        }
       }
     </div>
     <div class="my-1.5 border-t border-gray-200 dark:border-gray-700" role="separator"></div>
