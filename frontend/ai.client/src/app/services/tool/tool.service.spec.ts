@@ -18,6 +18,10 @@ describe('ToolService', () => {
   const mockResponse: ToolsResponse = { tools: mockTools, categories: ['search', 'code'], appRolesApplied: ['user'] };
 
   async function setup() {
+    await setupWith(mockResponse);
+  }
+
+  async function setupWith(response: ToolsResponse) {
     TestBed.configureTestingModule({
       providers: [
         provideHttpClient(),
@@ -32,7 +36,7 @@ describe('ToolService', () => {
 
     // Flush microtasks so constructor's async loadTools() makes the HTTP call
     await vi.waitFor(() => {
-      httpMock.expectOne('http://localhost:8000/tools/').flush(mockResponse);
+      httpMock.expectOne('http://localhost:8000/tools/').flush(response);
     });
   }
 
@@ -130,6 +134,36 @@ describe('ToolService', () => {
       service.lockToAgentTools([]);
       expect(service.agentLocked()).toBe(true);
       expect(service.enabledToolIds()).toEqual([]);
+    });
+  });
+
+  describe('a project that binds no tools', () => {
+    // search-web is admin-pinned here; code-interp is only the member's own pick.
+    beforeEach(() =>
+      setupWith({
+        ...mockResponse,
+        tools: mockTools.map(t => (t.toolId === 'search-web' ? { ...t, alwaysOn: true } : t)),
+      }),
+    );
+
+    it("keeps the admin's always-on tools and drops the member's picks", () => {
+      service.lockToAgentTools([], { keepAlwaysOn: true });
+      expect(service.agentLocked()).toBe(true);
+      expect(service.enabledToolIds()).toEqual(['search-web']);
+      expect(service.visibleTools().map(t => t.toolId)).toEqual(['search-web']);
+      expect(service.isToolShownEnabled(service.getTool('code-interp')!)).toBe(false);
+    });
+
+    it('an ordinary empty lock still leaves the pinned tools out', () => {
+      service.lockToAgentTools([]);
+      expect(service.enabledToolIds()).toEqual([]);
+    });
+
+    it('a later lock without the option forgets it', () => {
+      service.lockToAgentTools([], { keepAlwaysOn: true });
+      service.clearAgentLock();
+      service.lockToAgentTools(['code-interp']);
+      expect(service.enabledToolIds()).toEqual(['code-interp']);
     });
   });
 

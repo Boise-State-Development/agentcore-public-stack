@@ -490,6 +490,10 @@ Two cases that must be exercised explicitly, because they are the D4 boundary:
 - an Agent **with** tool bindings → the union is absent, the bound set is exact;
 - an Agent **without** tool bindings (the template-derived default shape) → the
   union is present.
+- a Shared Project harness **without** tool bindings → the member's picker is
+  ignored (the toolset is empty, `ResolvedTools.owns_toolset` False), and the
+  union is still present. Without that floor, creating a project would be the
+  one-click bypass this decision exists to prevent.
 
 ⚠️ **Rollout note.** Because template-derived Agents carry empty `bindings`,
 flipping the flag changes the effective toolset of every such Agent at once —

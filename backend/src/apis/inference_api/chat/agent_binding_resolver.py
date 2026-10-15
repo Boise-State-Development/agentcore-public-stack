@@ -23,6 +23,7 @@ Phase 3 lands incrementally:
   A ref may be *scoped* (``toolId::mcpToolName``) to bind a subset of an MCP server's tools
   rather than all of them; the scoped id rides through to the runtime, where
   ``collect_tool_name_filters`` turns it into that server's ``allowed_tool_names``.
+  A project harness never falls through: it runs on its own tools only (below).
 - ``skill`` bindings → the effective skill set (**replace**, same shape as tools): when an
   Agent binds skills they *are* the turn's skills, re-resolved per invoker via the
   invoke-through predicate (§6/D7, ``resolve_invocable_skill_ids``); a bound skill the
@@ -42,10 +43,13 @@ each drop is recorded in ``plan.unavailable`` for the route to surface as an
 ``agent_notice``. Ordinary shared agents keep block-with-message (D5) unchanged. Nothing
 about a drop enters the prompt — the notice is for the person, not the model.
 
-**A project's skills are the project's.** A harness that binds no skills, or whose
-bound skills were all dropped for this member, runs with *no* skills — never the
-member's own. One project conversation must disclose the same skills whoever is typing,
-and a member's personal skills are not part of what the project's editors chose.
+**A project's skills and tools are the project's.** A harness that binds no skills, or
+whose bound skills were all dropped for this member, runs with *no* skills — never the
+member's own. Tools follow the same rule, with one floor: a harness that binds no tools
+still gets the admin's always-on tools (``ResolvedTools.owns_toolset`` is False), because
+otherwise anyone could shed them by creating a project (admin-always-on-tools §7 D4).
+One project conversation must not change with whoever is typing, and a member's own
+picks are not part of what the project's editors chose.
 """
 
 from __future__ import annotations
@@ -132,6 +136,9 @@ class ResolvedTools:
     """
 
     tool_ids: List[str]
+    # False only for a project harness that binds no tools: its toolset is empty, but it
+    # expressed no intent about tools, so the admin's always-on floor still applies (D4).
+    owns_toolset: bool = True
 
 
 @dataclass
@@ -229,8 +236,8 @@ class AgentInvocationPlan:
     Memory Space. ``tools`` is ``None`` when the Agent binds no tools — the caller then
     uses the request's ``enabled_tools`` unchanged. ``skills`` is ``None`` when the Agent
     binds no skills — the caller then uses the request's ``agent_type``/``enabled_skills``.
-    A project harness never leaves ``skills`` as ``None``: with nothing to run it is an
-    empty ``ResolvedSkills``.
+    A project harness never leaves ``tools`` or ``skills`` as ``None``: with nothing bound
+    each is empty, so the member's own picks never reach a project turn.
     """
 
     model_override: Optional[ResolvedModel] = None
@@ -290,6 +297,10 @@ async def resolve_agent_invocation(
     plan.memory = await _resolve_memory(assistant, invoker, plan.unavailable if degrade else None)
     plan.tools = await _resolve_tools(assistant, invoker, plan.unavailable if degrade else None)
     plan.skills = await _resolve_skills(assistant, invoker, plan.unavailable if degrade else None)
+    if degrade and plan.tools is None:
+        # A project harness that binds no tools runs on none of the member's picks. It
+        # chose no tools, so the admin's always-on floor still applies (module docstring).
+        plan.tools = ResolvedTools(tool_ids=[], owns_toolset=False)
     if degrade and plan.skills is None:
         # A project harness owns its skills: none bound, or none left after degrading,
         # means none — not the member's own (see the module docstring).
@@ -372,7 +383,8 @@ async def _resolve_tools(
     ``AppRoleService.can_access_tool`` gate the harness already enforces (R2), so an author
     cannot compose a tool the invoker is later denied. A single missing tool blocks the turn
     (block-with-message, no silent drop — D5). Returns ``None`` when the Agent binds no tools,
-    leaving the request's ``enabled_tools`` in force. The RBAC service is fetched lazily (only
+    leaving the request's ``enabled_tools`` in force; ``resolve_agent_invocation`` turns
+    that into an empty toolset for a project harness. The RBAC service is fetched lazily (only
     when the Agent actually binds tools) — mirroring how ``_resolve_memory`` builds its own.
 
     A ref may be **scoped** (``toolId::mcpToolName``) to bind a subset of an MCP server's

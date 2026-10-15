@@ -81,6 +81,42 @@ class TestAgentBindingExemption:
         assert result == ["picker_tool", "pinned"]
 
 
+class TestProjectHarnessWithNoTools:
+    """A project harness that binds no tools ignores the member's picker, but it
+    expressed no intent about tools, so the pinned floor still applies (D4).
+    Exempting it would make creating a project the one-click bypass."""
+
+    @staticmethod
+    async def _effective(override):
+        input_data = SimpleNamespace(enabled_tools=["picker_tool"], session_id="s1")
+        with patch.object(
+            routes,
+            "_apply_attachment_tool_autoenable",
+            AsyncMock(side_effect=lambda tools, *args, **kwargs: tools),
+        ), patch.object(
+            routes, "resolve_always_on_tool_ids", _resolver(["pinned"])
+        ) as always_on:
+            result = await routes._resolve_effective_tools(
+                input_data, USER, "u1", override, turn_has_tabular=False
+            )
+        return result, always_on
+
+    @pytest.mark.asyncio
+    async def test_the_members_picker_is_ignored_and_the_pinned_set_kept(self):
+        from apis.inference_api.chat.agent_binding_resolver import ResolvedTools
+
+        result, _ = await self._effective(ResolvedTools(tool_ids=[], owns_toolset=False))
+        assert result == ["pinned"]
+
+    @pytest.mark.asyncio
+    async def test_a_project_whose_bound_tools_were_all_dropped_still_owns_its_toolset(self):
+        from apis.inference_api.chat.agent_binding_resolver import ResolvedTools
+
+        result, always_on = await self._effective(ResolvedTools(tool_ids=[]))
+        assert result == []
+        always_on.assert_not_awaited()
+
+
 class TestSystemTools:
     """System (platform-shipped) tools apply on EVERY turn, unlike admin
     always-on. See docs/specs/platform-self-service/design.md."""

@@ -1405,7 +1405,10 @@ async def _apply_admin_always_on_tools(
     deliberate: a template-derived Agent starts with empty ``bindings``
     (``agent_templates/seed.py``), and exempting it would make always-on
     opt-out-by-construction — anyone could shed a pinned tool with a trivial
-    unbound Agent. See docs/specs/admin-always-on-tools.md §7 D4.
+    unbound Agent. See docs/specs/admin-always-on-tools.md §7 D4. A project
+    harness that binds no tools is the same case, though it no longer falls
+    through to the picker: its toolset is empty with ``owns_toolset`` False,
+    so the pinned set is still unioned in.
 
     This is a deliberate divergence from the attachment auto-enable above,
     which applies to the effective list and so does reach Agent-bound turns:
@@ -3313,7 +3316,8 @@ async def _resolve_effective_tools(
     # directly; no preferences fallback needed.
     # An Agent's tool bindings replace the request's enabled_tools for this
     # turn (D5, resolved per invoker above). None ⇒ no tool binding ⇒ the
-    # request drives the toolset exactly as today. Drives both the built-in
+    # request drives the toolset exactly as today. A project harness is never
+    # None: binding no tools, it runs on none of the member's. Drives both the built-in
     # extra tools (spreadsheet/artifact gate on specific ids) and get_agent.
     effective_enabled_tools = (
         agent_tools_override.tool_ids
@@ -3345,7 +3349,7 @@ async def _resolve_effective_tools(
     effective_enabled_tools = await _apply_admin_always_on_tools(
         effective_enabled_tools,
         current_user,
-        agent_bound_tools=agent_tools_override is not None,
+        agent_bound_tools=agent_tools_override is not None and agent_tools_override.owns_toolset,
     )
 
     return effective_enabled_tools
