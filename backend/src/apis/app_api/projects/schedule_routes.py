@@ -40,6 +40,7 @@ from apis.shared.scheduled_prompts.models import (
 )
 from apis.shared.scheduled_prompts.service import (
     MIN_INTERVAL_MINUTES,
+    InvalidTimezoneError,
     ScheduledPromptLimitExceeded,
     interval_to_minutes,
     create_scheduled_prompt,
@@ -282,6 +283,8 @@ async def create_schedule(
         )
     except ScheduledPromptLimitExceeded as e:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
+    except InvalidTimezoneError as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
     except ValueError as e:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(e))
 
@@ -359,6 +362,8 @@ async def update_schedule(
             notify_members=body.notify_members,
             publish_outputs=body.publish_outputs,
         )
+    except InvalidTimezoneError as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
     except ValueError as e:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(e))
     if updated is None:
