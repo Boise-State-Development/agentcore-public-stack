@@ -960,7 +960,7 @@ export class ConversationPage implements OnDestroy {
       this.assistant.set(loadedAssistant);
       // Reflect the Agent's governed bindings in the chat-input (Agent Designer).
       // Best-effort and independent of the assistant fetch above.
-      await this.loadAgentBindings(assistantId);
+      await this.loadAgentBindings(assistantId, !!loadedAssistant.projectId);
     } catch (error: any) {
       console.error('Failed to load assistant:', error);
       
@@ -988,11 +988,11 @@ export class ConversationPage implements OnDestroy {
    * and the conversation is never blocked on this. The backend still governs
    * bindings at invocation regardless, so this is UI honesty, not enforcement.
    */
-  private async loadAgentBindings(assistantId: string): Promise<void> {
+  private async loadAgentBindings(assistantId: string, isProjectHarness: boolean): Promise<void> {
     try {
       const agent = await this.agentService.getAgent(assistantId);
       this.agent.set(agent);
-      this.applyAgentBindingLocks(agent);
+      this.applyAgentBindingLocks(agent, isProjectHarness);
     } catch {
       this.agent.set(null);
       this.runnability.set(null);
@@ -1010,8 +1010,12 @@ export class ConversationPage implements OnDestroy {
     }
   }
 
-  /** Lock each picker to the Agent's binding, or release it when unbound. */
-  private applyAgentBindingLocks(agent: Agent): void {
+  /**
+   * Lock each picker to the Agent's binding, or release it when unbound. A
+   * project's skills are always locked, to none if it binds none: the backend
+   * runs a project with only its own skills, never the member's.
+   */
+  private applyAgentBindingLocks(agent: Agent, isProjectHarness: boolean): void {
     const modelId = agent.modelConfig?.modelId;
     if (modelId) {
       this.modelService.lockToAgentModel(modelId);
@@ -1027,12 +1031,12 @@ export class ConversationPage implements OnDestroy {
     }
 
     const skillIds = agent.bindings.filter(b => b.kind === 'skill').map(b => b.ref);
-    if (skillIds.length > 0) {
+    if (skillIds.length > 0 || isProjectHarness) {
       this.skillService.lockToAgentSkills(skillIds);
       // Load the accessible skills so the locked rows can render their names.
       // Only fires when an Agent actually binds skills (a skills-enabled
       // context), so there is no /skills fetch in flag-off environments.
-      if (!this.skillService.initialized()) {
+      if (skillIds.length > 0 && !this.skillService.initialized()) {
         void this.skillService.loadSkills();
       }
     } else {

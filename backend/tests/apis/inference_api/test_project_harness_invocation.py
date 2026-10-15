@@ -97,16 +97,26 @@ class TestDegrade:
         assert plan.unavailable.model_id == "us.anthropic.claude-opus-4-7"
 
     @pytest.mark.asyncio
-    async def test_skills_are_filtered_and_none_left_means_no_skill_binding(self, monkeypatch):
+    async def test_skills_are_filtered_and_none_left_means_no_skills_not_the_members(self, monkeypatch):
         _patch_skill_access(monkeypatch, {"rubric-writer"})
         agent = _assistant(bindings=[_skill_binding("rubric-writer"), _skill_binding("grant-budget")])
         plan = await resolve_agent_invocation(agent, _user(), degrade=True)
         assert plan.skills.skill_ids == ["rubric-writer"]
         assert plan.unavailable.skills == ["grant-budget"]
 
+        # Same split as tools: an empty set, never a fall-through to the request's skills.
         _patch_skill_access(monkeypatch, set())
         plan = await resolve_agent_invocation(_assistant(bindings=[_skill_binding("grant-budget")]), _user(), degrade=True)
-        assert plan.skills is None
+        assert plan.skills is not None and plan.skills.skill_ids == []
+
+    @pytest.mark.asyncio
+    async def test_a_project_that_binds_no_skills_runs_with_none(self, monkeypatch):
+        # The member's own enabled skills are not the project's: one project conversation
+        # discloses the same skills whoever is typing.
+        _patch_skill_access(monkeypatch, True)
+        plan = await resolve_agent_invocation(_assistant(bindings=[]), _user(), degrade=True)
+        assert plan.skills is not None and plan.skills.skill_ids == []
+        assert not plan.unavailable
 
     @pytest.mark.asyncio
     async def test_skills_disabled_drops_them_all(self, monkeypatch):
@@ -114,7 +124,7 @@ class TestDegrade:
         plan = await resolve_agent_invocation(
             _assistant(bindings=[_skill_binding("a"), _skill_binding("b")]), _user(), degrade=True
         )
-        assert plan.skills is None and plan.unavailable.skills == ["a", "b"]
+        assert plan.skills.skill_ids == [] and plan.unavailable.skills == ["a", "b"]
 
     @pytest.mark.asyncio
     async def test_an_unreachable_memory_space_is_skipped(self, monkeypatch):

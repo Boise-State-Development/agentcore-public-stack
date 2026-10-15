@@ -1194,6 +1194,10 @@ Extend the closed enum with `project.{created, updated, archived, deleted, trans
 ### 9.6 Block-on-missing (D5) is hostile in a 200-member project
 Today an invoker who lacks one bound tool or model gets the whole turn blocked with a message. For project harnesses this plan uses **degrade with notice**: unavailable tools are dropped and an `agent_status`-style notice lists them; a missing model falls back to the invoker's default with a notice; a missing skill is dropped. Rationale: principle 1 (the Viewer can still work) over strict parity with published agents. D5 stays as-is for ordinary shared agents. **Decided 2026-09-22 (Phil): degrade with notice.**
 
+**A project's skills are the project's (decided 2026-10-14, Phil).** A harness that binds no skills, or whose bound skills were all dropped for this member, runs with **no** skills. It never falls back to the member's own enabled skills: one project conversation must disclose the same skills whoever is typing, and a member's personal skills are not what the project's editors chose. `resolve_agent_invocation` returns an empty `ResolvedSkills` for a harness instead of `None`. The SPA locks the skill picker and the `/` menu to the project's bound set, empty included, so the composer offers no `/` commands in a project with no skills. Ordinary shared agents keep the old rule: no skill binding means the request's skills.
+
+Tools differ in one case. A harness whose bound tools were all dropped runs with no tools, the same as skills. A harness that binds **no** tools still runs on the member's own tool picks.
+
 ### 9.7 Observability the overview asks for
 EMF metrics from the memory service and worker under `AgentCoreStack/ProjectMemory`: `IndexHit` (a `memory_read` followed the index), `ProposalsCreated/Approved/Rejected`, `FileTokens` and `ScopeTokens` vs thresholds, `CompactionRatio`, `NeverRetrievedShare`, `VerificationFailures`, `ArchiveRestores`, `ValidationRejections` by step. Scheduled-run success and per-project cost already flow through `RUN#` rows and the new `COST#` rows.
 

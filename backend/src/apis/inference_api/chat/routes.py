@@ -4790,6 +4790,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             # (before the main-turn get_agent below) makes them flow into construction —
             # and thus the paused-turn snapshot — so a bound-skill agent resumes on the
             # same skills_hash. None ⇒ no skill binding ⇒ the request drives skills/type.
+            # A project harness is never None here: an empty set runs it with no skills.
             if agent_skills_override is not None:
                 effective_agent_type = "skill"
                 effective_skill_ids = agent_skills_override.skill_ids
