@@ -322,13 +322,20 @@ async def _find_managed_model(model_id: str | None):
 # A project harness's guidance on where teammates' work lives (shared-projects 2.5c).
 # Without it Haiku 4.5 answered "every open escalation" from project memory alone and
 # never listed the shared conversations (0 of 6 first responses on the simulation project);
-# with it, 6 of 6. Constant text, so it costs one cache write per harness, on deploy.
+# with it, 6 of 6. The last sentence is the 2026-10-15 QA pass: asked mid-conversation to
+# remember a preference "just for me", Haiku 4.5 said it had saved or noted it without
+# calling `memory_save` (2 of 10 on dev before; the tool spec alone left 1 of 10). An empty
+# personal space renders no memory block, so this is the one place always in the prompt.
+# Constant text, so it costs one cache write per harness, on deploy.
 PROJECT_WORKSPACE_GUIDANCE = (
     "## Project Workspace\n\n"
     "Teammates' work reaches you three ways: the project's files, project memory, and "
     "conversations members have shared with the project. Before answering about the team's status, open "
     "items, decisions or who owns what, check all three: call `shared_conversations_list` and read the "
-    "relevant shared conversations, not only memory."
+    "relevant shared conversations, not only memory.\n\n"
+    "When a member asks you to remember something, for the team or just for them, call `memory_save` "
+    "in that same turn. Nothing carries into a later conversation until it succeeds, so never say "
+    "you've saved, noted or recorded something you haven't saved."
 )
 
 
