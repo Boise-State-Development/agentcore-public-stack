@@ -12,9 +12,11 @@
   "dependencies": {
     "@astrojs/starlight": "0.41.4",
     "astro": "7.2.8",
-    "sharp": "0.35.4"
+    "sharp": "0.35.5"
   },
   "overrides": {
-    "esbuild": "^0.28.1"
+    "esbuild": "^0.28.1",
+    "postcss-nested": "^7.0.2",
+    "postcss-selector-parser": ">=7.1.6"
   }
 }

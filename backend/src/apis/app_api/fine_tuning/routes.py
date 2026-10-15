@@ -427,8 +427,8 @@ def _budgeted_runtime(
     effective = min(requested_seconds, affordable_seconds)
     if effective < requested_seconds:
         logger.info(
-            f"Clamped max runtime from {requested_seconds}s to {effective}s "
-            f"to fit ${remaining_usd:.2f} remaining on {scrub_log(instance_type)}"
+            f"Clamped max runtime from {scrub_log(requested_seconds)}s to {scrub_log(effective)}s "
+            f"to fit ${scrub_log(f'{remaining_usd:.2f}')} remaining on {scrub_log(instance_type)}"
         )
     return effective
 
