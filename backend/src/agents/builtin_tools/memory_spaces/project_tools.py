@@ -359,7 +359,8 @@ def make_project_memory_save_tool(scopes: ProjectMemoryScopes):
         they want answers, a standing request), save it to "mine" now: this conversation
         alone will not carry it into their next one. Make `description` the rule itself,
         such as "Status checks: reply 'STATUS-OK:' plus one sentence", because that line
-        is what their later conversations see.
+        is what their later conversations see. Nothing is saved until this tool returns
+        success, so never tell the member something is saved without calling it.
 
         A file is a list with one fact per "- " line, such as "- The pilot starts
         March 3."; prose and headings are rejected. To change a file, `memory_read` it

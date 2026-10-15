@@ -221,6 +221,8 @@ class TestProjectHarnessSpecs:
         assert 'save it to "mine" now' in description
         assert "will not carry it into their next one" in description
         assert "Make `description` the rule itself" in description
+        # QA 2026-10-15: "I've saved your preference" with no tool call, mid-conversation.
+        assert "never tell the member something is saved without calling it" in description
 
     def test_save_says_its_description_is_the_index_line_on_every_save(self):
         """The 2026-10-15 QA pass: an update left the index line naming the old value."""
