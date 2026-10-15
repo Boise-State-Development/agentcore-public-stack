@@ -40,6 +40,7 @@ from apis.shared.files.content_disposition import build_content_disposition
 from apis.shared.memory.store import MemorySpaceStoreError
 from apis.shared.projects.memory_files import EditedItem, ProjectMemoryFiles
 from apis.shared.projects.memory_proposals import ProjectMemoryProposals, ProposalProjectError
+from apis.shared.security.log_sanitize import scrub_log
 
 from apis.app_api.memory_spaces.export_zip import build_export_zip, safe_component, stream_and_close
 
@@ -442,7 +443,11 @@ class SaveFileResponse(BaseModel):
     over_soft_threshold: bool = Field(False, alias="overSoftThreshold")
     removed_anchors: List[str] = Field(default_factory=list, alias="removedAnchors")
     indexed: Optional[str] = Field(
-        None, description="A new file's index line: added, already_linked or over_budget; null for an existing file"
+        None,
+        description=(
+            "How the file's index line went: for a new file added, already_linked or over_budget; for an "
+            "update whose description changed refreshed, link_only or not_linked; null when nothing changed"
+        ),
     )
     lint: List[LintFindingResponse] = Field(
         default_factory=list, description="What the content check found in the items this save added or changed"
@@ -494,7 +499,7 @@ def read_memory_file(
         replaced = files.replaced(project_id, user, scope, slug)
     except Exception:
         # The markers are a courtesy: the file still reads without them.
-        logger.warning("Could not read what the items of %s replaced", slug, exc_info=True)
+        logger.warning("Could not read what the items of %s replaced", scrub_log(slug), exc_info=True)
         replaced = {}
     pinned = set(ref.pinned)
     findings = lint_for_read(_SPACE_SCOPE[scope], items, ref.description)
@@ -673,7 +678,7 @@ def export_memory(
     except _ERRORS as e:
         raise _translate(e)
     except MemorySpaceStoreError:
-        logger.error("projects: memory export failed to read the store for project=%s", project_id)
+        logger.error("projects: memory export failed to read the store for project=%s", scrub_log(project_id))
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Couldn't read the memory to export it.")
     name = f"{export.space.name or 'project'} memory" if scope == "project" else f"{export.space.name or 'project'} my memory"
     root = safe_component(name, "memory")

@@ -150,8 +150,9 @@ How it reaches other people's conversations: each memory has a short
 **index**, and the index is what the assistant sees at the start of every
 conversation. Detailed entries
 are only read when the assistant goes looking. When the assistant saves a new
-memory, it adds a line for it to the index automatically, so you only need to
-say what to record:
+memory, it adds a line for it to the index automatically, and when an update
+changes what that line says (a new date, say), the line is rewritten to match.
+You only need to say what to record:
 
 > Record our agreed Article 3 payment position in project memory.
 
@@ -210,13 +211,16 @@ can change their own (**Just me**):
   from the list; you can type to narrow it.
 - **New file** asks for a short lowercase name, such as `deadlines`, plus a
   description that tells the assistant when to open it. The new file is added
-  to the index for you, and a deleted file is taken out of it.
+  to the index for you, a changed description rewrites the file's index line,
+  and a deleted file is taken out of it.
 - **Edit index** changes the index itself.
 
 The editor points out problems as you type, such as a link to a file that
 doesn't exist or a name that's already taken. If someone else saved the same
 file while you had it open, your save is refused so their change isn't lost.
-Reload the file and make your change again.
+Reload the file and make your change again. The assistant works the same way:
+it reads a file before changing it, and if a teammate saved it in between, it
+reads it again rather than overwrite their change.
 
 ### Pin an item
 

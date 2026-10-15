@@ -194,6 +194,11 @@ class TestNotice:
 
 
 class TestPrompt:
+    def test_the_guidance_says_to_save_before_saying_so(self):
+        """QA 2026-10-15: "I've saved your preference" with no memory_save call."""
+        assert "call `memory_save` in that same turn" in PROJECT_WORKSPACE_GUIDANCE
+        assert "never say you've saved, noted or recorded something you haven't saved" in PROJECT_WORKSPACE_GUIDANCE
+
     def test_project_heading_and_unchanged_agent_heading(self):
         assert compose_agent_system_prompt("BASE", "Do X.", project_harness=True) == (
             f"BASE\n\n{PROJECT_WORKSPACE_GUIDANCE}\n\n## Project Instructions\n\nDo X."

@@ -212,20 +212,21 @@ class ProjectMemoryProposals:
             space_id, user.user_id, user.email, proposal_id, text=text, description=description, note=note,
             ops=ops,
         )
-        self._index_new_file(space_id, user, result)
+        self._index_saved_file(space_id, user, result)
         self._tell_proposer(project, user, proposal)
         self._record(AuditAction.PROJECT_MEMORY_PROPOSAL_APPROVED, user, project, proposal)
         return proposal, result
 
-    def _index_new_file(self, space_id: str, user: User, result: Any) -> None:
-        """A new file joins MEMORY.md as a direct save's would (the harness's ``memory_save`` does this too)."""
-        if result.ref.version != 1:
-            return
+    def _index_saved_file(self, space_id: str, user: User, result: Any) -> None:
+        """Keep MEMORY.md in step as a direct save would (the harness's ``memory_save`` does this too).
+
+        A new file joins the index; a change to a file's description rewrites its line.
+        """
         from apis.shared.memory.hydration import PROJECT_MEMORY_MAX_TOKENS
 
         try:
-            self.memory.add_index_link(
-                space_id, user.user_id, user.email, result.ref, max_tokens=PROJECT_MEMORY_MAX_TOKENS
+            self.memory.index_saved_file(
+                space_id, user.user_id, user.email, result, max_tokens=PROJECT_MEMORY_MAX_TOKENS
             )
         except Exception:
             logger.warning("Could not index approved file %s in %s", result.ref.slug, space_id, exc_info=True)

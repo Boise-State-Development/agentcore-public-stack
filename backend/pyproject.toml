@@ -25,7 +25,7 @@ dependencies = [
     "aiofiles==25.1.0",
 
     # Authentication (for shared auth module)
-    "pyjwt[crypto]==2.13.0",
+    "pyjwt[crypto]==2.15.0",
 
     # OAuth provider management
     "authlib==1.7.1",
@@ -46,7 +46,7 @@ dependencies = [
     "cryptography==50.0.1",
     "python-multipart==0.0.31",
     "aiohttp==3.14.3",
-    "urllib3==2.7.0",
+    "urllib3==2.8.0",
     "idna==3.15",
     "pyasn1==0.6.4",
     "soupsieve==2.9.0",

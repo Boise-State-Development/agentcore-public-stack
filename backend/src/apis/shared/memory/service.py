@@ -199,13 +199,43 @@ def _index_cap() -> int:
     return _DEFAULT_INDEX_CAP
 
 
+# ``save_entry``'s ``base_content_hash`` for a save that must create the file.
+NEW_FILE = ""
+
 IndexLinkOutcome = Literal["added", "already_linked", "over_budget"]
+# How a saved file's own index line went: a new file's ``IndexLinkOutcome``, or
+# for an update whose description changed ``refreshed`` (the line now says it),
+# ``link_only`` (the line now just links the file: the index is at its budget),
+# or ``not_linked`` (no line of its own to refresh).
+IndexSyncOutcome = Literal["added", "already_linked", "over_budget", "refreshed", "link_only", "not_linked"]
 
 
 def _index_line(slug: str, description: str) -> str:
     """One canonical index line: ``- [[slug]] — description``, or just the link."""
     summary = " ".join((description or "").split())
     return f"- [[{slug}]] — {summary}" if summary else f"- [[{slug}]]"
+
+
+def _own_line_pattern(slug: str) -> "re.Pattern[str]":
+    """A list line that starts with ``[[slug]]``: the line ``add_index_link`` writes, or one shaped like it."""
+    return re.compile(r"^(\s*)[-*]\s+\[\[\s*" + re.escape(slug) + r"\s*\]\]", re.IGNORECASE)
+
+
+_TRAILING_ANCHOR = re.compile(r"\s*<!--\s*e:[^>]*-->\s*$")
+
+
+def _with_own_line(index_text: str, slug: str, line: str) -> str:
+    """``index_text`` with each of ``slug``'s own lines replaced by ``line``, keeping indent and anchor."""
+    pattern = _own_line_pattern(slug)
+    out = []
+    for current in index_text.split("\n"):
+        match = pattern.match(current)
+        if match is None:
+            out.append(current)
+            continue
+        anchor = _TRAILING_ANCHOR.search(current)
+        out.append(f"{match.group(1)}{line}{anchor.group(0) if anchor else ''}")
+    return "\n".join(out)
 
 
 def _without_starter(index_text: str, template: str) -> str:
@@ -295,6 +325,9 @@ class SaveResult:
     created_indexed: Dict[str, str] = field(default_factory=dict)
     # Content lint (2.7): what the check found in the text this save added or changed.
     lint: List[LintFinding] = field(default_factory=list)
+    # The description the file had before this save (None for a new file), so a
+    # caller can tell whether its index line needs to follow it.
+    previous_description: Optional[str] = None
 
 
 @dataclass
@@ -984,6 +1017,8 @@ class MemorySpaceService:
         user_id: str,
         user_email: Optional[str],
         body: str,
+        *,
+        base_content_hash: Optional[str] = None,
     ) -> IndexSaveResult:
         """Replace the MEMORY.md index text (editor+), with what the caller should hear about it.
 
@@ -991,8 +1026,20 @@ class MemorySpaceService:
         new link to nothing fails, one it already had is tolerated. In a
         project's spaces the lines it didn't have before go through the content
         check (2.7), since the index is what every task loads.
+
+        ``base_content_hash`` is the hash of the index ``body`` was derived from
+        (of ``""`` for a space without one). An index that has moved on since,
+        such as a line a teammate's new file added, is a conflict rather than a
+        silent overwrite, and the write itself is conditional on it.
         """
         space, _ = self._require(space_id, user_id, user_email, "editor")
+        moved = MemorySpaceConcurrencyError(
+            "MEMORY.md was changed by someone else since it was read. Read it again and retry."
+        )
+        if base_content_hash is not None:
+            current_hash = space.index_content_hash if space.index_s3_key else compute_content_hash(b"")
+            if current_hash != base_content_hash:
+                raise moved
         lint: List[LintFinding] = []
         settings = lint_settings()
         mode = lint_mode_for(space.scope, settings)
@@ -1012,10 +1059,19 @@ class MemorySpaceService:
         new_key = self.store.put(
             space_id=space_id, content=content, content_type="text/markdown"
         )
+        old_hash = space.index_content_hash
         space.index_s3_key = new_key
         space.index_content_hash = compute_content_hash(content)
         space.updated_at = _now_iso()
-        self.repository.put_space(space)
+        if base_content_hash is None:
+            self.repository.put_space(space)
+        else:
+            try:
+                self.repository.put_space_if_index_unchanged(space, old_hash)
+            except OptimisticLockError:
+                if new_key != old_key and not self._key_in_use(space_id, new_key):
+                    self.store.delete(new_key)
+                raise moved from None
         if old_key and old_key != new_key and not self._key_in_use(space_id, old_key):
             self.store.delete(old_key)
         return IndexSaveResult(space=space, warnings=warning_messages(lint), lint=lint)
@@ -1108,7 +1164,7 @@ class MemorySpaceService:
     def _remove_index_line(self, space: Optional[MemorySpace], slug: str, *, collect: bool = True) -> bool:
         """:meth:`remove_index_link` once the caller's access is settled (``collect`` as for :meth:`_add_index_line`)."""
         space_id = space.space_id if space is not None else ""
-        pattern = re.compile(r"^\s*[-*]\s+\[\[\s*" + re.escape(slug) + r"\s*\]\]", re.IGNORECASE)
+        pattern = _own_line_pattern(slug)
         for attempt in range(_MAX_MANIFEST_RETRIES):
             if attempt:
                 space = self.repository.get_space(space_id)
@@ -1134,6 +1190,86 @@ class MemorySpaceService:
             if collect and old_key and old_key != new_key and not self._key_in_use(space_id, old_key):
                 self.store.delete(old_key)
             return True
+        raise MemorySpaceConcurrencyError(
+            f"the index of memory space '{space_id}' is being edited concurrently; retry the write"
+        )
+
+    def index_saved_file(
+        self,
+        space_id: str,
+        user_id: str,
+        user_email: Optional[str],
+        result: SaveResult,
+        *,
+        max_tokens: int,
+    ) -> Optional[IndexSyncOutcome]:
+        """Keep a just-saved file's ``MEMORY.md`` line in step with it (editor+). None: nothing to do.
+
+        A new file gets its line (:meth:`add_index_link`). An update whose
+        description changed has its own line rewritten to the new description
+        (:meth:`refresh_index_link`): the index is the one part of a space every
+        conversation sees, and a line left naming the old value was answered
+        over the file itself (the 2026-10-15 QA pass, 3 of 3). An update that
+        keeps its description leaves the index byte for byte, so it costs the
+        cached prompt prefix nothing.
+        """
+        ref = result.ref
+        if ref.version == 1:
+            return self.add_index_link(space_id, user_id, user_email, ref, max_tokens=max_tokens)
+        if " ".join((ref.description or "").split()) == " ".join((result.previous_description or "").split()):
+            return None
+        return self.refresh_index_link(space_id, user_id, user_email, ref, max_tokens=max_tokens)
+
+    def refresh_index_link(
+        self,
+        space_id: str,
+        user_id: str,
+        user_email: Optional[str],
+        ref: MemoryEntryRef,
+        *,
+        max_tokens: int,
+    ) -> Literal["refreshed", "link_only", "not_linked"]:
+        """Rewrite ``MEMORY.md``'s own line for ``ref`` (one starting ``[[slug]]``) to its current description (editor+).
+
+        The line is replaced where it stands, so the rest of the index keeps its
+        bytes and order. A file the index gives no line of its own is left out
+        (``not_linked``): a member who took it out meant it. If the new line
+        would push the index past ``max_tokens``, it just links the file
+        (``link_only``), which drops the old value without being cut off. The
+        write is conditional on the index it read, like :meth:`add_index_link`.
+        """
+        space, _ = self._require(space_id, user_id, user_email, "editor")
+        pattern = _own_line_pattern(ref.slug)
+        for attempt in range(_MAX_MANIFEST_RETRIES):
+            if attempt:
+                space = self.repository.get_space(space_id)
+            if space is None:
+                raise MemorySpaceNotFoundError(f"Memory space '{space_id}' not found")
+            previous = self.store.get(space.index_s3_key).decode("utf-8") if space.index_s3_key else ""
+            if not any(pattern.match(line) for line in previous.split("\n")):
+                return "not_linked"
+            outcome: Literal["refreshed", "link_only"] = "refreshed"
+            text = _with_own_line(previous, ref.slug, _index_line(ref.slug, ref.description))
+            if estimate_tokens(strip_anchors(text)) > max_tokens:
+                outcome = "link_only"
+                text = _with_own_line(previous, ref.slug, _index_line(ref.slug, ""))
+            if text == previous:
+                return outcome
+            content = self._encode(text)
+            old_key, old_hash = space.index_s3_key, space.index_content_hash
+            new_key = self.store.put(space_id=space_id, content=content, content_type="text/markdown")
+            space.index_s3_key = new_key
+            space.index_content_hash = compute_content_hash(content)
+            space.updated_at = _now_iso()
+            try:
+                self.repository.put_space_if_index_unchanged(space, old_hash)
+            except OptimisticLockError:
+                if new_key != old_key and not self._key_in_use(space_id, new_key):
+                    self.store.delete(new_key)
+                continue
+            if old_key and old_key != new_key and not self._key_in_use(space_id, old_key):
+                self.store.delete(old_key)
+            return outcome
         raise MemorySpaceConcurrencyError(
             f"the index of memory space '{space_id}' is being edited concurrently; retry the write"
         )
@@ -1244,8 +1380,9 @@ class MemorySpaceService:
 
         ``description=None`` keeps a canonical file's description; a freeform
         entry treats it as empty, as it always has. ``base_content_hash`` is the
-        version ``body`` was derived from; a file that has moved on since is a
-        conflict rather than a silent overwrite.
+        version ``body`` was derived from (``NEW_FILE`` for a file that must not
+        exist yet); a file that has moved on since is a conflict rather than a
+        silent overwrite.
         """
         space, _ = self._require(space_id, user_id, user_email, "editor")
         return self._save(
@@ -1432,9 +1569,10 @@ class MemorySpaceService:
         )
         # Before validation: ``body`` was derived from that version, so against a
         # newer one its anchors may not even exist, and that's a conflict, not bad input.
+        # ``NEW_FILE`` (``""``) is the base of a file that doesn't exist yet.
         if base_content_hash is not None:
             base = self._find_ref(space_id, slug)
-            if base is None or base.content_hash != base_content_hash:
+            if (base.content_hash if base is not None else NEW_FILE) != base_content_hash:
                 raise moved
         prepared = self._prepare_save(
             space, slug, body, description=description, aliases=aliases, now=now, restorable=restorable,
@@ -1442,8 +1580,8 @@ class MemorySpaceService:
             lint_skip=set(context.moved) if context else (),
         )
         if base_content_hash is not None and (
-            prepared.current_ref is None or prepared.current_ref.content_hash != base_content_hash
-        ):
+            prepared.current_ref.content_hash if prepared.current_ref is not None else NEW_FILE
+        ) != base_content_hash:
             raise moved
         result = self._commit_save(
             space_id, user_id, prepared, canonical=canonical, entry_type=entry_type,
@@ -1675,6 +1813,7 @@ class MemorySpaceService:
             archived_links=list(validated.archived_links) if validated else [],
             over_soft_threshold=over_soft,
             lint=list(prepared.lint),
+            previous_description=current_ref.description if current_ref is not None else None,
         )
 
     def delete_entry(
