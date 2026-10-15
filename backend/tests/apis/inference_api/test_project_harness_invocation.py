@@ -87,6 +87,30 @@ class TestDegrade:
         assert plan.tools is not None and plan.tools.tool_ids == []
 
     @pytest.mark.asyncio
+    async def test_a_project_that_binds_no_tools_ignores_the_members_picks(self, monkeypatch):
+        # Empty, never None (which would fall through to the request's enabled_tools), and
+        # not owning its toolset, so the admin's always-on floor still applies (D4).
+        _patch_tool_access(monkeypatch, True)
+        plan = await resolve_agent_invocation(_assistant(bindings=[]), _user(), degrade=True)
+        assert plan.tools is not None and plan.tools.tool_ids == []
+        assert plan.tools.owns_toolset is False
+        assert not plan.unavailable
+
+    @pytest.mark.asyncio
+    async def test_bound_tools_own_the_toolset_even_when_all_were_dropped(self, monkeypatch):
+        _patch_tool_access(monkeypatch, False)
+        plan = await resolve_agent_invocation(
+            _assistant(bindings=[_tool_binding("sis")]), _user(), degrade=True
+        )
+        assert plan.tools.owns_toolset is True
+
+    @pytest.mark.asyncio
+    async def test_an_ordinary_agent_with_no_tools_still_falls_through(self, monkeypatch):
+        _patch_tool_access(monkeypatch, True)
+        plan = await resolve_agent_invocation(_assistant(bindings=[]), _user())
+        assert plan.tools is None
+
+    @pytest.mark.asyncio
     async def test_a_denied_model_falls_through_to_the_members_default(self, monkeypatch):
         _patch_access(monkeypatch, False)
         agent = _assistant(model_settings=AgentModelConfig(model_id="us.anthropic.claude-opus-4-7"))
