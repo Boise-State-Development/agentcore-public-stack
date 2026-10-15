@@ -98,8 +98,10 @@ async def create_sync_policy(
     interval: SyncInterval,
     created_by_user_id: str,
     source_name: Optional[str] = None,
+    due_now: bool = False,
 ) -> SyncPolicy:
-    """Create an active sync policy due one interval from now.
+    """Create an active sync policy due one interval from now, or at the
+    next dispatcher tick when ``due_now``.
 
     Enforces the per-assistant policy cap and one-policy-per-source
     uniqueness (both checked against the current policy list — bounded by
@@ -123,7 +125,7 @@ async def create_sync_policy(
         interval=interval,
         state="active",
         source_name=source_name,
-        next_sync_at=compute_next_sync_at(interval),
+        next_sync_at=now if due_now else compute_next_sync_at(interval),
         created_by_user_id=created_by_user_id,
         created_at=now,
         updated_at=now,

@@ -151,13 +151,15 @@ class TestCreatePolicy:
         with (
             patch(f"{ROUTES_MODULE}.resolve_assistant_permission", _resolve("owner")),
             patch(f"{ROUTES_MODULE}.records.get_source_item", return_value=CRAWL_SOURCE),
-            patch(f"{ROUTES_MODULE}.create_sync_policy", AsyncMock(return_value=policy)),
+            patch(f"{ROUTES_MODULE}.create_sync_policy", AsyncMock(return_value=policy)) as create,
             patch(f"{ROUTES_MODULE}.records.update_document_sync_fields", update_fields),
         ):
             response = self._post(app, source_type="web_crawl", source_ref="crawl-001")
 
         assert response.status_code == 201
         update_fields.assert_not_called()
+        # Only a folder's first run is due at creation; a crawl waits one interval.
+        assert "due_now" not in create.await_args.kwargs
 
     def test_missing_source_404(self, app):
         _override_user(app)
@@ -548,6 +550,7 @@ class TestFolderPolicy:
             interval="weekly",
             created_by_user_id=USER_ID,
             source_name="Readings/Week 3",
+            due_now=True,
         )
         assert file_source_ok.await_args.args[0] == "google-workspace"
         get_source.assert_not_called()
