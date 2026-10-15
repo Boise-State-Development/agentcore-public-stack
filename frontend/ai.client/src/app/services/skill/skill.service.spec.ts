@@ -91,6 +91,14 @@ describe('SkillService', () => {
       expect(service.visibleSkills().map(s => s.skillId)).toEqual(['web_research']);
     });
 
+    it('locks to no skills at all for a project that binds none', () => {
+      // A project never runs on the member's own skills, so an empty lock is a real lock.
+      service.lockToAgentSkills([]);
+      expect(service.agentLocked()).toBe(true);
+      expect(service.enabledSkillIds()).toEqual([]);
+      expect(service.visibleSkills()).toEqual([]);
+    });
+
     it('restores the user set when cleared', () => {
       service.lockToAgentSkills(['web_research']);
       service.clearAgentLock();

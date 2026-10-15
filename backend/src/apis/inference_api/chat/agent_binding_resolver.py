@@ -29,7 +29,8 @@ Phase 3 lands incrementally:
   invoker lacks — or the skills feature being disabled in this environment — blocks the
   turn (D5). The caller hands the result to ChatAgent as ``accessible_skill_ids``, which
   is what mounts the ``AgentSkills`` disclosure plugin. Absent skill bindings ⇒ the
-  request's ``enabled_skills`` drive the turn as today.
+  request's ``enabled_skills`` drive the turn as today — except on a project harness,
+  which always owns its skills (below).
 - ``knowledge_base`` stays with the existing RAG path.
 
 **Degrade with notice — a Shared Project's harness only** (shared-projects §9.6). A project
@@ -40,6 +41,11 @@ falls through to the invoker's default, an unreachable memory binding is skipped
 each drop is recorded in ``plan.unavailable`` for the route to surface as an
 ``agent_notice``. Ordinary shared agents keep block-with-message (D5) unchanged. Nothing
 about a drop enters the prompt — the notice is for the person, not the model.
+
+**A project's skills are the project's.** A harness that binds no skills, or whose
+bound skills were all dropped for this member, runs with *no* skills — never the
+member's own. One project conversation must disclose the same skills whoever is typing,
+and a member's personal skills are not part of what the project's editors chose.
 """
 
 from __future__ import annotations
@@ -136,8 +142,9 @@ class ResolvedSkills:
     AgentSkills plugin discloses exactly these (an Agent that binds skills owns its skills,
     like tools own the toolset). Every id has already passed the invoker's invoke-through
     predicate (§6); a bound skill the invoker could not access blocks the turn before this
-    is constructed (D5). Always non-empty — the resolver returns ``None`` (no skill
-    binding) rather than an empty ``ResolvedSkills``.
+    is constructed (D5). Empty only for a project harness, where it means "this project
+    runs with no skills" and is distinct from ``plan.skills is None`` (no skill binding,
+    fall through to the request) — the same split ``ResolvedTools`` makes.
     """
 
     # A pinned binding's id carries its version (``skill_id@3``, ``skills.pins``).
@@ -222,6 +229,8 @@ class AgentInvocationPlan:
     Memory Space. ``tools`` is ``None`` when the Agent binds no tools — the caller then
     uses the request's ``enabled_tools`` unchanged. ``skills`` is ``None`` when the Agent
     binds no skills — the caller then uses the request's ``agent_type``/``enabled_skills``.
+    A project harness never leaves ``skills`` as ``None``: with nothing to run it is an
+    empty ``ResolvedSkills``.
     """
 
     model_override: Optional[ResolvedModel] = None
@@ -281,6 +290,10 @@ async def resolve_agent_invocation(
     plan.memory = await _resolve_memory(assistant, invoker, plan.unavailable if degrade else None)
     plan.tools = await _resolve_tools(assistant, invoker, plan.unavailable if degrade else None)
     plan.skills = await _resolve_skills(assistant, invoker, plan.unavailable if degrade else None)
+    if degrade and plan.skills is None:
+        # A project harness owns its skills: none bound, or none left after degrading,
+        # means none — not the member's own (see the module docstring).
+        plan.skills = ResolvedSkills(skill_ids=[])
     return plan
 
 
@@ -296,7 +309,8 @@ async def _resolve_skills(
     this environment also blocks — design-time refuses to create these while the flag is off,
     so reaching here with the flag off is environment drift (mirror ``_resolve_memory``).
     Returns ``None`` when the Agent binds no skills, leaving the request's ``agent_type`` /
-    ``enabled_skills`` in force.
+    ``enabled_skills`` in force; ``resolve_agent_invocation`` turns that into an empty set
+    for a project harness.
 
     This is the **only** place invoke-through applies. It is AGENT-scoped, not
     user-scoped: widening the shared ``resolve_accessible_skill_ids`` instead would
@@ -345,8 +359,7 @@ async def _resolve_skills(
     # A pinned binding (shared-projects 3.1) runs as ``skill_id@n``; access was judged on
     # the catalog id above, and the pin only chooses which content the skill runs.
     kept = [pinned_ref(ref, pins[ref]) for ref in refs if ref in invocable]
-    # Always non-empty (see ResolvedSkills): a degraded harness left with no skills runs
-    # as if it bound none.
+    # None when every skill was dropped; the caller makes that "no skills" for a project.
     return ResolvedSkills(skill_ids=kept) if kept else None
 
 
