@@ -415,6 +415,12 @@ PROJECTS_DISABLED_MESSAGE = (
     "Its history is still here, and nothing in the project was deleted."
 )
 
+#: One answer for an agent (or a project's harness) that is gone and for one the
+#: caller may not use: a 404 beside a 403 told anyone whether an id existed.
+AGENT_UNAVAILABLE_MESSAGE = (
+    "This agent or project isn't available to you. It may have been deleted, or you may no longer have access to it."
+)
+
 
 async def _project_turn_gate(project_id: Optional[str]) -> Tuple[Optional[str], Optional["Project"]]:
     """``(refusal, project)`` for a project harness turn; the refusal is None if it may run.
@@ -4234,17 +4240,14 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             if await is_disabled_project_harness(input_data.rag_assistant_id):
                 return _forbidden_turn(input_data, user_id, PROJECTS_DISABLED_MESSAGE)
 
-            # Check if assistant exists at all to provide better error message
+            # A deleted agent and one the caller may not use get the same answer, so
+            # the response never says whether an id exists. Which it was goes to the
+            # log only, where it helps whoever is debugging and tells a caller nothing.
             from apis.shared.assistants.service import assistant_exists
 
             exists = await assistant_exists(input_data.rag_assistant_id)
-
-            if not exists:
-                logger.warning("Assistant does not exist (404)")
-                raise HTTPException(status_code=404, detail=f"Assistant not found: {input_data.rag_assistant_id}")
-            else:
-                logger.warning("Access denied to assistant (403)")
-                raise HTTPException(status_code=403, detail=f"Access denied: You do not have permission to access this assistant")
+            logger.warning("Agent unavailable for this turn (%s)", "no access" if exists else "not found")
+            return _forbidden_turn(input_data, user_id, AGENT_UNAVAILABLE_MESSAGE)
 
         # Log assistant details for debugging
         logger.info("Assistant loaded successfully!")
