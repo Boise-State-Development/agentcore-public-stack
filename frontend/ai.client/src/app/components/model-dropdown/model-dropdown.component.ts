@@ -53,14 +53,14 @@ const SWITCH_HINT: Record<SwitchTarget, { pill: string; note: string }> = {
           (cdkMenuOpened)="onMenuOpened()"
           (cdkMenuClosed)="onMenuClosed()"
           [class]="triggerSizeClass()"
-          class="flex items-center rounded-lg text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-gray-300"
+          class="group flex items-center rounded-lg text-gray-600 transition-colors hover:bg-gray-200 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-gray-300"
           aria-label="Select model"
         >
           <span>{{ modelService.selectedModel().modelName || 'Loading...' }}</span>
           @if (activeEffortLabel(); as effort) {
             <!-- The active effort rides in the trigger so it's visible without
                  opening the menu — it changes cost and latency, not just output. -->
-            <span class="text-gray-400 dark:text-gray-500">{{ effort }}</span>
+            <span class="text-gray-500 group-hover:text-gray-600 dark:text-gray-500 dark:group-hover:text-gray-500">{{ effort }}</span>
           }
           <svg
             viewBox="0 0 20 20"
