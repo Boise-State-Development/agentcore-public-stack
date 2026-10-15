@@ -221,11 +221,23 @@ class TestProjectHarnessSpecs:
         assert 'save it to "mine" now' in description
         assert "will not carry it into their next one" in description
         assert "Make `description` the rule itself" in description
+        # QA 2026-10-15: "I've saved your preference" with no tool call, mid-conversation.
+        assert "never tell the member something is saved without calling it" in description
 
-    def test_save_says_a_new_file_is_indexed_for_it(self):
-        description = " ".join(self._specs()["memory_save"]["description"].split())
-        assert "A new file is added to that scope's MEMORY.md index" in description
+    def test_save_says_its_description_is_the_index_line_on_every_save(self):
+        """The 2026-10-15 QA pass: an update left the index line naming the old value."""
+        spec = self._specs()["memory_save"]
+        description = " ".join(spec["description"].split())
+        assert "`description` is the file's line in that scope's MEMORY.md index" in description
+        assert "Send it on every save" in description
+        assert "the index line is rewritten to match it" in description
         assert "`memory_read` it first" in description
+        assert "description" in spec["inputSchema"]["json"]["required"]
+
+    def test_save_says_an_unread_file_is_refused(self):
+        """B6: a save is conditional on the version this conversation read."""
+        description = " ".join(self._specs()["memory_save"]["description"].split())
+        assert "a save to a file this conversation hasn't read is refused" in description
 
     def test_specs_are_the_same_for_every_member_and_project(self):
         from agents.builtin_tools.memory_spaces.project_tools import (

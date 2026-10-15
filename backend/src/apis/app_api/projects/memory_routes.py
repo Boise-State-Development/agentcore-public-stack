@@ -443,7 +443,11 @@ class SaveFileResponse(BaseModel):
     over_soft_threshold: bool = Field(False, alias="overSoftThreshold")
     removed_anchors: List[str] = Field(default_factory=list, alias="removedAnchors")
     indexed: Optional[str] = Field(
-        None, description="A new file's index line: added, already_linked or over_budget; null for an existing file"
+        None,
+        description=(
+            "How the file's index line went: for a new file added, already_linked or over_budget; for an "
+            "update whose description changed refreshed, link_only or not_linked; null when nothing changed"
+        ),
     )
     lint: List[LintFindingResponse] = Field(
         default_factory=list, description="What the content check found in the items this save added or changed"

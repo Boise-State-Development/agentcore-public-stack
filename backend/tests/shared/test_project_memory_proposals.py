@@ -228,7 +228,7 @@ class TestTheTool:
         assert _kinds(inbox, OWNER, "project_proposal_pending")
 
     def test_a_viewers_refused_save_points_at_proposing(self, runtime, team):
-        result = asyncio.run(self._tools(team, VIEWER)["memory_save"](scope="project", slug="sis", text=FACT))
+        result = asyncio.run(self._tools(team, VIEWER)["memory_save"](scope="project", slug="sis", text=FACT, description="SIS"))
         assert result["status"] == "error" and "memory_propose" in result["content"][0]["text"]
 
     def test_a_bad_file_is_an_error_result(self, runtime, team):
@@ -261,7 +261,7 @@ class TestTheTool:
 
     def test_a_scheduled_run_cannot_rewrite_the_shared_index(self, runtime, team):
         result = asyncio.run(self._tools(team, EDITOR)["memory_save"](
-            scope="project", slug="MEMORY.md", text="- [[sis]] — SIS", tool_context=self._in_session("headless-abc"),
+            scope="project", slug="MEMORY.md", text="- [[sis]] — SIS", description="", tool_context=self._in_session("headless-abc"),
         ))
         assert result["status"] == "error" and "memory_propose" in result["content"][0]["text"]
 

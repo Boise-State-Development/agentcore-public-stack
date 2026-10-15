@@ -124,7 +124,7 @@ class ProjectMemoryFiles:
         space_id = self.space(project_id, user, scope, writable=True)
         result = self.memory.restore_archived_item(space_id, user.user_id, user.email, archive_id)
         if result.ref.version == 1:
-            self._index_new_file(space_id, user, scope, result)
+            self._index_saved_file(space_id, user, scope, result)
         return result
 
     # ---- edits (2.8b) -------------------------------------------------
@@ -146,10 +146,13 @@ class ProjectMemoryFiles:
         ``base_version`` is the version the editor opened (0 for a new file).
         A file that moved on since, or a new file whose name is taken, is a 409,
         so one editor never silently overwrites another's change. Returns
-        ``(save_result, index_outcome)``, the outcome being how a new file's
-        index line went (None for an existing file).
+        ``(save_result, index_outcome)``, the outcome being how the file's
+        index line went (``index_saved_file``'s; None when it had nothing to do).
         """
+        from apis.shared.memory.service import NEW_FILE
+
         project, space_id = self._resolve(project_id, user, scope, writable=True)
+        base_hash: Optional[str] = None
         if base_version is not None:
             current = next(
                 (e for e in self.memory.list_entries(space_id, user.user_id, user.email) if e.slug == slug), None
@@ -158,11 +161,14 @@ class ProjectMemoryFiles:
                 raise ProposalProjectError(409, ALREADY_EXISTS)
             if base_version > 0 and (current is None or (current.version or 1) != base_version):
                 raise ProposalProjectError(409, CHANGED_SINCE)
+            # The save itself is conditional on the version checked, so a save
+            # landing between this check and the write is a conflict too.
+            base_hash = current.content_hash if current is not None else NEW_FILE
         result = self.memory.save_entry(
             space_id, user.user_id, user.email, slug, render_items_for_save(items),
-            description=description, aliases=aliases, reason="edit",
+            description=description, aliases=aliases, reason="edit", base_content_hash=base_hash,
         )
-        indexed = self._index_new_file(space_id, user, scope, result) if result.ref.version == 1 else None
+        indexed = self._index_saved_file(space_id, user, scope, result)
         if scope == "project":
             after = {"slug": result.ref.slug, "version": result.ref.version}
             if result.ref.version == 1:
@@ -247,6 +253,7 @@ class ProjectMemoryFiles:
                 self.memory.repository.delete_archived_item(space_id, row.archive_id)
             except Exception:
                 logger.warning("Could not clear archive row %s in %s", row.archive_id, space_id, exc_info=True)
+        self._index_saved_file(space_id, user, scope, result)
         if scope == "project":
             self._record(
                 AuditAction.PROJECT_MEMORY_EDITED, user, project,
@@ -254,14 +261,15 @@ class ProjectMemoryFiles:
             )
         return result
 
-    def _index_new_file(self, space_id: str, user: User, scope: MemoryScope, result: Any) -> Optional[str]:
+    def _index_saved_file(self, space_id: str, user: User, scope: MemoryScope, result: Any) -> Optional[str]:
+        """A new file's index line, or an updated one's rewritten to a changed description."""
         from apis.shared.memory.hydration import MINE_MEMORY_MAX_TOKENS, PROJECT_MEMORY_MAX_TOKENS
 
         budget = PROJECT_MEMORY_MAX_TOKENS if scope == "project" else MINE_MEMORY_MAX_TOKENS
         try:
-            return self.memory.add_index_link(space_id, user.user_id, user.email, result.ref, max_tokens=budget)
+            return self.memory.index_saved_file(space_id, user.user_id, user.email, result, max_tokens=budget)
         except Exception:
-            logger.warning("Could not index new file %s in %s", result.ref.slug, space_id, exc_info=True)
+            logger.warning("Could not index saved file %s in %s", result.ref.slug, space_id, exc_info=True)
             return None
 
     def _record(self, action: str, user: User, project: Any, *, before: Optional[dict] = None, after: Optional[dict] = None) -> None:
