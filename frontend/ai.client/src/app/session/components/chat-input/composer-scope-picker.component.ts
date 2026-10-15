@@ -14,7 +14,7 @@ import { Dialog } from '@angular/cdk/dialog';
 import { CdkConnectedOverlay, CdkOverlayOrigin, ConnectedPosition } from '@angular/cdk/overlay';
 import { ActivatedRoute, Router } from '@angular/router';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroCheck, heroChevronDown, heroFolder, heroFolderPlus, heroPlus, heroRectangleStack, heroXMark } from '@ng-icons/heroicons/outline';
+import { heroCheck, heroFolder, heroFolderPlus, heroPlus, heroRectangleStack, heroXMark } from '@ng-icons/heroicons/outline';
 import { firstValueFrom } from 'rxjs';
 import {
   AttachSelection,
@@ -90,7 +90,7 @@ export function folderKey(connectorId: string, providerFolderId: string): string
   selector: 'app-composer-scope-picker',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [CdkConnectedOverlay, CdkOverlayOrigin, NgIcon],
-  providers: [provideIcons({ heroCheck, heroChevronDown, heroFolder, heroFolderPlus, heroPlus, heroRectangleStack, heroXMark })],
+  providers: [provideIcons({ heroCheck, heroFolder, heroFolderPlus, heroPlus, heroRectangleStack, heroXMark })],
   host: { class: 'contents' },
   template: `
     @if (visible()) {
@@ -106,7 +106,7 @@ export function folderKey(connectorId: string, providerFolderId: string): string
         aria-haspopup="dialog"
         [attr.aria-expanded]="open()"
         [attr.aria-label]="selectedProject() ? 'Project: ' + selectedProject()!.name + '. Change project or add a folder' : null"
-        class="inline-flex min-w-0 max-w-full items-center gap-1 rounded-full bg-gray-50 px-2.5 py-0.5 text-xs/5 text-gray-600 ring-1 ring-gray-200 ring-inset transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white/5 dark:text-gray-300 dark:ring-white/10 dark:hover:bg-white/10 dark:hover:text-white"
+        class="inline-flex min-w-0 max-w-full items-center gap-1 rounded-lg px-2 py-1 text-xs/5 text-gray-600 transition-colors hover:bg-gray-200 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-gray-300"
         data-testid="composer-scope-trigger"
       >
         @if (selectedProject(); as project) {
@@ -115,7 +115,13 @@ export function folderKey(connectorId: string, providerFolderId: string): string
         } @else {
           <span class="truncate">{{ triggerLabel() }}</span>
         }
-        <ng-icon name="heroChevronDown" class="size-3 shrink-0 transition-transform" [class.rotate-180]="open()" aria-hidden="true" />
+        <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" class="size-3.5 shrink-0 transition-transform" [class.rotate-180]="open()">
+          <path
+            fill-rule="evenodd"
+            d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z"
+            clip-rule="evenodd"
+          />
+        </svg>
       </button>
 
       <ng-template
