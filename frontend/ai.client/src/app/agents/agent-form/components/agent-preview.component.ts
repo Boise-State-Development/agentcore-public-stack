@@ -30,7 +30,7 @@ import { ModelService } from '../../../session/services/model/model.service';
  * (`POST /chat/stream` with a `preview-` session id the backend skips
  * persisting), scoped to the agent by id. Because `agentId == assistantId`,
  * the harness resolves the agent's FULL set from the SAVED record server-side
- * — instructions + model + params + tools + skills + memory — so the preview
+ * — instructions + model + params + tools + skills — so the preview
  * exercises the agent exactly as a real invoker would. The request body carries
  * no `system_prompt` and no tool selection of its own — either would fight the
  * bindings, and a long persona sent as `system_prompt` blows the length cap
@@ -38,7 +38,7 @@ import { ModelService } from '../../../session/services/model/model.service';
  * what is typed, so a dirty form shows a "save to apply" banner making that gap
  * explicit rather than letting the pane quietly answer as the wrong agent.
  *
- * It deliberately does NOT restate the model, tools, skills or memory spaces. That was
+ * It deliberately does NOT restate the model, tools or skills. That was
  * a capability strip here, and it was a read-out of the form sitting one column to the
  * left: the same facts, in a second place that could only ever agree or be wrong.
  *

@@ -2,7 +2,7 @@
 
 Composes existing per-primitive access checks; the primitive services are mocked so
 these stay fast unit tests. Asserts the inert guarantee for tool/skill (no RBAC/catalog
-call is made), the memory_space grant matrix, and the implicit-KB rejection.
+call is made), the retired memory_space rejection, and the implicit-KB rejection.
 """
 
 from types import SimpleNamespace
@@ -29,15 +29,6 @@ def _model_svc(allowed: bool) -> MagicMock:
     # ``filter_accessible_models`` (accessible → the model is returned, else []).
     svc = MagicMock()
     svc.filter_accessible_models = AsyncMock(side_effect=lambda user, models: list(models) if allowed else [])
-    return svc
-
-
-_PERSONAL_SPACE = SimpleNamespace(is_project_space=False)
-
-
-def _mem_svc(space, role) -> MagicMock:
-    svc = MagicMock()
-    svc.resolve_permission = MagicMock(return_value=(space, role))
     return svc
 
 
@@ -364,14 +355,9 @@ class TestToolValidation:
     @pytest.mark.asyncio
     async def test_no_tool_binding_skips_tool_fetch(self, monkeypatch):
         # No tool binding ⇒ the tool service is never consulted (lazy palette resolution).
-        monkeypatch.setattr(f"{MODULE}.memory_spaces_enabled", lambda: True)
+        monkeypatch.setattr(f"{MODULE}.skills_enabled", lambda: False)
         svc = _tool_svc("a")
-        await validate_agent_write(
-            _user(),
-            bindings=[AgentBinding(kind="memory_space", ref="spc_1", config={"access": "read"})],
-            memory_service=_mem_svc(space=_PERSONAL_SPACE, role="viewer"),
-            tool_service=svc,
-        )
+        await validate_agent_write(_user(), bindings=[], tool_service=svc)
         svc.get_user_accessible_tools.assert_not_awaited()
 
     # -- scoped refs (``toolId::mcpToolName``) -----------------------------------
@@ -460,98 +446,12 @@ class TestKnowledgeBase:
 
 # --------------------------------------------------------------------------- memory_space
 class TestMemorySpace:
-    @pytest.fixture(autouse=True)
-    def _flag_on(self, monkeypatch):
-        monkeypatch.setattr(f"{MODULE}.memory_spaces_enabled", lambda: True)
-
     @pytest.mark.asyncio
-    async def test_flag_off_400(self, monkeypatch):
-        monkeypatch.setattr(f"{MODULE}.memory_spaces_enabled", lambda: False)
+    async def test_memory_space_binding_is_rejected(self):
+        # The kind was retired: memory belongs to Projects, not Agents.
         with pytest.raises(BindingValidationError) as ei:
             await validate_agent_write(
                 _user(),
                 bindings=[AgentBinding(kind="memory_space", ref="spc_1", config={"access": "read"})],
-                memory_service=_mem_svc(space=_PERSONAL_SPACE, role="viewer"),
-            )
-        assert ei.value.status_code == 400
-
-    @pytest.mark.asyncio
-    async def test_readwrite_requires_editor(self):
-        with pytest.raises(BindingValidationError) as ei:
-            await validate_agent_write(
-                _user(),
-                bindings=[AgentBinding(kind="memory_space", ref="spc_1", config={"access": "readwrite"})],
-                memory_service=_mem_svc(space=_PERSONAL_SPACE, role="viewer"),
-            )
-        assert ei.value.status_code == 403
-
-    @pytest.mark.asyncio
-    async def test_readwrite_editor_ok(self):
-        await validate_agent_write(
-            _user(),
-            bindings=[AgentBinding(kind="memory_space", ref="spc_1", config={"access": "readwrite"})],
-            memory_service=_mem_svc(space=_PERSONAL_SPACE, role="editor"),
-        )
-
-    @pytest.mark.asyncio
-    async def test_read_viewer_ok(self):
-        await validate_agent_write(
-            _user(),
-            bindings=[AgentBinding(kind="memory_space", ref="spc_1", config={"access": "read"})],
-            memory_service=_mem_svc(space=_PERSONAL_SPACE, role="viewer"),
-        )
-
-    @pytest.mark.asyncio
-    async def test_no_grant_403(self):
-        with pytest.raises(BindingValidationError) as ei:
-            await validate_agent_write(
-                _user(),
-                bindings=[AgentBinding(kind="memory_space", ref="spc_1", config={"access": "read"})],
-                memory_service=_mem_svc(space=_PERSONAL_SPACE, role=None),
-            )
-        assert ei.value.status_code == 403
-
-    @pytest.mark.asyncio
-    async def test_missing_space_400(self):
-        with pytest.raises(BindingValidationError) as ei:
-            await validate_agent_write(
-                _user(),
-                bindings=[AgentBinding(kind="memory_space", ref="ghost", config={"access": "read"})],
-                memory_service=_mem_svc(space=None, role=None),
-            )
-        assert ei.value.status_code == 400
-
-    @pytest.mark.asyncio
-    async def test_project_space_cannot_be_bound_even_by_an_editor(self):
-        """A project member resolves editor on the project's space, but its memory
-        reaches agents only through the project (Shared Projects 2.4)."""
-        with pytest.raises(BindingValidationError) as ei:
-            await validate_agent_write(
-                _user(),
-                bindings=[AgentBinding(kind="memory_space", ref="spc_p", config={"access": "readwrite"})],
-                memory_service=_mem_svc(space=SimpleNamespace(is_project_space=True), role="editor"),
-            )
-        assert ei.value.status_code == 400
-        assert "project" in ei.value.message.lower()
-
-    @pytest.mark.asyncio
-    async def test_bad_access_value_400(self):
-        with pytest.raises(BindingValidationError) as ei:
-            await validate_agent_write(
-                _user(),
-                bindings=[AgentBinding(kind="memory_space", ref="spc_1", config={"access": "admin"})],
-                memory_service=_mem_svc(space=_PERSONAL_SPACE, role="owner"),
-            )
-        assert ei.value.status_code == 400
-
-    @pytest.mark.asyncio
-    async def test_bad_alwaysload_400(self):
-        with pytest.raises(BindingValidationError) as ei:
-            await validate_agent_write(
-                _user(),
-                bindings=[
-                    AgentBinding(kind="memory_space", ref="spc_1", config={"access": "read", "alwaysLoad": "nope"})
-                ],
-                memory_service=_mem_svc(space=_PERSONAL_SPACE, role="viewer"),
             )
         assert ei.value.status_code == 400

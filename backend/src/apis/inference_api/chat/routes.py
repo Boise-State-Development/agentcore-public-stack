@@ -1084,36 +1084,6 @@ def _build_powerpoint_presentation_tools(
     return tools
 
 
-def _build_memory_tools(agent_memory, user_id: str, user_email: str) -> list:
-    """Context-bound Memory-Space tools for an Agent's resolved memory binding.
-
-    ``agent_memory`` is the resolver's ``ResolvedMemoryBinding`` (or ``None``). No binding
-    → no tools. Read tools (list + read) are always exposed; the write tool only when the
-    binding grants ``readwrite`` — and the service re-checks ``editor+`` on every call, so
-    this is a UX gate, not the security boundary. Not gated on ``enabled_tools``: the
-    governing capability is the Agent's binding, not the user's tool picker.
-    """
-    if agent_memory is None:
-        return []
-
-    from agents.builtin_tools.memory_spaces import (
-        make_memory_list_tool,
-        make_memory_read_tool,
-        make_memory_write_tool,
-    )
-
-    space_id, space_name = agent_memory.space_id, agent_memory.space_name
-    tools = [
-        make_memory_list_tool(space_id, space_name, user_id, user_email),
-        make_memory_read_tool(space_id, space_name, user_id, user_email),
-    ]
-    if agent_memory.access == "readwrite":
-        tools.append(make_memory_write_tool(space_id, space_name, user_id, user_email))
-
-    logger.info(f"Created {len(tools)} memory-space tools for bound space")
-    return tools
-
-
 # ============================================================
 # Document Read Tool Injection (docs/specs/document-context-offload.md §4B)
 # ============================================================
@@ -3379,7 +3349,6 @@ async def _build_turn_tools(
     user_id: str,
     effective_enabled_tools: Optional[list],
     *,
-    agent_memory,
     project_memory,
     turn_has_document: bool,
     text_only_model: bool = False,
@@ -3420,24 +3389,20 @@ async def _build_turn_tools(
         user_email=current_user.email,
     )
 
-    memory_tools = _build_memory_tools(
-        agent_memory=agent_memory,
-        user_id=user_id,
-        user_email=current_user.email,
-    )
-    # A project harness addresses its spaces by scope instead (2.4b), and
-    # reads the team's shared tasks (2.5c). Memory first, so the four memory
-    # specs keep their place in the cached toolConfig.
+    # A project harness addresses its spaces by scope (2.4b), and reads the
+    # team's shared tasks (2.5c). Memory first, so the four memory specs keep
+    # their place in the cached toolConfig.
     if project_memory is not None:
         from apis.inference_api.chat.project_memory import (
             build_project_memory_tools,
             build_shared_task_tools,
         )
 
-        memory_tools = build_project_memory_tools(project_memory, current_user)
-        extra_tools = extra_tools + memory_tools + build_shared_task_tools(project_memory.project_id, current_user)
-    else:
-        extra_tools = extra_tools + memory_tools
+        extra_tools = (
+            extra_tools
+            + build_project_memory_tools(project_memory, current_user)
+            + build_shared_task_tools(project_memory.project_id, current_user)
+        )
 
     # document_read for any session that carries a readable attachment
     # (this turn's uploads count). Gated on session state, not the
@@ -3461,19 +3426,10 @@ async def _build_turn_tools(
     extra_tools_key_described = injected_tools_are_key_described(
         enabled_tools=effective_enabled_tools,
     )
-    # Memory tools close over the resolved binding, so it is a cache-key
-    # element (Shared Projects 2.1). Only set when the tools were built,
-    # so the key and the toolset cannot disagree.
-    if project_memory is not None:
-        memory_binding_key = project_memory.binding_key()
-    elif memory_tools:
-        memory_binding_key = {
-            "spaceId": agent_memory.space_id,
-            "spaceName": agent_memory.space_name,
-            "access": agent_memory.access,
-        }
-    else:
-        memory_binding_key = None
+    # Memory tools close over the project's resolved spaces, so the binding is
+    # a cache-key element (Shared Projects 2.1). Only set when the tools were
+    # built, so the key and the toolset cannot disagree.
+    memory_binding_key = project_memory.binding_key() if project_memory is not None else None
 
     return TurnTools(
         extra_tools=extra_tools,
@@ -4002,7 +3958,6 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # (D5). None ⇒ resolve exactly as today. Set in the assistant block below,
     # consumed at model resolution / prompt assembly; None on resume/continuation.
     agent_model_override = None
-    agent_memory = None
     memory_context = None
     # Agent Designer: an Agent's ``tool`` bindings, resolved per invoker (D5), replace
     # the request's ``enabled_tools`` for the turn (like ``model_override`` replaces the
@@ -4360,7 +4315,6 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                     assistant, current_user, degrade=runs_project_harness
                 )
                 agent_model_override = agent_plan.model_override
-                agent_memory = agent_plan.memory
                 agent_tools_override = agent_plan.tools
                 agent_skills_override = agent_plan.skills
                 if agent_plan.unavailable:
@@ -4450,38 +4404,6 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
 
             project_memory = await await_project_memory(project_memory_task)
             memory_context = project_memory.memory_context or None
-            if agent_memory is not None:
-                logger.warning("Project harness has a memory binding; project memory replaces it")
-                agent_memory = None
-
-        # 5b'. Agent Designer Phase 3: hydrate the bound Memory Space content (read-only),
-        # in either branch. Sent as `memory_context`, not appended to the prompt.
-        # Hydration re-reads via the invoker
-        # (MemorySpaceService re-checks viewer+ internally). Empty for a fresh space.
-        if agent_memory is not None:
-            from apis.shared.memory.hydration import render_memory_block, resolve_always_load
-            from apis.shared.memory.service import MemorySpaceService
-
-            try:
-                fragments = await asyncio.to_thread(
-                    resolve_always_load,
-                    MemorySpaceService(),
-                    agent_memory.space_id,
-                    user_id,
-                    current_user.email,
-                    agent_memory.always_load,
-                )
-                memory_block = render_memory_block(agent_memory.space_name, fragments)
-                if memory_block:
-                    # Kept apart from system_prompt: it goes after the prompt,
-                    # outside <user_instructions>, behind its own cache point
-                    # (Shared Projects 2.2).
-                    memory_context = memory_block
-                    logger.info("Hydrated bound Memory Space content for the prompt")
-            except Exception:
-                # Never fail a turn on a memory-read hiccup — the permission was already
-                # resolved; injection is best-effort context.
-                logger.error("Failed to hydrate bound Memory Space; continuing", exc_info=True)
 
         # 6. Save assistant_id to session preferences (persist for future loads)
         # Skip persistence for preview sessions and for continuations (a continuation
@@ -4804,7 +4726,6 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 current_user,
                 user_id,
                 effective_enabled_tools,
-                agent_memory=agent_memory,
                 project_memory=project_memory,
                 turn_has_document=attachments.turn_has_document,
                 text_only_model=turn_model.text_only,

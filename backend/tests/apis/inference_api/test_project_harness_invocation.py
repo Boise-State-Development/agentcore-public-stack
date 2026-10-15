@@ -43,9 +43,7 @@ from apis.shared.sessions.models import MessageMetadata, TokenUsage
 
 from tests.apis.inference_api.test_agent_binding_resolver import (
     _assistant,
-    _mem_binding,
     _patch_access,
-    _patch_memory,
     _patch_skill_access,
     _patch_tool_access,
     _skill_binding,
@@ -149,16 +147,6 @@ class TestDegrade:
             _assistant(bindings=[_skill_binding("a"), _skill_binding("b")]), _user(), degrade=True
         )
         assert plan.skills.skill_ids == [] and plan.unavailable.skills == ["a", "b"]
-
-    @pytest.mark.asyncio
-    async def test_an_unreachable_memory_space_is_skipped(self, monkeypatch):
-        from types import SimpleNamespace
-
-        _patch_memory(monkeypatch, space=SimpleNamespace(name="Team notes", is_project_space=False), role="viewer")
-        plan = await resolve_agent_invocation(
-            _assistant(bindings=[_mem_binding(access="readwrite")]), _user(), degrade=True
-        )
-        assert plan.memory is None and plan.unavailable.memory == "Team notes"
 
     @pytest.mark.asyncio
     async def test_nothing_missing_means_no_notice(self, monkeypatch):

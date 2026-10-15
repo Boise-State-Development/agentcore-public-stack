@@ -395,7 +395,7 @@ Each PR targets `develop`, lands behind `PROJECTS_ENABLED` (opt-in while in deve
   - `projectId` rides the `C#` row like `turnAgentId`. **Rollup shape changed:** instead of a `byUser` map on `COST#{YYYY-MM}`, each member gets a `COST#{YYYY-MM}#USER#{userId}` row. Each write is one atomic `ADD`, and member rows are bounded by membership, so there is no top-N trimming. Both are `UpdateItem` (the runtime has no `PutItem`).
   - Gaps inherited from `turnAgentId`: interrupted-turn and resume rows carry no project id.
   - **UI impact (for the 1.8 mockup re-sync):**
-    - The degrade notice is the `agent_notice` SSE event, arriving before the reply. It carries a ready-made `message` plus structured `unavailableModelId` / `unavailableTools` / `unavailableSkills` / `unavailableMemory`, is not persisted, and so shows on the live turn only.
+    - The degrade notice is the `agent_notice` SSE event, arriving before the reply. It carries a ready-made `message` plus structured `unavailableModelId` / `unavailableTools` / `unavailableSkills`, is not persisted, and so shows on the live turn only.
     - An archived project's composer gets a conversational error, not a disabled input, unless 1.8 disables it up front.
 
   **1.4b:** personal instructions (`UserSettings.personalInstructions` + precedence sentence). Separate because it changes every user's system prompt, not only project turns.

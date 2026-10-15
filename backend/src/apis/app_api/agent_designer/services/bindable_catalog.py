@@ -20,8 +20,6 @@ Per-kind sourcing (see the write-side rules in ``binding_validation``):
 - ``knowledge_base`` → **empty**. The KB is welded to the agent and its index is not
   user-configurable, so it is never author-settable (``binding_validation`` rejects an
   explicit KB write); the compat layer synthesizes it on read. Nothing to pick.
-- ``memory_space``   → ``MemorySpaceService.list_spaces_for_user`` — **empty when
-  ``memory_spaces_enabled()`` is off**.
 """
 
 import logging
@@ -29,8 +27,7 @@ from typing import List, Optional
 
 from apis.shared.assistants.models import BindableItem
 from apis.shared.auth.models import User
-from apis.shared.feature_flags import memory_spaces_enabled, skills_enabled
-from apis.shared.memory.service import MemorySpaceService
+from apis.shared.feature_flags import skills_enabled
 from apis.shared.models.managed_models import list_all_managed_models
 from apis.shared.skills.access import resolve_accessible_skill_ids
 from apis.shared.skills.repository import get_skill_catalog_repository
@@ -46,7 +43,7 @@ logger = logging.getLogger(__name__)
 # The kinds the catalog can serve. ``model`` is not a binding kind (it is the governed
 # single-select ``modelConfig``) but rides the same palette endpoint so the Designer has
 # one place to fetch every choice.
-BINDABLE_KINDS = ("model", "tool", "skill", "knowledge_base", "memory_space")
+BINDABLE_KINDS = ("model", "tool", "skill", "knowledge_base")
 
 
 async def list_bindable(
@@ -55,7 +52,6 @@ async def list_bindable(
     *,
     model_access_service: Optional[ModelAccessService] = None,
     tool_service: Optional[ToolCatalogService] = None,
-    memory_service: Optional[MemorySpaceService] = None,
 ) -> List[BindableItem]:
     """Return the RBAC-filtered bindable primitives of ``kind`` for ``user``.
 
@@ -72,8 +68,6 @@ async def list_bindable(
     if kind == "knowledge_base":
         # Welded to the agent, synthesized on read, never author-settable (D2/F4).
         return []
-    if kind == "memory_space":
-        return _list_memory_spaces(user, memory_service or MemorySpaceService())
     raise ValueError(f"Unknown bindable kind '{kind}'.")
 
 
@@ -188,24 +182,4 @@ async def _list_skills(user: User) -> List[BindableItem]:
             meta={"compose": s.compose},
         )
         for s in skills
-    ]
-
-
-def _list_memory_spaces(user: User, svc: MemorySpaceService) -> List[BindableItem]:
-    if not memory_spaces_enabled():
-        return []
-    try:
-        spaces = svc.list_spaces_for_user(user.user_id, user.email)
-    except Exception:
-        logger.warning("Failed to list bindable memory spaces", exc_info=True)
-        return []
-    return [
-        BindableItem(
-            kind="memory_space",
-            ref=space.space_id,
-            label=space.name,
-            description=space.template or "",
-            meta={"role": role, "ownerId": space.owner_id, "template": space.template},
-        )
-        for space, role in spaces
     ]

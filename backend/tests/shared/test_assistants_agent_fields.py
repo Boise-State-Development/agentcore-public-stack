@@ -25,7 +25,7 @@ class TestAgentFieldsPersistence:
             description="Chief of Staff",
             instructions="You are Oliver.",
             model_settings=AgentModelConfig(model_id="m1", params={"temperature": 0.7, "maxTokens": 4096}),
-            bindings=[AgentBinding(kind="memory_space", ref="spc_1", config={"access": "readwrite"})],
+            bindings=[AgentBinding(kind="skill", ref="sk_1", config={"pinned": True})],
         )
         got = await get_assistant(created.assistant_id, "u1")
         assert got is not None
@@ -35,8 +35,8 @@ class TestAgentFieldsPersistence:
         assert isinstance(got.model_settings.params["temperature"], float)
         assert got.model_settings.params["maxTokens"] == 4096
         assert len(got.bindings) == 1
-        assert got.bindings[0].kind == "memory_space"
-        assert got.bindings[0].config == {"access": "readwrite"}
+        assert got.bindings[0].kind == "skill"
+        assert got.bindings[0].config == {"pinned": True}
 
     @pytest.mark.asyncio
     async def test_legacy_create_has_no_agent_fields(self, assistants_table):

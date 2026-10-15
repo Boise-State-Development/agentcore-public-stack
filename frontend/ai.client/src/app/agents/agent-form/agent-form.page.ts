@@ -29,7 +29,6 @@ import {
   heroCpuChip,
   heroWrenchScrewdriver,
   heroSparkles,
-  heroCircleStack,
   heroCheck,
   heroAdjustmentsHorizontal,
   heroChevronDown,
@@ -43,7 +42,6 @@ import {
   AgentBinding,
   BindableItem,
   BindableServerTool,
-  MemorySpaceBindingConfig,
   ModelParamSpec,
   SupportedParams,
 } from '../models/agent.model';
@@ -110,18 +108,9 @@ const PARAM_LABELS: Record<string, string> = {
  */
 const AUTHOR_HIDDEN_PARAMS: ReadonlySet<string> = new Set(['max_tokens']);
 
-/** A memory-space selection with its per-binding config (access + alwaysLoad). */
-interface MemorySelection {
-  ref: string;
-  label: string;
-  role: string;
-  access: 'read' | 'readwrite';
-  alwaysLoadIndex: boolean; // maps to alwaysLoad: ['MEMORY.md']
-}
-
 /**
  * Agent Designer — the authoring surface (Phase 4). A persona + a governed model
- * single-select + binding pickers (tools, skills, memory spaces), each populated
+ * single-select + binding pickers (tools, skills), each populated
  * from `GET /agents/bindable?kind=…` so the user only sees what their role enables
  * (D4). The KB is welded to the agent (synthesized on read, not author-settable) so
  * it is shown read-only. Mirrors the write-side rules in `binding_validation`.
@@ -155,7 +144,6 @@ interface MemorySelection {
       heroCpuChip,
       heroWrenchScrewdriver,
       heroSparkles,
-      heroCircleStack,
       heroCheck,
       heroAdjustmentsHorizontal,
       heroChevronDown,
@@ -184,7 +172,7 @@ export class AgentFormPage implements OnInit, OnDestroy {
   readonly loadingPalettes = signal(true);
   /**
    * The page is still assembling. Both fetches feed sections of the same form
-   * (the palettes render the Model/Tools/Skills/Memory pickers; the record fills
+   * (the palettes render the Model/Tools/Skills pickers; the record fills
    * the persona + selections), so the editor stays behind a skeleton until both
    * settle — otherwise the form paints empty and then visibly rewrites itself.
    */
@@ -230,7 +218,6 @@ export class AgentFormPage implements OnInit, OnDestroy {
   readonly models = signal<BindableItem[]>([]);
   readonly tools = signal<BindableItem[]>([]);
   readonly skills = signal<BindableItem[]>([]);
-  readonly spaces = signal<BindableItem[]>([]);
 
   readonly selectedModelId = signal<string | null>(null);
   /** Author-set inference params (temperature/maxTokens/effort/…), governed by the
@@ -252,7 +239,6 @@ export class AgentFormPage implements OnInit, OnDestroy {
    */
   readonly toolsOpen = signal(true);
   readonly selectedSkillRefs = signal<Set<string>>(new Set());
-  readonly memorySelections = signal<MemorySelection[]>([]);
 
   // ---- model params (governed by the selected model's supportedParams) --------
   private readonly selectedModel = computed<BindableItem | undefined>(() =>
@@ -398,16 +384,14 @@ export class AgentFormPage implements OnInit, OnDestroy {
 
   private async loadPalettes(): Promise<void> {
     try {
-      const [models, tools, skills, spaces] = await Promise.all([
+      const [models, tools, skills] = await Promise.all([
         this.agentService.loadBindable('model'),
         this.agentService.loadBindable('tool'),
         this.agentService.loadBindable('skill'),
-        this.agentService.loadBindable('memory_space'),
       ]);
       this.models.set(models);
       this.tools.set(tools);
       this.skills.set(skills);
-      this.spaces.set(spaces);
     } catch (err) {
       // Don't let a palette failure strand the page on its skeleton — fall through
       // to the form with empty pickers (the Model section renders its own empty state).
@@ -466,7 +450,7 @@ export class AgentFormPage implements OnInit, OnDestroy {
     }
     const catalog = this.toolService.tools();
 
-    // Only tool bindings are reconciled; skill / memory / KB bindings pass through as-is.
+    // Only tool bindings are reconciled; skill / KB bindings pass through as-is.
     const bindings = draft.bindings ?? [];
     const toolRefs = bindings.filter((b) => b.kind === 'tool').map((b) => b.ref);
     const { apply, flagged, dropped } = reconcileToolRefs(toolRefs, catalog);
@@ -522,7 +506,7 @@ export class AgentFormPage implements OnInit, OnDestroy {
 
   /**
    * Map an agent-shaped object into form + selection state: the persona fields,
-   * starters, model + params, and the tool/skill/memory `bindings` decomposition,
+   * starters, model + params, and the tool/skill `bindings` decomposition,
    * finishing by mirroring the form into the live-preview signals.
    *
    * Deliberately does NOT touch cleanliness (`markAsPristine` / `bindingsDirty`) or
@@ -564,20 +548,9 @@ export class AgentFormPage implements OnInit, OnDestroy {
 
     const toolRefs = new Set<string>();
     const skillRefs = new Set<string>();
-    const memory: MemorySelection[] = [];
     for (const b of agent.bindings ?? []) {
       if (b.kind === 'tool') toolRefs.add(b.ref);
       else if (b.kind === 'skill') skillRefs.add(b.ref);
-      else if (b.kind === 'memory_space') {
-        const cfg = (b.config ?? {}) as Partial<MemorySpaceBindingConfig>;
-        memory.push({
-          ref: b.ref,
-          label: this.spaceLabel(b.ref),
-          role: this.spaceRole(b.ref),
-          access: cfg.access === 'readwrite' ? 'readwrite' : 'read',
-          alwaysLoadIndex: (cfg.alwaysLoad ?? []).includes('MEMORY.md'),
-        });
-      }
       // knowledge_base bindings are welded/synthesized and managed live by
       // the knowledge-base section — no read-only display state to hydrate.
     }
@@ -585,16 +558,7 @@ export class AgentFormPage implements OnInit, OnDestroy {
     // Collapse Tools only when there is something to collapse *to* — see `toolsOpen`.
     this.toolsOpen.set(toolRefs.size === 0);
     this.selectedSkillRefs.set(skillRefs);
-    this.memorySelections.set(memory);
     this.syncFormToSignals();
-  }
-
-  private spaceLabel(ref: string): string {
-    return this.spaces().find((s) => s.ref === ref)?.label ?? ref;
-  }
-
-  private spaceRole(ref: string): string {
-    return (this.spaces().find((s) => s.ref === ref)?.meta?.['role'] as string) ?? 'viewer';
   }
 
   // ---- persona helpers -------------------------------------------------
@@ -917,50 +881,11 @@ export class AgentFormPage implements OnInit, OnDestroy {
     return this.selectedSkillRefs().has(ref);
   }
 
-  // ---- memory spaces ---------------------------------------------------
-  isSpaceSelected(ref: string): boolean {
-    return this.memorySelections().some((m) => m.ref === ref);
-  }
-  toggleSpace(item: BindableItem): void {
-    this.memorySelections.update((cur) => {
-      if (cur.some((m) => m.ref === item.ref)) {
-        return cur.filter((m) => m.ref !== item.ref);
-      }
-      const role = (item.meta?.['role'] as string) ?? 'viewer';
-      return [
-        ...cur,
-        { ref: item.ref, label: item.label, role, access: 'read', alwaysLoadIndex: true },
-      ];
-    });
-    this.bindingsDirty.set(true);
-  }
-  /** readwrite requires editor+ on the space (D5) — the option is disabled otherwise. */
-  canWrite(sel: MemorySelection): boolean {
-    return sel.role === 'owner' || sel.role === 'editor';
-  }
-  setAccess(ref: string, access: 'read' | 'readwrite'): void {
-    this.memorySelections.update((cur) =>
-      cur.map((m) => (m.ref === ref ? { ...m, access } : m)),
-    );
-    this.bindingsDirty.set(true);
-  }
-  toggleAlwaysLoad(ref: string): void {
-    this.memorySelections.update((cur) =>
-      cur.map((m) => (m.ref === ref ? { ...m, alwaysLoadIndex: !m.alwaysLoadIndex } : m)),
-    );
-    this.bindingsDirty.set(true);
-  }
-
   // ---- submit ----------------------------------------------------------
   private buildBindings(): AgentBinding[] {
     const bindings: AgentBinding[] = [];
     for (const ref of this.selectedToolRefs()) bindings.push({ kind: 'tool', ref });
     for (const ref of this.selectedSkillRefs()) bindings.push({ kind: 'skill', ref });
-    for (const m of this.memorySelections()) {
-      const config: Record<string, unknown> = { access: m.access };
-      if (m.alwaysLoadIndex) config['alwaysLoad'] = ['MEMORY.md'];
-      bindings.push({ kind: 'memory_space', ref: m.ref, config });
-    }
     // KB bindings are welded/synthesized — never sent (backend rejects an explicit one).
     return bindings;
   }

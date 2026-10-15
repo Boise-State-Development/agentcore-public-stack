@@ -1,8 +1,7 @@
 """Agent Marketplace Phase 1 — the author's submit / withdraw routes (D2, D7, D12).
 
 The load-bearing cases here are the D7 checks, because they are the only place the cost
-of publishing is made visible to the person paying it: a memory-space binding blocks
-submission outright, and skill exposure is enumerated before a reviewer's time is spent.
+of publishing is made visible to the person paying it: skill exposure is enumerated before a reviewer's time is spent.
 """
 
 from types import SimpleNamespace
@@ -126,60 +125,6 @@ class TestFeatureGate:
         assert resp.status_code == 404
 
 
-# ── D7.2 — memory spaces block submission ────────────────────────────────────────────
-class TestMemorySpaceBlock:
-    def test_memory_space_binding_blocks_submission_and_names_the_space(
-        self, app, make_user, _no_writes
-    ):
-        """A memory space is personal data — a published agent bound to one fails for everyone."""
-        assistant = _make_assistant(
-            bindings=[AgentBinding(kind="memory_space", ref="mem-042", config={})]
-        )
-        space = SimpleNamespace(space_id="mem-042", name="Oliver", owner_id="user-001")
-
-        mock_auth_user(app, make_user())
-        with _owner(assistant), patch(f"{SERVICE_MODULE}.MemorySpaceService") as svc:
-            svc.return_value.list_spaces_for_user.return_value = [(space, "owner")]
-            resp = TestClient(app).post(
-                "/agents/ast-001/listing/submit", json={"category": "Administration"}
-            )
-
-        assert resp.status_code == 400
-        detail = resp.json()["detail"]
-        assert "Oliver" in detail, "the message must name the space, not just its id"
-        assert "memory space" in detail.lower()
-
-    def test_block_falls_back_to_the_ref_when_the_name_cannot_be_resolved(
-        self, app, make_user, _no_writes
-    ):
-        assistant = _make_assistant(
-            bindings=[AgentBinding(kind="memory_space", ref="mem-042", config={})]
-        )
-        mock_auth_user(app, make_user())
-        with _owner(assistant), patch(f"{SERVICE_MODULE}.MemorySpaceService") as svc:
-            svc.return_value.list_spaces_for_user.side_effect = RuntimeError("boom")
-            resp = TestClient(app).post(
-                "/agents/ast-001/listing/submit", json={"category": "Administration"}
-            )
-
-        assert resp.status_code == 400
-        assert "mem-042" in resp.json()["detail"]
-
-    def test_blocked_submission_writes_nothing(self, app, make_user, _no_writes):
-        """A blocked submission must not leave a half-built listing behind."""
-        assistant = _make_assistant(
-            bindings=[AgentBinding(kind="memory_space", ref="mem-042", config={})]
-        )
-        mock_auth_user(app, make_user())
-        with _owner(assistant), patch(f"{SERVICE_MODULE}.MemorySpaceService") as svc:
-            svc.return_value.list_spaces_for_user.return_value = []
-            TestClient(app).post(
-                "/agents/ast-001/listing/submit", json={"category": "Administration"}
-            )
-
-        _no_writes.assert_not_called()
-
-
 # ── the marketplace is public-only ───────────────────────────────────────────────────
 class TestVisibilityBlock:
     """Publication requires PUBLIC.
@@ -247,20 +192,6 @@ class TestVisibilityBlock:
         assert body["requiresPublic"] is False
         assert body["blockReason"] is None
 
-    def test_the_memory_space_block_is_still_a_block(self, app, make_user, _no_writes):
-        """A real dead end stays one — nothing in the dialog can resolve it."""
-        assistant = _make_assistant(
-            visibility="PRIVATE",
-            bindings=[AgentBinding(kind="memory_space", ref="mem-042", config={})],
-        )
-        mock_auth_user(app, make_user())
-        with _owner(assistant), patch(f"{SERVICE_MODULE}.MemorySpaceService") as svc:
-            svc.return_value.list_spaces_for_user.return_value = []
-            body = TestClient(app).get("/agents/ast-001/listing/preflight").json()
-
-        assert "memory space" in body["blockReason"].lower()
-        assert body["requiresPublic"] is True, "still true — it just is not what stops them"
-
 
 class TestGoingPublicOnSubmission:
     """The consent checkbox: the author widens visibility from the submit dialog."""
@@ -291,25 +222,6 @@ class TestGoingPublicOnSubmission:
 
         assert resp.status_code == 200
         assert _no_writes.call_args.kwargs["visibility"] is None
-
-    def test_consent_does_not_bypass_the_memory_space_block(
-        self, app, make_user, _no_writes
-    ):
-        """Ticking a visibility box must not wave through an unrelated, real block."""
-        assistant = _make_assistant(
-            visibility="PRIVATE",
-            bindings=[AgentBinding(kind="memory_space", ref="mem-042", config={})],
-        )
-        mock_auth_user(app, make_user())
-        with _owner(assistant), patch(f"{SERVICE_MODULE}.MemorySpaceService") as svc:
-            svc.return_value.list_spaces_for_user.return_value = []
-            resp = TestClient(app).post(
-                "/agents/ast-001/listing/submit",
-                json={"category": "Administration", "makePublic": True},
-            )
-
-        assert resp.status_code == 400
-        _no_writes.assert_not_called()
 
     def test_an_omitted_flag_still_refuses(self, app, make_user, _no_writes):
         """Consent defaults off, so a direct API caller cannot widen an agent by accident."""
@@ -840,7 +752,7 @@ class TestPreflight:
 
     The point of this route is that the author sees the D7 answers *before* committing,
     and that what they see comes from the same helpers the transition enforces. Each
-    test below therefore pairs with one in TestMemorySpaceBlock / TestSkillDisclosure.
+    test below therefore pairs with one in TestSkillDisclosure.
     """
 
     def test_enumerates_the_authors_own_skills_without_submitting(
@@ -870,27 +782,6 @@ class TestPreflight:
         assert body["blockReason"] is None
         # A preflight must never move the listing — it is a rehearsal, not the act.
         _no_writes.assert_not_called()
-
-    def test_memory_space_returns_a_block_reason_rather_than_an_error(
-        self, app, make_user, _no_writes
-    ):
-        """A disabled Submit with an explanation beats a 400 after the click."""
-        assistant = _make_assistant(
-            bindings=[AgentBinding(kind="memory_space", ref="mem-042", config={})]
-        )
-        space = SimpleNamespace(space_id="mem-042", name="Oliver", owner_id="user-001")
-
-        mock_auth_user(app, make_user())
-        with _owner(assistant), patch(f"{SERVICE_MODULE}.MemorySpaceService") as svc:
-            svc.return_value.list_spaces_for_user.return_value = [(space, "owner")]
-            resp = TestClient(app).get("/agents/ast-001/listing/preflight")
-
-        assert resp.status_code == 200
-        body = resp.json()
-        assert "Oliver" in body["blockReason"]
-        # Blocked agents disclose nothing: an author who cannot publish at all should not
-        # first be walked through a skill-exposure confirmation. Mirrors submit_listing.
-        assert body["exposedSkills"] == []
 
     def test_editor_may_not_preflight(self, app, make_user, _no_writes):
         """Skill exposure is a statement about the owner's publication, not an editor's."""
