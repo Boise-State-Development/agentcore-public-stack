@@ -490,6 +490,14 @@ last_run_summary  = {listed, unchanged, updated, added, removedFromSource,
 - Creating one needs an editor (the existing gate), the flag, and a file
   source the caller can use (`resolve_file_source`, the import route's check),
   because the worker will fetch with the creator's credentials.
+- Its first run is **due at creation** (`next_sync_at` = the creation time),
+  not one interval out like the other source types, so it runs at the next
+  dispatcher tick. That run costs a listing and a metadata call: it adopts the
+  copies Save as project just imported, with no downloads (§11.3, step 5).
+  Until it does, each copy has no `syncPolicyId` and offers its own per-file
+  schedule on the Files page; a `drive_file` policy set in that window would
+  keep that document out of the folder's for good, splitting one folder
+  across two kinds of schedule.
 
 **Which documents belong to it.** A document belongs to a folder policy when
 its `syncPolicyId` names that policy. The worker stamps it: on a document it

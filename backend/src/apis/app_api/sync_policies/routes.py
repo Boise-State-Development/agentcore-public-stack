@@ -116,7 +116,12 @@ async def create_policy(
         _validate_source(assistant_id, request.source_type, request.source_ref)
 
     # Only a folder carries a display name; every other source is named by its record.
-    folder_name = {"source_name": request.source_name} if request.source_type == "drive_folder" else {}
+    # A folder's first run is due at once (spec §11.1): it only adopts the copies
+    # Save as project just imported, and until it does each copy offers its own
+    # per-file schedule, which would split the folder across two kinds of policy.
+    folder_extras = (
+        {"source_name": request.source_name, "due_now": True} if request.source_type == "drive_folder" else {}
+    )
     try:
         policy = await create_sync_policy(
             assistant_id=assistant_id,
@@ -124,7 +129,7 @@ async def create_policy(
             source_ref=request.source_ref,
             interval=request.interval,
             created_by_user_id=current_user.user_id,
-            **folder_name,
+            **folder_extras,
         )
     except DuplicateSyncPolicy:
         raise HTTPException(

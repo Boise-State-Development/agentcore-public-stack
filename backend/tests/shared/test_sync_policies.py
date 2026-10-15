@@ -76,6 +76,26 @@ class TestCreateAndGet:
         assert item["GSI4_PK"] == DUE_INDEX_PK
         assert item["GSI4_SK"] == f"{policy.next_sync_at}#{policy.policy_id}"
 
+    async def test_new_policy_is_due_one_interval_out(self, assistants_table):
+        policy = await _make_policy()
+
+        assert policy.next_sync_at > policy.created_at
+        assert await list_due_policies() == []
+
+    async def test_due_now_policy_runs_at_the_next_tick(self, assistants_table):
+        """A ``drive_folder`` policy's first run is due at creation (spec §11.1)."""
+        policy = await create_sync_policy(
+            assistant_id=ASSISTANT_ID, source_type="drive_folder", source_ref="gw:folder-1",
+            interval="weekly", created_by_user_id=USER_ID, due_now=True,
+        )
+
+        assert policy.next_sync_at == policy.created_at
+        item = assistants_table.get_item(
+            Key={"PK": f"AST#{ASSISTANT_ID}", "SK": f"SYNCPOL#{policy.policy_id}"}
+        )["Item"]
+        assert item["GSI4_SK"] == f"{policy.created_at}#{policy.policy_id}"
+        assert [p.policy_id for p in await list_due_policies()] == [policy.policy_id]
+
     async def test_get_missing_returns_none(self, assistants_table):
         assert await get_sync_policy(ASSISTANT_ID, "syn-missing") is None
 
