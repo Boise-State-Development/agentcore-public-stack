@@ -13,7 +13,7 @@ For narrative release notes written for operators and product owners, see [RELEA
 - **One rule for model access** across chat, the catalog and api-converse, with denials streamed as a message.
 - **Agents no longer bind Memory Spaces**, since memory now belongs to Projects.
 
-The **AgentCore Runtime stops receiving 26 derived resource names**, which makes Runtime V2 selectable. For an upgrade from 1.27.0, that means **`backend.yml` runs before `platform.yml`** (the pipeline enforces it). Word tracked changes, skill authoring, direct user grants, session prewarm and client TTFT turn on here as well. For other deployments they remain in-development flags, off by default.
+The **AgentCore Runtime stops receiving 26 derived resource names**, which makes Runtime V2 selectable, and this deployment switches to it (`CDK_AGENTCORE_RUNTIME_PLATFORM_VERSION=V2`, as dev has run since 2026-10-10). For an upgrade from 1.27.0, that means **`backend.yml` runs before `platform.yml`** (the pipeline enforces it). Word tracked changes, skill authoring, direct user grants, session prewarm and client TTFT turn on here as well. For other deployments they remain in-development flags, off by default.
 
 ### 🚀 Added
 

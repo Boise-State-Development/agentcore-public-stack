@@ -9,6 +9,8 @@
 > - **This deployment:** the `production` GitHub environment sets each feature's `CDK_*_ENABLED` variable to `true`, and the production SPA build (`environment.production.ts`) turns on every matching `features` entry.
 > - **Other deployments:** the backend flags still default off. The production SPA build now offers all of these features, so either set the matching `CDK_*_ENABLED` variables to `true`, or set the `features` entries back to `false` before you build. Otherwise the UI will offer features whose API returns 404.
 >
+> ⚡ **This deployment also moves the AgentCore Runtime to V2** (`CDK_AGENTCORE_RUNTIME_PLATFORM_VERSION=V2`), the combination dev has run since 2026-10-10. The same Platform update shrinks the Runtime's environment and switches its platform version, in place. To go back, set `V1` and re-run `platform.yml`.
+>
 > 🔀 **Upgrading from 1.27.0, the order is `backend.yml` first, then `platform.yml`, then `frontend-deploy.yml`.**
 > - The CDK deploy stops sending the AgentCore Runtime 26 resource names that the inference-api now works out for itself, and only this release's image can run without them. If the Platform Stack deploy goes first, it stops before changing anything and says to run the Backend Deploy. Run that, then re-run the Platform Stack deploy.
 > - After Platform, **re-run the Backend Deploy's "Deploy large-document-prepare Lambda image" job.** On the first pass it skips, and still reports success, because the function doesn't exist until Platform creates it.
@@ -47,7 +49,7 @@ Members start conversations from the project page, share them with the project, 
 **One rule for model access.** Chat, the model catalog and api-converse used to disagree about who could use a model. They now share one rule: a model an admin turned off is off for everyone. A denial reads as a message in the conversation, not as an error code.
 
 Also in this release:
-- **Runtime V2 becomes selectable.**
+- **The AgentCore Runtime moves to V2** in this deployment, so cold starts restore from a snapshot.
 - **Agents no longer bind Memory Spaces**, because memory belongs to Projects.
 - **Upload sizes are verified** when an upload completes.
 - **Knowledge-base migrations check every document** before promoting.
@@ -167,7 +169,7 @@ Check which catalog rows are `enabled: false`. Before this release, a user whose
 
 ---
 
-## AgentCore Runtime V2 becomes selectable
+## AgentCore Runtime V2
 
 V2 bills memory at a higher per-GB-hour rate, but it doesn't bill idle memory. It caps the Runtime's environment at 2,560 bytes, and the prod Runtime was sending about 2,526 bytes across 46 variables. This release makes room (#1533, #1535).
 
@@ -182,9 +184,21 @@ V2 bills memory at a higher per-GB-hour rate, but it doesn't bill idle memory. I
 - **The deploy order is enforced once.** `scripts/platform/check-runtime-env-contract.sh` runs inside `scripts/platform/deploy.sh` before `cdk deploy`. It reads the live inference-api image's `runtime-env-contract` label from ECR. If that image predates the derivation, the deploy stops, changing nothing, and says to run `backend.yml` first. `SKIP_RUNTIME_ENV_CONTRACT_CHECK` bypasses the check for a deploy role without ECR read.
 - **Warm-up finishes before `/ping` (#1542).** V2 snapshots a container at its first healthy ping. Warm-up used to run on a daemon thread, so about one restored session in five redid it on the first turn: a 1.7–3.4 s prelude instead of about 1 s. `warm_before_ready()` now runs in the lifespan, on a worker thread bounded at 60 s. On V1 a fresh container becomes ready about 0.7 s later, and pre-booted pool containers are unaffected. `deploy-runtime-image-if-changed.sh` now waits up to 20 minutes for READY, because a V2 update snapshots first.
 
-### Switching to V2
+### This deployment switches to V2
 
-Set `CDK_AGENTCORE_RUNTIME_PLATFORM_VERSION=V2` one environment at a time, dev first. *Deployment ▸ AgentCore Runtime V2* on the docs site has the prerequisites, the verification steps and the recovery runbook. `docs/specs/agentcore-runtime-v2.md` §4 says when V2 saves money.
+`CDK_AGENTCORE_RUNTIME_PLATFORM_VERSION=V2` is set in the `production` GitHub environment. Dev has run V2 since 2026-10-10, with session prewarm on, so prod runs the combination that was tested.
+
+- **Prerequisites are met.**
+  - The worst-case environment is about 1,278 bytes against V2's 2,560, and V2 synthesizes cleanly.
+  - Prod's 26 resource names all match what the inference-api derives.
+  - The deploy script refuses an AWS CLI that doesn't know `platformVersion`.
+- **What the dev readout found** (`docs/specs/agentcore-runtime-v2.md` §9 and §9.5, six days of data):
+  - Per turn, V2 cost $0.0050 against V1's $0.0056 (0.89×), so it is about cost-neutral and buys the faster cold start.
+  - As billed, Runtime spend went from $0.22 to $0.44 a day. Most of the difference is session prewarm: 115 of 205 warm-ups never got a turn, and those were about 27% of the V2 bill.
+  - A second week's readout runs on 2026-10-24.
+- **Going back.** Set the variable to `V1` and run `platform.yml`. The property is always written explicitly, so that is a deterministic in-place update.
+
+Another deployment should switch one environment at a time, dev first. *Deployment ▸ AgentCore Runtime V2* on the docs site has the prerequisites, the verification steps and the recovery runbook.
 
 ---
 
@@ -346,7 +360,7 @@ Each of these is still an in-development flag for other deployments: the CDK def
 - **Session prewarm** (`CDK_SESSION_PREWARM_ENABLED`, `features.sessionPrewarm`; #1543):
   - The SPA starts a conversation's Runtime session before the send, on page load or on the first keystroke, through `POST /chat/prewarm`. That hides the ~1.5–2 s session start.
   - It answers 202, dedupes per conversation for 10 minutes and caps a user at 10 a minute.
-  - **Cost on Runtime V1:** an abandoned page or unsent draft holds a session until the 15-minute idle timeout, billed at peak memory. On V2 the same hold is cheap.
+  - **Cost:** an abandoned page or unsent draft holds a session until the 15-minute idle timeout. On dev's V2 Runtime, 115 of 205 warm-ups never got a turn; at about 0.31 GB-hours each, they were about 27% of the Runtime bill. On V1 the same hold is billed at peak memory, which is why this deployment runs it on V2.
 - **Client-side time to first token** (`CDK_CLIENT_TURN_TIMING_ENABLED`, `features.clientTurnTiming`; #1546): the SPA reports send-to-first-token once per turn, to `AgentCoreStack/TurnLatency`, and the turn-latency dashboard gains a client row.
 
 ---
@@ -504,6 +518,7 @@ These npm overrides were raised or added (#1620): `undici`, `hono`, `piscina`, `
 - **Check the flags.** The `production` GitHub environment sets all of these to `true`:
   - `CDK_PROJECTS_ENABLED`, `CDK_MEMORY_SPACES_ENABLED`, `CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED` and `CDK_FOLDER_ATTACHMENTS_ENABLED` (set 2026-10-15);
   - `CDK_ATTACHMENT_KB_ENABLED`, `CDK_FOLDER_SYNC_ENABLED`, `CDK_USER_GRANTS_ENABLED`, `CDK_SESSION_PREWARM_ENABLED`, `CDK_CLIENT_TURN_TIMING_ENABLED`, `CDK_WORD_TRACKED_CHANGES_ENABLED` and `CDK_SKILL_AUTHORING_ENABLED` (set 2026-10-16).
+  - `CDK_AGENTCORE_RUNTIME_PLATFORM_VERSION=V2` is set as well (2026-10-16).
 
   Another deployment either sets the ones it wants or turns the matching SPA `features` off (see Changed).
 - **Check for renamed resources.** The Runtime will no longer be sent the 26 names in `backend/src/apis/shared/config/derived_environment.json`. For each one your Runtime sends today, the value must equal `{prefix}-{suffix}`, with `-{account}` added for the three account-scoped buckets. If one doesn't, add a CDK override that keeps sending it. 1.27.0 had no startup drift line, so compare the live Runtime's environment against the manifest yourself. For prod this has been checked: the main Runtime's 26 values all match.
@@ -521,10 +536,11 @@ These npm overrides were raised or added (#1620): `undici`, `hono`, `piscina`, `
 
 **3. Verify the deploy.**
 - **Runtime:**
-  - The Runtime is `READY`.
+  - The Runtime and its `DEFAULT` endpoint are `READY`, and `get-agent-runtime` reports `platformVersion` `V2`. Check the field again after the next `backend.yml`; the deploy script fails with exit 8 if the image roll changed it.
   - Both services' startup logs read `… derived environment (prefix=…): … 0 drifted`. On app-api, which still receives the names, expect `N matched`. On the Runtime, after Platform, expect `N set`.
   - The Runtime's environment is about 1.3 KB (24 variables or fewer).
   - A first turn and a follow-up stream normally.
+  - The inference-api log shows `treating this as a snapshot restore` once sessions start restoring from the snapshot. Watch first turns for 424 responses or doubled cold starts.
 - **Projects:**
   - Create a project, invite a second account as viewer, and start a conversation in it.
   - Save something to project memory, then share the conversation with the project.
@@ -547,7 +563,7 @@ These npm overrides were raised or added (#1620): `undici`, `hono`, `piscina`, `
 - **Agents bound to a Memory Space** lose that binding. Memory Spaces is now on here, but agent bindings are ignored.
 - **A new conversation makes one `GET /sessions/{id}/metadata`** after its first reply.
 - **The resource budget is nearly spent.** At about 496 of 500, the next release that adds resources has to make room first.
-- **Session prewarm costs more on V1.** Every page load and first keystroke warms a session, and an abandoned one is billed at peak memory until the 15-minute idle timeout. Watch Runtime spend for the first days. Moving to V2 makes the hold cheap.
+- **Runtime spend goes up, mostly from session prewarm.** On dev, V2 with prewarm doubled the Runtime line ($0.22 to $0.44 a day), and turnless warm-ups were about 27% of it. Watch Runtime spend for the first days and compare it with the 2026-10-24 readout.
 - **Attachments KB storage** is billed at $5 per GB-month of indexed bytes, with each user capped at 500 MB.
 
 **5. Seed Skill Creator and grant skill authoring.** Re-run `bootstrap-data-seeding.yml` to add the `skill_creator` skill and the `my_skill_create` catalog tool; the seed leaves existing rows alone. Skill authoring is on, but it does nothing until a role is granted `my_skill_create`. Grant it, and `skill_creator`, under Admin → Roles to the roles you want. Until then only skill-wildcard roles can reach Skill Creator.
