@@ -435,7 +435,7 @@ So the memory reclaim is real: a V2 session holds about 40% of the GB-hours a V1
 - **The committed baseline** ($0.0132 / $0.0997) moves the memory break-even to 72%. That is within reach of the normalised 0.36–0.63. Re-run this readout against it once it can be bought.
 - **Data that would settle it:**
   1. ~~Join warm invocations to sessions in Logs Insights to get the turnless-warm share.~~ Done (§9.5).
-  2. A second V2 week (10-17 → 10-23) with no flip-day burst. Read it on or after 10-24, with §9.5's per-turn method. That also gives a second estimate of a turnless warm's cost.
+  2. A second V2 week (10-17 → 10-23) with no flip-day burst. Read it on or after 10-24, with §9.5's per-turn method. That also gives a second estimate of a turnless warm's cost. **Scheduled** for 2026-10-24 as a one-off readout, which adds the results as §9.6.
   3. ~~The V2 vCPU-per-invocation question (9.3 item 5).~~ Mostly explained (§9.5). A ~1.15× per-turn residual remains.
   4. Prod's V1 GB-hours per turn on real traffic, read-only, as the baseline any prod projection multiplies.
 
