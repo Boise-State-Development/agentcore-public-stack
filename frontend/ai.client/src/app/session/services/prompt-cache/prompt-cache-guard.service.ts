@@ -31,13 +31,39 @@ interface CachedWith {
 }
 
 /**
- * How long a conversation's history stays cached after its last model call.
- * Bedrock's default TTL; the tools and system prompt may be held for an hour,
- * but they are a small share of a conversation worth warning about. Past this
- * the next message re-writes the history whether or not anything changed, so
- * a switch costs nothing extra and there is nothing to warn about.
+ * How long a conversation's history stays cached after its last model call,
+ * mirroring the backend's `cache_ttl_seconds_for`
+ * (`apis/shared/observability/prompt_cache.py`), which the cost classifier
+ * measures every call against. Past this the next message re-writes the
+ * history whether or not anything changed, so a switch costs nothing extra and
+ * there is nothing to warn about.
+ *
+ * Bedrock's default is about 5 minutes. A deployment can hold the tools and
+ * system prompt for an hour, but they are a small share of a conversation
+ * worth warning about.
  */
-export const CACHE_WARM_MS = 5 * 60 * 1000;
+export const DEFAULT_CACHE_TTL_MS = 5 * 60 * 1000;
+
+/**
+ * The OpenAI Responses API on bedrock-runtime keeps entries for 30 minutes.
+ * Only the `bedrock-responses` provider, not the whole OpenAI family: `mantle`
+ * serves `openai.gpt-5.4` with implicit caching whose retention AWS does not
+ * document, and the backend deliberately does not guess there either.
+ */
+export const RESPONSES_CACHE_TTL_MS = 30 * 60 * 1000;
+
+const RESPONSES_TTL_PROVIDERS: ReadonlySet<ManagedModel['provider']> = new Set(['bedrock-responses']);
+
+/**
+ * The cache lifetime for the model a conversation's cache was written with.
+ * The backend's model-id fallback is only for rows written before the
+ * provider was recorded; a catalog model always carries its provider.
+ */
+export function cacheTtlMsFor(model: Pick<ManagedModel, 'provider'>): number {
+  return RESPONSES_TTL_PROVIDERS.has(model.provider)
+    ? RESPONSES_CACHE_TTL_MS
+    : DEFAULT_CACHE_TTL_MS;
+}
 
 /** Below this the extra cost is not worth interrupting anyone for. */
 export const MIN_WARN_USD = 0.01;
@@ -130,8 +156,11 @@ export class PromptCacheGuardService {
     if (!cacheModel.supportsCaching) return true;
 
     const sessionId = this.sessionService.currentSession().sessionId;
-    if (!sessionId || !this.isCacheWarm(sessionId)) return true;
+    if (!sessionId) return true;
+    // Past this, `cacheModel` is the model the cache was written with, so its
+    // provider decides how long that cache lives.
     if (!this.changesCachedPrefix(sessionId, change)) return true;
+    if (!this.isCacheWarm(sessionId, cacheModel)) return true;
 
     const tokens = this.chatState.contextTokensFor(sessionId);
     const usd = estimateCacheResetUsd(change, tokens);
@@ -172,10 +201,10 @@ export class PromptCacheGuardService {
 
   /**
    * Whether the conversation's last model call was recent enough that its
-   * cache is still live. A conversation with no messages has no cache; one
-   * streaming right now is warm by definition.
+   * cache, written by `cacheModel`, is still live. A conversation with no
+   * messages has no cache; one streaming right now is warm by definition.
    */
-  private isCacheWarm(sessionId: string): boolean {
+  private isCacheWarm(sessionId: string, cacheModel: ManagedModel): boolean {
     const messages = this.messageMap.getMessagesForSession(sessionId)();
     if (messages.length === 0) return false;
     if (this.chatState.isSessionLoading(sessionId)) return true;
@@ -185,6 +214,6 @@ export class PromptCacheGuardService {
     const lastActivity = Math.max(Number.isNaN(createdAt) ? 0 : createdAt, turnEnded ?? 0);
     // No timestamp at all: assume warm, since asking is the safe side.
     if (lastActivity === 0) return true;
-    return Date.now() - lastActivity < CACHE_WARM_MS;
+    return Date.now() - lastActivity < cacheTtlMsFor(cacheModel);
   }
 }
