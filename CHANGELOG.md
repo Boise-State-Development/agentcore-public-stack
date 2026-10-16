@@ -88,7 +88,7 @@ For narrative release notes written for operators and product owners, see [RELEA
 ### 🔒 Security
 
 - **An upload's stored size is checked before it completes.** The presigned PUT does not sign `Content-Length`, so a client could declare a small `size_bytes` and store more, past the size cap and quota. `POST /files/{id}/complete` now reads the stored size: over the cap is a 400, a size different from the declared one (or none) is a 409, and either way the upload is marked failed, its object deleted and quota untouched. The SPA always declares the real size (#1560)
-- **Dependency security patches and log scrubbing**: `pyjwt`, `urllib3`, `werkzeug`, `multidict`, the Angular runtime and CLI, `sharp`, and overrides for `undici`, `hono`, `piscina`, `brace-expansion`, `proxy-addr`, `@modelcontextprotocol/sdk`, `source-map-js`, `fast-uri`, `ip-address` and `http-cache-semantics` (see Dependencies); user-controlled values in feedback, fine-tuning and project-memory log lines go through `scrub_log` (CodeQL log injection) (#1620)
+- **Dependency security patches and log scrubbing**: `pyjwt`, `urllib3`, `werkzeug`, `multidict`, the Angular runtime and CLI, `sharp`, and overrides for `undici`, `hono`, `piscina`, `brace-expansion`, `proxy-addr`, `@modelcontextprotocol/sdk`, `source-map-js`, `fast-uri`, `ip-address` and `http-cache-semantics` (see Dependencies); user-controlled values in feedback, fine-tuning and project-memory log lines go through `scrub_log` (CodeQL log injection), as do the project-schedule and share-storage error logs; the artifact preview's tag stripping leaves no `<` behind (#1620, #1631)
 
 ### 📦 Dependencies
 

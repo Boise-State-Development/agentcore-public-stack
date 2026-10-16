@@ -319,7 +319,8 @@ None of the following is on in production. Each sits behind an in-development fl
 
   The SPA always declares the real size, so normal uploads are unaffected.
 - **Dependency patches (#1620):** `pyjwt`, `urllib3`, `werkzeug`, `multidict`, the Angular runtime and CLI, `sharp`, and npm overrides (table below).
-- **Log scrubbing (#1620):** user-controlled values in the feedback, fine-tuning and project-memory log lines now go through `scrub_log`, closing CodeQL log-injection findings.
+- **Log scrubbing (#1620, #1631):** user-controlled values in the feedback, fine-tuning, project-memory, project-schedule and share-storage log lines now go through `scrub_log`, closing CodeQL log-injection findings.
+- **Artifact previews leave no tag start (#1631).** The Outputs preview's Markdown text was already interpolated, never bound as HTML. Its tag stripping now also removes any `<` it can't close, so the guarantee doesn't depend on the binding.
 
 ---
 
