@@ -31,6 +31,8 @@ from __future__ import annotations
 
 from typing import Any, List, Optional
 
+from apis.shared.models.history_projection import project_model_history
+
 # Content-block keys a TEXT-only model rejects. A toolResult's content can
 # carry the same blocks and is projected the same way.
 _MEDIA_KEYS = ("image", "document", "video")
@@ -97,32 +99,5 @@ def project_text_only_messages(messages: List[Any]) -> List[Any]:
 
 
 def text_only_input(model: Any) -> Any:
-    """Make ``model`` see its message history through the text-only projection.
-
-    Wraps the instance's ``stream`` (the request) and ``count_tokens`` (Strands'
-    pre-call estimate, which should count what is actually sent), plus
-    ``native_count_tokens`` where the model has one (the context-attribution
-    hook's background count). The wrappers are set on the instance rather than
-    a subclass because the OpenAI-compatible models come from shared builders,
-    and an instance attribute keeps every ``isinstance`` check on the model
-    (``BedrockModel`` included) true.
-    """
-    stream = model.stream
-    count_tokens = model.count_tokens
-    native_count_tokens = getattr(model, "native_count_tokens", None)
-
-    def projected_stream(messages: List[Any], *args: Any, **kwargs: Any) -> Any:
-        return stream(project_text_only_messages(messages), *args, **kwargs)
-
-    async def projected_count_tokens(messages: List[Any], *args: Any, **kwargs: Any) -> int:
-        return await count_tokens(project_text_only_messages(messages), *args, **kwargs)
-
-    model.stream = projected_stream
-    model.count_tokens = projected_count_tokens
-    if native_count_tokens is not None:
-
-        def projected_native_count_tokens(messages: List[Any], *args: Any, **kwargs: Any) -> Optional[int]:
-            return native_count_tokens(project_text_only_messages(messages), *args, **kwargs)
-
-        model.native_count_tokens = projected_native_count_tokens
-    return model
+    """Make ``model`` see its message history through the text-only projection."""
+    return project_model_history(model, project_text_only_messages)
