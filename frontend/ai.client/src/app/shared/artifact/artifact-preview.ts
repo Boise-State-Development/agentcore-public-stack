@@ -30,6 +30,9 @@ export function plainInline(text: string): string {
     .replace(/(^|[^\w*])[*_](?!\s)(.+?)(?<!\s)[*_](?![\w*])/g, '$1$2')
     .replace(/`([^`]*)`/g, '$1')
     .replace(/<[^>]+>/g, '')
+    // A tag the pattern above can't close (`<script` with no `>`, or one
+    // rebuilt from nested pieces) must not survive as a tag start.
+    .replace(/</g, '')
     .trim();
 }
 
