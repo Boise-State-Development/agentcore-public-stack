@@ -16,13 +16,13 @@ export const environment = {
     // Front-end feature switches for prod (feature-flags.ts). Keep in step with the
     // production GitHub environment's CDK_*_ENABLED variables.
     features: {
-        projects: false,
+        projects: true,
         conversationSearch: true,
         userGrants: false,
         sessionPrewarm: false,
         clientTurnTiming: false,
-        largeDocumentAttachments: false,
-        folderAttachments: false,
+        largeDocumentAttachments: true,
+        folderAttachments: true,
         attachmentKb: false,
         folderSync: false,
     } satisfies FeatureFlags,
