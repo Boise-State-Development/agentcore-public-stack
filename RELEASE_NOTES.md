@@ -5,9 +5,9 @@
 
 ---
 
-> 🚀 **Shared Projects, large document attachments and Drive folder attachments turn on with this release.**
-> - **This deployment:** the `production` GitHub environment already sets `CDK_PROJECTS_ENABLED`, `CDK_MEMORY_SPACES_ENABLED`, `CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED` and `CDK_FOLDER_ATTACHMENTS_ENABLED` to `true`, and the production SPA build (`environment.production.ts`) now turns on `projects`, `largeDocumentAttachments` and `folderAttachments`.
-> - **Other deployments:** the production SPA build shows these features, but the backend flags still default off. Set the three `CDK_*_ENABLED` variables to `true` to run them. Otherwise, set the matching `features` entries back to `false` before you build, or the UI will offer features whose API returns 404.
+> 🚀 **This release turns on every feature it carries in this deployment:** Shared Projects (with Memory Spaces), large document attachments with semantic search, Drive folder attachments and folder sync, Word tracked changes, skill authoring, direct user grants, session prewarm and client time-to-first-token.
+> - **This deployment:** the `production` GitHub environment sets each feature's `CDK_*_ENABLED` variable to `true`, and the production SPA build (`environment.production.ts`) turns on every matching `features` entry.
+> - **Other deployments:** the backend flags still default off. The production SPA build now offers all of these features, so either set the matching `CDK_*_ENABLED` variables to `true`, or set the `features` entries back to `false` before you build. Otherwise the UI will offer features whose API returns 404.
 >
 > 🔀 **Upgrading from 1.27.0, the order is `backend.yml` first, then `platform.yml`, then `frontend-deploy.yml`.**
 > - The CDK deploy stops sending the AgentCore Runtime 26 resource names that the inference-api now works out for itself, and only this release's image can run without them. If the Platform Stack deploy goes first, it stops before changing anything and says to run the Backend Deploy. Run that, then re-run the Platform Stack deploy.
@@ -17,11 +17,11 @@
 > ⚠️ **If you renamed any table or bucket**, keep sending its variable through a CDK override before you deploy. Otherwise the Runtime will look for a resource that does not exist. A deployment that kept the default `{prefix}-{suffix}` names has nothing to do.
 >
 > 🏗️ **Infrastructure:** there are **no new DynamoDB tables, no GSI changes and no backfills**.
-> - With large documents on, the CDK deploy adds about 12 resources: the prepare queue, its dead-letter queue, the Lambda and its alarms, plus one TTFT-probe rule.
-> - Prod's PlatformStack goes from 482 to about **494 of CloudFormation's 500**.
+> - With large documents and the attachments KB on, the CDK deploy adds about 14 resources: the prepare pipeline's 11, the attachments KB's two rules, and one TTFT-probe rule.
+> - Prod's PlatformStack goes from 482 to about **496 of CloudFormation's 500**.
 > - The deploy also rewrites the Runtime's environment in place and widens a few IAM roles.
 >
-> 🌱 **Optional:** re-run bootstrap seeding afterwards to add the Skill Creator skill and the `my_skill_create` tool.
+> 🌱 **After the deploy:** re-run bootstrap seeding to add the Skill Creator skill and the `my_skill_create` tool. Skill authoring does nothing until a role is granted `my_skill_create`.
 
 ---
 
@@ -36,7 +36,7 @@
 Members start conversations from the project page, share them with the project, and can put prompts on a schedule that delivers each run to the project. Projects are open to every signed-in user.
 
 **Big documents and whole Drive folders.**
-- A pdf, docx, txt, md or html file can be up to 50 MB instead of 4 MB. It is prepared in the background and read on demand, never inlined.
+- A pdf, docx, txt, md or html file can be up to 50 MB instead of 4 MB. It is prepared in the background, indexed for search, and read on demand, never inlined.
 - A whole Google Drive folder can be attached as one attachment. The model gets a manifest and reads files as it needs them, and the folder can be refreshed or saved as a project.
 - A **Project or folder** picker beneath a new conversation's composer scopes the work before the first message.
 
@@ -51,7 +51,7 @@ Also in this release:
 - **Agents no longer bind Memory Spaces**, because memory belongs to Projects.
 - **Upload sizes are verified** when an upload completes.
 - **Knowledge-base migrations check every document** before promoting.
-- **These features arrive in development, off by default:** semantic search over attached documents, folder sync, Word tracked changes, skill authoring, direct user grants, session prewarm and client-side TTFT.
+- **Also turning on in this deployment:** semantic search over attached documents, folder sync, Word tracked changes, skill authoring, direct user grants, session prewarm and client-side time to first token.
 
 **Action required:** the deploy order above, including the re-run of the large-document job, and the checks under Deployment notes.
 
@@ -274,7 +274,16 @@ New in this release:
 
 ## Large documents and Drive folders
 
-Both turn on with this release: `CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED` and `CDK_FOLDER_ATTACHMENTS_ENABLED` on the backend, `largeDocumentAttachments` and `folderAttachments` in the production SPA build. Folder attachments require large documents; synth refuses one without the other.
+All four turn on with this release:
+
+| Feature | Backend variable | SPA switch |
+|---|---|---|
+| Large document attachments | `CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED` | `largeDocumentAttachments` |
+| Semantic search over attachments | `CDK_ATTACHMENT_KB_ENABLED` | `attachmentKb` |
+| Drive folder attachments | `CDK_FOLDER_ATTACHMENTS_ENABLED` | `folderAttachments` |
+| Folder sync | `CDK_FOLDER_SYNC_ENABLED` | `folderSync` |
+
+The attachments KB and folder attachments each require large documents, and synth refuses either one without it.
 
 ### Large document attachments (#1573, #1577, #1593)
 
@@ -289,7 +298,14 @@ Both turn on with this release: `CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED` and `CD
   - The chip reads "Large document, read on demand".
   - A large PDF's thumbnail renders from its first shard.
 - **Pattern search finds the match (#1593).** Excerpts are cut around the match, as described under Bug fixes.
-- **Semantic search over these documents** (the attachments knowledge base) stays off. It is listed under In development below.
+- **Semantic search (#1580, #1583, #1584, #1600).**
+  - Each prepared document is indexed into one shared managed knowledge base for the environment, reserved id `attachments`. The KB creates itself on the first ingest.
+  - `document_read` gains `query`, which returns up to 5 excerpts with their PDF page numbers.
+  - The chip moves from *Indexing…* to *Searchable*.
+  - On the dev harness, search answered 97% of questions correctly at $0.013 a turn, against 85% at $0.071 when reading on demand.
+  - **Scope:** retrieval is limited to the user and the conversation, and an architecture test keeps it the only caller.
+  - **Limits:** each user has a 500 MB cap, and documents idle for 30 days are evicted. They're re-queued when their conversation is opened.
+  - **Cost:** storage is billed at $5 per GB-month of indexed bytes.
 
 ### Drive folder attachments (#1592, #1597, #1601, #1603, #1605, #1606, #1604, #1607)
 
@@ -303,25 +319,25 @@ Both turn on with this release: `CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED` and `CD
   - **Refresh** re-lists the folder: changed files are rewritten in place, new files imported, and files gone from the folder marked removed.
   - A card whose Drive token has lapsed offers **Connect**.
 - **Project or folder.** A picker beneath a new conversation's composer lists the caller's projects and the Drive folders they attached before, filtered as they type. Picking a project binds the conversation to it; picking a folder attaches it.
-- **Save as project.** A sent folder chip offers **Save as project**. It creates a project the user owns, named after the folder, and copies the folder's files into its Files. Keeping the project in step with the folder is folder sync, which stays off.
+- **Save as project.** A sent folder chip offers **Save as project**. It creates a project the user owns, named after the folder, and copies the folder's files into its Files. With **Keep in sync with the folder**, folder sync keeps the project in step with the folder (#1610, #1617):
+  - It uses one KB-sync policy per folder, and its first run is due at creation.
+  - Changed files are re-ingested, new ones imported, and removed ones marked.
+  - Each run is capped at 50 downloads, 250 MB and 12 minutes.
+  - A sync re-fetches with the Drive access of the person who set it up.
 
 ---
 
-## In development (off by default)
+## Also turning on in this deployment
 
-None of the following is on in production. Each sits behind an in-development flag that only `"true"` enables, and its GitHub variable stays unset unless an environment opts in.
+Each of these is still an in-development flag for other deployments: the CDK default is off, and only `"true"` enables it. Here the `production` GitHub environment sets it to `true`.
 
-- **Semantic search over attached documents** (`CDK_ATTACHMENT_KB_ENABLED`, `features.attachmentKb`; #1580, #1583, #1584):
-  - Prepared large documents are indexed into one shared managed knowledge base per environment, and `document_read` gains `query`.
-  - On the dev harness, search answered 97% of questions correctly at $0.013 a turn. Reading on demand answered 85% at $0.071 (#1600).
-  - Retrieval is scoped to the user and the session. An architecture test keeps it the only caller.
-  - Turning it on adds 2 CloudFormation resources. Note the resource budget under Deployment notes.
-- **Folder sync** (`CDK_FOLDER_SYNC_ENABLED`, `features.folderSync`; #1610, #1617): a project saved from a folder stays in step with it. It uses one KB-sync policy per folder, capped at 50 downloads, 250 MB and 12 minutes a run.
-- **Word tracked changes** (`CDK_WORD_TRACKED_CHANGES_ENABLED`; #1570):
-  - A redlined `.docx` reaches the model with each change written out as `[deleted: …]` or `[inserted: …]`.
+- **Word tracked changes** (`CDK_WORD_TRACKED_CHANGES_ENABLED`, app-api and Runtime, no SPA switch; #1570):
+  - A redlined `.docx` reaches the model with each change written out as `[deleted: …]` or `[inserted: …]`, and its comments inline. That applies to chat attachments, `document_read`, the upload digest and `read_word_document`.
   - A new `redline_word_document` tool writes real tracked changes and comments, authored as the signed-in user.
-- **Skill authoring and Skill Creator** (`CDK_SKILL_AUTHORING_ENABLED`; #1555, #1557, #1558, #1561, #1563, #1566):
+  - The tool spec adds about 515 tokens to the cached tool configuration.
+- **Skill authoring and Skill Creator** (`CDK_SKILL_AUTHORING_ENABLED`, Runtime only; #1555, #1557, #1558, #1561, #1563, #1566):
   - Seven `my_skill_*` tools let an assistant author the user's own skills. Every write goes through the approval card.
+  - Nothing happens until a role is granted the `my_skill_create` tool. No role has it yet.
   - `skill_creator` is a seeded platform skill that interviews the user and drafts a skill. It is granted to no role, and works without the tools by handing over a draft.
   - The bundle is adapted from Anthropic's skill-creator and carries its Apache-2.0 notice.
 - **Direct user grants** (`CDK_USER_GRANTS_ENABLED`, `features.userGrants`; #1537, #1538):
@@ -329,8 +345,9 @@ None of the following is on in production. Each sits behind an in-development fl
   - The flag gates only the admin screens. A grant that exists still applies with the flag off; delete it to revoke.
 - **Session prewarm** (`CDK_SESSION_PREWARM_ENABLED`, `features.sessionPrewarm`; #1543):
   - The SPA starts a conversation's Runtime session before the send, on page load or on the first keystroke, through `POST /chat/prewarm`. That hides the ~1.5–2 s session start.
-  - An abandoned page holds a session until the 15-minute idle timeout.
-- **Client-side time to first token** (`CDK_CLIENT_TURN_TIMING_ENABLED`, `features.clientTurnTiming`; #1546): the SPA reports send-to-first-token once per turn, to `AgentCoreStack/TurnLatency`. The turn-latency dashboard gains a client row whether the flag is on or not.
+  - It answers 202, dedupes per conversation for 10 minutes and caps a user at 10 a minute.
+  - **Cost on Runtime V1:** an abandoned page or unsent draft holds a session until the 15-minute idle timeout, billed at peak memory. On V2 the same hold is cheap.
+- **Client-side time to first token** (`CDK_CLIENT_TURN_TIMING_ENABLED`, `features.clientTurnTiming`; #1546): the SPA reports send-to-first-token once per turn, to `AgentCoreStack/TurnLatency`, and the turn-latency dashboard gains a client row.
 
 ---
 
@@ -393,7 +410,7 @@ None of the following is on in production. Each sits behind an in-development fl
 
 ## ⚠️ Changed
 
-- **The production SPA build turns on Projects, large document attachments and folder attachments** (`environment.production.ts`). The backend flags still default off. A deployment that builds the production SPA without setting `CDK_PROJECTS_ENABLED`, `CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED` and `CDK_FOLDER_ATTACHMENTS_ENABLED` to `true` will offer those features with an API that returns 404. Either set the variables, or set the matching `features` entries to `false` before building.
+- **The production SPA build turns on every in-development feature switch** (`environment.production.ts`): `projects`, `largeDocumentAttachments`, `folderAttachments`, `attachmentKb`, `folderSync`, `userGrants`, `sessionPrewarm` and `clientTurnTiming`. The backend flags still default off. A deployment that builds the production SPA without setting the matching `CDK_*_ENABLED` variables to `true` will offer those features with an API that returns 404. Either set the variables, or set the matching `features` entries to `false` before building.
 - **The AgentCore Runtime no longer receives 26 resource-name variables** (#1533, #1535). Covered in the Runtime V2 section above; the deploy order and the renamed-resources caveat are under Deployment notes.
 - **Agents can no longer bind a Memory Space** (#1621). Covered above.
 - **A disabled model is off for everyone, and legacy `availableToRoles` now grants on chat** (#1525). Covered above.
@@ -422,9 +439,10 @@ None of the following is on in production. Each sits behind an in-development fl
 
   These grants apply with Projects off.
 
-**Large document attachments (on in this deployment)**
+**Large document attachments and the attachments KB (on in this deployment)**
 - `LargeDocumentPrepareConstruct` adds 11 resources: the prepare queue, its dead-letter queue and TLS-only queue policy, a log group, the Lambda and its role and policy, the event-source mapping, an SSM parameter, and two alarms. app-api's send grant sits on the queue policy (#1573).
-- With the TTFT probe rule, prod's PlatformStack goes from 482 to about 494 of CloudFormation's 500. This was measured by synthesizing 1.27.0 and this release with prod's flags.
+- The attachments KB adds two EventBridge rules: S3 Object Deleted, and a daily reconcile (#1580, #1584).
+- With the TTFT probe rule, prod's PlatformStack goes from 482 to about 496 of CloudFormation's 500. This was measured by synthesizing 1.27.0 and this release with prod's flags.
 
 **app-api and observability**
 - app-api always receives `WORD_TRACKED_CHANGES_ENABLED` and `LARGE_DOCUMENT_ATTACHMENTS_ENABLED`, `false` while off. The next Platform deploy therefore re-registers its task definition (#1570, #1573).
@@ -483,7 +501,11 @@ These npm overrides were raised or added (#1620): `undici`, `hono`, `piscina`, `
 ## 🚀 Deployment notes
 
 **1. Before the merge.**
-- **Check the flags.** The `production` GitHub environment already sets these to `true` (on 2026-10-15): `CDK_PROJECTS_ENABLED`, `CDK_MEMORY_SPACES_ENABLED`, `CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED` and `CDK_FOLDER_ATTACHMENTS_ENABLED`. Leave `CDK_ATTACHMENT_KB_ENABLED` and `CDK_FOLDER_SYNC_ENABLED` unset. Another deployment either sets the first four or turns the matching SPA `features` off (see Changed).
+- **Check the flags.** The `production` GitHub environment sets all of these to `true`:
+  - `CDK_PROJECTS_ENABLED`, `CDK_MEMORY_SPACES_ENABLED`, `CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED` and `CDK_FOLDER_ATTACHMENTS_ENABLED` (set 2026-10-15);
+  - `CDK_ATTACHMENT_KB_ENABLED`, `CDK_FOLDER_SYNC_ENABLED`, `CDK_USER_GRANTS_ENABLED`, `CDK_SESSION_PREWARM_ENABLED`, `CDK_CLIENT_TURN_TIMING_ENABLED`, `CDK_WORD_TRACKED_CHANGES_ENABLED` and `CDK_SKILL_AUTHORING_ENABLED` (set 2026-10-16).
+
+  Another deployment either sets the ones it wants or turns the matching SPA `features` off (see Changed).
 - **Check for renamed resources.** The Runtime will no longer be sent the 26 names in `backend/src/apis/shared/config/derived_environment.json`. For each one your Runtime sends today, the value must equal `{prefix}-{suffix}`, with `-{account}` added for the three account-scoped buckets. If one doesn't, add a CDK override that keeps sending it. 1.27.0 had no startup drift line, so compare the live Runtime's environment against the manifest yourself. For prod this has been checked: the main Runtime's 26 values all match.
 
 **2. Deploy: Backend, then Platform, then the large-document job again, then Frontend.** A release merge starts `platform.yml`, `backend.yml` and `frontend-deploy.yml` together.
@@ -493,7 +515,7 @@ These npm overrides were raised or added (#1620): `undici`, `hono`, `piscina`, `
   - The features this release turns on stay off until Platform sets their variables.
   - Project schedules can't exist before then, so the scheduled-runs grants that Platform adds aren't needed yet.
   - KaTeX falls back to the browser's MathML until the CSP update lands.
-- **After Platform succeeds, re-run the large-document job.** In the Backend Deploy run, re-run **Deploy large-document-prepare Lambda image**. On the first pass the function didn't exist, so the job skipped and still reported success. Until it runs for real, the function created by Platform is the bootstrap stub and uploads over 4 MB aren't prepared. Then confirm the function's `ImageUri` is no longer the stub, and that `{prefix}-large-document-prepare-dlq` is empty.
+- **After Platform succeeds, re-run the large-document job.** In the Backend Deploy run, re-run **Deploy large-document-prepare Lambda image**. On the first pass the function didn't exist, so the job skipped and still reported success. Until it runs for real, the function created by Platform is the bootstrap stub, so uploads over 4 MB aren't prepared or indexed. Then confirm the function's `ImageUri` is no longer the stub, and that `{prefix}-large-document-prepare-dlq` is empty.
 - **Frontend last.** If the Frontend Deploy lands before Platform, the Projects navigation shows and its API returns 404 until Platform finishes. Re-run it after Platform if it raced ahead.
 - **A transient ECR Public pull failure** on the Python base image failed one dev Backend Deploy this week. Re-run the job if it recurs.
 
@@ -507,11 +529,13 @@ These npm overrides were raised or added (#1620): `undici`, `hono`, `piscina`, `
   - Create a project, invite a second account as viewer, and start a conversation in it.
   - Save something to project memory, then share the conversation with the project.
   - The viewer sees it, and can't make it public.
-- **Large documents:** attach a PDF over 4 MB. The chip reads "Large document, read on demand", and a question about a specific page is answered from it.
-- **Drive folders:** attach a small Drive folder. The card expands, the sent message shows the folder chip, and a question about one of its files is answered.
+- **Large documents:** attach a PDF over 4 MB. The chip reads "Large document, read on demand" and moves from *Indexing…* to *Searchable*. A question about a specific page is answered from it. The first ingest creates the attachments KB, which takes a minute or two.
+- **Drive folders:** attach a small Drive folder. The card expands, the sent message shows the folder chip, and a question about one of its files is answered. **Save as project** with **Keep in sync** lists the folder under the project's Synced folders.
+- **Admin:** a system admin sees the **Direct access** card on a user's admin page.
+- **TTFT:** `ClientFirstTokenMs` starts arriving in `AgentCoreStack/TurnLatency`.
 - **Model access:** in a new conversation, sending with a disabled model returns the "turned off by an administrator" message, and nothing is left behind in the sidebar.
 - **Artifacts:** a Markdown artifact with `$…$` math typesets it.
-- **Resources:** the PlatformStack holds about 494 resources.
+- **Resources:** the PlatformStack holds about 496 resources.
 
 **4. Expected after the deploy.**
 - **Every signed-in user sees Projects** and can create one. There is no role gate and no per-project budget yet.
@@ -522,9 +546,11 @@ These npm overrides were raised or added (#1620): `undici`, `hono`, `piscina`, `
 - **Weekly schedules made in the UI** show their real day, which is one day later than the label they had before. Tell users who scheduled weekly prompts.
 - **Agents bound to a Memory Space** lose that binding. Memory Spaces is now on here, but agent bindings are ignored.
 - **A new conversation makes one `GET /sessions/{id}/metadata`** after its first reply.
-- **The resource budget is nearly spent.** At about 494 of 500, the next release that adds resources has to make room first. Turning on the attachments KB (+2) still fits.
+- **The resource budget is nearly spent.** At about 496 of 500, the next release that adds resources has to make room first.
+- **Session prewarm costs more on V1.** Every page load and first keystroke warms a session, and an abandoned one is billed at peak memory until the 15-minute idle timeout. Watch Runtime spend for the first days. Moving to V2 makes the hold cheap.
+- **Attachments KB storage** is billed at $5 per GB-month of indexed bytes, with each user capped at 500 MB.
 
-**5. Optional: seed Skill Creator.** Re-run `bootstrap-data-seeding.yml` to add the `skill_creator` skill and the `my_skill_create` catalog tool. The seed leaves existing rows alone. Then grant `skill_creator` to a pilot role under Admin → Roles if wanted; until then only skill-wildcard roles can reach it.
+**5. Seed Skill Creator and grant skill authoring.** Re-run `bootstrap-data-seeding.yml` to add the `skill_creator` skill and the `my_skill_create` catalog tool; the seed leaves existing rows alone. Skill authoring is on, but it does nothing until a role is granted `my_skill_create`. Grant it, and `skill_creator`, under Admin → Roles to the roles you want. Until then only skill-wildcard roles can reach Skill Creator.
 
 **6. No backfills, no GSIs, no new tables.** `check-gsi-update-limit.mjs` and `check-pending-backfills.mjs` both pass.
 
