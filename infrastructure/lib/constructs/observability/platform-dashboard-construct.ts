@@ -7,6 +7,35 @@ import { Construct } from 'constructs';
 import { AppConfig, getResourceName } from '../../config';
 import { ALARM_PERIOD } from './alarm-factory';
 
+/**
+ * CloudWatch rejects an alarm-status widget listing more than 100 alarms
+ * ("/widgets/N/properties/alarms: Should NOT have more than 100 items"), and
+ * the rejection fails the whole stack update. Prod crossed it in 1.28.0, when
+ * turning on every feature took the platform past 100 alarms.
+ */
+export const MAX_ALARMS_PER_STATUS_WIDGET = 100;
+
+/**
+ * One full-width status widget per 100 alarms, in order, so the row grows
+ * with the alarm count instead of failing the deploy.
+ */
+export function alarmStatusWidgets(alarms: cloudwatch.IAlarm[]): cloudwatch.AlarmStatusWidget[] {
+  if (alarms.length <= MAX_ALARMS_PER_STATUS_WIDGET) {
+    return [new cloudwatch.AlarmStatusWidget({ title: `All platform alarms (${alarms.length})`, alarms, width: 24, height: 8 })];
+  }
+  const widgets: cloudwatch.AlarmStatusWidget[] = [];
+  for (let start = 0; start < alarms.length; start += MAX_ALARMS_PER_STATUS_WIDGET) {
+    const chunk = alarms.slice(start, start + MAX_ALARMS_PER_STATUS_WIDGET);
+    widgets.push(new cloudwatch.AlarmStatusWidget({
+      title: `All platform alarms (${start + 1}–${start + chunk.length} of ${alarms.length})`,
+      alarms: chunk,
+      width: 24,
+      height: 8,
+    }));
+  }
+  return widgets;
+}
+
 export interface PlatformDashboardConstructProps {
   config: AppConfig;
   loadBalancer: elbv2.IApplicationLoadBalancer;
@@ -194,14 +223,9 @@ export class PlatformDashboardConstruct extends Construct {
     // Row 3 — what is already known to be broken?
     // ============================================================
 
-    this.dashboard.addWidgets(
-      new cloudwatch.AlarmStatusWidget({
-        title: `All platform alarms (${alarms.length})`,
-        alarms,
-        width: 24,
-        height: 8,
-      }),
-    );
+    for (const widget of alarmStatusWidgets(alarms)) {
+      this.dashboard.addWidgets(widget);
+    }
 
     new cdk.CfnOutput(this, 'PlatformDashboardName', {
       value: this.dashboard.dashboardName,

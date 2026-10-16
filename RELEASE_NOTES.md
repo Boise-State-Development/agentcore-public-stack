@@ -1,3 +1,42 @@
+# Release Notes — v1.28.1
+
+**Release Date:** October 16, 2026
+**Previous Release:** v1.28.0 (October 16, 2026)
+
+---
+
+## Highlights
+
+1.28.0's Platform Stack deploy rolled back in prod. With every feature on, the platform now has more than 100 CloudWatch alarms. The platform dashboard listed them all in one alarm-status widget, which CloudWatch caps at 100 alarms, so it rejected the dashboard update. That failure rolled back the whole stack update. The stack ended cleanly in `UPDATE_ROLLBACK_COMPLETE`, so nothing was left half-applied, but none of 1.28.0's infrastructure landed: the feature flags, Runtime V2, the large-document pipeline and the new IAM grants. This release splits the alarm list across as many widgets as it needs. There are no other changes.
+
+---
+
+## 🐛 Bug fixes
+
+- **The platform dashboard no longer fails the deploy past 100 alarms.**
+  - The "All platform alarms" row is now one full-width status widget per 100 alarms, titled "All platform alarms (1–100 of N)", and so on.
+  - The split lives in `alarmStatusWidgets` in `platform-dashboard-construct.ts`.
+  - No alarm, threshold or notification route changes.
+  - A unit test feeds it 250 alarms and checks that no widget lists more than 100 and that every alarm appears exactly once.
+
+---
+
+## 🚀 Deployment notes
+
+Every 1.28.0 deployment note still applies. If you haven't deployed 1.28.0, deploy this release in its place, following 1.28.0's notes. In particular, run `backend.yml` before `platform.yml`, then re-run the large-document-prepare job.
+
+If you already deployed 1.28.0's backend and its Platform deploy rolled back, as prod did:
+1. **Let `backend.yml` run, or let it skip.** It only rebuilds images whose inputs changed; this release changes infrastructure only.
+2. **Run `platform.yml`.** The env-contract check passes, because the new inference-api image is already live. The update applies 1.28.0's infrastructure and switches the Runtime to V2 where `CDK_AGENTCORE_RUNTIME_PLATFORM_VERSION=V2` is set.
+3. **Re-run "Deploy large-document-prepare Lambda image"** from the Backend Deploy run, now that Platform has created the function.
+4. **Verify as in 1.28.0:**
+   - `platformVersion` is `V2`;
+   - the Runtime's environment is about 1.3 KB;
+   - the prepare Lambda's `ImageUri` is no longer the bootstrap stub;
+   - the dashboard shows the alarms split across several widgets, none listing more than 100.
+
+---
+
 # Release Notes — v1.28.0
 
 **Release Date:** October 15, 2026
