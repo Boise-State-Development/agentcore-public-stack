@@ -422,14 +422,14 @@ import {
               {{ anatomyResource.value().avoidableMissCount }}
             </p>
             <!--
-              #756 — an @-mention re-writes the prefix on purpose and looks exactly
-              like the regression this page exists to find. The count stays whole (the
-              spend was real); the explained part is named underneath so the red number
-              above only means "unexplained".
+              #756 — an @-mention or a model switch re-writes the prefix on purpose and
+              looks exactly like the regression this page exists to find. The count stays
+              whole (the spend was real); the explained part is named underneath so the
+              red number above only means "unexplained".
             -->
-            @if (anatomyResource.value().agentSwitchMissCount > 0) {
+            @if (explainedMissNote(); as note) {
               <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
-                {{ anatomyResource.value().agentSwitchMissCount }} from an agent switch ·
+                {{ note }} ·
                 <span class="font-medium">{{ unexplainedMisses() }} unexplained</span>
               </p>
             }
@@ -941,7 +941,20 @@ export class SessionCostAnatomyPage {
   readonly unexplainedMisses = computed(() => {
     const anatomy = this.anatomyResource.value();
     if (!anatomy) return 0;
-    return Math.max(0, anatomy.avoidableMissCount - anatomy.agentSwitchMissCount);
+    return Math.max(
+      0,
+      anatomy.avoidableMissCount - anatomy.agentSwitchMissCount - (anatomy.modelSwitchMissCount ?? 0),
+    );
+  });
+
+  /** "2 from an agent switch, 1 from a model switch", or null when nothing is explained. */
+  readonly explainedMissNote = computed<string | null>(() => {
+    const anatomy = this.anatomyResource.value();
+    if (!anatomy) return null;
+    const parts: string[] = [];
+    if (anatomy.agentSwitchMissCount > 0) parts.push(`${anatomy.agentSwitchMissCount} from an agent switch`);
+    if ((anatomy.modelSwitchMissCount ?? 0) > 0) parts.push(`${anatomy.modelSwitchMissCount} from a model switch`);
+    return parts.length ? parts.join(', ') : null;
   });
 
   private expandedRows = signal<ReadonlySet<number>>(new Set());

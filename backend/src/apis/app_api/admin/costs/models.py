@@ -266,6 +266,13 @@ class SessionCallRow(BaseModel):
         alias="agentSwitched",
         description="This call ran on a different Agent than the previous one — an explained prefix re-write",
     )
+    # The same for the model: a mid-conversation switch continues the
+    # conversation in place, and each model has its own cache.
+    model_switched: bool = Field(
+        False,
+        alias="modelSwitched",
+        description="This call ran on a different model than the previous one — an explained prefix re-write",
+    )
     prefix_fingerprints: Optional[PrefixFingerprints] = Field(
         None, alias="prefixFingerprints"
     )
@@ -321,6 +328,12 @@ class SessionCostAnatomy(BaseModel):
     # which is the number a prefix-stability regression moves.
     agent_switch_miss_count: int = Field(0, alias="agentSwitchMissCount")
     agent_switch_usd: float = Field(0.0, alias="agentSwitchUsd")
+    # The subset a model switch explains, excluding calls already counted as an
+    # Agent switch (an `@`-mention to an Agent that pins its own model sets both
+    # flags). Disjoint from the agent-switch pair, so unexplained waste is
+    # `wastedUsd - agentSwitchUsd - modelSwitchUsd` with nothing subtracted twice.
+    model_switch_miss_count: int = Field(0, alias="modelSwitchMissCount")
+    model_switch_usd: float = Field(0.0, alias="modelSwitchUsd")
     # cacheRead / (cacheRead + cacheWrite) over the session; None until
     # there has been any cache activity.
     cache_efficiency: Optional[float] = Field(None, alias="cacheEfficiency")
