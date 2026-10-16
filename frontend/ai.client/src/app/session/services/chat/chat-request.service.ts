@@ -12,6 +12,7 @@ import { ConversationBindingService } from '../session/conversation-binding.serv
 import { TurnTimingService } from './turn-timing.service';
 import { UserService } from '../../../auth/user.service';
 import { ModelService } from '../model/model.service';
+import { PromptCacheGuardService } from '../prompt-cache/prompt-cache-guard.service';
 import { ToolService } from '../../../services/tool/tool.service';
 import { SkillService } from '../../../services/skill/skill.service';
 import { FileUploadService } from '../../../services/file-upload';
@@ -65,6 +66,7 @@ export class ChatRequestService implements OnDestroy {
   private turnTiming = inject(TurnTimingService);
   private userService = inject(UserService);
   private modelService = inject(ModelService);
+  private promptCacheGuard = inject(PromptCacheGuardService);
   private toolService = inject(ToolService);
   private skillService = inject(SkillService);
   private fileUploadService = inject(FileUploadService);
@@ -495,6 +497,10 @@ export class ChatRequestService implements OnDestroy {
 
     // If using the system default model, send null for model_id to let backend use its default
     const isDefaultModel = this.modelService.isUsingDefaultModel();
+
+    // What this message writes the prompt cache with, so a later model or
+    // effort pick is weighed against the cache rather than the picker.
+    this.promptCacheGuard.recordSend(session_id, selectedModel.modelId, this.modelService.selectedEffort());
 
     const requestObject: Record<string, unknown> = {
       message,

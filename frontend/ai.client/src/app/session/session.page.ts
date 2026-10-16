@@ -287,12 +287,23 @@ export class ConversationPage implements OnDestroy {
       }
     });
 
-    // Apply model from session preferences when session metadata loads
+    // Apply the conversation's last model once, when it is opened. Not on
+    // every metadata update: a model switch now continues the conversation
+    // in place, and a later refresh (rename, star, the post-turn title read)
+    // can still carry the previous turn's model, which would silently undo
+    // the user's pick. Retried until the model list has loaded, because
+    // `setSelectedModelById` changes nothing for an id it can't find yet.
+    let restoredSessionId: string | undefined;
+    let restored = false;
     effect(() => {
       const session = this.sessionConversation();
-      if (session?.preferences?.lastModel) {
-        this.modelService.setSelectedModelById(session.preferences.lastModel);
+      if (session?.sessionId !== restoredSessionId) {
+        restoredSessionId = session?.sessionId;
+        restored = false;
       }
+      const lastModel = session?.preferences?.lastModel;
+      if (restored || !lastModel) return;
+      restored = this.modelService.setSelectedModelById(lastModel);
     });
 
     // Hydrate active system prompt from session preferences. We treat the
