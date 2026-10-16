@@ -14,9 +14,17 @@ export class LocalSettingsService {
   private readonly SHOW_DEBUG_OUTPUT_KEY = 'show-debug-output';
   private readonly AGENTS_VIEW_MODE_KEY = 'agents-view-mode';
   private readonly ARTIFACTS_VIEW_MODE_KEY = 'artifacts-view-mode';
+  private readonly CONFIRM_CACHE_RESET_KEY = 'confirm-cache-reset';
 
   readonly showTokenCount = signal(this.loadBoolean(this.SHOW_TOKEN_COUNT_KEY, false));
   readonly showDebugOutput = signal(this.loadBoolean(this.SHOW_DEBUG_OUTPUT_KEY, false));
+
+  /**
+   * Whether to ask before a change that makes an open conversation's next
+   * message re-process the whole conversation (a model or effort switch).
+   * Turned off by the dialog's "Don't ask again".
+   */
+  readonly confirmCacheReset = signal(this.loadBoolean(this.CONFIRM_CACHE_RESET_KEY, true));
 
   /**
    * Grid is the default: it is the one that shows an agent's artwork at a size you
@@ -56,6 +64,11 @@ export class LocalSettingsService {
   setShowDebugOutput(value: boolean): void {
     this.showDebugOutput.set(value);
     localStorage.setItem(this.SHOW_DEBUG_OUTPUT_KEY, JSON.stringify(value));
+  }
+
+  setConfirmCacheReset(value: boolean): void {
+    this.confirmCacheReset.set(value);
+    localStorage.setItem(this.CONFIRM_CACHE_RESET_KEY, JSON.stringify(value));
   }
 
   setAgentsViewMode(value: ViewMode): void {

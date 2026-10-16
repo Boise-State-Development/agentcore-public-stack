@@ -57,6 +57,13 @@ export class ChatStateService {
      */
     private readonly unreadSessionIds = signal<ReadonlySet<string>>(new Set());
 
+    /**
+     * When each session's most recent turn finished in this tab (epoch ms).
+     * The model's last call ends with the turn, so this is when the prompt
+     * cache was last refreshed. Read at decision time only, so a plain map.
+     */
+    private readonly turnEndedAt = new Map<string, number>();
+
     readonly isChatLoading = computed(() => this.viewedState()?.loading() ?? false);
     readonly currentStopReason = computed(() => this.viewedState()?.stopReason() ?? null);
     readonly lastTurnContinuable = computed(() => this.viewedState()?.lastTurnContinuable() ?? false);
@@ -108,9 +115,17 @@ export class ChatStateService {
         const wasLoading = state.loading();
         state.loading.set(loading);
 
-        if (wasLoading && !loading && sessionId !== this.viewedSessionIdSignal()) {
-            this.markSessionUnread(sessionId);
+        if (wasLoading && !loading) {
+            this.turnEndedAt.set(sessionId, Date.now());
+            if (sessionId !== this.viewedSessionIdSignal()) {
+                this.markSessionUnread(sessionId);
+            }
         }
+    }
+
+    /** When a session's last turn finished in this tab (epoch ms), or null. */
+    lastTurnEndedAt(sessionId: string): number | null {
+        return this.turnEndedAt.get(sessionId) ?? null;
     }
 
     /**

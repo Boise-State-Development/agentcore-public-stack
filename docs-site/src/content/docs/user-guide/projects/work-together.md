@@ -20,13 +20,15 @@ project it belongs to.
 **Your conversations are private.** Nobody else in the project, including the
 owner, can see them until you share one.
 
-:::note[Switching models starts a new conversation]
+:::note[Switching models mid-conversation]
 Picking a different model from the model menu inside a project conversation
-starts a **new conversation in the same project**, on the project's assistant.
-The conversation so far stays where it was and doesn't come along. The menu
-marks this with a **New conversation** label and says so before you choose. If
-the project pins a model in its **Model** setting, the menu is locked to it;
-change it there to use a different model for the whole team.
+keeps you in the same conversation, on the project's assistant, and your next
+message runs on the new model. If you have been chatting in the last few
+minutes, the menu first asks **Switch model?**: the new model has to process
+the whole conversation again, which uses more of your limit. Changing
+**Effort** asks the same way. If the project pins a model in its **Model**
+setting, the menu is locked to it; change it there to use a different model
+for the whole team.
 :::
 
 ### Your role and preferences
