@@ -220,6 +220,13 @@ async def get_session_cost_anatomy(
     deducted from them. Subtract to get unexplained waste — that difference is
     what a prefix-stability regression moves.
 
+    ⚠️ **Check `modelSwitched` too.** A mid-conversation model switch keeps the
+    conversation, and each model has its own cache, so the first call on the new
+    model re-writes the whole prefix with *unchanged* fingerprints and classifies
+    `miss_avoidable`. `modelSwitchMissCount` / `modelSwitchUsd` are the subset it
+    explains, excluding calls already counted as an Agent switch, so subtract
+    both pairs.
+
     Args:
         session_id: Session identifier (any user's session — admin scope)
         admin_user: Authenticated admin user (injected)
