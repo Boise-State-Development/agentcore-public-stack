@@ -23,17 +23,36 @@ export function previewKind(contentType: string): PreviewKind {
 
 /** Markdown inline syntax read as the words it marks. */
 export function plainInline(text: string): string {
-  return text
+  const inline = text
     .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
     .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
     .replace(/(\*\*|__)(.+?)\1/g, '$2')
     .replace(/(^|[^\w*])[*_](?!\s)(.+?)(?<!\s)[*_](?![\w*])/g, '$1$2')
-    .replace(/`([^`]*)`/g, '$1')
-    .replace(/<[^>]+>/g, '')
-    // A tag the pattern above can't close (`<script` with no `>`, or one
-    // rebuilt from nested pieces) must not survive as a tag start.
-    .replace(/</g, '')
-    .trim();
+    .replace(/`([^`]*)`/g, '$1');
+  return stripTags(inline).trim();
+}
+
+/**
+ * Drops every `<…>` span and every `<` that never closes, keeping the words
+ * around them. A scan rather than a regex replace, so no tag start can be
+ * rebuilt from the pieces a single pass leaves behind.
+ */
+function stripTags(text: string): string {
+  let out = '';
+  let pending: string | null = null;
+  for (const ch of text) {
+    if (ch === '<') {
+      if (pending !== null) out += pending;
+      pending = '';
+    } else if (pending === null) {
+      out += ch;
+    } else if (ch === '>') {
+      pending = null;
+    } else {
+      pending += ch;
+    }
+  }
+  return pending === null ? out : out + pending;
 }
 
 /** Headings, list items and paragraphs: the shapes a few hundred characters of Markdown make. */

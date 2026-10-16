@@ -223,7 +223,11 @@ class ShareService:
                 note=request.note,
             )
         except ShareStorageError as e:
-            logger.error(f"Failed to store snapshot body for session {self._sanitize_id(session_id)}: {scrub_log(e)}")
+            logger.error(
+                "Failed to store snapshot body for session %s: %s",
+                scrub_log(self._sanitize_id(session_id)),
+                scrub_log(e),
+            )
             raise ShareStorageUnavailableError() from e
         share_id = item["share_id"]
         if project_id:
