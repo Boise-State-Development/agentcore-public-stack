@@ -27,7 +27,7 @@ import { SidenavService } from '../../services/sidenav/sidenav.service';
 import { TooltipDirective } from '../tooltip/tooltip.directive';
 import { BrandingService } from '../../../branding/branding.service';
 import { SearchDialogService } from '../search/search-dialog.service';
-import { searchShortcutAria, searchShortcutLabel } from '../search/search-shortcut';
+import { shortcutAria, withShortcut } from '../shortcuts/shortcuts';
 import { SidebarLayoutService } from './sidebar-layout.service';
 import { EditSidebarDialogComponent } from './components/edit-sidebar-dialog.component';
 
@@ -82,9 +82,12 @@ export class Sidenav {
     { originX: 'start', originY: 'top', overlayX: 'start', overlayY: 'bottom', offsetY: -4 },
   ];
 
-  /** The search shortcut as this platform spells it, for the button's tooltip. */
-  protected readonly searchShortcutLabel = searchShortcutLabel();
-  protected readonly searchShortcutAria = searchShortcutAria();
+  /** Tooltips and `aria-keyshortcuts` for the buttons that have a shortcut. */
+  protected readonly searchTooltip = withShortcut('Search', 'search');
+  protected readonly searchShortcutAria = shortcutAria('search');
+  protected readonly collapseTooltip = withShortcut('Close sidebar', 'toggleSidebar');
+  protected readonly sidebarShortcutAria = shortcutAria('toggleSidebar');
+  protected readonly newSessionShortcutAria = shortcutAria('newConversation');
 
   /** Whether the branding logo image failed to load (Requirement 2.8). */
   protected logoLoadFailed = signal(false);

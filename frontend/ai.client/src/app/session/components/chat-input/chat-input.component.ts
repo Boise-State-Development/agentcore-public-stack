@@ -73,6 +73,7 @@ import { ComposerAddMenuComponent } from './composer-add-menu.component';
 import { ComposerScopePickerComponent, folderKey } from './composer-scope-picker.component';
 import { FEATURES } from '../../../services/features';
 import { ToastService } from '../../../services/toast/toast.service';
+import { ShortcutTargetsService } from '../../../components/shortcuts/shortcut-targets.service';
 import { ToolService } from '../../../services/tool/tool.service';
 import { ModelService, isTextOnlyModel } from '../../services/model/model.service';
 import {
@@ -364,6 +365,7 @@ export class ChatInputComponent {
   private readonly handoff = inject(ComposerHandoffService);
   private readonly injector = inject(Injector);
   private readonly destroyRef = inject(DestroyRef);
+  private readonly shortcutTargets = inject(ShortcutTargetsService);
 
   // Input: session ID for file uploads
   readonly sessionId = input<string | null>(null);
@@ -1279,6 +1281,11 @@ export class ChatInputComponent {
         if (from && shell) this.animateShellFrom(shell, from);
       }
     });
+
+    // Shift+Esc, from anywhere on the page, comes back to this field.
+    this.destroyRef.onDestroy(
+      this.shortcutTargets.registerComposer(() => this.messageInput()?.nativeElement),
+    );
 
     if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
       const pointer = window.matchMedia('(pointer: coarse)');
@@ -2591,7 +2598,9 @@ export class ChatInputComponent {
 
     // Escape stops a streaming response — only down here, after every menu has
     // had its chance at the key, so closing a menu never also kills the run.
-    if (event.key === 'Escape' && this.showStop()) {
+    // Not Shift+Esc: that is the "focus the composer" shortcut, and pressing it
+    // while already here must not cancel the reply.
+    if (event.key === 'Escape' && !event.shiftKey && this.showStop()) {
       event.preventDefault();
       this.cancelChatRequest();
       return;

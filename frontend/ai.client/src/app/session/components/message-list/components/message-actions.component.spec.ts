@@ -1,10 +1,11 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { provideMarkdown, MarkdownService } from 'ngx-markdown';
 import { MessageActionsComponent } from './message-actions.component';
 import { Message, MessageFeedback } from '../../../services/models/message.model';
 import { MessageFeedbackService } from '../../../services/session/message-feedback.service';
 import { signal } from '@angular/core';
+import { ShortcutTargetsService } from '../../../../components/shortcuts/shortcut-targets.service';
 
 function makeMessage(text: string): Message {
   return {
@@ -254,5 +255,71 @@ describe('MessageActionsComponent — thumbs feedback', () => {
     fixture.detectChanges();
     expect(fixture.nativeElement.querySelector('[role="group"]')).toBeNull();
     expect(fixture.nativeElement.querySelector('button[aria-label="Retry with that in mind"]')).toBeNull();
+  });
+});
+
+describe('MessageActionsComponent — the copy shortcut', () => {
+  let fixture: ComponentFixture<MessageActionsComponent>;
+  let targets: ShortcutTargetsService;
+
+  function copyButton(): HTMLButtonElement {
+    return fixture.nativeElement.querySelector('button[aria-label="Copy message"]');
+  }
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [MessageActionsComponent],
+      providers: [provideMarkdown()],
+    }).compileComponents();
+
+    const markdownService = TestBed.inject(MarkdownService);
+    markdownService.parse = () => '';
+    targets = TestBed.inject(ShortcutTargetsService);
+
+    fixture = TestBed.createComponent(MessageActionsComponent);
+    fixture.componentRef.setInput('messages', [makeMessage('the answer')]);
+  });
+
+  it('is not registered on an older response', () => {
+    fixture.detectChanges();
+    expect(targets.canCopyLatestResponse()).toBe(false);
+    expect(copyButton().getAttribute('aria-keyshortcuts')).toBeNull();
+  });
+
+  it('registers the newest response and advertises the shortcut on its button', () => {
+    fixture.componentRef.setInput('latest', true);
+    fixture.detectChanges();
+    expect(targets.canCopyLatestResponse()).toBe(true);
+    expect(copyButton().getAttribute('aria-keyshortcuts')).toMatch(/^(Meta|Control)\+Shift\+C$/);
+  });
+
+  it('hands the shortcut on when it stops being the newest, and on destroy', () => {
+    fixture.componentRef.setInput('latest', true);
+    fixture.detectChanges();
+    fixture.componentRef.setInput('latest', false);
+    fixture.detectChanges();
+    expect(targets.canCopyLatestResponse()).toBe(false);
+
+    fixture.componentRef.setInput('latest', true);
+    fixture.detectChanges();
+    fixture.destroy();
+    expect(targets.canCopyLatestResponse()).toBe(false);
+  });
+
+  it('copies through the same path as the button', async () => {
+    const write = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText: write }, configurable: true });
+    fixture.componentRef.setInput('latest', true);
+    fixture.detectChanges();
+
+    expect(await targets.copyLatestResponse()).toBe(true);
+    expect(write).toHaveBeenCalledWith('the answer');
+  });
+
+  it('has nothing to copy while the response has no text yet', () => {
+    fixture.componentRef.setInput('messages', [{ id: 'msg-1', role: 'assistant', content: [] }]);
+    fixture.componentRef.setInput('latest', true);
+    fixture.detectChanges();
+    expect(targets.canCopyLatestResponse()).toBe(false);
   });
 });

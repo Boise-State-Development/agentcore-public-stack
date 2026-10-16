@@ -872,6 +872,18 @@ export class MessageListComponent {
     return groups;
   });
 
+  /** The newest response's segment key: the one Cmd/Ctrl+Shift+C copies. */
+  protected readonly latestResponseKey = computed<string | null>(() => {
+    const turns = this.turns();
+    for (let t = turns.length - 1; t >= 0; t--) {
+      const segments = turns[t].segments;
+      for (let i = segments.length - 1; i >= 0; i--) {
+        if (segments[i].kind === 'assistant') return segments[i].key;
+      }
+    }
+    return null;
+  });
+
   /**
    * Min-height for the LAST turn group, replacing the old fixed
    * viewport-sized bottom spacer. Reserving the space around the turn
