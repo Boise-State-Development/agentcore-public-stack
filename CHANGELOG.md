@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [1.28.1] - 2026-10-16
+
+Fixes the Platform Stack deploy that 1.28.0's feature launch rolled back.
+
+### 🐛 Fixed
+
+- **The platform dashboard no longer fails the deploy past 100 alarms.** CloudWatch rejects an alarm-status widget that lists more than 100 alarms, and the rejection rolls back the whole stack update. With every 1.28.0 feature on, prod's alarm count crossed 100, and the Platform Stack deploy rolled back on `PlatformDashboard` (`/widgets/7/properties/alarms: Should NOT have more than 100 items`). The "All platform alarms" row is now one full-width widget per 100 alarms (`alarmStatusWidgets`, `MAX_ALARMS_PER_STATUS_WIDGET`), so it grows with the count. No alarm, threshold or route changes.
+
 ## [1.28.0] - 2026-10-15
 
 **Shared Projects launches**, with large document attachments (up to 50 MB, read on demand, searchable through the attachments KB) and Google Drive folder attachments with folder sync. Every feature this release carries turns on in the production SPA build, and for this deployment in its `production` GitHub environment. Projects arrives complete: roles, shared files from uploads, the web or Drive, governed project memory, schedules that deliver runs and publish Outputs, pinned skill versions, a page per setting, and the launch fixes for memory, sharing and refusals. Beside it, more changes reach every deployment:
