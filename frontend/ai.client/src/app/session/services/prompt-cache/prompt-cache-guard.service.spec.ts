@@ -10,7 +10,9 @@ import { ChatStateService } from '../chat/chat-state.service';
 import { SessionService } from '../session/session.service';
 import { MessageMapService } from '../session/message-map.service';
 import {
-  CACHE_WARM_MS,
+  DEFAULT_CACHE_TTL_MS,
+  RESPONSES_CACHE_TTL_MS,
+  cacheTtlMsFor,
   CacheResetChange,
   PromptCacheGuardService,
   estimateCacheResetUsd,
@@ -51,6 +53,15 @@ const SONNET = model({
   cacheReadPricePerMillionTokens: 0.33,
 });
 const SWITCH: CacheResetChange = { kind: 'model', from: HAIKU, to: SONNET };
+const LUNA = model({
+  modelId: 'luna',
+  modelName: 'GPT-6 Luna',
+  provider: 'bedrock-responses',
+  inputPricePerMillionTokens: 0.5,
+  cacheWritePricePerMillionTokens: null,
+  cacheReadPricePerMillionTokens: 0.05,
+});
+const FROM_LUNA: CacheResetChange = { kind: 'model', from: LUNA, to: SONNET };
 
 function setup(options: {
   sessionId?: string;
@@ -125,6 +136,22 @@ describe('estimateCacheResetUsd', () => {
   });
 });
 
+describe('cacheTtlMsFor', () => {
+  it('gives the Responses API its 30-minute cache', () => {
+    expect(cacheTtlMsFor({ provider: 'bedrock-responses' })).toBe(RESPONSES_CACHE_TTL_MS);
+    expect(RESPONSES_CACHE_TTL_MS).toBe(30 * 60 * 1000);
+  });
+
+  it('gives Bedrock Converse its 5-minute cache', () => {
+    expect(cacheTtlMsFor({ provider: 'bedrock' })).toBe(DEFAULT_CACHE_TTL_MS);
+    expect(DEFAULT_CACHE_TTL_MS).toBe(5 * 60 * 1000);
+  });
+
+  it('does not guess for mantle, whose retention is undocumented (as the backend)', () => {
+    expect(cacheTtlMsFor({ provider: 'mantle' })).toBe(DEFAULT_CACHE_TTL_MS);
+  });
+});
+
 describe('PromptCacheGuardService', () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -178,14 +205,36 @@ describe('PromptCacheGuardService', () => {
   });
 
   it('does not ask once the cache has expired: the next message re-writes it anyway', async () => {
-    const stale = new Date(NOW - CACHE_WARM_MS - 1000).toISOString();
+    const stale = new Date(NOW - DEFAULT_CACHE_TTL_MS - 1000).toISOString();
     const { guard, open } = setup({ messages: [{ createdAt: stale }] });
     expect(await guard.confirm(SWITCH)).toBe(true);
     expect(open).not.toHaveBeenCalled();
   });
 
+  describe('the window follows the provider of the model that wrote the cache', () => {
+    const minutesAgo = (m: number) => new Date(NOW - m * 60_000).toISOString();
+
+    it('still asks 20 minutes after a GPT reply: the Responses cache lives 30 minutes', async () => {
+      const { guard, open } = setup({ messages: [{ createdAt: minutesAgo(20) }], dialogResult: { dontAskAgain: false } });
+      await guard.confirm(FROM_LUNA);
+      expect(open).toHaveBeenCalled();
+    });
+
+    it('stops asking once the Responses cache has expired', async () => {
+      const { guard, open } = setup({ messages: [{ createdAt: minutesAgo(31) }] });
+      expect(await guard.confirm(FROM_LUNA)).toBe(true);
+      expect(open).not.toHaveBeenCalled();
+    });
+
+    it('does not stretch a Claude conversation to 30 minutes', async () => {
+      const { guard, open } = setup({ messages: [{ createdAt: minutesAgo(20) }] });
+      expect(await guard.confirm(SWITCH)).toBe(true);
+      expect(open).not.toHaveBeenCalled();
+    });
+  });
+
   it('counts a long turn as warm from when it ended, not when it started', async () => {
-    const started = new Date(NOW - CACHE_WARM_MS - 60_000).toISOString();
+    const started = new Date(NOW - DEFAULT_CACHE_TTL_MS - 60_000).toISOString();
     const { guard, open } = setup({
       messages: [{ createdAt: started }],
       turnEndedAt: NOW - 30_000,
@@ -196,7 +245,7 @@ describe('PromptCacheGuardService', () => {
   });
 
   it('asks while a turn is streaming', async () => {
-    const stale = new Date(NOW - CACHE_WARM_MS - 1000).toISOString();
+    const stale = new Date(NOW - DEFAULT_CACHE_TTL_MS - 1000).toISOString();
     const { guard, open } = setup({ messages: [{ createdAt: stale }], loading: true, dialogResult: { dontAskAgain: false } });
     await guard.confirm(SWITCH);
     expect(open).toHaveBeenCalled();
