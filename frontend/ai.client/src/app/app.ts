@@ -15,15 +15,10 @@ import { SessionService as SessionListService } from './session/services/session
 import { DockedPaneService } from './session/services/docked-pane/docked-pane.service';
 import { isAdminChromeRoute, isMinimalChromeRoute } from './shared/utils/route-chrome';
 import { BrandingService } from '../branding/branding.service';
-import { Dialog } from '@angular/cdk/dialog';
 import { FEATURES } from './services/features';
 import { SearchDialogService } from './components/search/search-dialog.service';
-import {
-  isSearchShortcut,
-  keepsSearchShortcut,
-  searchShortcutAria,
-  searchShortcutLabel,
-} from './components/search/search-shortcut';
+import { KeyboardShortcutsService } from './components/shortcuts/keyboard-shortcuts.service';
+import { shortcutAria, withShortcut } from './components/shortcuts/shortcuts';
 
 @Component({
   selector: 'app-root',
@@ -51,11 +46,15 @@ export class App {
   private dockedPane = inject(DockedPaneService);
   private titleService = inject(Title);
   private branding = inject(BrandingService);
-  private dialog = inject(Dialog);
   private searchDialog = inject(SearchDialogService);
+  private shortcuts = inject(KeyboardShortcutsService);
   protected readonly conversationSearchOn = inject(FEATURES).conversationSearch;
-  protected readonly searchShortcutLabel = searchShortcutLabel();
-  protected readonly searchShortcutAria = searchShortcutAria();
+  protected readonly searchTooltip = withShortcut('Search', 'search');
+  protected readonly searchShortcutAria = shortcutAria('search');
+  protected readonly newChatTooltip = withShortcut('New chat', 'newConversation');
+  protected readonly newChatShortcutAria = shortcutAria('newConversation');
+  protected readonly expandSidebarTooltip = withShortcut('Expand sidebar', 'toggleSidebar');
+  protected readonly sidebarShortcutAria = shortcutAria('toggleSidebar');
 
   /** Re-read on every completed navigation; the value itself is unused,
    *  it exists so `minimalChrome` recomputes when the route changes. */
@@ -149,21 +148,12 @@ export class App {
   }
 
   /**
-   * Cmd/Ctrl+K opens conversation search: the app's one global shortcut
-   * (conversation-search §6). A second press while it is up refocuses it. It
-   * stays out of the way while another dialog is open and inside a rich-text
-   * editor (`keepsSearchShortcut`).
+   * Every document keydown goes to the shortcut table (`components/shortcuts`):
+   * Cmd/Ctrl+K search, Cmd/Ctrl+Shift+O new conversation, Shift+Esc focus the
+   * composer, Cmd/Ctrl+Shift+S sidebar, Cmd/Ctrl+Shift+C copy the last
+   * response, Cmd/Ctrl+/ this list.
    */
   onDocumentKeydown(event: KeyboardEvent): void {
-    if (!this.conversationSearchOn || !isSearchShortcut(event)) return;
-    if (this.searchDialog.isOpen()) {
-      event.preventDefault();
-      void this.searchDialog.open();
-      return;
-    }
-    if (this.dialog.openDialogs.length > 0) return;
-    if (keepsSearchShortcut(event.target)) return;
-    event.preventDefault();
-    void this.searchDialog.open();
+    this.shortcuts.handle(event, { chromeHidden: this.chromeHidden() });
   }
 }

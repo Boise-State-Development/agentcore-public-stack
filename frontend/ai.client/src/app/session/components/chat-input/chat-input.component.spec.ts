@@ -25,6 +25,7 @@ import { NEW_CONVERSATION_DRAFT_KEY } from '../../services/session/composer-draf
 import { ChatInputComponent, spliceDictation } from './chat-input.component';
 import { ComposerHandoffService } from './composer-handoff.service';
 import { SessionPrewarmService } from '../../services/session/session-prewarm.service';
+import { ShortcutTargetsService } from '../../../components/shortcuts/shortcut-targets.service';
 
 const AGENTS: MentionableAgent[] = [
   { agentId: 'a1', name: 'Alpha', group: 'own' },
@@ -644,6 +645,25 @@ describe('ChatInputComponent — queueing a follow-up mid-stream', () => {
     setStreaming(true);
     textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true, bubbles: true }));
     expect(cancelled).toBe(1);
+  });
+
+  it('does not stop on Shift+Esc, the focus-the-composer shortcut', () => {
+    setStreaming(true);
+    const event = new KeyboardEvent('keydown', { key: 'Escape', shiftKey: true, cancelable: true, bubbles: true });
+    textarea.dispatchEvent(event);
+    expect(cancelled).toBe(0);
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it('is what Shift+Esc focuses', () => {
+    document.body.appendChild(fixture.nativeElement);
+    try {
+      textarea.blur();
+      expect(TestBed.inject(ShortcutTargetsService).focusComposer()).toBe(true);
+      expect(document.activeElement).toBe(textarea);
+    } finally {
+      fixture.nativeElement.remove();
+    }
   });
 
   it('ignores Escape when nothing is streaming', () => {

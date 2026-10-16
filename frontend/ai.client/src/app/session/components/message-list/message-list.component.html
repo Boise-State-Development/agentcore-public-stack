@@ -46,6 +46,7 @@
             <div class="mt-1 flex justify-start">
                 <app-message-actions
                   [messages]="segment.messages"
+                  [latest]="segment.key === latestResponseKey()"
                   [canContinue]="canContinueFor(segment.last.id)"
                   [interruptedReason]="interruptedReasonFor(segment.last.id)"
                   (continueRequested)="continueRequested.emit()"></app-message-actions>
