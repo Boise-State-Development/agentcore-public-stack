@@ -211,7 +211,7 @@ import {
                   What it reaches
                 </h2>
                 <p class="text-xs/5 text-gray-500 dark:text-gray-400">
-                  Tools, skills and memory spaces bound by this version.
+                  Tools and skills bound by this version.
                 </p>
                 @if (s.capabilities.length) {
                   <ul class="mt-2 flex flex-wrap gap-1.5">
@@ -410,7 +410,6 @@ export class SubmissionReviewPage implements OnInit {
   private readonly kindLabels: Record<string, string> = {
     tool: 'tool',
     skill: 'skill',
-    memory_space: 'memory space',
     knowledge_base: 'knowledge base',
   };
 

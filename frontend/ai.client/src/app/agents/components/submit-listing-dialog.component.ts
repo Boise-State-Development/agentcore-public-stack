@@ -37,9 +37,9 @@ export type SubmitListingDialogResult = AgentListingBlock | undefined;
  * * **Skill exposure (D7.1)** — publishing an Agent effectively publishes the contents
  *   of every skill its author wrote and bound, because Skills v2 resolves a `skill`
  *   binding on `skill.owner_id == agent.owner_id`. The names are listed, not counted.
- * * **Memory spaces (D7.2)** — a `memory_space` binding blocks submission outright, so
- *   the form is hidden and the backend's message (which names the space) explains why.
- *   The author learns this before filling in a category, not after clicking.
+ * * **Blocked agents** — when the backend reports a block (a project's harness cannot
+ *   be published), the form is hidden and its message explains why. The author learns
+ *   this before filling in a category, not after clicking.
  * * **Going public** — the marketplace is public-only, and every Agent starts PRIVATE,
  *   so most first submissions need visibility widened. `makePublic` rides the submit
  *   request and the backend widens in the same write, so the author never leaves this

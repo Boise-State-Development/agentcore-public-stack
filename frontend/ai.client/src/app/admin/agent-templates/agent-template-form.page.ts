@@ -25,7 +25,7 @@ const MAX_INSTRUCTIONS = 100_000;
 const MAX_PITCH = 200;
 
 /** Binding kinds a template can carry (free string on the wire; these are the known set). */
-const BINDING_KINDS = ['tool', 'knowledge_base', 'skill', 'memory_space'] as const;
+const BINDING_KINDS = ['tool', 'knowledge_base', 'skill'] as const;
 
 type BindingGroup = FormGroup<{
   kind: FormControl<string>;

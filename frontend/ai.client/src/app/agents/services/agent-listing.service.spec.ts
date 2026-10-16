@@ -133,7 +133,7 @@ describe('AgentListingService', () => {
     });
 
     it('leaves the card alone when the submission is refused', async () => {
-      // A memory_space binding added since the preflight, for instance (D7.2).
+      // A block added since the preflight, for instance.
       mockApi.submitListing.mockReturnValue(throwError(() => ({ status: 400 })));
 
       await expect(service.submit('ast-001', { category: 'Teaching' })).rejects.toBeTruthy();

@@ -120,7 +120,7 @@ describe('SubmitListingDialogComponent — going public', () => {
   describe('when something really does block submission', () => {
     it('stays a dead end — the going-public notice must not wave it through', async () => {
       const component = build({
-        blockReason: 'This agent cannot be published while it is bound to a memory space.',
+        blockReason: 'This agent cannot be published while it belongs to a project.',
         requiresPublic: true,
         reachability: 'owner_only',
       });

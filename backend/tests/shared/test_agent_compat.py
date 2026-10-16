@@ -48,7 +48,7 @@ class TestCompatMapping:
         assert to_agent_view(a)["modelConfig"] is None
 
     def test_stored_bindings_returned_verbatim(self):
-        stored = [AgentBinding(kind="memory_space", ref="spc_1", config={"access": "readwrite"})]
+        stored = [AgentBinding(kind="skill", ref="sk_1", config={"pinned": True})]
         a = _legacy_assistant(bindings=stored)
         assert effective_bindings(a) == stored
 

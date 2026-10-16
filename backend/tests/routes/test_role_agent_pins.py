@@ -48,8 +48,8 @@ def _no_live_catalog_reads():
     mock the pin services only, so that call used to leave the box; it is
     fail-open, so the failure was swallowed and the assertions passed anyway.
     The same applies to ``agent_detail._tool_labels`` (-> ``ToolCatalogService.get_tool``)
-    and ``_memory_labels`` (-> ``MemorySpaceService.resolve_permission``). All three
-    are fail-open, so the failures were swallowed and the assertions passed anyway. See the off-box socket guard
+    (-> ``ToolCatalogService.get_tool``). Both are fail-open, so the failures were
+    swallowed and the assertions passed anyway. See the off-box socket guard
     in ``tests/conftest.py``.
     """
     role_service = MagicMock()
@@ -63,10 +63,6 @@ def _no_live_catalog_reads():
         # accessor comes too late.
         "apis.app_api.tools.service.ToolCatalogService.get_tool",
         new=AsyncMock(return_value=None),
-    ), patch(
-        # Same shape: ``_memory_labels`` gets a constructed service.
-        "apis.shared.memory.service.MemorySpaceService.resolve_permission",
-        new=MagicMock(return_value=(None, None)),
     ):
         yield
 
@@ -453,19 +449,6 @@ def test_a_role_that_grants_everything_reads_as_ready(client):
     assert row["state"] == "ready"
     assert row["missing"] == []
 
-
-def test_a_memory_space_binding_is_a_note_not_a_verdict(client):
-    """A role does not grant memory spaces, so 'ready' must not claim to have checked one."""
-    agent = _make_assistant(
-        assistantId="ast-001",
-        bindings=[{"kind": "memory_space", "ref": "space-1", "config": {}}],
-    ).model_dump(by_alias=True)
-
-    response = _admin_get(client, _role("faculty"), [_seed("ast-001")], {"ast-001": agent})
-
-    row = response.json()["pins"][0]
-    assert row["notes"]
-    assert all(item["kind"] != "memory_space" for item in row["missing"])
 
 
 def test_a_private_agent_is_flagged_as_unreachable(client):

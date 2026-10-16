@@ -343,7 +343,7 @@ export interface RoleAgentPinRow {
   /** Two states, not three — see `RunnabilityState` in the agents feature (#747). */
   state: 'ready' | 'blocked';
   missing: MissingCapability[];
-  /** What the role-level check could not decide — a memory space resolves per person. */
+  /** What the role-level check could not decide. */
   notes: string[];
 }
 
