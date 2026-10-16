@@ -18,6 +18,25 @@ from apis.shared.observability.build_stages import mark_stage
 logger = logging.getLogger(__name__)
 
 
+def unconnected_tools_note(gated: List[Any]) -> str:
+    """The system-prompt note for servers left out for missing consent.
+
+    ``gated`` arrives sorted (``load_external_tools``), and names are
+    de-duplicated in order, so one set of servers always renders the same
+    bytes.
+    """
+    names = list(dict.fromkeys(g.display_name for g in gated))
+    return (
+        "## Tools waiting on a connection\n"
+        "These tools are set up for this conversation but are not available "
+        "because the user has not connected the account they need: "
+        f"{', '.join(names)}. They are not in your tool list. Do not call, "
+        "guess or invent tools for them. If the request needs one, say so and "
+        "ask the user to connect the account with the Connect button in this "
+        "conversation, or under Customize → Connectors, and then ask again."
+    )
+
+
 class ChatAgent(BaseAgent):
     """
     Text-based chat agent using Strands Agent.
@@ -140,14 +159,27 @@ class ChatAgent(BaseAgent):
 
         Cost: ~70 tokens, constant per configuration, inside the cacheable
         prefix — it is written once per session, never re-written per turn.
+
+        Also adds a note naming any enabled server this build left out because
+        the user has not connected its provider (``consent_gated_tools``).
+        Without it the model sees no trace of a tool the user asked for and
+        invents one (prod, 2026-10-16: ``search_issues`` → "Unknown tool").
+        The note changes only when the set of unconnected servers does, and
+        that set changing means ``toolConfig`` changed too, which already
+        re-writes the cached prefix; so it adds no cache writes of its own.
         """
         from agents.builtin_tools.ask_user_question import SYSTEM_PROMPT_GUIDANCE
 
+        prompt = self.system_prompt
         for tool in tools:
             spec = getattr(tool, "tool_spec", None)
             if isinstance(spec, dict) and spec.get("name") == "ask_user_question":
-                return f"{self.system_prompt}\n\n{SYSTEM_PROMPT_GUIDANCE}"
-        return self.system_prompt
+                prompt = f"{prompt}\n\n{SYSTEM_PROMPT_GUIDANCE}"
+                break
+        gated = getattr(self, "consent_gated_tools", None)
+        if gated:
+            prompt = f"{prompt}\n\n{unconnected_tools_note(gated)}"
+        return prompt
 
     async def stream_async(
         self,
