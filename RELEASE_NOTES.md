@@ -71,6 +71,7 @@ Until now the model menu's choices read **New chat** or **New conversation**, be
   - the re-write adds at least $0.01 (`contextTokens × (new write rate − current read rate)`, from catalog prices).
 
   The dialog gives the conversation's size and the estimate, for example "about 40K tokens … roughly $0.16 more".
+- **Switching back is free, so it doesn't ask (#1633).** Bedrock keeps a separate cache entry for each model and effort. Going back to a model used in the last few minutes (30 for Responses-API models such as GPT-6), at the same effort, hits that model's still-warm entry, so no dialog appears. The guard keeps one entry per (model, effort) that the conversation wrote, each timed from its last call, and reads no new data to do it.
 - **Effort asks too.** The effort level is part of what the cache is keyed on, so changing it re-writes the prefix exactly like a model switch. That was measured on Claude and GPT.
 - **Stacked changes are weighed honestly.** The comparison is against what the last message was sent with, not what the picker shows. Returning to the cached model goes through without asking.
 - **Don't ask again** turns the dialog off for that browser (`confirm-cache-reset` in `localStorage`).
