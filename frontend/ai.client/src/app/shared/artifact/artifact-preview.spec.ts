@@ -19,6 +19,12 @@ describe('artifact preview reading', () => {
     expect(plainInline('snake_case_name stays')).toBe('snake_case_name stays');
   });
 
+  it('leaves no tag start behind, closed or not', () => {
+    expect(plainInline('a <script src=x')).toBe('a script src=x');
+    expect(plainInline('x <<b>script>alert(1)')).not.toContain('<');
+    expect(plainInline('<em>kept</em> words')).toBe('kept words');
+  });
+
   it('splits Markdown into headings, items and paragraphs', () => {
     const source = [
       '# Week 7 digest',

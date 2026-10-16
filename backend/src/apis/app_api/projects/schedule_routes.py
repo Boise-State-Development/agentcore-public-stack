@@ -48,6 +48,7 @@ from apis.shared.scheduled_prompts.service import (
     set_schedule_state,
     update_scheduled_prompt,
 )
+from apis.shared.security.log_sanitize import scrub_log
 
 from .routes import _svc, _translate, require_projects_user
 
@@ -292,7 +293,12 @@ async def create_schedule(
         await asyncio.to_thread(_svc().schedules.add_pointer, schedule)
     except Exception:
         # Unlisted, it would still run in the project with nobody able to see it.
-        logger.error("Could not list schedule %s in project %s; removing it", schedule.schedule_id, project_id, exc_info=True)
+        logger.error(
+            "Could not list schedule %s in project %s; removing it",
+            schedule.schedule_id,
+            scrub_log(project_id),
+            exc_info=True,
+        )
         await asyncio.to_thread(_svc().schedules.delete, schedule)
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "The schedule could not be saved. Try again.")
     _record(AuditAction.PROJECT_SCHEDULE_CREATED, user, project_id, schedule)

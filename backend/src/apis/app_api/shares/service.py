@@ -25,6 +25,7 @@ from apis.shared.projects.access import resolve_project_role
 from apis.shared.projects.models import Project, normalize_email
 from apis.shared.projects.repository import ProjectRepository
 from apis.shared.projects.service import max_members
+from apis.shared.security.log_sanitize import scrub_log
 from apis.shared.sessions.messages import get_messages
 from apis.shared.sessions.metadata import get_session_metadata, store_session_metadata
 
@@ -222,7 +223,7 @@ class ShareService:
                 note=request.note,
             )
         except ShareStorageError as e:
-            logger.error(f"Failed to store snapshot body for session {self._sanitize_id(session_id)}: {e}")
+            logger.error(f"Failed to store snapshot body for session {self._sanitize_id(session_id)}: {scrub_log(e)}")
             raise ShareStorageUnavailableError() from e
         share_id = item["share_id"]
         if project_id:
