@@ -65,7 +65,7 @@ describe('ChatRequestService', () => {
         ChatRequestService,
         { provide: ChatHttpService, useValue: mockChatHttpService },
         { provide: Router, useValue: mockRouter },
-        { provide: ChatStateService, useValue: { setChatLoading: vi.fn(), setLastTurnContinuable: vi.fn(), setLastTurnInterrupted: vi.fn(), setViewedSession: vi.fn(), isSessionLoading: vi.fn().mockReturnValue(false) } },
+        { provide: ChatStateService, useValue: { setChatLoading: vi.fn(), setLastTurnContinuable: vi.fn(), setLastTurnInterrupted: vi.fn(), setViewedSession: vi.fn(), isSessionLoading: vi.fn().mockReturnValue(false), lastTurnEndedAt: vi.fn().mockReturnValue(null) } },
         { provide: MessageMapService, useValue: { addUserMessage: vi.fn(), startStreaming: vi.fn(), beginContinuationStreaming: vi.fn(), endStreaming: vi.fn(), reloadMessagesForSession: vi.fn().mockResolvedValue(undefined), markSendFailed: vi.fn(), removeTrailingMessage: vi.fn().mockReturnValue(true) } },
         { provide: SessionService, useValue: { addSessionToCache: vi.fn() } },
         { provide: MessageFeedbackService, useValue: { consumePendingRetry: vi.fn() } },
