@@ -1,3 +1,433 @@
+# Release Notes — v1.28.0
+
+**Release Date:** October 15, 2026
+**Previous Release:** v1.27.0 (October 8, 2026)
+
+---
+
+> 🔀 **Upgrading from 1.27.0, the order is `backend.yml` first, then `platform.yml`.** The CDK deploy stops sending the AgentCore Runtime 26 resource names that the inference-api now works out for itself, and only this release's image can run without them. If the Platform Stack deploy goes first, it stops before changing anything and says to run the Backend Deploy. Run that, then re-run the Platform Stack deploy.
+>
+> ⚠️ **If you renamed any table or bucket**, keep sending its variable through a CDK override before you deploy. Otherwise the Runtime will look for a resource that does not exist. A deployment that kept the default `{prefix}-{suffix}` names has nothing to do.
+>
+> 🏗️ **Infrastructure:** there are **no new DynamoDB tables, no GSI changes and no backfills**. The CDK deploy rewrites the Runtime's environment in place, widens a few IAM roles, and adds one disabled EventBridge rule.
+>
+> 🌱 **Optional:** re-run bootstrap seeding afterwards to add the Skill Creator skill and the `my_skill_create` tool.
+
+---
+
+## Highlights
+
+**Switching models keeps you in the conversation.** Picking another model, or another effort level, in an open conversation used to start a new conversation. Now the next message runs on the new model in the same thread. When the switch would re-process a warm, cached conversation at a real cost, a **Switch model?** dialog first says how big the conversation is and roughly what the switch adds.
+
+**The composer grew a menu.** The `+` button opens **Add files or photos**, **Add from Google Drive** (wherever an admin has mapped a file source), and submenus for skills, tools and connectors. Keyboard shortcuts arrive with a help sheet (`⌘/`). Pages open at the top, and Back restores where you were.
+
+**One rule for model access.** Chat, the model catalog and api-converse used to disagree about who could use a model. They now share one rule: a model an admin turned off is off for everyone. A denial reads as a message in the conversation, not as an error code.
+
+**Shared Projects is finished and still dark.** Schedules, pinned skill versions, a page for each setting, web and Drive sources, and the launch fixes for memory, sharing and refusals all ship here with `PROJECTS_ENABLED` off. A later patch turns it on.
+
+**Runtime V2 becomes selectable.** The Runtime's environment shrinks from about 2.8 KB to 1.3 KB, under V2's 2,560-byte limit.
+
+Also in this release:
+- **Agents no longer bind Memory Spaces**, because memory belongs to Projects.
+- **Upload sizes are verified** when an upload completes.
+- **Knowledge-base migrations check every document** before promoting.
+- **These features arrive in development, off by default:** large document attachments (up to 50 MB, with semantic search), Drive folder attachments and folder sync, Word tracked changes, skill authoring, direct user grants, session prewarm and client-side TTFT.
+
+**Action required:** the deploy order above, and the checks under Deployment notes.
+
+---
+
+## Switching models keeps the conversation
+
+Until now the model menu's choices read **New chat** or **New conversation**, because the prompt cache is keyed on the model and a fresh thread was the honest way to say "this starts over". Now a switch continues the thread, keeps its agent or project, and is honest about the cost instead (#1625).
+
+### What users get
+
+- **A switch in place.** The next message runs on the new model, in the same conversation. The **New chat**, **New session** and **New conversation** labels are gone from the menu.
+- **A warning only when it costs something.** `PromptCacheGuardService` asks only if all four hold:
+  - the conversation has messages;
+  - its cache is still warm (last reply within 5 minutes);
+  - the current model caches;
+  - the re-write adds at least $0.01 (`contextTokens × (new write rate − current read rate)`, from catalog prices).
+
+  The dialog gives the conversation's size and the estimate, for example "about 40K tokens … roughly $0.16 more".
+- **Effort asks too.** The effort level is part of what the cache is keyed on, so changing it re-writes the prefix exactly like a model switch. That was measured on Claude and GPT.
+- **Stacked changes are weighed honestly.** The comparison is against what the last message was sent with, not what the picker shows. Returning to the cached model goes through without asking.
+- **Don't ask again** turns the dialog off for that browser (`confirm-cache-reset` in `localStorage`).
+
+### Backend
+
+- **GPT → Claude switches work.** GPT turns store their reasoning as `reasoningContent` blocks with no signature, and Claude rejects an unsigned reasoning block. Claude on Converse now sees history through a per-call projection that drops unsigned reasoning blocks (`apis/shared/models/signed_reasoning.py`, `history_projection.py`, wired in `agent_factory.py`). Stored history is untouched, so the cacheable prefix stays byte-stable.
+
+### Cost
+
+A switch costs one full re-write of the conversation's prefix at the new model's cache-write rate. The dialog states that cost before it happens. Prompt-cache observability books the first call after a switch as `miss_avoidable`, because separate accounting for model switches did not land in this release. That call counts toward `prompt-cache-avoidable-miss` like any other miss (see Deployment notes).
+
+---
+
+## The composer and getting around
+
+### The `+` menu, and files from Google Drive (#1587)
+
+- **Add files or photos** opens the device picker, as before.
+- **Add from {connector}** appears once for each connector an admin has mapped to a file-source adapter (Google Drive today). It opens the same folder browser the knowledge base import uses.
+  - Files are fetched server-side by the new `POST /files/import`. It uses cookie auth, the same connector gating as `/connectors/{id}/browse`, and presign's type, size and quota checks.
+  - Native Docs, Sheets and Slides are exported as .docx, .xlsx or .pdf.
+- **Skills ›, Tools › and Connectors ›** submenus. Tools and connectors are switches.
+  - A switch follows the real state, for screen readers too. An abandoned sign-in or a failed save no longer announces "checked" (#1595).
+  - Connecting from the menu, or from any other connect control, no longer leaves an "authorize" card in the open conversation (#1594).
+- Attachment cards now show for imported files and for files restored from a draft.
+
+### Keyboard shortcuts (#1626)
+
+| Shortcut | Action |
+|---|---|
+| ⌘⇧O / Ctrl+Shift+O | New conversation |
+| ⇧Esc | Focus the message box |
+| ⌘⇧S / Ctrl+Shift+S | Toggle the sidebar |
+| ⌘⇧C / Ctrl+Shift+C | Copy the last response |
+| ⌘/ / Ctrl+/ | Open the shortcuts sheet (also in the user menu) |
+| ⌘K / Ctrl+K | Search (unchanged) |
+
+One table (`components/shortcuts/shortcuts.ts`) drives the handlers, the tooltips and `aria-keyshortcuts`, so they can't drift. Shortcuts do nothing while a dialog is open. ⇧Esc in the composer no longer stops a streaming reply; plain Esc still does.
+
+### Navigation and layout
+
+- **Pages open at the top (#1586).** Moving between Customize, Admin, Models or a project no longer lands partway down the new page. `RouteScrollService` keeps each page's offset, so a revisited page restores it, Back and Forward included. Conversations manage their own scroll.
+- **Back returns a conversation to where you were (#1589).** The old save point always read 0, because Angular removes the DOM before `ngOnDestroy`. The offset is now saved at `NavigationStart`.
+- **A docked pane no longer squashes the next page (#1590).** With an artifact or file preview docked, leaving for a non-chat page kept the right padding until a refresh. The same fix applies to the Agent Designer preview, the marketplace test drive and the shared view.
+- **A calmer composer (#1611, #1619).**
+  - The empty-state composer matches the in-thread one: a flat shell, with the model picker beneath it.
+  - The effort label's contrast rises from 2.6:1 to 4.63:1, which passes WCAG AA.
+
+---
+
+## One rule for model access
+
+Three places decided who could use a model, and they disagreed:
+- A model granted only through a catalog row's legacy `availableToRoles` was **listed** but **refused** by chat.
+- A row an admin had set `enabled: false` still **ran** for anyone holding a grant.
+
+They now share one predicate, `grants_model_access` in `apis/shared/rbac/model_access.py` (#1525). Closes #798.
+
+### The rule, in order
+
+1. A disabled row (`enabled: false`) is refused, including for holders of the `*` grant.
+2. A role grant allows.
+3. A row's legacy `availableToRoles` allows, on chat too now.
+4. An id with no catalog row is decided by role grants alone.
+
+`AppRoleService.can_access_model`, `filter_accessible_models` and `ModelAccessService._grants_access` all delegate to it, and the duplicate in `account_tools` is gone. Retirement redirects are judged on the successor's row. The turn path makes no new catalog read.
+
+### What a refused turn looks like
+
+- **Before anything is written (#1530).** The check now runs before attachments, the session-row pre-create and the title task. A refused first turn used to leave a phantom conversation in the sidebar and spend a title call. The check moved rather than being added, so TTFT is unchanged.
+- **As a message (#1532).** A denial used to be a bare 403, which the AgentCore data plane wrapped as a generic 424. It now streams as a conversational refusal (`stream_error`, `forbidden`). The message names the model by its catalog name and tells the two causes apart:
+  - "has been turned off by an administrator";
+  - "isn't available to your account … ask an administrator".
+
+  The refusal is not saved, so it disappears on reload along with the unsent message.
+- **No stray toast (#1539).** The post-stream title fallback no longer shows "Session not found" after a refused first turn.
+
+### For operators
+
+Check which catalog rows are `enabled: false`. Before this release, a user whose conversation already used a disabled model could keep using it. Now they get the "turned off" message and pick another model. A saved default pointing at a disabled row falls back to the catalog default. Voice doesn't go through this check.
+
+---
+
+## AgentCore Runtime V2 becomes selectable
+
+V2 bills memory at a higher per-GB-hour rate, but it doesn't bill idle memory. It caps the Runtime's environment at 2,560 bytes, and the prod Runtime was sending about 2,526 bytes across 46 variables. This release makes room (#1533, #1535).
+
+### What changed
+
+- **Names derived, not sent.**
+  - The inference-api fills in 26 table, bucket, vector-index and workload-identity names from `PROJECT_PREFIX` (and the account id, for the three account-scoped buckets) when they are absent. Explicit values always win (`apis/shared/config/runtime_environment.py`, `derived_environment.json`).
+  - A CDK test holds the manifest to the names `getResourceName` builds.
+  - The Runtime then stops receiving those 26 variables and gains `AWS_ACCOUNT_ID`. The worst case goes from 49 variables (~2,851 B) to 24 (~1,278 B).
+- **Drift is logged.** Both services log `… derived environment (prefix=…): N set, M matched, K drifted` at startup, with a `WARNING` naming any variable whose explicit value differs from the derived name.
+- **Synth refuses an oversized V2 environment.** `RuntimeEnvironmentPayloadGuard` fails `cdk synth` when a V2 Runtime's environment would exceed 2,560 bytes; on V1 it only warns. In 1.27.0 the same overflow surfaced as a stack in `UPDATE_ROLLBACK_FAILED`. The payload test fails CI above 2,000 bytes.
+- **The deploy order is enforced once.** `scripts/platform/check-runtime-env-contract.sh` runs inside `scripts/platform/deploy.sh` before `cdk deploy`. It reads the live inference-api image's `runtime-env-contract` label from ECR. If that image predates the derivation, the deploy stops, changing nothing, and says to run `backend.yml` first. `SKIP_RUNTIME_ENV_CONTRACT_CHECK` bypasses the check for a deploy role without ECR read.
+- **Warm-up finishes before `/ping` (#1542).** V2 snapshots a container at its first healthy ping. Warm-up used to run on a daemon thread, so about one restored session in five redid it on the first turn: a 1.7–3.4 s prelude instead of about 1 s. `warm_before_ready()` now runs in the lifespan, on a worker thread bounded at 60 s. On V1 a fresh container becomes ready about 0.7 s later, and pre-booted pool containers are unaffected. `deploy-runtime-image-if-changed.sh` now waits up to 20 minutes for READY, because a V2 update snapshots first.
+
+### Switching to V2
+
+Set `CDK_AGENTCORE_RUNTIME_PLATFORM_VERSION=V2` one environment at a time, dev first. *Deployment ▸ AgentCore Runtime V2* on the docs site has the prerequisites, the verification steps and the recovery runbook. `docs/specs/agentcore-runtime-v2.md` §4 says when V2 saves money.
+
+---
+
+## Agents and Memory Spaces
+
+Memory now belongs to Projects, so an Agent can no longer bind a Memory Space (#1621).
+
+- **Removed:**
+  - the `memory_space` binding kind, from the Designer palette, write validation, agent detail, role pins, marketplace checks and the agent form;
+  - the bound-space `memory_list`, `memory_read` and `memory_write` tools;
+  - the bound-space prompt injection;
+  - `unavailableMemory` on the `agent_notice` SSE event.
+- **Not migrated:**
+  - Stored bindings are ignored, and the next form save drops one.
+  - An agent bound to a space loses its memory tools and injected context on deploy, and its cached prefix changes once.
+  - An API write that names `kind: "memory_space"` gets a 400.
+- **Unchanged:** project memory, and the standalone Memory Spaces surface at `/memory/spaces`.
+
+This only affects deployments that run with Memory Spaces on (`CDK_MEMORY_SPACES_ENABLED`). If your agent owners bound spaces, tell them before the deploy and point them to Projects.
+
+---
+
+## Shared Projects (preview, off by default)
+
+Projects stays dark in this release: `CDK_PROJECTS_ENABLED` must be `true` and the SPA built with `features.projects`. Everything below is groundwork for turning it on.
+
+### Schedules in a project (3.2)
+
+- **Run a prompt on a schedule (#1545).** An editor or the owner schedules a prompt at `/projects/{id}/schedules` (it also needs `SCHEDULED_RUNS_ENABLED`). The schedule runs on the project's assistant, as the person who made it, on their own headless grant.
+  - `run_block_reason` keeps it running only while Projects is on, the project is active and the creator is still an editor or the owner.
+  - That rule is checked on create and resume, when someone is removed, demoted or leaves, and before every run.
+  - A pause notifies the creator and the owner.
+- **Deliver each run to the project (#1549, #1551).** With `deliverTo: "project"`, each completed run is shared with the project as its creator, the same way the Share dialog would. It is noted "Scheduled: <label>", optionally notifies members, and only the newest 10 deliveries stay shared. In a headless turn, a `memory_save` to project memory becomes a proposal.
+- **Publish the run's artifacts to Outputs (#1552).** `publishOutputs` shares each run's artifacts and retires the previous run's, so Outputs always show the latest edition. Outputs someone shared by hand are never touched.
+- **The Schedules UI (#1550).** A Schedules page lists cadence, creator, state with the reason a schedule stopped, next and last run, and run history. The schedule form gains a project mode.
+
+### The project's setup
+
+- **Pinned skill versions (#1541).** A skill added to a project is pinned to its content as of that save, so its author's later edits don't change what the project runs until an editor updates the pin. **Tools** and **Skills** are now separate rows, and the Skills row shows "N updates".
+- **A page for each setting (#1559).** Instructions, Files, Tools, Skills, Schedules, Members, Activity and History are routed pages with breadcrumbs. Instructions, Tools and Skills ask before you leave with unsaved changes. **Model** is a dropdown on its row.
+- **Web content, Drive import and sync schedules in Files (#1571).** Editors can add a page or a bounded crawl, import from Google Drive, and schedule syncs with **Sync now** and **Reconnect**. A sync re-fetches with the credentials of the editor who set it.
+- **Managed knowledge only (#1574).** Project Files need a managed knowledge base and answer 503 if one can't be set up. Agents gain a related fix, listed under Changed below.
+- **No personal fallthrough (#1616, #1618).** A project that binds no skills or no tools now runs with none, instead of whatever the typing member had switched on. Admin always-on tools still apply.
+
+### The conversation
+
+- **"Conversations", not "tasks" (#1565).** Everything users see says *conversation*. The project tools are renamed `shared_conversations_list` and `shared_conversation_read`; API paths and stored keys are unchanged.
+- **The project, not its harness (#1608).** A project conversation no longer shows the hidden harness Agent's launch card. Its placeholder reads "Ask anything in {project}…", and links carry `?project=`. Old `assistantId` links are rewritten.
+- **No `@`-mentions in a project (#1615).** A hand-off would have run without the project's setup.
+- **Sharing and grouping without a reload (#1572).** On a conversation started in the current tab, "Project members" sharing and the sidebar's project grouping now appear without a reload.
+- **Outputs show previews (#1567).** Each card shows the top of its artifact as a small sheet, and the newest scheduled output leads as a wide card.
+
+### Launch fixes from the readiness review
+
+- **Memory stays consistent (#1622).**
+  - An update that changes a memory file's description rewrites its `MEMORY.md` line, so new conversations stop answering from a stale index.
+  - `memory_save` needs a `description`, and it is conditional on what `memory_read` returned. A save over a teammate's newer change, or over a file this conversation never read, is refused.
+- **No false "saved" claims (#1624).** The model is told to call `memory_save` before it says something is saved. In a dev A/B, false claims went from 2 in 10 to 0 in 10.
+- **Viewers can't make a project conversation public (#1623).** Only an owner or editor can. With Projects off, no project conversation can be made public.
+- **Activity links only settings saves to History (#1554).**
+
+Turning Projects on is a later release. It sets `CDK_PROJECTS_ENABLED=true` and `features.projects: true` in `environment.production.ts`. That file is shared, so other organizations' production builds show the Projects UI until their API flag catches up.
+
+---
+
+## In development (off by default)
+
+None of the following is on in production. Each sits behind an in-development flag that only `"true"` enables, and its GitHub variable stays unset unless an environment opts in.
+
+- **Large document attachments** (`CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED`, `features.largeDocumentAttachments`; #1573, #1577):
+  - A user can attach a pdf, docx, txt, md or html file up to 50 MB instead of 4 MB. It is read on demand, never inlined.
+  - A new `large-document-prepare` Lambda writes a text layer and 10-page PDF shards. `document_read` fetches only the shards it needs.
+  - Turning it on adds 11 CloudFormation resources.
+- **Semantic search over attached documents** (`CDK_ATTACHMENT_KB_ENABLED`, `features.attachmentKb`; #1580, #1583, #1584):
+  - Prepared documents are indexed into one shared managed knowledge base per environment, and `document_read` gains `query`.
+  - On the dev harness, search answered 97% of questions correctly at $0.013 a turn. Reading on demand answered 85% at $0.071 (#1600).
+  - Retrieval is scoped to the user and the session. An architecture test keeps it the only caller.
+  - Requires large document attachments.
+- **Drive folder attachments** (`CDK_FOLDER_ATTACHMENTS_ENABLED`, `features.folderAttachments`; #1592, #1597, #1601, #1603, #1605, #1606):
+  - **Attach this folder** sends a whole Drive folder as one attachment.
+  - The model gets a bounded manifest of the folder and reads its files on demand.
+  - The folder chip offers **Refresh**.
+  - A **Project or folder** picker beneath a new conversation's composer lists projects and recent folders (#1604).
+  - A sent folder can be saved as a project (#1607).
+  - Requires large document attachments.
+- **Folder sync** (`CDK_FOLDER_SYNC_ENABLED`, `features.folderSync`; #1610, #1617): a project saved from a folder stays in step with it. It uses one KB-sync policy per folder, capped at 50 downloads, 250 MB and 12 minutes a run.
+- **Word tracked changes** (`CDK_WORD_TRACKED_CHANGES_ENABLED`; #1570):
+  - A redlined `.docx` reaches the model with each change written out as `[deleted: …]` or `[inserted: …]`.
+  - A new `redline_word_document` tool writes real tracked changes and comments, authored as the signed-in user.
+- **Skill authoring and Skill Creator** (`CDK_SKILL_AUTHORING_ENABLED`; #1555, #1557, #1558, #1561, #1563, #1566):
+  - Seven `my_skill_*` tools let an assistant author the user's own skills. Every write goes through the approval card.
+  - `skill_creator` is a seeded platform skill that interviews the user and drafts a skill. It is granted to no role, and works without the tools by handing over a draft.
+  - The bundle is adapted from Anthropic's skill-creator and carries its Apache-2.0 notice.
+- **Direct user grants** (`CDK_USER_GRANTS_ENABLED`, `features.userGrants`; #1537, #1538):
+  - A system admin can grant one user tools, models or skills on top of their roles, with an optional expiry and note. This lives in a **Direct access** card on the user's admin page, under the non-delegable `admin.user_grants` scope.
+  - The flag gates only the admin screens. A grant that exists still applies with the flag off; delete it to revoke.
+- **Session prewarm** (`CDK_SESSION_PREWARM_ENABLED`, `features.sessionPrewarm`; #1543):
+  - The SPA starts a conversation's Runtime session before the send, on page load or on the first keystroke, through `POST /chat/prewarm`. That hides the ~1.5–2 s session start.
+  - An abandoned page holds a session until the 15-minute idle timeout.
+- **Client-side time to first token** (`CDK_CLIENT_TURN_TIMING_ENABLED`, `features.clientTurnTiming`; #1546): the SPA reports send-to-first-token once per turn, to `AgentCoreStack/TurnLatency`. The turn-latency dashboard gains a client row whether the flag is on or not.
+
+---
+
+## ✨ Also improved
+
+- **One tool selector everywhere (#1528, #1529).** The admin role form's grant lists, the Agent form, the Schedule form and project bindings all use one `<app-tool-selector>`. It has search, category chips, Selected only, and select-all and clear. Locked non-delegable scopes read "System admins only". Ids no longer in a catalog survive a save.
+- **A synthetic TTFT probe (#1547).** An hourly one-off Fargate task sends a cold first turn, a follow-up and a prewarmed first turn as a dedicated user. It records `TtftProbe*Ms`, so TTFT has a baseline that doesn't depend on traffic. `ttft-probe-not-reporting` alarms after 3 hours without a complete run.
+  - **To turn it on:** set `CDK_TTFT_PROBE_USER_ID` (a Cognito sub) and optionally `CDK_TTFT_PROBE_MODEL_ID`.
+  - **The probe user** must sign in at least monthly to keep its headless grant, and needs quota for about three short turns an hour.
+
+---
+
+## 🐛 Bug fixes
+
+**Chat**
+- **A refused send looked delivered (#1526, #1536).** A Runtime 403 "Unauthorized inbound token" turned out to be transient rather than tied to token age. It is now retried once, with a refreshed token when one is available. The 403 comes from the data plane, so a retry cannot run a turn twice. A send that fails before the stream opens shows **Not sent**, with the reason and **Retry**.
+- **Voice and dictation failed to start in Chrome (#1524).**
+  - Mono capture is now `ideal` rather than `exact`.
+  - An `AudioContext` that rejects the requested sample rate falls back to the device's own.
+  - The error toast names the browser's error.
+  - A microphone that can't do mono no longer wipes the saved microphone choice.
+- **`document_read` pattern matches lost the matched text (#1593).** Each matching line was cut to its first 200 characters, so a match deep in a long Word paragraph came back without the match, and the model usually answered "not stated". The excerpt is now cut around the match. On the harness's Word fixture, accuracy went from 1/5 to 5/5 and cost per turn from $0.085 to $0.013.
+- **A resumed turn could overwrite the previous turn in the conversation archive (#1521).** A turn that resumed after a pause and ended on a tool result was written over the previous turn's object. The key now comes from the messages that request appended, and writes are create-only or ETag-conditional. A turn cut short by Stop or a dropped connection is now archived, with its partial answer.
+- **A turn on an agent you can't use no longer reveals whether it exists (#1623).** Deleted and inaccessible agents and project harnesses now stream the same refusal.
+
+**Knowledge bases**
+- **A classic → managed migration could promote with documents missing (#1579).**
+  - Each document's Bedrock status is now checked before promotion. A missing document is re-sent, at most 3 times.
+  - A failed or ignored document fails the migration and names the files, and the agent stays on classic.
+  - The upgrade card shows the specific reason, such as `ByteCapExceeded`, instead of "Something went wrong".
+- **A knowledge base founded by a Drive import or web crawl stayed classic for good (#1574).** Under `MANAGED_KB_NEW_DEFAULT`, it now starts managed, like one founded by an upload. Pages crawled while the KB provisions wait instead of being failed by the stale sweep. Existing classic knowledge bases are unchanged.
+
+**Scheduling, artifacts and cost**
+- **A weekly schedule ran the day after the one it showed (#1568, #1575).** The backend counts weekdays from Monday, while the form and every cadence summary counted from Sunday. No data is migrated:
+  - A weekly schedule made in the UI before this release keeps running on the day it always ran.
+  - Its label now shows that real day, which is one day after the day its creator picked.
+  - To get the intended day back, edit the schedule and pick the day again.
+- **A schedule with an unknown timezone returned a 500 (#1623).** It is now a 400 on both personal and project schedule routes.
+- **Markdown artifacts showed LaTeX as source (#1588).** The render wrapper now typesets math with KaTeX 0.16.45, the chat's version and delimiters, loaded from jsDelivr with SRI. Existing artifact versions are immutable and keep the raw source until the agent writes a new version.
+- **api-converse batch traffic fired the `AvoidableMiss` alarm (#1612).** API-key requests share one pseudo-session, so unrelated requests read as cache misses of each other. Prod alarmed three times this way.
+  - api-converse rows now carry prefix fingerprints and a pricing snapshot.
+  - A predecessor only counts when its whole prompt is a prefix of this one.
+  - Real misses on api-converse are now priced in `wastedUsd`; they used to show $0.
+
+---
+
+## 🔒 Security
+
+- **An upload's stored size is checked before it completes (#1560).** The presigned PUT does not sign `Content-Length`, so a client could declare a small `size_bytes`, store more, and get past the size cap and quota. `POST /files/{id}/complete` now reads the stored size.
+  - Over the cap returns 400.
+  - A size that differs from the declared one, or is missing, returns 409.
+  - Either way the upload is marked failed, its object is deleted, and quota is not charged.
+
+  The SPA always declares the real size, so normal uploads are unaffected.
+- **Dependency patches (#1620):** `pyjwt`, `urllib3`, `werkzeug`, `multidict`, the Angular runtime and CLI, `sharp`, and npm overrides (table below).
+- **Log scrubbing (#1620):** user-controlled values in the feedback, fine-tuning and project-memory log lines now go through `scrub_log`, closing CodeQL log-injection findings.
+
+---
+
+## ⚠️ Changed
+
+- **The AgentCore Runtime no longer receives 26 resource-name variables** (#1533, #1535). Covered in the Runtime V2 section above; the deploy order and the renamed-resources caveat are under Deployment notes.
+- **Agents can no longer bind a Memory Space** (#1621). Covered above.
+- **A disabled model is off for everyone, and legacy `availableToRoles` now grants on chat** (#1525). Covered above.
+- **Switching models continues the conversation** (#1625). Covered above.
+- **`POST /files/{id}/complete` can return 400 or 409** for a stored size over the cap or different from the declared size (#1560). A client that declares the real size is unaffected.
+- **A knowledge base founded by a Drive import or web crawl starts managed** under `MANAGED_KB_NEW_DEFAULT` (#1574).
+
+---
+
+## 🏗️ Infrastructure
+
+**The AgentCore Runtime**
+- **Environment:** 26 resource-name variables removed and `AWS_ACCOUNT_ID` added, as an in-place update that keeps the runtime id (#1535).
+- **Synth guard:** `RuntimeEnvironmentPayloadGuard` (#1533).
+- **Execution role:**
+  - `s3:GetObject` on the conversation archive's `conversations/*` (#1521). Until it deploys, a resumed turn keeps its paused copy rather than overwriting anything.
+  - `s3:PutObject` and `s3:DeleteObject` on the skill-resources bucket's `skills/*`, in every environment, whether or not skill authoring is on (#1557).
+
+**Scheduled runs**
+- The dispatcher and worker gain read/write on the projects table (#1545).
+- The worker also gains, with the matching environment variables (#1549, #1551, #1552):
+  - Memory `ListEvents` and `GetEvent`;
+  - the shared-conversations table;
+  - its bucket's `shares/*`, with a `ListBucket` scoped to that prefix;
+  - read/write on artifacts, and write on the audit log.
+
+  These grants apply with Projects off.
+
+**app-api and observability**
+- app-api always receives `WORD_TRACKED_CHANGES_ENABLED` and `LARGE_DOCUMENT_ATTACHMENTS_ENABLED`, `false` while off. The next Platform deploy therefore re-registers its task definition (#1570, #1573).
+- One EventBridge rule for the TTFT probe, disabled until configured. Watch this if your stack is close to the 500-resource limit (#1547).
+- The turn-latency dashboard gains client and probe rows (#1546, #1547).
+
+**Artifacts**
+- The artifacts CloudFront response-headers policy, and the render Lambda's CSP, allow `https://cdn.jsdelivr.net` in `style-src` and `font-src` for KaTeX (#1588).
+
+**New GitHub variables (all optional, unset by default)**
+
+| Variable | Purpose |
+|---|---|
+| `CDK_USER_GRANTS_ENABLED` | Direct user grants (#1537) |
+| `CDK_SESSION_PREWARM_ENABLED` | Session prewarm (#1543) |
+| `CDK_CLIENT_TURN_TIMING_ENABLED` | Client TTFT (#1546) |
+| `CDK_TTFT_PROBE_USER_ID`, `CDK_TTFT_PROBE_MODEL_ID` | Synthetic TTFT probe (#1547) |
+| `CDK_WORD_TRACKED_CHANGES_ENABLED` | Word tracked changes (#1570) |
+| `CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED` | Large document attachments (#1573) |
+| `CDK_ATTACHMENT_KB_ENABLED` | Attachments knowledge base; needs large documents (#1580) |
+| `CDK_FOLDER_ATTACHMENTS_ENABLED` | Drive folder attachments; needs large documents (#1592) |
+| `CDK_FOLDER_SYNC_ENABLED` | Folder sync (#1610) |
+| `CDK_SKILL_AUTHORING_ENABLED` | Skill authoring tools (#1557) |
+| `SKIP_RUNTIME_ENV_CONTRACT_CHECK` | Bypass the Runtime env-contract preflight (#1535) |
+
+---
+
+## 🔧 CI/CD
+
+- **Python base images come from ECR Public (#1534).** They are pulled from `public.ecr.aws/docker/library/python:3.13-slim` at the same digest, instead of from Docker Hub, whose unauthenticated rate limit was failing Backend Deploy.
+- **The Platform deploy checks the Runtime env contract (#1535).** `scripts/platform/deploy.sh` runs `check-runtime-env-contract.sh` before `cdk deploy`.
+- **`backend.yml` builds `large-document-prepare` in every environment (#1573).** Its first run creates the ECR repository. The deploy step skips while the feature is off, and the nightly Trivy scan covers the image.
+- **Runtime READY wait raised to 20 minutes (#1542).** `deploy-runtime-image-if-changed.sh` used to wait 10.
+
+---
+
+## 📦 Dependencies
+
+| Component | Package | From | To |
+|---|---|---|---|
+| Backend | `pyjwt[crypto]` | 2.13.0 | 2.15.0 |
+| Backend | `urllib3` | 2.7.0 | 2.8.0 |
+| Backend (lock) | `werkzeug` | 3.1.6 | 3.1.9 |
+| Backend (lock) | `multidict` | 6.7.1 | 6.9.1 |
+| Frontend | `@angular/*` runtime | 21.2.20 | 21.2.25 |
+| Frontend | `@angular/build`, `@angular/cli` | 21.2.16 | 21.2.27 |
+| Frontend | `sharp` | 0.35.4 | 0.35.5 |
+| Scheduled-runs image | `strands-agents` | — | 1.57.2 (#1549) |
+| Markdown artifacts | KaTeX (CDN) | — | 0.16.45 (#1588) |
+
+These npm overrides were raised or added (#1620): `undici`, `hono`, `piscina`, `brace-expansion`, `proxy-addr`, `@modelcontextprotocol/sdk`, `source-map-js`, `fast-uri`, `ip-address` and `http-cache-semantics`.
+
+---
+
+## 🚀 Deployment notes
+
+**1. Before the merge: check for renamed resources.** The Runtime will no longer be sent the 26 names in `backend/src/apis/shared/config/derived_environment.json`. For each one your Runtime sends today, the value must equal `{prefix}-{suffix}`, with `-{account}` added for the three account-scoped buckets. If one doesn't, add a CDK override that keeps sending it.
+
+1.27.0 had no startup drift line, so compare the live Runtime's environment against the manifest yourself. For prod this has been checked: the main Runtime's 26 values all match.
+
+**2. Deploy: Backend first, then Platform, then Frontend.** A release merge starts `platform.yml` and `backend.yml` together.
+- **If Platform runs first,** it stops at the env-contract check with "run backend.yml first; nothing has been changed". Let `backend.yml` finish, then re-run `platform.yml`.
+- **Running Backend first is safe for this release.** The new inference-api image still honours the explicit names the old Runtime definition sends. The new IAM grants only matter for features that are off. KaTeX falls back to the browser's MathML until the CSP update lands.
+- **Scheduled runs that fire between the two deploys** run the new code with the old Lambda environment. With Projects off they don't read the new variables.
+
+**3. Verify the deploy.**
+- The Runtime is `READY`.
+- Both services' startup logs read `… derived environment (prefix=…): … 0 drifted`. On app-api, which still receives the names, expect `N matched`. On the Runtime, after Platform, expect `N set`.
+- The Runtime's environment is about 1.3 KB (24 variables or fewer).
+- A first turn and a follow-up stream normally.
+- In a new conversation, sending with a disabled model returns the "turned off by an administrator" message. Nothing is left behind in the sidebar.
+- A Markdown artifact with `$…$` math typesets it.
+
+**4. Expected after the deploy.**
+- **Model switches will register as avoidable cache misses.** Switching a model or effort level in place is now the default, and the first call after each switch is booked `miss_avoidable`. It counts toward the `prompt-cache-avoidable-miss` alarm and `wastedUsd`, because separate model-switch accounting did not land in this release. Read a spike against model switches before treating it as a regression.
+- **api-converse alarms quiet down.** Batch API-key traffic no longer reads as misses. Real api-converse misses now show a non-zero `wastedUsd`.
+- **One cold start per conversation after the Runtime update**, as with any Runtime update.
+- **Weekly schedules made in the UI** show their real day, which is one day later than the label they had before. Tell users who scheduled weekly prompts.
+- **Agents bound to a Memory Space** lose that memory, where Memory Spaces is on.
+- **A new conversation makes one `GET /sessions/{id}/metadata`** after its first reply.
+
+**5. Optional: seed Skill Creator.** Re-run `bootstrap-data-seeding.yml` to add the `skill_creator` skill and the `my_skill_create` catalog tool. The seed leaves existing rows alone. Then grant `skill_creator` to a pilot role under Admin → Roles if wanted; until then only skill-wildcard roles can reach it.
+
+**6. No backfills, no GSIs, no new tables.** `check-gsi-update-limit.mjs` and `check-pending-backfills.mjs` both pass.
+
+---
+
 # Release Notes — v1.27.0
 
 **Release Date:** October 8, 2026
