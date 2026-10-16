@@ -46,7 +46,7 @@ Until now the model menu's choices read **New chat** or **New conversation**, be
 - **A switch in place.** The next message runs on the new model, in the same conversation. The **New chat**, **New session** and **New conversation** labels are gone from the menu.
 - **A warning only when it costs something.** `PromptCacheGuardService` asks only if all four hold:
   - the conversation has messages;
-  - its cache is still warm (last reply within 5 minutes);
+  - its cache is still warm: the last reply is within the cache's lifetime for the model that wrote it. That is 30 minutes for Responses-API models such as GPT-6 and Kimi K3, and 5 minutes for everything else, matching the backend's `cache_ttl_seconds_for` (#1630);
   - the current model caches;
   - the re-write adds at least $0.01 (`contextTokens × (new write rate − current read rate)`, from catalog prices).
 
