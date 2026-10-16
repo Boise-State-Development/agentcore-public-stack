@@ -1,7 +1,7 @@
 import { Injectable, inject } from '@angular/core';
 import { Dialog } from '@angular/cdk/dialog';
 import { firstValueFrom } from 'rxjs';
-import { ManagedModel } from '../../../admin/manage-models/models/managed-model.model';
+import { ManagedModel, resolveEffortControl } from '../../../admin/manage-models/models/managed-model.model';
 import {
   CacheResetDialogComponent,
   CacheResetDialogData,
@@ -9,6 +9,7 @@ import {
 } from '../../../components/cache-reset-dialog/cache-reset-dialog.component';
 import { LocalSettingsService } from '../../../services/local-settings.service';
 import { ChatStateService } from '../chat/chat-state.service';
+import { ModelService } from '../model/model.service';
 import { SessionService } from '../session/session.service';
 import { MessageMapService } from '../session/message-map.service';
 
@@ -23,10 +24,30 @@ export type CacheResetChange =
   | { kind: 'model'; from: ManagedModel; to: ManagedModel }
   | { kind: 'effort'; model: ManagedModel; fromLabel: string; toLabel: string; toLevel: string };
 
-/** What the conversation's cache was last written with: the model and effort of its last message. */
-interface CachedWith {
+/**
+ * A prompt-cache entry this conversation wrote: the model and effort of a
+ * model call, and when it was last touched. Bedrock keeps one entry per model
+ * and effort, so an entry outlives a switch away from it: a conversation that
+ * goes Haiku → GPT → Haiku inside Haiku's lifetime reads Haiku's entry back.
+ */
+interface CacheEntry {
   modelId: string;
-  /** Null when unknown (a conversation opened from the list, not sent from this tab). */
+  /**
+   * The effort it was sent with (null: none). Undefined when not known: the
+   * history the server returns records each reply's model but not its effort.
+   */
+  effort?: string | null;
+  /**
+   * Epoch ms of the last call on it. Null for the conversation's latest
+   * entry, which is timed from the conversation's own last activity (and is
+   * warm while a turn streams).
+   */
+  at: number | null;
+}
+
+/** What the next message would be sent with: a model and its effort level. */
+interface Selection {
+  model: ManagedModel;
   effort: string | null;
 }
 
@@ -125,19 +146,21 @@ function dialogData(change: CacheResetChange, tokens: number, usd: number | null
 /**
  * Asks before a change that throws away the open conversation's prompt cache,
  * and only when doing so actually costs something: the conversation has
- * messages, its cache is still warm, and the re-write is worth more than a
- * cent. Everything else goes through without a prompt.
+ * messages, what the next message would be sent with is still cached, what it
+ * would be sent with after the change is not, and the re-write is worth more
+ * than a cent. Everything else goes through without a prompt.
  */
 @Injectable({ providedIn: 'root' })
 export class PromptCacheGuardService {
   private readonly dialog = inject(Dialog);
   private readonly chatState = inject(ChatStateService);
+  private readonly modelService = inject(ModelService);
   private readonly sessionService = inject(SessionService);
   private readonly messageMap = inject(MessageMapService);
   private readonly localSettings = inject(LocalSettingsService);
 
-  /** Per session, the model and effort the last message in this tab was sent with. */
-  private readonly sentWith = new Map<string, CachedWith>();
+  /** Per session, the entries messages sent from this tab wrote, oldest first. */
+  private readonly sent = new Map<string, CacheEntry[]>();
 
   /**
    * Record what a message is being sent with. Called as each chat request is
@@ -146,7 +169,14 @@ export class PromptCacheGuardService {
    * touched the cache.
    */
   recordSend(sessionId: string, modelId: string, effort: string | null): void {
-    this.sentWith.set(sessionId, { modelId, effort });
+    const entries = this.sent.get(sessionId) ?? [];
+    // A send only follows a finished turn, so the previous entry was last
+    // touched when that turn ended.
+    const previous = entries[entries.length - 1];
+    if (previous) previous.at = this.chatState.lastTurnEndedAt(sessionId) ?? Date.now();
+    const next = entries.filter(e => e.modelId !== modelId || e.effort !== effort);
+    next.push({ modelId, effort, at: null });
+    this.sent.set(sessionId, next);
   }
 
   /** Resolves true when the change should go ahead. */
@@ -157,10 +187,20 @@ export class PromptCacheGuardService {
 
     const sessionId = this.sessionService.currentSession().sessionId;
     if (!sessionId) return true;
-    // Past this, `cacheModel` is the model the cache was written with, so its
-    // provider decides how long that cache lives.
-    if (!this.changesCachedPrefix(sessionId, change)) return true;
-    if (!this.isCacheWarm(sessionId, cacheModel)) return true;
+    if (this.messageMap.getMessagesForSession(sessionId)().length === 0) return true;
+
+    const from: Selection = { model: cacheModel, effort: this.modelService.selectedEffort() };
+    const to: Selection =
+      change.kind === 'model'
+        ? { model: change.to, effort: this.modelService.effortFor(change.to) }
+        : { model: change.model, effort: change.toLevel };
+    // Not when the next message already misses (the cache expired, or a
+    // switch picked but not sent already pays the re-write), and not when the
+    // change lands on an entry the conversation still has, because that is a
+    // cache hit. Unknowns lean towards asking on both sides.
+    const entries = this.cacheEntries(sessionId, cacheModel);
+    if (!this.isWarm(sessionId, entries, from, true)) return true;
+    if (this.isWarm(sessionId, entries, to, false)) return true;
 
     const tokens = this.chatState.contextTokensFor(sessionId);
     const usd = estimateCacheResetUsd(change, tokens);
@@ -176,44 +216,67 @@ export class PromptCacheGuardService {
   }
 
   /**
-   * Whether the change moves the next message away from what the cache was
-   * written with. Not when the selection already differs from it, because a
-   * switch picked but not sent yet already pays the re-write, and changing
-   * effort on top of it (or picking a third model) adds nothing. Not when it
-   * goes back to what the cache holds, because that is a cache hit.
+   * The cache entries this conversation may still hold, latest last. Sends
+   * from this tab know their effort. A conversation opened from the list has
+   * only its history: each reply's `modelInfo`, else the session's
+   * `lastModel`, else nothing, and then the selected model is assumed to have
+   * written the cache, since asking is the safe side.
    */
-  private changesCachedPrefix(sessionId: string, change: CacheResetChange): boolean {
-    const cached = this.cachedWith(sessionId);
-    if (!cached) return true;
-    if (change.kind === 'model') {
-      return change.from.modelId === cached.modelId && change.to.modelId !== cached.modelId;
+  private cacheEntries(sessionId: string, selected: ManagedModel): CacheEntry[] {
+    const history: CacheEntry[] = [];
+    for (const message of this.messageMap.getMessagesForSession(sessionId)()) {
+      if (message.role !== 'assistant') continue;
+      const modelId = (message.metadata?.['modelInfo'] as { modelId?: unknown } | undefined)?.modelId;
+      const at = Date.parse(message.createdAt ?? '');
+      if (typeof modelId === 'string' && !Number.isNaN(at)) history.push({ modelId, at });
     }
-    if (change.model.modelId !== cached.modelId) return false;
-    return cached.effort === null || change.toLevel !== cached.effort;
-  }
+    history.sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
 
-  private cachedWith(sessionId: string): CachedWith | null {
-    const sent = this.sentWith.get(sessionId);
-    if (sent) return sent;
+    const sent = this.sent.get(sessionId) ?? [];
+    if (sent.length > 0) return [...history, ...sent];
+    const latest = history.pop();
+    if (latest) return [...history, { modelId: latest.modelId, at: null }];
     const lastModel = this.sessionService.currentSession().preferences?.lastModel;
-    return lastModel ? { modelId: lastModel, effort: null } : null;
+    return [{ modelId: lastModel ?? selected.modelId, at: null }];
   }
 
   /**
-   * Whether the conversation's last model call was recent enough that its
-   * cache, written by `cacheModel`, is still live. A conversation with no
-   * messages has no cache; one streaming right now is warm by definition.
+   * Whether the conversation holds a live cache entry for `selection`.
+   * `assumeUnknownEffort` decides an entry whose effort was not recorded; the
+   * one exception is a model with no effort control, whose requests never
+   * carry one, so its effort cannot differ.
    */
-  private isCacheWarm(sessionId: string, cacheModel: ManagedModel): boolean {
-    const messages = this.messageMap.getMessagesForSession(sessionId)();
-    if (messages.length === 0) return false;
-    if (this.chatState.isSessionLoading(sessionId)) return true;
+  private isWarm(
+    sessionId: string,
+    entries: CacheEntry[],
+    selection: Selection,
+    assumeUnknownEffort: boolean,
+  ): boolean {
+    const ttl = cacheTtlMsFor(selection.model);
+    const effortless = selection.effort === null && resolveEffortControl(selection.model) === null;
+    return entries.some(entry => {
+      if (entry.modelId !== selection.model.modelId) return false;
+      const sameEffort =
+        entry.effort === undefined ? assumeUnknownEffort || effortless : entry.effort === selection.effort;
+      if (!sameEffort) return false;
+      if (entry.at !== null) return Date.now() - entry.at < ttl;
+      return this.isLatestWarm(sessionId, ttl);
+    });
+  }
 
-    const createdAt = Date.parse(messages[messages.length - 1].createdAt ?? '');
+  /**
+   * Whether the conversation's last model call was recent enough that the
+   * entry it touched is still live. One streaming right now is warm by
+   * definition.
+   */
+  private isLatestWarm(sessionId: string, ttl: number): boolean {
+    if (this.chatState.isSessionLoading(sessionId)) return true;
+    const messages = this.messageMap.getMessagesForSession(sessionId)();
+    const createdAt = Date.parse(messages[messages.length - 1]?.createdAt ?? '');
     const turnEnded = this.chatState.lastTurnEndedAt(sessionId);
     const lastActivity = Math.max(Number.isNaN(createdAt) ? 0 : createdAt, turnEnded ?? 0);
     // No timestamp at all: assume warm, since asking is the safe side.
     if (lastActivity === 0) return true;
-    return Date.now() - lastActivity < cacheTtlMsFor(cacheModel);
+    return Date.now() - lastActivity < ttl;
   }
 }

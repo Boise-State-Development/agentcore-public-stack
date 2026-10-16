@@ -7,6 +7,7 @@ import { ManagedModel } from '../../../admin/manage-models/models/managed-model.
 import { CacheResetDialogData } from '../../../components/cache-reset-dialog/cache-reset-dialog.component';
 import { LocalSettingsService } from '../../../services/local-settings.service';
 import { ChatStateService } from '../chat/chat-state.service';
+import { ModelService } from '../model/model.service';
 import { SessionService } from '../session/session.service';
 import { MessageMapService } from '../session/message-map.service';
 import {
@@ -65,7 +66,7 @@ const FROM_LUNA: CacheResetChange = { kind: 'model', from: LUNA, to: SONNET };
 
 function setup(options: {
   sessionId?: string;
-  messages?: { createdAt?: string }[];
+  messages?: { createdAt?: string; role?: string; metadata?: Record<string, unknown> }[];
   loading?: boolean;
   turnEndedAt?: number | null;
   contextTokens?: number;
@@ -73,10 +74,17 @@ function setup(options: {
   dialogResult?: { dontAskAgain: boolean } | undefined;
   /** The session's persisted `lastModel`, as loaded from the list. */
   lastModel?: string;
+  /** The effort level each model would send with, by model id (default: none). */
+  efforts?: Record<string, string>;
+  /** The id of the model the picker starts on (default: haiku). */
+  selectedModelId?: string;
 } = {}) {
   const open = vi.fn(() => ({ closed: of(options.dialogResult) }));
   const setConfirmCacheReset = vi.fn();
   const messages = signal(options.messages ?? [{ createdAt: new Date(NOW - 60_000).toISOString() }]);
+  let turnEndedAt = options.turnEndedAt ?? null;
+  /** The model the picker shows; `selectedEffort` is that model's level. */
+  const picker = { modelId: options.selectedModelId ?? 'haiku' };
 
   TestBed.resetTestingModule();
   TestBed.configureTestingModule({
@@ -86,8 +94,15 @@ function setup(options: {
         provide: ChatStateService,
         useValue: {
           isSessionLoading: () => options.loading ?? false,
-          lastTurnEndedAt: () => options.turnEndedAt ?? null,
+          lastTurnEndedAt: () => turnEndedAt,
           contextTokensFor: () => options.contextTokens ?? 40_000,
+        },
+      },
+      {
+        provide: ModelService,
+        useValue: {
+          selectedEffort: () => options.efforts?.[picker.modelId] ?? null,
+          effortFor: (m: ManagedModel) => options.efforts?.[m.modelId] ?? null,
         },
       },
       {
@@ -106,7 +121,14 @@ function setup(options: {
       },
     ],
   });
-  return { guard: TestBed.inject(PromptCacheGuardService), open, setConfirmCacheReset };
+  return {
+    guard: TestBed.inject(PromptCacheGuardService),
+    open,
+    setConfirmCacheReset,
+    picker,
+    /** A turn finishing in this tab at `at` (epoch ms). */
+    endTurn: (at: number) => (turnEndedAt = at),
+  };
 }
 
 function dialogData(open: ReturnType<typeof setup>['open']): CacheResetDialogData {
@@ -298,7 +320,7 @@ describe('PromptCacheGuardService', () => {
     });
 
     it('does not ask when going back to the effort the cache holds', async () => {
-      const { guard, open } = setup();
+      const { guard, open } = setup({ efforts: { sonnet: 'low' }, selectedModelId: 'sonnet' });
       guard.recordSend('s1', 'sonnet', 'high');
       const back: CacheResetChange = { kind: 'effort', model: SONNET, fromLabel: 'Low', toLabel: 'High', toLevel: 'high' };
       expect(await guard.confirm(back)).toBe(true);
@@ -306,7 +328,11 @@ describe('PromptCacheGuardService', () => {
     });
 
     it('asks when changing effort on the model the last message used', async () => {
-      const { guard, open } = setup({ dialogResult: { dontAskAgain: false } });
+      const { guard, open } = setup({
+        efforts: { sonnet: 'medium' },
+        selectedModelId: 'sonnet',
+        dialogResult: { dontAskAgain: false },
+      });
       guard.recordSend('s1', 'sonnet', 'medium');
       await guard.confirm(SONNET_HIGH);
       expect(open).toHaveBeenCalled();
@@ -316,6 +342,123 @@ describe('PromptCacheGuardService', () => {
       const { guard, open } = setup({ lastModel: 'haiku' });
       expect(await guard.confirm({ kind: 'model', from: SONNET, to: HAIKU })).toBe(true);
       expect(open).not.toHaveBeenCalled();
+    });
+  });
+  describe('a model keeps its own cache entry after a switch away from it', () => {
+    const at = (minutesAgo: number) => NOW - minutesAgo * 60_000;
+    const BACK_TO_HAIKU: CacheResetChange = { kind: 'model', from: LUNA, to: HAIKU };
+
+    /** Haiku replied, then one GPT turn: the conversation seen on dev, 2026-10-16. */
+    function haikuThenLuna(guard: PromptCacheGuardService, endTurn: (at: number) => void, haikuEnded: number) {
+      vi.setSystemTime(haikuEnded - 30_000);
+      guard.recordSend('s1', 'haiku', null);
+      endTurn(haikuEnded);
+      vi.setSystemTime(at(1.5));
+      guard.recordSend('s1', 'luna', null);
+      endTurn(at(1));
+      vi.setSystemTime(NOW);
+    }
+
+    it('does not ask when switching back to a model still warm within its own lifetime', async () => {
+      const { guard, open, endTurn } = setup();
+      haikuThenLuna(guard, endTurn, at(4));
+      expect(await guard.confirm(BACK_TO_HAIKU)).toBe(true);
+      expect(open).not.toHaveBeenCalled();
+    });
+
+    it("asks when switching back after that model's own lifetime", async () => {
+      const { guard, open, endTurn } = setup({ dialogResult: { dontAskAgain: false } });
+      // Six minutes is inside GPT's 30 but past Haiku's 5.
+      haikuThenLuna(guard, endTurn, at(6));
+      expect(await guard.confirm(BACK_TO_HAIKU)).toBe(true);
+      expect(dialogData(open).message).toContain('cached for GPT-6 Luna. Switching to Haiku');
+    });
+
+    it('asks when leaving the warm model it went back to for a third', async () => {
+      const { guard, open, endTurn, picker } = setup({ dialogResult: { dontAskAgain: false } });
+      haikuThenLuna(guard, endTurn, at(4));
+      await guard.confirm(BACK_TO_HAIKU);
+      picker.modelId = 'haiku';
+      await guard.confirm(SWITCH);
+      expect(dialogData(open).message).toContain('cached for Haiku. Switching to Sonnet');
+    });
+
+    describe('effort is part of the entry', () => {
+      const SONNET_LOW_TO_HIGH: CacheResetChange = { kind: 'effort', model: SONNET, fromLabel: 'Low', toLabel: 'High', toLevel: 'high' };
+
+      function sonnetThenLuna(guard: PromptCacheGuardService, endTurn: (at: number) => void) {
+        vi.setSystemTime(at(3.5));
+        guard.recordSend('s1', 'sonnet', 'low');
+        endTurn(at(3));
+        vi.setSystemTime(at(1.5));
+        guard.recordSend('s1', 'luna', null);
+        endTurn(at(1));
+        vi.setSystemTime(NOW);
+      }
+
+      it('asks on an effort change once back on the warm model', async () => {
+        const { guard, open, endTurn, picker } = setup({
+          efforts: { sonnet: 'low' },
+          selectedModelId: 'luna',
+          dialogResult: { dontAskAgain: false },
+        });
+        sonnetThenLuna(guard, endTurn);
+        expect(await guard.confirm({ kind: 'model', from: LUNA, to: SONNET })).toBe(true);
+        expect(open).not.toHaveBeenCalled();
+
+        picker.modelId = 'sonnet';
+        await guard.confirm(SONNET_LOW_TO_HIGH);
+        expect(dialogData(open).title).toBe('Change effort?');
+      });
+
+      it('asks when switching back to the model at a different effort than its entry', async () => {
+        const { guard, open, endTurn } = setup({
+          efforts: { sonnet: 'high' },
+          selectedModelId: 'luna',
+          dialogResult: { dontAskAgain: false },
+        });
+        sonnetThenLuna(guard, endTurn);
+        await guard.confirm({ kind: 'model', from: LUNA, to: SONNET });
+        expect(open).toHaveBeenCalled();
+      });
+    });
+
+    describe('in a conversation opened from the list', () => {
+      const reply = (modelId: string, minutesAgo: number) => ({
+        role: 'assistant',
+        createdAt: new Date(at(minutesAgo)).toISOString(),
+        metadata: { modelInfo: { modelId } },
+      });
+
+      it("reads each reply's model from the history", async () => {
+        const { guard, open } = setup({ messages: [reply('haiku', 4), reply('luna', 1)] });
+        expect(await guard.confirm(BACK_TO_HAIKU)).toBe(true);
+        expect(open).not.toHaveBeenCalled();
+      });
+
+      it("still asks once that model's lifetime has passed", async () => {
+        const { guard, open } = setup({
+          messages: [reply('haiku', 6), reply('luna', 1)],
+          dialogResult: { dontAskAgain: false },
+        });
+        await guard.confirm(BACK_TO_HAIKU);
+        expect(open).toHaveBeenCalled();
+      });
+
+      it('asks for a model with an effort control, since the history does not record effort', async () => {
+        const opus = model({
+          modelId: 'opus',
+          modelName: 'Opus',
+          supportedParams: { params: { effort: { supported: true, allowed: ['low', 'high'], default: 'low' } } as never },
+        });
+        const { guard, open } = setup({
+          messages: [reply('opus', 3), reply('luna', 1)],
+          efforts: { opus: 'low' },
+          dialogResult: { dontAskAgain: false },
+        });
+        await guard.confirm({ kind: 'model', from: LUNA, to: opus });
+        expect(open).toHaveBeenCalled();
+      });
     });
   });
 });

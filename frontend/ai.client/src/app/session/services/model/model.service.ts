@@ -182,15 +182,22 @@ export class ModelService {
    * in which case the provider's own default applies and we don't claim to
    * know what it is.
    */
-  readonly selectedEffort = computed<string | null>(() => {
-    const control = this.effortControl();
-    if (!control) return null;
-    const override = this.selectedModelOverrides()[control.key];
+  readonly selectedEffort = computed<string | null>(() => this.effortFor(this.selectedModel()));
+
+  /**
+   * The effort level a message on `model` would be sent with, by the same
+   * rule as `selectedEffort`. Effort overrides are kept per model, so a
+   * switch to another model sends that model's own level, not the current one.
+   */
+  effortFor(model: ManagedModel | null | undefined): string | null {
+    const control = resolveEffortControl(model);
+    if (!control || !model) return null;
+    const override = this._inferenceOverrides()[model.modelId]?.[control.key];
     if (typeof override === 'string' && control.levels.includes(override)) {
       return override;
     }
     return control.defaultLevel;
-  });
+  }
 
   constructor() {
     // Load models on initialization
