@@ -433,6 +433,10 @@ def _derive_cache_observability(
     - ``wastedUsd``: for avoidable and partial misses, the re-written
       previously-cached prefix priced at the cache-write premium over the
       cache-read rate, using this row's own pricingSnapshot.
+    - ``agentSwitched`` / ``modelSwitched``: set when this call ran on a
+      different Agent / model than the previous call — an explained re-write
+      (an ``@``-mention, a mid-conversation model switch). The waste stays in
+      ``wastedUsd``; the flags let readers subtract it.
 
     ⚠️ The predecessor that decides ``miss_avoidable`` vs ``miss_ttl_expired``
     is the last call with the **same toolConfig + system-prompt fingerprints**,
@@ -623,6 +627,19 @@ def _derive_cache_observability(
         if prev_row is not None and own_agent != prev_agent:
             result["agentSwitched"] = True
 
+        # The same question for the model. Each model has its own cache, so a
+        # call on a different model than the one before it re-writes the whole
+        # prefix even though the fingerprints match, and the classifier above
+        # (which keys on the fingerprints) books it `miss_avoidable`. Since a
+        # model switch continues the conversation in place, that is a routine,
+        # user-chosen re-write — the dialog quoted its cost before the user
+        # confirmed it. Same discipline as `agentSwitched`: the spend stays in
+        # `wastedUsd`, the flag says it was explained.
+        own_model = getattr(model_info, "model_id", None)
+        prev_model = ((prev_row or {}).get("modelInfo") or {}).get("modelId")
+        if prev_row is not None and own_model and prev_model and own_model != prev_model:
+            result["modelSwitched"] = True
+
         # `cacheGapSeconds` keeps its original meaning — seconds since the
         # previous call — because the anatomy page and its consumers read it as
         # a plain chronology. When the call that actually determined the verdict
@@ -697,6 +714,7 @@ def _emit_cache_metrics(
             session_id=session_id,
             cache_status=status,
             agent_switched=bool(cache_observability.get("agentSwitched")),
+            model_switched=bool(cache_observability.get("modelSwitched")),
         )
     except Exception as e:  # noqa: BLE001 - metrics must never break the write path
         logger.debug("Cache EMF emission skipped: %s", e)

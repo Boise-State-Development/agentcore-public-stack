@@ -1011,6 +1011,8 @@ class AdminCostService:
         wasted_usd = 0.0
         agent_switch_misses = 0
         agent_switch_usd = 0.0
+        model_switch_misses = 0
+        model_switch_usd = 0.0
         previous_removed: Optional[int] = None
 
         for record in records:
@@ -1038,6 +1040,7 @@ class AdminCostService:
             # #756 — derived at write time, where the predecessor row was already
             # in hand; read here as a plain projection.
             agent_switched = bool(record.get("agentSwitched"))
+            model_switched = bool(record.get("modelSwitched"))
 
             total_cost += cost
             total_cache_read += cache_read
@@ -1048,6 +1051,9 @@ class AdminCostService:
                 if agent_switched:
                     agent_switch_misses += 1
                     agent_switch_usd += row_wasted
+                elif model_switched:
+                    model_switch_misses += 1
+                    model_switch_usd += row_wasted
             elif cache_status == "partial_miss":
                 partial_misses += 1
                 partial_miss_usd += row_wasted
@@ -1072,6 +1078,7 @@ class AdminCostService:
                 wasted_usd=row_wasted,
                 turn_agent_id=record.get("turnAgentId"),
                 agent_switched=agent_switched,
+                model_switched=model_switched,
                 prefix_fingerprints=(
                     PrefixFingerprints(**fingerprints_raw)
                     if isinstance(fingerprints_raw, dict) else None
@@ -1106,6 +1113,8 @@ class AdminCostService:
             wasted_usd=round(wasted_usd, 6),
             agent_switch_miss_count=agent_switch_misses,
             agent_switch_usd=round(agent_switch_usd, 6),
+            model_switch_miss_count=model_switch_misses,
+            model_switch_usd=round(model_switch_usd, 6),
             cache_efficiency=cache_efficiency,
         )
 

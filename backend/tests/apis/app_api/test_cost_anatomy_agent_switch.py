@@ -17,8 +17,9 @@ import pytest
 from apis.app_api.admin.costs.service import AdminCostService
 
 
-def _row(*, status, wasted, agent_id=None, switched=False, ts="2026-07-26T00:00:00Z"):
+def _row(*, status, wasted, agent_id=None, switched=False, model_switched=False, ts="2026-07-26T00:00:00Z"):
     return {
+        "modelSwitched": model_switched,
         "timestamp": ts,
         "cacheStatus": status,
         "wastedUsd": wasted,
@@ -114,3 +115,39 @@ async def test_rows_written_before_this_shipped_read_as_unswitched():
     assert anatomy.calls[0].turn_agent_id is None
     assert anatomy.calls[0].agent_switched is False
     assert anatomy.agent_switch_miss_count == 0
+
+
+@pytest.mark.asyncio
+async def test_a_model_switch_miss_is_split_out_like_an_agent_switch():
+    anatomy = await _service(
+        [_row(status="miss_avoidable", wasted=0.02, model_switched=True)]
+    ).get_session_cost_anatomy("sess-1")
+
+    assert anatomy.avoidable_miss_count == 1
+    assert anatomy.wasted_usd == 0.02
+    assert anatomy.model_switch_miss_count == 1
+    assert anatomy.model_switch_usd == 0.02
+    assert anatomy.agent_switch_miss_count == 0
+    assert anatomy.calls[0].model_switched is True
+
+
+@pytest.mark.asyncio
+async def test_a_miss_with_both_switches_is_counted_once_as_an_agent_switch():
+    """The pairs are disjoint, so a reader can subtract both."""
+    anatomy = await _service(
+        [_row(status="miss_avoidable", wasted=0.01, agent_id="ast-x", switched=True, model_switched=True)]
+    ).get_session_cost_anatomy("sess-1")
+
+    assert anatomy.agent_switch_miss_count == 1
+    assert anatomy.model_switch_miss_count == 0
+    assert anatomy.model_switch_usd == 0.0
+
+
+@pytest.mark.asyncio
+async def test_a_model_switch_that_hit_contributes_no_explained_waste():
+    anatomy = await _service(
+        [_row(status="hit", wasted=0.0, model_switched=True)]
+    ).get_session_cost_anatomy("sess-1")
+
+    assert anatomy.model_switch_miss_count == 0
+

@@ -321,6 +321,7 @@ class TestEmfEmission:
             "AvoidableMiss",
             "PartialMiss",
             "AgentSwitchMiss",
+            "ModelSwitchMiss",
             "WastedUsd",
             "PartialMissUsd",
         }
@@ -340,6 +341,39 @@ class TestEmfEmission:
         )
         assert record["AvoidableMiss"] == 1
         assert record["AgentSwitchMiss"] == 0
+
+    def test_a_model_switch_miss_is_counted_in_both(self):
+        """A mid-conversation model switch: real spend, explained."""
+        record = json.loads(
+            self._capture(
+                cache_read_tokens=0, cache_write_tokens=5000, avoidable_miss=True,
+                wasted_usd=0.01, model_switched=True,
+            )
+        )
+        assert record["AvoidableMiss"] == 1
+        assert record["ModelSwitchMiss"] == 1
+        assert record["AgentSwitchMiss"] == 0
+
+    def test_an_agent_switch_that_also_changed_model_counts_once(self):
+        """An @-mention to an Agent that pins its own model sets both flags. The two
+        metrics stay disjoint so subtracting both never double-counts."""
+        record = json.loads(
+            self._capture(
+                cache_read_tokens=0, cache_write_tokens=5000, avoidable_miss=True,
+                agent_switched=True, model_switched=True,
+            )
+        )
+        assert record["AgentSwitchMiss"] == 1
+        assert record["ModelSwitchMiss"] == 0
+
+    def test_a_model_switch_that_hit_is_not_a_miss(self):
+        record = json.loads(
+            self._capture(
+                cache_read_tokens=5000, cache_write_tokens=0, avoidable_miss=False,
+                model_switched=True,
+            )
+        )
+        assert record["ModelSwitchMiss"] == 0
 
     def test_an_agent_switch_miss_is_counted_in_both(self):
         """A subset, not a reclassification (#756).

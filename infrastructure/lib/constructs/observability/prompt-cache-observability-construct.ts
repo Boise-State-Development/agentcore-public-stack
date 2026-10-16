@@ -80,6 +80,39 @@ export class PromptCacheObservabilityConstruct extends Construct {
       period: cdk.Duration.minutes(5),
     });
 
+    // The subsets of AvoidableMiss that an explained re-write accounts for: an
+    // `@`-mention handing a turn to another Agent, and a mid-conversation model
+    // switch (each model has its own cache). Disjoint by construction (emf.py),
+    // so subtracting both never double-counts.
+    const agentSwitchMissMetric = new cloudwatch.Metric({
+      namespace,
+      metricName: 'AgentSwitchMiss',
+      statistic: 'Sum',
+      period: cdk.Duration.minutes(5),
+    });
+    const modelSwitchMissMetric = new cloudwatch.Metric({
+      namespace,
+      metricName: 'ModelSwitchMiss',
+      statistic: 'Sum',
+      period: cdk.Duration.minutes(5),
+    });
+
+    // What the alarm watches: avoidable misses nobody chose. A model switch now
+    // continues the conversation in place, so explained misses are routine
+    // traffic, and alarming on the raw sum would page on users doing what the
+    // UI offered them. FILL so a quiet period with no switches reads as zero
+    // rather than leaving the whole expression empty.
+    const unexplainedAvoidableMissExpression = new cloudwatch.MathExpression({
+      expression: 'FILL(avoidable, 0) - FILL(agentSwitch, 0) - FILL(modelSwitch, 0)',
+      usingMetrics: {
+        avoidable: avoidableMissMetric,
+        agentSwitch: agentSwitchMissMetric,
+        modelSwitch: modelSwitchMissMetric,
+      },
+      label: 'Unexplained avoidable misses',
+      period: cdk.Duration.minutes(5),
+    });
+
     // A call that read a leading prefix segment and re-wrote the rest against
     // a live cache entry. Its own metric rather than a roll-in to
     // AvoidableMiss so the existing alarm keeps its meaning; its dollars are
@@ -265,12 +298,13 @@ export class PromptCacheObservabilityConstruct extends Construct {
 
     // AvoidableMiss is the nominated alarm target (see emf.py): a
     // prefix-stability regression flips a large share of calls to
-    // `miss_avoidable`, showing up as a step change in this sum.
-    alarms.alarm('PromptCacheAvoidableMissAlarm', {
+    // `miss_avoidable`, showing up as a step change in this sum. Watched net of
+    // the explained subsets (Agent and model switches), which are expected.
+    alarms.expressionAlarm('PromptCacheAvoidableMissAlarm', {
       name: 'prompt-cache-avoidable-miss',
       alarmDescription:
-        'Avoidable prompt-cache misses exceeded threshold — likely a prompt-prefix stability regression',
-      metric: avoidableMissMetric,
+        'Unexplained avoidable prompt-cache misses (net of agent and model switches) exceeded threshold — likely a prompt-prefix stability regression',
+      expression: unexplainedAvoidableMissExpression,
       threshold: config.observability.promptCacheAvoidableMissThreshold,
       evaluationPeriods: 3,
       comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
