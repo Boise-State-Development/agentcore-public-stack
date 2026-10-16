@@ -175,6 +175,8 @@ class ShareService:
         project: Optional[Project] = None
         project_id = None
         recipients: List[str] = []
+        if request.access_level == "public":
+            self._require_public_share_allowed(metadata, user)
         if request.access_level == "project":
             project = self._require_shareable_project(metadata, user)
             project_id = project.project_id
@@ -276,6 +278,12 @@ class ShareService:
         if request.access_level is not None:
             update_expr_parts.append("access_level = :al")
             attr_values[":al"] = request.access_level
+
+        if request.access_level == "public":
+            metadata = await get_session_metadata(session_id=item["session_id"], user_id=user.user_id)
+            if not metadata:
+                raise SessionNotFoundError(item["session_id"])
+            self._require_public_share_allowed(metadata, user)
 
         if new_access == "project" and old_access != "project":
             metadata = await get_session_metadata(session_id=item["session_id"], user_id=user.user_id)
@@ -767,6 +775,31 @@ class ShareService:
         if project.status != "active":
             raise ProjectShareError(409, "This project is archived. Restore it to share conversations with it.")
         return project
+
+    def _require_public_share_allowed(self, metadata: Any, user: User) -> None:
+        """Raise a ``ProjectShareError`` unless ``user`` may make this conversation public.
+
+        A conversation in a project can carry what the project gave it (files,
+        knowledge, memory), so only the project's owner and editors may publish
+        it; viewers keep private, specific-people and project sharing. A former
+        member is refused like a viewer. A project that no longer exists binds
+        nothing. While Projects is switched off the roles cannot be checked, so
+        a project conversation cannot be made public at all: the kill switch
+        must never be the way around this rule.
+        """
+        prefs = getattr(metadata, "preferences", None)
+        project_id = getattr(prefs, "project_id", None) if prefs else None
+        if not project_id:
+            return
+        if not projects_enabled():
+            raise ProjectShareError(403, "A conversation in a project cannot be shared publicly while Projects is unavailable")
+        project, role = self._project_role(project_id, user)
+        if project is None:
+            return
+        if role not in ("owner", "editor"):
+            raise ProjectShareError(
+                403, "Only the project's owner and editors can share its conversations publicly"
+            )
 
     def _notify_recipients(self, project: Project, request: CreateShareRequest, user: User) -> List[str]:
         """The inboxes a project share's ``notify`` reaches, never including the sharer.

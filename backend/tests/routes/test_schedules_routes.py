@@ -29,7 +29,7 @@ from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.models import User
 from apis.shared.tools.scoped_ids import base_tool_id
 from apis.shared.scheduled_prompts.models import ScheduledPrompt
-from apis.shared.scheduled_prompts.service import ScheduledPromptLimitExceeded
+from apis.shared.scheduled_prompts.service import InvalidTimezoneError, ScheduledPromptLimitExceeded
 from tests.routes.conftest import mock_no_auth
 
 USER_ID = "user-001"
@@ -338,6 +338,22 @@ class TestCreateSchedule:
         )
         assert response.status_code == 400
 
+    def test_unknown_timezone_is_400(self, monkeypatch):
+        client = _make_client(monkeypatch)
+
+        response = client.post(
+            "/schedules",
+            json={
+                "label": "Somewhere else",
+                "promptText": "Go",
+                "cadence": "daily",
+                "hourLocal": 9,
+                "timezone": "Mars/Olympus",
+            },
+        )
+        assert response.status_code == 400
+        assert "Unknown timezone" in response.json()["detail"]
+
     def test_empty_prompt_is_422(self, monkeypatch):
         client = _make_client(monkeypatch)
         response = client.post(
@@ -429,6 +445,18 @@ class TestUpdateSchedule:
 
         assert response.status_code == 200
         assert response.json()["label"] == "Renamed"
+
+    def test_unknown_timezone_is_400(self, monkeypatch):
+        client = _make_client(monkeypatch)
+        monkeypatch.setattr(schedules_routes, "get_scheduled_prompt", AsyncMock(return_value=_make_schedule()))
+        monkeypatch.setattr(
+            schedules_routes,
+            "update_scheduled_prompt",
+            AsyncMock(side_effect=InvalidTimezoneError("Unknown timezone: 'Mars/Olympus'")),
+        )
+
+        response = client.patch(f"/schedules/{SCHEDULE_ID}", json={"timezone": "Mars/Olympus"})
+        assert response.status_code == 400
 
     def test_missing_schedule_is_404(self, monkeypatch):
         client = _make_client(monkeypatch)

@@ -12,6 +12,7 @@ from .models import (
     ScheduledPromptState,
 )
 from .service import (
+    InvalidTimezoneError,
     ScheduledPromptLimitExceeded,
     compute_next_run_at,
     create_scheduled_prompt,
@@ -28,6 +29,7 @@ from .service import (
 
 __all__ = [
     "DUE_INDEX_PK",
+    "InvalidTimezoneError",
     "ScheduleCadence",
     "ScheduledPrompt",
     "ScheduledPromptLimitExceeded",
