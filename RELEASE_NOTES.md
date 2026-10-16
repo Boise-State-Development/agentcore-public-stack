@@ -61,7 +61,18 @@ Until now the model menu's choices read **New chat** or **New conversation**, be
 
 ### Cost
 
-A switch costs one full re-write of the conversation's prefix at the new model's cache-write rate. The dialog states that cost before it happens. Prompt-cache observability books the first call after a switch as `miss_avoidable`, because separate accounting for model switches did not land in this release. That call counts toward `prompt-cache-avoidable-miss` like any other miss (see Deployment notes).
+A switch costs one full re-write of the conversation's prefix at the new model's cache-write rate. The dialog states that cost before it happens.
+
+### Accounting for switches (#1629)
+
+The first call after a switch re-writes the whole prefix while its fingerprint hashes stay the same. To the cache classifier, that looks exactly like a prefix-stability regression. Switches are now booked as explained misses, the same way `@`-mention agent switches already were:
+
+- **`modelSwitched` on the call's `C#` row**, beside `agentSwitched`. The spend stays in `wastedUsd`.
+- **A `ModelSwitchMiss` EMF metric.** It doesn't overlap `AgentSwitchMiss`: an `@`-mention to an agent that pins its own model counts once, as an agent switch.
+- **The admin cost anatomy** (`GET /admin/costs/sessions/{id}/calls`) gains `modelSwitchMissCount` / `modelSwitchUsd` and per-call `modelSwitched`. The page reads "N from a model switch".
+- **`prompt-cache-avoidable-miss` alarms only on unexplained misses.** It now uses `AvoidableMiss − AgentSwitchMiss − ModelSwitchMiss`, so routine switches don't page. `WastedUsd` still carries every dollar.
+
+Rows written before this release are not backfilled.
 
 ---
 
@@ -346,6 +357,7 @@ None of the following is on in production. Each sits behind an in-development fl
 - app-api always receives `WORD_TRACKED_CHANGES_ENABLED` and `LARGE_DOCUMENT_ATTACHMENTS_ENABLED`, `false` while off. The next Platform deploy therefore re-registers its task definition (#1570, #1573).
 - One EventBridge rule for the TTFT probe, disabled until configured. Watch this if your stack is close to the 500-resource limit (#1547).
 - The turn-latency dashboard gains client and probe rows (#1546, #1547).
+- `prompt-cache-avoidable-miss` alarms on the metric math `AvoidableMiss − AgentSwitchMiss − ModelSwitchMiss`. It is the same alarm resource with the same threshold, so the resource count is unchanged (#1629).
 
 **Artifacts**
 - The artifacts CloudFront response-headers policy, and the render Lambda's CSP, allow `https://cdn.jsdelivr.net` in `style-src` and `font-src` for KaTeX (#1588).
@@ -415,7 +427,8 @@ These npm overrides were raised or added (#1620): `undici`, `hono`, `piscina`, `
 - A Markdown artifact with `$…$` math typesets it.
 
 **4. Expected after the deploy.**
-- **Model switches will register as avoidable cache misses.** Switching a model or effort level in place is now the default, and the first call after each switch is booked `miss_avoidable`. It counts toward the `prompt-cache-avoidable-miss` alarm and `wastedUsd`, because separate model-switch accounting did not land in this release. Read a spike against model switches before treating it as a regression.
+- **Model switches show up as explained misses.** Switching a model in place is now the default. The first call after each switch carries `modelSwitched`, counts in `ModelSwitchMiss`, and is left out of the `prompt-cache-avoidable-miss` alarm; its spend still appears in `wastedUsd`. When you read a cost spike, subtract `modelSwitchUsd` along with `agentSwitchUsd` to find unexplained waste.
+- **An effort change is not flagged.** It re-writes the prefix with the model unchanged, so it still books `miss_avoidable`. The dialog warns before one that costs money.
 - **api-converse alarms quiet down.** Batch API-key traffic no longer reads as misses. Real api-converse misses now show a non-zero `wastedUsd`.
 - **One cold start per conversation after the Runtime update**, as with any Runtime update.
 - **Weekly schedules made in the UI** show their real day, which is one day later than the label they had before. Tell users who scheduled weekly prompts.
