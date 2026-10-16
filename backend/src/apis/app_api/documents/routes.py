@@ -36,7 +36,7 @@ from apis.app_api.documents.services.storage_service import (
     generate_upload_url,
 )
 from apis.app_api.file_sources.service import require_file_source_token, resolve_file_source
-from apis.app_api.kb_upgrade.born_managed import STATUS_PROVISIONING, begin_born_managed
+from apis.app_api.kb_upgrade.born_managed import STATUS_PROVISIONING, begin_born_managed, initial_document_status
 from apis.shared.auth import User, get_current_user_from_session
 from apis.shared.oauth.provider_repository import (
     OAuthProviderRepository,
@@ -310,7 +310,7 @@ async def import_documents(
     """
     try:
         # 1. Verify the caller is the owner or an editor of this assistant.
-        await _require_edit_permission(assistant_id, current_user)
+        assistant_owner_id = await _require_edit_permission(assistant_id, current_user)
 
         # 2. Resolve the connector to a usable adapter + access token. Raises
         #    404/403 (not a visible file source), 409 (not connected), or 503
@@ -323,6 +323,10 @@ async def import_documents(
         # 3. Create a document record per file. Values are provisional — the
         #    async task backfills the real filename/type/size/key after the
         #    adapter download (Google-native docs change extension on export).
+        #    An import can be the agent's first knowledge, so it starts
+        #    born-managed provisioning like a first upload, and every file waits
+        #    on it while the knowledge base is built.
+        initial_status = await initial_document_status(assistant_id, owner_user_id=assistant_owner_id)
         created: list = []
         items: list = []
         for file_ref in request.files:
@@ -338,6 +342,7 @@ async def import_documents(
                 size_bytes=0,
                 s3_key=provisional_key,
                 document_id=document_id,
+                status=initial_status,
                 provenance=DocumentProvenance(
                     source_connector_id=provider.provider_id,
                     source_adapter_key=adapter.metadata.key,
@@ -637,8 +642,13 @@ async def delete_document(
         # Delete any sync policy covering this document so the schedule
         # cannot outlive its source (drive_file policies use the document
         # id as source_ref; crawl policies are cascaded with the CrawlJob)
-        from apis.shared.sync_policies.service import delete_sync_policies_for_source
+        from apis.shared.sync_policies.service import delete_sync_policies_for_source, exclude_folder_file
         await delete_sync_policies_for_source(assistant_id, document_id)
+        # A folder policy's file someone removed stays removed: its next run
+        # would otherwise find it in the folder and import it again
+        # (assistant-kb-sync.md §11.4). A no-op for any other policy.
+        if document.sync_policy_id and document.source_file_id:
+            await exclude_folder_file(assistant_id, document.sync_policy_id, document.source_file_id)
 
         # Fire-and-forget cleanup (response already sent as 204)
         asyncio.ensure_future(

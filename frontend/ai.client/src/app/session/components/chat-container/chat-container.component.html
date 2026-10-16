@@ -71,6 +71,7 @@
           [showAnnouncements]="showAnnouncements()"
           [announcementPlacement]="announcementPlacement()"
           [sessionId]="sessionId()"
+          [allowFolderAttachments]="allowFolderAttachments()"
           [draftKey]="draftKey()"
           [isChatLoading]="isChatLoading()"
           [showFileControls]="resolvedConfig().showFileControls"
@@ -83,8 +84,11 @@
       </div>
     </div>
   } @else {
-    <!-- Full-page mode: original layout -->
-    @if (isLoadingAssistant()) {
+    <!-- Full-page mode: original layout. A project task takes the greeting
+         layout below, its composer naming the project, never the launch
+         card or its skeleton: the harness Agent is the project's machinery,
+         not something the person chose to talk to. -->
+    @if (isLoadingAssistant() && !project()) {
       <!-- Agent is loading: skeleton in the launch card's own shape, so the real card
            lands in place rather than re-flowing a centered layout into a left-aligned one. -->
       <div
@@ -131,6 +135,8 @@
             [showAnnouncements]="showAnnouncements()"
           [announcementPlacement]="announcementPlacement()"
             [sessionId]="sessionId()"
+            [allowFolderAttachments]="allowFolderAttachments()"
+            [showScopePicker]="showScopePicker()"
             [draftKey]="draftKey()"
             [isChatLoading]="isChatLoading()"
             [showFileControls]="resolvedConfig().showFileControls"
@@ -142,7 +148,7 @@
           </app-chat-input>
         </div>
       </div>
-    } @else if (assistant()) {
+    } @else if (assistant() && !project()) {
       <!-- Assistant selected: show only assistant card with fixed input at bottom -->
       <div
         class="chat-container-empty full-page"
@@ -180,6 +186,8 @@
             [showAnnouncements]="showAnnouncements()"
           [announcementPlacement]="announcementPlacement()"
             [sessionId]="sessionId()"
+            [allowFolderAttachments]="allowFolderAttachments()"
+            [showScopePicker]="showScopePicker()"
             [draftKey]="draftKey()"
             [isChatLoading]="isChatLoading()"
             [showFileControls]="resolvedConfig().showFileControls"
@@ -234,6 +242,9 @@
               [showAnnouncements]="showAnnouncements()"
           [announcementPlacement]="announcementPlacement()"
               [sessionId]="sessionId()"
+              [allowFolderAttachments]="allowFolderAttachments()"
+              [showScopePicker]="showScopePicker()"
+              [project]="project()"
               [draftKey]="draftKey()"
               [isChatLoading]="isChatLoading()"
               [showFileControls]="resolvedConfig().showFileControls"
@@ -285,6 +296,7 @@
             [showAnnouncements]="showAnnouncements()"
             [announcementPlacement]="announcementPlacement()"
             [sessionId]="sessionId()"
+            [allowFolderAttachments]="allowFolderAttachments()"
             [draftKey]="draftKey()"
             [isChatLoading]="isChatLoading()"
             [showFileControls]="resolvedConfig().showFileControls"
@@ -340,6 +352,7 @@
             [showAnnouncements]="showAnnouncements()"
             [announcementPlacement]="announcementPlacement()"
             [sessionId]="sessionId()"
+            [allowFolderAttachments]="allowFolderAttachments()"
             [draftKey]="draftKey()"
             [isChatLoading]="isChatLoading()"
             [showFileControls]="resolvedConfig().showFileControls"
@@ -348,6 +361,7 @@
             (messageCancelled)="onMessageCancelled()"
             (fileAttached)="onFileAttached($event)"
             [compact]="true"
+            [project]="project()"
           >
             <!-- Context meter (cost lives in its panel), beside the model
                  picker; unpinned so it follows the viewed session. -->

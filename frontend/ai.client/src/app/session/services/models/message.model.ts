@@ -43,6 +43,27 @@ export interface FileAttachmentData {
 }
 
 /**
+ * A Drive folder attached to a user message, for the folder chip
+ * (docs/specs/drive-folder-attachments.md §4.7). Built from the folder row at
+ * send time, and from the `<folder …>` manifest in the stored message on reload,
+ * so a reloaded chip shows exactly the files the model was given.
+ */
+export interface FolderAttachmentData {
+  /** Known for a message sent in this tab; absent on one rebuilt from history. */
+  folderAttachId?: string;
+  name: string;
+  /** The connector's display name ("Google Drive for Employees"). */
+  source: string | null;
+  /** expanding | ready | partial | failed, as of the send. */
+  status: string;
+  fileCount: number;
+  /** Paths inside the folder, as the manifest lists them (bounded by it). */
+  files: string[];
+  /** Files beyond `files` the manifest counted but did not list. */
+  moreCount: number;
+}
+
+/**
  * Citation data from RAG retrieval.
  * Sent as SSE events before the assistant response starts streaming.
  */
@@ -114,6 +135,8 @@ export interface ContentBlock {
    * tool rail's durations.
    */
   reasoningDurationMs?: number;
+  /** Folder attachment (if type is folderAttachment) - for the folder chip in user messages */
+  folderAttachment?: FolderAttachmentData;
   /** File attachment metadata (if type is fileAttachment) - for displaying file badges in user messages */
   fileAttachment?: FileAttachmentData | null;
 }
@@ -167,6 +190,15 @@ export interface Message {
    * into two groups (and does not move the scroll reserve mid-stream).
    */
   steering?: boolean;
+  /**
+   * Set on a user message whose request was refused before any of the
+   * response streamed — the BFF or the Runtime answered non-2xx, or the
+   * connection never opened. The agent never saw it, so the bubble says so
+   * and offers a retry (`FailedSendService`) instead of looking delivered.
+   * Client-only: the backend never persisted the message, so a reload drops
+   * the bubble along with the flag.
+   */
+  sendFailure?: { reason: string };
 }
 
 // ============================================================================

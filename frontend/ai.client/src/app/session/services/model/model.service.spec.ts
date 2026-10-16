@@ -353,6 +353,31 @@ describe('ModelService', () => {
     });
   });
 
+  describe('effortFor', () => {
+    const withEffort = (modelId: string): ManagedModel => ({
+      ...mockModels[0],
+      modelId,
+      supportedParams: { params: { effort: { supported: true, allowed: ['low', 'high'], default: 'low' } } as never },
+    });
+
+    it("gives each model its own level, not the selected model's", async () => {
+      const opus = withEffort('opus');
+      const sonnet = withEffort('sonnet');
+      await setupWith({ models: [opus, sonnet], totalCount: 2 });
+      service.setSelectedModel(opus);
+      service.setEffort('high');
+
+      expect(service.selectedEffort()).toBe('high');
+      expect(service.effortFor(opus)).toBe('high');
+      expect(service.effortFor(sonnet)).toBe('low');
+    });
+
+    it('is null for a model without an effort control', async () => {
+      await setup();
+      expect(service.effortFor(mockModels[0])).toBeNull();
+    });
+  });
+
   describe('setSelectedModel', () => {
     beforeEach(setup);
 

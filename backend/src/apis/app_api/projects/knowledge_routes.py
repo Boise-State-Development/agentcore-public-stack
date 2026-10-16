@@ -7,10 +7,17 @@ over the document and web-crawl routes, authorized by the project instead:
     project, then call the agent's own route handler for the harness. That
     handler re-checks access through the harness's project delegation and keeps
     all of its logic (knowledge-base provisioning, the byte cap, cleanup).
+  - **Sync schedules** (``/sync-policies``) keep a crawled site or an imported
+    Drive file fresh. They are editor-only, like the agent's own sync routes,
+    which they call for the harness.
   - **Reads** (list, status, download) need only a viewer. The agent routes are
     editor-only, which is right for an ordinary agent and wrong for a project
     whose viewers should see its files, so reads call the document service
     directly, with the harness's owner id the service keys on.
+
+Projects are native to managed (Bedrock) knowledge bases: adding the first file
+starts born-managed provisioning on every path, and a file is refused rather than
+ever added to a classic knowledge base.
 
 Every document says who added it (``addedByEmail``, and ``addedByName`` from
 the directory), resolved from the member list, so a former member's files show
@@ -35,7 +42,15 @@ from apis.app_api.documents.models import (
     ReportUploadFailureRequest,
 )
 from apis.app_api.documents.services.document_service import get_document, list_assistant_documents
+from apis.app_api.kb_upgrade.born_managed import begin_born_managed
 from apis.app_api.documents.services.storage_service import generate_download_url
+from apis.app_api.sync_policies import routes as sync_routes
+from apis.app_api.sync_policies.models import (
+    CreateSyncPolicyRequest,
+    SyncPoliciesListResponse,
+    SyncPolicyResponse,
+    UpdateSyncPolicyRequest,
+)
 from apis.app_api.web_sources import routes as crawl_routes
 from apis.app_api.web_sources.models import ActiveCrawlsResponse, CrawlJob, StartCrawlRequest
 from apis.shared.assistants.models import Assistant
@@ -101,6 +116,28 @@ def _document(doc, emails: Dict[str, str], names: Dict[str, str]) -> ProjectDocu
     )
 
 
+async def _require_managed_knowledge(harness: Assistant) -> None:
+    """Refuse to add a project's file to anything but a managed knowledge base.
+
+    ``begin_born_managed`` starts (or joins) provisioning for a project with no
+    knowledge yet and is idempotent, so the agent handler calling it again is a
+    no-op. It answers "legacy" when ``MANAGED_KB_NEW_DEFAULT`` is off, the start
+    failed, or the harness already holds classic documents; the agent handlers
+    would then carry on on the classic engine, which a project never uses.
+    """
+    from apis.shared.kb_backend.records import ENGINE_MANAGED, get_kb_record, resolve_engine
+
+    await begin_born_managed(harness.assistant_id, owner_user_id=harness.owner_id)
+    record = await asyncio.to_thread(get_kb_record, harness.assistant_id, harness.assistant_id)
+    if resolve_engine(record) == ENGINE_MANAGED:
+        return
+    logger.warning("project harness %s: no managed knowledge base; refusing the file", harness.assistant_id)
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="The project's knowledge base can't be set up right now. Try again in a few minutes.",
+    )
+
+
 async def _names(emails: Dict[str, str]) -> Dict[str, str]:
     return await asyncio.to_thread(display_names, set(emails.values()))
 
@@ -126,6 +163,7 @@ async def start_crawl(
     project_id: str, body: StartCrawlRequest, user: User = Depends(require_projects_user)
 ) -> ProjectStartCrawlResponse:
     project, harness = await _editor(project_id, user)
+    await _require_managed_knowledge(harness)
     result = await crawl_routes.start_crawl(harness.assistant_id, body, user)
     _svc().record(AuditAction.PROJECT_KNOWLEDGE_ADDED, user, project_id, after={"url": body.url, "source": "web"})
     return ProjectStartCrawlResponse(**result.model_dump(), notice=sharing_notice(project))
@@ -151,6 +189,56 @@ async def get_crawl(project_id: str, crawl_id: str, user: User = Depends(require
 async def delete_crawl(project_id: str, crawl_id: str, user: User = Depends(require_projects_user)) -> None:
     _, harness = await _editor(project_id, user)
     await crawl_routes.delete_crawl(harness.assistant_id, crawl_id, user)
+
+
+# ---- sync schedules (editor) --------------------------------------------
+# Also before ``/{document_id}``. A schedule re-fetches with the credentials of
+# the editor who set it, so it is theirs to set; the dispatcher's guards (and
+# its inactivity pause, fed by project chat turns) apply unchanged.
+
+
+@router.get("/sync-policies", response_model=SyncPoliciesListResponse, response_model_by_alias=True)
+async def list_sync_policies(project_id: str, user: User = Depends(require_projects_user)) -> SyncPoliciesListResponse:
+    _, harness = await _editor(project_id, user, writable=False)
+    return await sync_routes.list_policies(harness.assistant_id, user)
+
+
+@router.post(
+    "/sync-policies",
+    response_model=SyncPolicyResponse,
+    response_model_by_alias=True,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_sync_policy(
+    project_id: str, body: CreateSyncPolicyRequest, user: User = Depends(require_projects_user)
+) -> SyncPolicyResponse:
+    _, harness = await _editor(project_id, user)
+    return await sync_routes.create_policy(harness.assistant_id, body, user)
+
+
+@router.patch("/sync-policies/{policy_id}", response_model=SyncPolicyResponse, response_model_by_alias=True)
+async def update_sync_policy(
+    project_id: str, policy_id: str, body: UpdateSyncPolicyRequest, user: User = Depends(require_projects_user)
+) -> SyncPolicyResponse:
+    _, harness = await _editor(project_id, user)
+    return await sync_routes.update_policy(harness.assistant_id, policy_id, body, user)
+
+
+@router.delete("/sync-policies/{policy_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_sync_policy(project_id: str, policy_id: str, user: User = Depends(require_projects_user)) -> None:
+    _, harness = await _editor(project_id, user)
+    await sync_routes.delete_policy(harness.assistant_id, policy_id, user)
+
+
+@router.post(
+    "/sync-policies/{policy_id}/run-now",
+    response_model=SyncPolicyResponse,
+    response_model_by_alias=True,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def run_sync_now(project_id: str, policy_id: str, user: User = Depends(require_projects_user)) -> SyncPolicyResponse:
+    _, harness = await _editor(project_id, user)
+    return await sync_routes.run_now(harness.assistant_id, policy_id, user)
 
 
 # ---- reads (viewer) -----------------------------------------------------
@@ -209,6 +297,7 @@ async def upload_file(
 ) -> ProjectUploadUrlResponse:
     """Start an upload: a presigned URL, plus the notice that every member can read the file."""
     project, harness = await _editor(project_id, user)
+    await _require_managed_knowledge(harness)
     result = await document_routes.generate_upload_url_endpoint(harness.assistant_id, body, user)
     _svc().record(
         AuditAction.PROJECT_KNOWLEDGE_ADDED, user, project_id,
@@ -232,6 +321,7 @@ async def import_files(
 ) -> ProjectImportResponse:
     """Import files from the caller's connected file source (their credentials, the project's files)."""
     project, harness = await _editor(project_id, user)
+    await _require_managed_knowledge(harness)
     result = await document_routes.import_documents(harness.assistant_id, body, user, provider_repo, role_service)
     for doc in result.documents:
         _svc().record(

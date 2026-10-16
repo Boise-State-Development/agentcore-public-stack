@@ -16,6 +16,7 @@ import {
   recoverFromStaleChunkNavigation,
 } from './services/app-update/app-update.providers';
 import { ConfigService } from './services/config.service';
+import { RouteScrollService } from './services/route-scroll/route-scroll.service';
 import { durableDownloadUrlFromHref } from './shared/utils/file-download-url';
 import { installLazyMermaid } from './shared/utils/lazy-mermaid';
 import { installKatexMathExtensions } from './shared/utils/katex-math-markdown';
@@ -95,6 +96,12 @@ export const appConfig: ApplicationConfig = {
     // app.html because a CDK overlay is not a layout element — and because
     // nothing else would ever inject it. Same pattern as ThemeService above.
     provideAppInitializer(() => { inject(AnnouncementModalService); }),
+
+    // The shell scrolls a container, not the window, so the router's own
+    // scroll restoration never applies. This service starts each newly opened
+    // page at the top and restores a page the user returns to. Started here so
+    // it is listening before the first navigation; nothing else injects it.
+    provideAppInitializer(() => { inject(RouteScrollService); }),
 
     // ngx-markdown's `mermaid` plugin reads the library off the global scope
     // and throws if it isn't there. Publishing a stand-in before the first

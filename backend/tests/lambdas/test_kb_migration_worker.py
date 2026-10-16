@@ -81,6 +81,15 @@ def _no_corpus_adoption():
 
 
 @pytest.fixture(autouse=True)
+def _no_documents_table():
+    """``run_promote`` re-reads the corpus before cutting over. Tests that care
+    about the documents patch ``list_document_items`` themselves; the rest have
+    no table, so by default there is nothing complete."""
+    with patch.object(worker, "list_document_items", return_value=[]):
+        yield
+
+
+@pytest.fixture(autouse=True)
 def lease_release():
     """``run_step`` releases its lease through the real table once a step ends.
     Tests that stub ``take_lease`` have no table, so unpatched the release would
@@ -100,15 +109,30 @@ async def _async_noop(*args, **kwargs):
     return None
 
 
+async def _async_value(value):
+    return value
+
+
 class StubBackend:
     """Records what it was asked to ingest, delete and search."""
 
-    def __init__(self, chunks: List[Chunk] = None):
+    def __init__(self, chunks: List[Chunk] = None, statuses: Dict[str, Any] = None):
         self.ingested: List[str] = []
         self.searched: List[str] = []
         self._chunks = chunks if chunks is not None else [
             Chunk(text="hit", relevance=1.0, document_id="d1", metadata={"document_id": "d1"})
         ]
+        # Bedrock's status per document id; anything not named is INDEXED. A
+        # value that is an exception is raised, as a failed status call would be.
+        self.statuses = statuses or {}
+
+    async def document_statuses(self, kb_ref, document_ids):
+        if isinstance(self.statuses, Exception):
+            raise self.statuses
+        return {
+            document_id: self.statuses.get(document_id, ("INDEXED", None))
+            for document_id in document_ids
+        }
 
     async def ingest_documents(self, kb_ref, sources, *, batch_size=10):
         self.ingested.extend(source.document_id for source in sources)
@@ -819,15 +843,140 @@ class TestVerify:
         def _set_state(assistant_id, app_kb_id, new_state, generation, due=None, expected=None, error=None):
             transitions.append((new_state, expected))
 
+        progress: List[dict] = []
+
+        async def _progress(*args, **kwargs):
+            progress.append(kwargs)
+
         with patch.dict("os.environ", BASE_ENV, clear=True), patch.object(
             worker, "list_document_items", return_value=[_doc("d1")]
-        ), patch("apis.shared.kb_backend.records.set_migration_state", side_effect=_set_state):
+        ), patch.object(worker, "_record_progress", _progress), patch(
+            "apis.shared.kb_backend.records.set_migration_state", side_effect=_set_state
+        ):
             result = await worker.run_verify(
                 ASSISTANT_ID, ASSISTANT_ID, _kb_record(r.VERIFY), backend
             )
 
         assert result.to_state == r.PROMOTE
         assert transitions == [(r.PROMOTE, [r.VERIFY])]
+        # Promotion's `migrated = total` guard now certifies Bedrock's own answer.
+        assert progress == [{"migrated": 1, "total": 1, "skipped": 0}]
+
+    async def _verify(self, docs, backend, record=None, **patches):
+        """Run verify over ``docs`` with the state machine's writes captured."""
+        writes = {"states": [], "updates": [], "deferred": 0}
+
+        def _set_state(assistant_id, app_kb_id, new_state, generation, due=None, expected=None, error=None):
+            writes["states"].append((new_state, expected))
+
+        def _defer(*_args):
+            writes["deferred"] += 1
+            return patches.get("attempts", writes["deferred"])
+
+        def _update(*_args, **kwargs):
+            writes["updates"].append(kwargs)
+            return True
+
+        async def _progress(*_args, **_kwargs):
+            return None
+
+        with patch.dict("os.environ", BASE_ENV, clear=True), patch.object(
+            worker, "list_document_items", return_value=docs
+        ), patch.object(worker, "_record_progress", _progress), patch.object(
+            worker, "_table", return_value=MagicMock()
+        ), patch("apis.shared.kb_backend.records.set_migration_state", side_effect=_set_state), patch(
+            "apis.shared.kb_backend.records.defer_verify", side_effect=_defer
+        ), patch("apis.shared.kb_backend.records.update_if_present", side_effect=_update):
+            result = await worker.run_verify(
+                ASSISTANT_ID, ASSISTANT_ID, record or _kb_record(r.VERIFY), backend
+            )
+        return result, writes
+
+    @pytest.mark.asyncio
+    async def test_a_document_bedrock_failed_to_index_fails_the_migration(self):
+        """Promoting would drop a document that answers on legacy today, silently:
+        the canary only needs one hit and the progress guard only counted hand-overs."""
+        backend = StubBackend(statuses={"d2": ("FAILED", "Unsupported file content")})
+        with pytest.raises(worker.VerificationFailed) as failed:
+            await self._verify([_doc("d1"), _doc("d2")], backend)
+        assert "d2.pdf" in str(failed.value)
+        assert "Unsupported file content" in str(failed.value)
+        assert backend.searched == [], "ran the canary on a corpus already known to be incomplete"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status", ["METADATA_UPDATE_FAILED", "IGNORED"])
+    async def test_a_document_bedrock_will_not_serve_fails_the_migration(self, status):
+        backend = StubBackend(statuses={"d1": (status, None)})
+        with pytest.raises(worker.VerificationFailed, match="could not index"):
+            await self._verify([_doc("d1")], backend)
+
+    @pytest.mark.asyncio
+    async def test_a_document_bedrock_never_received_goes_back_to_shadow(self):
+        backend = StubBackend(statuses={"d2": ("NOT_FOUND", None)})
+        result, writes = await self._verify([_doc("d1"), _doc("d2")], backend)
+
+        assert result.to_state == r.SHADOW
+        assert writes["states"] == [(r.SHADOW, [r.VERIFY])]
+        update = writes["updates"][0]
+        assert update["ExpressionAttributeValues"][":ids"] == {"d2"}, "shadow would skip it as done"
+        assert "REMOVE verifyAttempts" in update["UpdateExpression"]
+        assert backend.searched == []
+
+    @pytest.mark.asyncio
+    async def test_re_sending_is_bounded(self):
+        backend = StubBackend(statuses={"d1": ("NOT_FOUND", None)})
+        record = _kb_record(r.VERIFY, verifyResends=Decimal(worker.MAX_VERIFY_RESENDS))
+        with pytest.raises(worker.VerificationFailed, match="no record"):
+            await self._verify([_doc("d1")], backend, record)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status", ["IN_PROGRESS", "TEXT_INDEXED", "SOMETHING_NEW"])
+    async def test_a_document_still_indexing_defers(self, status):
+        backend = StubBackend(statuses={"d1": (status, None)})
+        result, writes = await self._verify([_doc("d1")], backend)
+        assert (result.to_state, writes["deferred"]) == (r.VERIFY, 1)
+        assert "still indexing" in result.detail
+        assert backend.searched == []
+
+    @pytest.mark.asyncio
+    async def test_an_unreadable_status_defers_rather_than_failing(self):
+        backend = StubBackend(statuses=RuntimeError("ThrottlingException"))
+        result, writes = await self._verify([_doc("d1")], backend)
+        assert (result.to_state, writes["deferred"]) == (r.VERIFY, 1)
+
+    @pytest.mark.asyncio
+    async def test_indexing_that_never_finishes_eventually_fails(self):
+        backend = StubBackend(statuses={"d1": ("IN_PROGRESS", None)})
+        with pytest.raises(worker.VerificationFailed, match="attempts over"):
+            await self._verify([_doc("d1")], backend, attempts=worker.MAX_VERIFY_ATTEMPTS + 1)
+
+    @pytest.mark.asyncio
+    async def test_partially_indexed_documents_verify(self):
+        backend = StubBackend(statuses={"d1": ("PARTIALLY_INDEXED", None)})
+        result, _ = await self._verify([_doc("d1")], backend)
+        assert result.to_state == r.PROMOTE
+
+    @pytest.mark.asyncio
+    async def test_a_failure_is_stored_with_its_type_for_the_upgrade_card(self):
+        """The card picks its copy by the error's type name; stored without it,
+        every expected failure fell through to the generic message."""
+        failed = []
+
+        async def _verify(*_args, **_kwargs):
+            raise worker.DocumentsNotIndexed("Bedrock could not index 1 document(s): d1.pdf.")
+
+        async def _fail(assistant_id, app_kb_id, generation, reason):
+            failed.append(reason)
+
+        with patch.dict("os.environ", BASE_ENV, clear=True), patch(
+            "apis.shared.kb_backend.records.get_kb_record", return_value=_kb_record(r.VERIFY)
+        ), patch.object(worker, "take_lease", side_effect=lambda *a: _async_value("lease")), patch.object(
+            worker, "run_verify", _verify
+        ), patch.object(worker, "_fail", _fail), patch("apis.shared.kb_backend.metrics.emit_count"):
+            result = await worker.run_step(ASSISTANT_ID)
+
+        assert result.to_state == r.MIGRATION_FAILED
+        assert failed == ["DocumentsNotIndexed: Bedrock could not index 1 document(s): d1.pdf."]
 
     def test_the_canary_query_is_built_from_the_corpus(self):
         """Not a fixed string: a constant like "test" can legitimately match
@@ -873,6 +1022,25 @@ class TestPromote:
 
         assert calls == ["promote", "retain_until", "state"]
         assert result.to_state == r.RETAIN
+
+    @pytest.mark.asyncio
+    async def test_a_document_added_after_verify_sends_it_back_round(self):
+        """Uploads keep landing on legacy until the cutover; promoting past one
+        would strand it on an engine nobody reads."""
+        transitions: List[tuple] = []
+        record = _kb_record(r.PROMOTE, migratedDocIds={"d1"})
+
+        with patch.dict("os.environ", BASE_ENV, clear=True), patch.object(
+            worker, "list_document_items", return_value=[_doc("d1"), _doc("late")]
+        ), patch("apis.shared.kb_backend.records.promote_engine") as promote, patch(
+            "apis.shared.kb_backend.records.set_migration_state",
+            side_effect=lambda *a, **k: transitions.append((a[2], a[5])),
+        ):
+            result = await worker.run_promote(ASSISTANT_ID, ASSISTANT_ID, record)
+
+        promote.assert_not_called()
+        assert result.to_state == r.SHADOW
+        assert transitions == [(r.SHADOW, [r.PROMOTE])]
 
     @pytest.mark.asyncio
     async def test_concurrent_promotion_yields_one_winner(self):
@@ -1044,6 +1212,39 @@ class TestResumingWithoutRedoingWork:
         assert sorted(captured["newly_done"]) == ["d1", "d2"], (
             "a count alone cannot tell a resume *which* documents to skip"
         )
+
+    @pytest.mark.asyncio
+    async def test_progress_counts_the_corpus_not_the_hand_overs(self):
+        """Writing the handed-over count as both numbers made promotion's
+        `migrated = total` guard true by construction."""
+        captured = {}
+
+        async def _progress(assistant_id, app_kb_id, *, migrated, total, skipped, newly_done=None):
+            captured.update(migrated=migrated, total=total)
+
+        listings = iter([
+            [_doc("d1")],                 # the snapshot
+            [_doc("d1")],                 # catch-up: quiet
+            [_doc("d1"), _doc("late")],   # completed after catch-up converged
+        ])
+        with patch.dict("os.environ", BASE_ENV, clear=True), patch.object(
+            worker, "list_document_items", side_effect=lambda _a: next(listings)
+        ), patch.object(
+            worker, "get_document_item", side_effect=lambda a, d: _doc(d)
+        ), patch(
+            "apis.shared.kb_backend.byte_cap.reserve_snapshot"
+        ), patch(
+            "apis.shared.kb_backend.provisioning.provision_managed_kb", side_effect=_async_noop
+        ), patch(
+            "apis.shared.kb_backend.metrics.emit_count"
+        ), patch.object(
+            worker, "_record_progress", side_effect=_progress
+        ), patch(
+            "apis.shared.kb_backend.records.set_migration_state"
+        ):
+            await worker.run_shadow(ASSISTANT_ID, ASSISTANT_ID, _kb_record(), StubBackend())
+
+        assert captured == {"migrated": 1, "total": 2}
 
     @pytest.mark.asyncio
     async def test_a_record_already_promoted_finishes_instead_of_failing(self):

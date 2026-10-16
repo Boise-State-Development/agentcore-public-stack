@@ -18,12 +18,14 @@ import {
 } from '../models/web-source.model';
 import { WebSourceError, WebSourceService } from '../services/web-source.service';
 import { ToastService } from '../../services/toast/toast.service';
+import { KnowledgeTarget } from '../models/knowledge-target.model';
 import { DialogShellComponent } from '../../components/dialog/dialog-shell.component';
 import { SpinnerComponent } from '../../components/spinner/spinner.component';
 
-/** Data passed in when the assistant editor opens the dialog. */
+/** Data passed in when an agent's knowledge base or a project's Files opens the dialog. */
 export interface WebSourceDialogData {
-  assistantId: string;
+  /** The agent (by id) or project the web content is added to. */
+  target: KnowledgeTarget;
 }
 
 /**
@@ -145,7 +147,7 @@ export class WebSourceDialogComponent {
     this.error.set(null);
     try {
       const response = await this.webSourceService.startCrawl(
-        this.data.assistantId,
+        this.data.target,
         { url, settings },
       );
       this.dialogRef.close(response.documents);

@@ -86,7 +86,7 @@ describe('ScheduleFormPage', () => {
         { provide: ToastService, useValue: mockToast },
         {
           provide: ActivatedRoute,
-          useValue: { snapshot: { paramMap: { get: (key: string) => routeParams[key] ?? null } } },
+          useValue: { snapshot: { paramMap: { get: (key: string) => routeParams[key] ?? null }, queryParamMap: { get: () => null } } },
         },
       ],
     })
@@ -112,10 +112,43 @@ describe('ScheduleFormPage', () => {
       expect(component.scheduleId()).toBeNull();
     });
 
-    it('defaults weekday to Monday the first time weekly is chosen', () => {
+    it('defaults weekday to Monday (0) the first time weekly is chosen', () => {
       expect(component.form.controls.weekday.value).toBeNull();
       component.form.controls.cadence.setValue('weekly');
-      expect(component.form.controls.weekday.value).toBe(1);
+      expect(component.form.controls.weekday.value).toBe(0);
+      expect(component.weekdayLabels[0]).toBe('Monday');
+    });
+
+    // The picker's option value is its index, and the backend runs index 0 on a
+    // Monday (`compute_next_run_at`), so the label at each index must be the day
+    // the dispatcher runs.
+    it('offers the days Monday first, matching the backend 0=Monday..6=Sunday', () => {
+      expect(component.weekdayLabels).toEqual([
+        'Monday',
+        'Tuesday',
+        'Wednesday',
+        'Thursday',
+        'Friday',
+        'Saturday',
+        'Sunday',
+      ]);
+    });
+
+    it('sends the picked day as its 0=Monday index', async () => {
+      component.form.patchValue({
+        label: 'Test',
+        promptText: 'Do the thing',
+        cadence: 'weekly',
+        hourLocal: 8,
+        timezone: 'UTC',
+      });
+      component.form.controls.weekday.setValue(component.weekdayLabels.indexOf('Sunday'));
+
+      await component.onSubmit();
+
+      expect(mockScheduleService.createSchedule).toHaveBeenCalledWith(
+        expect.objectContaining({ cadence: 'weekly', weekday: 6 }),
+      );
     });
 
     it('rejects submit when required fields are missing', async () => {
@@ -131,7 +164,7 @@ describe('ScheduleFormPage', () => {
         hourLocal: 8,
         timezone: 'UTC',
       });
-      component.toggleTool('class_search');
+      component.onToolSelectionChange(new Set(['class_search']));
 
       await component.onSubmit();
 
@@ -157,7 +190,7 @@ describe('ScheduleFormPage', () => {
       });
       // Pick some tools first, then target an agent — the agent's bound tools
       // govern the run, so the snapshot must not be sent.
-      component.toggleTool('class_search');
+      component.onToolSelectionChange(new Set(['class_search']));
       component.form.controls.assistantId.setValue('ast-9');
 
       expect(component.agentSelected()).toBe(true);
@@ -170,7 +203,7 @@ describe('ScheduleFormPage', () => {
 
     it('run now targets the selected agent and omits the tool snapshot', () => {
       component.form.patchValue({ label: 'Test', promptText: 'Do the thing' });
-      component.toggleTool('class_search');
+      component.onToolSelectionChange(new Set(['class_search']));
       component.form.controls.assistantId.setValue('ast-9');
 
       component.runNow();
@@ -247,7 +280,7 @@ describe('ScheduleFormPage', () => {
       const router = TestBed.inject(Router);
       const navigateSpy = vi.spyOn(router, 'navigate').mockResolvedValue(true);
       component.form.patchValue({ label: 'Test', promptText: 'Do the thing' });
-      component.toggleTool('class_search');
+      component.onToolSelectionChange(new Set(['class_search']));
 
       component.runNow();
 

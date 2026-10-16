@@ -11,11 +11,13 @@ import {
   inject,
 } from '@angular/core';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroArrowTurnDownRight } from '@ng-icons/heroicons/outline';
-import { ContentBlock, Message, FileAttachmentData } from '../../../services/models/message.model';
+import { heroArrowPath, heroArrowTurnDownRight, heroExclamationCircle } from '@ng-icons/heroicons/outline';
+import { ContentBlock, Message, FileAttachmentData, FolderAttachmentData } from '../../../services/models/message.model';
+import { FolderAttachmentChipComponent } from './folder-attachment/folder-attachment-chip.component';
 import { FileAttachmentBadgeComponent, ImageAttachmentGroupComponent } from './file-attachment';
 import { MentionTextComponent } from './mention-text.component';
 import { LocalSettingsService } from '../../../../services/local-settings.service';
+import { FailedSendService } from '../../../services/chat/failed-send.service';
 import { parseIso } from '../../../../utils/date';
 
 function isImageMimeType(mimeType: string): boolean {
@@ -27,10 +29,10 @@ const MAX_HEIGHT_PX = 200;
 @Component({
   selector: 'app-user-message',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FileAttachmentBadgeComponent, ImageAttachmentGroupComponent, MentionTextComponent, NgIcon],
-  viewProviders: [provideIcons({ heroArrowTurnDownRight })],
+  imports: [FileAttachmentBadgeComponent, FolderAttachmentChipComponent, ImageAttachmentGroupComponent, MentionTextComponent, NgIcon],
+  viewProviders: [provideIcons({ heroArrowTurnDownRight, heroExclamationCircle, heroArrowPath })],
   template: `
-    @if (hasTextContent() || hasFileAttachments()) {
+    @if (hasTextContent() || hasFileAttachments() || folderAttachments().length > 0) {
       <div class="group relative flex w-full flex-col items-end gap-2">
         <!-- Hover-revealed sent-at subtitle (positioned above the topmost slot) -->
         @if (formattedSentAt()) {
@@ -116,6 +118,42 @@ const MAX_HEIGHT_PX = 200;
             }
           </div>
         }
+
+        <!-- Drive folders (drive-folder spec §4.7): one chip each, expanding to its files -->
+        @if (folderAttachments().length > 0) {
+          <div class="flex max-w-[80%] flex-wrap justify-end gap-2">
+            @for (folder of folderAttachments(); track $index) {
+              <app-folder-attachment-chip [folder]="folder" />
+            }
+          </div>
+        }
+
+        <!--
+          The request was refused before any reply streamed, so the agent never
+          saw this. Said on the message itself: a toast is gone in seconds and
+          leaves a bubble that looks delivered with nothing under it.
+        -->
+        @if (message().sendFailure; as failure) {
+          <div
+            role="alert"
+            class="flex max-w-[80%] flex-wrap items-center justify-end gap-x-2 gap-y-1 pr-1 text-xs text-state-danger-600 dark:text-state-danger-400"
+          >
+            <span class="flex items-center gap-1">
+              <ng-icon name="heroExclamationCircle" class="size-4" aria-hidden="true" />
+              <span><span class="font-medium">Not sent.</span> {{ failure.reason }}</span>
+            </span>
+            @if (canRetry()) {
+              <button
+                type="button"
+                (click)="retry()"
+                class="flex items-center gap-1 rounded-full px-2 py-0.5 font-medium text-gray-700 ring-1 ring-gray-300 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-200 dark:ring-gray-600 dark:hover:bg-gray-800"
+              >
+                <ng-icon name="heroArrowPath" class="size-3.5" aria-hidden="true" />
+                Retry
+              </button>
+            }
+          </div>
+        }
       </div>
     }
   `,
@@ -134,6 +172,14 @@ export class UserMessageComponent implements AfterViewInit, OnDestroy {
   isOverflowing = signal(false);
 
   private localSettings = inject(LocalSettingsService);
+  private failedSends = inject(FailedSendService);
+
+  /** Offered only while a resend could start a turn — see FailedSendService. */
+  canRetry = computed(() => this.failedSends.canRetry(this.message().id));
+
+  retry(): void {
+    this.failedSends.retry(this.message().id);
+  }
 
   readonly maxHeightPx = MAX_HEIGHT_PX;
 
@@ -203,6 +249,12 @@ export class UserMessageComponent implements AfterViewInit, OnDestroy {
       .filter((block: ContentBlock) => block.type === 'fileAttachment' && block.fileAttachment)
       .map((block: ContentBlock) => block.fileAttachment as FileAttachmentData);
   });
+
+  folderAttachments = computed((): FolderAttachmentData[] =>
+    this.message()
+      .content.filter((block: ContentBlock) => block.type === 'folderAttachment' && block.folderAttachment)
+      .map((block: ContentBlock) => block.folderAttachment as FolderAttachmentData),
+  );
 
   imageAttachments = computed((): FileAttachmentData[] =>
     this.fileAttachments().filter((a) => isImageMimeType(a.mimeType)),

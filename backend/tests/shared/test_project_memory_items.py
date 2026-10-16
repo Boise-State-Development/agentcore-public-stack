@@ -249,7 +249,7 @@ class TestTheTool:
         tools = {t.tool_spec["name"]: t for t in make_project_memory_tools(
             ProjectMemoryScopes.for_member(team.project_id, team.shared_space_id, None, EDITOR))}
         agent = SimpleNamespace(_session_manager=SimpleNamespace(config=SimpleNamespace(session_id="sess-tool")))
-        result = asyncio.run(tools["memory_save"](scope="project", slug="sis", text=A, tool_context=SimpleNamespace(agent=agent)))
+        result = asyncio.run(tools["memory_save"](scope="project", slug="sis", text=A, description="", tool_context=SimpleNamespace(agent=agent)))
 
         assert result["status"] == "success"
         _, (item,), prov = _items(memory, team)

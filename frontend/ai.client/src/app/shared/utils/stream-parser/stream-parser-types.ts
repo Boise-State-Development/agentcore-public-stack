@@ -323,7 +323,7 @@ export interface ArtifactEvent {
  *
  * Best-effort by design: a stream that finishes before generation does
  * never emits this event, and the SPA's post-close metadata refresh
- * (ChatHttpService.refreshTitleFromServer) remains the fallback. Never
+ * (ChatHttpService.refreshNewSessionFromServer) remains the fallback. Never
  * carries the "New Conversation" placeholder.
  */
 export interface SessionTitleEvent {
@@ -383,8 +383,7 @@ export interface ModelRetryEvent {
  * Emitted before `message_start`. `message` is the ready-made sentence to
  * show; the structured fields say what was dropped. Not persisted — it
  * describes this turn's resolution, so it shows on the live turn only.
- * `projectId`, `unavailableModelId` and `unavailableMemory` are omitted when
- * null.
+ * `projectId` and `unavailableModelId` are omitted when null.
  */
 export interface AgentNoticeEvent {
   type: 'agent_notice';
@@ -395,7 +394,6 @@ export interface AgentNoticeEvent {
   unavailableModelId?: string;
   unavailableTools: string[];
   unavailableSkills: string[];
-  unavailableMemory?: string;
 }
 
 /**

@@ -2,6 +2,7 @@ import { Injectable, inject, signal, computed } from '@angular/core';
 import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../config.service';
+import { FEATURES, type FeatureFlags } from '../features';
 /**
  * File status enum matching backend FileStatus
  */
@@ -66,16 +67,117 @@ export const MAX_FILE_SIZE_BYTES = 4 * 1024 * 1024;
 export const PPTX_MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024;
 
 /**
- * Resolve the size cap that applies to a given file. Use this rather than
- * `MAX_FILE_SIZE_BYTES` directly at any gate, or a legitimate deck gets
- * rejected by whichever check was missed.
+ * Maximum size of a large document attached by reference (50MB).
+ *
+ * A document over `MAX_FILE_SIZE_BYTES` never rides inline: the backend
+ * prepares it off the request path and the model reads the parts it needs
+ * through `document_read` (docs/specs/large-document-attachments.md). Admitted
+ * only while `features.largeDocumentAttachments` is on.
+ *
+ * Must match `LARGE_DOCUMENT_MAX_BYTES` on the backend
+ * (`backend/src/apis/shared/files/models.py`), which is the enforcing side.
  */
-export function maxFileSizeFor(file: File): number {
+export const LARGE_DOCUMENT_MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024;
+
+/**
+ * MIME types `document_read` can read: the backend's `DOCUMENT_CLASS_FORMATS`
+ * (pdf, docx, txt, md, html), as `document_format_for` classifies them. CSV is
+ * text but tabular, so it routes to the spreadsheet tools instead.
+ */
+const DOCUMENT_CLASS_MIME_TYPES = new Set<string>([
+  'application/pdf',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'text/plain',
+  'text/markdown',
+  'text/html',
+]);
+
+/** Whether a file of this MIME type is a document `document_read` can read. */
+export function isDocumentClassMimeType(mimeType: string): boolean {
+  return DOCUMENT_CLASS_MIME_TYPES.has(mimeType);
+}
+
+/**
+ * Whether a file is attached by reference: a document over the inline limit
+ * and within the large-document ceiling. Mirrors the backend's one predicate,
+ * `is_reference_document`, for display only (the attachment chip); the backend
+ * decides how the file actually reaches the model.
+ */
+export function isReferenceDocument(mimeType: string, sizeBytes: number): boolean {
+  return (
+    isDocumentClassMimeType(mimeType) &&
+    sizeBytes > MAX_FILE_SIZE_BYTES &&
+    sizeBytes <= LARGE_DOCUMENT_MAX_FILE_SIZE_BYTES
+  );
+}
+
+/**
+ * Resolve the size cap that applies to a given file. Use this rather than
+ * `MAX_FILE_SIZE_BYTES` directly at any gate, or a legitimate deck (or, with
+ * large-document attachments on, a large PDF) gets rejected by whichever check
+ * was missed. `features` comes from the `FEATURES` token at the call site.
+ */
+export function maxFileSizeFor(
+  file: File,
+  features: Pick<FeatureFlags, 'largeDocumentAttachments'>,
+): number {
+  return attachmentSizeLimitFor(file.name, file.type, features);
+}
+
+/**
+ * The same cap, for a file known only by name and MIME type: an entry in a
+ * connected file source's listing, before it is downloaded.
+ */
+export function attachmentSizeLimitFor(
+  filename: string,
+  mimeType: string,
+  features: Pick<FeatureFlags, 'largeDocumentAttachments'>,
+): number {
   const isPptx =
-    file.name.toLowerCase().endsWith('.pptx') ||
-    file.type ===
-      'application/vnd.openxmlformats-officedocument.presentationml.presentation';
-  return isPptx ? PPTX_MAX_FILE_SIZE_BYTES : MAX_FILE_SIZE_BYTES;
+    filename.toLowerCase().endsWith('.pptx') ||
+    mimeType === 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+  if (isPptx) {
+    return PPTX_MAX_FILE_SIZE_BYTES;
+  }
+  if (
+    features.largeDocumentAttachments &&
+    isDocumentClassMimeType(resolveMimeTypeFor(filename, mimeType))
+  ) {
+    return LARGE_DOCUMENT_MAX_FILE_SIZE_BYTES;
+  }
+  return MAX_FILE_SIZE_BYTES;
+}
+
+/** The shape of a file-source listing entry the composer needs to judge. */
+export interface AttachableSourceFile {
+  name: string;
+  mimeType?: string | null;
+  /** What the file downloads as when an export changes it (a Google Doc → .docx). */
+  downloadMimeType?: string | null;
+  /** Unknown (null) for a provider-native document until it is exported. */
+  sizeBytes?: number | null;
+}
+
+/**
+ * Whether a file listed by a connected file source can be attached to a
+ * conversation: its downloaded type is one the chat accepts, and its size,
+ * when the provider knows it, is within that type's cap. Mirrors the checks
+ * `processFiles` runs on a device upload, so the browser greys a file out
+ * instead of letting the import fail after the download. The backend
+ * re-checks both once the bytes are in hand.
+ */
+export function isAttachableSourceFile(
+  file: AttachableSourceFile,
+  features: Pick<FeatureFlags, 'largeDocumentAttachments'>,
+): boolean {
+  const mime = resolveMimeTypeFor(file.name, file.downloadMimeType || file.mimeType || '');
+  if (!isAllowedMimeType(mime)) {
+    return false;
+  }
+  if (file.sizeBytes != null && file.sizeBytes > attachmentSizeLimitFor(file.name, mime, features)) {
+    return false;
+  }
+  return true;
 }
 
 /**
@@ -155,6 +257,25 @@ export type ThumbnailFetchResult =
   | { status: 'unavailable' };
 
 /**
+ * Whether a large document can be searched through the attachments KB, from
+ * GET /files/{uploadId}/search-status (docs/specs/large-document-attachments.md
+ * §4G). `preparing`, `indexing` and `evicted` (re-indexing because the
+ * conversation was opened) are still moving; the rest are settled.
+ */
+export type AttachmentSearchStatus =
+  | 'off'
+  | 'preparing'
+  | 'indexing'
+  | 'searchable'
+  | 'evicted'
+  | 'unavailable';
+
+export interface SearchStatusResponse {
+  uploadId: string;
+  status: AttachmentSearchStatus;
+}
+
+/**
  * File metadata from list/get operations
  */
 export interface FileMetadata {
@@ -195,6 +316,12 @@ export interface PendingUpload {
   status: 'uploading' | 'completing' | 'ready' | 'error';
   progress: number;
   error?: string;
+  /**
+   * What the card says while `uploading`, instead of "Uploading... n%". Set
+   * when the bytes never leave this browser — a file app-api fetches from a
+   * connected file source — so there is no upload and no percentage to show.
+   */
+  statusLabel?: string;
 }
 
 /**
@@ -303,10 +430,15 @@ const EXTENSION_TO_MIME_TYPE: Record<string, string> = {
  * spreadsheet stored that way never reaches the analysis tools.
  */
 export function resolveMimeType(file: File): string {
-  if (isAllowedMimeType(file.type)) {
-    return file.type;
+  return resolveMimeTypeFor(file.name, file.type);
+}
+
+/** `resolveMimeType` for a file known by name and reported type only. */
+export function resolveMimeTypeFor(filename: string, mimeType: string): string {
+  if (isAllowedMimeType(mimeType)) {
+    return mimeType;
   }
-  return EXTENSION_TO_MIME_TYPE[getFileExtension(file.name)] ?? file.type;
+  return EXTENSION_TO_MIME_TYPE[getFileExtension(filename)] ?? mimeType;
 }
 
 /**
@@ -324,6 +456,7 @@ export function resolveMimeType(file: File): string {
 export class FileUploadService {
   private http = inject(HttpClient);
   private config = inject(ConfigService);
+  private features = inject(FEATURES);
 
   private readonly baseUrl = computed(() => `${this.config.appApiUrl()}/files`);
 
@@ -383,7 +516,21 @@ export class FileUploadService {
         createdAt: new Date().toISOString(),
       };
     }
-    return null;
+    return this.knownFiles.get(uploadId) ?? null;
+  }
+
+  /**
+   * Files the composer holds as server metadata rather than an upload from
+   * this browser: one restored from a draft, or one app-api fetched from a
+   * connected file source. The thread's user message draws its attachment
+   * cards from `getReadyFileById`, so without this a file that never went
+   * through `uploadFile` sent fine but showed no card.
+   */
+  private readonly knownFiles = new Map<string, FileMetadata>();
+
+  /** Make `getReadyFileById` answer for a file whose bytes never left this browser. */
+  registerKnownFile(file: FileMetadata): void {
+    this.knownFiles.set(file.uploadId, file);
   }
 
   /**
@@ -391,8 +538,8 @@ export class FileUploadService {
    * @throws FileUploadError if validation fails
    */
   validateFile(file: File): void {
-    // Check size (pptx has its own, larger cap)
-    const sizeLimit = maxFileSizeFor(file);
+    // Check size (pptx and, behind the flag, large documents have their own caps)
+    const sizeLimit = maxFileSizeFor(file, this.features);
     if (file.size > sizeLimit) {
       throw new FileTooLargeError(file.size, sizeLimit);
     }
@@ -723,6 +870,16 @@ export class FileUploadService {
       }
       return { status: 'unavailable' };
     }
+  }
+
+  /**
+   * Whether a large document is searchable yet. One row read on the server, no
+   * Bedrock call; the attachment chip polls it while the answer is moving.
+   */
+  async getSearchStatus(uploadId: string): Promise<SearchStatusResponse> {
+    return firstValueFrom(
+      this.http.get<SearchStatusResponse>(`${this.baseUrl()}/${uploadId}/search-status`)
+    );
   }
 
   /**

@@ -22,11 +22,11 @@
 
 <div
     #shell
-    class="relative rounded-2xl shadow-xl outline -outline-offset-1 transition-all duration-200"
+    class="relative rounded-2xl outline -outline-offset-1 transition-all duration-200"
     [class]="isDraggingOver()
       ? 'bg-primary-50 dark:bg-primary-900/20 outline-2 outline-dashed outline-primary-500 dark:outline-primary-400 ring-2 ring-primary-500/30 dark:ring-primary-400/30'
       : isFocused()
-        ? 'bg-white dark:bg-slate-800 outline-2 outline-primary-500 dark:outline-gray-400 ring-2 ring-primary-500/20 dark:ring-gray-400/30 shadow-lg'
+        ? 'bg-white dark:bg-slate-800 outline-2 outline-primary-500 dark:outline-gray-400 ring-2 ring-primary-500/20 dark:ring-gray-400/30'
         : 'bg-white dark:bg-slate-800 outline-1 outline-gray-300 dark:outline-white/10'"
     (dragenter)="onDragEnter($event)"
     (dragover)="onDragOver($event)"
@@ -121,11 +121,32 @@
               (remove)="onFileRemove($event)"
             />
           }
+          <!--
+            Files on their way from a connected file source. app-api fetches
+            them, so the card shows a label rather than a percentage; a
+            finished one moves into `restoredAttachments` above as metadata.
+          -->
+          @for (upload of importingAttachments(); track upload.uploadId) {
+            <app-file-card
+              [pendingUpload]="upload"
+              (remove)="onFileRemove($event)"
+              (retry)="onFileRetry($event)"
+            />
+          }
           @for (upload of pendingUploads(); track upload.uploadId) {
             <app-file-card
               [pendingUpload]="upload"
               (remove)="onFileRemove($event)"
               (retry)="onFileRetry($event)"
+            />
+          }
+          <!-- Drive folders: one card each, whatever their file count (drive-folder spec §4.7) -->
+          @for (folder of attachedFolders(); track folder.localId) {
+            <app-folder-card
+              [folder]="folder"
+              (remove)="onFolderRemove($event)"
+              (retry)="onFolderRetry($event)"
+              (connect)="onFolderConnect($event)"
             />
           }
         </div>
@@ -260,27 +281,37 @@
         }
       </div>
 
-      <!-- Leading control: attach -->
+      <!--
+        Leading control: the `+` menu — files from the device or a connected
+        file source, then Skills, Tools and Connectors as submenus
+        (`ComposerAddMenuComponent`). The device picker stays a native input,
+        hidden: the menu's first row clicks it, so the browser's own dialog
+        and its `accept` filter are unchanged. `hidden` rather than `sr-only`
+        because the menu row is the accessible path now; a second, invisible
+        tab stop for the same action would only confuse.
+      -->
       <div class="composer-lead flex items-center" role="group" aria-label="Message options">
         @if (showFileControls()) {
-          <div
-            class="flex size-10 items-center justify-center rounded-lg text-gray-500 dark:text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-white/5 dark:hover:text-gray-300 focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-[var(--color-primary)]"
-            appTooltip="Attach file"
-            appTooltipPosition="top"
-          >
-            <input
-              type="file"
-              class="sr-only"
-              (change)="onFileSelect($event)"
-              id="chat-input-file-upload"
-              [accept]="acceptedFileTypes"
-              multiple
-              aria-label="Attach a file"
-            />
-            <label for="chat-input-file-upload" class="flex size-full cursor-pointer items-center justify-center">
-              <ng-icon name="heroPlus" class="size-5" aria-hidden="true" />
-            </label>
-          </div>
+          <input
+            #fileInput
+            type="file"
+            class="hidden"
+            tabindex="-1"
+            (change)="onFileSelect($event)"
+            id="chat-input-file-upload"
+            [accept]="acceptedFileTypes"
+            multiple
+          />
+          <app-composer-add-menu
+            [remainingFiles]="remainingFileSlots()"
+            [showSkills]="showSkillCommands()"
+            [disabled]="isDictating()"
+            (pickFromDevice)="openFilePicker()"
+            (sourceFilesPicked)="onSourceFilesPicked($event)"
+            [remainingFolders]="remainingFolderSlots()"
+            (sourceFolderPicked)="onSourceFolderPicked($event)"
+            (skillPicked)="insertSkillCommand($event)"
+          />
         }
       </div>
 
@@ -335,11 +366,6 @@
             }
           </button>
         } @else {
-          @if (!compact()) {
-            <!-- The empty state keeps the picker in its bar; compact moves it under the shell. -->
-            <app-model-dropdown />
-          }
-
           @if (showDictateButton()) {
             <!-- Dictate: speech-to-text into this composer -->
             <button
@@ -636,23 +662,31 @@
   </div>
 
 <!--
-  Meta line beneath the shell. The left side carries a short status while one
-  applies; the right side holds the model picker and, after it, the context
-  meter (projected by the container as `composerMeta`), whose panel also
-  reports what the conversation has cost.
+  Meta line beneath the shell, in both layouts, so the empty state and a
+  thread wear the same composer. The left side carries "Project or folder" in
+  a new conversation (`ComposerScopePickerComponent`) and a short status while
+  one applies; the right side holds the model picker and, in a thread, the
+  context meter after it (projected by the container as `composerMeta`), whose
+  panel also reports what the conversation has cost.
 -->
-@if (showMetaLine()) {
-  <div class="flex min-h-8 items-center justify-between gap-3 pt-1 pl-3 text-xs text-gray-500 dark:text-gray-400">
-    <div class="flex min-w-0 items-center">
-      @if (statusHint(); as hint) {
-        <span class="truncate">{{ hint }}</span>
-      }
-    </div>
-    @if (compact()) {
-      <div class="flex shrink-0 items-center gap-0.5">
-        <app-model-dropdown size="compact" class="shrink-0" />
-        <ng-content select="[composerMeta]" />
-      </div>
+<div class="flex min-h-8 items-center justify-between gap-3 pt-1.5 pl-3 text-xs text-gray-500 dark:text-gray-400">
+  <div class="flex min-w-0 items-center gap-3">
+    @if (scopePickerOffered()) {
+      <app-composer-scope-picker
+        [remainingFiles]="remainingFileSlots()"
+        [remainingFolders]="remainingFolderSlots()"
+        [attachedFolderKeys]="attachedFolderKeys()"
+        [disabled]="isDictating()"
+        (sourceFolderPicked)="onSourceFolderPicked($event)"
+        (sourceFilesPicked)="onSourceFilesPicked($event)"
+      />
+    }
+    @if (statusHint(); as hint) {
+      <span class="truncate">{{ hint }}</span>
     }
   </div>
-}
+  <div class="flex shrink-0 items-center gap-0.5">
+    <app-model-dropdown size="compact" [menuOpens]="compact() ? 'up' : 'down'" class="shrink-0" />
+    <ng-content select="[composerMeta]" />
+  </div>
+</div>

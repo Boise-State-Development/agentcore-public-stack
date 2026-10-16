@@ -22,6 +22,7 @@ import { InViewDirective } from './in-view.directive';
 import { ProjectsService } from '../../../../projects/services/projects.service';
 import { FEATURES } from '../../../../services/features';
 import { UNTITLED_SESSION_TITLE } from './session-title-filter';
+import { bindingQueryParams } from '../../../../session/services/session/conversation-binding.service';
 
 /**
  * One row of a time bucket: a plain conversation, or the tasks of one project
@@ -339,7 +340,9 @@ export class SessionList {
   /**
    * Gets the queryParams for a session's routerLink. When the session has
    * an assistant attached in preferences, we include it in the URL so the
-   * session page can load the assistant without a second round-trip. Keeping
+   * session page can load the assistant without a second round-trip: a
+   * project task as `?project=` (its Agent is the project's hidden harness),
+   * any other Agent as `?assistantId=`. Keeping
    * the URL the single source of truth also avoids a race where the user
    * sends a message before the metadata fetch hydrates preferences.
    *
@@ -347,7 +350,12 @@ export class SessionList {
    * @returns queryParams object for routerLink, or null when no assistant
    */
   protected getSessionQueryParams(session: SessionMetadata): Record<string, string> | null {
-    const assistantId = session.preferences?.assistantId;
+    const { project, assistantId } = bindingQueryParams(
+      session.preferences?.assistantId,
+      session.preferences?.projectId,
+      this.projectsOn,
+    );
+    if (project) return { project };
     return assistantId ? { assistantId } : null;
   }
 

@@ -171,6 +171,42 @@ def _reset_directory():
         adapter._directory = None
 
 
+class _InlineExecutor:
+    """Runs a submitted call at once, on the caller's thread."""
+
+    def submit(self, fn, *args, **kwargs):
+        fn(*args, **kwargs)
+
+
+@pytest.fixture(autouse=True)
+def _memory_stats_inline():
+    """Count memory-file reads inline, inside the test that made them.
+
+    A project harness's ``memory_read`` hands its ``STATS#`` write to a
+    process-wide background thread (``apis.shared.memory.stats``) so the read
+    never waits on it. In a test that write ran whenever the thread got to it,
+    which could be after the test's ``mock_aws()`` had closed, so it reached
+    real AWS during whichever test came next on that worker and failed that
+    test's socket-guard teardown. The thread also caches its repository per
+    thread, bound to the first test's mock. Inline, the write happens under the
+    mock that set it up, and the repository cache starts empty each test.
+
+    A test that is about the background thread itself puts a real executor back
+    with ``monkeypatch.setattr(stats, "_executor", ...)``.
+    """
+    import threading
+
+    from apis.shared.memory import stats
+
+    saved = stats._executor, stats._local
+    stats._executor = _InlineExecutor()
+    stats._local = threading.local()
+    try:
+        yield
+    finally:
+        stats._executor, stats._local = saved
+
+
 @pytest.fixture(autouse=True)
 def _clear_env_config_bleed():
     saved = {

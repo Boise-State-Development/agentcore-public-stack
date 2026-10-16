@@ -21,6 +21,7 @@ from agents.main_agent.session.hooks.context_attribution import (
     get_prefix_token_split,
 )
 from apis.shared.observability.prefix_tokens import prompt_tokens_from_usage
+from apis.shared.conversation_archive.live import appended_since, tail_anchor
 from apis.shared.feature_flags import (
     agent_status_live_drain_enabled,
     cost_diagnostics_enabled,
@@ -519,6 +520,14 @@ class StreamCoordinator:
         first_token_emit_pending = False
 
         _turn_clock_call(turn_clock, "mark", "head_of_turn.rest")
+
+        # The conversation's tail before this request appends anything (the
+        # head-of-turn trims above are done). The archive write counts what
+        # the turn added by finding this message again afterwards, so it can
+        # place a turn that ended on a tool result with no assistant message.
+        # One list read; the archive itself waits until after `done`.
+        archive_anchor = tail_anchor(getattr(agent, "messages", None) or [])
+        turn_archived = False
         try:
             # Get raw agent stream
             agent_stream = agent.stream_async(prompt)
@@ -1557,14 +1566,21 @@ class StreamCoordinator:
             # and never awaited, so it cannot delay anything above; `done`
             # went to the client before this block began. A paused turn is
             # archived too and re-archived under the same key when it resumes.
+            # Placed by counting what this request appended, never from
+            # `message_id`: a turn that ends on a tool result has no assistant
+            # message, and `message_id` then falls back to the session
+            # manager's stale per-instance count (it once landed a resume on
+            # the previous turn's key).
+            turn_archived = True
             try:
                 from apis.shared.conversation_archive.live import schedule_turn_archive
+                archive_messages = getattr(agent, "messages", None) or []
                 schedule_turn_archive(
-                    messages=getattr(agent, "messages", None) or [],
+                    messages=archive_messages,
                     user_id=user_id,
                     session_id=session_id,
-                    last_message_index=message_id,
                     turn_first_index=initial_message_count,
+                    appended_count=appended_since(archive_messages, archive_anchor),
                     original_message=original_message,
                     project_id=turn_project_id,
                     assistant_id=turn_agent_id,
@@ -1597,6 +1613,11 @@ class StreamCoordinator:
                 first_token_time=first_token_time,
                 reason="user_stopped",
                 per_message_metadata=per_message_metadata,
+                original_message=original_message,
+                archive_appended_count=(
+                    None if turn_archived
+                    else appended_since(getattr(agent, "messages", None) or [], archive_anchor)
+                ),
                 turn_started_at=turn_started_at,
                 citations=citations,
                 turn_agent_id=turn_agent_id,
@@ -1643,6 +1664,11 @@ class StreamCoordinator:
                 stream_start_time=stream_start_time,
                 first_token_time=first_token_time,
                 per_message_metadata=per_message_metadata,
+                original_message=original_message,
+                archive_appended_count=(
+                    None if turn_archived
+                    else appended_since(getattr(agent, "messages", None) or [], archive_anchor)
+                ),
                 turn_started_at=turn_started_at,
                 citations=citations,
                 turn_agent_id=turn_agent_id,
@@ -1787,10 +1813,12 @@ class StreamCoordinator:
         turn_project_id: Optional[str] = None,
         meter_usage: bool = True,
         model_retries: int = 0,
+        original_message: Optional[str] = None,
+        archive_appended_count: Optional[int] = None,
     ) -> None:
         """Persist the in-flight partial assistant turn + an interrupted
-        marker when a turn is torn down mid-stream, and meter the model calls
-        the turn made.
+        marker when a turn is torn down mid-stream, meter the model calls
+        the turn made, and archive what was persisted.
 
         ``reason`` records why: the default ``connection_lost`` is the
         disconnect backstop (conditional, never downgrades a stronger
@@ -1834,6 +1862,16 @@ class StreamCoordinator:
         usage (``turn_usage_recorded`` in ``stream_response``): a disconnect
         that lands while the success block or a failure arm is writing must
         not meter the same calls again.
+
+        ``archive_appended_count`` is how many messages this request appended
+        to ``agent.messages`` (``appended_since``); None skips the archive,
+        which is what the caller passes when the success block already
+        scheduled it or the turn cannot be placed. The interrupted turn is
+        archived as Memory now holds it: the user's words, every assistant
+        message that completed, and the partial when it was persisted (never
+        the "interrupted before any content" placeholder), so a stopped turn
+        is searchable and survives Memory expiry like any other
+        (docs/specs/conversation-search.md §4).
         """
         async def _do() -> None:
             base_index = initial_message_count
@@ -1856,6 +1894,7 @@ class StreamCoordinator:
             # non-empty partial is worth persisting, and an empty partial is
             # persisted only to answer a dangling user turn.
             should_persist = (bool(text) or last_role == "user") and last_role != "assistant"
+            partial_persisted = False
             if should_persist:
                 try:
                     from agents.main_agent.session.persistence import persist_synthetic_messages
@@ -1864,7 +1903,7 @@ class StreamCoordinator:
                     persist_session_manager = SessionFactory.create_session_manager(
                         session_id=session_id, user_id=user_id, caching_enabled=False
                     )
-                    persist_synthetic_messages(
+                    partial_persisted = persist_synthetic_messages(
                         persist_session_manager,
                         session_id,
                         [("assistant", message)],
@@ -1881,6 +1920,34 @@ class StreamCoordinator:
                     "(in-flight partial present=%s, history tail role=%s)",
                     session_id, bool(text), last_role,
                 )
+
+            # Archive after the persist, so the object mirrors what Memory
+            # holds. A background write, like the success path's; this whole
+            # task already runs after the stream was cut.
+            if archive_appended_count is not None:
+                try:
+                    from apis.shared.conversation_archive.live import schedule_turn_archive
+
+                    archive_messages = list(getattr(agent, "messages", None) or [])
+                    appended = archive_appended_count
+                    if partial_persisted and text:
+                        archive_messages.append({"role": "assistant", "content": [{"text": text}]})
+                        appended += 1
+                    schedule_turn_archive(
+                        messages=archive_messages,
+                        user_id=user_id,
+                        session_id=session_id,
+                        turn_first_index=base_index,
+                        appended_count=appended,
+                        original_message=original_message,
+                        project_id=turn_project_id,
+                        assistant_id=turn_agent_id,
+                    )
+                except Exception as archive_error:  # noqa: BLE001
+                    logger.error(
+                        "Failed to schedule archive of interrupted turn for session %s: %s",
+                        session_id, archive_error, exc_info=True,
+                    )
 
             try:
                 from apis.shared.sessions.metadata import set_interrupted_turn

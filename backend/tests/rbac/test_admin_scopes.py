@@ -70,7 +70,7 @@ def test_every_scope_has_label_group_and_description() -> None:
         assert scope.description.strip(), scope.id
 
 
-def test_non_delegable_set_is_exactly_the_three_reserved_surfaces() -> None:
+def test_non_delegable_set_is_exactly_the_reserved_surfaces() -> None:
     """I1 — the escalation paths back to full admin, plus the trail that watches them.
 
     ``admin.roles`` is obvious. ``admin.auth_providers`` is the one that gets
@@ -90,6 +90,9 @@ def test_non_delegable_set_is_exactly_the_three_reserved_surfaces() -> None:
         "admin.roles",
         "admin.auth_providers",
         "admin.audit",
+        # Writing a per-user grant is role editing by another route: the writer
+        # can name themselves.
+        "admin.user_grants",
     }
 
 

@@ -183,6 +183,17 @@ ADMIN_SCOPES: tuple[AdminScope, ...] = (
         delegable=False,
     ),
     AdminScope(
+        id="admin.user_grants",
+        label="User Grants",
+        group=GROUP_IDENTITY,
+        description=(
+            "Grant tools, models and skills to one user directly, beside their "
+            "roles. Never delegable — a delegated admin could grant themselves "
+            "anything, which is role editing by another route."
+        ),
+        delegable=False,
+    ),
+    AdminScope(
         id="admin.audit",
         label="Audit Log",
         group=GROUP_IDENTITY,

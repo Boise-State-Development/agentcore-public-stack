@@ -24,7 +24,7 @@ import {
   ShareResponse,
 } from '../../services/share/share.service';
 import { ProjectApiService } from '../../../projects/services/project-api.service';
-import { ProjectMember } from '../../../projects/models/project.model';
+import { ProjectMember, ProjectRole } from '../../../projects/models/project.model';
 import { DialogShellComponent } from '../../../components/dialog/dialog-shell.component';
 import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 
@@ -33,7 +33,9 @@ export interface ShareModalData {
   ownerEmail: string;
   /**
    * The session's `preferences.projectId`, when it is a task in a project.
-   * Adds the "Project members" option (and makes it the default).
+   * Adds the "Project members" option (and makes it the default), and offers
+   * "Public link" only once the caller is known to be the project's owner or an
+   * editor: the API refuses a viewer's public share.
    */
   projectId?: string | null;
 }
@@ -63,7 +65,7 @@ const NOTIFY_OPTIONS: { value: NotifyMode; label: string }[] = [
 const PROJECT_ACCESS_OPTION: AccessOption = {
   value: 'project',
   label: 'Project members',
-  description: 'Everyone in this task’s project can view it and continue it in their own task',
+  description: 'Everyone in this conversation’s project can view it and continue it in their own conversation',
 };
 
 @Component({
@@ -87,7 +89,7 @@ const PROJECT_ACCESS_OPTION: AccessOption = {
       <fieldset class="space-y-2">
         <legend class="sr-only">Access level</legend>
 
-        @for (option of accessOptions; track option.value) {
+        @for (option of accessOptions(); track option.value) {
           <label
             class="flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors"
             [class]="selectedAccess() === option.value
@@ -110,6 +112,11 @@ const PROJECT_ACCESS_OPTION: AccessOption = {
           </label>
         }
       </fieldset>
+      @if (projectRole() === 'viewer') {
+        <p class="mt-2 text-xs text-gray-600 dark:text-gray-300">
+          Only the project’s owner and editors can share its conversations with a public link.
+        </p>
+      }
 
       <!-- Email input (specific access) -->
       @if (selectedAccess() === 'specific') {
@@ -251,7 +258,7 @@ const PROJECT_ACCESS_OPTION: AccessOption = {
               class="mt-1 block w-full resize-none rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-900 placeholder:text-gray-500 focus:border-primary-500 focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder:text-gray-400"
             ></textarea>
             <p id="share-note-hint" class="mt-1 flex justify-between gap-3 text-xs text-gray-600 dark:text-gray-400">
-              <span>Shown with the task{{ notifyMode() === 'none' ? '' : ' and in the notification' }}.</span>
+              <span>Shown with the conversation{{ notifyMode() === 'none' ? '' : ' and in the notification' }}.</span>
               <span>{{ maxNoteChars - note().length }} left</span>
             </p>
           </div>
@@ -263,7 +270,7 @@ const PROJECT_ACCESS_OPTION: AccessOption = {
         <div class="mt-4 rounded-md bg-state-info-50 p-3 dark:bg-state-info-500/10">
           <p class="text-xs text-state-info-700 dark:text-state-info-300">
             @if (replacesProjectShare()) {
-              This task is already shared with the project. Sharing again replaces the snapshot the project sees.
+              This conversation is already shared with the project. Sharing again replaces the snapshot the project sees.
             } @else {
               This conversation has {{ existingShares().length }} existing share{{ existingShares().length > 1 ? 's' : '' }}.
               Creating a new share will add another snapshot.
@@ -281,7 +288,7 @@ const PROJECT_ACCESS_OPTION: AccessOption = {
           <p class="text-xs text-state-success-700 dark:text-state-success-400 mb-2">
             Future messages aren't included in the share.
             @if (shareResult()!.accessLevel === 'project') {
-              It’s listed under Shared tasks in the project, replacing any earlier share of this task.
+              It’s listed under “Shared with the project”, replacing any earlier share of this conversation.
               @if (notifiedSummary()) {
                 {{ notifiedSummary() }}
               }
@@ -381,9 +388,15 @@ export class ShareModalComponent implements OnInit {
     return this.others().filter((m) => m.email.toLowerCase().includes(q) || (m.name ?? '').toLowerCase().includes(q));
   });
 
-  protected readonly accessOptions: AccessOption[] = this.data.projectId
-    ? [PROJECT_ACCESS_OPTION, ...BASE_ACCESS_OPTIONS]
-    : BASE_ACCESS_OPTIONS;
+  /** The caller's role on the conversation's project; null until loaded, or if it can't be. */
+  protected projectRole = signal<ProjectRole | null>(null);
+
+  protected readonly accessOptions = computed<AccessOption[]>(() => {
+    if (!this.data.projectId) return BASE_ACCESS_OPTIONS;
+    const role = this.projectRole();
+    const canPublish = role === 'owner' || role === 'editor';
+    return [PROJECT_ACCESS_OPTION, ...BASE_ACCESS_OPTIONS.filter((o) => o.value !== 'public' || canPublish)];
+  });
 
   /**
    * A project share is listed once per task, newest wins (`SHARED_TASK#` pointer), so
@@ -407,11 +420,27 @@ export class ShareModalComponent implements OnInit {
   });
 
   async ngOnInit(): Promise<void> {
+    await Promise.all([this.loadExistingShares(), this.loadProjectRole()]);
+  }
+
+  private async loadExistingShares(): Promise<void> {
     try {
       const response = await this.shareService.listSharesForSession(this.data.sessionId);
       this.existingShares.set(response.shares);
     } catch {
       // No existing shares — that's fine
+    }
+  }
+
+  /** A failure leaves the role unknown, so "Public link" stays hidden rather than offered and refused. */
+  private async loadProjectRole(): Promise<void> {
+    const projectId = this.data.projectId;
+    if (!projectId) return;
+    try {
+      const project = await firstValueFrom(this.projectApi.get(projectId));
+      this.projectRole.set(project.role);
+    } catch {
+      this.projectRole.set(null);
     }
   }
 

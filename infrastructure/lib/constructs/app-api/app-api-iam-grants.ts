@@ -505,6 +505,25 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
     }),
   );
 
+  // ── Large-document preparation (large-document-attachments §4C) ──
+  // complete_upload sends one message per reference-class upload. Only while
+  // the feature is on; the queue does not exist otherwise.
+  //
+  // Granted on the QUEUE's resource policy, not on this role: the role's
+  // statements already spill into CDK overflow managed policies, and this one
+  // pushed the fullest to ~6,160 of IAM's 6,144 characters (the trap that
+  // rolled back the 2.6a deploy). The queue policy exists anyway (enforceSSL),
+  // so this costs no resource, and same-account access needs only one side.
+  props.refs.largeDocumentPrepareQueue?.addToResourcePolicy(
+    new iam.PolicyStatement({
+      sid: 'AppApiSendsPrepareMessages',
+      effect: iam.Effect.ALLOW,
+      principals: [new iam.ArnPrincipal(taskRole.roleArn)],
+      actions: ['sqs:SendMessage'],
+      resources: [props.refs.largeDocumentPrepareQueue.queueArn],
+    }),
+  );
+
   // ── Memory maintenance (Shared Projects 2.6) ──
   // Starting a run async-invokes the worker (InvocationType=Event); nothing else.
   //

@@ -10,11 +10,26 @@ import { AppNotification } from '../../services/notifications/notification.model
 import { SidenavService } from '../../services/sidenav/sidenav.service';
 import { parseIso } from '../../utils/date';
 import { personLabel } from '../../shared/utils/person';
+import { SCHEDULE_STOPS } from '../../schedules/schedule-wording';
 
 /** Re-read on returning to the tab at most this often. */
 const REFRESH_ON_FOCUS_MS = 60_000;
 
 const ROLE_PHRASES: Record<string, string> = { editor: 'an editor', viewer: 'a viewer', owner: 'the owner' };
+
+function describeSchedule(n: AppNotification, who: string, project: string): string {
+  const label = typeof n.payload?.label === 'string' && n.payload.label ? ` “${n.payload.label}”` : '';
+  const mine = !!n.payload?.createdBy && n.payload.createdBy === n.recipientEmail?.toLowerCase();
+  const subject = mine ? `Your schedule${label}` : label ? `The schedule${label}` : 'A schedule';
+  switch (n.payload?.reason) {
+    case 'paused_by_editor':
+      return `${who} paused your schedule${label} in ${project}.`;
+    case 'deleted':
+      return `${who} deleted your schedule${label} in ${project}.`;
+  }
+  const stop = SCHEDULE_STOPS[n.payload?.reason ?? ''];
+  return stop ? `${subject} in ${project} stopped ${mine ? stop.mine : stop.theirs}.` : `${subject} in ${project} stopped.`;
+}
 
 /** The sentence a notification reads as. Actor and project fall back to neutral words. */
 export function describeNotification(n: AppNotification): string {
@@ -49,8 +64,10 @@ export function describeNotification(n: AppNotification): string {
       const files = count === 1 ? '1 file' : count > 1 ? `${count} files` : 'some files';
       return `Memory maintenance that ${who} ran suggests changes to ${files} in ${project}’s memory.`;
     }
+    case 'project_schedule_paused':
+      return describeSchedule(n, who, project);
     case 'project_task_shared': {
-      const title = typeof n.payload?.title === 'string' && n.payload.title ? n.payload.title : 'a task';
+      const title = typeof n.payload?.title === 'string' && n.payload.title ? n.payload.title : 'a conversation';
       return `${who} shared “${title}” with you in ${project}.`;
     }
     default:
@@ -309,6 +326,13 @@ export class NotificationBellComponent {
     if (n.kind === 'project_proposal_decided' && n.projectId) {
       const file = typeof n.payload?.slug === 'string' ? n.payload.slug : undefined;
       void this.router.navigate(['/projects', n.projectId, 'memory'], { queryParams: file ? { file } : {} });
+      this.sidenav.close();
+      return;
+    }
+    // A stopped schedule opens the project's Schedules dialog; a deleted one has
+    // nothing left to show there, so it opens the project.
+    if (n.kind === 'project_schedule_paused' && n.projectId && n.payload?.reason !== 'deleted') {
+      void this.router.navigate(['/projects', n.projectId, 'schedules']);
       this.sidenav.close();
       return;
     }

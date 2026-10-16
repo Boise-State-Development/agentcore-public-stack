@@ -282,6 +282,9 @@ def _no_live_infrastructure_reads(monkeypatch):
         # auth dependency itself, which never reaches this.
         ("apis.shared.rbac.repository.AppRoleRepository.get_roles_for_jwt_role", []),
         ("apis.shared.rbac.repository.AppRoleRepository.get_role", None),
+        # The direct user grant read runs alongside the role lookups on every
+        # cold resolve, so it needs the same stub or it opens a real socket.
+        ("apis.shared.rbac.repository.AppRoleRepository.get_user_grant", None),
         # Agent-detail label resolution.
         ("apis.shared.memory.repository.MemorySpaceRepository.get_space", None),
         # Session delete cascades into artifact share cleanup. Whether it fires

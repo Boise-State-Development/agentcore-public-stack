@@ -21,6 +21,7 @@ per the CLAUDE.md app-api rule.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import List, Optional
 
@@ -33,6 +34,7 @@ from apis.shared.rbac.service import get_app_role_service
 from apis.shared.scheduled_prompts.service import (
     MIN_INTERVAL_MINUTES,
     UNSET,
+    InvalidTimezoneError,
     ScheduledPromptLimitExceeded,
     compute_next_run_at,
     create_scheduled_prompt,
@@ -71,6 +73,11 @@ async def require_scheduled_runs_user(
     return user
 
 
+def _only_state(request: UpdateScheduleRequest) -> bool:
+    """Whether a PATCH asks for nothing but a state change."""
+    return set(request.model_dump(exclude_none=True, exclude_defaults=True)) <= {"state"}
+
+
 async def _resolve_enabled_tools_snapshot(user: User, requested: Optional[List[str]]) -> Optional[List[str]]:
     """Snapshot enabled_tools at creation time (Phase A punch #7).
 
@@ -102,6 +109,20 @@ def _require_schedule_or_404(schedule, schedule_id: str):
     return schedule
 
 
+def _refuse_project_schedule(schedule) -> None:
+    """A project schedule is changed and resumed from its project (Shared Projects 3.2).
+
+    There its creator's standing is checked and the change is on the project's
+    trail. Pausing and deleting stay open here: stopping your own schedule never
+    needs the project's say.
+    """
+    if schedule.project_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This schedule runs in a project. Change or resume it from the project.",
+        )
+
+
 @router.post("", response_model=ScheduledPromptResponse, status_code=status.HTTP_201_CREATED)
 async def create_schedule(
     request: CreateScheduleRequest,
@@ -124,6 +145,8 @@ async def create_schedule(
             deliver_email=request.deliver_email,
         )
     except ScheduledPromptLimitExceeded as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except InvalidTimezoneError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
@@ -165,6 +188,8 @@ async def update_schedule(
     ``sync_policies.change_policy_interval``).
     """
     schedule = _require_schedule_or_404(await get_scheduled_prompt(user.user_id, schedule_id), schedule_id)
+    if not (schedule.project_id and request.state == "paused" and _only_state(request)):
+        _refuse_project_schedule(schedule)
 
     effective_cadence = request.cadence if request.cadence is not None else schedule.cadence
     effective_weekday = request.weekday if request.weekday is not None else schedule.weekday
@@ -212,21 +237,24 @@ async def update_schedule(
     else:
         tools_arg = UNSET
 
-    schedule = await update_scheduled_prompt(
-        user.user_id,
-        schedule_id,
-        label=request.label,
-        prompt_text=request.prompt_text,
-        cadence=request.cadence,
-        hour_local=request.hour_local,
-        weekday=request.weekday,
-        interval_value=request.interval_value,
-        interval_unit=request.interval_unit,
-        timezone_name=request.timezone,
-        assistant_id=assistant_arg,
-        enabled_tools=tools_arg,
-        deliver_email=request.deliver_email,
-    )
+    try:
+        schedule = await update_scheduled_prompt(
+            user.user_id,
+            schedule_id,
+            label=request.label,
+            prompt_text=request.prompt_text,
+            cadence=request.cadence,
+            hour_local=request.hour_local,
+            weekday=request.weekday,
+            interval_value=request.interval_value,
+            interval_unit=request.interval_unit,
+            timezone_name=request.timezone,
+            assistant_id=assistant_arg,
+            enabled_tools=tools_arg,
+            deliver_email=request.deliver_email,
+        )
+    except InvalidTimezoneError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
     if request.state is not None and request.state != schedule.state:
         if request.state == "active":
@@ -270,6 +298,7 @@ async def resume_schedule(
     schedule = _require_schedule_or_404(await get_scheduled_prompt(user.user_id, schedule_id), schedule_id)
     if schedule.state == "active":
         return ScheduledPromptResponse.from_schedule(schedule)
+    _refuse_project_schedule(schedule)
 
     next_run_at = compute_next_run_at(
         schedule.cadence,
@@ -288,7 +317,21 @@ async def delete_schedule(
     schedule_id: str,
     user: User = Depends(require_scheduled_runs_user),
 ) -> None:
-    """Delete = total revocation (no orphan timers)."""
-    _require_schedule_or_404(await get_scheduled_prompt(user.user_id, schedule_id), schedule_id)
+    """Delete = total revocation (no orphan timers).
+
+    A project schedule also leaves its project's list, and the project's trail
+    records it, as if deleted from the project.
+    """
+    schedule = _require_schedule_or_404(await get_scheduled_prompt(user.user_id, schedule_id), schedule_id)
+    if schedule.project_id:
+        from apis.app_api.projects.routes import _svc as _projects
+        from apis.shared.audit import AuditAction
+
+        await asyncio.to_thread(_projects().schedules.delete, schedule)
+        _projects().record(
+            AuditAction.PROJECT_SCHEDULE_DELETED, user, schedule.project_id,
+            before={"scheduleId": schedule_id, "label": schedule.label, "createdBy": schedule.owner_email},
+        )
+        return None
     await delete_scheduled_prompt(user.user_id, schedule_id)
     return None

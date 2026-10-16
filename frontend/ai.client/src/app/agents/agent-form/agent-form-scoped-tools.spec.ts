@@ -11,15 +11,16 @@ import { SidenavService } from '../../services/sidenav/sidenav.service';
 import { ThemeService } from '../../components/topnav/components/theme-toggle/theme.service';
 import { ToastService } from '../../services/toast/toast.service';
 import { ToolService } from '../../services/tool/tool.service';
+import { toggleChild, toggleItem } from '../../components/tool-selector/tool-selection';
 
 /**
- * Binding a subset of an MCP server's tools.
+ * Binding a subset of an MCP server's tools, from the Agent Designer's side.
  *
- * The selection model is the thing worth pinning down: `selectedToolRefs` holds the
- * `binding.ref` values verbatim, and the invariant is that a fully-selected server is
- * stored as the **bare** ref rather than as N scoped ones. Get that wrong and every
- * existing agent's bindings silently rewrite themselves the first time someone opens
- * the form — a different record, for no change the author made.
+ * The selection rules (a fully-selected server is stored as the **bare** ref, never
+ * as N scoped ones) live in `components/tool-selector/tool-selection.ts` and are
+ * pinned there. What this pins is the page's half: `selectedToolRefs` hydrates the
+ * `binding.ref` values verbatim, the rows it hands the selector carry each server's
+ * tools, and what the selector reports is exactly what the form submits.
  */
 
 @Component({ selector: 'app-agent-preview', template: '' })
@@ -142,6 +143,24 @@ function refs(component: AgentFormPage): string[] {
   return [...component.selectedToolRefs()].sort();
 }
 
+const CANVAS_TOOLS = CANVAS.meta.serverTools.map((t) => t.name);
+
+/** What `<app-tool-selector>` emits for a row click, handed to the page's handler. */
+function clickRow(component: AgentFormPage, ref: string): void {
+  component.onToolSelectionChange(toggleItem(component.selectedToolRefs(), ref));
+}
+
+/** What the selector emits for one of a server's tools. */
+function clickServerTool(component: AgentFormPage, name: string): void {
+  component.onToolSelectionChange(
+    toggleChild(component.selectedToolRefs(), 'canvas_faculty', CANVAS_TOOLS, name),
+  );
+}
+
+function canvasItem(component: AgentFormPage) {
+  return component.toolItems().find((i) => i.id === 'canvas_faculty')!;
+}
+
 describe('AgentFormPage — scoped tool bindings', () => {
   let fixture: ComponentFixture<AgentFormPage>;
   let component: AgentFormPage;
@@ -151,38 +170,28 @@ describe('AgentFormPage — scoped tool bindings', () => {
       ({ fixture, component } = await mount([{ kind: 'tool', ref: 'canvas_faculty' }]));
     });
 
-    it('reads as selected with every tool on', () => {
+    it('reads as selected', () => {
       expect(component.isToolSelected('canvas_faculty')).toBe(true);
-      expect(component.isWholeServerSelected(CANVAS)).toBe(true);
-      expect(component.isServerToolSelected('canvas_faculty', 'grade_submission')).toBe(true);
     });
 
     it('stays the bare ref when nothing is touched', () => {
       expect(refs(component)).toEqual(['canvas_faculty']);
+      expect(component.isDirty()).toBe(false);
     });
 
-    it('narrows to scoped refs when one tool is turned off', () => {
-      component.toggleServerTool(CANVAS, 'grade_submission');
+    it('writes the narrowed refs the selector reports, and marks the form dirty', () => {
+      clickServerTool(component, 'grade_submission');
       expect(refs(component)).toEqual([
         'canvas_faculty::list_courses',
         'canvas_faculty::list_rubrics',
       ]);
-      expect(component.isServerToolSelected('canvas_faculty', 'grade_submission')).toBe(false);
-      expect(component.selectedServerToolCount(CANVAS)).toBe(2);
+      expect(component.isDirty()).toBe(true);
     });
 
     it('collapses back to the bare ref when the last tool is turned on again', () => {
-      component.toggleServerTool(CANVAS, 'grade_submission');
-      component.toggleServerTool(CANVAS, 'grade_submission');
+      clickServerTool(component, 'grade_submission');
+      clickServerTool(component, 'grade_submission');
       expect(refs(component)).toEqual(['canvas_faculty']);
-    });
-
-    it('deselects the server when its last tool is turned off', () => {
-      for (const name of ['list_courses', 'list_rubrics', 'grade_submission']) {
-        component.toggleServerTool(CANVAS, name);
-      }
-      expect(refs(component)).toEqual([]);
-      expect(component.isToolSelected('canvas_faculty')).toBe(false);
     });
   });
 
@@ -201,47 +210,91 @@ describe('AgentFormPage — scoped tool bindings', () => {
       ]);
     });
 
-    it('shows the server as selected but not whole', () => {
+    it('shows the server as selected', () => {
       expect(component.isToolSelected('canvas_faculty')).toBe(true);
-      expect(component.isWholeServerSelected(CANVAS)).toBe(false);
-      expect(component.selectedServerToolCount(CANVAS)).toBe(2);
+      expect(component.selectedToolCount()).toBe(1);
     });
 
-    it('leaves the unselected tool off', () => {
-      expect(component.isServerToolSelected('canvas_faculty', 'grade_submission')).toBe(false);
-    });
-
-    it('drops every scoped ref when the server chip is deselected', () => {
-      component.toggleTool('canvas_faculty');
+    it('drops every scoped ref when the server row is deselected', () => {
+      clickRow(component, 'canvas_faculty');
       expect(refs(component)).toEqual([]);
     });
 
-    it('re-selecting the chip binds the whole server again', () => {
-      component.toggleTool('canvas_faculty');
-      component.toggleTool('canvas_faculty');
+    it('re-selecting the row binds the whole server again', () => {
+      clickRow(component, 'canvas_faculty');
+      clickRow(component, 'canvas_faculty');
       expect(refs(component)).toEqual(['canvas_faculty']);
     });
 
-    it('renders the per-tool rows once expanded', async () => {
+    it('renders the per-tool rows once expanded, with the narrowing on the row', () => {
       // A saved agent with tools opens collapsed, so the panel has to be opened
       // before its rows exist at all — see `toolsOpen`.
       component.toolsOpen.set(true);
-      component.toggleToolExpanded('canvas_faculty');
       fixture.detectChanges();
-      // Scoped to the server's own panel: the parent rows are switches too now, so
-      // a document-wide count would measure the catalog rather than the sub-tools.
-      const panel = fixture.nativeElement.querySelector('#agent-server-tools-canvas_faculty');
-      expect(panel).not.toBeNull();
-      expect(panel.querySelectorAll('[role="switch"]').length).toBe(3);
-      expect(panel.textContent).toContain('grade_submission');
+      const root: HTMLElement = fixture.nativeElement;
       // `2 of 3` on the row, so the narrowing is legible without expanding.
-      expect(fixture.nativeElement.textContent).toContain('2 of 3');
+      expect(root.textContent).toContain('2 of 3 tools');
+
+      const expand = root.querySelector(
+        'button[aria-label="Choose individual Canvas Faculty tools"]',
+      ) as HTMLButtonElement;
+      expand.click();
+      fixture.detectChanges();
+      const panel = root.querySelector(`#${expand.getAttribute('aria-controls')}`)!;
+      const boxes = [...panel.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')];
+      expect(boxes.map((b) => b.checked)).toEqual([true, true, false]);
+      expect(panel.textContent).toContain('grade_submission');
+
+      // Ticking the last one through the real control collapses to the bare ref.
+      boxes[2].click();
+      fixture.detectChanges();
+      expect(refs(component)).toEqual(['canvas_faculty']);
+    });
+  });
+
+  describe('the selector rows', () => {
+    beforeEach(async () => {
+      ({ fixture, component } = await mount([]));
     });
 
-    it('splits a docstring into summary and Args: detail, like the chat picker', () => {
-      const listCourses = component.serverTools(CANVAS)[0];
+    it('splits each server tool docstring into summary and Args: detail, like the chat picker', () => {
+      const [listCourses] = canvasItem(component).children!;
       expect(listCourses.summary).toBe('List courses.');
       expect(listCourses.detail).toContain('Args:');
+    });
+
+    it('gives a tool with no discovered list no per-tool children', () => {
+      const calculator = component.toolItems().find((i) => i.id === 'calculator')!;
+      expect(calculator.children).toEqual([]);
+    });
+
+    it('groups by catalog category, sorted, with `Other` for an unset one', () => {
+      // Neither fixture has a `category`, which is the point of the fallback: an
+      // uncategorised tool still has a home.
+      expect(component.toolItems().map((i) => [i.group, i.name])).toEqual([
+        ['Other', 'Calculator'],
+        ['Other', 'Canvas Faculty'],
+      ]);
+    });
+
+    it('renders an empty state rather than a blank list when nothing matches', () => {
+      const root: HTMLElement = fixture.nativeElement;
+      const input = root.querySelector('#agent-tools-panel input[type="search"]') as HTMLInputElement;
+      input.value = 'zzz-no-such-tool';
+      input.dispatchEvent(new Event('input'));
+      fixture.detectChanges();
+      expect(root.textContent).toContain('No tools match');
+    });
+
+    it('selects a plain tool through the rendered checkbox', () => {
+      const root: HTMLElement = fixture.nativeElement;
+      const name = [...root.querySelectorAll('#agent-tools-panel [id$="-name"]')].find(
+        (n) => n.textContent?.trim() === 'Calculator',
+      )!;
+      (root.querySelector(`input[aria-labelledby="${name.id}"]`) as HTMLInputElement).click();
+      fixture.detectChanges();
+      expect(refs(component)).toEqual(['calculator']);
+      expect(component.isDirty()).toBe(true);
     });
   });
 
@@ -278,57 +331,6 @@ describe('AgentFormPage — scoped tool bindings', () => {
       ]));
       // Alphabetical, so the header does not reorder itself between visits.
       expect(component.selectedToolSummary()).toBe('Calculator, Canvas Faculty');
-    });
-  });
-
-  describe('the Tools list', () => {
-    beforeEach(async () => {
-      ({ fixture, component } = await mount([]));
-    });
-
-    it('groups by catalog category, sorted', () => {
-      // CANVAS has no `category` on its meta, so both fall to the `Other` bucket —
-      // which is the point of the fallback: an uncategorised tool still has a home.
-      const groups = component.toolGroups();
-      expect(groups.map((g) => g.category)).toEqual(['Other']);
-      expect(groups[0].items.map((i) => i.label)).toEqual(['Calculator', 'Canvas Faculty']);
-    });
-
-    it('filters on label, description and category', () => {
-      component.toolQuery.set('canvas');
-      expect(component.toolGroups().flatMap((g) => g.items.map((i) => i.ref))).toEqual([
-        'canvas_faculty',
-      ]);
-
-      // Description, not label: Calculator's description is "Arithmetic".
-      component.toolQuery.set('arithmetic');
-      expect(component.toolGroups().flatMap((g) => g.items.map((i) => i.ref))).toEqual([
-        'calculator',
-      ]);
-    });
-
-    it('renders an empty state rather than a blank list when nothing matches', () => {
-      component.toolQuery.set('zzz-no-such-tool');
-      fixture.detectChanges();
-      expect(component.toolGroups()).toEqual([]);
-      expect(fixture.nativeElement.textContent).toContain('No tools match');
-    });
-  });
-
-  describe('a tool with no discovered list', () => {
-    beforeEach(async () => {
-      ({ fixture, component } = await mount([{ kind: 'tool', ref: 'calculator' }]));
-    });
-
-    it('offers no per-tool control', () => {
-      expect(component.canScopeTool(CALCULATOR)).toBe(false);
-    });
-
-    it('toggles as a plain whole-tool binding', () => {
-      component.toggleTool('calculator');
-      expect(refs(component)).toEqual([]);
-      component.toggleTool('calculator');
-      expect(refs(component)).toEqual(['calculator']);
     });
   });
 });

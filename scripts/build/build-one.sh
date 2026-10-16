@@ -129,6 +129,8 @@ case "$SERVICE" in
             # document_service releases a managed-KB byte reservation.
             "backend/src/apis/shared/observability"
             "backend/src/apis/app_api/file_sources"
+            # files/ — the drive_folder path's walk caps and type allowlist.
+            "backend/src/apis/shared/files"
             "backend/src/apis/app_api/documents"
             "backend/src/apis/app_api/web_sources"
             "backend/src/apis/shared/sync_policies"
@@ -232,8 +234,15 @@ case "$SERVICE" in
             "backend/src/apis/shared/browser_takeover"
             "backend/src/apis/shared/storage"
             "backend/src/apis/shared/observability"
-            # projects/ — sessions/metadata.py's project cost rollup (lazy import).
+            # projects/ — project schedules (3.2) and sessions/metadata.py's
+            # project cost rollup; notifications/ — a project schedule's pause notice.
             "backend/src/apis/shared/projects"
+            "backend/src/apis/shared/notifications"
+            # 3.2b delivery: the share writer, audit, and what get_messages reaches.
+            "backend/src/apis/shared/shares"
+            "backend/src/apis/shared/audit"
+            "backend/src/apis/shared/tool_summaries"
+            "backend/src/apis/shared/conversation_archive"
         )
         # Single-file COPYs hashed as manifests (same as kb-sync/rag-ingestion);
         # the dispatcher's requirements.txt lives inside its own source dir.
@@ -242,6 +251,9 @@ case "$SERVICE" in
             "backend/src/apis/shared/errors.py"
             "backend/src/apis/shared/feature_flags.py"
             "backend/src/apis/shared/dynamo_errors.py"
+            "backend/src/apis/shared/auth/models.py"
+            "backend/src/apis/shared/timestamps.py"
+            "backend/src/apis/shared/mcp_apps/ui_resource_store.py"
         )
         # Both scheduled-runs Lambdas are arm64 (see the scheduled-runs
         # CDK construct).
@@ -270,9 +282,29 @@ case "$SERVICE" in
         PLATFORM="linux/arm64"
         SSM_KEY="/${CDK_PROJECT_PREFIX}/memory-maintenance/image-tag"
         ;;
+    large-document-prepare)
+        # Large-document attachments PR-1: the `_derived/` sidecar builder.
+        # Keep SOURCE_DIRS and MANIFESTS in lockstep with
+        # Dockerfile.large-document-prepare's COPY list.
+        DOCKERFILE="backend/Dockerfile.large-document-prepare"
+        SOURCE_DIRS=(
+            "backend/src/lambdas/large_document_prepare"
+            "backend/src/apis/shared/files"
+            "backend/src/apis/shared/observability"
+            "backend/src/apis/shared/kb_backend"
+        )
+        MANIFESTS=(
+            "backend/src/apis/shared/__init__.py"
+            "backend/src/apis/shared/timestamps.py"
+            "backend/src/apis/shared/aws_clients.py"
+            "backend/src/apis/shared/feature_flags.py"
+        )
+        PLATFORM="linux/arm64"
+        SSM_KEY="/${CDK_PROJECT_PREFIX}/large-document-prepare/image-tag"
+        ;;
     *)
         echo "Unknown service: $SERVICE" >&2
-        echo "Expected one of: app-api | inference-api | rag-ingestion | kb-sync | kb-migration | conversation-index | scheduled-runs | memory-maintenance" >&2
+        echo "Expected one of: app-api | inference-api | rag-ingestion | kb-sync | kb-migration | conversation-index | scheduled-runs | memory-maintenance | large-document-prepare" >&2
         exit 1
         ;;
 esac

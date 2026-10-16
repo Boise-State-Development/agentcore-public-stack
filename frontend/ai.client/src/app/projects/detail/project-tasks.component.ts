@@ -55,8 +55,8 @@ const PAGE_SIZE = 20;
         } @else if (tasks().length === 0 && !tasksError()) {
           <div class="mt-3 rounded-2xl border border-dashed border-gray-300 px-6 py-8 text-center dark:border-gray-700">
             <ng-icon name="heroChatBubbleLeftRight" class="mx-auto size-6 text-gray-400 dark:text-gray-500" aria-hidden="true" />
-            <p class="mt-2 text-sm/6 text-gray-600 dark:text-gray-400">You haven’t started a task in this project yet.</p>
-            <p class="text-xs/5 text-gray-600 dark:text-gray-400">Only you can see your tasks. To show one to the project, open it and share it with “Project members”.</p>
+            <p class="mt-2 text-sm/6 text-gray-600 dark:text-gray-400">You haven’t started a conversation in this project yet.</p>
+            <p class="text-xs/5 text-gray-600 dark:text-gray-400">Only you can see your conversations. To show one to the project, open it and share it with “Project members”.</p>
           </div>
         } @else if (tasks().length > 0) {
           <ul class="mt-1 divide-y divide-gray-200/80 dark:divide-white/10">
@@ -67,7 +67,7 @@ const PAGE_SIZE = 20;
                   [queryParams]="taskQueryParams()"
                   class="-mx-3 flex items-center gap-4 rounded-2xl px-3 py-3.5 transition-colors hover:bg-gray-100 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary-500 dark:hover:bg-white/5"
                 >
-                  <span class="min-w-0 flex-1 truncate text-sm/6 text-gray-900 dark:text-white">{{ task.title || 'Untitled task' }}</span>
+                  <span class="min-w-0 flex-1 truncate text-sm/6 text-gray-900 dark:text-white">{{ task.title || 'Untitled conversation' }}</span>
                   <span class="shrink-0 text-xs/5 text-gray-600 dark:text-gray-400">{{ when(task) | date: 'MMM d' }}</span>
                 </a>
               </li>
@@ -103,23 +103,31 @@ const PAGE_SIZE = 20;
           </div>
         } @else if (shared().length === 0 && !sharedError()) {
           <div class="mt-3 rounded-2xl border border-dashed border-gray-300 px-6 py-6 text-center dark:border-gray-700">
-            <p class="text-sm/6 text-gray-600 dark:text-gray-400">No one has shared a task with the project yet.</p>
+            <p class="text-sm/6 text-gray-600 dark:text-gray-400">No one has shared a conversation with the project yet.</p>
           </div>
         } @else if (shared().length > 0) {
           <ul class="mt-1 divide-y divide-gray-200/80 dark:divide-white/10">
             @for (task of shared(); track task.shareId) {
               <li class="flex flex-wrap items-center gap-x-4 gap-y-2 py-3.5">
                 <div class="min-w-0 flex-1">
-                  <a
-                    [routerLink]="['/shared', task.shareId]"
-                    class="block truncate rounded-sm text-sm/6 text-gray-900 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-white"
-                  >
-                    {{ task.title || 'Untitled task' }}
-                  </a>
+                  <div class="flex min-w-0 items-center gap-2">
+                    <a
+                      [routerLink]="['/shared', task.shareId]"
+                      class="truncate rounded-sm text-sm/6 text-gray-900 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-white"
+                    >
+                      {{ task.title || 'Untitled conversation' }}
+                    </a>
+                    @if (task.scheduleId) {
+                      <span data-testid="scheduled-tag" class="shrink-0 rounded-2xl bg-gray-100 px-2 py-0.5 text-xs/5 font-medium text-gray-700 dark:bg-gray-700 dark:text-gray-200">Scheduled</span>
+                    }
+                  </div>
                   <p class="text-xs/5 text-gray-600 dark:text-gray-400">
                     Shared by <span [attr.title]="!task.isMine && task.sharedByName ? task.sharedByEmail : null">{{ task.isMine ? 'you' : personLabel(task.sharedByName, task.sharedByEmail) }}</span> · {{ sharedAt(task) | date: 'MMM d' }}
+                    @if (scheduleLabel(task); as label) {
+                      · from the schedule “{{ label }}”
+                    }
                   </p>
-                  @if (task.note) {
+                  @if (task.note && !scheduleLabel(task)) {
                     <p class="mt-1 border-l-2 border-gray-200 pl-2 text-sm/6 text-gray-700 dark:border-gray-700 dark:text-gray-300">{{ task.note }}</p>
                   }
                 </div>
@@ -131,7 +139,7 @@ const PAGE_SIZE = 20;
                     class="inline-flex items-center gap-1.5 rounded-2xl border border-gray-300 bg-white px-3 py-1 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
                   >
                     <ng-icon name="heroDocumentDuplicate" class="size-4" aria-hidden="true" />
-                    {{ busyShareId() === task.shareId && busyAction() === 'continue' ? 'Copying…' : 'Continue in my own task' }}
+                    {{ busyShareId() === task.shareId && busyAction() === 'continue' ? 'Copying…' : 'Continue in my own conversation' }}
                   </button>
                   @if (task.isMine) {
                     <button
@@ -140,7 +148,7 @@ const PAGE_SIZE = 20;
                       [disabled]="busyShareId() !== null"
                       [appTooltip]="'Stop sharing'"
                       appTooltipPosition="top"
-                      [attr.aria-label]="'Stop sharing ' + (task.title || 'Untitled task')"
+                      [attr.aria-label]="'Stop sharing ' + (task.title || 'Untitled conversation')"
                       class="flex size-8 items-center justify-center rounded-2xl text-gray-500 hover:bg-state-danger-50 hover:text-state-danger-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-600 disabled:cursor-not-allowed disabled:opacity-60 dark:text-gray-400 dark:hover:bg-state-danger-900/20 dark:hover:text-state-danger-400"
                     >
                       <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
@@ -150,7 +158,7 @@ const PAGE_SIZE = 20;
               </li>
             }
           </ul>
-          <p class="mt-3 text-xs/5 text-gray-600 dark:text-gray-400">A snapshot of each task at the moment it was shared. Continue one to pick it up in a task of your own.</p>
+          <p class="mt-3 text-xs/5 text-gray-600 dark:text-gray-400">A snapshot of each conversation at the moment it was shared. Continue one to pick it up in a conversation of your own.</p>
         }
       </section>
     </div>
@@ -179,8 +187,8 @@ export class ProjectTasksComponent {
   protected readonly busyAction = signal<'continue' | 'revoke' | null>(null);
 
   protected readonly archived = computed(() => this.project().status === 'archived');
-  /** A task opens on the project's agent, like the sidebar's `getSessionQueryParams`. */
-  protected readonly taskQueryParams = computed(() => ({ assistantId: this.project().harnessAgentId }));
+  /** A task opens in the project (`?project=`), like the sidebar's `getSessionQueryParams`. */
+  protected readonly taskQueryParams = computed(() => ({ project: this.project().projectId }));
 
   private readonly projectId = computed(() => this.project().projectId);
 
@@ -194,6 +202,15 @@ export class ProjectTasksComponent {
         void this.loadShared(id);
       });
     });
+  }
+
+  /**
+   * The schedule a delivered run came from. Its note is the worker's
+   * "Scheduled: <label>", shown as part of the byline rather than as a hand-off note.
+   */
+  protected scheduleLabel(task: SharedTask): string | null {
+    const prefix = 'Scheduled: ';
+    return task.scheduleId && task.note?.startsWith(prefix) ? task.note.slice(prefix.length) : null;
   }
 
   protected when(task: SessionMetadata): Date {
@@ -217,7 +234,7 @@ export class ProjectTasksComponent {
       this.tasks.update(list => (cursor ? [...list, ...page.sessions] : page.sessions));
       this.nextToken.set(page.nextToken ?? null);
     } catch (err) {
-      this.tasksError.set(projectErrorMessage(err, 'Your tasks could not be loaded.'));
+      this.tasksError.set(projectErrorMessage(err, 'Your conversations could not be loaded.'));
     } finally {
       this.tasksLoading.set(false);
     }
@@ -231,7 +248,7 @@ export class ProjectTasksComponent {
       if (projectId !== this.projectId()) return;
       this.shared.set(response.tasks);
     } catch (err) {
-      this.sharedError.set(projectErrorMessage(err, 'Shared tasks could not be loaded.'));
+      this.sharedError.set(projectErrorMessage(err, 'Shared conversations could not be loaded.'));
     } finally {
       this.sharedLoading.set(false);
     }
@@ -253,7 +270,7 @@ export class ProjectTasksComponent {
         queryParams: this.archived() ? {} : this.taskQueryParams(),
       });
     } catch (err) {
-      this.sharedError.set(projectErrorMessage(err, 'The task could not be copied. Please try again.'));
+      this.sharedError.set(projectErrorMessage(err, 'The conversation could not be copied. Please try again.'));
     } finally {
       this.busyShareId.set(null);
       this.busyAction.set(null);
@@ -263,8 +280,8 @@ export class ProjectTasksComponent {
   protected async revoke(task: SharedTask): Promise<void> {
     const ref = this.dialog.open<boolean>(ConfirmationDialogComponent, {
       data: {
-        title: 'Stop sharing this task?',
-        message: `“${task.title || 'Untitled task'}” will no longer be listed in the project, and its link will stop working for members. Copies people already made stay theirs.`,
+        title: 'Stop sharing this conversation?',
+        message: `“${task.title || 'Untitled conversation'}” will no longer be listed in the project, and its link will stop working for members. Copies people already made stay theirs.`,
         confirmText: 'Stop sharing',
         cancelText: 'Cancel',
         destructive: true,

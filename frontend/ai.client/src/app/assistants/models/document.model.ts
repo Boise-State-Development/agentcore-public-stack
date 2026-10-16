@@ -77,6 +77,11 @@ export interface Document {
   /** Back-pointer to the covering sync policy, when one exists. */
   syncPolicyId?: string | null;
   lastSyncedAt?: string | null;
+  /**
+   * A folder sync found the file no longer in its Drive folder. The document is
+   * kept (assistant-kb-sync spec §11.3); an editor decides whether to delete it.
+   */
+  removedFromSource?: boolean | null;
 }
 
 /**

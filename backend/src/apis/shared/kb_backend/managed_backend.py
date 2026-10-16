@@ -612,6 +612,41 @@ class ManagedKbBackend:
             what="IngestKnowledgeBaseDocuments",
         )
 
+    async def document_statuses(
+        self, kb_ref: str, document_ids: Iterable[str]
+    ) -> Dict[str, Tuple[str, Optional[str]]]:
+        """Bedrock's own ``(status, statusReason)`` for each document, ``NOT_FOUND`` when it holds none.
+
+        ``IngestKnowledgeBaseDocuments`` returns once a request is accepted and says
+        nothing about whether indexing finished or failed, so this is the only way
+        to know what a knowledge base actually holds. Batched at the API's limit of
+        10 identifiers. A failed call raises: the caller must not read "could not
+        ask" as "not there".
+        """
+        ids = [document_id for document_id in document_ids if document_id]
+        if not ids:
+            return {}
+        aws_kb_id, aws_data_source_id = await self._locate_async(kb_ref)
+        client = self._agent()
+        statuses: Dict[str, Tuple[str, Optional[str]]] = {
+            document_id: ("NOT_FOUND", None) for document_id in ids
+        }
+        for batch in batched(ids):
+            response = await asyncio.to_thread(
+                client.get_knowledge_base_documents,
+                knowledgeBaseId=aws_kb_id,
+                dataSourceId=aws_data_source_id,
+                documentIdentifiers=[document_identifier(document_id) for document_id in batch],
+            )
+            for detail in response.get("documentDetails") or []:
+                document_id = ((detail.get("identifier") or {}).get("custom") or {}).get("id")
+                if document_id in statuses:
+                    statuses[document_id] = (
+                        str(detail.get("status") or "NOT_FOUND"),
+                        detail.get("statusReason"),
+                    )
+        return statuses
+
     def _annotated_word_document(self, source: DocumentSource) -> Optional[str]:
         """The source's Word document as text with tracked changes written out.
 

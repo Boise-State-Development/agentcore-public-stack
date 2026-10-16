@@ -38,9 +38,7 @@ class FakeConsent {
   private readonly inFlight = signal<ReadonlySet<string>>(new Set());
   readonly inFlightProviders = this.inFlight.asReadonly();
 
-  requestConsent(): void {}
-
-  async openConsentPopup(providerId: string): Promise<boolean> {
+  async startUserConsent(providerId: string): Promise<boolean> {
     this.opened.push(providerId);
     return true;
   }

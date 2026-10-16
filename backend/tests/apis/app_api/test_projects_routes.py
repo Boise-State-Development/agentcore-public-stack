@@ -329,6 +329,21 @@ def test_shared_tasks_hide_user_ids_and_mark_the_callers_own(project_id, service
     ]
     assert not any("ownerId" in t or "sessionId" in t for t in tasks)
     assert [t["note"] for t in tasks] == ["Over to you", None]
+    assert [t["scheduleId"] for t in tasks] == [None, None]
+
+
+def test_shared_tasks_name_the_schedule_that_delivered_them(project_id, service):
+    from apis.shared.projects.models import SharedTask
+
+    service.repository.put_shared_task(SharedTask(
+        project_id=project_id, session_id="headless-run", share_id="sh-run", owner_id=EDITOR.user_id,
+        owner_email=EDITOR.email, title="Weekly digest", shared_at="2026-09-03", note="Scheduled: Weekly digest",
+        schedule_id="sched-1",
+    ))
+    tasks = client_for(VIEWER).get(f"/projects/{project_id}/shared-tasks").json()["tasks"]
+    assert [(t["shareId"], t["scheduleId"], t["note"]) for t in tasks] == [
+        ("sh-run", "sched-1", "Scheduled: Weekly digest"),
+    ]
 
 
 def test_directory_marks_people_already_in_the_project(project_id):

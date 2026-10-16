@@ -167,7 +167,7 @@ export function describeProvenance(
   const who = (email: string | null | undefined) =>
     !email ? 'someone' : email.toLowerCase() === me ? 'you' : people[email] || email;
   const at = provenance.restoredAt || provenance.updatedAt || provenance.addedAt || '';
-  const fromTask = provenance.sourceSessionId ? ' from a task' : '';
+  const fromTask = provenance.sourceSessionId ? ' from a conversation' : '';
   const editor = provenance.updatedBy && provenance.updatedBy !== provenance.addedBy ? provenance.updatedBy : null;
 
   let text: string;

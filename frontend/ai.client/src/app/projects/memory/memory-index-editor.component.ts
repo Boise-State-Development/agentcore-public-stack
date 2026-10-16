@@ -28,7 +28,7 @@ import { estimateTokens, itemProblem, lintLine } from './memory-text';
       <div>
         <h2 class="text-lg/7 font-semibold text-gray-900 dark:text-white">Edit the index</h2>
         <p class="mt-0.5 text-sm/6 text-gray-600 dark:text-gray-400">
-          Keep it to one short line per file, such as “- [[deadlines]] — dates the team has agreed”. Only about the first {{ budget() | number }} tokens reach a task.
+          Keep it to one short line per file, such as “- [[deadlines]] — dates the team has agreed”. Only about the first {{ budget() | number }} tokens reach a conversation.
         </p>
       </div>
       <div>
@@ -62,7 +62,7 @@ import { estimateTokens, itemProblem, lintLine } from './memory-text';
         <p role="alert" class="rounded-xl bg-state-danger-50 px-3 py-2 text-sm/6 text-state-danger-800 dark:bg-state-danger-900/20 dark:text-state-danger-200">{{ serverError() }}</p>
       }
       <div class="flex flex-wrap items-center justify-between gap-3 border-t border-gray-100 pt-4 dark:border-gray-700">
-        <app-memory-meter [tokens]="tokens()" [max]="budget()" label="Index size against what reaches a task" />
+        <app-memory-meter [tokens]="tokens()" [max]="budget()" label="Index size against what a conversation loads" />
         <span class="flex gap-2">
           <button type="button" (click)="cancelled.emit()" class="rounded-2xl border border-gray-300 bg-white px-3.5 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700">
             Cancel
@@ -142,7 +142,7 @@ export class MemoryIndexEditorComponent {
       const result = await firstValueFrom(this.api.saveMemoryIndex(this.projectId(), this.scope(), this.text()));
       const flagged = lintLine(result.lint);
       if (flagged) {
-        this.toast.warning('Saved the index', `${flagged} Every task loads the index, so check it before moving on.`);
+        this.toast.warning('Saved the index', `${flagged} Every conversation loads the index, so check it before moving on.`);
       } else {
         this.toast.success('Saved the index');
       }

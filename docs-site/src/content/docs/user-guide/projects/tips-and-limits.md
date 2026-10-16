@@ -34,7 +34,7 @@ own. So the wording of your question decides which passages it gets to see.
 - **Pin** the facts everything else depends on, so no later change can drop
   them by accident.
 - **Correct mistakes immediately.** Anything saved to project memory is
-  repeated in every teammate's tasks.
+  repeated in every teammate's conversations.
 - Use **"just for me"** memory for preferences that apply to this project, and
   **personal instructions** for your role and how you like answers formatted
   everywhere.
@@ -68,21 +68,21 @@ can tell you which have changed on your deployment.
 **Working together**
 
 - **Few notifications for team activity.** Archiving and restoring a project
-  notify every member, the owner hears when someone leaves, and sharing a task
-  notifies the people you choose. New files and changes to instructions don't
+  notify every member, the owner hears when someone leaves, and sharing a
+  conversation notifies the people you choose. New files and changes to instructions don't
   notify anyone. Check **Activity**.
-- **No comments or @-mentions** on shared tasks. To hand work to a specific
-  person, share the task, notify them, and add a note.
+- **No comments or @-mentions** on shared conversations. To hand work to a
+  specific person, share the conversation, notify them, and add a note.
 - **Activity is for editors and the owner only.** Viewers don't see it.
 - **People appear by email address**, not name or title.
 - **Viewers can't add files or save to project memory directly.** They can
-  propose a memory change for an editor to approve, share a task, or ask an
-  editor to add a file.
-- **The assistant reads a shared task's conversation, not its attachments or
-  tool results.** If a teammate's answer depended on a file, add the file to
-  **Files** so everyone's tasks can use it.
+  propose a memory change for an editor to approve, share a conversation, or
+  ask an editor to add a file.
+- **The assistant reads a shared conversation's messages, not its attachments
+  or tool results.** If a teammate's answer depended on a file, add the file to
+  **Files** so everyone's conversations can use it.
 
-**Continuing someone's task** ("Continue in my own task")
+**Continuing someone's conversation** ("Continue in my own conversation")
 
 - **Attachments don't come along.** The copy says which files weren't copied.
   Attach your own copy of any you need, or ask for it to be added to Files.
@@ -95,8 +95,8 @@ can tell you which have changed on your deployment.
   tracked changes were supported (October 2026) keeps its old text, with deleted
   and inserted wording run together. Delete it and upload it again (see
   [Word redlines in Files](/agentcore-public-stack/user-guide/projects/set-up/#word-redlines-in-files)).
-- Documents the assistant creates are **saved to your task only**. There's no
-  "save to project" button. Download the file and add it to Files.
+- Documents the assistant creates are **saved to your conversation only**.
+  There's no "save to project" button. Download the file and add it to Files.
 - There's no version history for files. Each upload is a separate file.
 
 **Memory and settings**
@@ -105,11 +105,11 @@ can tell you which have changed on your deployment.
   (`MEMORY.md`) has no history, so copy it somewhere before a big rewrite.
 - **No one-click revert** for instructions. Copy an old version from History
   and save it.
-- **Switching models inside a task** starts a new task in the project. The
-  conversation so far doesn't carry over.
+- **Switching models inside a project conversation** starts a new
+  conversation in the project. The conversation so far doesn't carry over.
 
 **Governance**
 
-- The **Share** menu in a project task also offers **Public link** and
-  **Limited share**, which share outside the project. There's no project setting
-  to turn these off.
+- The **Share** menu in a project conversation also offers **Public link**
+  and **Limited share**, which share outside the project. There's no project
+  setting to turn these off.

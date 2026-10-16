@@ -43,9 +43,7 @@ from apis.shared.sessions.models import MessageMetadata, TokenUsage
 
 from tests.apis.inference_api.test_agent_binding_resolver import (
     _assistant,
-    _mem_binding,
     _patch_access,
-    _patch_memory,
     _patch_skill_access,
     _patch_tool_access,
     _skill_binding,
@@ -87,6 +85,30 @@ class TestDegrade:
         assert plan.tools is not None and plan.tools.tool_ids == []
 
     @pytest.mark.asyncio
+    async def test_a_project_that_binds_no_tools_ignores_the_members_picks(self, monkeypatch):
+        # Empty, never None (which would fall through to the request's enabled_tools), and
+        # not owning its toolset, so the admin's always-on floor still applies (D4).
+        _patch_tool_access(monkeypatch, True)
+        plan = await resolve_agent_invocation(_assistant(bindings=[]), _user(), degrade=True)
+        assert plan.tools is not None and plan.tools.tool_ids == []
+        assert plan.tools.owns_toolset is False
+        assert not plan.unavailable
+
+    @pytest.mark.asyncio
+    async def test_bound_tools_own_the_toolset_even_when_all_were_dropped(self, monkeypatch):
+        _patch_tool_access(monkeypatch, False)
+        plan = await resolve_agent_invocation(
+            _assistant(bindings=[_tool_binding("sis")]), _user(), degrade=True
+        )
+        assert plan.tools.owns_toolset is True
+
+    @pytest.mark.asyncio
+    async def test_an_ordinary_agent_with_no_tools_still_falls_through(self, monkeypatch):
+        _patch_tool_access(monkeypatch, True)
+        plan = await resolve_agent_invocation(_assistant(bindings=[]), _user())
+        assert plan.tools is None
+
+    @pytest.mark.asyncio
     async def test_a_denied_model_falls_through_to_the_members_default(self, monkeypatch):
         _patch_access(monkeypatch, False)
         agent = _assistant(model_settings=AgentModelConfig(model_id="us.anthropic.claude-opus-4-7"))
@@ -97,16 +119,26 @@ class TestDegrade:
         assert plan.unavailable.model_id == "us.anthropic.claude-opus-4-7"
 
     @pytest.mark.asyncio
-    async def test_skills_are_filtered_and_none_left_means_no_skill_binding(self, monkeypatch):
+    async def test_skills_are_filtered_and_none_left_means_no_skills_not_the_members(self, monkeypatch):
         _patch_skill_access(monkeypatch, {"rubric-writer"})
         agent = _assistant(bindings=[_skill_binding("rubric-writer"), _skill_binding("grant-budget")])
         plan = await resolve_agent_invocation(agent, _user(), degrade=True)
         assert plan.skills.skill_ids == ["rubric-writer"]
         assert plan.unavailable.skills == ["grant-budget"]
 
+        # Same split as tools: an empty set, never a fall-through to the request's skills.
         _patch_skill_access(monkeypatch, set())
         plan = await resolve_agent_invocation(_assistant(bindings=[_skill_binding("grant-budget")]), _user(), degrade=True)
-        assert plan.skills is None
+        assert plan.skills is not None and plan.skills.skill_ids == []
+
+    @pytest.mark.asyncio
+    async def test_a_project_that_binds_no_skills_runs_with_none(self, monkeypatch):
+        # The member's own enabled skills are not the project's: one project conversation
+        # discloses the same skills whoever is typing.
+        _patch_skill_access(monkeypatch, True)
+        plan = await resolve_agent_invocation(_assistant(bindings=[]), _user(), degrade=True)
+        assert plan.skills is not None and plan.skills.skill_ids == []
+        assert not plan.unavailable
 
     @pytest.mark.asyncio
     async def test_skills_disabled_drops_them_all(self, monkeypatch):
@@ -114,17 +146,7 @@ class TestDegrade:
         plan = await resolve_agent_invocation(
             _assistant(bindings=[_skill_binding("a"), _skill_binding("b")]), _user(), degrade=True
         )
-        assert plan.skills is None and plan.unavailable.skills == ["a", "b"]
-
-    @pytest.mark.asyncio
-    async def test_an_unreachable_memory_space_is_skipped(self, monkeypatch):
-        from types import SimpleNamespace
-
-        _patch_memory(monkeypatch, space=SimpleNamespace(name="Team notes", is_project_space=False), role="viewer")
-        plan = await resolve_agent_invocation(
-            _assistant(bindings=[_mem_binding(access="readwrite")]), _user(), degrade=True
-        )
-        assert plan.memory is None and plan.unavailable.memory == "Team notes"
+        assert plan.skills.skill_ids == [] and plan.unavailable.skills == ["a", "b"]
 
     @pytest.mark.asyncio
     async def test_nothing_missing_means_no_notice(self, monkeypatch):
@@ -172,6 +194,11 @@ class TestNotice:
 
 
 class TestPrompt:
+    def test_the_guidance_says_to_save_before_saying_so(self):
+        """QA 2026-10-15: "I've saved your preference" with no memory_save call."""
+        assert "call `memory_save` in that same turn" in PROJECT_WORKSPACE_GUIDANCE
+        assert "never say you've saved, noted or recorded something you haven't saved" in PROJECT_WORKSPACE_GUIDANCE
+
     def test_project_heading_and_unchanged_agent_heading(self):
         assert compose_agent_system_prompt("BASE", "Do X.", project_harness=True) == (
             f"BASE\n\n{PROJECT_WORKSPACE_GUIDANCE}\n\n## Project Instructions\n\nDo X."
@@ -184,9 +211,9 @@ class TestPrompt:
     def test_a_harness_is_told_to_check_shared_tasks(self):
         """2.5c: without this, an "every open escalation" question never listed shared tasks."""
         prompt = compose_agent_system_prompt("BASE", "Do X.", project_harness=True)
-        assert "call `shared_tasks_list`" in prompt
+        assert "call `shared_conversations_list`" in prompt
         assert prompt.index("## Project Workspace") < prompt.index("## Project Instructions")
-        assert "shared_tasks_list" not in compose_agent_system_prompt("BASE", "Do X.", project_harness=False)
+        assert "shared_conversations_list" not in compose_agent_system_prompt("BASE", "Do X.", project_harness=False)
 
     def test_two_members_render_the_same_prefix(self):
         """Nothing about the invoker can reach this text — the signature takes no user —

@@ -399,9 +399,20 @@ class BaseAgent(ABC):
         return hooks
 
     def _build_mcp_external_approval_hook(self) -> MCPExternalApprovalHook:
-        """Resolve a Strands `selected_tool` to the per-tool approval set
-        cached by the external MCP integration. Mirrors the provider lookup
-        used by the OAuth consent hook."""
+        """Resolve a Strands `selected_tool` to the set of tool names that
+        pause for approval.
+
+        Two sources, one gate. An external MCP tool uses the per-tool set
+        cached by the integration (mirrors the provider lookup used by the
+        OAuth consent hook). The skill-authoring writes are a fixed set of
+        built-in names (skill-creator spec D10), composed in here so the
+        snapshot, resume route, breadcrumb and SPA card stay the MCP ones.
+        Gating a name that was not built this turn is a no-op.
+        """
+        from agents.builtin_tools.skill_authoring.approval import (
+            APPROVAL_TOOL_NAMES as SKILL_AUTHORING_APPROVAL_NAMES,
+            describe_for_approval,
+        )
         from agents.main_agent.integrations.external_mcp_client import (
             get_external_mcp_integration,
         )
@@ -410,12 +421,20 @@ class BaseAgent(ABC):
         integration = get_external_mcp_integration()
 
         def approval_names_lookup(selected_tool: object) -> set[str]:
-            if not isinstance(selected_tool, MCPAgentTool):
-                return set()
-            return integration.approval_names_for_client(selected_tool.mcp_client)
+            if isinstance(selected_tool, MCPAgentTool):
+                return integration.approval_names_for_client(selected_tool.mcp_client)
+            if getattr(selected_tool, "tool_name", None) in SKILL_AUTHORING_APPROVAL_NAMES:
+                return set(SKILL_AUTHORING_APPROVAL_NAMES)
+            return set()
+
+        owner_id = self.user_id
+
+        async def approval_details_lookup(tool_name: str, tool_input: object):
+            return await describe_for_approval(owner_id, tool_name, tool_input)
 
         return MCPExternalApprovalHook(
             approval_names_lookup=approval_names_lookup,
+            approval_details_lookup=approval_details_lookup,
         )
 
     def _build_oauth_consent_hook(self) -> OAuthConsentHook:

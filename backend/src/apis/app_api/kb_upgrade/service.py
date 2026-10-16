@@ -279,6 +279,16 @@ _FAILURE_FALLBACK = (
 
 def _failure_reason(record: Dict[str, Any]) -> str:
     stored = str(record.get("migrationError") or "")
+    if stored.startswith("DocumentsNotIndexed"):
+        # The one failure the owner can fix themselves, so it names the files.
+        import re
+
+        match = re.search(r"document\(s\): (.+?)(?: \(|\. Remove|$)", stored)
+        files = match.group(1) if match else "some documents"
+        return (
+            f"The upgraded knowledge base couldn't read {files}, so nothing was "
+            f"switched over. Remove or replace those files, then try the upgrade again."
+        )
     for token, copy in _FAILURE_COPY.items():
         if token in stored:
             return copy

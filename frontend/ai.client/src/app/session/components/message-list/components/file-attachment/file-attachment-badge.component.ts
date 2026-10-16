@@ -1,4 +1,4 @@
-import { Component, ChangeDetectionStrategy, computed, effect, inject, input, signal } from '@angular/core';
+import { Component, ChangeDetectionStrategy, computed, effect, inject, input, signal, untracked } from '@angular/core';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroDocument,
@@ -11,7 +11,16 @@ import {
   heroEye,
 } from '@ng-icons/heroicons/outline';
 import { MarkdownComponent } from 'ngx-markdown';
-import { formatBytes, FileUploadService } from '../../../../../services/file-upload';
+import {
+  AttachmentSearchStatusService,
+  formatBytes,
+  FileUploadService,
+  isReferenceDocument,
+  largeDocumentChip,
+  LARGE_DOCUMENT_CHIP_COPY,
+  type LargeDocumentChip,
+} from '../../../../../services/file-upload';
+import { FEATURES } from '../../../../../services/features';
 import { FileAttachmentData } from '../../../../services/models/message.model';
 import { FilePreviewStateService } from '../../../../services/file-preview/file-preview-state.service';
 import { isPreviewableFilename } from '../../../../services/file-preview/file-preview.model';
@@ -384,6 +393,21 @@ const SLIDE_BULLET_WIDTHS = [78, 92, 60];
         <p class="text-xs text-gray-500 dark:text-gray-400">
           {{ formattedSize() }}
         </p>
+        <!-- A large document is attached by reference: the model reads the
+             parts it needs through document_read, not the whole file. Shown
+             while it is being prepared and after; the SPA classifies on size
+             alone, the same thresholds the backend's is_reference_document
+             uses. With the attachments KB it follows the search index:
+             indexing, then searchable. -->
+        @if (isReference()) {
+          <p
+            class="mt-1 inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-medium text-gray-700 dark:bg-gray-700 dark:text-gray-200"
+            data-testid="reference-chip"
+            [attr.data-chip]="chip()"
+          >
+            {{ chipCopy().full }}
+          </p>
+        }
       </div>
     </button>
 
@@ -401,6 +425,8 @@ export class FileAttachmentBadgeComponent {
 
   private readonly fileUploadService = inject(FileUploadService);
   private readonly filePreview = inject(FilePreviewStateService);
+  /** Present only while the deployment has the attachments KB. */
+  private readonly searchStatus = inject(FEATURES).attachmentKb ? inject(AttachmentSearchStatusService) : null;
 
   protected readonly skeletonWidths = SKELETON_LINE_WIDTHS;
   protected readonly slideBulletWidths = SLIDE_BULLET_WIDTHS;
@@ -423,6 +449,17 @@ export class FileAttachmentBadgeComponent {
   );
 
   protected readonly hasSnippet = computed(() => this.snippet().trim().length > 0);
+
+  protected readonly isReference = computed(() =>
+    isReferenceDocument(this.attachment().mimeType, this.attachment().sizeBytes),
+  );
+
+  /** What the large-document chip says: read on demand, indexing, or searchable. */
+  protected readonly chip = computed<LargeDocumentChip>(() =>
+    this.searchStatus ? largeDocumentChip(this.searchStatus.statusFor(this.attachment().uploadId)) : 'read-on-demand',
+  );
+
+  protected readonly chipCopy = computed(() => LARGE_DOCUMENT_CHIP_COPY[this.chip()]);
 
   protected readonly isMarkdown = computed(() => this.attachment().mimeType === 'text/markdown');
 
@@ -449,6 +486,14 @@ export class FileAttachmentBadgeComponent {
   });
 
   constructor() {
+    // A large document follows its search index (one poll per upload, shared
+    // with the composer card).
+    effect(() => {
+      const service = this.searchStatus;
+      if (!service || !this.isReference()) return;
+      const id = this.attachment().uploadId;
+      untracked(() => service.track(id));
+    });
     effect(() => {
       const att = this.attachment();
       if (TEXT_PREVIEW_MIMES.has(att.mimeType)) {

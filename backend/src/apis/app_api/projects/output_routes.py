@@ -46,6 +46,10 @@ class ProjectOutputResponse(BaseModel):
     share_url: str = Field(..., alias="shareUrl", description="The shared-artifact view")
     is_mine: bool = Field(..., alias="isMine")
     can_remove: bool = Field(..., alias="canRemove", description="The caller may remove it from the project")
+    schedule_id: Optional[str] = Field(None, alias="scheduleId", description="The project schedule that published it, if one did")
+    preview: Optional[str] = Field(
+        None, description="A short excerpt for the card: Markdown, CSV rows, page text or a small SVG; empty or null for none"
+    )
 
 
 class ProjectOutputsResponse(BaseModel):
@@ -68,6 +72,8 @@ def _response(o: ProjectOutput, user: User, can_moderate: bool, names: dict) -> 
         share_url=f"/shared-artifact/{o.share_id}",
         is_mine=mine,
         can_remove=mine or can_moderate,
+        schedule_id=o.schedule_id,
+        preview=o.preview or None,
     )
 
 
@@ -79,6 +85,7 @@ def list_outputs(project_id: str, user: User = Depends(require_projects_user)) -
     except ProjectError as e:
         raise _translate(e)
     outputs = sorted(_svc().repository.list_outputs(project_id), key=lambda o: o.shared_at, reverse=True)
+    project_outputs.fill_previews(outputs, repository=_svc().repository)
     can_moderate = project.status == "active" and ROLE_RANK[role] >= ROLE_RANK["editor"]
     names = display_names({o.owner_email for o in outputs})
     return ProjectOutputsResponse(outputs=[_response(o, user, can_moderate, names) for o in outputs])

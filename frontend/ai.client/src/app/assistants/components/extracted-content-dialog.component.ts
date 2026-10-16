@@ -7,9 +7,11 @@ import { DialogShellComponent } from '../../components/dialog/dialog-shell.compo
 import { SpinnerComponent } from '../../components/spinner/spinner.component';
 import { DocumentService } from '../services/document.service';
 import { ExtractedChunk } from '../models/document.model';
+import { KnowledgeTarget } from '../models/knowledge-target.model';
 
 export interface ExtractedContentDialogData {
-  assistantId: string;
+  /** The agent (by id) or project the document belongs to. */
+  target: KnowledgeTarget;
   documentId: string;
   filename: string;
 }
@@ -126,7 +128,7 @@ export class ExtractedContentDialogComponent {
   private async load(): Promise<void> {
     try {
       const result = await this.documents.getExtractedChunks(
-        this.data.assistantId,
+        this.data.target,
         this.data.documentId,
       );
       if (!result.available) {

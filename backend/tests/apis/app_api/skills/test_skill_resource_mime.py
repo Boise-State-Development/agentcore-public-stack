@@ -390,7 +390,7 @@ class TestLegacyRowIsNeutralizedOnRead:
         """The owner-tier read route is hardened identically."""
         skill_id = _create_my_skill(author_client, "Legacy Mine")
         ref = _plant_legacy_html_resource(
-            user_skill_service.catalog_service, skill_id
+            user_skill_service.bundle_files, skill_id
         )
         await user_skill_service.repository.update_skill(
             skill_id, {"resources": [ref]}, admin_user_id=author_user.user_id

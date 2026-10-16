@@ -2,6 +2,7 @@ import {
   ChangeDetectionStrategy,
   Component,
   computed,
+  effect,
   inject,
   input,
   output,
@@ -16,6 +17,8 @@ import { MarkdownService } from 'ngx-markdown';
 import { FeedbackReason, Message, isTextContentBlock } from '../../../services/models/message.model';
 import { FEEDBACK_REASONS, MessageFeedbackService, parseMessageRef } from '../../../services/session/message-feedback.service';
 import { TooltipDirective } from '../../../../components/tooltip';
+import { ShortcutTargetsService } from '../../../../components/shortcuts/shortcut-targets.service';
+import { shortcutAria, withShortcut } from '../../../../components/shortcuts/shortcuts';
 
 @Component({
   selector: 'app-message-actions',
@@ -48,9 +51,10 @@ import { TooltipDirective } from '../../../../components/tooltip';
         <button
           type="button"
           class="inline-flex items-center justify-center rounded-md p-1.5 text-gray-500 transition-colors hover:bg-gray-200 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"
-          [appTooltip]="copied() ? 'Copied' : 'Copy'"
+          [appTooltip]="copied() ? 'Copied' : latest() ? copyShortcutTooltip : 'Copy'"
           appTooltipPosition="top"
           [attr.aria-label]="copied() ? 'Copied to clipboard' : 'Copy message'"
+          [attr.aria-keyshortcuts]="latest() ? copyShortcutAria : null"
           [disabled]="!hasCopyableText()"
           (click)="copy()"
         >
@@ -181,6 +185,10 @@ export class MessageActionsComponent {
   private isBrowser = isPlatformBrowser(this.platformId);
   private markdown = inject(MarkdownService);
   private feedbackService = inject(MessageFeedbackService);
+  private shortcutTargets = inject(ShortcutTargetsService);
+
+  protected readonly copyShortcutTooltip = withShortcut('Copy', 'copyLastResponse');
+  protected readonly copyShortcutAria = shortcutAria('copyLastResponse');
 
   /**
    * The assistant messages of one run (see AssistantMessageComponent).
@@ -191,6 +199,21 @@ export class MessageActionsComponent {
    * the user is reading. Taking only the final message would silently drop it.
    */
   messages = input.required<Message[]>();
+
+  /** The newest response in the conversation: Cmd/Ctrl+Shift+C copies this one. */
+  latest = input<boolean>(false);
+
+  constructor() {
+    effect(onCleanup => {
+      if (!this.latest()) return;
+      onCleanup(
+        this.shortcutTargets.registerLatestResponse({
+          canCopy: () => this.isBrowser && this.hasCopyableText(),
+          copy: () => this.copy(),
+        }),
+      );
+    });
+  }
 
   /** Show a "Continue" button when this is the last assistant message of a
    *  recoverable max_tokens-truncated turn. */
@@ -301,8 +324,9 @@ export class MessageActionsComponent {
       : 'border-gray-300 bg-white text-gray-600 hover:bg-gray-100 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700';
   }
 
-  async copy(): Promise<void> {
-    if (!this.isBrowser || !this.hasCopyableText()) return;
+  /** Resolves whether anything reached the clipboard. */
+  async copy(): Promise<boolean> {
+    if (!this.isBrowser || !this.hasCopyableText()) return false;
 
     const markdown = this.copyableText();
 
@@ -320,8 +344,10 @@ export class MessageActionsComponent {
         this.copied.set(false);
         this.resetTimeout = null;
       }, 2000);
+      return true;
     } catch {
       // Clipboard API may be unavailable (insecure context, permissions). No-op.
+      return false;
     }
   }
 

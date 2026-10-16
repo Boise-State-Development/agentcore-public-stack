@@ -461,8 +461,8 @@ export class ExportDialogComponent implements OnInit {
       hasBackdrop: false,
     });
     const result = await firstValueFrom(ref.closed);
-    // Cancelled, or closed in import mode (never happens here) — leave as-is.
-    if (!result || Array.isArray(result)) {
+    // Cancelled, or closed in another mode (never happens here) — leave as-is.
+    if (!result || !('folderId' in result)) {
       return;
     }
     const selection: FolderSelection = result;
@@ -544,8 +544,7 @@ export class ExportDialogComponent implements OnInit {
         this.toast.error('Unexpected response from the server.');
         return;
       }
-      this.consentService.requestConsent(target.providerId, result.authorizationUrl);
-      void this.consentService.openConsentPopup(target.providerId);
+      void this.consentService.startUserConsent(target.providerId, result.authorizationUrl);
       this.connectPhase.set('awaiting');
     } catch (err) {
       this.connectingId.set(null);

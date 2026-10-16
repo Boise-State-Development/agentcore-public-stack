@@ -1,11 +1,13 @@
 """Property-based exploration test for model access enforcement bug.
 
-**Property 1: Bug Condition** — Unauthorized Model Access Returns 403
+**Property 1: Bug Condition** — Unauthorized Model Access Is Refused
 
 For any request to `/invocations` or `/chat/api-converse` where the user's
 AppRole permissions do NOT include the requested `model_id` (and `model_id`
-is non-null/non-empty), the endpoint SHALL return HTTP 403 Forbidden with
-detail "Access denied to model: {model_id}".
+is non-null/non-empty), the endpoint SHALL refuse it: `/invocations` streams a
+conversational refusal (200 SSE, `stream_error` with code `forbidden`), and the
+API-key `/chat/api-converse` returns HTTP 403 with detail
+"Access denied to model: {model_id}".
 
 This test is EXPECTED TO FAIL on unfixed code — failure confirms the bug
 exists (endpoints proceed to Bedrock instead of returning 403).
@@ -66,7 +68,7 @@ def _make_mock_app_role_service(can_access: bool) -> MagicMock:
 # ---------------------------------------------------------------------------
 
 class TestInvocationsUnauthorizedModel:
-    """Bug condition: POST /invocations with unauthorized model_id should 403.
+    """Bug condition: POST /invocations with unauthorized model_id is refused in-stream.
 
     **Validates: Requirements 1.1, 2.1**
     """
@@ -77,8 +79,8 @@ class TestInvocationsUnauthorizedModel:
         deadline=None,
         suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture],
     )
-    def test_invocations_returns_403_for_unauthorized_model(self, model_id: str):
-        """Property 1 (invocations): Unauthorized model access returns 403.
+    def test_invocations_refuses_unauthorized_model(self, model_id: str):
+        """Property 1 (invocations): Unauthorized model access streams a refusal.
 
         **Validates: Requirements 1.1, 2.1**
         """
@@ -127,13 +129,14 @@ class TestInvocationsUnauthorizedModel:
                 },
             )
 
-        assert resp.status_code == 403, (
-            f"Expected 403 for unauthorized model_id={model_id!r}, "
+        assert resp.status_code == 200, (
+            f"Expected 200 SSE for unauthorized model_id={model_id!r}, "
             f"got {resp.status_code}: {resp.text[:200]}"
         )
-        assert "Access denied to model" in resp.text, (
-            f"Expected 'Access denied to model' in response body, got: {resp.text[:200]}"
+        assert '"code": "forbidden"' in resp.text, (
+            f"Expected a forbidden stream_error in the stream, got: {resp.text[:200]}"
         )
+        assert "isn't available to your account" in resp.text
 
 
 # ---------------------------------------------------------------------------

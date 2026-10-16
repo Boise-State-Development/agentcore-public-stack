@@ -1,0 +1,56 @@
+# large-document-prepare Lambda image: builds the `_derived/` sidecars that
+# `document_read` reads for a reference-class upload
+# (docs/specs/large-document-attachments.md §4C, PR-1). One function, fed by the
+# prepare queue that app-api's complete_upload sends to. The handler is a plain
+# top-level module, like Dockerfile.memory-maintenance, since standalone Lambda
+# code stays out of apis/ (CLAUDE.md).
+#
+# CDK (infrastructure/lib/constructs/large-document/large-document-prepare-construct.ts)
+# ships the bootstrap stub from infrastructure/bootstrap-assets/large-document-prepare/,
+# and only while CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED is on; the backend
+# workflow swaps this image in with `update-function-code`, and skips the swap
+# where the function does not exist.
+#
+# Keep the COPY surface minimal but COMPLETE: it must cover the handler's whole
+# import closure, function-local imports included.
+# backend/tests/supply_chain/test_lambda_image_imports.py enforces it. When
+# adding a COPY here, add the path to the large-document-prepare SOURCE_DIRS /
+# MANIFESTS in scripts/build/build-one.sh as well, or the content-hash tag will
+# not notice the change and the deploy becomes a silent no-op.
+#
+# Base image digest-pinned to the same digest as the other Lambda images; the
+# supply-chain dockerfile-pinning test asserts they agree.
+
+FROM public.ecr.aws/lambda/python:3.12@sha256:745b0eb8a9787e9c4bfd4fc4cae942399a2225831c96394ae70c0c2a7c7c6168
+
+# Dependencies (exact pins). pypdfium2 has a manylinux aarch64 wheel.
+COPY backend/src/lambdas/large_document_prepare/requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+
+# Application code: the namespace-package layout mirrors backend/src. `apis/`
+# has no `__init__.py` and relies on implicit namespace packages.
+COPY backend/src/apis/shared/__init__.py ${LAMBDA_TASK_ROOT}/apis/shared/__init__.py
+COPY backend/src/apis/shared/timestamps.py ${LAMBDA_TASK_ROOT}/apis/shared/timestamps.py
+# aws_clients.py — the S3 client and the digest's Bedrock client.
+COPY backend/src/apis/shared/aws_clients.py ${LAMBDA_TASK_ROOT}/apis/shared/aws_clients.py
+# feature_flags.py — WORD_TRACKED_CHANGES_ENABLED, read by docx_paragraphs (stdlib only).
+COPY backend/src/apis/shared/feature_flags.py ${LAMBDA_TASK_ROOT}/apis/shared/feature_flags.py
+# observability/ — the digest's and the preparation's EMF records.
+COPY backend/src/apis/shared/observability/ ${LAMBDA_TASK_ROOT}/apis/shared/observability/
+# files/ — whole package: the row model and repository, document_read's
+# extractors, the digest and the sidecar layout. Its modules import each other
+# relatively, so it is copied as a unit.
+COPY backend/src/apis/shared/files/ ${LAMBDA_TASK_ROOT}/apis/shared/files/
+# kb_backend/ — whole package (stdlib-only at module scope): docx_revisions for
+# tracked changes, and the managed-KB provisioning, records and backend the
+# attachments index (apis/shared/files/attachment_index.py) uses.
+COPY backend/src/apis/shared/kb_backend/ ${LAMBDA_TASK_ROOT}/apis/shared/kb_backend/
+
+# The handler itself, as a plain top-level module.
+COPY backend/src/lambdas/large_document_prepare/handler.py ${LAMBDA_TASK_ROOT}/handler.py
+
+# /var/task is read-only at runtime, so precompile what we COPYed; pip already
+# compiled site-packages.
+RUN python -m compileall -q ${LAMBDA_TASK_ROOT}
+
+CMD ["handler.lambda_handler"]

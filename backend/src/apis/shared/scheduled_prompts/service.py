@@ -18,10 +18,10 @@ import logging
 import os
 import uuid
 from datetime import date, datetime, timedelta, timezone
-from typing import List, Optional, Union
-from zoneinfo import ZoneInfo
+from typing import List, Optional, Tuple, Union
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from .models import DUE_INDEX_PK, IntervalUnit, ScheduleCadence, ScheduledPrompt, ScheduledPromptState
+from .models import DUE_INDEX_PK, DeliverTo, IntervalUnit, ScheduleCadence, ScheduledPrompt, ScheduledPromptState
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +58,24 @@ DEFAULT_MAX_SCHEDULES_PER_USER = 20
 
 class ScheduledPromptLimitExceeded(Exception):
     """Raised when a user already has the maximum number of schedules."""
+
+
+class InvalidTimezoneError(ValueError):
+    """Raised when a schedule names a timezone that is not a known IANA zone."""
+
+
+def _zone(timezone_name: str) -> ZoneInfo:
+    """The IANA zone ``timezone_name``, or ``InvalidTimezoneError``.
+
+    ``ZoneInfo`` raises ``ZoneInfoNotFoundError`` (a ``KeyError``) for an
+    unknown name, and ``ValueError``/``TypeError``/``OSError`` for a malformed
+    one or a path that is not a zone file, so a caller catching only
+    ``ValueError`` let a typo through as a 500.
+    """
+    try:
+        return ZoneInfo(timezone_name)
+    except (ZoneInfoNotFoundError, ValueError, TypeError, OSError) as e:
+        raise InvalidTimezoneError(f"Unknown timezone: {timezone_name!r}") from e
 
 
 def _iso(dt: datetime) -> str:
@@ -138,7 +156,7 @@ def compute_next_run_at(
         base_utc = (from_time or datetime.now(timezone.utc)).astimezone(timezone.utc)
         return _iso(base_utc + timedelta(minutes=interval_minutes))
 
-    tz = ZoneInfo(timezone_name)
+    tz = _zone(timezone_name)
     base = (from_time or datetime.now(timezone.utc)).astimezone(tz)
 
     candidate = base.replace(hour=hour_local, minute=0, second=0, microsecond=0)
@@ -177,6 +195,11 @@ async def create_scheduled_prompt(
     assistant_id: Optional[str] = None,
     enabled_tools: Optional[List[str]] = None,
     deliver_email: bool = False,
+    project_id: Optional[str] = None,
+    owner_email: Optional[str] = None,
+    deliver_to: DeliverTo = "owner",
+    notify_members: bool = False,
+    publish_outputs: bool = False,
 ) -> ScheduledPrompt:
     """Create an active scheduled prompt, due at the next occurrence of its cadence.
 
@@ -185,6 +208,7 @@ async def create_scheduled_prompt(
     passes the RBAC-resolved tool set at creation time; it is never
     re-resolved lazily at fire time (Phase A punch #7).
     """
+    _zone(timezone_name)  # an interval cadence never reads it, but stores it
     existing = await list_scheduled_prompts(user_id)
     if len(existing) >= max_schedules_per_user():
         raise ScheduledPromptLimitExceeded(
@@ -217,6 +241,11 @@ async def create_scheduled_prompt(
         runs_today_date=None,
         enabled_tools=enabled_tools,
         deliver_email=deliver_email,
+        project_id=project_id,
+        owner_email=owner_email,
+        deliver_to=deliver_to,
+        notify_members=notify_members,
+        publish_outputs=publish_outputs,
         created_at=now,
         updated_at=now,
     )
@@ -236,6 +265,35 @@ async def get_scheduled_prompt(user_id: str, schedule_id: str) -> Optional[Sched
     response = _get_table().get_item(Key={"PK": f"USER#{user_id}", "SK": f"SCHEDPROMPT#{schedule_id}"})
     item = response.get("Item")
     return ScheduledPrompt.model_validate(item) if item else None
+
+
+async def get_scheduled_prompts(keys: List[Tuple[str, str]]) -> List[ScheduledPrompt]:
+    """Batch-read schedules by ``(user_id, schedule_id)``; missing ones are left out.
+
+    For a project's schedules, which live in their creators' partitions and are
+    found through the project's ``SCHEDULE#`` pointers.
+    """
+    import boto3
+
+    unique = list(dict.fromkeys(keys))
+    if not unique:
+        return []
+    client = boto3.resource("dynamodb")
+    table = _table_name()
+    schedules: List[ScheduledPrompt] = []
+    for start in range(0, len(unique), 100):
+        request = {
+            table: {"Keys": [{"PK": f"USER#{u}", "SK": f"SCHEDPROMPT#{s}"} for u, s in unique[start:start + 100]]}
+        }
+        while request:
+            response = client.batch_get_item(RequestItems=request)
+            for item in response.get("Responses", {}).get(table, []):
+                try:
+                    schedules.append(ScheduledPrompt.model_validate(item))
+                except Exception as e:
+                    logger.warning(f"Failed to parse scheduled prompt item: {e}")
+            request = response.get("UnprocessedKeys") or None
+    return schedules
 
 
 async def list_scheduled_prompts(user_id: str) -> List[ScheduledPrompt]:
@@ -444,6 +502,9 @@ async def update_scheduled_prompt(
     assistant_id: Union[str, None, _Unset] = UNSET,
     enabled_tools: Union[List[str], None, _Unset] = UNSET,
     deliver_email: Optional[bool] = None,
+    deliver_to: Optional[DeliverTo] = None,
+    notify_members: Optional[bool] = None,
+    publish_outputs: Optional[bool] = None,
 ) -> Optional[ScheduledPrompt]:
     """Edit a schedule's fields in place.
 
@@ -460,6 +521,8 @@ async def update_scheduled_prompt(
     default agent / all-RBAC-allowed tools). All other fields keep the plain
     ``None`` == "leave unchanged" contract.
     """
+    if timezone_name is not None:
+        _zone(timezone_name)  # a paused schedule stores it unread until it resumes
     schedule = await get_scheduled_prompt(user_id, schedule_id)
     if schedule is None:
         return None
@@ -514,7 +577,14 @@ async def update_scheduled_prompt(
             values[":gsisk"] = _due_sort_key(next_run_at, schedule_id)
 
     # Non-clearable fields: None == "leave unchanged".
-    for attr, value in (("label", label), ("promptText", prompt_text), ("deliverEmail", deliver_email)):
+    for attr, value in (
+        ("label", label),
+        ("promptText", prompt_text),
+        ("deliverEmail", deliver_email),
+        ("deliverTo", deliver_to),
+        ("notifyMembers", notify_members),
+        ("publishOutputs", publish_outputs),
+    ):
         if value is not None:
             set_parts.append(f"{attr} = :{attr}")
             values[f":{attr}"] = value

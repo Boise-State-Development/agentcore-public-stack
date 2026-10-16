@@ -57,6 +57,12 @@ export interface FileEntry {
    * Forms). The browser renders non-selectable files disabled.
    */
   selectable: boolean;
+  /**
+   * The MIME type the file's bytes arrive as when an export changes it: a
+   * Google Doc downloads as a .docx. Absent when the file downloads as
+   * itself. The chat composer judges attachability on this, not `mimeType`.
+   */
+  downloadMimeType?: string | null;
 }
 
 /** One hop in the folder path shown above the browser. */
@@ -77,6 +83,17 @@ export interface BrowseResult {
 export interface ImportFileRef {
   fileId: string;
   name: string;
+}
+
+/**
+ * Request body for POST /files/import: attach one file from a connected file
+ * source to a conversation. One file per call so each gets its own card,
+ * progress and retry.
+ */
+export interface AttachSourceFileRequest {
+  sessionId: string;
+  connectorId: string;
+  fileId: string;
 }
 
 /** Request body for POST /assistants/{id}/documents/import. */

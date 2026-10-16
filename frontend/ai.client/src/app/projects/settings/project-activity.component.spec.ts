@@ -1,0 +1,242 @@
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { TestBed } from '@angular/core/testing';
+import { signal } from '@angular/core';
+import { HttpErrorResponse } from '@angular/common/http';
+import { provideRouter } from '@angular/router';
+import { of, throwError } from 'rxjs';
+import { ProjectActivityComponent, describeActivity } from './project-activity.component';
+import { ProjectApiService } from '../services/project-api.service';
+import { UserService } from '../../auth/user.service';
+import { AgentService } from '../../agents/services/agent.service';
+import { Project, ProjectAuditRecord } from '../models/project.model';
+
+const PROJECT: Project = {
+  projectId: 'prj_1', name: 'Enrollment Sync', description: '', ownerEmail: 'o@x.edu', ownerName: null, role: 'editor',
+  status: 'active', editorsManageMembers: true, memberCount: 2, harnessAgentId: 'ast-1',
+  createdAt: '2026-09-24T00:00:00Z', updatedAt: '2026-09-24T00:00:00Z',
+};
+
+function rec(action: string, over: Partial<ProjectAuditRecord> = {}): ProjectAuditRecord {
+  return { auditId: `a-${action}-${Math.random()}`, timestamp: '2026-09-24T12:00:00Z', action, actorEmail: 'ann@x.edu', ...over };
+}
+
+describe('describeActivity', () => {
+  it.each([
+    [rec('project.created'), 'created the project'],
+    [rec('project.updated', { changes: ['name'], after: { name: 'Roster' } }), 'renamed the project to “Roster”'],
+    [rec('project.updated', { changes: ['description', 'editorsManageMembers'], after: { editorsManageMembers: false } }),
+      'updated the description and limited managing members to the owner'],
+    [rec('project.archived'), 'archived the project'],
+    [rec('project.archived', { reason: 'policy review' }), 'archived the project (policy review)'],
+    [rec('project.restored'), 'restored the project'],
+    [rec('project.transferred', { after: { ownerEmail: 'bo@x.edu' } }), 'made bo@x.edu the owner'],
+    [rec('project.member_added', { after: { email: 'bo@x.edu', role: 'viewer' } }), 'added bo@x.edu as a viewer'],
+    [rec('project.member_role_changed', { before: { email: 'bo@x.edu', role: 'viewer' }, after: { email: 'bo@x.edu', role: 'editor' } }),
+      'made bo@x.edu an editor (was a viewer)'],
+    [rec('project.member_removed', { before: { email: 'bo@x.edu', role: 'viewer' } }), 'removed bo@x.edu'],
+    [rec('project.member_removed', { before: { email: 'ann@x.edu' }, reason: 'left' }), 'left the project'],
+    [rec('project.model_updated', { after: { version: 4, modelId: 'claude-x' } }), 'changed the model to claude-x'],
+    [rec('project.tools_updated', { before: { refs: ['a', 'b'] }, after: { version: 5, refs: ['b', 'c', 'd'] } }),
+      'added the tools c and d and removed the tool a'],
+    [rec('project.skills_updated', { before: { refs: [] }, after: { version: 6, refs: [] } }), 'updated the skills'],
+    [rec('project.skills_updated', {
+      before: { refs: ['memo', 'pdf'], versions: { memo: '1', pdf: '2' } },
+      after: { version: 7, refs: ['memo', 'pdf'], versions: { memo: '1', pdf: '3' } },
+    }), 'updated the skill pdf to version 3'],
+    [rec('project.knowledge_added', { after: { filename: 'plan.pdf', source: 'upload' } }), 'added the file plan.pdf'],
+    [rec('project.knowledge_added', { after: { url: 'https://x.edu', source: 'web' } }), 'started adding pages from https://x.edu'],
+    [rec('project.knowledge_removed', { before: { filename: 'plan.pdf' } }), 'removed the file plan.pdf'],
+    [rec('project.task_shared', { after: { title: 'Roster diff' } }), 'shared the conversation “Roster diff” with the project'],
+    [rec('project.output_shared', { after: { title: 'Roster chart' } }), 'shared the output “Roster chart” with the project'],
+    [rec('project.output_removed', { after: { title: 'Roster chart' } }), 'removed the output “Roster chart” from the project'],
+    [rec('project.output_shared', { after: { title: 'Weekly report', scheduleId: 'sc_1' }, reason: 'schedule' }),
+      'published “Weekly report” to Outputs from a schedule'],
+    [rec('project.memory_proposed', { after: { slug: 'sis' } }), 'proposed a change to the memory file “sis”'],
+    [rec('project.memory_proposal_approved', { after: { slug: 'sis', edited: true } }), 'approved a change to the memory file “sis” with edits'],
+    [rec('project.memory_proposal_approved', { after: { slug: 'sis', kind: 'compaction', appliedOps: 2, totalOps: 2 } }), 'applied 2 maintenance changes to the memory file “sis”'],
+    [rec('project.memory_proposal_approved', { after: { slug: 'sis', kind: 'compaction', appliedOps: '1', totalOps: '3' } }), 'applied 1 of 3 maintenance changes to the memory file “sis”'],
+    [
+      rec('project.memory_proposal_approved', { after: { slug: 'canvas', kind: 'compaction', appliedOps: '4', totalOps: '4', createdFiles: ['lti-tools'] } }),
+      'applied 4 maintenance changes to the memory file “canvas”, moving items into “lti-tools”',
+    ],
+    [rec('project.memory_maintenance_started', { after: { runId: 'r1' } }), 'ran maintenance on project memory'],
+    [rec('project.memory_maintenance_started', { after: { runId: 'r1', slug: 'sis' } }), 'ran maintenance on the memory file “sis”'],
+    [rec('project.memory_proposal_rejected', { after: { slug: 'sis' } }), 'declined a change to the memory file “sis”'],
+    [rec('project.memory_edited', { after: { slug: 'sis', created: 'True' } }), 'created the memory file “sis”'],
+    [rec('project.memory_edited', { after: { slug: 'sis' } }), 'edited the memory file “sis”'],
+    [rec('project.memory_edited', { after: { slug: 'MEMORY.md' } }), 'edited the memory index'],
+    [rec('project.memory_deleted', { before: { slug: 'sis' } }), 'deleted the memory file “sis”'],
+    [rec('project.task_unshared', { after: { title: 'Roster diff' } }), 'stopped sharing the conversation “Roster diff”'],
+    [rec('project.task_shared', { after: { title: 'Weekly digest', scheduleId: 'sc_1' }, reason: 'schedule' }),
+      'shared “Weekly digest” with the project from a schedule'],
+    [rec('project.schedule_created', { after: { scheduleId: 'sc_1', label: 'Weekly digest', createdBy: 'ann@x.edu' } }),
+      'created the schedule “Weekly digest”'],
+    [rec('project.schedule_updated', {
+      changes: ['hourLocal', 'promptText', 'timezone'], after: { scheduleId: 'sc_1', label: 'Weekly digest', createdBy: 'ann@x.edu' },
+    }), 'edited the schedule “Weekly digest” (the prompt and when it runs)'],
+    [rec('project.schedule_updated', {
+      changes: ['deliverTo', 'label', 'notifyMembers'], after: { scheduleId: 'sc_1', label: 'Digest', createdBy: 'ann@x.edu' },
+    }), 'edited the schedule “Digest” (the name, where its runs go and who hears about its runs)'],
+    [rec('project.schedule_updated', { after: { scheduleId: 'sc_1', label: 'Digest', createdBy: 'ann@x.edu' } }),
+      'edited the schedule “Digest”'],
+    [rec('project.schedule_paused', { after: { scheduleId: 'sc_1', label: 'Weekly digest', createdBy: 'Ann@x.edu' } }),
+      'paused the schedule “Weekly digest”'],
+    [rec('project.schedule_paused', { after: { scheduleId: 'sc_1', label: 'Weekly digest', createdBy: 'bo@x.edu' } }),
+      'paused bo@x.edu’s schedule “Weekly digest”'],
+    [rec('project.schedule_resumed', { after: { scheduleId: 'sc_1', label: 'Weekly digest', createdBy: 'ann@x.edu' } }),
+      'resumed the schedule “Weekly digest”'],
+    [rec('project.schedule_deleted', { before: { scheduleId: 'sc_1', label: 'Weekly digest', createdBy: 'bo@x.edu' } }),
+      'deleted bo@x.edu’s schedule “Weekly digest”'],
+    [rec('project.something_new'), 'something new'],
+  ])('%#: %s', (record, text) => {
+    expect(describeActivity(record).text).toBe(text);
+  });
+
+  it('names models, tools and skills when their display names are known', () => {
+    const names: Record<string, string> = {
+      'model:us.anthropic.claude-haiku-4-5-20251001-v1:0': 'Claude Haiku 4.5',
+      'tool:whoami': 'Who am I',
+      'skill:sk-1': 'Brand voice',
+    };
+    const label = (kind: string, ref: string) => names[`${kind}:${ref}`] ?? ref;
+    expect(describeActivity(
+      rec('project.model_updated', { after: { modelId: 'us.anthropic.claude-haiku-4-5-20251001-v1:0' } }), label,
+    ).text).toBe('changed the model to Claude Haiku 4.5');
+    expect(describeActivity(
+      rec('project.tools_updated', { before: { refs: ['retired_tool'] }, after: { refs: ['whoami'] } }), label,
+    ).text).toBe('added the tool Who am I and removed the tool retired_tool');
+    expect(describeActivity(rec('project.skills_updated', { before: { refs: [] }, after: { refs: ['sk-1'] } }), label).text)
+      .toBe('added the skill Brand voice');
+  });
+
+  it('names the creator of a schedule someone else acted on', () => {
+    const person = (email: string) => (email === 'bo@x.edu' ? 'Bo Diaz' : email);
+    expect(describeActivity(
+      rec('project.schedule_deleted', { before: { scheduleId: 'sc_1', label: 'Weekly digest', createdBy: 'bo@x.edu' } }), undefined, person,
+    ).text).toBe('deleted Bo Diaz’s schedule “Weekly digest”');
+  });
+
+  it('points a settings save at the version it cut', () => {
+    expect(describeActivity(rec('project.instructions_updated', { after: { version: 3 } }))).toEqual({
+      text: 'updated the instructions', version: 3,
+    });
+    // As the audit log returns it: detail values come back as strings.
+    expect(describeActivity(rec('project.tools_updated', { after: { version: '7', refs: [] } })).version).toBe(7);
+    expect(describeActivity(rec('project.member_added', { after: { email: 'x', role: 'viewer' } })).version).toBeNull();
+  });
+
+  it('never links an artifact’s or a memory file’s version to settings History', () => {
+    expect(describeActivity(rec('project.output_shared', { after: { title: 'Report', version: '1' }, reason: 'schedule' })).version).toBeNull();
+    expect(describeActivity(rec('project.output_removed', { after: { title: 'Report', version: 3 } })).version).toBeNull();
+    expect(describeActivity(rec('project.memory_edited', { after: { slug: 'sis', version: '4' } })).version).toBeNull();
+    expect(describeActivity(rec('project.memory_proposal_approved', { after: { slug: 'sis', version: 5 } })).version).toBeNull();
+    expect(describeActivity(rec('project.skills_updated', { before: { refs: [] }, after: { refs: ['s'], version: '6' } })).version).toBe(6);
+  });
+});
+
+describe('ProjectActivityComponent', () => {
+  const api = { audit: vi.fn() };
+  const agents = { loadBindable: vi.fn() };
+
+  beforeEach(() => {
+    TestBed.resetTestingModule();
+    vi.clearAllMocks();
+    TestBed.configureTestingModule({
+      imports: [ProjectActivityComponent],
+      providers: [
+        provideRouter([]),
+        { provide: ProjectApiService, useValue: api },
+        { provide: UserService, useValue: { currentUser: signal({ email: 'Me@x.edu' }) } },
+        { provide: AgentService, useValue: agents },
+      ],
+    });
+    agents.loadBindable.mockResolvedValue([]);
+  });
+
+  async function render() {
+    const fixture = TestBed.createComponent(ProjectActivityComponent);
+    fixture.componentRef.setInput('project', PROJECT);
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    return { fixture, el: fixture.nativeElement as HTMLElement };
+  }
+
+  it('lists the trail with who did it, "You" for the caller, and a link to the version', async () => {
+    api.audit.mockReturnValue(of({
+      records: [
+        rec('project.instructions_updated', { actorEmail: 'me@x.edu', after: { version: 2 } }),
+        rec('project.member_added', { after: { email: 'bo@x.edu', role: 'editor' } }),
+      ],
+      nextCursor: null,
+    }));
+    const { el } = await render();
+    expect(api.audit).toHaveBeenCalledWith('prj_1', 50, null);
+    const rows = Array.from(el.querySelectorAll('li')).map(li => li.textContent?.replace(/\s+/g, ' ').trim());
+    expect(rows[0]).toContain('You updated the instructions. Version 2');
+    expect(rows[1]).toContain('ann@x.edu added bo@x.edu as an editor.');
+    expect(el.querySelector('a')?.getAttribute('href')).toBe('/projects/prj_1/history?version=2');
+  });
+
+  it('names people from the page’s directory names, with the email on hover', async () => {
+    api.audit.mockReturnValueOnce(of({
+      records: [
+        rec('project.member_added', { after: { email: 'bo@x.edu', role: 'editor' } }),
+        rec('project.transferred', { actorEmail: 'Cy@x.edu', after: { ownerEmail: 'dee@x.edu' } }),
+      ],
+      people: { 'ann@x.edu': 'Ann Lee', 'bo@x.edu': 'Bo Diaz', 'cy@x.edu': 'Cy Ng' },
+      nextCursor: 'c1',
+    }));
+    const { fixture, el } = await render();
+    const rows = () => Array.from(el.querySelectorAll('li')).map(li => li.textContent?.replace(/\s+/g, ' ').trim());
+    expect(rows()[0]).toContain('Ann Lee added Bo Diaz as an editor.');
+    expect(rows()[1]).toContain('Cy Ng made dee@x.edu the owner.'); // no name for dee: the email
+    expect(el.querySelector('li span[title]')?.getAttribute('title')).toBe('ann@x.edu');
+
+    // Names from earlier pages still apply to later ones.
+    api.audit.mockReturnValueOnce(of({ records: [rec('project.created')], nextCursor: null }));
+    Array.from(el.querySelectorAll('button')).find(b => b.textContent?.includes('Show older'))!.click();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(rows()[2]).toContain('Ann Lee created the project.');
+  });
+
+  it('shows display names from the bindable palettes Settings loads', async () => {
+    agents.loadBindable.mockImplementation(async (kind: string) =>
+      kind === 'tool' ? [{ kind: 'tool', ref: 'whoami', label: 'Who am I', description: '', meta: {} }] : [],
+    );
+    api.audit.mockReturnValue(of({
+      records: [rec('project.tools_updated', { before: { refs: [] }, after: { version: 3, refs: ['whoami'] } })],
+      nextCursor: null,
+    }));
+    const { fixture, el } = await render();
+    await new Promise(resolve => setTimeout(resolve)); // the palettes resolve after the trail
+    fixture.detectChanges();
+    expect(agents.loadBindable.mock.calls.map(c => c[0])).toEqual(['model', 'tool', 'skill']);
+    expect(el.querySelector('li')?.textContent?.replace(/\s+/g, ' ')).toContain('ann@x.edu added the tool Who am I.');
+  });
+
+  it('pages older entries with the cursor', async () => {
+    api.audit.mockReturnValueOnce(of({ records: [rec('project.created')], nextCursor: 'c1' }));
+    const { fixture, el } = await render();
+    api.audit.mockReturnValueOnce(of({ records: [rec('project.archived')], nextCursor: null }));
+    Array.from(el.querySelectorAll('button')).find(b => b.textContent?.includes('Show older'))!.click();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(api.audit).toHaveBeenLastCalledWith('prj_1', 50, 'c1');
+    expect(el.querySelectorAll('li').length).toBe(2);
+    expect(el.textContent).not.toContain('Show older');
+  });
+
+  it('shows the API’s sentence on failure', async () => {
+    api.audit.mockReturnValue(throwError(() => new HttpErrorResponse({ status: 403, error: { detail: 'Only editors can see this.' } })));
+    const { el } = await render();
+    expect(el.querySelector('[role=alert]')?.textContent).toContain('Only editors can see this.');
+  });
+
+  it('says when nothing has happened', async () => {
+    api.audit.mockReturnValue(of({ records: [], nextCursor: null }));
+    const { el } = await render();
+    expect(el.textContent).toContain('Nothing has happened here yet.');
+  });
+});

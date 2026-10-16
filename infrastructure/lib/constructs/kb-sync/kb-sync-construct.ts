@@ -112,6 +112,9 @@ export class KbSyncConstruct extends Construct {
         AGENTCORE_RUNTIME_WORKLOAD_NAME: workloadIdentityName,
         AGENTCORE_LOCAL_OAUTH_CALLBACK_URL: oauthCallbackUrl,
         KB_SYNC_ENABLED: config.kbSync.enabled ? 'true' : 'false',
+        // drive_folder runs (assistant-kb-sync.md §11): the worker skips one
+        // already in flight when this is turned off.
+        FOLDER_SYNC_ENABLED: config.folderSync.enabled ? 'true' : 'false',
       },
       description:
         'KB sync worker - re-fetches a synced knowledge-base source and stages changed content for re-ingestion',
@@ -135,6 +138,8 @@ export class KbSyncConstruct extends Construct {
         DYNAMODB_ASSISTANTS_TABLE_NAME: assistantsTable.tableName,
         KB_SYNC_ENABLED: config.kbSync.enabled ? 'true' : 'false',
         KB_SYNC_WORKER_FUNCTION_NAME: this.workerLambda.functionName,
+        // Off, a due drive_folder policy is re-armed without a run.
+        FOLDER_SYNC_ENABLED: config.folderSync.enabled ? 'true' : 'false',
       },
       description:
         'KB sync dispatcher - sweeps due sync policies on an EventBridge schedule, applies runaway guards, invokes the worker',

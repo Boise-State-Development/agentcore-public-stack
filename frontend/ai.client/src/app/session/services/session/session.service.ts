@@ -1,9 +1,10 @@
 import { inject, Injectable, signal, WritableSignal, resource, computed, effect } from '@angular/core';
-import { HttpClient, HttpParams } from '@angular/common/http';
+import { HttpClient, HttpContext, HttpParams } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
 import { SessionService as BffSessionService } from '../../../auth/session.service';
-import { SessionMetadata, UpdateSessionMetadataRequest } from '../models/session-metadata.model';
+import { SUPPRESS_ERROR_TOAST } from '../../../auth/error.interceptor';
+import { SessionMetadata, SessionPreferences, UpdateSessionMetadataRequest } from '../models/session-metadata.model';
 import { Message } from '../models/message.model';
 import type { UiResourceEvent } from '../../../shared/utils/stream-parser';
 
@@ -249,6 +250,16 @@ export class SessionService {
   private newSessionIds = new Set<string>();
 
   /**
+   * Sessions started in this tab whose server row has not been read back yet.
+   * Their cache row is written before the backend binds the session to an agent
+   * or a project, and `currentSession` is that row (the metadata resource skips
+   * new sessions). The `session_title` event takes a session out of
+   * `newSessionIds` without fetching anything, so without this nothing reads the
+   * server's `preferences` before a reload or a list refetch.
+   */
+  private unreadServerRowIds = new Set<string>();
+
+  /**
    * Reactive resource for fetching sessions.
    *
    * The loader runs untracked, so nothing it reads triggers a fetch — loads
@@ -467,6 +478,39 @@ export class SessionService {
   }
 
   /**
+   * Whether a session started in this tab is still shown from its optimistic
+   * row, i.e. `adoptServerPreferences` has not run for it yet.
+   */
+  awaitsServerRow(sessionId: string): boolean {
+    return this.unreadServerRowIds.has(sessionId);
+  }
+
+  /**
+   * Fills a session started in this tab with the preferences the backend bound
+   * on its first turn (its agent, its project), on both the list cache row and
+   * `currentSession`. That is what groups a project conversation under its
+   * project and offers "Project members" sharing without a reload.
+   *
+   * Keys this tab already holds win: they were written here after the row was
+   * created and may be newer than the read.
+   */
+  adoptServerPreferences(sessionId: string, preferences: SessionPreferences | undefined): void {
+    this.unreadServerRowIds.delete(sessionId);
+    if (!preferences) return;
+
+    const fill = (session: SessionMetadata): SessionMetadata => ({
+      ...session,
+      preferences: { ...preferences, ...session.preferences },
+    });
+    this.localSessionsCache.update(sessions =>
+      sessions.map(session => (session.sessionId === sessionId ? fill(session) : session))
+    );
+    if (this.currentSession().sessionId === sessionId) {
+      this.currentSession.update(fill);
+    }
+  }
+
+  /**
    * Fetches a list of sessions from the Python API with pagination support.
    * 
    * @param params - Optional query parameters for pagination
@@ -612,6 +656,10 @@ export class SessionService {
    * Fetches metadata for a specific session from the Python API.
    * 
    * @param sessionId - UUID of the session
+   * @param options.quiet - Skip the global error toast. For best-effort
+   *   background reads whose caller already tolerates failure. A first turn
+   *   refused before the session row exists (model access) leaves no row, so
+   *   the post-stream title fallback 404s there by design.
    * @returns Promise resolving to SessionMetadata object
    * @throws Error if the API request fails
    * 
@@ -622,13 +670,16 @@ export class SessionService {
    * );
    * ```
    */
-  async getSessionMetadata(sessionId: string): Promise<SessionMetadata> {
+  async getSessionMetadata(
+    sessionId: string,
+    options: { quiet?: boolean } = {},
+  ): Promise<SessionMetadata> {
     // Ensure user is authenticated before making the request
     try {
       const response = await firstValueFrom(
-        this.http.get<SessionMetadata>(
-          `${this.baseUrl()}/${sessionId}/metadata`
-        )
+        this.http.get<SessionMetadata>(`${this.baseUrl()}/${sessionId}/metadata`, {
+          context: new HttpContext().set(SUPPRESS_ERROR_TOAST, options.quiet ?? false),
+        })
       );
 
       return response;
@@ -910,6 +961,7 @@ export class SessionService {
 
     // Mark this session as new to skip metadata fetches
     this.newSessionIds.add(sessionId);
+    this.unreadServerRowIds.add(sessionId);
 
     // Add to local cache (will be merged with API data on next load)
     this.localSessionsCache.update(sessions => {
@@ -1006,6 +1058,7 @@ export class SessionService {
    */
   clearSessionCache(): void {
     this.localSessionsCache.set([]);
+    this.unreadServerRowIds.clear();
   }
 
   /**

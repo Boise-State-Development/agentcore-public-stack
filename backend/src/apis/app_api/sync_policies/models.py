@@ -4,7 +4,13 @@ from typing import List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from apis.shared.sync_policies.models import SyncInterval, SyncPolicy, SyncPolicyState, SyncSourceType
+from apis.shared.sync_policies.models import (
+    FolderRunSummary,
+    SyncInterval,
+    SyncPolicy,
+    SyncPolicyState,
+    SyncSourceType,
+)
 
 
 class CreateSyncPolicyRequest(BaseModel):
@@ -18,9 +24,15 @@ class CreateSyncPolicyRequest(BaseModel):
         alias="sourceRef",
         min_length=1,
         max_length=128,
-        description="drive_file: document id; web_crawl: crawl id",
+        description="drive_file: document id; web_crawl: crawl id; drive_folder: {connector_id}:{folder_id}",
     )
     interval: SyncInterval = Field(..., description="Re-sync cadence")
+    source_name: Optional[str] = Field(
+        None,
+        alias="sourceName",
+        max_length=1024,
+        description="drive_folder only: the folder's path, shown beside the schedule",
+    )
 
 
 class UpdateSyncPolicyRequest(BaseModel):
@@ -47,12 +59,14 @@ class SyncPolicyResponse(BaseModel):
     assistant_id: str = Field(..., alias="assistantId")
     source_type: SyncSourceType = Field(..., alias="sourceType")
     source_ref: str = Field(..., alias="sourceRef")
+    source_name: Optional[str] = Field(None, alias="sourceName")
     interval: SyncInterval
     state: SyncPolicyState
     state_reason: Optional[str] = Field(None, alias="stateReason")
     next_sync_at: Optional[str] = Field(None, alias="nextSyncAt")
     last_sync_at: Optional[str] = Field(None, alias="lastSyncAt")
     last_result: Optional[str] = Field(None, alias="lastResult")
+    last_run_summary: Optional[FolderRunSummary] = Field(None, alias="lastRunSummary")
     created_at: str = Field(..., alias="createdAt")
     updated_at: str = Field(..., alias="updatedAt")
 
@@ -63,12 +77,14 @@ class SyncPolicyResponse(BaseModel):
             assistant_id=policy.assistant_id,
             source_type=policy.source_type,
             source_ref=policy.source_ref,
+            source_name=policy.source_name,
             interval=policy.interval,
             state=policy.state,
             state_reason=policy.state_reason,
             next_sync_at=policy.next_sync_at,
             last_sync_at=policy.last_sync_at,
             last_result=policy.last_result,
+            last_run_summary=policy.last_run_summary,
             created_at=policy.created_at,
             updated_at=policy.updated_at,
         )

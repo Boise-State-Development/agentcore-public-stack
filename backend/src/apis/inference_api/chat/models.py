@@ -106,6 +106,13 @@ class InvocationRequest(BaseModel):
 
     session_id: str
     message: str = ""
+    # Session prewarm (docs/specs/agentcore-runtime-v2.md §5a): app-api sends
+    # `{"session_id": ..., "warm": true}` with the conversation's affinity header
+    # when the user opens a conversation, so the microVM the first real turn
+    # lands on is already started. The handler returns before reading anything:
+    # no ownership read, no session or metadata rows, no lease, no quota, no
+    # model call. Every other field is ignored on a warm request.
+    warm: Optional[bool] = None
     model_id: Optional[str] = None
     temperature: Optional[float] = None
     system_prompt: Optional[str] = None
@@ -113,6 +120,11 @@ class InvocationRequest(BaseModel):
     enabled_tools: Optional[List[str]] = None  # User-specific tool preferences
     files: Optional[List[FileContent]] = None  # Direct file content (base64-encoded)
     file_upload_ids: Optional[List[str]] = None  # Upload IDs to resolve from S3
+    # Attached Drive folders (docs/specs/drive-folder-attachments.md §4.4): folder
+    # attach ids from app-api's `POST /sessions/{id}/folders`. Each counts ONE
+    # against the per-message cap and reaches the model as a manifest; its files
+    # are never on `file_upload_ids`. Ignored while FOLDER_ATTACHMENTS_ENABLED is off.
+    folder_attachment_ids: Optional[List[str]] = None
     provider: Optional[str] = None  # LLM provider: "bedrock", "openai", or "gemini"
     max_tokens: Optional[int] = None  # Maximum tokens to generate
     # Per-request canonical inference param overrides (temperature, top_p,

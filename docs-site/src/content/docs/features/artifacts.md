@@ -52,6 +52,24 @@ To load one, the SPA asks app-api to mint a **render token**: a short-lived
 (~120 second) HS256 JWT that pins one exact `(user, artifact, version)`. The
 token goes in the iframe URL and is re-minted on every open — never cached.
 
+### Markdown artifacts
+
+A Markdown artifact is stored as a small HTML document that renders its source
+in the browser: the Markdown is base64-embedded, `marked` turns it into HTML,
+and KaTeX typesets any math in it. The math delimiters are the chat's —
+`$$…$$`, `\[…\]`, `\(…\)`, the AMS display environments, and `$…$` only where
+it cannot be currency, so "a $5 fee" stays prose. Both libraries are pinned to
+exact versions, and KaTeX loads from jsDelivr with subresource integrity, which
+is why the artifact CSP lists `cdn.jsdelivr.net` under `style-src` and
+`font-src` as well as `script-src`. If the stylesheet is blocked, math falls
+back to the browser's native MathML rendering instead of unreadable markup.
+
+The rendering document is written into each version when the version is
+created, and versions are immutable, so a change to it applies to **new
+versions only**. A Markdown artifact written before math support shows its
+LaTeX as source until the agent writes a new version of it. The render Lambda
+serves stored bytes and does not re-render old versions.
+
 ## Sharing an artifact
 
 A user can share one artifact version with other people. The model deliberately

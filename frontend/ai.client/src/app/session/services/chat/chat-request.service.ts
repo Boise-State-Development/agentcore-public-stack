@@ -2,16 +2,21 @@ import { inject, Injectable, OnDestroy } from '@angular/core';
 import { Router } from '@angular/router';
 import { v4 as uuidv4 } from 'uuid';
 import { ChatStateService } from './chat-state.service';
-import { ChatHttpService } from './chat-http.service';
+import { ChatHttpService, StreamNotStartedError } from './chat-http.service';
+import { FailedSendService } from './failed-send.service';
 import { MessageMapService } from '../session/message-map.service';
 import { MessageFeedbackService } from '../session/message-feedback.service';
 import { SessionService } from '../session/session.service';
+import { SessionPrewarmService } from '../session/session-prewarm.service';
+import { ConversationBindingService } from '../session/conversation-binding.service';
+import { TurnTimingService } from './turn-timing.service';
 import { UserService } from '../../../auth/user.service';
 import { ModelService } from '../model/model.service';
+import { PromptCacheGuardService } from '../prompt-cache/prompt-cache-guard.service';
 import { ToolService } from '../../../services/tool/tool.service';
 import { SkillService } from '../../../services/skill/skill.service';
 import { FileUploadService } from '../../../services/file-upload';
-import { FileAttachmentData } from '../models/message.model';
+import { FileAttachmentData, FolderAttachmentData } from '../models/message.model';
 import { OAuthConsentService } from '../../../services/oauth-consent/oauth-consent.service';
 import { SteeringService } from './steering.service';
 import {
@@ -57,8 +62,11 @@ export class ChatRequestService implements OnDestroy {
   private messageMapService = inject(MessageMapService);
   private messageFeedbackService = inject(MessageFeedbackService);
   private sessionService = inject(SessionService);
+  private sessionPrewarm = inject(SessionPrewarmService);
+  private turnTiming = inject(TurnTimingService);
   private userService = inject(UserService);
   private modelService = inject(ModelService);
+  private promptCacheGuard = inject(PromptCacheGuardService);
   private toolService = inject(ToolService);
   private skillService = inject(SkillService);
   private fileUploadService = inject(FileUploadService);
@@ -68,8 +76,10 @@ export class ChatRequestService implements OnDestroy {
   private browserLoginService = inject(BrowserLoginService);
   private steering = inject(SteeringService);
   private errorService = inject(ErrorService);
+  private failedSends = inject(FailedSendService);
   private systemPromptsService = inject(SystemPromptsService);
   private router = inject(Router);
+  private readonly binding = inject(ConversationBindingService);
   // TODO: Inject proper logging service
 
   constructor() {
@@ -87,6 +97,25 @@ export class ChatRequestService implements OnDestroy {
     );
   }
 
+  /**
+   * Start the client-measured first-token clock for a send. A turn is the
+   * conversation's first when this tab knows the conversation as new and it has
+   * no messages yet; an existing conversation sent to before its history loaded
+   * stays a follow-up. Computed only while the feature is on.
+   */
+  private startTurnTiming(sessionId: string, mintedHere: boolean): void {
+    if (!this.turnTiming.enabled) {
+      return;
+    }
+    const isFirst =
+      (mintedHere || this.sessionService.isNewSession(sessionId)) &&
+      this.messageMapService.getMessagesForSession(sessionId)().length === 0;
+    this.turnTiming.start(sessionId, {
+      turnKind: isFirst ? 'first' : 'followup',
+      warmAgeMs: this.sessionPrewarm.warmAgeMs(sessionId),
+    });
+  }
+
   ngOnDestroy(): void {
     this.oauthConsentService.setResumeHandler(null);
     this.toolApprovalService.setResumeHandler(null);
@@ -101,11 +130,20 @@ export class ChatRequestService implements OnDestroy {
     assistantId?: string,
     mentionAgentId?: string,
     invokedSkillIds?: string[],
+    folders?: FolderAttachmentData[],
   ): Promise<void> {
     // Ensure conversation exists and get its ID
     // Update URL to reflect current conversation
     const isNewSession = !sessionId;
-    sessionId = sessionId || uuidv4();
+    // A new conversation starts on the id the page warmed when it opened, so
+    // this turn lands on the microVM that is already starting (session
+    // prewarm). Null while the feature is off: mint one, as before.
+    sessionId = sessionId || this.sessionPrewarm.claimNewConversationId() || uuidv4();
+    // Client-measured time to first token starts here, at the send (read before
+    // noteTurn, which this turn's own start would otherwise count as a warm).
+    this.startTurnTiming(sessionId, isNewSession);
+    // This turn starts the microVM itself; typing a follow-up need not warm it.
+    this.sessionPrewarm.noteTurn(sessionId);
 
     // Any new send (including a "Continue") retires the previous turn's
     // max_tokens "Continue" affordance and any interrupted-turn chip
@@ -137,14 +175,14 @@ export class ChatRequestService implements OnDestroy {
       this.systemPromptsService.bindToSession(sessionId);
     }
 
-    // Preserve assistantId in URL when navigating to new session
+    // Preserve the binding in the URL when navigating to the new session
     this.navigateToSession(sessionId, assistantId);
 
     // Get file attachment metadata for display in user message
     const fileAttachments = this.getFileAttachments(fileUploadIds);
 
     // Create and add user message with file attachments
-    const userMessage = this.messageMapService.addUserMessage(sessionId, userInput, fileAttachments);
+    const userMessage = this.messageMapService.addUserMessage(sessionId, userInput, fileAttachments, folders);
     // If this send is the retry a down-thumb asked for, link it to the thumb
     // (an index on the feedback row — never the text).
     this.messageFeedbackService.consumePendingRetry(sessionId, userMessage);
@@ -171,15 +209,61 @@ export class ChatRequestService implements OnDestroy {
         assistantId,
         mentionAgentId,
         invokedSkillIds,
+        (folders ?? []).flatMap((folder) => (folder.folderAttachId ? [folder.folderAttachId] : [])),
       );
+      this.turnTiming.describe(sessionId, {
+        // The selected model even when the request omits it as the default.
+        modelId: this.modelService.getSelectedModel()?.modelId ?? null,
+        hasAgent: Boolean(requestObject['rag_assistant_id']),
+        hasFiles: Boolean(fileUploadIds?.length),
+      });
       await this.chatHttpService.sendChatRequest(requestObject);
     } catch (error) {
+      this.turnTiming.abandon(sessionId);
       // TODO: Replace with proper logging service
       // logger.error('Chat request failed', { error, conversationId: sessionId });
       this.chatStateService.setChatLoading(sessionId, false);
       this.messageMapService.endStreaming(sessionId);
+      if (error instanceof StreamNotStartedError) {
+        this.markNotSent(sessionId, userMessage.id, error.reason, () =>
+          this.submitChatRequest(
+            userInput,
+            sessionId,
+            fileUploadIds,
+            assistantId,
+            mentionAgentId,
+            invokedSkillIds,
+            // Every argument of the original send, or a retry quietly drops
+            // what this one carried (dev, 2026-10-14: a folder's manifest).
+            folders,
+          ),
+        );
+      }
       throw error; // Re-throw to allow caller to handle
     }
+  }
+
+  /**
+   * Leave a refused send on screen as "Not sent", with a retry.
+   *
+   * Without this a request refused before streaming — a queued follow-up
+   * flushed into a Runtime 403 or a 409, say — left a bubble that looked
+   * delivered and no reply under it (dev, 2026-10-09). The retry drops that
+   * bubble first so the resend does not render twice; one that is no longer
+   * last stays, still marked, because removing it would shift every later
+   * message id (see `removeTrailingMessage`).
+   */
+  private markNotSent(
+    sessionId: string,
+    messageId: string,
+    reason: string,
+    resend: () => Promise<void>,
+  ): void {
+    this.messageMapService.markSendFailed(sessionId, messageId, reason);
+    this.failedSends.register(messageId, sessionId, () => {
+      this.messageMapService.removeTrailingMessage(sessionId, messageId);
+      resend().catch(error => console.error('Error resending chat request:', error));
+    });
   }
 
   /**
@@ -334,14 +418,14 @@ export class ChatRequestService implements OnDestroy {
   /**
    * Navigates to the conversation route
    * @param sessionId The conversation ID to navigate to
-   * @param assistantId Optional assistant ID to preserve in query params
+   * @param assistantId Optional assistant ID to preserve in query params:
+   *   `?project=` when it is a project's harness, else `?assistantId=`
    */
   private navigateToSession(sessionId: string, assistantId?: string): void {
-    // Build query params - only include assistantId if it has a value
-    const queryParams: Record<string, string> = {};
-    if (assistantId) {
-      queryParams['assistantId'] = assistantId;
-    }
+    // Merged, not replaced, so `m` and the like survive. Without an Agent the
+    // binding params are left as they are, as before.
+    const binding = this.binding.queryParamsFor(assistantId);
+    const queryParams: Record<string, string | null> = assistantId ? { ...binding } : {};
 
     this.router.navigate(['s', sessionId], {
       replaceUrl: true,
@@ -403,6 +487,7 @@ export class ChatRequestService implements OnDestroy {
     assistantId?: string,
     mentionAgentId?: string,
     invokedSkillIds?: string[],
+    folderAttachmentIds?: string[],
   ) {
     const selectedModel = this.modelService.getSelectedModel();
 
@@ -412,6 +497,10 @@ export class ChatRequestService implements OnDestroy {
 
     // If using the system default model, send null for model_id to let backend use its default
     const isDefaultModel = this.modelService.isUsingDefaultModel();
+
+    // What this message writes the prompt cache with, so a later model or
+    // effort pick is weighed against the cache rather than the picker.
+    this.promptCacheGuard.recordSend(session_id, selectedModel.modelId, this.modelService.selectedEffort());
 
     const requestObject: Record<string, unknown> = {
       message,
@@ -458,6 +547,13 @@ export class ChatRequestService implements OnDestroy {
     // Add file upload IDs if present
     if (fileUploadIds && fileUploadIds.length > 0) {
       requestObject['file_upload_ids'] = fileUploadIds;
+    }
+
+    // Attached Drive folders (drive-folder spec §4.4). Each is ONE attachment
+    // against the per-message cap; its files are never on `file_upload_ids`.
+    // Omitted when empty so a plain turn's payload is unchanged.
+    if (folderAttachmentIds && folderAttachmentIds.length > 0) {
+      requestObject['folder_attachment_ids'] = folderAttachmentIds;
     }
 
     // Add assistant ID if present

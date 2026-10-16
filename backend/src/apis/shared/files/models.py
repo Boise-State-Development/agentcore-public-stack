@@ -8,7 +8,7 @@ Supports the pre-signed URL upload flow for S3.
 import os
 from datetime import datetime, timezone
 from enum import Enum
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field, ConfigDict
 from apis.shared.timestamps import from_iso, to_iso
@@ -165,6 +165,50 @@ INLINE_DOCUMENT_MAX_BYTES = int(
     os.environ.get("INLINE_DOCUMENT_MAX_BYTES", 4 * 1024 * 1024)  # 4MB
 )
 
+# Ceiling for a reference-class document (docs/specs/large-document-attachments.md
+# §4 "Size classes", §9 D1). A product choice, not an AWS limit: it bounds the
+# preparation Lambda's memory and time, the size of the ``_derived/`` sidecars
+# ``document_read`` reads, and per-user storage. Raising it means re-measuring
+# preparation, nothing else (the managed KB connector's own default is 500 MB).
+LARGE_DOCUMENT_MAX_BYTES = int(
+    os.environ.get("LARGE_DOCUMENT_MAX_BYTES", 50 * 1024 * 1024)  # 50MB
+)
+
+# How a file row reaches the model (drive-folder spec §4.3). ``inline`` is the
+# default and what every row written before the field existed reads as: the
+# size rule alone decides. ``reference`` is set at import for a file from an
+# attached folder, so it is prepared and read on demand whatever its size.
+DELIVERY_INLINE = "inline"
+DELIVERY_REFERENCE = "reference"
+Delivery = Literal["inline", "reference"]
+
+
+def is_reference_document(meta: "FileMetadata") -> bool:
+    """Whether ``meta`` is attached by reference rather than inline.
+
+    The one predicate for the reference class (large-document spec §4): a
+    document ``document_read`` can read (pdf, docx, txt, md, html) that either
+    was stored with ``delivery="reference"`` (a file from an attached folder,
+    drive-folder spec §4.3: by reference whatever its size) or whose size is
+    over ``INLINE_DOCUMENT_MAX_BYTES`` and at most ``LARGE_DOCUMENT_MAX_BYTES``.
+    Such a file never rides inline: the upload enqueues it for preparation
+    instead of building a digest in-process, and ``document_read`` reads its
+    ``_derived/`` sidecars. Other documents stay inline-class; larger ones are
+    refused at upload. ``delivery`` never promotes a spreadsheet, a deck or an
+    image: those have no sidecars to read, and their tools read the original.
+    """
+    # Function-local: document_read imports this module, and the format
+    # classification (tabular and presentation carve-outs included) must stay
+    # the one ``document_read`` itself uses.
+    from .document_read import document_format_for
+
+    if document_format_for(meta.mime_type, meta.filename) is None:
+        return False
+    if meta.delivery == DELIVERY_REFERENCE:
+        return True
+    return INLINE_DOCUMENT_MAX_BYTES < meta.size_bytes <= LARGE_DOCUMENT_MAX_BYTES
+
+
 # A turn's inline attachments are persisted as ONE message, and the message —
 # not the file — is what AgentCore Memory bounds. Anything over the SDK's
 # ~72 KB conversational limit is written as a base64 ``blob`` payload, so raw
@@ -253,6 +297,13 @@ class FileMetadata(BaseModel):
     # never part of an access decision.
     source: str = Field(default="upload", description="Origin of the file")
 
+    # How the file reaches the model (drive-folder spec §4.3): ``inline`` lets
+    # the size rule decide, as every row did before this field; ``reference``
+    # makes a document-class file reference-class whatever its size, so it is
+    # prepared and read through ``document_read``. Set once at import, never
+    # changed. Absent on older rows, which read as ``inline``.
+    delivery: Delivery = Field(default=DELIVERY_INLINE, description="inline or reference delivery")
+
     # DocumentDigest (docs/specs/document-context-offload.md §4A), built once
     # when a document upload completes and stored as a plain map — see
     # ``apis.shared.files.document_digest``. ``None`` = never generated (files
@@ -260,6 +311,20 @@ class FileMetadata(BaseModel):
     # prose (``abstract``) and heading text (``sections``): content-bearing,
     # denylisted in the admin projections.
     digest: Optional[dict] = Field(None, description="DocumentDigest map, when generated")
+
+    # Preparation of a reference-class document (large-document spec §4C):
+    # ``{status: pending|ready|failed, pageCount, shardPages, textBytes,
+    # error?}``, written by app-api (pending) and the large-document-prepare
+    # Lambda (ready / failed). ``None`` for every inline-class file. Numeric and
+    # status fields only: never content.
+    preparation: Optional[dict] = Field(None, description="Large-document preparation state, when queued")
+
+    # The reference-class document's state in the shared ``attachments``
+    # managed knowledge base (large-document spec §4E): ``{status:
+    # queued|indexing|indexed|failed|skipped_cap|evicted|removed, indexedAt?,
+    # updatedAt, error?}``, written only by the large-document pipeline.
+    # ``None`` = never queued for indexing. Status fields only: never content.
+    kb_index: Optional[dict] = Field(None, description="Attachments-KB index state, when queued")
 
     # Timestamps
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -307,8 +372,14 @@ class FileMetadata(BaseModel):
             "updatedAt": to_iso(self.updated_at),
             "ttl": ttl_value,
         }
+        if self.delivery != DELIVERY_INLINE:
+            item["delivery"] = self.delivery
         if self.digest:
             item["digest"] = self.digest
+        if self.preparation:
+            item["preparation"] = self.preparation
+        if self.kb_index:
+            item["kbIndex"] = self.kb_index
         return item
 
     @classmethod
@@ -328,10 +399,17 @@ class FileMetadata(BaseModel):
             s3_bucket=item.get("s3Bucket", ""),
             status=item.get("status", FileStatus.PENDING),
             source=item.get("source", "upload"),
+            delivery=(
+                DELIVERY_REFERENCE
+                if item.get("delivery") == DELIVERY_REFERENCE
+                else DELIVERY_INLINE
+            ),
             created_at=from_iso(created_at) if created_at else datetime.now(timezone.utc),
             updated_at=from_iso(updated_at) if updated_at else datetime.now(timezone.utc),
             ttl=item.get("ttl"),
             digest=item.get("digest") if isinstance(item.get("digest"), dict) else None,
+            preparation=item.get("preparation") if isinstance(item.get("preparation"), dict) else None,
+            kb_index=item.get("kbIndex") if isinstance(item.get("kbIndex"), dict) else None,
         )
 
 
@@ -384,6 +462,21 @@ class PresignRequest(BaseModel):
     filename: str = Field(..., min_length=1, max_length=255, description="Original filename")
     mime_type: str = Field(..., validation_alias="mimeType", description="File MIME type")
     size_bytes: int = Field(..., validation_alias="sizeBytes", gt=0, description="File size in bytes")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class ImportFileRequest(BaseModel):
+    """Request body for POST /api/files/import.
+
+    Attach a file from a connected file source (a connector an admin mapped
+    to a file-source adapter) to a conversation. app-api downloads it with
+    the user's vaulted OAuth token and stores it exactly as a device upload.
+    """
+
+    session_id: str = Field(..., validation_alias="sessionId", description="Conversation session ID")
+    connector_id: str = Field(..., validation_alias="connectorId", min_length=1, description="File-source connector id")
+    file_id: str = Field(..., validation_alias="fileId", min_length=1, description="Provider-side file id")
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -505,6 +598,20 @@ class ThumbnailResponse(BaseModel):
     url: str = Field(..., description="Short-lived presigned GET URL for a PNG thumbnail")
     expires_at: str = Field(..., alias="expiresAt", description="ISO8601 expiration time")
     cached: bool = Field(..., description="True if served from cache, False if newly rendered")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class SearchStatusResponse(BaseModel):
+    """Response for GET /api/files/{upload_id}/search-status.
+
+    Drives the SPA's large-document chip: ``preparing`` and ``indexing`` (poll
+    again), ``searchable``, ``evicted`` (re-indexing on conversation open, so
+    shown as indexing), ``unavailable`` and ``off`` (read on demand only).
+    """
+
+    upload_id: str = Field(..., alias="uploadId")
+    status: str
 
     model_config = ConfigDict(populate_by_name=True)
 

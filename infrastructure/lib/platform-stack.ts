@@ -67,6 +67,7 @@ import { ArtifactsDistributionConstruct } from './constructs/artifacts/artifacts
 import { SkillResourcesConstruct } from './constructs/skills/skill-resources-construct';
 import { MemorySpacesConstruct } from './constructs/memory/memory-spaces-construct';
 import { MemoryMaintenanceConstruct } from './constructs/memory/memory-maintenance-construct';
+import { LargeDocumentPrepareConstruct } from './constructs/large-document/large-document-prepare-construct';
 
 // AgentCore (Memory, Code Interpreter, Browser, Gateway).
 // Pure infrastructure — no code, no out-of-band updates needed.
@@ -95,6 +96,7 @@ import { LambdaAlarmsConstruct } from './constructs/observability/lambda-alarms-
 import { EcsServiceAlarmsConstruct } from './constructs/observability/ecs-service-alarms-construct';
 import { PromptCacheObservabilityConstruct } from './constructs/observability/prompt-cache-observability-construct';
 import { TurnLatencyObservabilityConstruct } from './constructs/observability/turn-latency-observability-construct';
+import { TtftProbeConstruct } from './constructs/observability/ttft-probe-construct';
 
 // Fine-tuning (data half lives in Platform)
 import { FineTuningDataConstruct } from './constructs/fine-tuning/fine-tuning-data-construct';
@@ -282,6 +284,7 @@ export class PlatformStack extends cdk.Stack {
   private _kbMigration?: KbMigrationConstruct;
   private _conversationIndex?: ConversationIndexConstruct;
   private _memoryMaintenance!: MemoryMaintenanceConstruct;
+  private _largeDocumentPrepare?: LargeDocumentPrepareConstruct;
   private _tokenEnrichment?: TokenEnrichmentConstruct;
   private _platformCostSync?: PlatformCostSyncConstruct;
   private readonly _spaBucketConstruct: SpaBucketConstruct;
@@ -461,6 +464,21 @@ export class PlatformStack extends cdk.Stack {
     this.fileUploadBucket = fileUpload.bucket;
     this.fileUploadTable = fileUpload.table;
 
+    // ============================================================
+    // Large-document preparation (docs/specs/large-document-attachments.md
+    // §4C). Not synthesized unless the deployment opts in: no queue, no
+    // Lambda, no alarms. app-api gets the queue URL and a send grant through
+    // PlatformComputeRefs.largeDocumentPrepareQueue below.
+    // ============================================================
+    if (config.largeDocumentAttachments.enabled) {
+      this._largeDocumentPrepare = new LargeDocumentPrepareConstruct(this, 'LargeDocumentPrepare', {
+        config,
+        userFilesBucket: this.fileUploadBucket,
+        userFilesTable: this.fileUploadTable,
+        alarmTopic: this.alarmTopic,
+      });
+    }
+
     const sharedConversations = new SharedConversationsConstruct(
       this,
       'SharedConversations',
@@ -607,6 +625,34 @@ export class PlatformStack extends cdk.Stack {
       managedKbRole,
     });
     conversationArchive.bucket.enableEventBridgeNotification();
+
+    // ============================================================
+    // The shared `attachments` knowledge base for large documents
+    // (docs/specs/large-document-attachments.md §4E). Rides the large-document
+    // pipeline (config refuses it without largeDocumentAttachments): the
+    // prepare Lambda ingests, removes and evicts documents. Two resources, the
+    // rules inside the construct.
+    //
+    // The user-files bucket's EventBridge delivery is switched on here (a
+    // construct never mutates a bucket handed to it), and through the bucket's
+    // own CloudFormation property rather than `enableEventBridgeNotification()`:
+    // that helper adds a Custom::S3BucketNotifications and a handler policy per
+    // bucket, two of the eight resources dev had left. This bucket has no other
+    // notification. ⚠️ If one is ever added through CDK's notification helpers,
+    // move this to `enableEventBridgeNotification()` too, so one owner writes
+    // the bucket's notification configuration.
+    // ============================================================
+    if (config.attachmentKb.enabled && this._largeDocumentPrepare) {
+      this._largeDocumentPrepare.enableAttachmentKb({
+        assistantsTable: this.ragAssistantsTable,
+        sessionsMetadataTable: this.sessionsMetadataTable,
+        managedKbRole,
+      });
+      (fileUpload.bucket.node.defaultChild as s3.CfnBucket).addPropertyOverride(
+        'NotificationConfiguration.EventBridgeConfiguration.EventBridgeEnabled',
+        true,
+      );
+    }
 
     // ============================================================
     // Fine-tuning data
@@ -934,6 +980,7 @@ export class PlatformStack extends cdk.Stack {
       conversationArchiveBucket: this.conversationArchiveBucket,
       fileUploadBucket: this.fileUploadBucket,
       fileUploadTable: this.fileUploadTable,
+      largeDocumentPrepareQueue: this._largeDocumentPrepare?.queue,
       ragDocumentsBucket: this.ragDocumentsBucket,
       ragAssistantsTable: this.ragAssistantsTable,
       ragVectorBucketName: this.ragVectorBucketName,
@@ -1027,12 +1074,25 @@ export class PlatformStack extends cdk.Stack {
     // retention is deleted by the same cascade as a user's delete. Report-only
     // until config.conversationRetentionPruneArmed; disabled when
     // config.conversationRetentionPrunesSessions is false.
-    new SessionRetentionPruneConstruct(this, 'SessionRetentionPrune', {
+    const sessionRetentionPrune = new SessionRetentionPruneConstruct(this, 'SessionRetentionPrune', {
       config: this._config,
       vpc: this.vpc,
       cluster: refs.ecsCluster,
       taskDefinition: appApi.taskDefinition,
       securityGroup: appApi.securityGroup,
+    });
+
+    // Hourly time-to-first-token probe on the same task definition, run by the
+    // pruner's schedule role (identical grants; no new role or policy). DISABLED
+    // until config.ttftProbe.userId names a probe user.
+    new TtftProbeConstruct(this, 'TtftProbe', {
+      config: this._config,
+      vpc: this.vpc,
+      cluster: refs.ecsCluster,
+      taskDefinition: appApi.taskDefinition,
+      securityGroup: appApi.securityGroup,
+      scheduleRole: sessionRetentionPrune.role,
+      alarmTopic: this.alarmTopic,
     });
 
     // After AppApiServiceConstruct: these bind to its target group and service.
@@ -1062,6 +1122,13 @@ export class PlatformStack extends cdk.Stack {
       config: this._config,
       sessionsMetadataTable: this.sessionsMetadataTable,
       bffSessionsTable: this.bffSessionsTable,
+      projectsTable: this.projectsTable,
+      agentCoreMemoryArn: this.agentCoreMemoryArn,
+      agentCoreMemoryId: this.agentCoreMemoryId,
+      sharedConversationsTable: this.sharedConversationsTable,
+      sharedConversationsBucket: this.sharedConversationsBucket,
+      artifactsTable: this.artifactsTable,
+      auditLogTable: this.auditLogTable,
       bffAppClient: this.bffAppClient,
       bffAppClientSecret: this.bffAppClientSecret,
       workloadIdentityName: this.platformWorkloadIdentity.name,
@@ -1112,6 +1179,9 @@ export class PlatformStack extends cdk.Stack {
           : []),
         ...(this._conversationIndex
           ? [{ name: 'conversation-index', queue: this._conversationIndex.deadLetterQueue }]
+          : []),
+        ...(this._largeDocumentPrepare
+          ? [{ name: 'large-document-prepare', queue: this._largeDocumentPrepare.deadLetterQueue }]
           : []),
       ],
     });

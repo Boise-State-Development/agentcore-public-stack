@@ -31,6 +31,9 @@ describe('ChatContainerComponent — branding logo theme swap and error handling
   @Component({ selector: 'app-chat-input', template: '' })
   class ChatInputStub {
     readonly sessionId = input<string | null>(null);
+    readonly allowFolderAttachments = input<boolean>(false);
+    readonly showScopePicker = input<boolean>(false);
+    readonly project = input<{ projectId: string; name: string } | null>(null);
   readonly draftKey = input<string | null>(null);
     readonly isChatLoading = input<boolean>(false);
     readonly showFileControls = input<boolean>(true);

@@ -38,11 +38,11 @@
           <h1 class="text-2xl font-semibold tracking-tight text-gray-900 sm:text-3xl dark:text-white">Memory</h1>
           <p class="mt-1 max-w-2xl text-sm/6 text-gray-600 dark:text-gray-400">
             @if (activeScope() === 'mine') {
-              Only you can see these. They load into your own tasks in this project, next to project memory.
+              Only you can see these. They load into your own conversations in this project, next to project memory.
             } @else if (p.role === 'viewer') {
-              What every member’s tasks know about this project. You can read all of it and propose changes, which an editor reviews.
+              What the assistant knows about this project in every member’s conversations. You can read all of it and propose changes, which an editor reviews.
             } @else {
-              What every member’s tasks know about this project. Editors and the assistant change it directly; changes members propose wait for review.
+              What the assistant knows about this project in every member’s conversations. Editors and the assistant change it directly; changes members propose wait for review.
             }
           </p>
         </div>
@@ -187,8 +187,8 @@
                       <span class="text-sm/6 font-medium text-gray-900 dark:text-white">Index</span>
                       <span class="font-mono text-xs text-gray-600 dark:text-gray-400">MEMORY.md</span>
                     </span>
-                    <span class="text-xs/5 text-gray-600 dark:text-gray-400">What every {{ activeScope() === 'mine' ? 'one of your tasks' : 'task' }} sees first</span>
-                    <app-memory-meter [tokens]="indexTokens()" [max]="indexBudget()" [compact]="true" label="Index size against what reaches a task" />
+                    <span class="text-xs/5 text-gray-600 dark:text-gray-400">What every {{ activeScope() === 'mine' ? 'one of your conversations' : 'conversation' }} sees first</span>
+                    <app-memory-meter [tokens]="indexTokens()" [max]="indexBudget()" [compact]="true" label="Index size against what a conversation loads" />
                   </a>
                 </li>
                 @for (entry of entries(); track entry.slug) {
@@ -218,7 +218,7 @@
               </ul>
               @if (!entries().length) {
                 <p class="mt-3 px-3.5 text-xs/5 text-gray-600 dark:text-gray-400">
-                  No files yet. When a task turns up a fact worth keeping, such as a limit, a decision or an owner, add it here or ask the assistant to save it.
+                  No files yet. When a conversation turns up a fact worth keeping, such as a limit, a decision or an owner, add it here or ask the assistant to save it.
                 </p>
               }
             </nav>
@@ -257,7 +257,7 @@
           <div class="mt-8 rounded-2xl border border-dashed border-gray-300 px-6 py-12 text-center dark:border-gray-700">
             <p class="text-sm/6 font-semibold text-gray-900 dark:text-white">Nothing of your own here yet</p>
             <p class="mx-auto mt-1 max-w-md text-sm/6 text-gray-600 dark:text-gray-400">
-              Your own memory in this project holds preferences and notes only you need, such as how you like answers. Start a file here, or ask the assistant in a task to remember something just for you.
+              Your own memory in this project holds preferences and notes only you need, such as how you like answers. Start a file here, or ask the assistant in a conversation to remember something just for you.
             </p>
             @if (!archived()) {
               <button

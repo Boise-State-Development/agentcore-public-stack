@@ -3,7 +3,7 @@
 Unit tests for ``list_bindable``: each primitive's list/access service is mocked so
 these stay fast. Asserts the uniform ``BindableItem`` projection per kind, that ``ref``
 carries the correct identifier (Bedrock model_id for models — not the internal UUID),
-the feature-flag gating for skills/memory_space, the welded-KB empty result, and the
+the feature-flag gating for skills, the welded-KB empty result, and the
 best-effort degradation on a sub-service failure.
 """
 
@@ -181,28 +181,14 @@ class TestKnowledgeBase:
         assert await bc.list_bindable("knowledge_base", _user()) == []
 
 
-# --------------------------------------------------------------------------- memory
-class TestMemorySpaces:
-    @pytest.mark.asyncio
-    async def test_empty_when_flag_off(self, monkeypatch):
-        monkeypatch.setattr(f"{MODULE}.memory_spaces_enabled", lambda: False)
-        items = await bc.list_bindable("memory_space", _user(), memory_service=MagicMock())
-        assert items == []
-
-    @pytest.mark.asyncio
-    async def test_projection_when_flag_on(self, monkeypatch):
-        monkeypatch.setattr(f"{MODULE}.memory_spaces_enabled", lambda: True)
-        space = SimpleNamespace(space_id="spc_1", name="Oliver", template="chief-of-staff", owner_id="u1")
-        svc = MagicMock()
-        svc.list_spaces_for_user = MagicMock(return_value=[(space, "owner")])
-        items = await bc.list_bindable("memory_space", _user(), memory_service=svc)
-        assert items[0].ref == "spc_1"
-        assert items[0].label == "Oliver"
-        assert items[0].meta["role"] == "owner"
-
-
 # --------------------------------------------------------------------------- misc
 class TestUnknownKind:
+    @pytest.mark.asyncio
+    async def test_memory_space_is_no_longer_bindable(self):
+        # Memory belongs to Projects now; the Designer palette has no such kind.
+        with pytest.raises(ValueError):
+            await bc.list_bindable("memory_space", _user())
+
     @pytest.mark.asyncio
     async def test_unknown_kind_raises(self):
         with pytest.raises(ValueError):

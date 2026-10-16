@@ -305,6 +305,35 @@ class TestDocxAndText:
         assert result.format == "docx"
 
     @pytest.mark.asyncio
+    async def test_a_match_late_in_a_long_paragraph_is_in_the_returned_text(self, stored):
+        # A Word paragraph is one line; cutting it from the start hid any match
+        # past the first 200 characters, so the model saw a hit it could not read.
+        filler = "The records office archives meeting minutes through the internal portal. " * 8
+        stored(_meta(filename="handbook.docx", mime=self.DOCX_MIME),
+               build_docx(["Intro", filler + "Each member may borrow up to 17 items at any one time.", "Close"]))
+        result = await dr.read_document("u1", "s1", "up-1", pattern=r"up to \d+ items")
+        (match,) = result.payload["matches"]
+        assert "up to 17 items" in match["text"]
+        assert match["text"].startswith("…") and len(match["text"]) <= dr._LINE_CHARS + 2
+
+    @pytest.mark.parametrize("line,pattern,expected", [
+        ("short line with fish", "fish", "short line with fish"),
+        ("x" * 300 + "fish" + "y" * 300, "fish", None),
+        ("fish" + "y" * 500, "fish", None),
+        ("x" * 500 + "fish", "fish", None),
+    ])
+    def test_excerpt_is_bounded_and_always_holds_the_match(self, line, pattern, expected):
+        import re
+
+        excerpt = dr._excerpt(line, re.search(pattern, line))
+        if expected is not None:
+            assert excerpt == expected
+            return
+        assert pattern in excerpt and len(excerpt.strip("…")) == dr._LINE_CHARS
+        assert excerpt.startswith("…") == (not line.startswith(pattern))
+        assert excerpt.endswith("…") == (not line.endswith(pattern))
+
+    @pytest.mark.asyncio
     async def test_page_range_on_a_non_pdf_is_rejected(self, stored):
         stored(_meta(filename="memo.docx", mime=self.DOCX_MIME), build_docx(["x"]))
         with pytest.raises(WorkspaceValidationError):
@@ -379,3 +408,58 @@ class TestListingAndGate:
             await dr.list_session_documents("", "s1")
         with pytest.raises(Exception):
             await dr.session_has_documents("u1", "")
+
+
+class TestListingFolderPaths:
+    """A folder file carries ``path`` (drive-folder spec §4.4); everything else
+    lists exactly as before, and a listing without folder files reads no folder row."""
+
+    def _setup(self, monkeypatch, files, folders):
+        from apis.shared.files import folder_repository
+
+        repo = MagicMock()
+        repo.list_session_files = AsyncMock(return_value=files)
+        monkeypatch.setattr(f"{MODULE}.get_file_upload_repository", lambda: repo)
+        folder_repo = MagicMock()
+        folder_repo.list_session_folders = (
+            AsyncMock(side_effect=folders) if isinstance(folders, Exception) else AsyncMock(return_value=folders)
+        )
+        monkeypatch.setattr(folder_repository, "get_folder_attachment_repository", lambda: folder_repo)
+        return folder_repo
+
+    def _folder(self, user="u1"):
+        from apis.shared.files.folder_attachments import FolderAttachment, FolderFileEntry
+
+        return FolderAttachment(
+            folder_attach_id="fa-1", session_id="s1", user_id=user, connector_id="google-drive",
+            provider_folder_id="p", folder_name="BIO 101",
+            files=[FolderFileEntry(provider_file_id="d1", name="rubric.docx", relative_path="week 1/rubric.docx",
+                                   mime_type="application/pdf", upload_id="up-2", status="attached")],
+        )
+
+    @pytest.mark.asyncio
+    async def test_folder_files_carry_their_path(self, monkeypatch):
+        own = _meta("up-1", "policy.pdf")
+        from_folder = _meta("up-2", "rubric.docx").model_copy(update={"source": "connector:google-drive:folder:fa-1"})
+        folder_repo = self._setup(monkeypatch, [own, from_folder], [self._folder()])
+
+        listing = await dr.list_session_documents("u1", "s1")
+
+        folder_repo.list_session_folders.assert_awaited_once_with("s1")
+        assert "path" not in listing["documents"][0]
+        assert listing["documents"][1]["path"] == "BIO 101/week 1/rubric.docx"
+
+    @pytest.mark.asyncio
+    async def test_no_folder_files_no_folder_read(self, monkeypatch):
+        folder_repo = self._setup(monkeypatch, [_meta("up-1", "policy.pdf")], [self._folder()])
+        listing = await dr.list_session_documents("u1", "s1")
+        folder_repo.list_session_folders.assert_not_awaited()
+        assert "path" not in listing["documents"][0]
+
+    @pytest.mark.asyncio
+    async def test_another_users_folder_and_a_failed_read_add_nothing(self, monkeypatch):
+        from_folder = _meta("up-2", "rubric.docx").model_copy(update={"source": "connector:google-drive:folder:fa-1"})
+        self._setup(monkeypatch, [from_folder], [self._folder(user="someone-else")])
+        assert "path" not in (await dr.list_session_documents("u1", "s1"))["documents"][0]
+        self._setup(monkeypatch, [from_folder], RuntimeError("throttled"))
+        assert "path" not in (await dr.list_session_documents("u1", "s1"))["documents"][0]

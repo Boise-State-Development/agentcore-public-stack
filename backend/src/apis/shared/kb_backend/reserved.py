@@ -4,7 +4,8 @@ A Managed Knowledge Base's KB_Record lives at ``AST#{assistant_id} / KB#{app_kb_
 in the assistants table. The conversation-search index (docs/specs/conversation-search.md
 §4) is one shared knowledge base per environment, and it keeps its record at
 ``AST#conversations / KB#conversations`` so the kb-migration reconciler, which
-treats an AWS knowledge base with no record as an orphan, sees it as owned.
+treats an AWS knowledge base with no record as an orphan, sees it as owned. The
+large-attachments index does the same at ``AST#attachments / KB#attachments``.
 
 That puts a platform record in the assistants' key space. Assistant ids are
 generated (``ast-{hex}``), so no assistant can be *created* with a reserved id,
@@ -24,9 +25,15 @@ from typing import Any
 #: The conversation-search knowledge base: ``assistant_id`` and ``app_kb_id`` both.
 CONVERSATIONS_KB_ID = "conversations"
 
+#: The shared knowledge base for large attachments
+#: (docs/specs/large-document-attachments.md §4E): record at
+#: ``AST#attachments / KB#attachments``, and the per-user byte accounting beside
+#: it under ``AST#attachments``.
+ATTACHMENTS_KB_ID = "attachments"
+
 #: Every reserved id. Compared exactly, never by prefix: ``conversations-1`` is
 #: an ordinary (if unlikely) id.
-RESERVED_KB_IDS = frozenset({CONVERSATIONS_KB_ID})
+RESERVED_KB_IDS = frozenset({CONVERSATIONS_KB_ID, ATTACHMENTS_KB_ID})
 
 
 def is_reserved_kb_id(value: Any) -> bool:
@@ -34,4 +41,4 @@ def is_reserved_kb_id(value: Any) -> bool:
     return isinstance(value, str) and value in RESERVED_KB_IDS
 
 
-__all__ = ["CONVERSATIONS_KB_ID", "RESERVED_KB_IDS", "is_reserved_kb_id"]
+__all__ = ["ATTACHMENTS_KB_ID", "CONVERSATIONS_KB_ID", "RESERVED_KB_IDS", "is_reserved_kb_id"]

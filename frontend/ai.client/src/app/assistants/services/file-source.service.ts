@@ -8,7 +8,9 @@ import {
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../services/config.service';
 import { SUPPRESS_ERROR_TOAST } from '../../auth/error.interceptor';
+import type { FileMetadata } from '../../services/file-upload';
 import {
+  AttachSourceFileRequest,
   BrowseResult,
   FileSourceConnector,
   FileSourceListResponse,
@@ -17,6 +19,7 @@ import {
   SourceRoot,
   SourceRootsResponse,
 } from '../models/file-source.model';
+import { KnowledgeTarget, knowledgePaths } from '../models/knowledge-target.model';
 
 /**
  * Error raised by {@link FileSourceService} for any failed call. `code` is
@@ -155,24 +158,48 @@ export class FileSourceService {
   }
 
   /**
-   * Import the selected files into an assistant. The backend creates one
-   * document per file (status 'uploading') and downloads them asynchronously.
+   * Import the selected files into an agent or a project. The backend creates
+   * one document per file (status 'uploading') and downloads them asynchronously.
    */
   async importDocuments(
-    assistantId: string,
+    target: KnowledgeTarget,
     connectorId: string,
     files: ImportFileRef[],
   ): Promise<ImportDocumentsResponse> {
     try {
       return await firstValueFrom(
         this.http.post<ImportDocumentsResponse>(
-          `${this.baseUrl()}/assistants/${encodeURIComponent(assistantId)}/documents/import`,
+          `${this.baseUrl()}${knowledgePaths(target).documents}/import`,
           { connectorId, files },
           this.requestOptions(),
         ),
       );
     } catch (err) {
       throw this.toError(err, 'Failed to import files');
+    }
+  }
+
+  /**
+   * Attach one file from a connected file source to a conversation: app-api
+   * downloads it with the user's vaulted token and stores it as a ready
+   * upload. Resolves to the file's metadata, the shape `GET /files` lists,
+   * so the composer can hold it exactly like an attachment restored from a
+   * draft. Errors carry the same codes as the browse calls (`HTTP_409` when
+   * the connector needs consent, `HTTP_400` for a type or size the chat
+   * cannot take).
+   */
+  async attachToConversation(
+    sessionId: string,
+    connectorId: string,
+    fileId: string,
+  ): Promise<FileMetadata> {
+    const body: AttachSourceFileRequest = { sessionId, connectorId, fileId };
+    try {
+      return await firstValueFrom(
+        this.http.post<FileMetadata>(`${this.baseUrl()}/files/import`, body, this.requestOptions()),
+      );
+    } catch (err) {
+      throw this.toError(err, 'Failed to attach the file');
     }
   }
 

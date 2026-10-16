@@ -35,6 +35,9 @@ export class SkillCommandService {
 
   readonly loading = this.skillService.loading;
 
+  /** True when the conversation's Agent (or project) dictates the skills, not the user. */
+  readonly agentLocked = this.skillService.agentLocked;
+
   /**
    * Enabled skills, ordered by name.
    *

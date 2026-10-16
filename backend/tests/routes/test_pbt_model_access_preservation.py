@@ -143,7 +143,7 @@ class TestAuthorizedAccessInvocations:
     )
     def test_authorized_model_proceeds_invocations(self, model_id: str):
         """For all model_id strings, when can_access_model returns True,
-        the endpoint proceeds to agent creation (status != 403).
+        the endpoint proceeds to agent creation (no forbidden refusal).
 
         **Validates: Requirements 3.1**
         """
@@ -182,8 +182,8 @@ class TestAuthorizedAccessInvocations:
                 },
             )
 
-        assert resp.status_code != 403, (
-            f"Authorized model_id={model_id!r} should NOT get 403, "
+        assert '"code": "forbidden"' not in resp.text, (
+            f"Authorized model_id={model_id!r} should NOT be refused, "
             f"got {resp.status_code}: {resp.text[:200]}"
         )
 
@@ -313,8 +313,8 @@ class TestWildcardAccess:
                 },
             )
 
-        assert resp.status_code != 403, (
-            f"Wildcard access model_id={model_id!r} should NOT get 403, "
+        assert '"code": "forbidden"' not in resp.text, (
+            f"Wildcard access model_id={model_id!r} should NOT be refused, "
             f"got {resp.status_code}: {resp.text[:200]}"
         )
 
@@ -426,8 +426,8 @@ class TestNullEmptyModelIdPassthrough:
                 },
             )
 
-        assert resp.status_code != 403, (
-            f"None model_id should NOT get 403, got {resp.status_code}"
+        assert '"code": "forbidden"' not in resp.text, (
+            f"None model_id should NOT be refused, got {resp.text[:200]}"
         )
         # can_access_model should NOT have been called
         mock_svc.can_access_model.assert_not_called()
@@ -473,8 +473,8 @@ class TestNullEmptyModelIdPassthrough:
                 },
             )
 
-        assert resp.status_code != 403, (
-            f"Empty model_id should NOT get 403, got {resp.status_code}"
+        assert '"code": "forbidden"' not in resp.text, (
+            f"Empty model_id should NOT be refused, got {resp.text[:200]}"
         )
         # can_access_model should NOT have been called
         mock_svc.can_access_model.assert_not_called()

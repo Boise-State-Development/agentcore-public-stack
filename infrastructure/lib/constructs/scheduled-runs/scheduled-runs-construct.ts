@@ -7,6 +7,7 @@ import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as logs from 'aws-cdk-lib/aws-logs';
+import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as sns from 'aws-cdk-lib/aws-sns';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
@@ -27,6 +28,22 @@ export interface ScheduledRunsConstructProps {
    * (PK=HEADLESS-GRANT#{id}) live here behind the sparse
    * HeadlessGrantUserIndex GSI. */
   bffSessionsTable: dynamodb.ITable;
+  /** Projects table — a schedule that runs in a project (Shared Projects 3.2):
+   * the dispatcher reads the project and the creator's member row before each
+   * run, and both Lambdas write the project's run rows and pause notices. */
+  projectsTable: dynamodb.ITable;
+  /** Delivering a scheduled run to its project (Shared Projects 3.2b): the worker
+   * snapshots the run's conversation (AgentCore Memory events, read only), pins its
+   * artifacts (the artifacts table's SessionIndex), writes the share (row, S3 body),
+   * and records it on the project's trail (audit log). A schedule that publishes
+   * its outputs (3.2d) also writes the run's artifact share rows, and deletes the
+   * previous run's, in the artifacts table. */
+  agentCoreMemoryArn: string;
+  agentCoreMemoryId: string;
+  sharedConversationsTable: dynamodb.ITable;
+  sharedConversationsBucket: s3.IBucket;
+  artifactsTable: dynamodb.ITable;
+  auditLogTable: dynamodb.ITable;
   /** BFF Cognito app client — the worker mints a per-owner access token
    * via REFRESH_TOKEN_AUTH against this (confidential) client. */
   bffAppClient: cognito.IUserPoolClient;
@@ -90,6 +107,13 @@ export class ScheduledRunsConstruct extends Construct {
       config,
       sessionsMetadataTable,
       bffSessionsTable,
+      projectsTable,
+      agentCoreMemoryArn,
+      agentCoreMemoryId,
+      sharedConversationsTable,
+      sharedConversationsBucket,
+      artifactsTable,
+      auditLogTable,
       bffAppClient,
       bffAppClientSecret,
       workloadIdentityName,
@@ -122,6 +146,8 @@ export class ScheduledRunsConstruct extends Construct {
       AGENTCORE_RUNTIME_WORKLOAD_NAME: workloadIdentityName,
       AGENTCORE_LOCAL_OAUTH_CALLBACK_URL: oauthCallbackUrl,
       SCHEDULED_RUNS_ENABLED: config.scheduledRuns.enabled ? 'true' : 'false',
+      DYNAMODB_PROJECTS_TABLE_NAME: projectsTable.tableName,
+      PROJECTS_ENABLED: config.projects.enabled ? 'true' : 'false',
     };
 
     const workerLogGroup = new logs.LogGroup(this, 'ScheduledRunsWorkerLogGroup', {
@@ -146,6 +172,12 @@ export class ScheduledRunsConstruct extends Construct {
       environment: {
         ...sharedEnvironment,
         SCHEDULED_RUNS_MAX_FAILURES: '3',
+        // Delivery (3.2b): what a share of the run reads and writes.
+        AGENTCORE_MEMORY_ID: agentCoreMemoryId,
+        SHARED_CONVERSATIONS_TABLE_NAME: sharedConversationsTable.tableName,
+        SHARED_CONVERSATIONS_BUCKET_NAME: sharedConversationsBucket.bucketName,
+        DYNAMODB_ARTIFACTS_TABLE_NAME: artifactsTable.tableName,
+        DYNAMODB_AUDIT_LOG_TABLE_NAME: auditLogTable.tableName,
       },
       description:
         'Scheduled-runs worker - executes one schedule\'s headless agent run via run_agent_headless',
@@ -169,6 +201,8 @@ export class ScheduledRunsConstruct extends Construct {
         DYNAMODB_SESSIONS_METADATA_TABLE_NAME: sessionsMetadataTable.tableName,
         SCHEDULED_RUNS_ENABLED: config.scheduledRuns.enabled ? 'true' : 'false',
         SCHEDULED_RUNS_WORKER_FUNCTION_NAME: this.workerLambda.functionName,
+        DYNAMODB_PROJECTS_TABLE_NAME: projectsTable.tableName,
+        PROJECTS_ENABLED: config.projects.enabled ? 'true' : 'false',
       },
       description:
         'Scheduled-runs dispatcher - sweeps due schedules on an EventBridge tick, applies the runaway guard, invokes the worker',
@@ -178,6 +212,10 @@ export class ScheduledRunsConstruct extends Construct {
     // the sessions-metadata table (list_due_schedules, rearm_schedule,
     // set_schedule_state).
     sessionsMetadataTable.grantReadWriteData(this.dispatcherLambda);
+    // A project schedule's standing (Shared Projects 3.2): the project and the
+    // creator's member row are read (and the member's userId back-filled, as any
+    // role check does), and a pause writes a run row and the inbox notices.
+    projectsTable.grantReadWriteData(this.dispatcherLambda);
     this.workerLambda.grantInvoke(this.dispatcherLambda);
 
     // Worker: schedule bookkeeping + run-audit trail + delivered session
@@ -185,6 +223,47 @@ export class ScheduledRunsConstruct extends Construct {
     // RunAuditRecorder and the harness's ensure_session_metadata_exists /
     // update_session_title both write here too).
     sessionsMetadataTable.grantReadWriteData(this.workerLambda);
+    // A project schedule's run rows, and the notice when the worker pauses one.
+    projectsTable.grantReadWriteData(this.workerLambda);
+
+    // Delivering a run to its project (Shared Projects 3.2b). The snapshot reads
+    // the run's Memory events, never writes them: the session already exists, so
+    // the session manager only reads it. The share is a row plus an S3 body under
+    // shares/, and an older delivery is unshared (row and body deleted).
+    this.workerLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'ScheduledRunSnapshotMemoryRead',
+        effect: iam.Effect.ALLOW,
+        actions: ['bedrock-agentcore:ListEvents', 'bedrock-agentcore:GetEvent'],
+        resources: [agentCoreMemoryArn],
+      }),
+    );
+    sharedConversationsTable.grantReadWriteData(this.workerLambda);
+    // The snapshot store checks for an existing body (HeadObject, which IAM
+    // authorizes as s3:GetObject) before it writes one. Without s3:ListBucket a
+    // missing key answers 403 rather than 404, which the store rightly treats as
+    // a real error, so the listing is granted too, limited to shares/.
+    this.workerLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'ScheduledRunShareBodies',
+        effect: iam.Effect.ALLOW,
+        actions: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject'],
+        resources: [sharedConversationsBucket.arnForObjects('shares/*')],
+      }),
+    );
+    this.workerLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'ScheduledRunShareBodiesList',
+        effect: iam.Effect.ALLOW,
+        actions: ['s3:ListBucket'],
+        resources: [sharedConversationsBucket.bucketArn],
+        conditions: { StringLike: { 's3:prefix': ['shares/*'] } },
+      }),
+    );
+    // Read: the run's artifacts. Write: the artifact shares a schedule that
+    // publishes its outputs makes and retires (Shared Projects 3.2d).
+    artifactsTable.grantReadWriteData(this.workerLambda);
+    auditLogTable.grantWriteData(this.workerLambda);
 
     // Worker: resolve + touch the caller's headless-grant record
     // (HeadlessGrantService — get_active_grant / persist_rotated_refresh_token

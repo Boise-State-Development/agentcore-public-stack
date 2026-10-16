@@ -1,0 +1,388 @@
+import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal, untracked } from '@angular/core';
+import { DatePipe } from '@angular/common';
+import { RouterLink } from '@angular/router';
+import { firstValueFrom } from 'rxjs';
+import { UserService } from '../../auth/user.service';
+import { BindableKind } from '../../agents/models/agent.model';
+import { AgentService } from '../../agents/services/agent.service';
+import { parseIso } from '../../utils/date';
+import { personLabel } from '../../shared/utils/person';
+import { Project, ProjectAuditRecord } from '../models/project.model';
+import { ProjectApiService } from '../services/project-api.service';
+import { projectErrorMessage } from '../services/projects.service';
+
+const PAGE_SIZE = 50;
+
+const ROLE_PHRASES: Record<string, string> = { editor: 'an editor', viewer: 'a viewer', owner: 'the owner' };
+
+/** The actions that cut a settings version (`harness_settings.py`), which an entry links to History. */
+const SETTINGS_ACTIONS = new Set([
+  'project.instructions_updated',
+  'project.model_updated',
+  'project.tools_updated',
+  'project.skills_updated',
+]);
+
+/** What an entry says after its actor, and the settings version it cut, if any. */
+export interface ActivityLine {
+  text: string;
+  version: number | null;
+}
+
+/** A model, tool or skill's display name for its id; the id itself when unknown. */
+export type ActivityLabel = (kind: BindableKind, ref: string) => string;
+
+const idsOnly: ActivityLabel = (_kind, ref) => ref;
+
+/** What to call the person behind an email: their name, or the email itself when unknown. */
+export type ActivityPerson = (email: string) => string;
+
+const emailsOnly: ActivityPerson = email => email;
+
+function str(value: unknown): string {
+  return typeof value === 'string' ? value : '';
+}
+
+function role(value: unknown): string {
+  const r = str(value);
+  return ROLE_PHRASES[r] ?? (r ? `a ${r}` : 'a member');
+}
+
+function refs(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [];
+}
+
+function list(items: string[]): string {
+  if (items.length <= 1) return items.join('');
+  return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
+}
+
+/** "added X and removed Y" for a tools/skills save; the kind word is "tool" or "skill". */
+function bindingChange(before: string[], after: string[], kind: 'tool' | 'skill', label: ActivityLabel): string {
+  const added = after.filter(r => !before.includes(r)).map(r => label(kind, r));
+  const removed = before.filter(r => !after.includes(r)).map(r => label(kind, r));
+  const parts: string[] = [];
+  if (added.length) parts.push(`added the ${kind}${added.length === 1 ? '' : 's'} ${list(added)}`);
+  if (removed.length) parts.push(`removed the ${kind}${removed.length === 1 ? '' : 's'} ${list(removed)}`);
+  return parts.length ? parts.join(' and ') : `updated the ${kind}s`;
+}
+
+/** "updated the skill X to version 3" when a save only moved pins (`versions`: ref → pinned version). */
+function skillUpdate(before: Record<string, unknown>, after: Record<string, unknown>, label: ActivityLabel): string | null {
+  const was = versions(before['versions']);
+  const now = versions(after['versions']);
+  const moved = Object.keys(now).filter(ref => now[ref] !== was[ref]);
+  if (moved.length !== 1) return null;
+  return `updated the skill ${label('skill', moved[0])} to version ${now[moved[0]]}`;
+}
+
+/** As the audit log returns it, a version may be a number or a numeric string. */
+function versions(value: unknown): Record<string, number> {
+  if (!value || typeof value !== 'object') return {};
+  return Object.fromEntries(
+    Object.entries(value)
+      .map(([ref, v]) => [ref, typeof v === 'number' ? v : Number(v)] as const)
+      .filter(([, v]) => Number.isInteger(v) && v > 0),
+  );
+}
+
+/** What a schedule edit changed, by the request fields the trail records (`changes`). */
+const SCHEDULE_FIELDS: Array<[string[], string]> = [
+  [['label'], 'the name'],
+  [['promptText'], 'the prompt'],
+  [['cadence', 'hourLocal', 'weekday', 'intervalValue', 'intervalUnit', 'timezone'], 'when it runs'],
+  [['deliverTo'], 'where its runs go'],
+  [['notifyMembers'], 'who hears about its runs'],
+];
+
+/** "the schedule “X”", or "Ann’s schedule “X”" when someone acted on another member's. */
+function scheduleNamed(record: ProjectAuditRecord, named: Record<string, unknown>, person: ActivityPerson): string {
+  const label = `“${str(named['label']) || 'Untitled schedule'}”`;
+  const creator = str(named['createdBy']);
+  const theirs = creator && record.actorEmail && creator.toLowerCase() !== record.actorEmail.toLowerCase();
+  return theirs ? `${person(creator)}’s schedule ${label}` : `the schedule ${label}`;
+}
+
+function scheduleChanges(changes: string[]): string {
+  const parts = SCHEDULE_FIELDS.filter(([fields]) => fields.some(f => changes.includes(f))).map(([, words]) => words);
+  return parts.length ? list(parts) : '';
+}
+
+/**
+ * One audit record as a sentence (without its actor, which the row shows).
+ * The trail keeps no instruction text, only the version a save cut, so settings
+ * entries point at the version whose diff is in Settings › History. The trail
+ * stores model, tool and skill ids; `label` turns them into display names, and
+ * members by email; `person` turns those into names.
+ */
+export function describeActivity(
+  record: ProjectAuditRecord,
+  label: ActivityLabel = idsOnly,
+  person: ActivityPerson = emailsOnly,
+): ActivityLine {
+  const before = record.before ?? {};
+  const after = record.after ?? {};
+  // The audit log stores detail values as strings ("2"), so accept either. Only a
+  // settings save's `version` is a settings version; an output's is the artifact's
+  // and a memory edit's the file's, which Settings › History knows nothing about.
+  const rawVersion = Number(after['version']);
+  const version =
+    SETTINGS_ACTIONS.has(record.action) && after['version'] != null && Number.isInteger(rawVersion) && rawVersion > 0
+      ? rawVersion
+      : null;
+  const line = (text: string): ActivityLine => ({ text, version });
+
+  switch (record.action) {
+    case 'project.created':
+      return line('created the project');
+    case 'project.updated': {
+      const parts = (record.changes ?? []).map(field => {
+        if (field === 'name') return `renamed the project to “${str(after['name'])}”`;
+        if (field === 'description') return 'updated the description';
+        if (field === 'editorsManageMembers') {
+          return after['editorsManageMembers'] ? 'let editors manage members' : 'limited managing members to the owner';
+        }
+        return `changed ${field}`;
+      });
+      return line(parts.length ? list(parts) : 'updated the project');
+    }
+    case 'project.archived':
+      return line(record.reason ? `archived the project (${record.reason})` : 'archived the project');
+    case 'project.restored':
+      return line(record.reason ? `restored the project (${record.reason})` : 'restored the project');
+    case 'project.deleted':
+      return line('deleted the project');
+    case 'project.transferred':
+      return line(`made ${person(str(after['ownerEmail']))} the owner`);
+    case 'project.member_added':
+      return line(`added ${person(str(after['email']))} as ${role(after['role'])}`);
+    case 'project.member_role_changed':
+      return line(`made ${person(str(after['email']))} ${role(after['role'])} (was ${role(before['role'])})`);
+    case 'project.member_removed':
+      return line(record.reason === 'left' ? 'left the project' : `removed ${person(str(before['email']))}`);
+    case 'project.instructions_updated':
+      return line('updated the instructions');
+    case 'project.model_updated':
+      return line(str(after['modelId']) ? `changed the model to ${label('model', str(after['modelId']))}` : 'changed the model');
+    case 'project.tools_updated':
+      return line(bindingChange(refs(before['refs']), refs(after['refs']), 'tool', label));
+    case 'project.skills_updated': {
+      const change = bindingChange(refs(before['refs']), refs(after['refs']), 'skill', label);
+      return line(change === 'updated the skills' ? (skillUpdate(before, after, label) ?? change) : change);
+    }
+    case 'project.knowledge_added':
+      return line(
+        str(after['source']) === 'web'
+          ? `started adding pages from ${str(after['url'])}`
+          : `added the file ${str(after['filename']) || 'a file'}`,
+      );
+    case 'project.knowledge_removed':
+      return line(`removed the file ${str(before['filename']) || 'a file'}`);
+    case 'project.task_shared':
+      // A schedule's delivery is recorded as its creator's share (3.2b).
+      return line(
+        record.reason === 'schedule'
+          ? `shared “${str(after['title']) || 'Untitled conversation'}” with the project from a schedule`
+          : `shared the conversation “${str(after['title']) || 'Untitled conversation'}” with the project`,
+      );
+    case 'project.task_unshared':
+      return line(`stopped sharing the conversation “${str(after['title']) || 'Untitled conversation'}”`);
+    case 'project.output_shared':
+      // A schedule's published artifact is recorded as its creator's share (3.2d).
+      return line(
+        record.reason === 'schedule'
+          ? `published “${str(after['title']) || 'Untitled artifact'}” to Outputs from a schedule`
+          : `shared the output “${str(after['title']) || 'Untitled artifact'}” with the project`,
+      );
+    case 'project.output_removed':
+      return line(`removed the output “${str(after['title']) || 'Untitled artifact'}” from the project`);
+    case 'project.schedule_created':
+      return line(`created ${scheduleNamed(record, after, person)}`);
+    case 'project.schedule_updated': {
+      const what = scheduleChanges(record.changes ?? []);
+      const named = scheduleNamed(record, after, person);
+      return line(what ? `edited ${named} (${what})` : `edited ${named}`);
+    }
+    case 'project.schedule_paused':
+      return line(`paused ${scheduleNamed(record, after, person)}`);
+    case 'project.schedule_resumed':
+      return line(`resumed ${scheduleNamed(record, after, person)}`);
+    case 'project.schedule_deleted':
+      return line(`deleted ${scheduleNamed(record, before, person)}`);
+    case 'project.memory_proposed':
+      return line(`proposed a change to the memory file “${str(after['slug'])}”`);
+    case 'project.memory_proposal_approved':
+      // The audit trail stores numbers as strings, so read them either way.
+      if (after['kind'] === 'compaction' && Number.isFinite(Number(after['appliedOps'] ?? NaN))) {
+        const applied = Number(after['appliedOps']);
+        const total = Number.isFinite(Number(after['totalOps'] ?? NaN)) ? Number(after['totalOps']) : applied;
+        const which = applied === total ? `${applied} maintenance ${applied === 1 ? 'change' : 'changes'}` : `${applied} of ${total} maintenance changes`;
+        // A split's new files (2.6c).
+        const made = Array.isArray(after['createdFiles']) ? (after['createdFiles'] as unknown[]).map(f => `“${str(f)}”`) : [];
+        const moved = made.length ? `, moving items into ${made.join(', ')}` : '';
+        return line(`applied ${which} to the memory file “${str(after['slug'])}”${moved}`);
+      }
+      return line(`approved a change to the memory file “${str(after['slug'])}”${after['edited'] ? ' with edits' : ''}`);
+    case 'project.memory_maintenance_started':
+      return line(str(after['slug']) ? `ran maintenance on the memory file “${str(after['slug'])}”` : 'ran maintenance on project memory');
+    case 'project.memory_proposal_rejected':
+      return line(`declined a change to the memory file “${str(after['slug'])}”`);
+    case 'project.memory_edited':
+      return line(
+        str(after['slug']) === 'MEMORY.md'
+          ? 'edited the memory index'
+          : after['created']
+            ? `created the memory file “${str(after['slug'])}”`
+            : `edited the memory file “${str(after['slug'])}”`,
+      );
+    case 'project.memory_deleted':
+      return line(`deleted the memory file “${str(before['slug'])}”`);
+    default:
+      return line(record.action.replace(/^project\./, '').replace(/_/g, ' '));
+  }
+}
+
+/**
+ * A project's Activity tab (shared-projects §5, PR-1.7): its audit trail, newest
+ * first, for editors and the owner. The detail page only offers the tab to them;
+ * the server refuses anyone else.
+ */
+@Component({
+  selector: 'app-project-activity',
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [DatePipe, RouterLink],
+  template: `
+    <section aria-label="Activity">
+      @if (error()) {
+        <p role="alert" class="mt-3 text-sm/6 text-state-danger-600 dark:text-state-danger-400">{{ error() }}</p>
+      }
+
+      @if (loading() && entries().length === 0) {
+        <div class="mt-4 h-32 animate-pulse rounded-2xl bg-gray-100 dark:bg-gray-700" aria-busy="true"></div>
+      } @else if (loaded() && entries().length === 0 && !error()) {
+        <div class="mt-4 rounded-2xl border border-dashed border-gray-300 p-6 text-center dark:border-gray-700">
+          <p class="text-sm/6 text-gray-600 dark:text-gray-400">Nothing has happened here yet.</p>
+        </div>
+      } @else if (entries().length > 0) {
+        <ul class="mt-4 divide-y divide-gray-200 overflow-hidden rounded-2xl border border-gray-200 bg-white dark:divide-gray-700 dark:border-gray-700 dark:bg-gray-800">
+          @for (entry of entries(); track entry.record.auditId) {
+            <li class="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 px-4 py-3">
+              <p class="min-w-0 flex-1 text-sm/6 text-gray-700 dark:text-gray-300">
+                <span class="font-medium text-gray-900 dark:text-white" [attr.title]="entry.actorEmail">{{ entry.actor }}</span>
+                {{ entry.line.text }}.
+                @if (entry.line.version !== null) {
+                  <a
+                    [routerLink]="['/projects', project().projectId, 'history']"
+                    [queryParams]="{ version: entry.line.version }"
+                    class="rounded-sm font-medium whitespace-nowrap text-primary-accessible hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-50"
+                  >Version {{ entry.line.version }}</a>
+                }
+              </p>
+              <time class="shrink-0 text-xs/5 text-gray-600 dark:text-gray-400" [attr.datetime]="entry.record.timestamp">
+                {{ entry.at | date: 'MMM d, y, h:mm a' }}
+              </time>
+            </li>
+          }
+        </ul>
+        @if (nextCursor()) {
+          <button
+            type="button"
+            (click)="loadMore()"
+            [disabled]="loading()"
+            class="mt-3 rounded-2xl border border-gray-300 bg-white px-3.5 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+          >
+            {{ loading() ? 'Loading…' : 'Show older' }}
+          </button>
+        }
+      }
+    </section>
+  `,
+})
+export class ProjectActivityComponent {
+  private api = inject(ProjectApiService);
+  private user = inject(UserService);
+  private agents = inject(AgentService);
+
+  readonly project = input.required<Project>();
+
+  private readonly records = signal<ProjectAuditRecord[]>([]);
+  protected readonly nextCursor = signal<string | null>(null);
+  protected readonly loading = signal(false);
+  protected readonly loaded = signal(false);
+  protected readonly error = signal<string | null>(null);
+
+  /**
+   * Display names by `kind:ref`, from the bindable palettes Settings loads (memoised
+   * in `AgentService`, so this usually costs nothing). A ref the viewer's palette
+   * doesn't have (a tool they can't use, one since retired) stays an id.
+   */
+  private readonly labels = signal<ReadonlyMap<string, string>>(new Map());
+  private readonly label = computed<ActivityLabel>(() => {
+    const names = this.labels();
+    return (kind, ref) => names.get(`${kind}:${ref}`) || ref;
+  });
+
+  /** Display names by email, merged across the pages loaded so far. */
+  private readonly people = signal<Readonly<Record<string, string>>>({});
+  private readonly person = computed<ActivityPerson>(() => {
+    const names = this.people();
+    return email => personLabel(names[email.toLowerCase()], email);
+  });
+
+  private readonly me = computed(() => (this.user.currentUser()?.email ?? '').toLowerCase());
+  protected readonly entries = computed(() =>
+    this.records().map(record => ({
+      record,
+      line: describeActivity(record, this.label(), this.person()),
+      actor: record.actorEmail
+        ? record.actorEmail.toLowerCase() === this.me() ? 'You' : this.person()(record.actorEmail)
+        : 'Someone',
+      // The email behind a name, on hover; nothing when the name already is the email.
+      actorEmail: record.actorEmail && this.person()(record.actorEmail) !== record.actorEmail ? record.actorEmail : null,
+      at: parseIso(record.timestamp),
+    })),
+  );
+
+  private readonly projectId = computed(() => this.project().projectId);
+
+  constructor() {
+    void this.loadLabels();
+    effect(() => {
+      const id = this.projectId();
+      untracked(() => {
+        this.records.set([]);
+        this.loaded.set(false);
+        void this.load(id, null);
+      });
+    });
+  }
+
+  private async loadLabels(): Promise<void> {
+    const kinds: BindableKind[] = ['model', 'tool', 'skill'];
+    const palettes = await Promise.all(kinds.map(kind => this.agents.loadBindable(kind)));
+    const names = new Map<string, string>();
+    palettes.forEach((items, i) => items.forEach(item => names.set(`${kinds[i]}:${item.ref}`, item.label)));
+    this.labels.set(names);
+  }
+
+  protected loadMore(): void {
+    void this.load(this.projectId(), this.nextCursor());
+  }
+
+  private async load(projectId: string, cursor: string | null): Promise<void> {
+    this.loading.set(true);
+    this.error.set(null);
+    try {
+      const page = await firstValueFrom(this.api.audit(projectId, PAGE_SIZE, cursor));
+      if (projectId !== this.projectId()) return;
+      this.records.update(list => (cursor ? [...list, ...page.records] : page.records));
+      this.people.update(known => (cursor ? { ...known, ...page.people } : { ...page.people }));
+      this.nextCursor.set(page.nextCursor ?? null);
+    } catch (err) {
+      this.error.set(projectErrorMessage(err, 'The activity could not be loaded.'));
+    } finally {
+      this.loading.set(false);
+      this.loaded.set(true);
+    }
+  }
+}

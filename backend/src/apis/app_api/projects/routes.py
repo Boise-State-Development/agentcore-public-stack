@@ -49,6 +49,7 @@ from .harness_settings import (
     HarnessView,
     created_by_email,
     settings_changes,
+    skill_pins,
     version_instructions_diff,
 )
 from .models import (
@@ -73,6 +74,8 @@ from .models import (
     SettingsVersionsResponse,
     SharedTaskResponse,
     SharedTasksResponse,
+    SkillBindingRef,
+    SkillBindingsResponse,
     TransferOwnershipRequest,
     UpdateBindingsRequest,
     UpdateInstructionsRequest,
@@ -280,18 +283,57 @@ async def put_tools(
     return _bindings(await _save(project_id, user, kind=TOOL, bindings=bindings), TOOL)
 
 
-@router.get("/{project_id}/skills", response_model=BindingsResponse, response_model_by_alias=True)
-async def get_skills(project_id: str, user: User = Depends(require_projects_user)) -> BindingsResponse:
-    return _bindings(await _view(project_id, user), SKILL)
+async def _skills(view: HarnessView) -> SkillBindingsResponse:
+    pins = await skill_pins(view.harness)
+    return SkillBindingsResponse(
+        bindings=[
+            SkillBindingRef(
+                ref=b.ref,
+                config=b.config,
+                version=pins[b.ref].version if b.ref in pins else None,
+                pinned_at=pins[b.ref].pinned_at if b.ref in pins else None,
+                update_available=pins[b.ref].update_available if b.ref in pins else False,
+            )
+            for b in (view.harness.bindings or [])
+            if b.kind == SKILL
+        ],
+        version=view.version,
+        can_edit=view.can_edit,
+    )
 
 
-@router.put("/{project_id}/skills", response_model=BindingsResponse, response_model_by_alias=True)
+@router.get("/{project_id}/skills", response_model=SkillBindingsResponse, response_model_by_alias=True)
+async def get_skills(project_id: str, user: User = Depends(require_projects_user)) -> SkillBindingsResponse:
+    return await _skills(await _view(project_id, user))
+
+
+@router.put("/{project_id}/skills", response_model=SkillBindingsResponse, response_model_by_alias=True)
 async def put_skills(
     project_id: str, body: UpdateBindingsRequest, user: User = Depends(require_projects_user)
-) -> BindingsResponse:
-    """Replace the project's skills (editor). Skills the saver adds must be ones they can use."""
+) -> SkillBindingsResponse:
+    """Replace the project's skills (editor). Skills the saver adds must be ones they can use.
+
+    A skill added without a version is pinned to its content as of this save; a skill
+    already bound keeps its pin unless the request names another version.
+    """
     bindings = [AgentBinding(kind=SKILL, ref=b.ref, config=b.config) for b in body.bindings]
-    return _bindings(await _save(project_id, user, kind=SKILL, bindings=bindings), SKILL)
+    return await _skills(await _save(project_id, user, kind=SKILL, bindings=bindings))
+
+
+@router.post(
+    "/{project_id}/skills/{skill_id}/pin", response_model=SkillBindingsResponse, response_model_by_alias=True
+)
+async def pin_skill(
+    project_id: str, skill_id: str, user: User = Depends(require_projects_user)
+) -> SkillBindingsResponse:
+    """Pin a bound skill to its current content (editor), the "update" for a newer version."""
+    try:
+        view = await _settings().pin_skill(project_id, user, skill_id)
+    except ProjectError as e:
+        raise _translate(e)
+    except BindingValidationError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    return await _skills(view)
 
 
 @router.get(

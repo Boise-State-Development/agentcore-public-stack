@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 from apis.shared.auth import require_admin
 from tests.conftest import override_admin_auth
 from apis.app_api.admin.skills import routes as skill_routes
-from apis.app_api.skills import service as skill_service_module
+from apis.shared.skills import bundle_files as bundle_files_module
 
 from .conftest import AWS_REGION, SKILL_RESOURCES_BUCKET
 
@@ -202,13 +202,13 @@ class TestValidationAnd404s:
 
     def test_too_large_400(self, client, monkeypatch):
         _create_skill(client)
-        monkeypatch.setattr(skill_service_module, "MAX_RESOURCE_BYTES", 8)
+        monkeypatch.setattr(bundle_files_module, "MAX_RESOURCE_BYTES", 8)
         resp = _upload(client, "pdf_workflows", "forms.md", b"way too many bytes")
         assert resp.status_code == 400
 
     def test_count_cap_400(self, client, monkeypatch):
         _create_skill(client)
-        monkeypatch.setattr(skill_service_module, "MAX_RESOURCES_PER_SKILL", 1)
+        monkeypatch.setattr(bundle_files_module, "MAX_RESOURCES_PER_SKILL", 1)
         assert _upload(client, "pdf_workflows", "a.md", b"a").status_code == 200
         resp = _upload(client, "pdf_workflows", "b.md", b"b")
         assert resp.status_code == 400
@@ -216,7 +216,7 @@ class TestValidationAnd404s:
 
     def test_count_cap_allows_replacing_existing(self, client, monkeypatch):
         _create_skill(client)
-        monkeypatch.setattr(skill_service_module, "MAX_RESOURCES_PER_SKILL", 1)
+        monkeypatch.setattr(bundle_files_module, "MAX_RESOURCES_PER_SKILL", 1)
         assert _upload(client, "pdf_workflows", "a.md", b"a").status_code == 200
         # Replacing the same filename is allowed even at the cap.
         assert _upload(client, "pdf_workflows", "a.md", b"a2").status_code == 200

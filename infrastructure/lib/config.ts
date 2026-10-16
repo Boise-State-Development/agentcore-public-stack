@@ -78,12 +78,22 @@ export interface AppConfig {
   platformCosts: PlatformCostsConfig;
   memorySpaces: MemorySpacesConfig;
   projects: ProjectsConfig;
+  userGrants: UserGrantsConfig;
+  sessionPrewarm: SessionPrewarmConfig;
+  clientTurnTiming: ClientTurnTimingConfig;
+  ttftProbe: TtftProbeConfig;
   memoryLint: MemoryLintConfig;
   conversationIndex: ConversationIndexConfig;
   conversationSearch: ConversationSearchConfig;
   platformSelfService: PlatformSelfServiceConfig;
   feedbackEvalSampling: FeedbackEvalSamplingConfig;
   skills: SkillsConfig;
+  skillAuthoring: SkillAuthoringConfig;
+  wordTrackedChanges: WordTrackedChangesConfig;
+  largeDocumentAttachments: LargeDocumentAttachmentsConfig;
+  attachmentKb: AttachmentKbConfig;
+  folderAttachments: FolderAttachmentsConfig;
+  folderSync: FolderSyncConfig;
   agents: AgentsConfig;
   agentMarketplace: AgentMarketplaceConfig;
   dictation: DictationConfig;
@@ -423,6 +433,63 @@ export interface ProjectsConfig {
   enabled: boolean;
 }
 
+/**
+ * Direct user grants (tools, models and skills granted to one user beside their
+ * roles). **Opt-in while the feature is in development**: off unless
+ * CDK_USER_GRANTS_ENABLED=true (or a `userGrants.enabled: true` cdk.json context).
+ * See CLAUDE.md "Feature flags". Sets USER_GRANTS_ENABLED on **app-api only**: it
+ * gates the admin write surface (`/admin/user-grants`), and permission resolution
+ * reads an existing grant row wherever it runs without a switch — the AgentCore
+ * Runtime is at its environment-variable cap, and an absent row is the off state
+ * (see `user_grants_enabled` in `apis/shared/feature_flags.py`).
+ */
+export interface UserGrantsConfig {
+  enabled: boolean;
+}
+
+/**
+ * Session prewarm (docs/specs/agentcore-runtime-v2.md §5a). **Opt-in while the
+ * feature is in development**: off unless CDK_SESSION_PREWARM_ENABLED=true (or a
+ * `sessionPrewarm.enabled: true` cdk.json context). Sets SESSION_PREWARM_ENABLED
+ * on **app-api only**, which serves `POST /chat/prewarm`: it forwards a no-op
+ * `warm` invocation so a conversation's Runtime microVM starts before its first
+ * send. The Runtime needs no copy (the warm action is a no-op behind the route),
+ * so it spends none of the Runtime's environment-variable budget. It spends
+ * Runtime session time on conversations nobody sends, so it is cheap on V2,
+ * which reclaims idle memory, and billed at peak memory on V1.
+ */
+export interface SessionPrewarmConfig {
+  enabled: boolean;
+}
+
+/**
+ * Client-measured time to first token (docs/specs/turn-path-ttft.md §6).
+ * **Opt-in while the feature is in development**: off unless
+ * CDK_CLIENT_TURN_TIMING_ENABLED=true (or a `clientTurnTiming.enabled: true`
+ * cdk.json context). Sets CLIENT_TURN_TIMING_ENABLED on **app-api only**, which
+ * serves `POST /telemetry/turn-timing`: the SPA reports each turn's
+ * send-to-first-token, and app-api records it as EMF in AgentCoreStack/TurnLatency.
+ * It is the only metric covering the browser, the app-api hop, Runtime routing
+ * and session start. Spends none of the Runtime's environment budget.
+ */
+export interface ClientTurnTimingConfig {
+  enabled: boolean;
+}
+
+/**
+ * Scheduled time-to-first-token probe (docs/specs/turn-path-ttft.md §6E). Not a
+ * feature flag: operational configuration. Enabled when CDK_TTFT_PROBE_USER_ID
+ * names a user (Cognito sub) with an active headless grant; the probe acts as
+ * that user, hourly, and its turns count against their quota. Unset (the
+ * default) leaves the schedule DISABLED and creates no alarm.
+ * CDK_TTFT_PROBE_MODEL_ID pins the model; unset means the user's default, which
+ * moves the baseline whenever the default changes.
+ */
+export interface TtftProbeConfig {
+  userId: string;
+  modelId: string;
+}
+
 /** What the project-memory content lint does with a finding. */
 export type MemoryLintMode = 'off' | 'warn' | 'block';
 
@@ -571,6 +638,98 @@ export interface FeedbackEvalSamplingConfig {
  * can reach *which* skills is a role's `grantedSkills`, edited in that UI.
  */
 export interface SkillsConfig {
+  enabled: boolean;
+}
+
+/**
+ * Skill authoring tools (docs/specs/skill-creator.md D12): the seven `my_skill_*`
+ * agent tools that create and edit the invoking user's own skills. **Opt-in while
+ * in development**: off unless CDK_SKILL_AUTHORING_ENABLED=true (or a
+ * `skillAuthoring.enabled: true` cdk.json context). Sets SKILL_AUTHORING_ENABLED on
+ * the AgentCore Runtime only, and only while on, so an environment that leaves it
+ * off spends none of the Runtime's environment budget. No app-api or SPA switch:
+ * the tools run in the Runtime and reuse the existing approval card. ANDs with
+ * `skills.enabled` and the `my_skill_create` tool grant.
+ */
+export interface SkillAuthoringConfig {
+  enabled: boolean;
+}
+
+/**
+ * Word tracked changes (docs/specs/word-tracked-changes.md): a .docx's tracked
+ * changes reach the model written out as `[deleted: …]` / `[inserted: …]`, and
+ * the Word tools gain `redline_word_document`. **Opt-in while in development**:
+ * off unless CDK_WORD_TRACKED_CHANGES_ENABLED=true (or a
+ * `wordTrackedChanges.enabled: true` cdk.json context). Sets
+ * WORD_TRACKED_CHANGES_ENABLED on the AgentCore Runtime only while on, so an
+ * environment that leaves it off spends none of the Runtime's environment
+ * budget, and on app-api, which builds the upload digest whose paragraph
+ * numbers must match `document_read`'s. No SPA switch.
+ */
+export interface WordTrackedChangesConfig {
+  enabled: boolean;
+}
+
+/**
+ * Large document attachments (docs/specs/large-document-attachments.md): a
+ * pdf, docx, txt, md or html attachment over the 4 MB inline limit is attached
+ * by reference and read through `document_read` from sidecars a preparation
+ * Lambda builds. **Opt-in while in development**: off unless
+ * CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED=true (or a
+ * `largeDocumentAttachments.enabled: true` cdk.json context). While off, the
+ * `LargeDocumentPrepareConstruct` (prepare queue, its dead-letter queue, the
+ * Lambda) is not synthesized at all. Sets LARGE_DOCUMENT_ATTACHMENTS_ENABLED
+ * and, while on, the prepare queue's URL on **app-api only**: the Runtime reads
+ * a prepared file by its row, never by a switch, so it spends none of its
+ * environment budget.
+ */
+export interface LargeDocumentAttachmentsConfig {
+  enabled: boolean;
+}
+
+/**
+ * The shared `attachments` managed knowledge base for large documents
+ * (docs/specs/large-document-attachments.md §4E, Tier 2). **Opt-in while in
+ * development**: off unless CDK_ATTACHMENT_KB_ENABLED=true (or an
+ * `attachmentKb.enabled: true` cdk.json context), and refused without
+ * `largeDocumentAttachments.enabled`, because it rides the large-document
+ * pipeline: the prepare Lambda also ingests, removes and evicts documents.
+ * While on it adds two resources (an S3 Object Deleted rule and a daily
+ * schedule, both targeting the prepare queue), turns on the user-files bucket's
+ * EventBridge delivery, and grants on existing roles. Sets
+ * ATTACHMENT_KB_ENABLED on the prepare Lambda and app-api. The knowledge base
+ * itself is created on first ingest, never by CloudFormation.
+ */
+export interface AttachmentKbConfig {
+  enabled: boolean;
+}
+
+/**
+ * Folder attachments (docs/specs/drive-folder-attachments.md): a conversation
+ * can attach a Google Drive folder, whose readable files app-api imports as
+ * session files delivered by reference whatever their size. **Opt-in while in
+ * development**: off unless CDK_FOLDER_ATTACHMENTS_ENABLED=true (or a
+ * `folderAttachments.enabled: true` cdk.json context), and refused without
+ * `largeDocumentAttachments.enabled`, because a folder file is read through
+ * the prepare Lambda's sidecars: without that pipeline there is nothing to
+ * read a small file through. Sets FOLDER_ATTACHMENTS_ENABLED on app-api (the
+ * routes and the expansion task) and, only while on, on the AgentCore Runtime
+ * (a turn's folder manifests). No resources.
+ */
+export interface FolderAttachmentsConfig {
+  enabled: boolean;
+}
+
+/**
+ * Folder sync (docs/specs/assistant-kb-sync.md §11): a `drive_folder` KB sync
+ * policy keeps a knowledge base (a project saved from a Drive folder) in step
+ * with that folder on the existing kb-sync dispatcher and worker. **Opt-in while
+ * in development**: off unless CDK_FOLDER_SYNC_ENABLED=true (or a
+ * `folderSync.enabled: true` cdk.json context). Sets FOLDER_SYNC_ENABLED on
+ * app-api (creating a folder policy) and on both kb-sync Lambdas (running one).
+ * No resources: the worker already holds every grant a folder run uses.
+ */
+export interface FolderSyncConfig {
   enabled: boolean;
 }
 
@@ -1287,6 +1446,32 @@ export function loadConfig(scope: cdk.App): AppConfig {
         ? process.env.CDK_PROJECTS_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('projects')?.enabled ?? false,
     },
+    userGrants: {
+      // Opt-in while in development (CLAUDE.md "Feature flags"): only the literal
+      // "true" turns it on; an unset workflow variable arrives as "" and is off.
+      enabled: process.env.CDK_USER_GRANTS_ENABLED
+        ? process.env.CDK_USER_GRANTS_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('userGrants')?.enabled ?? false,
+    },
+    sessionPrewarm: {
+      // Opt-in while in development (CLAUDE.md "Feature flags"): only the literal
+      // "true" turns it on; an unset workflow variable arrives as "" and is off.
+      enabled: process.env.CDK_SESSION_PREWARM_ENABLED
+        ? process.env.CDK_SESSION_PREWARM_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('sessionPrewarm')?.enabled ?? false,
+    },
+    clientTurnTiming: {
+      // Opt-in while in development (CLAUDE.md "Feature flags"): only the literal
+      // "true" turns it on; an unset workflow variable arrives as "" and is off.
+      enabled: process.env.CDK_CLIENT_TURN_TIMING_ENABLED
+        ? process.env.CDK_CLIENT_TURN_TIMING_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('clientTurnTiming')?.enabled ?? false,
+    },
+    ttftProbe: {
+      // Configuration, not a flag: unset workflow variables arrive as "".
+      userId: (process.env.CDK_TTFT_PROBE_USER_ID || scope.node.tryGetContext('ttftProbe')?.userId || '').trim(),
+      modelId: (process.env.CDK_TTFT_PROBE_MODEL_ID || scope.node.tryGetContext('ttftProbe')?.modelId || '').trim(),
+    },
     // Project-memory content lint: configuration of Shared Projects, not a flag.
     // The workflow forwards an EMPTY STRING when a variable is unset, which falls
     // through to the context and then to the defaults (warn, no patterns).
@@ -1328,6 +1513,44 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_SKILLS_ENABLED
         ? process.env.CDK_SKILLS_ENABLED !== 'false'
         : scope.node.tryGetContext('skills')?.enabled ?? true,
+    },
+    skillAuthoring: {
+      // Opt-in while in development, same parsing as projects above: '' (an
+      // unset workflow variable) and anything but "true" are off.
+      enabled: process.env.CDK_SKILL_AUTHORING_ENABLED
+        ? process.env.CDK_SKILL_AUTHORING_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('skillAuthoring')?.enabled ?? false,
+    },
+    wordTrackedChanges: {
+      // Opt-in while in development, same parsing as skillAuthoring above.
+      enabled: process.env.CDK_WORD_TRACKED_CHANGES_ENABLED
+        ? process.env.CDK_WORD_TRACKED_CHANGES_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('wordTrackedChanges')?.enabled ?? false,
+    },
+    largeDocumentAttachments: {
+      // Opt-in while in development, same parsing as skillAuthoring above:
+      // '' (an unset workflow variable) and anything but "true" are off.
+      enabled: process.env.CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED
+        ? process.env.CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('largeDocumentAttachments')?.enabled ?? false,
+    },
+    attachmentKb: {
+      // Opt-in while in development, same parsing as largeDocumentAttachments.
+      enabled: process.env.CDK_ATTACHMENT_KB_ENABLED
+        ? process.env.CDK_ATTACHMENT_KB_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('attachmentKb')?.enabled ?? false,
+    },
+    folderAttachments: {
+      // Opt-in while in development, same parsing as attachmentKb.
+      enabled: process.env.CDK_FOLDER_ATTACHMENTS_ENABLED
+        ? process.env.CDK_FOLDER_ATTACHMENTS_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('folderAttachments')?.enabled ?? false,
+    },
+    folderSync: {
+      // Opt-in while in development, same parsing as folderAttachments.
+      enabled: process.env.CDK_FOLDER_SYNC_ENABLED
+        ? process.env.CDK_FOLDER_SYNC_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('folderSync')?.enabled ?? false,
     },
     agents: {
       // Default ON with a kill switch (house style, mirroring memorySpaces /
@@ -1962,6 +2185,21 @@ export function validateAwsRegion(region: string): void {
  * Validate configuration values
  */
 function validateConfig(config: AppConfig): void {
+  // The attachments KB rides the large-document pipeline (its queue and Lambda).
+  if (config.attachmentKb.enabled && !config.largeDocumentAttachments.enabled) {
+    throw new Error(
+      'CDK_ATTACHMENT_KB_ENABLED=true requires CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED=true: '
+      + 'the attachments knowledge base is fed by the large-document preparation pipeline.',
+    );
+  }
+  // A folder's files are read through the prepare Lambda's sidecars.
+  if (config.folderAttachments.enabled && !config.largeDocumentAttachments.enabled) {
+    throw new Error(
+      'CDK_FOLDER_ATTACHMENTS_ENABLED=true requires CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED=true: '
+      + 'a folder\'s files are delivered by reference and read from the sidecars the large-document pipeline prepares.',
+    );
+  }
+
   // Validate project prefix
   if (!/^[a-z][a-z0-9-]{1,20}$/.test(config.projectPrefix)) {
     throw new Error(

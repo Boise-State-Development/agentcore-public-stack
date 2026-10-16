@@ -19,35 +19,29 @@
 // against the SAME overridden theme without re-emitting a stock-palette
 // copy of Tailwind.
 import { describe, expect, it } from 'vitest';
-import * as fs from 'fs';
 import * as path from 'path';
 import { fromProjectRoot } from '../testing/project-root';
+import { readSourceTree, SOURCE_TREE_SCAN_TIMEOUT_MS } from '../testing/source-tree';
 
 describe('tailwind theme-import hygiene', () => {
+  // Scans all of src, so it takes the scan timeout, not the 5 s default
+  // (see source-tree.ts).
   it('only styles/theme.css may @import "tailwindcss"; every other stylesheet must @reference the shared theme', () => {
     // The single allowed owner of `@import "tailwindcss"`, relative to src/.
     const ALLOWED_TAILWIND_IMPORTER = path.normalize('styles/theme.css');
 
     const srcDir = fromProjectRoot('src');
-    const styleFiles: string[] = [];
 
     // Both standalone `.css` stylesheets AND `.ts` components with an inline
     // `styles:` block can carry `@import "tailwindcss"` — an inline import
     // regenerates the default theme just as a `.css` one does (this is how
-    // the user-menu hover regressed to white). Scan both.
-    function walkDir(dir: string): void {
-      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-        const fullPath = path.join(dir, entry.name);
-        if (/node_modules/.test(fullPath)) continue;
-        if (entry.isDirectory()) {
-          walkDir(fullPath);
-        } else if (entry.name.endsWith('.css') || (entry.name.endsWith('.ts') && !entry.name.endsWith('.spec.ts'))) {
-          styleFiles.push(fullPath);
-        }
-      }
-    }
-
-    walkDir(srcDir);
+    // the user-menu hover regressed to white). Scan both. styles/generated
+    // is scanned too: a generator that emitted the import would break the
+    // theme just the same.
+    const styleFiles = readSourceTree(srcDir, {
+      extensions: ['.css', '.ts'],
+      skipFile: (name) => name.endsWith('.spec.ts'),
+    });
 
     // Matches a real `@import "tailwindcss"` / `@import 'tailwindcss'`
     // statement, not a mention inside a comment (comments are stripped
@@ -57,11 +51,12 @@ describe('tailwind theme-import hygiene', () => {
 
     const violations: string[] = [];
 
-    for (const file of styleFiles) {
-      const relative = path.normalize(path.relative(srcDir, file));
-      const withoutComments = fs.readFileSync(file, 'utf-8').replace(blockCommentRegex, '');
-      if (tailwindImportRegex.test(withoutComments) && relative !== ALLOWED_TAILWIND_IMPORTER) {
-        violations.push(relative);
+    for (const { relativePath, content } of styleFiles) {
+      // Almost no file names tailwindcss at all; skip the comment strip for them.
+      if (!content.includes('tailwindcss')) continue;
+      const withoutComments = content.replace(blockCommentRegex, '');
+      if (tailwindImportRegex.test(withoutComments) && relativePath !== ALLOWED_TAILWIND_IMPORTER) {
+        violations.push(relativePath);
       }
     }
 
@@ -77,5 +72,5 @@ describe('tailwind theme-import hygiene', () => {
     ].join('\n');
 
     expect(violations, message).toEqual([]);
-  });
+  }, SOURCE_TREE_SCAN_TIMEOUT_MS);
 });

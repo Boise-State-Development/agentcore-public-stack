@@ -20,6 +20,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 
 from apis.shared.auth import User, require_admin_scope
 from apis.shared.feature_flags import feedback_eval_sampling_enabled
+from apis.shared.security.log_sanitize import scrub_log
 from apis.shared.storage.dynamodb_storage import DynamoDBStorage
 
 from .fleet import build_fleet_report
@@ -103,8 +104,8 @@ async def get_fleet_feedback(
         sessions_omitted=omitted,
     )
     logger.info(
-        "Fleet feedback: %d thumbs over %dd, %d sessions joined (%d omitted)",
-        report["totals"]["thumbs"], days, len(records_by_session), omitted,
+        "Fleet feedback: %d thumbs over %sd, %d sessions joined (%d omitted)",
+        report["totals"]["thumbs"], scrub_log(days), len(records_by_session), omitted,
     )
     return FleetFeedbackResponse(**report)
 
@@ -200,7 +201,7 @@ async def run_eval_sampling(
             logger.error("eval sampling batch failed", exc_info=True)
 
     background.add_task(task)
-    logger.info("Admin queued an eval sampling batch (limit=%d)", limit)
+    logger.info("Admin queued an eval sampling batch (limit=%s)", scrub_log(limit))
     return SamplingRunResponse(
         accepted=True,
         limit=limit,

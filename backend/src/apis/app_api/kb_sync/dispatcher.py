@@ -23,6 +23,12 @@ docs/specs/assistant-kb-sync.md §7 in order:
 
 Guard failures transition state (removing the policy from the sparse
 index) — they never reschedule-and-retry.
+
+A ``drive_folder`` policy (spec §11.7) has no source record to check, so its
+liveness is the assistant alone (the worker's not-found streak covers the
+folder). While FOLDER_SYNC_ENABLED is off a due folder policy is re-armed one
+interval out without a run: left due, it would sit at the head of the
+most-overdue-first sweep and starve every other policy.
 """
 
 import asyncio
@@ -32,6 +38,7 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
+from apis.shared.feature_flags import folder_sync_enabled
 from apis.shared.sync_policies.models import SyncPolicy
 from apis.shared.timestamps import from_iso
 from apis.shared.sync_policies.service import (
@@ -146,14 +153,25 @@ async def _dispatch_policy(policy: SyncPolicy, now: datetime, counts: Dict[str, 
         counts["OrphansDeleted"] += 1
         return
 
-    source = _get_source_item(assistant_id, policy.source_type, policy.source_ref)
-    if source is None or source.get("status") == "deleting":
-        logger.warning(
-            f"Sync policy {policy.policy_id}: source {policy.source_ref} gone or deleting; deleting policy"
-        )
-        await delete_sync_policy(assistant_id, policy.policy_id)
-        counts["OrphansDeleted"] += 1
-        return
+    if policy.source_type == "drive_folder":
+        if not folder_sync_enabled():
+            # Wait, don't run, and don't stay due (see the module docstring).
+            if await rearm_policy(
+                assistant_id, policy.policy_id, policy.next_sync_at, _backoff_next_sync_at(policy, now)
+            ):
+                counts["FolderSyncDisabled"] += 1
+            else:
+                counts["RearmLost"] += 1
+            return
+    else:
+        source = _get_source_item(assistant_id, policy.source_type, policy.source_ref)
+        if source is None or source.get("status") == "deleting":
+            logger.warning(
+                f"Sync policy {policy.policy_id}: source {policy.source_ref} gone or deleting; deleting policy"
+            )
+            await delete_sync_policy(assistant_id, policy.policy_id)
+            counts["OrphansDeleted"] += 1
+            return
 
     # Guard 3 — circuit breaker on the streak counters the worker maintains.
     if policy.consecutive_not_found >= _env_int("KB_SYNC_MAX_NOT_FOUND", 2):
@@ -224,6 +242,7 @@ async def dispatch_once() -> Dict[str, int]:
         "PausedInactive": 0,
         "InFlightSkipped": 0,
         "RearmLost": 0,
+        "FolderSyncDisabled": 0,
     }
 
     if os.environ.get("KB_SYNC_ENABLED", "false").lower() != "true":

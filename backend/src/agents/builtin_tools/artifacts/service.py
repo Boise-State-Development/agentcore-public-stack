@@ -83,12 +83,41 @@ _HTML_MIME_TYPES = frozenset({"text/html", "application/xhtml+xml"})
 # artifacts, so its containment story is identical to theirs. `marked` is
 # pinned (dependency-free single module) and loaded from esm.sh, which the
 # artifact-origin CSP allows under script-src.
-_MARKDOWN_RENDER_TEMPLATE = """<!doctype html>
+#
+# Math: KaTeX typesets `$$…$$`, `\[…\]`, `\(…\)`, the AMS display
+# environments and currency-guarded `$…$`, the same delimiters the chat
+# renders (frontend `katex-math-markdown.ts`; the guarded-`$` regex is
+# pinned to that file by a test). Unlike the chat, which emits delimiters
+# and lets KaTeX's auto-render walk the DOM, these extensions call
+# `katex.renderToString` on the span marked has already claimed, so there
+# is no positional `$` pairing left to swallow the prose between two
+# dollar amounts. KaTeX is pinned to the chat's version and loaded from
+# jsDelivr with SRI; its stylesheet and fonts need `cdn.jsdelivr.net` in
+# style-src and font-src, which both CSP layers grant (CloudFront policy
+# and the render Lambda). If the stylesheet does not load, math falls
+# back to KaTeX's MathML-only output, which the browser typesets without
+# CSS or fonts; if the script does not load, math stays as its source.
+#
+# The wrapper is baked into each version's S3 object, and versions are
+# immutable, so a template change reaches NEW versions only: a Markdown
+# artifact written before math support keeps its raw-LaTeX render until
+# the model writes a new version. The render Lambda deliberately does not
+# re-wrap old ones (it serves stored bytes; see its module docstring).
+_MARKDOWN_RENDER_TEMPLATE = r"""<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>__ARTIFACT_TITLE__</title>
+<link rel="stylesheet" id="katex-css"
+  href="https://cdn.jsdelivr.net/npm/katex@0.16.45/dist/katex.min.css"
+  integrity="sha384-UA8juhPf75SzzAMA/4fo3yOU7sBJ0om7SCD2GHq0fZqZco6tr1UCV7nUbk9J90JM"
+  crossorigin="anonymous"
+  onload="this.dataset.state='loaded'" onerror="this.dataset.state='failed'">
+<script defer
+  src="https://cdn.jsdelivr.net/npm/katex@0.16.45/dist/katex.min.js"
+  integrity="sha384-Tt7wBxLKwSzFVRET4O4U9H6v8MNaQ/CjN2FMP4xFm0ErrFu6aNqoonRVW5W40iGI"
+  crossorigin="anonymous"></script>
 <style>
   :root { color-scheme: light dark; }
   body {
@@ -128,6 +157,9 @@ _MARKDOWN_RENDER_TEMPLATE = """<!doctype html>
   th { background: #f6f8fa; }
   img { max-width: 100%; }
   hr { border: none; border-top: 1px solid #d0d7de; margin: 2rem 0; }
+  .katex-display { overflow-x: auto; overflow-y: hidden; padding: .25rem 0; }
+  math[display="block"] { overflow-x: auto; }
+  .katex-error { color: inherit; font-family: ui-monospace, monospace; }
   @media (prefers-color-scheme: dark) {
     body { color: #e6edf3; background: #0d1117; }
     h1, h2 { border-bottom-color: #30363d; }
@@ -146,6 +178,100 @@ _MARKDOWN_RENDER_TEMPLATE = """<!doctype html>
 <script type="application/x-markdown-base64" id="md-src">__ARTIFACT_MD_B64__</script>
 <script type="module">
   import { marked } from "https://esm.sh/marked@14.1.4";
+
+  // `katex.min.js` is a deferred classic script ahead of this module, so it
+  // has run (or failed) by now. Its stylesheet may still be in flight.
+  const katex = window.katex;
+  const css = document.getElementById("katex-css");
+  const cssLoaded = css.dataset.state
+    ? Promise.resolve(css.dataset.state === "loaded")
+    : new Promise((resolve) => {
+        css.addEventListener("load", () => resolve(true), { once: true });
+        css.addEventListener("error", () => resolve(false), { once: true });
+        setTimeout(() => resolve(false), 4000);
+      });
+  // Without KaTeX's CSS its HTML output is unreadable; MathML is typeset
+  // natively by the browser and needs neither the stylesheet nor fonts.
+  const output = (await cssLoaded) ? "htmlAndMathml" : "mathml";
+
+  const escapeHtml = (value) =>
+    value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+  function tex(source, raw, displayMode) {
+    if (!katex) return escapeHtml(raw);
+    try {
+      return katex.renderToString(source, { displayMode, output, throwOnError: false });
+    } catch (err) {
+      return escapeHtml(raw);
+    }
+  }
+
+  function delimited(name, open, rule, displayMode) {
+    return {
+      name,
+      level: "inline",
+      start: (src) => {
+        const at = src.indexOf(open);
+        return at === -1 ? undefined : at;
+      },
+      tokenizer(src) {
+        const match = rule.exec(src);
+        if (!match) return undefined;
+        return { type: name, raw: match[0], text: match[1] };
+      },
+      renderer: (token) => tex(token.text, token.raw, displayMode),
+    };
+  }
+
+  // Same rules as the chat's KATEX_MARKED_EXTENSIONS. `$x$` is math only
+  // where it cannot be currency: the opening `$` is not followed by
+  // whitespace or a digit, the closing one is not preceded by whitespace
+  // nor followed by a digit, and the span stays on one line — so
+  // "$5 fee" and "from $1M to $2M" stay prose.
+  const DOLLAR_INLINE_MATH = /^\$(?![\s\d])([^\n$]+?)\$(?!\d)/;
+  const ENVIRONMENT_MATH =
+    /^\\begin\{((?:equation|align|alignat|gather)\*?|CD)\}[\s\S]+?\\end\{\1\}/;
+
+  // Order matters: `$$` before the single-`$` rule, so display math is
+  // never read as two inline spans, and before the environment rule, so
+  // `$$\begin{align}…\end{align}$$` is claimed by its outer delimiter.
+  marked.use({
+    extensions: [
+      delimited("mathDisplayDollar", "$$", /^\$\$([\s\S]+?)\$\$/, true),
+      delimited("mathInlineParen", "\\(", /^\\\(([\s\S]+?)\\\)/, false),
+      delimited("mathDisplayBracket", "\\[", /^\\\[([\s\S]+?)\\\]/, true),
+      {
+        name: "mathEnvironment",
+        level: "inline",
+        start: (src) => {
+          const at = src.indexOf("\\begin{");
+          return at === -1 ? undefined : at;
+        },
+        tokenizer(src) {
+          const match = ENVIRONMENT_MATH.exec(src);
+          if (!match) return undefined;
+          return { type: "mathEnvironment", raw: match[0], text: match[0] };
+        },
+        renderer: (token) => tex(token.text, token.raw, true),
+      },
+      {
+        name: "mathInlineDollar",
+        level: "inline",
+        start: (src) => {
+          const at = src.indexOf("$");
+          return at === -1 ? undefined : at;
+        },
+        tokenizer(src) {
+          const match = DOLLAR_INLINE_MATH.exec(src);
+          // A space before the closing `$` means prose, not math.
+          if (!match || /\s$/.test(match[1])) return undefined;
+          return { type: "mathInlineDollar", raw: match[0], text: match[1] };
+        },
+        renderer: (token) => tex(token.text, token.raw, false),
+      },
+    ],
+  });
+
   const b64 = document.getElementById("md-src").textContent.trim();
   const md = new TextDecoder().decode(
     Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)),

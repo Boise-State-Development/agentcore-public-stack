@@ -72,7 +72,7 @@ def _message_dict(text: str, msg_id: str = "m0") -> dict:
 
 def _patch_snapshot_sources(metadata_dump: dict, message_dumps: list):
     """Patch get_session_metadata + get_messages used by create_share."""
-    meta = MagicMock()
+    meta = MagicMock(preferences=None)  # not in a project
     meta.model_dump.return_value = metadata_dump
 
     messages = [MagicMock(model_dump=MagicMock(return_value=m)) for m in message_dumps]

@@ -13,15 +13,7 @@ export type { AgentListingBlock };
  * Agent shape carries the governed `modelConfig` + uniform `bindings[]`.
  */
 
-export type BindingKind = 'knowledge_base' | 'tool' | 'skill' | 'memory_space';
-
-/** Value stored in a `memory_space` binding's `config`. */
-export interface MemorySpaceBindingConfig {
-  /** Read-only injection vs. read + `memory_*` write tools (D5 gate). */
-  access: 'read' | 'readwrite';
-  /** Entry slugs (or `MEMORY.md`) always hydrated into the prompt. */
-  alwaysLoad?: string[];
-}
+export type BindingKind = 'knowledge_base' | 'tool' | 'skill';
 
 /** Governed single-select model (D3). `modelId` is the Bedrock/provider id. */
 export interface AgentModelConfig {

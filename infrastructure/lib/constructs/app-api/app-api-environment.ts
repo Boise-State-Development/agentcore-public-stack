@@ -88,6 +88,8 @@ export interface AppApiSsmParams {
   userFilesBucketArn: string;
   userFilesTableName: string;
   userFilesTableArn: string;
+  /** Large-document prepare queue URL; absent unless the feature is on. */
+  largeDocumentPrepareQueueUrl?: string;
   // RAG
   ragDocumentsBucketName: string;
   ragAssistantsTableName: string;
@@ -212,6 +214,7 @@ export function resolveAppApiParams(
     userFilesBucketArn: refs.fileUploadBucket.bucketArn,
     userFilesTableName: refs.fileUploadTable.tableName,
     userFilesTableArn: refs.fileUploadTable.tableArn,
+    largeDocumentPrepareQueueUrl: refs.largeDocumentPrepareQueue?.queueUrl,
     // RAG
     ragDocumentsBucketName: refs.ragDocumentsBucket.bucketName,
     ragAssistantsTableName: refs.ragAssistantsTable.tableName,
@@ -373,6 +376,36 @@ export function buildAppApiEnvironment(
     // is always wired; only PROJECTS_ENABLED gates whether the routes mount.
     PROJECTS_ENABLED: config.projects.enabled ? 'true' : 'false',
     DYNAMODB_PROJECTS_TABLE_NAME: params.projectsTableName,
+    // Direct user grants (opt-in while in development). app-api only: it gates
+    // the admin write surface; resolution reads grant rows everywhere without a
+    // switch, so the Runtime (at its env-var cap) deliberately gets no copy.
+    USER_GRANTS_ENABLED: config.userGrants.enabled ? 'true' : 'false',
+    // Session prewarm (opt-in while in development): gates POST /chat/prewarm.
+    // app-api only; the Runtime's warm action is a no-op behind this route.
+    SESSION_PREWARM_ENABLED: config.sessionPrewarm.enabled ? 'true' : 'false',
+    // Client-measured time to first token (opt-in while in development): gates
+    // POST /telemetry/turn-timing, which records the SPA's own measurement.
+    CLIENT_TURN_TIMING_ENABLED: config.clientTurnTiming.enabled ? 'true' : 'false',
+    // Word tracked changes (opt-in while in development). The upload digest is
+    // built here and numbers paragraphs the way the Runtime's document_read
+    // does, so this must match the Runtime's copy.
+    WORD_TRACKED_CHANGES_ENABLED: config.wordTrackedChanges.enabled ? 'true' : 'false',
+    // Large document attachments (opt-in while in development). app-api only:
+    // complete_upload enqueues a reference-class upload for preparation. The
+    // Runtime reads a prepared file by its row and needs no copy.
+    LARGE_DOCUMENT_ATTACHMENTS_ENABLED: config.largeDocumentAttachments.enabled ? 'true' : 'false',
+    // The attachments knowledge base (opt-in while in development): opening a
+    // conversation re-queues its evicted large documents for indexing.
+    ATTACHMENT_KB_ENABLED: config.attachmentKb.enabled ? 'true' : 'false',
+    // Folder attachments (opt-in while in development): the
+    // /sessions/{id}/folders routes and the expansion task. app-api only.
+    FOLDER_ATTACHMENTS_ENABLED: config.folderAttachments.enabled ? 'true' : 'false',
+    // Folder sync (opt-in while in development): app-api accepts a
+    // `drive_folder` KB sync policy. The kb-sync Lambdas carry it too.
+    FOLDER_SYNC_ENABLED: config.folderSync.enabled ? 'true' : 'false',
+    ...(params.largeDocumentPrepareQueueUrl
+      ? { LARGE_DOCUMENT_PREPARE_QUEUE_URL: params.largeDocumentPrepareQueueUrl }
+      : {}),
     // Project-memory content lint (Shared Projects 2.7): the Memory page's saves,
     // proposals and restores, and the flags it shows on read.
     MEMORY_LINT_MODE: config.memoryLint.mode,

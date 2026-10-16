@@ -10,6 +10,7 @@ import {
   untracked,
   afterNextRender,
   DestroyRef,
+  EffectRef,
   ElementRef,
   Injector,
 } from '@angular/core';
@@ -44,15 +45,42 @@ import {
   ALLOWED_EXTENSIONS,
   maxFileSizeFor,
   MAX_FILES_PER_MESSAGE,
-  formatBytes
+  formatBytes,
+  resolveMimeTypeFor,
 } from '../../../services/file-upload';
+import { FileSourceService } from '../../../assistants/services/file-source.service';
+import { FileSourceConnector, ImportFileRef } from '../../../assistants/models/file-source.model';
+import {
+  AttachSelection,
+  FolderAttachSelection,
+} from '../../../assistants/components/file-source-browser-dialog.component';
+import {
+  FOLDER_POLL_DELAYS_MS,
+  FOLDER_POLL_MAX_MS,
+  FolderAttachment,
+  FolderAttachmentError,
+  FolderAttachmentService,
+  FolderRefreshService,
+  MAX_FOLDERS_PER_MESSAGE,
+  isSettledStatus,
+} from '../../../services/folder-attachments';
+import { UserConnectorsService } from '../../../settings/connectors/services/user-connectors.service';
+import { OAuthConsentService } from '../../../services/oauth-consent/oauth-consent.service';
+import { FolderAttachmentData } from '../../services/models/message.model';
+import { folderDataFromRow } from '../../services/session/folder-manifest';
+import { ComposerFolder, FolderCardComponent } from './folder-card.component';
+import { ComposerAddMenuComponent } from './composer-add-menu.component';
+import { ComposerScopePickerComponent, folderKey } from './composer-scope-picker.component';
+import { FEATURES } from '../../../services/features';
 import { ToastService } from '../../../services/toast/toast.service';
+import { ShortcutTargetsService } from '../../../components/shortcuts/shortcut-targets.service';
 import { ToolService } from '../../../services/tool/tool.service';
 import { ModelService, isTextOnlyModel } from '../../services/model/model.service';
 import {
   AudioRecorderService,
   VoiceChatService,
   VOICE_GROUPS,
+  describeAudioError,
   voiceDescription,
   type AudioInputDevice,
   type VoiceStatus,
@@ -76,11 +104,13 @@ import {
 import { SkillCommandMenuComponent } from './skill-command-menu.component';
 import { SteeringService } from '../../services/chat/steering.service';
 import { ComposerDraftService } from '../../services/session/composer-draft.service';
+import { SessionPrewarmService } from '../../services/session/session-prewarm.service';
 import {
   ComposerDraftStorageService,
   EMPTY_DRAFT,
   StoredAttachment,
   StoredComposerDraft,
+  StoredFolder,
 } from '../../services/session/composer-draft-storage.service';
 import { ComposerHandoffService } from './composer-handoff.service';
 import { ComposerSegment, findHighlightRanges, toSegments } from './composer-highlights';
@@ -103,6 +133,16 @@ const SHELL_RESIZE_MS = 200;
 
 /** The composer's resting placeholder, and the string the rotation settles back on. */
 const IDLE_PLACEHOLDER = 'How can I help you today?';
+
+/**
+ * The Shared Project a conversation runs in, as the composer shows it. The
+ * name is the project's own, read from the project list, never the harness
+ * Agent's, which keeps the name the project was created with.
+ */
+export interface ComposerProject {
+  projectId: string;
+  name: string;
+}
 
 /**
  * Where dictated text goes: the composer's text either side of the caret (or
@@ -160,6 +200,8 @@ interface Message {
   content: string;
   timestamp: Date;
   fileUploadIds?: string[];
+  /** Attached Drive folders, each one attachment (drive-folder spec §4.4). */
+  folders?: FolderAttachmentData[];
   /**
    * Marketplace D11: the Agent `@`-mentioned for **this turn only**. The conversation is
    * not bound to it — the next message with no mention is plain chat again.
@@ -198,6 +240,9 @@ interface QueuedMessage {
    * was about.
    */
   attachments?: StoredAttachment[];
+  /** Folders queued with this follow-up: the chip data for the send, and the draft copy. */
+  folders?: FolderAttachmentData[];
+  storedFolders?: StoredFolder[];
   mentionAgentId?: string;
   invokedSkillIds?: string[];
   /**
@@ -253,6 +298,16 @@ function toFileMetadata(attachment: StoredAttachment, sessionId: string): FileMe
   };
 }
 
+/** First mention of each folder wins, as for files below. */
+function dedupeFolders(folders: StoredFolder[]): StoredFolder[] {
+  const seen = new Set<string>();
+  return folders.filter(folder => {
+    if (seen.has(folder.folderAttachId)) return false;
+    seen.add(folder.folderAttachId);
+    return true;
+  });
+}
+
 /**
  * First mention of each upload id wins, so an attachment held by both the
  * composer and a queued follow-up is stored (and restored) once.
@@ -268,7 +323,7 @@ function dedupeAttachments(attachments: StoredAttachment[]): StoredAttachment[] 
 
 @Component({
   selector: 'app-chat-input',
-  imports: [AgentNoticeBannerComponent, AnnouncementBannerComponent, CdkMenu, CdkMenuItem, CdkMenuTrigger, FormsModule, ModelDropdownComponent, NgIcon, QuotaWarningBannerComponent, StorageQuotaBannerComponent, TooltipDirective, FileCardComponent, AgentMentionMenuComponent, SkillCommandMenuComponent, SpinnerComponent],
+  imports: [AgentNoticeBannerComponent, AnnouncementBannerComponent, CdkMenu, CdkMenuItem, CdkMenuTrigger, ComposerAddMenuComponent, ComposerScopePickerComponent, FormsModule, ModelDropdownComponent, NgIcon, QuotaWarningBannerComponent, StorageQuotaBannerComponent, TooltipDirective, FileCardComponent, FolderCardComponent, AgentMentionMenuComponent, SkillCommandMenuComponent, SpinnerComponent],
   // `relative` is the anchor the announcement banner floats against — it sits
   // `bottom-full` of this host, above the quota tabs and clear of the composer.
   host: { class: 'relative block' },
@@ -291,8 +346,13 @@ function dedupeAttachments(attachments: StoredAttachment[]): StoredAttachment[] 
 export class ChatInputComponent {
   // Service injection
   private readonly fileUploadService = inject(FileUploadService);
+  private readonly fileSourceService = inject(FileSourceService);
+  private readonly folderAttachments = inject(FolderAttachmentService);
+  private readonly folderRefresh = inject(FolderRefreshService);
+  private readonly features = inject(FEATURES);
   private readonly toastService = inject(ToastService);
   private readonly steering = inject(SteeringService);
+  private readonly sessionPrewarm = inject(SessionPrewarmService);
   private readonly composerDraft = inject(ComposerDraftService);
   private readonly draftStorage = inject(ComposerDraftStorageService);
   private readonly toolService = inject(ToolService);
@@ -305,9 +365,18 @@ export class ChatInputComponent {
   private readonly handoff = inject(ComposerHandoffService);
   private readonly injector = inject(Injector);
   private readonly destroyRef = inject(DestroyRef);
+  private readonly shortcutTargets = inject(ShortcutTargetsService);
 
   // Input: session ID for file uploads
   readonly sessionId = input<string | null>(null);
+
+  /**
+   * Offer "Attach this folder" in the file-source browser (drive-folder spec
+   * §4.7). Off by default: only a composer whose parent sends folders turns it
+   * on, so a preview composer that drops them never offers one. Also needs
+   * `features.folderAttachments`.
+   */
+  readonly allowFolderAttachments = input<boolean>(false);
 
   // Input: loading state (required - parent must provide this)
   readonly isChatLoading = input<boolean>(false);
@@ -375,13 +444,42 @@ export class ChatInputComponent {
 
   /**
    * The conversation layout: one row — attach, text, speech controls — with
-   * the model picker and the cost/context line moved beneath the shell. False
-   * (the default) is the roomy empty-state composer, which keeps the picker in
-   * its own bar. The container sets this once the conversation has messages.
+   * the cost/context meter beside the model picker beneath the shell. False
+   * (the default) is the roomy empty-state composer, text above a control
+   * bar; its model picker sits beneath the shell too, so the two layouts
+   * match. The container sets this once the conversation has messages.
    */
   readonly compact = input<boolean>(false);
 
+  /**
+   * Offer "Project or folder" on the line beneath a new conversation's
+   * composer (docs/specs/composer-project-folder-picker.md). Opt-in, like
+   * `allowFolderAttachments`: only the conversation page's empty state sets
+   * it, never a thread (`compact`) and never an embedded preview. The picker
+   * hides itself when neither projects nor folders have anything to offer.
+   */
+  readonly showScopePicker = input<boolean>(false);
+
+  /**
+   * The project this conversation runs in, or null. Named in the placeholder:
+   * a project task has no launch card, so the empty box is what says where
+   * the first message goes.
+   */
+  readonly project = input<ComposerProject | null>(null);
+
+  /**
+   * Whether `@` hands a turn to another Agent here. Never in a project: a
+   * project's messages run on its harness — the project's instructions,
+   * memory, tools and skills — and a mention would run the turn on a personal
+   * Agent with none of them, inside the project's conversation. The switch
+   * would also re-write the cached prefix for that turn.
+   */
+  protected readonly agentMentionsOffered = computed(
+    () => this.showAgentMentions() && this.project() === null,
+  );
+
   private readonly messageInput = viewChild<ElementRef<HTMLTextAreaElement>>('messageInput');
+  private readonly fileInput = viewChild<ElementRef<HTMLInputElement>>('fileInput');
   private readonly shell = viewChild<ElementRef<HTMLElement>>('shell');
   private readonly highlightMirror = viewChild<ElementRef<HTMLElement>>('highlightMirror');
 
@@ -441,12 +539,78 @@ export class ChatInputComponent {
 
   // File upload state from service
   readonly pendingUploads = this.fileUploadService.pendingUploadsList;
-  readonly hasActivePendingUploads = this.fileUploadService.hasActivePendingUploads;
   readonly readyUploadIds = this.fileUploadService.readyUploadIds;
 
   /**
-   * Files attached in an earlier visit to this conversation, rebuilt from the
-   * stored draft.
+   * Files on their way from a connected file source (the `+` menu's "Add from
+   * Google Drive"), one card each.
+   *
+   * Composer-local rather than in `FileUploadService`: that service's list is
+   * uploads from this browser, with a `File` to send and a percentage to show,
+   * and it feeds the draft and the send. An import has neither — app-api
+   * fetches the bytes — so it rides here until the server answers with the
+   * file's metadata, at which point it joins `restoredAttachments` and is an
+   * ordinary attachment from then on. The placeholder `File` carries only the
+   * name, for the card. `uploadId` is a local `source:` id until then.
+   */
+  readonly importingAttachments = signal<PendingUpload[]>([]);
+
+  /** What each in-flight or failed import was asked for, by its local id (for retry). */
+  private readonly importRequests = new Map<string, { connector: FileSourceConnector; file: ImportFileRef }>();
+
+  /**
+   * Drive folders on the composer (drive-folder spec §4.7). A folder is one
+   * attachment whatever its file count; app-api expands it in the background
+   * and this composer polls the row so the card's count moves. Sending does
+   * not wait for the expansion: the manifest says what is ready.
+   */
+  readonly attachedFolders = signal<ComposerFolder[]>([]);
+
+  /** Poll timers and start times, by the card's `localId`. */
+  private readonly folderPolls = new Map<string, { timer: ReturnType<typeof setTimeout> | null; startedAt: number; attempt: number; resumed: boolean }>();
+
+  /** Folders whose id the send can carry: attached, not still being created, not failed to attach. */
+  private readonly sendableFolders = computed(() =>
+    this.attachedFolders().filter(folder => folder.phase === 'attached' && !!folder.folderAttachId),
+  );
+
+  /**
+   * The source folders on this message, keyed as the picker's recent list is,
+   * so the picker never offers one a second time. A card still being created
+   * has no row yet and is missed for that fraction of a second.
+   */
+  protected readonly attachedFolderKeys = computed(() =>
+    this.attachedFolders()
+      .map(folder => folder.row)
+      .filter((row): row is NonNullable<typeof row> => row !== null)
+      .map(row => folderKey(row.connectorId, row.providerFolderId)),
+  );
+
+  /** How many more folders this message can take; zero hides "Attach this folder". */
+  readonly remainingFolderSlots = computed(() => {
+    if (!this.features.folderAttachments || !this.allowFolderAttachments()) return 0;
+    return Math.min(
+      Math.max(0, MAX_FOLDERS_PER_MESSAGE - this.attachedFolders().length),
+      this.remainingFileSlots(),
+    );
+  });
+
+  /**
+   * An upload, an import or a folder attach still in flight: Enter waits, and
+   * so does the queue. A folder only holds the send until app-api has created
+   * its row (a fraction of a second); its expansion never holds it.
+   */
+  readonly hasActivePendingUploads = computed(
+    () =>
+      this.fileUploadService.hasActivePendingUploads() ||
+      this.importingAttachments().some(upload => upload.status === 'uploading') ||
+      this.attachedFolders().some(folder => folder.phase === 'attaching'),
+  );
+
+  /**
+   * Attachments the composer holds as server metadata rather than a local
+   * upload: files attached in an earlier visit, rebuilt from the stored draft,
+   * and files imported from a connected file source once app-api has them.
    *
    * Metadata, not an upload: the bytes are already in S3 and the id is all the
    * send needs, so there is nothing to re-upload and no `File` to hold. They
@@ -454,10 +618,10 @@ export class ChatInputComponent {
    * the file browser passes it — which is why restoring one costs no changes
    * to the card.
    *
-   * Painted straight from storage so the cards are there on first frame, then
-   * reconciled against the server (see `reconcileRestoredAttachments`), which
-   * is what makes a stale or hand-edited id disappear instead of failing at
-   * send time.
+   * Restored ones are painted straight from storage so the cards are there on
+   * first frame, then reconciled against the server (see
+   * `reconcileRestoredAttachments`), which is what makes a stale or hand-edited
+   * id disappear instead of failing at send time.
    */
   readonly restoredAttachments = signal<FileMetadata[]>([]);
 
@@ -476,7 +640,24 @@ export class ChatInputComponent {
 
   // Computed: show file attachments area
   readonly showFileAttachments = computed(
-    () => this.pendingUploads().length > 0 || this.restoredAttachments().length > 0,
+    () =>
+      this.pendingUploads().length > 0 ||
+      this.restoredAttachments().length > 0 ||
+      this.importingAttachments().length > 0 ||
+      this.attachedFolders().length > 0,
+  );
+
+  /** How many more files this message can take, counting what is on its way. */
+  readonly remainingFileSlots = computed(() =>
+    Math.max(
+      0,
+      MAX_FILES_PER_MESSAGE -
+        this.pendingUploads().length -
+        this.restoredAttachments().length -
+        this.importingAttachments().length -
+        // A folder is ONE attachment, whatever its file count (spec §9 D1).
+        this.attachedFolders().length,
+    ),
   );
 
   /**
@@ -512,10 +693,20 @@ export class ChatInputComponent {
     if (this.queueHeld()) {
       return 'Send a follow-up — it goes in when you answer above';
     }
-    if (!this.isLoading()) return IDLE_PLACEHOLDER;
+    if (!this.isLoading()) return this.idlePlaceholder();
     return this.canSteer()
       ? 'Send a follow-up — it goes in at the next step'
       : 'Send a follow-up — it goes out when this response finishes';
+  });
+
+  /**
+   * The resting line, and so also where the hint rotation settles. In a
+   * project it names the project, so the box says where a message goes
+   * before anything is typed into it.
+   */
+  private readonly idlePlaceholder = computed(() => {
+    const project = this.project();
+    return project ? `Ask anything in ${project.name}…` : IDLE_PLACEHOLDER;
   });
 
   /**
@@ -609,11 +800,17 @@ export class ChatInputComponent {
   });
 
   /**
-   * Whether the line beneath the shell renders. Always in compact — it holds
-   * the model picker — and in the empty state only while there is a status to
-   * say, since the empty state has no cost yet and keeps its picker in the bar.
+   * Whether the line holds "Project or folder": a new conversation whose page
+   * asked for it, with projects or folders switched on. The picker makes the
+   * final call on what it has to offer; this only keeps an empty line from
+   * rendering where it could have nothing.
    */
-  protected readonly showMetaLine = computed(() => this.compact() || this.statusHint() !== null);
+  protected readonly scopePickerOffered = computed(
+    () =>
+      this.showScopePicker() &&
+      !this.compact() &&
+      (this.features.projects || this.remainingFolderSlots() > 0),
+  );
 
   /**
    * Padding shared by the textarea, the highlight mirror behind it and the
@@ -672,12 +869,17 @@ export class ChatInputComponent {
       : false;
 
   protected readonly composerHints = computed<string[]>(() => {
-    const hints = [IDLE_PLACEHOLDER];
-    if (this.showAgentMentions() && this.mentionService.mentionable().length > 0) {
+    const hints = [this.idlePlaceholder()];
+    if (this.agentMentionsOffered() && this.mentionService.mentionable().length > 0) {
       hints.push('Type @ to hand this turn to one of your agents');
     }
     if (this.showSkillCommands() && this.skillCommandService.commands().length > 0) {
-      hints.push('Type / to run one of your skills');
+      // A project that binds skills offers its own, not the member's.
+      hints.push(
+        this.project() && this.skillCommandService.agentLocked()
+          ? "Type / to run one of this project's skills"
+          : 'Type / to run one of your skills',
+      );
     }
     return hints;
   });
@@ -752,7 +954,7 @@ export class ChatInputComponent {
   // Computed: can submit (has content or ready files)
   readonly canSubmit = computed(() => {
     const hasText = this.userInput().trim().length > 0;
-    const hasReadyFiles = this.attachmentIds().length > 0;
+    const hasReadyFiles = this.attachmentIds().length > 0 || this.sendableFolders().length > 0;
     const isUploading = this.hasActivePendingUploads();
     return (hasText || hasReadyFiles) && !isUploading;
   });
@@ -947,7 +1149,7 @@ export class ChatInputComponent {
    */
   readonly isMentionMenuOpen = computed(
     () =>
-      this.showAgentMentions() &&
+      this.agentMentionsOffered() &&
       this.mentionToken() !== null &&
       this.mentionedAgent() === null &&
       this.mentionService.mentionable().length > 0,
@@ -1080,6 +1282,11 @@ export class ChatInputComponent {
       }
     });
 
+    // Shift+Esc, from anywhere on the page, comes back to this field.
+    this.destroyRef.onDestroy(
+      this.shortcutTargets.registerComposer(() => this.messageInput()?.nativeElement),
+    );
+
     if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
       const pointer = window.matchMedia('(pointer: coarse)');
       this.isCoarsePointer.set(pointer.matches);
@@ -1133,6 +1340,18 @@ export class ChatInputComponent {
       untracked(() => this.syncDraft(key, draft));
     });
 
+    // Picking a project after an `@`-mention un-hands the turn: the `@Name`
+    // stays in the text as prose, but the send must not carry the Agent past
+    // a project that offers no mentions.
+    effect(() => {
+      if (this.agentMentionsOffered()) return;
+      untracked(() => {
+        this.mentionedAgent.set(null);
+        this.pendingMentionAgentId.set(null);
+        this.mentionToken.set(null);
+      });
+    });
+
     // Re-bind a restored `@`-mention once the candidate list arrives.
     //
     // The draft stores the Agent's id, not the row: a name, icon or tagline
@@ -1144,7 +1363,7 @@ export class ChatInputComponent {
     effect(() => {
       const candidates = this.mentionService.mentionable();
       const wanted = this.pendingMentionAgentId();
-      if (!wanted || candidates.length === 0) return;
+      if (!wanted || candidates.length === 0 || !this.agentMentionsOffered()) return;
       const match = candidates.find(agent => agent.agentId === wanted);
       untracked(() => {
         this.pendingMentionAgentId.set(null);
@@ -1251,6 +1470,7 @@ export class ChatInputComponent {
         content: next.content,
         timestamp: new Date(),
         fileUploadIds: next.fileUploadIds,
+        folders: next.folders,
         mentionAgentId: next.mentionAgentId,
         invokedSkillIds: next.invokedSkillIds,
       });
@@ -1282,6 +1502,24 @@ export class ChatInputComponent {
     });
 
     inject(DestroyRef).onDestroy(() => this.cancelDictation());
+    // A folder card's poll must not outlive the composer that shows it.
+    inject(DestroyRef).onDestroy(() => {
+      this.stopAllFolderPolls();
+      this.consentWatch?.destroy();
+    });
+
+    // A folder refreshed from its chip on a sent message (spec §4.6) comes
+    // onto this composer as a card, so the next message carries a manifest of
+    // the folder as it is now. Only for this conversation, only once.
+    effect(() => {
+      const handoff = this.folderRefresh.handoff();
+      const sessionId = this.sessionId();
+      if (!handoff || !sessionId || handoff.sessionId !== sessionId) return;
+      untracked(() => {
+        this.folderRefresh.take();
+        this.adoptRefreshedFolder(handoff.row);
+      });
+    });
   }
 
   private focusInput(): void {
@@ -1312,11 +1550,16 @@ export class ChatInputComponent {
       // the question without the file it was about.
       ...queuedEntries.flatMap(entry => entry.attachments ?? []),
     ];
+    const folders = [
+      ...this.folderDraft(),
+      ...queuedEntries.flatMap(entry => entry.storedFolders ?? []),
+    ];
     return {
       text: this.userInput(),
       mentionAgentId: this.mentionedAgent()?.agentId ?? this.pendingMentionAgentId() ?? undefined,
       queued: queuedEntries.map(entry => entry.content).filter(content => !!content),
       attachments: dedupeAttachments(attachments),
+      folders: dedupeFolders(folders),
       attachmentSessionId: this.sessionId() ?? undefined,
     };
   }
@@ -1406,12 +1649,15 @@ export class ChatInputComponent {
     this.closeMentionMenu();
     this.closeSkillMenu();
 
-    this.restoredAttachments.set(
-      (draft.attachments ?? []).map(attachment =>
-        toFileMetadata(attachment, draft.attachmentSessionId ?? ''),
-      ),
+    const restored = (draft.attachments ?? []).map(attachment =>
+      toFileMetadata(attachment, draft.attachmentSessionId ?? ''),
     );
+    // So the sent message shows a card for a file attached in an earlier
+    // visit, which `FileUploadService` never saw upload.
+    for (const file of restored) this.fileUploadService.registerKnownFile(file);
+    this.restoredAttachments.set(restored);
     void this.reconcileRestoredAttachments(draft.attachmentSessionId);
+    this.adoptFolders(draft.folders ?? [], draft.attachmentSessionId);
 
     const textarea = this.messageInput()?.nativeElement;
     if (textarea) textarea.value = text;
@@ -1499,8 +1745,9 @@ export class ChatInputComponent {
   private queueChatRequest(): void {
     const content = this.userInput().trim();
     const fileUploadIds = this.attachmentIds();
+    const folders = this.folderSendData();
 
-    if (!content && fileUploadIds.length === 0) {
+    if (!content && fileUploadIds.length === 0 && folders.length === 0) {
       return;
     }
 
@@ -1514,6 +1761,8 @@ export class ChatInputComponent {
       content,
       fileUploadIds: fileUploadIds.length > 0 ? [...fileUploadIds] : undefined,
       attachments: fileUploadIds.length > 0 ? this.attachmentMetadata() : undefined,
+      folders: folders.length > 0 ? folders : undefined,
+      storedFolders: folders.length > 0 ? this.folderDraft() : undefined,
       mentionAgentId: this.mentionedAgent()?.agentId,
       invokedSkillIds: this.invokedSkillIds(),
     };
@@ -1550,7 +1799,7 @@ export class ChatInputComponent {
   private async armSteering(entry: QueuedMessage): Promise<void> {
     const sessionId = this.sessionId();
     if (!sessionId) return;
-    if (entry.fileUploadIds?.length || entry.mentionAgentId) return;
+    if (entry.fileUploadIds?.length || entry.folders?.length || entry.mentionAgentId) return;
     // A slash command has to go as a normal turn too: the directive it produces is
     // appended to the turn's *user message*, and a mid-turn injection lands as a text
     // block on the tool-result message of a turn whose skills were already resolved.
@@ -1586,9 +1835,10 @@ export class ChatInputComponent {
   submitChatRequest() {
     const content = this.userInput().trim();
     const fileUploadIds = this.attachmentIds();
+    const folders = this.folderSendData();
 
-    // Must have content or files to submit
-    if (!content && fileUploadIds.length === 0) {
+    // Must have content, files or a folder to submit
+    if (!content && fileUploadIds.length === 0 && folders.length === 0) {
       return;
     }
 
@@ -1610,6 +1860,7 @@ export class ChatInputComponent {
       content,
       timestamp: new Date(),
       fileUploadIds: fileUploadIds.length > 0 ? fileUploadIds : undefined,
+      folders: folders.length > 0 ? folders : undefined,
       mentionAgentId: this.mentionedAgent()?.agentId,
       invokedSkillIds: this.invokedSkillIds(),
     });
@@ -1659,8 +1910,7 @@ export class ChatInputComponent {
         this.toastService.info('Dictation', 'Dictation is not available here.');
         return;
       }
-      const message = err instanceof Error ? err.message : 'Could not start dictation.';
-      this.toastService.error('Dictation', message);
+      this.toastService.error('Dictation', describeAudioError(err, 'Could not start dictation.'));
     }
   }
 
@@ -1721,10 +1971,173 @@ export class ChatInputComponent {
       try {
         await this.voiceChatService.connect(this.sessionId() || undefined);
       } catch (err) {
-        const msg = err instanceof Error ? err.message : 'Failed to start voice';
-        this.toastService.error('Voice Error', msg);
+        this.toastService.error('Voice Error', describeAudioError(err, 'Failed to start voice'));
       }
     }
+  }
+
+  /** The `+` menu's "Add files or photos": open the browser's own picker. */
+  openFilePicker(): void {
+    this.fileInput()?.nativeElement.click();
+  }
+
+  /**
+   * The `+` menu's "Add from …": the user picked files in a connected file
+   * source's browser. Each is fetched by app-api and attached to the
+   * conversation; this composer shows a card per file while that happens.
+   */
+  onSourceFilesPicked(selection: AttachSelection): void {
+    void this.processSourceFiles(selection.connector, selection.files);
+  }
+
+  /**
+   * The browser's "Attach this folder": attach the whole folder as one item
+   * (drive-folder spec §4.1). app-api creates the row at once and expands it in
+   * the background; the card polls the row until it settles.
+   */
+  onSourceFolderPicked(selection: FolderAttachSelection): void {
+    void this.attachFolder(selection);
+  }
+
+  /** Remove a folder card, and the folder and its files server-side. */
+  onFolderRemove(localId: string): void {
+    const folder = this.attachedFolders().find(f => f.localId === localId);
+    this.stopFolderPoll(localId);
+    this.attachedFolders.update(list => list.filter(f => f.localId !== localId));
+    const folderAttachId = folder?.folderAttachId;
+    if (folder && folderAttachId) {
+      void this.folderAttachments.remove(folder.sessionId, folderAttachId).catch(() => {
+        this.toastService.error('Folder', "Couldn't remove the folder's files. They will be deleted with the conversation.");
+      });
+    }
+  }
+
+  /**
+   * Reconnect the folder's connector, then pick the walk up where it stopped.
+   *
+   * The consent services are resolved here rather than injected: only a card
+   * whose token lapsed ever needs them, and the composer is constructed far
+   * more often than that.
+   */
+  async onFolderConnect(localId: string): Promise<void> {
+    const folder = this.attachedFolders().find(f => f.localId === localId);
+    const providerId = folder?.row?.connectorId;
+    if (!folder || !providerId) return;
+    const connectors = this.injector.get(UserConnectorsService);
+    const consent = this.injector.get(OAuthConsentService);
+    try {
+      const result = await connectors.initiateConsent(providerId);
+      if (result.connected) {
+        await this.onFolderRetry(localId);
+        return;
+      }
+      if (!result.authorizationUrl) {
+        this.toastService.error('Folder', 'Unexpected response from the server.');
+        return;
+      }
+      this.watchConsent(consent, providerId, localId);
+      void consent.startUserConsent(providerId, result.authorizationUrl);
+    } catch (err) {
+      this.toastService.error('Folder', err instanceof Error ? err.message : "Couldn't start connecting.");
+    }
+  }
+
+  /** The popup's outcome for this provider: resume the folder on success. */
+  private consentWatch: EffectRef | null = null;
+
+  private watchConsent(consent: OAuthConsentService, providerId: string, localId: string): void {
+    this.consentWatch?.destroy();
+    this.consentWatch = effect(
+      () => {
+        const completion = consent.completion();
+        if (!completion || completion.providerId !== providerId) return;
+        untracked(() => {
+          consent.acknowledgeCompletion();
+          this.consentWatch?.destroy();
+          this.consentWatch = null;
+          if (completion.status === 'success') {
+            void this.onFolderRetry(localId);
+          } else {
+            this.toastService.error('Folder', completion.error ?? 'Could not connect Google Drive.');
+          }
+        });
+      },
+      { injector: this.injector },
+    );
+  }
+
+  /** A folder refreshed elsewhere becomes this composer's card, polling until it settles. */
+  private adoptRefreshedFolder(row: FolderAttachment): void {
+    const existing = untracked(this.attachedFolders).find(f => f.folderAttachId === row.folderAttachId);
+    if (existing) {
+      this.updateFolder(existing.localId, { row, phase: 'attached', error: null });
+      this.startFolderPoll(existing.localId);
+      return;
+    }
+    if (untracked(this.remainingFolderSlots) <= 0) {
+      this.toastService.warning(
+        'Folder limit',
+        'The folder is refreshing, but this message has no room for it. Remove an attachment to add it.',
+      );
+      return;
+    }
+    const localId = `folder:${row.folderAttachId}`;
+    this.attachedFolders.update(list => [
+      ...list,
+      {
+        localId,
+        folderAttachId: row.folderAttachId,
+        sessionId: row.sessionId,
+        name: row.folderName,
+        source: row.connectorName ?? row.connectorId,
+        row,
+        phase: 'attached',
+        error: null,
+      },
+    ]);
+    this.startFolderPoll(localId);
+  }
+
+  /** Re-run a walk that stopped short (consent, quota, a listing error). */
+  async onFolderRetry(localId: string): Promise<void> {
+    const folder = this.attachedFolders().find(f => f.localId === localId);
+    const folderAttachId = folder?.folderAttachId;
+    if (!folder || !folderAttachId) return;
+    try {
+      const row = await this.folderAttachments.resume(folder.sessionId, folderAttachId);
+      this.updateFolder(localId, { row, phase: 'attached', error: null });
+      this.startFolderPoll(localId);
+    } catch (err) {
+      this.toastService.error('Folder', this.folderErrorMessage(err));
+    }
+  }
+
+  /**
+   * The `+` menu's Skills row: write the skill's `/command` into the message.
+   *
+   * At the caret, padded so it never fuses with the text either side of it,
+   * and followed by a space so the user can carry on typing. The literal
+   * `/slug` is the binding, exactly as a pick from the `/` autocomplete is
+   * (see `onSkillPicked`).
+   */
+  insertSkillCommand(command: SkillCommand): void {
+    const textarea = this.messageInput()?.nativeElement;
+    const current = textarea?.value ?? this.userInput();
+    const caret = textarea?.selectionStart ?? current.length;
+    const before = current.slice(0, caret);
+    const after = current.slice(textarea?.selectionEnd ?? caret);
+    const lead = before.length > 0 && !/\s$/.test(before) ? ' ' : '';
+    const replacement = `${lead}/${command.slug} `;
+    const next = before + replacement + after;
+
+    this.userInput.set(next);
+    this.closeSkillMenu();
+    if (!textarea) return;
+    textarea.value = next;
+    const caretAfter = before.length + replacement.length;
+    textarea.setSelectionRange(caretAfter, caretAfter);
+    textarea.focus();
+    this.autoResize(textarea);
   }
 
   async onFileSelect(event: Event) {
@@ -1744,18 +2157,28 @@ export class ChatInputComponent {
    */
   onFileRemove(uploadId: string): void {
     // A restored card has no live upload behind it, so it comes off this list
-    // instead. Removing from both is safe and saves the caller knowing which
-    // kind of card it clicked.
+    // instead. Removing from all three is safe and saves the caller knowing
+    // which kind of card it clicked.
     this.restoredAttachments.update(list =>
       list.filter(attachment => attachment.uploadId !== uploadId),
     );
+    // An import that is still in flight cannot be cancelled server-side;
+    // forgetting its request is what tells the completion to delete the file.
+    this.importRequests.delete(uploadId);
+    this.removeImporting(uploadId);
     this.fileUploadService.clearPendingUpload(uploadId);
   }
 
   /** Release every attachment on the composer — what a send or a queue clears. */
   private clearAttachments(): void {
     this.restoredAttachments.set([]);
+    this.importingAttachments.set([]);
+    this.importRequests.clear();
     this.fileUploadService.clearReadyUploads();
+    // The folders travel with the send (or the queued entry); only the cards
+    // and their polling stop here, never the rows.
+    this.stopAllFolderPolls();
+    this.attachedFolders.set([]);
   }
 
   /**
@@ -1764,6 +2187,13 @@ export class ChatInputComponent {
   async onFileRetry(pendingUpload: PendingUpload): Promise<void> {
     const sessionId = this.sessionId();
     if (!sessionId) {
+      return;
+    }
+
+    // A failed import is asked for again, under the same card.
+    const importRequest = this.importRequests.get(pendingUpload.uploadId);
+    if (importRequest) {
+      await this.importSourceFile(sessionId, importRequest.connector, importRequest.file, pendingUpload.uploadId);
       return;
     }
 
@@ -1780,6 +2210,10 @@ export class ChatInputComponent {
   }
 
   onTextareaInput(event: Event) {
+    // First keystroke or paste in an existing conversation: start its Runtime
+    // microVM while the user finishes typing (session prewarm). A no-op unless
+    // the conversation page armed it, and deduped per conversation.
+    this.sessionPrewarm.noteTyping();
     this.settleHints();
     const textarea = event.target as HTMLTextAreaElement;
     this.userInput.set(textarea.value);
@@ -1823,7 +2257,7 @@ export class ChatInputComponent {
    * and it ends at whitespace or a second `@`.
    */
   private syncMentionToken(textarea: HTMLTextAreaElement): void {
-    if (!this.showAgentMentions()) {
+    if (!this.agentMentionsOffered()) {
       return;
     }
     const caret = textarea.selectionStart ?? textarea.value.length;
@@ -2164,7 +2598,9 @@ export class ChatInputComponent {
 
     // Escape stops a streaming response — only down here, after every menu has
     // had its chance at the key, so closing a menu never also kills the run.
-    if (event.key === 'Escape' && this.showStop()) {
+    // Not Shift+Esc: that is the "focus the composer" shortcut, and pressing it
+    // while already here must not cancel the reply.
+    if (event.key === 'Escape' && !event.shiftKey && this.showStop()) {
       event.preventDefault();
       this.cancelChatRequest();
       return;
@@ -2182,7 +2618,7 @@ export class ChatInputComponent {
     this.isFocused.set(true);
     // Warm the `@` candidates before the first keystroke needs them — both sources are
     // session-cached, so this costs one request per session and makes the menu instant.
-    if (this.showAgentMentions()) {
+    if (this.agentMentionsOffered()) {
       void this.mentionService.load();
     }
     if (this.showSkillCommands()) {
@@ -2307,8 +2743,9 @@ export class ChatInputComponent {
 
     // Validate and upload each file
     for (const file of newFiles) {
-      // Check file size (pptx has its own, larger cap — see maxFileSizeFor)
-      const sizeLimit = maxFileSizeFor(file);
+      // Check file size (pptx and, behind the flag, large documents have
+      // their own caps — see maxFileSizeFor)
+      const sizeLimit = maxFileSizeFor(file, this.features);
       if (file.size > sizeLimit) {
         this.toastService.error(
           'File Too Large',
@@ -2361,6 +2798,297 @@ export class ChatInputComponent {
         const message = err instanceof Error ? err.message : 'Upload failed';
         this.toastService.error('Upload Failed', `${file.name}: ${message}`);
       }
+    }
+  }
+
+  /**
+   * Attach files chosen in a connected file source's browser.
+   *
+   * Mirrors `processFiles`: stage a session first (the placeholder `File`
+   * carries only the name — the page uses the event to mint a session, never
+   * the bytes), then check the per-message count, then start every import at
+   * once so the cards fill in as app-api answers. Type and size were judged
+   * in the browser from the listing, and are judged again by the backend
+   * once the bytes are in hand.
+   */
+  /** Attach a whole folder: a card at once, the row when app-api answers, then polling. */
+  private async attachFolder(selection: FolderAttachSelection): Promise<void> {
+    if (this.remainingFolderSlots() <= 0) {
+      this.toastService.warning(
+        'Folder limit',
+        `A message can carry ${MAX_FOLDERS_PER_MESSAGE} folders, and each counts as one of its ${MAX_FILES_PER_MESSAGE} attachments.`,
+      );
+      return;
+    }
+    // A first attachment on a new conversation: the parent mints its id from
+    // this event, exactly as for an upload or an import.
+    this.fileAttached.emit(new File([], selection.folder.folderName));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const sessionId = this.sessionId();
+    if (!sessionId) {
+      this.toastService.error('Folder', 'Failed to create a conversation for the folder.');
+      return;
+    }
+
+    const localId = `folder:${uuidv4()}`;
+    this.attachedFolders.update(list => [
+      ...list,
+      {
+        localId,
+        folderAttachId: null,
+        sessionId,
+        name: selection.folder.folderName,
+        source: selection.connector.displayName,
+        row: null,
+        phase: 'attaching',
+        error: null,
+      },
+    ]);
+    try {
+      const row = await this.folderAttachments.attach(sessionId, {
+        connectorId: selection.connector.providerId,
+        folderId: selection.folder.folderId,
+        folderName: selection.folder.folderName,
+        folderPath: selection.folder.folderPath || null,
+      });
+      // Removed while the attach was in flight: take it back server-side too.
+      if (!untracked(this.attachedFolders).some(folder => folder.localId === localId)) {
+        void this.folderAttachments.remove(sessionId, row.folderAttachId).catch(() => undefined);
+        return;
+      }
+      this.updateFolder(localId, {
+        row,
+        folderAttachId: row.folderAttachId,
+        source: row.connectorName ?? selection.connector.displayName,
+        phase: 'attached',
+      });
+      this.startFolderPoll(localId);
+    } catch (err) {
+      this.updateFolder(localId, { phase: 'error', error: this.folderErrorMessage(err) });
+    }
+  }
+
+  /** Bring back a draft's folders: cards at once, then each row re-read (a gone one is dropped). */
+  private adoptFolders(stored: StoredFolder[], sessionId: string | undefined): void {
+    this.stopAllFolderPolls();
+    if (!sessionId || stored.length === 0) {
+      this.attachedFolders.set([]);
+      return;
+    }
+    const folders: ComposerFolder[] = stored.map(entry => ({
+      localId: `folder:${entry.folderAttachId}`,
+      folderAttachId: entry.folderAttachId,
+      sessionId,
+      name: entry.name,
+      source: entry.source,
+      row: null,
+      phase: 'attached',
+      error: null,
+    }));
+    this.attachedFolders.set(folders);
+    for (const folder of folders) {
+      this.folderPolls.set(folder.localId, { timer: null, startedAt: Date.now(), attempt: 0, resumed: false });
+      void this.pollFolderOnce(folder.localId);
+    }
+  }
+
+  private startFolderPoll(localId: string): void {
+    this.stopFolderPoll(localId);
+    this.folderPolls.set(localId, { timer: null, startedAt: Date.now(), attempt: 0, resumed: false });
+    this.scheduleFolderPoll(localId);
+  }
+
+  /** Poll again unless the folder has settled or polling has run its course. */
+  private scheduleFolderPoll(localId: string): void {
+    const state = this.folderPolls.get(localId);
+    const folder = untracked(this.attachedFolders).find(f => f.localId === localId);
+    if (!state || !folder?.row) return;
+    if (isSettledStatus(folder.row.status) || Date.now() - state.startedAt > FOLDER_POLL_MAX_MS) {
+      this.folderPolls.delete(localId);
+      return;
+    }
+    const delay = FOLDER_POLL_DELAYS_MS[Math.min(state.attempt, FOLDER_POLL_DELAYS_MS.length - 1)];
+    state.attempt += 1;
+    state.timer = setTimeout(() => void this.pollFolderOnce(localId), delay);
+  }
+
+  /**
+   * One read of a folder's row. A row the server reports stale (its task was
+   * lost to an app-api restart) is resumed once; a row that is gone (the user
+   * removed it elsewhere) drops its card. A transient failure just polls again.
+   */
+  private async pollFolderOnce(localId: string): Promise<void> {
+    const state = this.folderPolls.get(localId);
+    const folder = untracked(this.attachedFolders).find(f => f.localId === localId);
+    if (!state || !folder?.folderAttachId) return;
+    state.timer = null;
+    try {
+      let row = await this.folderAttachments.get(folder.sessionId, folder.folderAttachId);
+      if (this.folderPolls.get(localId) !== state) return;
+      if (row.stale && !state.resumed) {
+        state.resumed = true;
+        row = await this.folderAttachments.resume(folder.sessionId, folder.folderAttachId);
+        if (this.folderPolls.get(localId) !== state) return;
+      }
+      this.updateFolder(localId, { row, source: row.connectorName ?? folder.source });
+    } catch (err) {
+      if (this.folderPolls.get(localId) !== state) return;
+      if (err instanceof FolderAttachmentError && err.status === 404) {
+        this.folderPolls.delete(localId);
+        this.attachedFolders.update(list => list.filter(f => f.localId !== localId));
+        return;
+      }
+    }
+    this.scheduleFolderPoll(localId);
+  }
+
+  private stopFolderPoll(localId: string): void {
+    const state = this.folderPolls.get(localId);
+    if (state?.timer) clearTimeout(state.timer);
+    this.folderPolls.delete(localId);
+  }
+
+  private stopAllFolderPolls(): void {
+    for (const localId of [...this.folderPolls.keys()]) this.stopFolderPoll(localId);
+  }
+
+  private updateFolder(localId: string, patch: Partial<ComposerFolder>): void {
+    this.attachedFolders.update(list =>
+      list.map(folder => (folder.localId === localId ? { ...folder, ...patch } : folder)),
+    );
+  }
+
+  /** The chips this message's folders become on the sent bubble, and the ids the request carries. */
+  private folderSendData(): FolderAttachmentData[] {
+    return this.sendableFolders().map(folder =>
+      folder.row
+        ? folderDataFromRow(folder.row)
+        : {
+            folderAttachId: folder.folderAttachId ?? undefined,
+            name: folder.name,
+            source: folder.source,
+            status: 'expanding',
+            fileCount: 0,
+            files: [],
+            moreCount: 0,
+          },
+    );
+  }
+
+  /** The composer's folders, as the draft stores them. */
+  private folderDraft(): StoredFolder[] {
+    return this.attachedFolders().flatMap(folder =>
+      folder.folderAttachId && folder.phase === 'attached'
+        ? [{ folderAttachId: folder.folderAttachId, name: folder.name, source: folder.source }]
+        : [],
+    );
+  }
+
+  private folderErrorMessage(err: unknown): string {
+    return err instanceof FolderAttachmentError ? err.message : "Couldn't attach this folder.";
+  }
+
+  private async processSourceFiles(connector: FileSourceConnector, files: ImportFileRef[]): Promise<void> {
+    for (const file of files) {
+      this.fileAttached.emit(new File([], file.name));
+    }
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const sessionId = this.sessionId();
+    if (!sessionId) {
+      this.toastService.error('Upload Error', 'Failed to create session for file upload.');
+      return;
+    }
+
+    const remaining = this.remainingFileSlots();
+    if (files.length > remaining) {
+      this.toastService.warning(
+        'File Limit',
+        `Maximum ${MAX_FILES_PER_MESSAGE} files per message. You can add ${remaining} more.`,
+      );
+      return;
+    }
+
+    await Promise.all(files.map(file => this.importSourceFile(sessionId, connector, file)));
+  }
+
+  /**
+   * One file-source import: a card the moment it starts, metadata when it
+   * lands, an error with Retry when it does not.
+   */
+  private async importSourceFile(
+    sessionId: string,
+    connector: FileSourceConnector,
+    file: ImportFileRef,
+    uploadId = `source:${uuidv4()}`,
+  ): Promise<void> {
+    const pending: PendingUpload = {
+      file: new File([], file.name, { type: resolveMimeTypeFor(file.name, '') }),
+      uploadId,
+      status: 'uploading',
+      progress: 0,
+      statusLabel: `Adding from ${connector.displayName}…`,
+    };
+    this.importRequests.set(uploadId, { connector, file });
+    this.upsertImporting(pending);
+
+    let attached: FileMetadata;
+    try {
+      attached = await this.fileSourceService.attachToConversation(sessionId, connector.providerId, file.fileId);
+    } catch (err) {
+      // Still wanted? A card removed mid-flight has nothing to report to.
+      if (!this.importRequests.has(uploadId)) return;
+      const message = err instanceof Error ? err.message : 'Could not add the file';
+      this.upsertImporting({ ...pending, status: 'error', error: message });
+      return;
+    }
+
+    if (!this.importRequests.has(uploadId)) {
+      // Removed while app-api was fetching it: the file landed in the
+      // conversation's storage anyway, so take it back out.
+      void this.fileUploadService.deleteFile(attached.uploadId).catch(() => undefined);
+      return;
+    }
+    this.importRequests.delete(uploadId);
+    this.removeImporting(uploadId);
+    // The thread's user message draws its cards through the upload service.
+    this.fileUploadService.registerKnownFile(attached);
+    this.restoredAttachments.update(list => [...list, attached]);
+    this.noteTextOnlyModelFor(attached.filename);
+  }
+
+  private upsertImporting(upload: PendingUpload): void {
+    this.importingAttachments.update(list => {
+      const index = list.findIndex(item => item.uploadId === upload.uploadId);
+      if (index < 0) return [...list, upload];
+      const next = [...list];
+      next[index] = upload;
+      return next;
+    });
+  }
+
+  private removeImporting(uploadId: string): void {
+    this.importingAttachments.update(list => list.filter(item => item.uploadId !== uploadId));
+  }
+
+  /**
+   * The notices `processFiles` gives a device upload when the turn's model
+   * reads text only, for a file whose real name is known only once app-api
+   * has fetched it (a Google Doc arrives as a .docx).
+   */
+  private noteTextOnlyModelFor(filename: string): void {
+    if (!isTextOnlyModel(this.modelService.selectedModel())) return;
+    const ext = filename.substring(filename.lastIndexOf('.')).toLowerCase();
+    if (IMAGE_EXTENSIONS.includes(ext)) {
+      this.toastService.info(
+        'Images will be skipped',
+        "This model can't see images, so they won't be sent to it. Switch models to ask about an image."
+      );
+    } else if (TEXT_EXTRACTED_EXTENSIONS.includes(ext)) {
+      this.toastService.info(
+        'This model reads text only',
+        "The document's text will be extracted and sent instead. Layout and images are lost."
+      );
     }
   }
 

@@ -359,7 +359,7 @@ describe('ShareModalComponent (a task in a project)', () => {
     createShare: vi.fn(),
     listSharesForSession: vi.fn(),
   };
-  const projectApi = { members: vi.fn() };
+  const projectApi = { members: vi.fn(), get: vi.fn() };
   const MEMBERS = [
     { email: 'owner@x.edu', name: 'Olive Owner', role: 'owner', hasSignedIn: true },
     { email: 'me@x.edu', name: 'Me', role: 'editor', hasSignedIn: true },
@@ -379,6 +379,7 @@ describe('ShareModalComponent (a task in a project)', () => {
     vi.clearAllMocks();
     shareService.listSharesForSession.mockResolvedValue({ shares: [] });
     projectApi.members.mockReturnValue(of({ members: MEMBERS, canManage: false }));
+    projectApi.get.mockReturnValue(of({ projectId: 'prj_1', role: 'editor' }));
     TestBed.configureTestingModule({
       imports: [ShareModalComponent],
       providers: [
@@ -403,6 +404,36 @@ describe('ShareModalComponent (a task in a project)', () => {
     expect(checked?.value).toBe('project');
   });
 
+  describe('the public link (B2)', () => {
+    const labels = () => Array.from(el().querySelectorAll('label span')).map(l => l.textContent?.trim());
+
+    async function reopenAs(role: 'owner' | 'viewer' | null) {
+      projectApi.get.mockReturnValue(role ? of({ projectId: 'prj_1', role }) : throwError(() => ({ status: 404 })));
+      fixture = TestBed.createComponent(ShareModalComponent);
+      component = fixture.componentInstance;
+      await component.ngOnInit();
+      fixture.detectChanges();
+    }
+
+    it('is offered to the project owner', async () => {
+      await reopenAs('owner');
+      expect(labels()).toEqual(['Project members', 'Public link', 'Limited share']);
+    });
+
+    it('is withheld from a viewer, and says why', async () => {
+      await reopenAs('viewer');
+      expect(projectApi.get).toHaveBeenCalledWith('prj_1');
+      expect(labels()).toEqual(['Project members', 'Limited share']);
+      expect(el().textContent).toContain('Only the project’s owner and editors can share its conversations with a public link.');
+    });
+
+    it('is withheld while the role cannot be loaded', async () => {
+      await reopenAs(null);
+      expect(labels()).toEqual(['Project members', 'Limited share']);
+      expect(el().textContent).not.toContain('Only the project’s owner and editors');
+    });
+  });
+
   it('shares to the project and says where it is listed', async () => {
     shareService.createShare.mockResolvedValue({
       shareId: 'sh_1', sessionId: 'sess-9', ownerId: 'u', accessLevel: 'project', projectId: 'prj_1',
@@ -413,7 +444,7 @@ describe('ShareModalComponent (a task in a project)', () => {
     expect(shareService.createShare).toHaveBeenCalledWith('sess-9', 'project', undefined, { suppressErrorToast: true });
     const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
     expect(text).toContain('Shared with the project');
-    expect(text).toContain('Shared tasks');
+    expect(text).toContain('listed under “Shared with the project”');
   });
 
   it.each([
@@ -504,7 +535,7 @@ describe('ShareModalComponent in a CDK dialog', () => {
     TestBed.configureTestingModule({
       providers: [
         { provide: ShareService, useValue: { listSharesForSession: vi.fn().mockResolvedValue({ shares: [] }) } },
-        { provide: ProjectApiService, useValue: { members: vi.fn() } },
+        { provide: ProjectApiService, useValue: { members: vi.fn(), get: vi.fn().mockReturnValue(of({ role: 'editor' })) } },
       ],
     });
   });

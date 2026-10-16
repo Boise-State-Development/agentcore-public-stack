@@ -2,11 +2,11 @@
   <div class="mx-auto max-w-3xl px-4 py-8 sm:px-6 lg:px-8">
     <div class="mb-8">
       <a
-        routerLink="/schedules"
+        [routerLink]="backLink()"
         class="inline-flex items-center gap-1.5 text-sm/6 font-medium text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
       >
         <ng-icon name="heroArrowLeft" class="size-4" aria-hidden="true" />
-        Back to schedules
+        {{ backLabel() }}
       </a>
       <div class="mt-3 flex items-start justify-between gap-4">
         <div class="min-w-0">
@@ -14,7 +14,11 @@
             {{ mode() === 'create' ? 'New scheduled run' : 'Edit scheduled run' }}
           </h1>
           <p class="mt-1.5 text-sm text-gray-500 dark:text-gray-400">
-            Run a prompt automatically on a cadence you choose. Results land in your conversation list.
+            @if (isProject()) {
+              Runs a prompt on {{ project()?.name || 'the project' }}’s assistant, with the project’s tools, as you.
+            } @else {
+              Run a prompt automatically on a cadence you choose. Results land in your conversation list.
+            }
           </p>
         </div>
 
@@ -28,7 +32,9 @@
             >
               Run now
             </button>
-            <span class="text-xs/5 text-gray-500 dark:text-gray-400">Runs once now — doesn’t create a schedule</span>
+            <span class="text-xs/5 text-gray-500 dark:text-gray-400">
+              {{ isProject() ? 'Runs once now as your own conversation in the project — not shared' : 'Runs once now — doesn’t create a schedule' }}
+            </span>
           </div>
         }
       </div>
@@ -195,6 +201,63 @@
           }
         </section>
 
+        @if (isProject()) {
+        <!-- Delivery (project mode): the project's assistant and tools decide what runs. -->
+        <section class="rounded-2xl border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
+          <h2 class="text-sm/6 font-semibold text-gray-900 dark:text-white">Where runs go</h2>
+          <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+            Each run is a conversation of yours in the project. Leave it there, or share every run with the project as it finishes.
+          </p>
+
+          <div class="mt-4 space-y-4">
+            <div class="flex gap-3">
+              <input
+                id="deliverToProject"
+                type="checkbox"
+                formControlName="deliverToProject"
+                aria-describedby="deliverToProject-help"
+                class="mt-1 size-4 shrink-0 rounded accent-primary-accessible dark:accent-primary-500"
+              />
+              <div>
+                <label for="deliverToProject" class="text-sm/6 font-medium text-gray-900 dark:text-white">Share each run with the project</label>
+                <p id="deliverToProject-help" class="text-xs/5 text-gray-500 dark:text-gray-400">
+                  Members find it under “Shared with the project”, and the assistant can read past runs. The newest runs stay shared; older ones stop being shared.
+                </p>
+              </div>
+            </div>
+            <div class="flex gap-3">
+              <input
+                id="notifyMembers"
+                type="checkbox"
+                formControlName="notifyMembers"
+                aria-describedby="notifyMembers-help"
+                class="mt-1 size-4 shrink-0 rounded accent-primary-accessible disabled:cursor-not-allowed disabled:opacity-50 dark:accent-primary-500"
+              />
+              <div>
+                <label for="notifyMembers" class="text-sm/6 font-medium text-gray-900 dark:text-white">Notify members when a run is shared</label>
+                <p id="notifyMembers-help" class="text-xs/5 text-gray-500 dark:text-gray-400">
+                  {{ shareWithProject() ? 'Everyone else in the project gets a notification for each run.' : 'Available when runs are shared with the project.' }}
+                </p>
+              </div>
+            </div>
+            <div class="flex gap-3">
+              <input
+                id="publishOutputs"
+                type="checkbox"
+                formControlName="publishOutputs"
+                aria-describedby="publishOutputs-help"
+                class="mt-1 size-4 shrink-0 rounded accent-primary-accessible disabled:cursor-not-allowed disabled:opacity-50 dark:accent-primary-500"
+              />
+              <div>
+                <label for="publishOutputs" class="text-sm/6 font-medium text-gray-900 dark:text-white">Publish its artifacts to Outputs</label>
+                <p id="publishOutputs-help" class="text-xs/5 text-gray-500 dark:text-gray-400">
+                  {{ shareWithProject() ? 'Anything a run makes, such as a report or a chart, appears under Outputs, replacing the previous run’s.' : 'Available when runs are shared with the project.' }}
+                </p>
+              </div>
+            </div>
+          </div>
+        </section>
+        } @else {
         <!-- Target config -->
         <section class="rounded-2xl border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
           <h2 class="text-sm/6 font-semibold text-gray-900 dark:text-white">Target (optional)</h2>
@@ -225,7 +288,7 @@
                   type="checkbox"
                   [checked]="clearAssistant()"
                   (change)="onClearAssistantChange($any($event.target).checked)"
-                  class="size-3.5 rounded border-gray-300 text-primary-600 focus:ring-primary-500 dark:border-gray-500 dark:bg-gray-700"
+                  class="size-3.5 rounded accent-primary-accessible dark:accent-primary-500"
                 />
                 Detach agent (use the default agent)
               </label>
@@ -246,45 +309,33 @@
           } @else {
             <div class="mt-5">
               <div class="flex items-center justify-between">
-                <span class="block text-sm/6 font-medium text-gray-900 dark:text-white">Tools</span>
+                <span id="schedule-tools-label" class="block text-sm/6 font-medium text-gray-900 dark:text-white">Tools</span>
                 @if (mode() === 'edit') {
                   <label class="flex items-center gap-2 text-xs/5 text-gray-600 dark:text-gray-400">
                     <input
                       type="checkbox"
                       [checked]="clearTools()"
                       (change)="onClearToolsChange($any($event.target).checked)"
-                      class="size-3.5 rounded border-gray-300 text-primary-600 focus:ring-primary-500 dark:border-gray-500 dark:bg-gray-700"
+                      class="size-3.5 rounded accent-primary-accessible dark:accent-primary-500"
                     />
                     Reset to all my tools
                   </label>
                 }
               </div>
-              <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
-                The tool set is snapshotted when the schedule is created — later changes to your tool
-                access won't silently expand what a sleeping schedule can do.
-              </p>
-              <div class="mt-2 max-h-56 space-y-1 overflow-y-auto rounded-2xl border border-gray-200 p-2 dark:border-gray-700">
-                @for (tool of tools(); track tool.toolId) {
-                  <label class="flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-sm/6 text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-gray-700/40">
-                    <input
-                      type="checkbox"
-                      [checked]="isToolSelected(tool.toolId)"
-                      [disabled]="clearTools() || isToolRetiring(tool.toolId)"
-                      (change)="toggleTool(tool.toolId)"
-                      class="size-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 dark:border-gray-500 dark:bg-gray-700"
-                    />
-                    {{ tool.displayName }}
-                    @if (isToolRetiring(tool.toolId)) {
-                      <span [attr.title]="retiringReason(tool)" class="shrink-0 rounded-sm bg-state-warning-50 px-1.5 font-mono text-[10px]/5 font-medium text-state-warning-700 dark:bg-state-warning-900/30 dark:text-state-warning-300">retiring</span>
-                    }
-                  </label>
-                } @empty {
-                  <p class="px-2 py-1.5 text-xs/5 text-gray-500 dark:text-gray-400">No tools available.</p>
-                }
-              </div>
+              <app-tool-selector
+                class="mt-2"
+                [items]="toolItems()"
+                [selected]="selectedToolIds()"
+                (selectedChange)="onToolSelectionChange($event)"
+                labelledBy="schedule-tools-label"
+                helperText="The tool set is snapshotted when the schedule is created — later changes to your tool access won't silently expand what a sleeping schedule can do."
+                [disabled]="clearTools()"
+                maxHeight="sm"
+              />
             </div>
           }
         </section>
+        }
 
         <!-- Actions -->
         <div class="flex items-center justify-end gap-3">

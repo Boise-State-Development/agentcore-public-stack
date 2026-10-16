@@ -17,13 +17,15 @@ now 404s.
 from __future__ import annotations
 
 import logging
-from typing import Iterable, Optional, Tuple
+from concurrent.futures import ThreadPoolExecutor
+from typing import Iterable, List, Optional, Tuple
 
 from apis.shared.auth import User
 from apis.shared.feature_flags import projects_enabled
 from apis.shared.projects.access import resolve_project_role
 from apis.shared.projects.models import Project, ProjectOutput
 from apis.shared.projects.repository import ProjectRepository
+from apis.shared.shares import artifact_shares
 from apis.shared.security.log_sanitize import scrub_log
 
 logger = logging.getLogger(__name__)
@@ -72,7 +74,7 @@ async def require_shareable_project(
         raise ArtifactProjectError(400, "Projects are not available")
     project_id = await _project_of_session(session_id, user)
     if not project_id:
-        raise ArtifactProjectError(400, "Only an artifact made in a project task can be shared with a project")
+        raise ArtifactProjectError(400, "Only an artifact made in a project conversation can be shared with a project")
     project, role = resolve_project_role(project_id, user.user_id, user.email, repository=repository)
     if project is None or role is None:
         raise ArtifactProjectError(403, "You are not a member of this artifact's project")
@@ -81,41 +83,19 @@ async def require_shareable_project(
     return project
 
 
-def _pointer(share: dict) -> ProjectOutput:
-    return ProjectOutput(
-        project_id=str(share["project_id"]),
-        artifact_id=str(share["artifact_id"]),
-        share_id=str(share["share_id"]),
-        version=int(share.get("version", 0)),
-        title=str(share.get("title", "")),
-        content_type=str(share.get("content_type", "")),
-        owner_id=str(share.get("owner_id", "")),
-        owner_email=str(share.get("owner_email", "")),
-        shared_at=str(share.get("created_at", "")),
-    )
-
-
 def put_output(share: dict, repository: Optional[ProjectRepository] = None) -> None:
     """List a new project share. Raises, so the caller can undo a share nobody could find."""
-    (repository or ProjectRepository()).put_output(_pointer(share))
+    (repository or ProjectRepository()).put_output(artifact_shares.output_pointer(share))
 
 
 def sync_output(
     owner_id: str, artifact_id: str, project_id: str, repository: Optional[ProjectRepository] = None
 ) -> None:
     """Point ``OUTPUT#{artifact_id}`` at the artifact's newest share with ``project_id``, or remove it."""
-    from .service import ArtifactShareService
+    from .service import _table
 
-    repo = repository or ProjectRepository()
     try:
-        remaining = [
-            s for s in ArtifactShareService().list_for_artifact(owner_id=owner_id, artifact_id=artifact_id)
-            if s.get("access_level") == "project" and s.get("project_id") == project_id
-        ]
-        if remaining:
-            repo.put_output(_pointer(max(remaining, key=lambda s: str(s.get("created_at", "")))))
-        else:
-            repo.delete_output(project_id, artifact_id)
+        artifact_shares.sync_project_output(_table(), owner_id, artifact_id, project_id, repository=repository)
     except Exception:
         logger.warning(
             "Could not sync output %s in project %s", scrub_log(artifact_id), scrub_log(project_id), exc_info=True
@@ -131,6 +111,50 @@ def sync_outputs(owner_id: str, shares: Iterable[dict], repository: Optional[Pro
     }
     for artifact_id, project_id in pairs:
         sync_output(owner_id, artifact_id, project_id, repository=repository)
+
+
+# Previews computed in one listing at once. A listing usually finds one new
+# output; a project opened for the first time since this shipped finds them all.
+_PREVIEW_WORKERS = 4
+
+
+def _compute_preview(output: ProjectOutput) -> Optional[str]:
+    """The excerpt of the version ``output`` lists, "" when it has none, None when unreadable for now."""
+    from . import preview
+    from .service import ArtifactNotFoundError, ArtifactTooLargeError, ArtifactContentService
+
+    try:
+        content, content_type = ArtifactContentService().get(
+            owner_id=output.owner_id, artifact_id=output.artifact_id, version=output.version
+        )
+    except (ArtifactNotFoundError, ArtifactTooLargeError):
+        return ""
+    except Exception:
+        logger.warning("Could not read output %s for its preview", scrub_log(output.artifact_id), exc_info=True)
+        return None
+    return preview.excerpt(content, content_type)
+
+
+def fill_previews(outputs: List[ProjectOutput], repository: Optional[ProjectRepository] = None) -> None:
+    """Give every output without an excerpt one, and keep it on its pointer. Never raises.
+
+    The listing's caller is a member, and a project share lets every member
+    read the artifact, so reading its content here grants nothing new.
+    """
+    missing = [o for o in outputs if o.preview is None]
+    if not missing:
+        return
+    repo = repository or ProjectRepository()
+    with ThreadPoolExecutor(max_workers=min(_PREVIEW_WORKERS, len(missing))) as pool:
+        computed = list(pool.map(_compute_preview, missing))
+    for output, text in zip(missing, computed):
+        if text is None:
+            continue
+        output.preview = text
+        try:
+            repo.set_output_preview(output.project_id, output.artifact_id, output.version, text)
+        except Exception:
+            logger.warning("Could not keep the preview of output %s", scrub_log(output.artifact_id), exc_info=True)
 
 
 def artifact_session_id(owner_id: str, artifact_id: str) -> str:

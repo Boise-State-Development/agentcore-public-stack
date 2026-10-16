@@ -17,6 +17,10 @@
       <h2 appDialogTitle class="text-base/7 font-semibold text-gray-900 dark:text-white">
         @if (isPicker) {
           Choose a destination folder
+        } @else if (isAttach && view() === 'browser' && connector(); as conn) {
+          Add from {{ conn.displayName }}
+        } @else if (isAttach) {
+          Add from a file source
         } @else if (view() === 'browser' && connector(); as conn) {
           {{ conn.displayName }}
         } @else {
@@ -289,6 +293,12 @@
             }
           </ul>
 
+          @if (isAttach && hasUnattachableEntries()) {
+            <p class="mt-2 text-xs/5 text-gray-400 dark:text-gray-500">
+              Greyed-out files are types or sizes a conversation can't take.
+            </p>
+          }
+
           @if (nextCursor()) {
             <button
               type="button"
@@ -337,7 +347,13 @@
             </button>
           </div>
         } @else {
-          <span class="text-sm/6 text-gray-500 dark:text-gray-400">{{ selectedCount() }} selected</span>
+          <span class="text-sm/6 text-gray-500 dark:text-gray-400">
+            @if (maxFiles !== null) {
+              {{ selectedCount() }} of {{ maxFiles }} selected
+            } @else {
+              {{ selectedCount() }} selected
+            }
+          </span>
           <div class="flex items-center gap-2">
             <button
               type="button"
@@ -346,15 +362,35 @@
             >
               Cancel
             </button>
+            @if (allowFolder) {
+              <!-- The whole folder as one attachment (drive-folder spec §4.1).
+                   Disabled until the user is inside a folder, and while files
+                   are ticked, so it never competes with Attach. -->
+              <button
+                type="button"
+                (click)="attachCurrentFolder()"
+                [disabled]="!canAttachCurrentFolder() || selectedCount() > 0"
+                class="inline-flex items-center gap-1.5 rounded-2xl border border-gray-300 bg-white px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+                [attr.aria-label]="currentFolderName() ? 'Attach the folder ' + currentFolderName() : 'Attach this folder'"
+                data-testid="file-source-attach-folder"
+              >
+                <ng-icon name="heroFolder" class="size-4" />
+                Attach this folder
+              </button>
+            }
             <button
               type="button"
-              (click)="importSelected()"
+              (click)="confirmSelection()"
               [disabled]="selectedCount() === 0 || importing()"
               class="inline-flex items-center gap-1.5 rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
+              data-testid="file-source-confirm"
             >
               @if (importing()) {
                 <app-spinner size="sm" variant="on-solid" label="Importing" />
                 Importing…
+              } @else if (isAttach) {
+                <ng-icon name="heroPaperClip" class="size-4" />
+                Attach {{ selectedCount() > 0 ? selectedCount() : '' }}
               } @else {
                 <ng-icon name="heroArrowDownTray" class="size-4" />
                 Import {{ selectedCount() > 0 ? selectedCount() : '' }}

@@ -1,4 +1,4 @@
-import { Component, ChangeDetectionStrategy, input, output, computed, signal, effect } from '@angular/core';
+import { Component, ChangeDetectionStrategy, input, output, computed, signal, effect, inject, untracked } from '@angular/core';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroDocument,
@@ -11,7 +11,18 @@ import {
   heroPhoto
 } from '@ng-icons/heroicons/outline';
 import { TooltipDirective } from '../tooltip';
-import { formatBytes, type PendingUpload, type FileMetadata } from '../../services/file-upload';
+import {
+  AttachmentSearchStatusService,
+  formatBytes,
+  isReferenceDocument,
+  largeDocumentChip,
+  LARGE_DOCUMENT_CHIP_COPY,
+  resolveMimeType,
+  type LargeDocumentChip,
+  type PendingUpload,
+  type FileMetadata,
+} from '../../services/file-upload';
+import { FEATURES } from '../../services/features';
 
 /**
  * Check if MIME type is an image
@@ -159,7 +170,7 @@ const DEFAULT_COLORS = {
   },
   template: `
     <div
-      class="group relative flex w-56 shrink-0 items-center gap-2 rounded-lg border px-3 py-2 transition-colors"
+      class="group relative flex shrink-0 items-center gap-2 rounded-lg border px-3 py-2 transition-colors"
       [class]="containerClass()"
     >
       <!-- File icon or image preview -->
@@ -192,17 +203,33 @@ const DEFAULT_COLORS = {
           @if (isError()) {
             <span class="text-state-danger-500 dark:text-state-danger-400">{{ errorMessage() }}</span>
           } @else if (isUploading()) {
-            Uploading... {{ progress() }}%
+            {{ uploadingLabel() }}
           } @else if (isCompleting()) {
             Finalizing...
+          } @else if (isReference()) {
+            <!-- A large document is attached by reference: the model reads the
+                 parts it needs rather than the whole file, and, with the
+                 attachments KB, can search it once it is indexed. The card has
+                 room for the short form; the full chip copy is the tooltip and
+                 the accessible text. -->
+            <span
+              [appTooltip]="chipCopy().full"
+              appTooltipPosition="top"
+              data-testid="reference-chip"
+              [attr.data-chip]="chip()"
+            >
+              {{ formattedSize() }} ·
+              <span class="font-medium text-gray-700 dark:text-gray-300" aria-hidden="true">{{ chipCopy().short }}</span>
+              <span class="sr-only">{{ chipCopy().full }}</span>
+            </span>
           } @else {
             {{ formattedSize() }}
           }
         </p>
       </div>
 
-      <!-- Progress bar (during upload) -->
-      @if (isUploading() && progress() < 100) {
+      <!-- Progress bar (during upload); a server-side fetch has no percentage to show -->
+      @if (isUploading() && progress() < 100 && !pendingUpload()?.statusLabel) {
         <div class="absolute bottom-0 left-0 right-0 h-0.5 overflow-hidden rounded-b-lg bg-gray-200 dark:bg-gray-700">
           <div
             class="h-full bg-primary-500 transition-all duration-200"
@@ -258,7 +285,19 @@ export class FileCardComponent {
   /** Image preview URL (data URL for images) */
   readonly imagePreviewUrl = signal<string | null>(null);
 
+  /** Present only while the deployment has the attachments KB. */
+  private readonly searchStatus = inject(FEATURES).attachmentKb ? inject(AttachmentSearchStatusService) : null;
+
   constructor() {
+    // A ready large document follows its search index (one poll per upload,
+    // shared with the message card).
+    effect(() => {
+      const service = this.searchStatus;
+      if (!service || !this.isReference() || !this.isReady()) return;
+      const id = this.uploadId();
+      untracked(() => service.track(id));
+    });
+
     // Effect to load image preview when pendingUpload changes
     effect(() => {
       const pending = this.pendingUpload();
@@ -348,10 +387,31 @@ export class FileCardComponent {
   });
 
   protected readonly isUploading = computed(() => this.status() === 'uploading');
+  /** The in-progress line: the caller's own wording, or the upload percentage. */
+  protected readonly uploadingLabel = computed(
+    () => this.pendingUpload()?.statusLabel ?? `Uploading... ${this.progress()}%`,
+  );
   protected readonly isCompleting = computed(() => this.status() === 'completing');
   protected readonly isError = computed(() => this.status() === 'error');
   protected readonly isReady = computed(() => this.status() === 'ready');
   protected readonly isImage = computed(() => isImageMimeType(this.mimeType()));
+
+  /** A document over the inline limit, attached by reference. Classified on the
+   *  MIME the upload was presigned with, which a browser may not report. */
+  protected readonly isReference = computed(() => {
+    const pending = this.pendingUpload();
+    const mime = pending ? resolveMimeType(pending.file) : this.mimeType();
+    return isReferenceDocument(mime, this.sizeBytes());
+  });
+
+  /** What the large-document chip says: read on demand, indexing, or searchable. */
+  protected readonly chip = computed<LargeDocumentChip>(() => {
+    const service = this.searchStatus;
+    if (!service || !this.isReady()) return 'read-on-demand';
+    return largeDocumentChip(service.statusFor(this.uploadId()));
+  });
+
+  protected readonly chipCopy = computed(() => LARGE_DOCUMENT_CHIP_COPY[this.chip()]);
 
   protected readonly iconName = computed(() => {
     const mime = this.mimeType();
@@ -364,10 +424,12 @@ export class FileCardComponent {
   });
 
   protected readonly containerClass = computed(() => {
+    // A reference card is a little wider, to fit "38 MB · Read on demand".
+    const width = this.isReference() && this.isReady() ? 'w-64' : 'w-56';
     if (this.isError()) {
-      return 'border-state-danger-200 bg-state-danger-50 dark:border-state-danger-800 dark:bg-state-danger-950/30';
+      return `${width} border-state-danger-200 bg-state-danger-50 dark:border-state-danger-800 dark:bg-state-danger-950/30`;
     }
-    return 'border-gray-200 bg-gray-50 dark:border-gray-600 dark:bg-gray-800';
+    return `${width} border-gray-200 bg-gray-50 dark:border-gray-600 dark:bg-gray-800`;
   });
 
   protected readonly iconContainerClass = computed(() => {

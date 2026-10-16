@@ -16,7 +16,7 @@ Resolution scope:
 - ``skill``          → feature-flagged; author must have the skill in the ``/agents/bindable``
   palette (``resolve_accessible_skill_ids``, the SAME source the picker fetches). Run-time then
   re-resolves each bound skill against the *invoker* (``resolve_invocable_skill_ids``, D5).
-- ``memory_space``   → feature-flagged; author needs viewer+ (read) / editor+ (readwrite).
+  ``config.version`` pins the binding to a version, which must exist (shared-projects 3.1).
 - ``knowledge_base`` → **managed implicitly** (the KB is welded to the agent and its index
   is not user-configurable), so it is NOT author-settable; the compat layer synthesizes it
   on read. An explicit knowledge_base binding is rejected.
@@ -27,18 +27,17 @@ from typing import List, Optional
 
 from apis.shared.assistants.models import KNOWN_BINDING_KINDS, AgentBinding, AgentModelConfig
 from apis.shared.auth.models import User
-from apis.shared.feature_flags import memory_spaces_enabled, skills_enabled
-from apis.shared.memory.service import MemorySpaceService
+from apis.shared.feature_flags import skills_enabled
 from apis.shared.models.managed_models import list_all_managed_models
 from apis.shared.skills.access import resolve_accessible_skill_ids
+from apis.shared.skills.pins import PIN_CONFIG_KEY, binding_pin
+from apis.shared.skills.repository import get_skill_catalog_repository
 from apis.shared.tools.scoped_ids import SCOPE_DELIMITER, parse_scoped_tool_id
 
 from apis.app_api.admin.services.model_access import ModelAccessService
 from apis.app_api.tools.service import ToolCatalogService
 
 logger = logging.getLogger(__name__)
-
-_ROLE_RANK = {"viewer": 1, "editor": 2, "owner": 3}
 
 
 class BindingValidationError(Exception):
@@ -60,7 +59,6 @@ async def validate_agent_write(
     bindings: Optional[List[AgentBinding]] = None,
     model_settings: Optional[AgentModelConfig] = None,
     model_access_service: Optional[ModelAccessService] = None,
-    memory_service: Optional[MemorySpaceService] = None,
     tool_service: Optional[ToolCatalogService] = None,
 ) -> None:
     """Validate an Agent write for ``user``; raise ``BindingValidationError`` on failure.
@@ -72,7 +70,6 @@ async def validate_agent_write(
         await _validate_model(user, model_settings, model_access_service or ModelAccessService())
 
     if bindings is not None:
-        mem = memory_service or MemorySpaceService()
         # Resolve the author's accessible tools/skills ONCE (async) when a binding of that
         # kind is present, then validate each binding synchronously against those sets — the
         # same sources the palette uses, so the picker and the write agree (cf. the model
@@ -92,7 +89,8 @@ async def validate_agent_write(
         if skills_enabled() and any(b.kind == "skill" for b in bindings):
             accessible_skill_ids = set(await resolve_accessible_skill_ids(user))
         for binding in bindings:
-            _validate_binding(user, binding, mem, accessible_tools, accessible_skill_ids)
+            _validate_binding(binding, accessible_tools, accessible_skill_ids)
+        await _validate_skill_pins(bindings)
 
 
 async def _validate_model(user: User, cfg: AgentModelConfig, svc: ModelAccessService) -> None:
@@ -104,10 +102,10 @@ async def _validate_model(user: User, cfg: AgentModelConfig, svc: ModelAccessSer
     if model is None:
         raise BindingValidationError(f"Model '{cfg.model_id}' is not available.", status_code=400)
     # Use the SAME predicate the ``/agents/bindable`` catalog uses, so "if the palette
-    # offers it, the write accepts it". ``can_access_model`` is now equivalent (both
-    # delegate to one ``_grants_access`` rule); this once had to avoid it because it
-    # additionally gated on the model's ``allowed_app_roles``, rejecting models the
-    # palette had just listed.
+    # offers it, the write accepts it". Every model check — this one, the palette and
+    # the run-time ``AppRoleService.can_access_model`` the invoker is later held to —
+    # reads ``apis.shared.rbac.model_access.grants_model_access``, so the author cannot
+    # compose a model the run-time check would refuse on the same grants (#798).
     if not await svc.filter_accessible_models(user, [model]):
         raise BindingValidationError(
             f"You do not have access to model '{cfg.model_id}'.", status_code=403
@@ -164,9 +162,7 @@ def _validate_model_params(cfg: AgentModelConfig, model) -> None:
 
 
 def _validate_binding(
-    user: User,
     binding: AgentBinding,
-    mem: MemorySpaceService,
     accessible_tools: Optional[dict] = None,
     accessible_skill_ids: Optional[set] = None,
 ) -> None:
@@ -186,10 +182,6 @@ def _validate_binding(
 
     if kind == "skill":
         _validate_skill(binding, accessible_skill_ids or set())
-        return
-
-    if kind == "memory_space":
-        _validate_memory_space(user, binding, mem)
 
 
 def _validate_tool(binding: AgentBinding, accessible_tools: dict) -> None:
@@ -250,37 +242,31 @@ def _validate_skill(binding: AgentBinding, accessible_skill_ids: set) -> None:
         raise BindingValidationError(
             f"You do not have access to skill '{ref}'.", status_code=403
         )
-
-
-def _validate_memory_space(user: User, binding: AgentBinding, mem: MemorySpaceService) -> None:
-    if not memory_spaces_enabled():
-        raise BindingValidationError("Memory Spaces are not enabled.", status_code=400)
-
-    access = (binding.config or {}).get("access", "read")
-    if access not in ("read", "readwrite"):
+    pin = (binding.config or {}).get(PIN_CONFIG_KEY)
+    if pin is not None and binding_pin(binding.config) is None:
         raise BindingValidationError(
-            f"memory_space binding 'access' must be 'read' or 'readwrite', got '{access}'.",
+            f"skill binding '{ref}' has an invalid version; it must be a whole number of 1 or more.",
             status_code=400,
         )
 
-    always_load = (binding.config or {}).get("alwaysLoad")
-    if always_load is not None and not (
-        isinstance(always_load, list) and all(isinstance(x, str) for x in always_load)
-    ):
-        raise BindingValidationError("memory_space 'alwaysLoad' must be a list of strings.", status_code=400)
 
-    space, role = mem.resolve_permission(binding.ref, user.user_id, user.email)
-    if space is None:
-        raise BindingValidationError(f"Memory space '{binding.ref}' not found.", status_code=400)
-    if space.is_project_space:
-        # A project's memory reaches agents only through the project (its harness).
-        raise BindingValidationError(
-            "Project memory can't be connected to an agent; it is used inside its project.",
-            status_code=400,
-        )
+async def _validate_skill_pins(bindings: List[AgentBinding]) -> None:
+    """A pinned skill binding must name a version that exists (shared-projects 3.1).
 
-    required = "editor" if access == "readwrite" else "viewer"
-    if role is None or _ROLE_RANK[role] < _ROLE_RANK[required]:
-        raise BindingValidationError(
-            f"'{required}' access required on memory space '{binding.ref}'.", status_code=403
-        )
+    The runtime leaves out a pin whose version is missing rather than running the
+    live skill, so a pin to a version that was never cut would bind a skill that
+    never runs.
+    """
+    pinned = [
+        (b.ref, binding_pin(b.config))
+        for b in bindings
+        if b.kind == "skill" and binding_pin(b.config) is not None
+    ]
+    if not pinned:
+        return
+    found = await get_skill_catalog_repository().batch_get_skill_versions(pinned)
+    for ref, number in pinned:
+        if (ref, number) not in found:
+            raise BindingValidationError(
+                f"Version {number} of skill '{ref}' does not exist.", status_code=400
+            )

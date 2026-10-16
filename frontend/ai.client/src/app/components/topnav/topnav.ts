@@ -222,9 +222,10 @@ export class Topnav {
   }
 
   /**
-   * The current session's project. A task started in this tab is shown from the
-   * optimistic cache row until its metadata is fetched, so fall back to the list
-   * row, which picks up the backend's preferences on the next list refresh.
+   * The current session's project. A conversation started in this tab is shown
+   * from its optimistic cache row until its first turn closes and the row is read
+   * back (`SessionService.adoptServerPreferences`), so fall back to the list row,
+   * which also picks up the backend's preferences on a list refresh.
    */
   private currentProjectId(): string | null {
     if (!this.features.projects) return null;

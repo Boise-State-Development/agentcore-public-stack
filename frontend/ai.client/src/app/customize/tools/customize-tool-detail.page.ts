@@ -987,8 +987,7 @@ export class CustomizeToolDetailPage {
   protected connect(): void {
     const provider = this.providerId();
     if (!provider) return;
-    this.consent.requestConsent(provider, undefined);
-    void this.consent.openConsentPopup(provider);
+    void this.consent.startUserConsent(provider);
   }
 
   /** A sub-tool is locked when it is pinned itself, or its server is. */

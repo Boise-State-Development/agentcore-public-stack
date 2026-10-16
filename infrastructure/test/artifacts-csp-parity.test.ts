@@ -18,9 +18,12 @@
  * would return, so the two can disagree indefinitely without a failing test
  * or a visibly broken artifact.
  *
- * This asserts the one value that is duplicated as a literal in both
- * languages: the `script-src` source list, including its CDN allow-list.
+ * This asserts the values duplicated as literals in both languages: the
+ * `script-src` source list, including its CDN allow-list, and the
+ * `style-src` / `font-src` lists the Markdown wrapper's KaTeX depends on.
  */
+import * as fs from 'fs';
+import * as path from 'path';
 import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import { loadConfig } from '../lib/config';
@@ -86,6 +89,21 @@ function lambdaScriptSrc(template: Template): string {
   return render!.Properties.Environment.Variables.CSP_SCRIPT_SRC;
 }
 
+/**
+ * A directive the render Lambda hard-codes in `_csp_header()` (only
+ * script-src and frame-ancestors come from env vars), read from the handler
+ * source because no synthesized value carries it.
+ */
+function lambdaLiteralDirective(name: string): string {
+  const handler = fs.readFileSync(
+    path.join(__dirname, '../../backend/src/lambdas/artifact_render/handler.py'),
+    'utf-8',
+  );
+  const found = handler.match(new RegExp(`"${name} ([^"]*)",`));
+  expect(found).not.toBeNull();
+  return found![1].trim();
+}
+
 /** Pull one directive's source list out of a `a; b; c` CSP string. */
 function directive(csp: string, name: string): string {
   const found = csp
@@ -108,6 +126,18 @@ describe('artifact origin CSP parity (CloudFront policy vs render Lambda)', () =
     expect(directive(edgeCsp(template), 'script-src')).toBe(
       lambdaScriptSrc(template),
     );
+  });
+
+  it('ships the same style-src and font-src to both layers', () => {
+    const csp = edgeCsp(synth());
+
+    // The Markdown render wrapper loads KaTeX's stylesheet and fonts from
+    // jsDelivr. Allowed at the edge but not by the Lambda (or the reverse),
+    // math typesets on one path and degrades on the other.
+    for (const name of ['style-src', 'font-src']) {
+      expect(directive(csp, name)).toBe(lambdaLiteralDirective(name));
+      expect(directive(csp, name)).toContain('https://cdn.jsdelivr.net');
+    }
   });
 
   it('keeps the artifact sandbox directives that make artifact JS inert', () => {

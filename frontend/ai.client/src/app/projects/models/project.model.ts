@@ -9,6 +9,7 @@
 
 import type { Document, KbUsage, UploadUrlResponse } from '../../assistants/models/document.model';
 import type { SessionMetadata } from '../../session/services/models/session-metadata.model';
+import type { IntervalUnit, ScheduleCadence, ScheduledPromptState } from '../../schedules/models/schedule.model';
 
 export type ProjectRole = 'owner' | 'editor' | 'viewer';
 export type MemberRole = 'editor' | 'viewer';
@@ -113,8 +114,18 @@ export interface ModelResponse extends SettingsResponse {
   modelConfig: ModelConfig | null;
 }
 
+/** A bound tool or skill as the project reports it. Only skills carry a pin. */
+export interface BoundBinding extends BindingRef {
+  /** The skill version this binding runs; null for a skill bound before pins (it runs the latest). */
+  version?: number | null;
+  /** When the pinned version was saved. */
+  pinnedAt?: string | null;
+  /** The skill has changed since the pinned version. */
+  updateAvailable?: boolean;
+}
+
 export interface BindingsResponse extends SettingsResponse {
-  bindings: BindingRef[];
+  bindings: BoundBinding[];
 }
 
 export interface SettingsVersionSummary {
@@ -170,6 +181,8 @@ export interface SharedTask {
   isMine: boolean;
   /** The sharer's note (2.5b), when they left one. */
   note?: string | null;
+  /** The project schedule that delivered this run (3.2b), when one did. */
+  scheduleId?: string | null;
 }
 
 /** An artifact a member shared with the project (3.3), as `/projects/{id}/outputs` returns it. */
@@ -187,6 +200,14 @@ export interface ProjectOutput {
   isMine: boolean;
   /** The sharer, or an editor of an active project. */
   canRemove: boolean;
+  /** The project schedule that published it (3.2d), when one did. */
+  scheduleId?: string | null;
+  /**
+   * A short excerpt for the card (`apis/app_api/artifacts/preview.py`): the
+   * opening Markdown, the first CSV rows, a page's text or a small SVG. Null
+   * when the artifact has none to show; the card then draws its type's icon.
+   */
+  preview?: string | null;
 }
 
 export interface ProjectOutputsResponse {
@@ -610,4 +631,82 @@ export interface MaintenanceRun {
 export interface MaintenanceRunsResponse {
   /** Newest first. */
   runs: MaintenanceRun[];
+}
+
+// ---- schedules (3.2) -----------------------------------------------------
+
+/** Where a project schedule's runs go: the creator's own sidebar, or shared with the project. */
+export type ScheduleDelivery = 'owner' | 'project';
+
+/** A schedule in a project, as `/projects/{id}/schedules` returns it. It runs as its creator. */
+export interface ProjectSchedule {
+  scheduleId: string;
+  label: string;
+  promptText: string;
+  cadence: ScheduleCadence;
+  hourLocal: number;
+  weekday?: number | null;
+  intervalValue?: number | null;
+  intervalUnit?: IntervalUnit | null;
+  timezone: string;
+  deliverTo: ScheduleDelivery;
+  notifyMembers: boolean;
+  /** Each shared run's artifacts go to Outputs, replacing the previous run's (3.2d). */
+  publishOutputs: boolean;
+  state: ScheduledPromptState;
+  /** A backend code (`member_removed`, `paused_by_editor`, …) or the personal page's "Paused by user". */
+  stateReason?: string | null;
+  nextRunAt?: string | null;
+  lastRunAt?: string | null;
+  lastRunStatus?: string | null;
+  /** The creator's own task from the last run; absent for everyone else. */
+  lastRunSessionId?: string | null;
+  createdByEmail: string;
+  createdByName?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  isMine: boolean;
+  /** Change the prompt, cadence or delivery, and resume: the creator, in an active project. */
+  canEdit: boolean;
+  /** Pause and delete: the creator, or an editor or the owner of an active project. */
+  canManage: boolean;
+}
+
+export interface ProjectSchedulesResponse {
+  /** Oldest first. */
+  schedules: ProjectSchedule[];
+}
+
+export interface CreateProjectScheduleRequest {
+  label: string;
+  promptText: string;
+  cadence: ScheduleCadence;
+  hourLocal: number;
+  weekday?: number | null;
+  intervalValue?: number | null;
+  intervalUnit?: IntervalUnit | null;
+  timezone: string;
+  deliverTo: ScheduleDelivery;
+  notifyMembers: boolean;
+  /** Only with `deliverTo: 'project'`; the API refuses it otherwise. */
+  publishOutputs: boolean;
+}
+
+/** The creator's change: any subset of what create takes. State has its own routes. */
+export type UpdateProjectScheduleRequest = Partial<CreateProjectScheduleRequest>;
+
+/** One run of a project schedule, or a pause the dispatcher recorded instead of running. */
+export interface ProjectScheduleRun {
+  runId: string;
+  status: 'completed' | 'error' | 'timeout' | 'paused';
+  finishedAt: string;
+  /** A short code; for a pause, the same codes as `stateReason`. */
+  reason?: string | null;
+  /** The delivered run, while it is still shared: opens at `/shared/{shareId}`. */
+  shareId?: string | null;
+}
+
+export interface ProjectScheduleRunsResponse {
+  /** Newest first. */
+  runs: ProjectScheduleRun[];
 }

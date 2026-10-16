@@ -7,7 +7,7 @@ from typing import List, Optional, Dict, Any
 import boto3
 from botocore.exceptions import ClientError
 
-from .models import AppRole
+from .models import AppRole, UserGrant
 from apis.shared.timestamps import utc_now_iso
 
 logger = logging.getLogger(__name__)
@@ -246,6 +246,11 @@ class AppRoleRepository:
 
         Uses GSI2 (ToolRoleMappingIndex) for efficient lookup.
 
+        Narrowed to ``ROLE#`` sort values: the same index partition also holds
+        the per-user direct grants (``GSI2SK = USER#...``, see
+        ``_build_user_grant_items``), which are not roles and must not be
+        reported as one. ``get_user_ids_for_tool`` is the other half.
+
         Args:
             tool_id: The tool identifier
 
@@ -255,8 +260,8 @@ class AppRoleRepository:
         try:
             response = self._table.query(
                 IndexName="ToolRoleMappingIndex",
-                KeyConditionExpression="GSI2PK = :pk",
-                ExpressionAttributeValues={":pk": f"TOOL#{tool_id}"},
+                KeyConditionExpression="GSI2PK = :pk AND begins_with(GSI2SK, :role)",
+                ExpressionAttributeValues={":pk": f"TOOL#{tool_id}", ":role": "ROLE#"},
             )
 
             return [
@@ -287,8 +292,8 @@ class AppRoleRepository:
         try:
             response = self._table.query(
                 IndexName="ModelRoleMappingIndex",
-                KeyConditionExpression="GSI3PK = :pk",
-                ExpressionAttributeValues={":pk": f"MODEL#{model_id}"},
+                KeyConditionExpression="GSI3PK = :pk AND begins_with(GSI3SK, :role)",
+                ExpressionAttributeValues={":pk": f"MODEL#{model_id}", ":role": "ROLE#"},
             )
 
             return [
@@ -321,8 +326,8 @@ class AppRoleRepository:
         try:
             response = self._table.query(
                 IndexName="ToolRoleMappingIndex",
-                KeyConditionExpression="GSI2PK = :pk",
-                ExpressionAttributeValues={":pk": f"SKILL#{skill_id}"},
+                KeyConditionExpression="GSI2PK = :pk AND begins_with(GSI2SK, :role)",
+                ExpressionAttributeValues={":pk": f"SKILL#{skill_id}", ":role": "ROLE#"},
             )
 
             return [
@@ -336,6 +341,197 @@ class AppRoleRepository:
 
         except ClientError as e:
             logger.error(f"Error querying skill role mappings for {skill_id}: {e}")
+            raise
+
+    # =========================================================================
+    # Direct user grants (``UserGrant``)
+    # =========================================================================
+    #
+    # Stored in this same table under the user's own partition, ``USER#<id>``,
+    # which already holds that user's ``TOOL_PREFERENCES`` and
+    # ``SKILL_PREFERENCES`` rows (``apis/shared/tools/repository.py``,
+    # ``apis/shared/skills/repository.py``). Every sort key here therefore
+    # starts with ``GRANT``, and the mapping sweep deletes by that prefix only —
+    # a sweep that cleared "everything but the definition" would take the
+    # user's picker preferences with it.
+    #
+    #   PK=USER#<id>  SK=GRANTS              the record (+ GSI5 for "list all")
+    #   PK=USER#<id>  SK=GRANT_TOOL#<tool>   GSI2PK=TOOL#<tool>   GSI2SK=USER#<id>
+    #   PK=USER#<id>  SK=GRANT_MODEL#<m>     GSI3PK=MODEL#<m>     GSI3SK=USER#<id>
+    #   PK=USER#<id>  SK=GRANT_SKILL#<s>     GSI2PK=SKILL#<s>     GSI2SK=USER#<id>
+    #
+    # The mapping rows reuse the role reverse-lookup indexes with a ``USER#``
+    # sort value, so "who is directly granted X?" costs no new GSI (one GSI per
+    # UpdateTable, and the stack is near its resource budget). The role queries
+    # above narrow to ``ROLE#`` so the two populations never mix.
+
+    USER_GRANT_SK = "GRANTS"
+    USER_GRANT_MAPPING_PREFIX = "GRANT_"
+    USER_GRANT_ENTITY_TYPE = "ENTITY#USER_GRANT"
+
+    async def get_user_grant(self, user_id: str) -> Optional[UserGrant]:
+        """The user's direct grant record, or ``None`` when they have none."""
+        try:
+            response = self._table.get_item(
+                Key={"PK": f"USER#{user_id}", "SK": self.USER_GRANT_SK}
+            )
+            item = response.get("Item")
+            if not item:
+                return None
+            return UserGrant.from_dict(item)
+        except ClientError as e:
+            logger.error(f"Error getting user grant for {user_id}: {e}")
+            raise
+
+    async def put_user_grant(self, grant: UserGrant) -> UserGrant:
+        """Create or replace a user's direct grant and its reverse-lookup rows.
+
+        The record is the source of truth and is written first; the mapping
+        rows are a projection rebuilt from it. ``created_at`` survives a
+        replace.
+        """
+        try:
+            existing = await self.get_user_grant(grant.user_id)
+            now = utc_now_iso()
+            grant.updated_at = now
+            grant.created_at = existing.created_at if existing and existing.created_at else now
+
+            self._table.put_item(Item=self._build_user_grant_record(grant))
+
+            await self._delete_user_grant_mapping_items(grant.user_id)
+            with self._table.batch_writer() as batch:
+                for item in self._build_user_grant_mapping_items(grant):
+                    batch.put_item(Item=item)
+
+            logger.info(f"Wrote direct grant for user {grant.user_id}")
+            return grant
+        except ClientError as e:
+            logger.error(f"Error writing user grant for {grant.user_id}: {e}")
+            raise
+
+    async def delete_user_grant(self, user_id: str) -> bool:
+        """Remove a user's direct grant. Returns False when there was none."""
+        try:
+            existing = await self.get_user_grant(user_id)
+            if not existing:
+                return False
+            await self._delete_user_grant_mapping_items(user_id)
+            self._table.delete_item(
+                Key={"PK": f"USER#{user_id}", "SK": self.USER_GRANT_SK}
+            )
+            logger.info(f"Deleted direct grant for user {user_id}")
+            return True
+        except ClientError as e:
+            logger.error(f"Error deleting user grant for {user_id}: {e}")
+            raise
+
+    async def list_user_grants(self) -> List[UserGrant]:
+        """Every direct grant record, via the EntityTypeIndex (no table scan)."""
+        try:
+            kwargs: Dict[str, Any] = {
+                "IndexName": "EntityTypeIndex",
+                "KeyConditionExpression": "GSI5PK = :pk",
+                "ExpressionAttributeValues": {":pk": self.USER_GRANT_ENTITY_TYPE},
+            }
+            grants: List[UserGrant] = []
+            while True:
+                response = self._table.query(**kwargs)
+                grants.extend(UserGrant.from_dict(i) for i in response.get("Items", []))
+                last = response.get("LastEvaluatedKey")
+                if not last:
+                    break
+                kwargs["ExclusiveStartKey"] = last
+            return grants
+        except ClientError as e:
+            logger.error(f"Error listing user grants: {e}")
+            raise
+
+    async def get_user_ids_for_tool(self, tool_id: str) -> List[str]:
+        """Users directly granted ``tool_id`` (reverse lookup on GSI2)."""
+        return await self._user_ids_on_index(
+            "ToolRoleMappingIndex", "GSI2PK", "GSI2SK", f"TOOL#{tool_id}"
+        )
+
+    async def get_user_ids_for_model(self, model_id: str) -> List[str]:
+        """Users directly granted ``model_id`` (reverse lookup on GSI3)."""
+        return await self._user_ids_on_index(
+            "ModelRoleMappingIndex", "GSI3PK", "GSI3SK", f"MODEL#{model_id}"
+        )
+
+    async def get_user_ids_for_skill(self, skill_id: str) -> List[str]:
+        """Users directly granted ``skill_id`` (reverse lookup on GSI2)."""
+        return await self._user_ids_on_index(
+            "ToolRoleMappingIndex", "GSI2PK", "GSI2SK", f"SKILL#{skill_id}"
+        )
+
+    async def _user_ids_on_index(
+        self, index_name: str, pk_attr: str, sk_attr: str, pk_value: str
+    ) -> List[str]:
+        try:
+            response = self._table.query(
+                IndexName=index_name,
+                KeyConditionExpression=f"{pk_attr} = :pk AND begins_with({sk_attr}, :user)",
+                ExpressionAttributeValues={":pk": pk_value, ":user": "USER#"},
+            )
+            return sorted(
+                str(item[sk_attr])[len("USER#"):]
+                for item in response.get("Items", [])
+                if sk_attr in item
+            )
+        except ClientError as e:
+            logger.error(f"Error querying direct grants for {pk_value}: {e}")
+            raise
+
+    def _build_user_grant_record(self, grant: UserGrant) -> Dict[str, Any]:
+        return {
+            "PK": f"USER#{grant.user_id}",
+            "SK": self.USER_GRANT_SK,
+            # Sparse EntityTypeIndex stamp: "list every user with a direct grant".
+            "GSI5PK": self.USER_GRANT_ENTITY_TYPE,
+            "GSI5SK": f"USER#{grant.user_id}",
+            **grant.to_dict(),
+        }
+
+    def _build_user_grant_mapping_items(self, grant: UserGrant) -> List[Dict[str, Any]]:
+        """Reverse-lookup rows for a grant, one per granted id."""
+        pk = f"USER#{grant.user_id}"
+        common = {"userId": grant.user_id, "expiresAt": grant.expires_at, "enabled": True}
+        items: List[Dict[str, Any]] = []
+        for tool_id in grant.granted_tools:
+            items.append({
+                "PK": pk, "SK": f"GRANT_TOOL#{tool_id}",
+                "GSI2PK": f"TOOL#{tool_id}", "GSI2SK": pk, **common,
+            })
+        for model_id in grant.granted_models:
+            items.append({
+                "PK": pk, "SK": f"GRANT_MODEL#{model_id}",
+                "GSI3PK": f"MODEL#{model_id}", "GSI3SK": pk, **common,
+            })
+        for skill_id in grant.granted_skills:
+            items.append({
+                "PK": pk, "SK": f"GRANT_SKILL#{skill_id}",
+                "GSI2PK": f"SKILL#{skill_id}", "GSI2SK": pk, **common,
+            })
+        return items
+
+    async def _delete_user_grant_mapping_items(self, user_id: str) -> None:
+        """Delete a user's ``GRANT_*`` mapping rows — and nothing else under ``USER#``."""
+        try:
+            response = self._table.query(
+                KeyConditionExpression="PK = :pk AND begins_with(SK, :prefix)",
+                ExpressionAttributeValues={
+                    ":pk": f"USER#{user_id}",
+                    ":prefix": self.USER_GRANT_MAPPING_PREFIX,
+                },
+            )
+            items = response.get("Items", [])
+            if not items:
+                return
+            with self._table.batch_writer() as batch:
+                for item in items:
+                    batch.delete_item(Key={"PK": item["PK"], "SK": item["SK"]})
+        except ClientError as e:
+            logger.error(f"Error deleting user grant mappings for {user_id}: {e}")
             raise
 
     # =========================================================================

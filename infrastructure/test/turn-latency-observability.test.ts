@@ -113,6 +113,28 @@ describe('TurnLatencyObservabilityConstruct', () => {
     expect(body).toContain('tests/load');
   });
 
+  it('leads with the client-measured first token, split by turn kind and prewarm', () => {
+    // The only metrics that see the app-api hop, Runtime routing and session
+    // start (docs/specs/turn-path-ttft.md §6). First turns and follow-ups are
+    // separate names: a first turn starts its Runtime session.
+    for (const name of [
+      'ClientFirstTurnWarmedFirstTokenMs',
+      'ClientFirstTurnColdFirstTokenMs',
+      'ClientFirstTurnFirstTokenMs',
+      'ClientFollowUpFirstTokenMs',
+    ]) {
+      expect(body).toContain(name);
+    }
+    // First graph on the board: before the server-side prelude row.
+    expect(body.indexOf('User-perceived first token')).toBeGreaterThan(-1);
+    expect(body.indexOf('User-perceived first token')).toBeLessThan(body.indexOf('Prelude total ('));
+  });
+
+  it('has a 30-day daily trend, the view that shows drift', () => {
+    expect(body).toContain('-P30D');
+    expect(body).toMatch(/period\\*":86400/);
+  });
+
   it('points at the AgentCore board for the AWS-measured comparison', () => {
     // PreludeTotalMs vs AWS's data-plane Latency is how the routing overhead
     // becomes visible; a reader who does not know the companion exists cannot

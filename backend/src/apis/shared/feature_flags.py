@@ -42,6 +42,129 @@ def skills_enabled() -> bool:
     return os.environ.get("SKILLS_ENABLED", "").strip().lower() != "false"
 
 
+def skill_authoring_enabled() -> bool:
+    """Whether the agent may author the invoking user's own skills.
+
+    Covers the seven ``my_skill_*`` tools (``docs/specs/skill-creator.md`` D12),
+    built per request by ``_build_skill_authoring_tools`` in the inference API.
+    **Opt-in while the feature is in development** (CLAUDE.md "Feature flags"):
+    only ``"true"`` (case-insensitive) enables it; unset, empty or anything else
+    is off. CDK sets it on the AgentCore Runtime only, and only when on (an unset
+    variable costs the Runtime's environment budget nothing). There is no SPA
+    switch: the tools reuse the existing approval card.
+
+    It ANDs with :func:`skills_enabled` and with the ``my_skill_create`` tool id
+    being in the turn's tools. Off, the tools are never built, so their specs
+    never reach ``toolConfig``.
+    """
+    return os.environ.get("SKILL_AUTHORING_ENABLED", "").strip().lower() == "true"
+
+
+def word_tracked_changes_enabled() -> bool:
+    """Whether Word tracked changes are read and written (``docs/specs/word-tracked-changes.md``).
+
+    On, a ``.docx`` with tracked changes reaches the model with each change
+    written out as ``[deleted: …]`` / ``[inserted: …]`` — as an inline
+    attachment, through ``document_read`` and the upload digest, and through
+    ``read_word_document`` — and the Word family gains ``redline_word_document``.
+    Off, each of those reads the file exactly as before and the tool is never
+    built. **Opt-in while the feature is in development**: only ``"true"``
+    (case-insensitive) enables it; unset, empty or anything else is off.
+
+    CDK sets it on the AgentCore Runtime and on app-api, and only while on. Both
+    are needed: app-api builds the upload digest, whose paragraph numbers have to
+    match what ``document_read`` returns on the Runtime. No SPA switch: the
+    redline comes back on the existing download card.
+    """
+    return os.environ.get("WORD_TRACKED_CHANGES_ENABLED", "").strip().lower() == "true"
+
+
+def large_document_attachments_enabled() -> bool:
+    """Whether documents over the inline limit are attached by reference
+    (``docs/specs/large-document-attachments.md``).
+
+    On, a reference-class upload (``is_reference_document``: a pdf, docx, txt,
+    md or html file over 4 MB and up to 50 MB) completes by enqueueing it for
+    the ``large-document-prepare`` Lambda, which writes the ``_derived/``
+    sidecars ``document_read`` reads. Off, nothing is enqueued. **Opt-in while
+    the feature is in development**: only ``"true"`` (case-insensitive) enables
+    it; unset, empty or anything else is off.
+
+    app-api only. CDK sets it from ``CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED``,
+    together with the prepare queue's URL, which exists only while it is on.
+    The Runtime needs no copy: ``document_read`` branches on the file row's
+    ``preparation``, not on a switch, so files already prepared stay readable
+    after the flag is turned off.
+    """
+    return os.environ.get("LARGE_DOCUMENT_ATTACHMENTS_ENABLED", "").strip().lower() == "true"
+
+
+def attachment_kb_enabled() -> bool:
+    """Whether prepared large documents are indexed into the shared
+    ``attachments`` managed knowledge base (large-document spec §4E, Tier 2).
+
+    On, the large-document pipeline ingests each prepared reference-class
+    original by its S3 location, removes it when the file is deleted, evicts it
+    after ``ATTACHMENT_KB_RETENTION_DAYS`` of inactivity, and app-api re-queues a
+    conversation's evicted documents when the conversation is opened. Off,
+    nothing is indexed and every index message is acknowledged untouched.
+    **Opt-in while the feature is in development**: only ``"true"``
+    (case-insensitive) enables it.
+
+    Set by CDK from ``CDK_ATTACHMENT_KB_ENABLED`` on the large-document Lambda,
+    app-api and the Runtime, and only together with
+    ``LARGE_DOCUMENT_ATTACHMENTS_ENABLED`` (the config refuses one without the
+    other). On the Runtime it adds ``document_read``'s ``query`` argument (§4F):
+    one tool-spec change per deployment, never per session. App-api serves the
+    SPA's *Indexing…* / *Searchable* chip from it
+    (``GET /files/{id}/search-status``).
+    """
+    return os.environ.get("ATTACHMENT_KB_ENABLED", "").strip().lower() == "true"
+
+
+def folder_attachments_enabled() -> bool:
+    """Whether a conversation can attach a Google Drive folder
+    (``docs/specs/drive-folder-attachments.md``).
+
+    On, app-api mounts ``POST/GET/DELETE /sessions/{id}/folders`` and runs the
+    expansion task that lists the folder and imports each readable file as a
+    session file delivered by reference, whatever its size. Off, the routes
+    404 and nothing is expanded. **Opt-in while the feature is in
+    development**: only ``"true"`` (case-insensitive) enables it; unset, empty
+    or anything else is off.
+
+    Read on app-api (the routes) and on the AgentCore Runtime (a turn's
+    ``folder_attachment_ids``: off, the field is ignored and no manifest is
+    rendered). CDK sets it from ``CDK_FOLDER_ATTACHMENTS_ENABLED`` on both, the
+    Runtime's copy only while on, and refuses it without
+    ``CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED``: a folder file is read through
+    the prepare Lambda's sidecars, so without that pipeline there is nothing to
+    read small files through.
+    """
+    return os.environ.get("FOLDER_ATTACHMENTS_ENABLED", "").strip().lower() == "true"
+
+
+def folder_sync_enabled() -> bool:
+    """Whether KB sync can keep a knowledge base in step with a Drive folder
+    (``drive_folder`` policies, ``docs/specs/assistant-kb-sync.md`` §11).
+
+    On, app-api accepts a ``drive_folder`` sync policy, and the kb-sync
+    dispatcher and worker run them: each run re-lists the folder, re-ingests
+    changed files, imports new ones and marks files gone from the folder. Off,
+    creating one is refused (400) and the dispatcher re-arms a due folder
+    policy one interval out without running it, so existing policies wait
+    rather than starve the sweep. **Opt-in while the feature is in
+    development**: only ``"true"`` (case-insensitive) enables it.
+
+    Read on app-api and on both kb-sync Lambdas; CDK sets it on all three from
+    ``CDK_FOLDER_SYNC_ENABLED``. The SPA's matching switch is
+    ``features.folderSync`` (the "Keep in sync with the folder" option on Save
+    as project). A **feature switch** once finished: it widens what a schedule
+    can fetch and ingest on a user's behalf.
+    """
+    return os.environ.get("FOLDER_SYNC_ENABLED", "").strip().lower() == "true"
+
+
 def scheduled_runs_enabled() -> bool:
     """Whether the scheduled-runs surface is enabled for this environment.
 
@@ -624,6 +747,73 @@ def projects_enabled() -> bool:
     401 first), the harness refuses everyone, and existing rows are left untouched.
     """
     return os.environ.get("PROJECTS_ENABLED", "").strip().lower() == "true"
+
+
+def client_turn_timing_enabled() -> bool:
+    """Whether app-api records the SPA's own time-to-first-token for each turn.
+
+    ``POST /telemetry/turn-timing`` (``apis/app_api/telemetry/routes.py``) takes
+    the browser's send-to-first-token measurement and writes it as EMF into
+    ``AgentCoreStack/TurnLatency``. It is the only metric that covers the whole
+    wait a user sees: the browser, the app-api hop, Runtime routing and session
+    start, which the server-side ``FirstTokenMs`` (handler entry onward) cannot
+    see (``docs/specs/turn-path-ttft.md`` §6). **Opt-in while the feature is in
+    development** (CLAUDE.md "Feature flags"): only ``"true"`` (case-insensitive)
+    enables it; while off the route 404s after authentication. CDK sets it on
+    app-api from ``config.clientTurnTiming.enabled``. The SPA's matching switch
+    is ``features.clientTurnTiming``.
+
+    A **feature switch** once finished: it is observability a deployment may not
+    want (a handful of custom metrics, one small log line per turn). It records
+    timings and a model id, never message content, user ids or session ids.
+    """
+    return os.environ.get("CLIENT_TURN_TIMING_ENABLED", "").strip().lower() == "true"
+
+
+def session_prewarm_enabled() -> bool:
+    """Whether app-api warms a conversation's AgentCore Runtime session ahead of its first send.
+
+    ``POST /chat/prewarm`` (``apis/app_api/chat/proxy_routes.py``) forwards a
+    no-op ``warm`` invocation to ``/invocations`` with the conversation's
+    affinity header, so the microVM the first real turn will use is restored
+    (V2) or booted (V1) while the user is still reading or typing
+    (``docs/specs/agentcore-runtime-v2.md`` §5a). **Opt-in while the feature is
+    in development** (CLAUDE.md "Feature flags"): only ``"true"``
+    (case-insensitive) enables it; while off the route 404s after
+    authentication. CDK sets it on app-api from ``config.sessionPrewarm.enabled``.
+    The SPA's matching switch is ``features.sessionPrewarm``.
+
+    A **feature switch** once finished, not a rollout switch: it spends Runtime
+    session time on conversations the user may never send, which is a cost a
+    deployment may reasonably not want (cheap on V2, which reclaims idle
+    memory; billed at peak memory on V1). The Runtime side needs no flag and no
+    environment variable: the ``warm`` action is a no-op that returns before
+    any work, so the app-api route is the whole gate.
+    """
+    return os.environ.get("SESSION_PREWARM_ENABLED", "").strip().lower() == "true"
+
+
+def user_grants_enabled() -> bool:
+    """Whether the admin surface for direct user grants is mounted on app-api.
+
+    A direct grant (``apis.shared.rbac.models.UserGrant``) hands tools, models
+    and skills to one user beside their roles. **Opt-in while the feature is
+    in development** (CLAUDE.md "Feature flags"): only ``"true"``
+    (case-insensitive) enables it. CDK sets it on app-api from
+    ``config.userGrants.enabled``. The SPA's matching switch is
+    ``features.userGrants``.
+
+    **This gates the write surface only.** Permission resolution reads a
+    user's grant row wherever it runs — app-api and the AgentCore Runtime —
+    without consulting this flag, for two reasons. The Runtime is at its
+    environment-variable cap (and Runtime V2 caps the whole payload), so a
+    second copy of the switch there would cost a slot the turn path needs
+    more. And an absent row *is* the off state: a grant can only exist where
+    an admin wrote one through these routes. Turning the flag off therefore
+    stops new grants and edits but does not revoke what was granted — delete
+    the grant to revoke it.
+    """
+    return os.environ.get("USER_GRANTS_ENABLED", "").strip().lower() == "true"
 
 
 def conversation_index_enabled() -> bool:

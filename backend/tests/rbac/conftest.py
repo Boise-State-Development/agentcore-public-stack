@@ -93,6 +93,11 @@ def mock_app_role_repo():
     repo.delete_role = AsyncMock(return_value=True)
     repo.get_roles_for_jwt_role = AsyncMock(return_value=[])
     repo.role_exists = AsyncMock(return_value=False)
+    # No direct grant unless a test writes one.
+    repo.get_user_grant = AsyncMock(return_value=None)
+    repo.put_user_grant = AsyncMock(side_effect=lambda g: g)
+    repo.delete_user_grant = AsyncMock(return_value=True)
+    repo.list_user_grants = AsyncMock(return_value=[])
     return repo
 
 

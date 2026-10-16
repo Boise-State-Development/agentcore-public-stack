@@ -10,6 +10,11 @@ import { ConfigService } from '../../services/config.service';
 
 const BASE = 'http://localhost:8000/projects';
 
+const SCHEDULE_BODY = {
+  label: 'Weekly digest', promptText: 'Summarize the week.', cadence: 'weekly' as const, hourLocal: 9, weekday: 1,
+  timezone: 'America/Boise', deliverTo: 'project' as const, notifyMembers: true, publishOutputs: true,
+};
+
 describe('ProjectApiService', () => {
   let service: ProjectApiService;
   let httpMock: HttpTestingController;
@@ -70,6 +75,14 @@ describe('ProjectApiService', () => {
     ['audit', 'GET', `${BASE}/prj_1/audit?limit=50`, () => service.audit('prj_1')],
     ['audit (page 2)', 'GET', `${BASE}/prj_1/audit?limit=50&cursor=c1`, () => service.audit('prj_1', 50, 'c1')],
     ['deleteFile', 'DELETE', `${BASE}/prj_1/knowledge/doc_1`, () => service.deleteFile('prj_1', 'doc_1')],
+    ['schedules', 'GET', `${BASE}/prj_1/schedules`, () => service.schedules('prj_1')],
+    ['schedule', 'GET', `${BASE}/prj_1/schedules/sc_1`, () => service.schedule('prj_1', 'sc_1')],
+    ['createSchedule', 'POST', `${BASE}/prj_1/schedules`, () => service.createSchedule('prj_1', SCHEDULE_BODY)],
+    ['updateSchedule', 'PATCH', `${BASE}/prj_1/schedules/sc_1`, () => service.updateSchedule('prj_1', 'sc_1', { label: 'y' })],
+    ['pauseSchedule', 'POST', `${BASE}/prj_1/schedules/sc_1/pause`, () => service.pauseSchedule('prj_1', 'sc_1')],
+    ['resumeSchedule', 'POST', `${BASE}/prj_1/schedules/sc_1/resume`, () => service.resumeSchedule('prj_1', 'sc_1')],
+    ['deleteSchedule', 'DELETE', `${BASE}/prj_1/schedules/sc_1`, () => service.deleteSchedule('prj_1', 'sc_1')],
+    ['scheduleRuns', 'GET', `${BASE}/prj_1/schedules/sc_1/runs`, () => service.scheduleRuns('prj_1', 'sc_1')],
   ];
 
   for (const [name, method, url, call] of calls) {
@@ -91,5 +104,8 @@ describe('ProjectApiService', () => {
 
     service.saveBindings('prj_1', 'tools', [{ ref: 'web_search' }]).subscribe();
     expect(httpMock.expectOne(`${BASE}/prj_1/tools`).request.body).toEqual({ bindings: [{ ref: 'web_search' }] });
+
+    service.createSchedule('prj_1', SCHEDULE_BODY).subscribe();
+    expect(httpMock.expectOne(`${BASE}/prj_1/schedules`).request.body).toEqual(SCHEDULE_BODY);
   });
 });

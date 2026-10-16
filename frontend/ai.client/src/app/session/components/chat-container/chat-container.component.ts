@@ -10,9 +10,9 @@ import {
   viewChild,
 } from '@angular/core';
 import { NgTemplateOutlet } from '@angular/common';
-import { Message } from '../../services/models/message.model';
+import { FolderAttachmentData, Message } from '../../services/models/message.model';
 import { MessageListComponent } from '../message-list/message-list.component';
-import { ChatInputComponent } from '../chat-input/chat-input.component';
+import { ChatInputComponent, ComposerProject } from '../chat-input/chat-input.component';
 import { AnimatedTextComponent } from '../../../components/animated-text';
 import { ParagraphSkeletonComponent } from '../../../components/paragraph-skeleton';
 import { Topnav } from '../../../components/topnav/topnav';
@@ -156,6 +156,25 @@ export class ChatContainerComponent {
   // Required inputs
   messages = input.required<Message[]>();
   sessionId = input<string | null>(null);
+  /**
+   * Let the composer attach Drive folders (drive-folder spec §4.7). Off unless
+   * the parent sends folders with the turn: the session page does; the agent
+   * preview and the marketplace test drive do not, so they never offer one.
+   */
+  allowFolderAttachments = input<boolean>(false);
+  /**
+   * Offer "Project or folder" beneath the full-page empty state's composer
+   * (docs/specs/composer-project-folder-picker.md). Only the session page sets
+   * it; a thread and the embedded previews never show it.
+   */
+  showScopePicker = input<boolean>(false);
+  /**
+   * The Shared Project this conversation runs in, resolved by the session page
+   * (it resolves the URL's `?project=` before the harness Agent has loaded).
+   * The empty state then shows the greeting, with the composer's placeholder
+   * naming the project, instead of the harness Agent's launch card.
+   */
+  project = input<ComposerProject | null>(null);
 
   // Optional inputs
 
@@ -209,7 +228,7 @@ export class ChatContainerComponent {
   // `mentionAgentId` and `invokedSkillIds` ride through untouched: the container is a
   // layout shell, and dropping either field here would silently turn every `@`-mention
   // back into a plain turn, or every `/` skill command into ordinary prose.
-  messageSubmitted = output<{ content: string; timestamp: Date; fileUploadIds?: string[]; mentionAgentId?: string; invokedSkillIds?: string[] }>();
+  messageSubmitted = output<{ content: string; timestamp: Date; fileUploadIds?: string[]; mentionAgentId?: string; invokedSkillIds?: string[]; folders?: FolderAttachmentData[] }>();
   continueRequested = output<void>();
   messageCancelled = output<void>();
   fileAttached = output<File>();
@@ -373,7 +392,7 @@ export class ChatContainerComponent {
   }
 
   // Event handlers
-  onMessageSubmitted(event: { content: string; timestamp: Date; fileUploadIds?: string[]; mentionAgentId?: string; invokedSkillIds?: string[] }) {
+  onMessageSubmitted(event: { content: string; timestamp: Date; fileUploadIds?: string[]; mentionAgentId?: string; invokedSkillIds?: string[]; folders?: FolderAttachmentData[] }) {
     this.messageSubmitted.emit(event);
 
     // Wait for DOM to update (user message to be added) then scroll to it

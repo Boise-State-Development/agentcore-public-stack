@@ -13,5 +13,12 @@ export const environment = {
     features: {
         projects: false,
         conversationSearch: true,
+        userGrants: false,
+        sessionPrewarm: false,
+        clientTurnTiming: false,
+        largeDocumentAttachments: false,
+        folderAttachments: false,
+        attachmentKb: false,
+        folderSync: false,
     } satisfies FeatureFlags,
 };

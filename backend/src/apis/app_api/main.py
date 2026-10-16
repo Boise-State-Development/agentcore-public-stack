@@ -80,6 +80,13 @@ async def lifespan(app: FastAPI):
     # Startup
     _validate_skip_auth_or_raise()
     logger.info("=== AgentCore Public Stack API Starting ===")
+    # app-api keeps its explicit resource-name variables (ECS has no payload
+    # limit). This only compares them with what PROJECT_PREFIX derives and
+    # warns on a difference, so the Runtime's derivation (spec §7) is checked
+    # against every real deployment before the Runtime stops receiving them.
+    from apis.shared.config import audit_derived_environment, log_environment_report
+
+    log_environment_report(audit_derived_environment(), logger, service="app-api")
     logger.info("Agent execution engine initialized")
 
     yield  # Application is running
@@ -209,6 +216,7 @@ from apis.app_api.costs.routes import router as costs_router
 from apis.app_api.chat.routes import router as chat_router
 from apis.app_api.chat.converse_routes import router as converse_router
 from apis.app_api.chat.proxy_routes import router as bff_chat_proxy_router
+from apis.app_api.telemetry.routes import router as telemetry_router
 from apis.app_api.mcp_apps.routes import router as mcp_apps_router
 from apis.app_api.memory.routes import router as memory_router
 from apis.app_api.memory_spaces.routes import router as memory_spaces_router
@@ -218,9 +226,12 @@ from apis.app_api.projects.maintenance_routes import router as project_memory_ma
 from apis.app_api.projects.memory_routes import files_router as project_memory_files_router
 from apis.app_api.projects.memory_routes import router as project_memory_router
 from apis.app_api.projects.output_routes import router as project_outputs_router
+from apis.app_api.projects.schedule_routes import router as project_schedules_router
 from apis.app_api.projects.routes import router as projects_router
 from apis.app_api.tools.routes import router as tools_router
 from apis.app_api.files.routes import router as files_router
+from apis.app_api.files.folders.routes import recent_router as recent_folders_router
+from apis.app_api.files.folders.routes import router as folder_attachments_router
 from apis.app_api.assistants.routes import router as assistants_router
 from apis.app_api.agent_designer.routes import router as agents_router
 from apis.app_api.documents.routes import router as documents_router
@@ -250,6 +261,8 @@ app.include_router(bff_auth_router)  # BFF Token Handler auth routes (Phase 3, d
 app.include_router(api_keys_router)
 app.include_router(session_search_router)  # GET /sessions/search; 404s while CONVERSATION_SEARCH_ENABLED is off
 app.include_router(sessions_router)
+app.include_router(folder_attachments_router)  # /sessions/{id}/folders (drive-folder PR-A); 404s while FOLDER_ATTACHMENTS_ENABLED is off
+app.include_router(recent_folders_router)  # /folders/recent (composer picker PR-2); 404s while FOLDER_ATTACHMENTS_ENABLED is off
 app.include_router(admin_router)
 app.include_router(assistants_router)
 app.include_router(agents_router)  # Agent Designer /agents surface; 404s while AGENTS_API_ENABLED off
@@ -262,6 +275,7 @@ app.include_router(costs_router)
 app.include_router(chat_router)  # Application-specific chat endpoints
 app.include_router(converse_router)  # API-key authenticated /chat/api-converse (Bedrock Converse)
 app.include_router(bff_chat_proxy_router)  # Cookie-authenticated SSE proxy (Phase 4, dormant until SPA cutover)
+app.include_router(telemetry_router)  # POST /telemetry/turn-timing; 404s while CLIENT_TURN_TIMING_ENABLED is off
 app.include_router(mcp_apps_router)  # MCP Apps app-initiated tools/call proxy (PR #5; inert until host flag on)
 app.include_router(memory_spaces_router)  # Memory Spaces user surface (A2); 404s while flag off
 app.include_router(projects_router)  # Shared Projects (PR-1.2); 404s while PROJECTS_ENABLED=false
@@ -270,6 +284,7 @@ app.include_router(project_memory_router)  # Proposals to a project's shared mem
 app.include_router(project_memory_files_router)  # Memory items: pins, provenance, archive (2.5a-2)
 app.include_router(project_memory_maintenance_router)  # Maintenance runs that propose compaction (2.6)
 app.include_router(project_outputs_router)  # Artifacts shared with a project (3.3)
+app.include_router(project_schedules_router)  # /projects/{id}/schedules (3.2); 404 unless PROJECTS_ENABLED and SCHEDULED_RUNS_ENABLED
 app.include_router(notifications_router)  # In-app inbox (PR-1.7); first producer is Shared Projects
 app.include_router(memory_router)  # AgentCore Memory access endpoints
 app.include_router(tools_router)  # Tool discovery and permissions

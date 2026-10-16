@@ -346,8 +346,8 @@ async def list_bindable_endpoint(
 ):
     """RBAC-filtered catalog of bindable primitives of ``kind`` for the caller (D4).
 
-    The Designer palette: each picker fetches ``?kind=model|tool|skill|knowledge_base|
-    memory_space`` and shows only what the user's role enables. Composes the existing
+    The Designer palette: each picker fetches ``?kind=model|tool|skill|knowledge_base``
+    and shows only what the user's role enables. Composes the existing
     per-primitive access services (see ``bindable_catalog``).
     """
     if kind not in BINDABLE_KINDS:
@@ -647,7 +647,7 @@ async def agent_listing_preflight_endpoint(
     """What the submit dialog needs before the author commits (D7, owner only).
 
     A read-only rehearsal of the submit checks: the skills publication would expose, the
-    memory-space block if there is one, and whether the author still has to consent to
+    project-harness block if there is one, and whether the author still has to consent to
     going public. Declared before ``/listing/submit`` only for reading order — the paths
     are literal and do not collide.
     """
@@ -677,8 +677,7 @@ async def submit_agent_listing_endpoint(
 ):
     """Submit an Agent for marketplace review (owner only).
 
-    Runs the D7 checks first: a ``memory_space`` binding rejects the submission with 400,
-    and the response enumerates the author's own skills that publication would make
+    Runs the D7 checks first; the response enumerates the author's own skills that publication would make
     readable to anyone who runs the Agent.
     """
     try:

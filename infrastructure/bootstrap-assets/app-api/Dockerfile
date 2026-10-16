@@ -14,7 +14,7 @@
 # Architecture: linux/amd64 — App API runs on x86_64 Fargate
 # (default); the real image is also amd64.
 
-FROM --platform=linux/amd64 python:3.13-slim@sha256:739e7213785e88c0f702dcdc12c0973afcbd606dbf021a589cab77d6b00b579d
+FROM --platform=linux/amd64 public.ecr.aws/docker/library/python:3.13-slim@sha256:739e7213785e88c0f702dcdc12c0973afcbd606dbf021a589cab77d6b00b579d
 
 WORKDIR /app
 COPY handler.py /app/handler.py

@@ -28,4 +28,51 @@ export interface FeatureFlags {
    * only when it is "false").
    */
   conversationSearch: boolean;
+  /**
+   * Direct user grants: the Access section on the admin user detail page, where a
+   * system admin grants tools, models and skills to one user beside their roles.
+   * Backend: USER_GRANTS_ENABLED (app-api; `/admin/user-grants` 404s while off).
+   */
+  userGrants: boolean;
+  /**
+   * Session prewarm: a new conversation's page load, or the first keystroke in an
+   * existing one, starts its AgentCore Runtime microVM ahead of the send.
+   * Backend: SESSION_PREWARM_ENABLED (app-api; `POST /chat/prewarm` 404s while off).
+   */
+  sessionPrewarm: boolean;
+  /**
+   * Client-measured time to first token: the SPA reports each turn's
+   * send-to-first-token. No UI. Backend: CLIENT_TURN_TIMING_ENABLED (app-api;
+   * `POST /telemetry/turn-timing` 404s while off).
+   */
+  clientTurnTiming: boolean;
+  /**
+   * Large document attachments: pdf, docx, txt, md and html files up to 50 MB
+   * (instead of 4 MB) are accepted and attached by reference, with a "Large
+   * document, read on demand" chip. Backend: LARGE_DOCUMENT_ATTACHMENTS_ENABLED
+   * (app-api; presign refuses a document over 4 MB while off).
+   */
+  largeDocumentAttachments: boolean;
+  /**
+   * Folder attachments (docs/specs/drive-folder-attachments.md): "Attach this
+   * folder" in the composer's Drive browser, the folder card, and the folder chip
+   * on a sent message. Backend: FOLDER_ATTACHMENTS_ENABLED on app-api (the
+   * routes) and the AgentCore Runtime (the manifest); keep them in step.
+   */
+  folderAttachments: boolean;
+  /**
+   * Attachments KB: a large document's chip follows its search index
+   * ("Indexing…", then "Searchable"), polled from `GET /files/{id}/search-status`.
+   * Only meaningful with `largeDocumentAttachments`. Backend: ATTACHMENT_KB_ENABLED
+   * (app-api and the Runtime; the endpoint answers `off` while it is off).
+   */
+  attachmentKb: boolean;
+  /**
+   * Folder sync (docs/specs/assistant-kb-sync.md §11): Save as project offers
+   * "Keep in sync with the folder" with an interval, and a project's Files page
+   * lists the folders it is kept in step with. Only meaningful with `projects`
+   * and `folderAttachments`. Backend: FOLDER_SYNC_ENABLED (app-api refuses a
+   * folder schedule while off; the kb-sync Lambdas carry it too).
+   */
+  folderSync: boolean;
 }

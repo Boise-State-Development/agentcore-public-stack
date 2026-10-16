@@ -11,6 +11,7 @@ import { StreamParserService } from './stream-parser.service';
 import { ChatStateService } from './chat-state.service';
 import { MessageMapService } from '../session/message-map.service';
 import { ErrorService } from '../../../services/error/error.service';
+import { TurnTimingService } from './turn-timing.service';
 
 describe('ChatHttpService', () => {
   let service: ChatHttpService;
@@ -29,7 +30,7 @@ describe('ChatHttpService', () => {
         // and lets cookie auth ride along with the request rather than
         // attaching a Bearer manually.
         { provide: BffSessionService, useValue: { csrfHeaders: vi.fn().mockReturnValue({}), handleUnauthorized: vi.fn() } },
-        { provide: SessionService, useValue: { currentSession: signal({ sessionId: 's1' }), updateSessionTitleInCache: vi.fn(), getSessionMetadata: vi.fn().mockResolvedValue({}), isNewSession: vi.fn().mockReturnValue(false) } },
+        { provide: SessionService, useValue: { currentSession: signal({ sessionId: 's1' }), updateSessionTitleInCache: vi.fn(), getSessionMetadata: vi.fn().mockResolvedValue({}), isNewSession: vi.fn().mockReturnValue(false), awaitsServerRow: vi.fn().mockReturnValue(false), adoptServerPreferences: vi.fn() } },
         { provide: StreamParserService, useValue: { getCurrentStreamId: vi.fn().mockReturnValue('stream-1'), parseEventSourceMessage: vi.fn(), hasReceivedDone: vi.fn().mockReturnValue(false) } },
         { provide: ChatStateService, useValue: { abortRequest: vi.fn(), setChatLoading: vi.fn(), setLastTurnInterrupted: vi.fn(), seedSessionAggregates: vi.fn(), createAbortController: vi.fn().mockReturnValue(new AbortController()), releaseAbortController: vi.fn(), streamingSessionIds: vi.fn().mockReturnValue([]) } },
         { provide: MessageMapService, useValue: { endStreaming: vi.fn() } },
@@ -112,7 +113,7 @@ describe('ChatHttpService', () => {
     // The refresh is delayed to let the teardown write land, then awaits the fetch.
     await vi.runAllTimersAsync();
 
-    expect(sessionSvc.getSessionMetadata).toHaveBeenCalledWith('s1');
+    expect(sessionSvc.getSessionMetadata).toHaveBeenCalledWith('s1', { quiet: true });
     expect(chatStateService.seedSessionAggregates).toHaveBeenCalledWith('s1', {
       totalCost: 0.0123,
       lastContextTokens: 4200,
@@ -167,6 +168,32 @@ describe('ChatHttpService', () => {
     vi.restoreAllMocks();
   });
 
+  it('ends the first-token clock on the first delta and clears it when the stream closes', async () => {
+    // Client-measured time to first token (turn-timing.service.ts): the first
+    // `content_block_delta` reports, and close clears whatever never got one.
+    const timing = TestBed.inject(TurnTimingService);
+    const firstToken = vi.spyOn(timing, 'firstToken').mockImplementation(() => undefined);
+    const abandon = vi.spyOn(timing, 'abandon').mockImplementation(() => undefined);
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        'event: message_start\ndata: {}\n\n'
+          + 'event: content_block_delta\ndata: {"type":"text","text":"PO"}\n\n'
+          + 'event: content_block_delta\ndata: {"type":"text","text":"NG"}\n\n'
+          + 'event: done\ndata: {}\n\n',
+        { status: 200, headers: { 'content-type': 'text/event-stream' } },
+      ),
+    );
+
+    await service.sendChatRequest({ session_id: 's1', message: 'hi' });
+
+    // Called per delta; the service itself reports only the first.
+    expect(firstToken).toHaveBeenCalledTimes(2);
+    expect(firstToken).toHaveBeenCalledWith('s1');
+    expect(abandon).toHaveBeenCalledWith('s1');
+    expect(firstToken.mock.invocationCallOrder[0]).toBeLessThan(abandon.mock.invocationCallOrder[0]);
+    vi.restoreAllMocks();
+  });
+
   it('surfaces a soft "Already responding" notice (not a hard error) on a 409 single-flight rejection', async () => {
     // The inference-api single-flight guard rejects a duplicate turn while the
     // prior one is still streaming server-side; the BFF relays it as 409.
@@ -180,7 +207,7 @@ describe('ChatHttpService', () => {
 
     await expect(
       service.sendChatRequest({ session_id: 's1', message: 'hi' }),
-    ).rejects.toMatchObject({ name: 'AlreadyStreamingError' });
+    ).rejects.toMatchObject({ name: 'StreamNotStartedError', httpStatus: 409 });
 
     // Gentle, dismissible notice carrying the server's explanation — NOT the
     // "Chat Request Failed" / network-error paths.
@@ -205,10 +232,39 @@ describe('ChatHttpService', () => {
 
     await expect(
       service.sendChatRequest({ session_id: 's1', message: 'hi' }),
-    ).rejects.toMatchObject({ name: 'AlreadyStreamingError' });
+    ).rejects.toMatchObject({ name: 'StreamNotStartedError', httpStatus: 409 });
 
     const [, message] = errorSvc.addError.mock.calls[0];
     expect(message).toBe('This conversation is busy generating a response.');
+    vi.restoreAllMocks();
+  });
+
+  it('rejects a Runtime token refusal as not started, in words the user can read', async () => {
+    // Dev, 2026-10-09: app-api relayed the Runtime's 403 inside its own
+    // `detail`, double-encoded, and the old parse fell back to "Access forbidden".
+    const body = JSON.stringify({ detail: JSON.stringify({ message: 'Unauthorized inbound token' }) });
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(body, { status: 403, headers: { 'content-type': 'application/json' } }),
+    );
+    const errorSvc = TestBed.inject(ErrorService) as any;
+
+    await expect(service.sendChatRequest({ session_id: 's1', message: 'hi' })).rejects.toMatchObject({
+      name: 'StreamNotStartedError',
+      httpStatus: 403,
+      reason: 'Your sign-in was being renewed when this was sent.',
+    });
+    expect(errorSvc.addError.mock.calls[0][1]).toBe('Unauthorized inbound token');
+    expect(chatStateService.setChatLoading).toHaveBeenCalledWith('s1', false);
+    vi.restoreAllMocks();
+  });
+
+  it('rejects a connection that never opened as not started', async () => {
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('Failed to fetch'));
+
+    await expect(service.sendChatRequest({ session_id: 's1', message: 'hi' })).rejects.toMatchObject({
+      name: 'StreamNotStartedError',
+      reason: 'The server could not be reached.',
+    });
     vi.restoreAllMocks();
   });
 
@@ -378,6 +434,57 @@ describe('ChatHttpService', () => {
     });
   });
 
+  describe('first-turn read-back of the session row', () => {
+    // The backend binds a session's agent and project before it streams, but
+    // a session started in this tab is shown from its optimistic cache row,
+    // and `session_title` takes it out of `isNewSession` without fetching
+    // anything. Without this read a project conversation had no "Project
+    // members" share option, and sat outside its project, until a reload.
+    let sessionSvc: any;
+
+    beforeEach(() => {
+      sessionSvc = TestBed.inject(SessionService) as any;
+      sessionSvc.applyServerTitle = vi.fn();
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+        new Response('event: done\ndata: {}\n\n', {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream' },
+        }),
+      );
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('adopts the bound preferences when the title already arrived mid-stream', async () => {
+      sessionSvc.awaitsServerRow.mockReturnValue(true);
+      sessionSvc.getSessionMetadata.mockResolvedValue({
+        title: 'Lab Safety Review',
+        preferences: { assistantId: 'harness-1', projectId: 'proj-1' },
+      });
+
+      await service.sendChatRequest({ session_id: 's1', message: 'hi' });
+      await vi.waitFor(() => expect(sessionSvc.adoptServerPreferences).toHaveBeenCalled());
+
+      expect(sessionSvc.adoptServerPreferences).toHaveBeenCalledWith('s1', {
+        assistantId: 'harness-1',
+        projectId: 'proj-1',
+      });
+      expect(sessionSvc.getSessionMetadata).toHaveBeenCalledTimes(1);
+      // The title is the session_title event's to apply; this read only fills in.
+      expect(sessionSvc.applyServerTitle).not.toHaveBeenCalled();
+    });
+
+    it('reads nothing back on a later turn', async () => {
+      await service.sendChatRequest({ session_id: 's1', message: 'hi' });
+      await Promise.resolve();
+
+      expect(sessionSvc.getSessionMetadata).not.toHaveBeenCalled();
+      expect(sessionSvc.adoptServerPreferences).not.toHaveBeenCalled();
+    });
+  });
+
   describe('title fallback polling', () => {
     // A stream that outran title generation closes before Nova Micro answers,
     // so the first read sees the placeholder. Short retries pick the title up
@@ -402,7 +509,7 @@ describe('ChatHttpService', () => {
         .mockResolvedValueOnce({ title: 'New Conversation' })
         .mockResolvedValue({ title: 'Biology Syllabus' });
 
-      void (service as any).refreshTitleFromServer('s1');
+      void (service as any).refreshNewSessionFromServer('s1');
       await vi.advanceTimersByTimeAsync(800);
 
       expect(sessionSvc.getSessionMetadata).toHaveBeenCalledTimes(3);
@@ -414,7 +521,7 @@ describe('ChatHttpService', () => {
     it('gives up after a bounded number of retries', async () => {
       sessionSvc.getSessionMetadata = vi.fn().mockResolvedValue({ title: 'New Conversation' });
 
-      void (service as any).refreshTitleFromServer('s1');
+      void (service as any).refreshNewSessionFromServer('s1');
       await vi.runAllTimersAsync();
 
       expect(sessionSvc.getSessionMetadata).toHaveBeenCalledTimes(6);
@@ -424,7 +531,7 @@ describe('ChatHttpService', () => {
     it('stops polling once the title arrived another way', async () => {
       sessionSvc.getSessionMetadata = vi.fn().mockResolvedValue({ title: 'New Conversation' });
 
-      void (service as any).refreshTitleFromServer('s1');
+      void (service as any).refreshNewSessionFromServer('s1');
       await vi.advanceTimersByTimeAsync(0);
       // A late `session_title` event applied the title and cleared the flag.
       sessionSvc.isNewSession.mockReturnValue(false);

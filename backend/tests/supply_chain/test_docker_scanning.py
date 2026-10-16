@@ -19,6 +19,7 @@ EXPECTED_DOCKERFILES = [
     "Dockerfile.kb-sync",
     "Dockerfile.conversation-index",
     "Dockerfile.memory-maintenance",
+    "Dockerfile.large-document-prepare",
 ]
 
 

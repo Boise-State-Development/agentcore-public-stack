@@ -103,7 +103,7 @@ async def _create_pending_document(
     user_id: str,
     filename: str,
 ) -> str:
-    """Create a fresh `uploading` document row for a discovered URL."""
+    """Create a fresh document row for a discovered URL."""
     from apis.app_api.documents.services.document_service import _generate_document_id
 
     document_id = _generate_document_id()
@@ -115,6 +115,7 @@ async def _create_pending_document(
         size_bytes=0,
         s3_key=s3_key,
         document_id=document_id,
+        status=await _new_page_status(assistant_id),
         provenance=DocumentProvenance(
             source_connector_id="web",
             source_adapter_key="http",
@@ -123,6 +124,24 @@ async def _create_pending_document(
         ),
     )
     return document_id
+
+
+async def _new_page_status(assistant_id: str) -> str:
+    """`provisioning` while the knowledge base is still being born managed, else `uploading`.
+
+    A crawl can outlast that window in either direction, so each page asks when it
+    is created. A page that said `uploading` during the window would be skipped by
+    the managed consumer (it defers) and by the provisioning job (which ingests
+    only `provisioning` rows), and sit until the stale sweep failed it.
+    """
+    from apis.shared.kb_backend.records import awaiting_provisioning, get_kb_record
+
+    try:
+        record = await asyncio.to_thread(get_kb_record, assistant_id, assistant_id)
+    except Exception:  # noqa: BLE001 — no record to read means nothing is being provisioned
+        logger.warning("Could not read the knowledge-base record for %s", assistant_id, exc_info=True)
+        return "uploading"
+    return "provisioning" if awaiting_provisioning(record) else "uploading"
 
 
 # ── KB-sync refresh support ──────────────────────────────────────────────────

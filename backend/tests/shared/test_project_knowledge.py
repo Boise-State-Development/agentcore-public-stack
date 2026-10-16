@@ -44,6 +44,8 @@ def pid(project, monkeypatch) -> str:
     monkeypatch.setattr(document_routes, "generate_upload_url", AsyncMock(return_value=("https://s3/put", "k")))
     monkeypatch.setattr(document_routes, "_resolve_kb_usage", AsyncMock(return_value=None))
     monkeypatch.setattr(knowledge_routes, "generate_download_url", AsyncMock(return_value="https://s3/get"))
+    # As if the harness's knowledge base were born managed (tested on its own below).
+    monkeypatch.setattr(knowledge_routes, "_require_managed_knowledge", AsyncMock())
     return created.project_id
 
 
@@ -171,3 +173,123 @@ def test_adding_and_removing_files_is_on_the_projects_audit_trail(pid, harness_i
     ]
     assert trail.records[0]["after"] == {"documentId": doc_id, "filename": "plan.txt", "source": "upload"}
     assert trail.records[1]["before"] == {"documentId": doc_id, "filename": "plan.txt"}
+
+
+def _drive_doc(harness_id: str, name: str = "roster.gdoc") -> str:
+    return _doc(harness_id, name, provenance=DocumentProvenance(
+        source_connector_id="gdrive", source_adapter_key="google", source_file_id="f-roster",
+        imported_by_user_id=EDITOR.user_id,
+    ))
+
+
+def test_editors_schedule_syncs_for_the_projects_sources(pid, harness_id):
+    doc = _drive_doc(harness_id)
+    base = f"/projects/{pid}/knowledge/sync-policies"
+    body = {"sourceType": "drive_file", "sourceRef": doc, "interval": "weekly"}
+
+    assert client(VIEWER).post(base, json=body).status_code == 403
+    assert client(STRANGER).post(base, json=body).status_code == 404
+    created = client(EDITOR).post(base, json=body)
+    assert created.status_code == 201, created.text
+    policy = created.json()
+    assert (policy["assistantId"], policy["sourceRef"], policy["interval"]) == (harness_id, doc, "weekly")
+    # The file now points at its schedule, as an agent's would.
+    assert client(VIEWER).get(f"/projects/{pid}/knowledge/{doc}").json()["syncPolicyId"] == policy["policyId"]
+
+    # "sync-policies" is never read as a document id, and only editors see schedules.
+    assert [p["policyId"] for p in client(OWNER).get(base).json()["policies"]] == [policy["policyId"]]
+    assert client(VIEWER).get(base).status_code == 403
+
+    one = f"{base}/{policy['policyId']}"
+    paused = client(EDITOR).patch(one, json={"state": "paused_user"})
+    assert (paused.status_code, paused.json()["state"]) == (200, "paused_user")
+    assert client(VIEWER).patch(one, json={"state": "active"}).status_code == 403
+    assert client(EDITOR).patch(one, json={"state": "active"}).json()["state"] == "active"
+    assert client(EDITOR).post(f"{one}/run-now").status_code == 202
+    assert client(EDITOR).delete(one).status_code == 204
+    assert client(EDITOR).get(base).json()["policies"] == []
+
+
+def test_an_uploaded_file_has_nothing_to_sync_from(pid, harness_id):
+    doc = _doc(harness_id, "local.txt")
+    response = client(EDITOR).post(
+        f"/projects/{pid}/knowledge/sync-policies",
+        json={"sourceType": "drive_file", "sourceRef": doc, "interval": "daily"},
+    )
+    assert response.status_code == 400
+
+
+def test_an_archived_project_takes_no_new_schedules(pid, harness_id, project):
+    service, _ = project
+    doc = _drive_doc(harness_id)
+    asyncio.run(service.update_project(pid, OWNER, status="archived"))
+    response = client(OWNER).post(
+        f"/projects/{pid}/knowledge/sync-policies",
+        json={"sourceType": "drive_file", "sourceRef": doc, "interval": "daily"},
+    )
+    assert response.status_code == 409
+
+
+
+# ---- a project only ever founds a managed knowledge base ---------------------
+
+
+@pytest.fixture()
+def kb(monkeypatch):
+    """The born-managed trigger, the KB record and the corpus probe, as the check sees them."""
+    from types import SimpleNamespace
+
+    from apis.shared.kb_backend import records
+
+    state = SimpleNamespace(record=None, born=AsyncMock(return_value=False))
+    monkeypatch.setattr(knowledge_routes, "begin_born_managed", state.born)
+    monkeypatch.setattr(records, "get_kb_record", lambda assistant_id, app_kb_id: state.record)
+    return state
+
+
+def _check(harness_id: str = "ast-h"):
+    from types import SimpleNamespace
+
+    harness = SimpleNamespace(assistant_id=harness_id, owner_id="u-owner")
+    return asyncio.run(knowledge_routes._require_managed_knowledge(harness))
+
+
+def test_a_projects_first_file_starts_a_managed_knowledge_base(kb):
+    kb.record = {"retrievalEngine": "managed"}  # what the trigger just declared
+    _check()
+    kb.born.assert_awaited_once_with("ast-h", owner_user_id="u-owner")
+
+
+def test_a_project_never_founds_a_classic_knowledge_base(kb):
+    from fastapi import HTTPException
+
+    # The trigger answered legacy (MANAGED_KB_NEW_DEFAULT off, or the start failed).
+    with pytest.raises(HTTPException) as refused:
+        _check()
+    assert refused.value.status_code == 503
+
+
+def test_a_project_never_adds_to_a_classic_knowledge_base(kb):
+    from fastapi import HTTPException
+
+    # A harness that already holds classic documents: the trigger leaves it legacy.
+    with pytest.raises(HTTPException) as refused:
+        _check()
+    assert refused.value.status_code == 503
+
+
+def test_a_project_adds_to_its_built_managed_knowledge_base(kb):
+    kb.record = {"retrievalEngine": "managed", "awsKbId": "kb", "awsDataSourceId": "ds"}
+    _check()
+
+
+def test_the_check_guards_every_way_a_project_adds_files(pid, monkeypatch):
+    from fastapi import HTTPException
+
+    refuse = AsyncMock(side_effect=HTTPException(status_code=503, detail="no"))
+    monkeypatch.setattr(knowledge_routes, "_require_managed_knowledge", refuse)
+    base = f"/projects/{pid}/knowledge"
+    assert _upload(EDITOR, pid).status_code == 503
+    assert client(EDITOR).post(f"{base}/crawl", json={"url": "https://example.com/"}).status_code == 503
+    assert client(EDITOR).post(f"{base}/import", json={"connectorId": "gdrive", "files": [{"fileId": "f", "name": "a"}]}).status_code == 503
+    assert refuse.await_count == 3

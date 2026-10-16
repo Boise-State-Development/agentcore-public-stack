@@ -62,6 +62,10 @@ class SkillResourceStoreError(RuntimeError):
     """
 
 
+class SkillResourceChangedError(SkillResourceStoreError):
+    """A live file's bytes no longer match the manifest being frozen. Retry the pin."""
+
+
 # Resource ``kind`` → bundle subdirectory (agentskills.io standard).
 KIND_DIRS: dict = {"reference": "references", "script": "scripts", "asset": "assets"}
 
@@ -75,6 +79,17 @@ def resource_key(skill_id: str, kind: str, filename: str) -> str:
     """
     subdir = KIND_DIRS.get(kind, "references")
     return f"skills/{skill_id}/{subdir}/{filename}"
+
+
+def version_blob_key(skill_id: str, content_hash: str) -> str:
+    """Return the frozen, content-addressed key a skill version's file is read from.
+
+    ``skill-versions/{skill_id}/{sha256}``: outside the skill's bundle prefix, so a
+    version never adds a directory to the agentskills.io layout, and keyed by content,
+    so the bytes behind a key can never change and two versions sharing a file share
+    one object (shared-projects 3.1).
+    """
+    return f"skill-versions/{skill_id}/{content_hash}"
 
 
 def skill_md_key(skill_id: str) -> str:
@@ -209,6 +224,35 @@ class SkillResourceStore:
             raise SkillResourceStoreError(
                 f"failed to read reference file at key '{s3_key}'"
             ) from e
+
+    def freeze(self, *, skill_id: str, s3_key: str, content_hash: str, content_type: str) -> str:
+        """Copy a live reference file to its frozen version key; return that key.
+
+        The copy goes through this process and is checked against ``content_hash``
+        rather than being a server-side copy: the live key is overwritten in place on
+        re-upload, so between reading a manifest and copying, its bytes may already
+        be someone's newer file, and a frozen key holding the wrong bytes would be
+        wrong forever. An object already at the frozen key is left alone (its key
+        is its content).
+        """
+        self._require_enabled()
+        frozen = version_blob_key(skill_id, content_hash)
+        client = self._client()
+        try:
+            client.head_object(Bucket=self.bucket_name, Key=frozen)
+            return frozen
+        except ClientError as e:
+            code = e.response.get("Error", {}).get("Code", "")
+            if code not in ("404", "NoSuchKey", "NotFound"):
+                raise SkillResourceStoreError(f"failed to check frozen key '{frozen}'") from e
+        content = self.get(s3_key)
+        if compute_content_hash(content) != content_hash:
+            raise SkillResourceChangedError(
+                f"reference file at '{s3_key}' changed while the skill was being pinned"
+            )
+        return self._put_bytes(
+            skill_id=skill_id, key=frozen, content=content, content_type=content_type
+        )
 
     def delete(self, s3_key: str) -> None:
         """Delete an object key. Best-effort — never raises on the storage

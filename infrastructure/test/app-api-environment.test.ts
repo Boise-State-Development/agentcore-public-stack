@@ -67,6 +67,42 @@ describe('buildAppApiEnvironment — Shared Projects', () => {
   });
 });
 
+describe('buildAppApiEnvironment — direct user grants', () => {
+  it('forwards the flag, off by default', () => {
+    const off = buildAppApiEnvironment(createMockConfig(), stubParams());
+    expect(off.USER_GRANTS_ENABLED).toBe('false');
+
+    const on = buildAppApiEnvironment(createMockConfig({ userGrants: { enabled: true } }), stubParams());
+    expect(on.USER_GRANTS_ENABLED).toBe('true');
+  });
+});
+
+describe('buildAppApiEnvironment — session prewarm', () => {
+  it('forwards the flag, off by default', () => {
+    const off = buildAppApiEnvironment(createMockConfig(), stubParams());
+    expect(off.SESSION_PREWARM_ENABLED).toBe('false');
+
+    const on = buildAppApiEnvironment(createMockConfig({ sessionPrewarm: { enabled: true } }), stubParams());
+    expect(on.SESSION_PREWARM_ENABLED).toBe('true');
+  });
+});
+
+describe('buildAppApiEnvironment — folder sync', () => {
+  it('forwards the flag, off by default', () => {
+    expect(buildAppApiEnvironment(createMockConfig(), stubParams()).FOLDER_SYNC_ENABLED).toBe('false');
+    const on = buildAppApiEnvironment(createMockConfig({ folderSync: { enabled: true } }), stubParams());
+    expect(on.FOLDER_SYNC_ENABLED).toBe('true');
+  });
+});
+
+describe('buildAppApiEnvironment — client turn timing', () => {
+  it('forwards the flag, off by default', () => {
+    expect(buildAppApiEnvironment(createMockConfig(), stubParams()).CLIENT_TURN_TIMING_ENABLED).toBe('false');
+    const on = buildAppApiEnvironment(createMockConfig({ clientTurnTiming: { enabled: true } }), stubParams());
+    expect(on.CLIENT_TURN_TIMING_ENABLED).toBe('true');
+  });
+});
+
 describe('buildAppApiEnvironment — project-memory content lint (2.7)', () => {
   it('always sets the mode and sets the patterns only when there are some', () => {
     const plain = buildAppApiEnvironment(createMockConfig(), stubParams());

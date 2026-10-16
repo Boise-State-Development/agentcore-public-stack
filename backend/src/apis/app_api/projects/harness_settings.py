@@ -10,6 +10,10 @@ model they add is validated against their RBAC with the same
 ``validate_agent_write`` the agent designer uses. Only what a save adds is
 checked, so a binding another member added earlier is never re-judged against
 someone who merely edited the instructions.
+
+Skills are pinned (shared-projects 3.1). A skill added here is pinned to its content
+as of the save, a skill already bound keeps its pin, and ``pin_skill`` moves one pin
+to the skill's current content. Every pin change is a settings version.
 """
 
 from __future__ import annotations
@@ -17,7 +21,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from apis.app_api.agent_designer.services.binding_validation import validate_agent_write
 from apis.shared.assistants.models import AgentBinding, AgentModelConfig, AgentVersion, Assistant
@@ -36,8 +40,17 @@ from apis.shared.assistants.versions import snapshot_of
 from apis.shared.audit import AuditAction
 from apis.shared.auth.models import User
 from apis.shared.projects.models import Project, ProjectRole
-from apis.shared.projects.service import ProjectNotFoundError, ProjectService
+from apis.shared.projects.service import (
+    ProjectConflictError,
+    ProjectError,
+    ProjectNotFoundError,
+    ProjectService,
+)
 from apis.shared.security.log_sanitize import scrub_log
+from apis.shared.skills.pinning import PinStatus, SkillPinError, pin_current, pin_status
+from apis.shared.skills.pins import PIN_CONFIG_KEY, binding_pin
+from apis.shared.skills.resource_store import SkillResourceChangedError, SkillResourceStoreError
+from apis.shared.skills.versions import SkillVersion
 from apis.shared.timestamps import utc_now_iso
 
 logger = logging.getLogger(__name__)
@@ -134,6 +147,8 @@ class HarnessSettingsService:
         if kind is not None and bindings is not None:
             current = list(harness.bindings or [])
             wanted = [AgentBinding(kind=kind, ref=b.ref, config=b.config) for b in bindings]
+            if kind == SKILL:
+                wanted = _keep_skill_pins(wanted, current)
             existing = _dumps([b for b in current if b.kind == kind])
             added = [b for b in wanted if b.model_dump(by_alias=True) not in existing]
             new_bindings = [b for b in current if b.kind != kind] + wanted
@@ -152,6 +167,8 @@ class HarnessSettingsService:
             return HarnessView(project, role, harness, latest.version if latest else None)
 
         await validate_agent_write(user, bindings=added or None, model_settings=model_settings)
+        if kind == SKILL and new_bindings is not None:
+            new_bindings = await _pin_added_skills(new_bindings, added, user)
 
         # The first save also records the state the project was created with, so the
         # first change in its history has something to be compared against.
@@ -189,10 +206,35 @@ class HarnessSettingsService:
         if new_bindings is not None:
             action = AuditAction.PROJECT_TOOLS_UPDATED if kind == TOOL else AuditAction.PROJECT_SKILLS_UPDATED
             refs = lambda bindings: sorted(b.ref for b in bindings or [] if b.kind == kind)  # noqa: E731
-            self.projects.record(
-                action, user, project_id,
-                before={"refs": refs(before.bindings)}, after={**at, "refs": refs(new_bindings)},
-            )
+            before_detail, after_detail = {"refs": refs(before.bindings)}, {**at, "refs": refs(new_bindings)}
+            if kind == SKILL:
+                # Pinned versions, so an update ("same skills, newer version") reads as a change.
+                versions = lambda bindings: {  # noqa: E731
+                    b.ref: binding_pin(b.config) for b in bindings or [] if b.kind == SKILL and binding_pin(b.config)
+                }
+                before_detail["versions"], after_detail["versions"] = versions(before.bindings), versions(new_bindings)
+            self.projects.record(action, user, project_id, before=before_detail, after=after_detail)
+
+    async def pin_skill(self, project_id: str, user: User, skill_id: str) -> HarnessView:
+        """Re-pin one bound skill to its current content ("update", shared-projects 3.1).
+
+        Saved like any skills change: the saver must be able to use the skill, and the
+        new pin is a settings version. Pinning a skill that has not changed is a no-op.
+        """
+        project, _ = self.projects.authorize(project_id, user, "editor", writable=True)
+        harness = await self._harness(project)
+        bound = [b for b in (harness.bindings or []) if b.kind == SKILL]
+        if all(b.ref != skill_id for b in bound):
+            raise ProjectNotFoundError("That skill is not one of this project's skills")
+        await validate_agent_write(user, bindings=[AgentBinding(kind=SKILL, ref=skill_id)])
+        version = await _pin(skill_id, user)
+        wanted = [
+            AgentBinding(kind=SKILL, ref=b.ref, config={**b.config, PIN_CONFIG_KEY: version.version})
+            if b.ref == skill_id
+            else b
+            for b in bound
+        ]
+        return await self.update(project_id, user, kind=SKILL, bindings=wanted)
 
     async def list_versions(self, project_id: str, user: User, limit: int) -> List[Tuple[AgentVersion, List[str]]]:
         """Newest first, each with the fields it changed from the one before it."""
@@ -210,6 +252,61 @@ class HarnessSettingsService:
             raise ProjectNotFoundError("That version does not exist")
         previous = await get_version(project.harness_agent_id, number - 1) if number > 1 else None
         return VersionDetail(version, previous)
+
+
+def _keep_skill_pins(wanted: List[AgentBinding], current: List[AgentBinding]) -> List[AgentBinding]:
+    """A skill already bound keeps its config when the request names no version.
+
+    So a client that sends only refs (the settings dialog before 3.1, or one that just
+    toggles another skill) never unpins anything, and a live binding from before 3.1
+    stays live until someone updates it. A request that names a version sets it.
+    """
+    prior = {b.ref: b for b in current if b.kind == SKILL}
+    return [
+        prior[b.ref].model_copy(deep=True)
+        if b.ref in prior and binding_pin(b.config) is None
+        else b
+        for b in wanted
+    ]
+
+
+async def _pin_added_skills(
+    bindings: List[AgentBinding], added: List[AgentBinding], user: User
+) -> List[AgentBinding]:
+    """Pin each newly added skill that names no version to its content as of now.
+
+    Runs after ``validate_agent_write``, so nothing is pinned (no version cut, no file
+    copied) for a skill the saver may not use.
+    """
+    to_pin = {b.ref for b in added if b.kind == SKILL and binding_pin(b.config) is None}
+    out: List[AgentBinding] = []
+    for binding in bindings:
+        if binding.kind == SKILL and binding.ref in to_pin:
+            version = await _pin(binding.ref, user)
+            binding = AgentBinding(
+                kind=SKILL, ref=binding.ref, config={**binding.config, PIN_CONFIG_KEY: version.version}
+            )
+        out.append(binding)
+    return out
+
+
+async def _pin(skill_id: str, user: User) -> SkillVersion:
+    try:
+        return await pin_current(skill_id, pinned_by=user.user_id)
+    except SkillPinError as e:
+        raise ProjectError(str(e)) from e
+    except SkillResourceChangedError as e:
+        raise ProjectConflictError("The skill changed while it was being pinned. Try again.") from e
+    except SkillResourceStoreError as e:
+        logger.error("Could not freeze the files of skill %s: %s", scrub_log(skill_id), e)
+        raise ProjectError("This skill's reference files couldn't be saved for its pinned version.") from e
+
+
+async def skill_pins(harness: Assistant) -> Dict[str, PinStatus]:
+    """Pin status for each skill the harness binds, for the settings response."""
+    return await pin_status(
+        (b.ref, binding_pin(b.config)) for b in (harness.bindings or []) if b.kind == SKILL
+    )
 
 
 def version_instructions_diff(detail: VersionDetail) -> List[str]:

@@ -1,6 +1,6 @@
 ---
 name: kaizen-research
-description: Weekly Friday early-morning external + internal scan for emerging functionality, agentic trends, tools, and feature/UX improvements in the AgentCore Public Stack repo. Tracks AWS Bedrock + AgentCore announcements, Strands Agents releases, FastMCP (used by externally hosted MCP servers), the aws-samples/sample-strands-agent-with-agentcore reference repo, the MCP ecosystem (including MCP Apps + extensions), frontier model announcements, agent-harness patterns (including opencode (anomalyco/opencode) as an open-source coding-agent harness reference scanned through tooling, cost-effectiveness, and context-engineering lenses — releases-first, light touch), agentic UI/UX patterns (MCP Apps, Vercel AI SDK, assistant-ui, NN/g AI research, Linear/Cursor/Anthropic product blogs), and LibreChat as a parallel open-source agentic-platform reference (releases-first, light touch). Audits internal signals (recent commits, open PRs, CI failures, version-pin lag, dormant skills). Outputs a dated research doc + queues ideas in `docs/kaizen/review-queue.md` for that same morning's `kaizen-review-prep` (runs ~4 hours later) to rank into decisions. Opens a PR into `develop`. **Out of scope**: security advisories / Dependabot / CodeQL — those have dedicated tooling and don't need a weekly kaizen lens. Triggers: "kaizen research", "weekly research scan", "external scan", "what should we look at this week".
+description: Weekly Friday early-morning external + internal scan for emerging functionality, agentic trends, tools, and feature/UX improvements in the AgentCore Public Stack repo. Tracks AWS Bedrock + AgentCore announcements, Strands Agents releases, multi-agent patterns and inter-agent communication (a standing watch that keeps docs/specs/multi-agent-patterns.md and docs/specs/agent-handoffs-and-consults.md in sync by queuing spec-sync items), FastMCP (used by externally hosted MCP servers), the aws-samples/sample-strands-agent-with-agentcore reference repo, the MCP ecosystem (including MCP Apps + extensions), frontier model announcements, agent-harness patterns (including opencode (anomalyco/opencode) as an open-source coding-agent harness reference scanned through tooling, cost-effectiveness, and context-engineering lenses — releases-first, light touch), agentic UI/UX patterns (MCP Apps, Vercel AI SDK, assistant-ui, NN/g AI research, Linear/Cursor/Anthropic product blogs), and LibreChat as a parallel open-source agentic-platform reference (releases-first, light touch). Audits internal signals (recent commits, open PRs, CI failures, version-pin lag, dormant skills). Outputs a dated research doc + queues ideas in `docs/kaizen/review-queue.md` for that same morning's `kaizen-review-prep` (runs ~4 hours later) to rank into decisions. Opens a PR into `develop`. **Out of scope**: security advisories / Dependabot / CodeQL — those have dedicated tooling and don't need a weekly kaizen lens. Triggers: "kaizen research", "weekly research scan", "external scan", "what should we look at this week".
 ---
 
 # Kaizen Research
@@ -135,6 +135,61 @@ Friday early morning (~6am MT). `kaizen-review-prep` runs ~4 hours later (~10am 
    bracket it. This already produced one false "does not cache" against our own
    production model.
 
+2b. **Multi-agent patterns and inter-agent communication — standing watch (added 2026-10-13)**
+
+   This is strategic: composing agents (agents as tools, Swarm, Graph, messages
+   between conversations, and eventually a drag-and-drop canvas in the Agent
+   Designer) is where the platform is headed. Two living specs carry the plan,
+   and this watch keeps them true:
+
+   - `docs/specs/multi-agent-patterns.md`: the pattern map, the shared sub-agent
+     runner (§4), what Strands handles vs. what's ours (§4.2), the Designer
+     composition model (§6), the sequence (§8)
+   - `docs/specs/agent-handoffs-and-consults.md`: handoffs (Phase 0), deliveries
+     (§4.8), consults (Phase 1), messages between conversations (Phase 2)
+
+   Read both before scanning. Lens (b), **capability unlock**, usually dominates
+   here, but subtraction matters too: each upstream release that ships a piece of
+   §4's substrate (nested interrupts, multi-agent session persistence, per-node
+   metering, nested streaming) is a piece we shouldn't build.
+
+   Sources:
+   - **Strands multi-agent.** In each harness-sdk release, look for changes to
+     `strands/multiagent/` (`swarm.py`, `graph.py`, `a2a/`, `_snapshot.py`) and to
+     `strands-agents-tools`' `workflow`, `swarm`, `agent_graph`, `use_agent` and
+     `a2a_client` tools. Shares source 2's web requests; no extra budget.
+   - **A2A protocol.** The spec and SDK releases (confirm the current repo; it moved
+     to the `a2aproject` org), and AgentCore Runtime A2A support in source 1.
+   - **Inter-agent patterns in shipped harnesses.** Claude Code's changelog (source
+     6) for subagents, cross-session messaging and agent teams; opencode (6a) for
+     sub-agent and task delegation.
+   - **Visual agent composition.** Products that let users wire agents together
+     (e.g. Amazon Bedrock Flows, OpenAI's agent builder, LangGraph Studio). Pattern-only
+     references for the Designer canvas (§6 of the patterns doc); 1–2 requests, and
+     only when a release headlines composition.
+
+   Each run, answer:
+   - **Did §4.2 move?** Does the pinned Strands version (or the candidate bump)
+     change how Swarm/Graph handle interrupts, `session_manager`, hooks, plugins or
+     prebuilt nodes? Does either of §4.2's two verify-firsts now have an upstream
+     answer?
+   - **Did anything retire a piece of the substrate?** Name the row of the patterns
+     doc §4 table it retires, and what we'd no longer build.
+   - **Did our own code move?** `git log origin/develop --since="7 days ago"` plus a grep for
+     the names the specs promise: `HANDOFF#`, `DELIVERY#`, `apis.shared.handoff`,
+     `resolve_turn_agent`, `send_to_conversation`, `consult-`, `strands.multiagent`,
+     `Binding.kind` `'agent'`. A landed PR means a spec's **Status** line, phase
+     table or "what already exists" section is now stale.
+   - **Does any claim in either spec no longer hold?** A pinned version, a parameter
+     name, a "not used in `backend/src`", a cost figure, a gate assumption.
+
+   **Output: a "Spec sync" list** in the research doc (see the template). Each entry
+   names the doc and section, quotes the stale claim, cites the evidence (URL, commit
+   or file:line) and gives the proposed replacement text. Queue each as a review-queue
+   item with **Surface: docs**. This skill still never edits the specs; the sync lands
+   in its own small PR after review, like every other idea. An empty week says
+   "no drift found" explicitly, so silence is distinguishable from not checking.
+
 3. **Reference repo — `aws-samples/sample-strands-agent-with-agentcore`**
    - https://github.com/aws-samples/sample-strands-agent-with-agentcore/commits/main
    - Diff the last 7 days (or "since last research run" — whichever is longer). Identify new patterns, removed approaches, or fixes that map to constructs in this repo: agent setup, tool registration, AgentCore Identity flows, Memory configuration, Gateway/MCP wiring.
@@ -214,7 +269,7 @@ Friday early morning (~6am MT). `kaizen-review-prep` runs ~4 hours later (~10am 
 
 ### Internal (this repo)
 
-13. **Recent commits.** `git log develop --since="7 days ago" --oneline --no-merges`. Cluster by area (`backend/`, `frontend/`, `infrastructure/`). Reverts and high-churn files signal pain points.
+13. **Recent commits.** `git log origin/develop --since="7 days ago" --oneline --no-merges`. Cluster by area (`backend/`, `frontend/`, `infrastructure/`). Reverts and high-churn files signal pain points.
 
 14. **Open PRs + review comments.** `gh pr list --base develop --state open --limit 20`, then `gh pr view <n> --comments` on the top 3 by comment count. Repeated review feedback is a CLAUDE.md or skill-update signal.
 
@@ -268,6 +323,14 @@ Friday early morning (~6am MT). `kaizen-review-prep` runs ~4 hours later (~10am 
 
 #### Strands Agents
 - **[Item]** — …
+
+#### Multi-agent patterns / inter-agent communication
+- **[Item]** — [URL or commit] — *relevance*: [patterns doc / handoffs spec section] — *unlocks* (if applicable): […]
+
+**Spec sync** (source 2b — required every run; "no drift found" when empty)
+| Doc § | Stale claim (quoted) | Evidence | Proposed text |
+|---|---|---|---|
+| multi-agent-patterns.md §4.2 | "…" | [URL / SHA / file:line] | "…" |
 
 #### Reference repo (aws-samples/sample-strands-agent-with-agentcore)
 - **[Commit / change]** — [diff summary] — [URL] — *applicability*: [does our equivalent code do this differently? worth porting?]
@@ -411,14 +474,14 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
    - Last 14 days of `CHANGELOG.md` and `RELEASE_NOTES.md`
 
 3. **Inventory internal signals** (parallel Bash calls):
-   - `git log develop --since="7 days ago" --oneline --no-merges`
+   - `git log origin/develop --since="7 days ago" --oneline --no-merges`
    - `gh pr list --base develop --state open --limit 20`
    - `gh issue list --state open --search "created:>$(date -v-7d +%Y-%m-%d)"`
    - `gh run list --status=failure --limit 30`
    - `find .claude/skills -name SKILL.md -exec stat -f "%Sm %N" {} \;`
    - Read pinned versions from the three manifest files.
 
-4. **Fan out external scan** — spawn parallel `general-purpose` subagents (or `Explore` for sources requiring multiple targeted lookups). One subagent per source category 1–12 above (15 categories total including 4a FastMCP, 4b Agentic UI/UX, 6a opencode, and 12 LibreChat). LibreChat and opencode each get a *light* subagent — releases-first, 1–2 web requests; do not fan either out further unless a headline maps onto something we're shipping. Each subagent receives:
+4. **Fan out external scan** — spawn parallel `general-purpose` subagents (or `Explore` for sources requiring multiple targeted lookups). One subagent per source category 1–12 above (16 categories total including 2b multi-agent, 4a FastMCP, 4b Agentic UI/UX, 6a opencode, and 12 LibreChat). The 2b subagent also receives both living specs and the internal grep list, and must return the Spec sync rows. LibreChat and opencode each get a *light* subagent — releases-first, 1–2 web requests; do not fan either out further unless a headline maps onto something we're shipping. Each subagent receives:
    - The exact URLs to scan
    - Scope: last 7 days
    - Web budget for that subagent (3–5 requests soft target)
@@ -434,7 +497,7 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
    - **Capability-unlock** items — new platform primitives, SDK hooks, spec capabilities, or UX patterns that enable net-new product surface we couldn't easily build before — rank on their strategic merit, *not* deprioritized just because they don't intersect existing code. Apply the dual lens from Philosophy: if a feature genuinely unlocks new capability (code-interpreter, persistent agent state, multi-agent UI attribution, etc.), rank it like a fit item, not like a "monitor" item. Resist the temptation to hedge unlock items into "replaces future glue we haven't written" — that under-weights the real story.
    - **Concrete fit** UI/UX patterns that match an existing surface (tool-call rendering, attachments, A2A attribution, consent flows) get a fit boost over generic "interesting trend" items.
 
-7. **Update review queue.** For each Top 5 idea, prepend a new entry under `## Open` in `docs/kaizen/review-queue.md`. Never touch `## Resolved`.
+7. **Update review queue.** For each Top 5 idea, prepend a new entry under `## Open` in `docs/kaizen/review-queue.md`. Also prepend one entry per Spec sync row (titled "Spec sync: <doc> §<n>", Surface: docs); these don't count toward the Top 5. Never touch `## Resolved`.
 
 8. **Open a PR** — see "PR creation".
 
@@ -444,7 +507,11 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 DATE=$(TZ=America/Denver date +'%Y-%m-%d')
 BRANCH="kaizen/research-${DATE}"
 
-git checkout -b "$BRANCH" develop
+# Branch from the remote tip, never local `develop`: the main checkout often
+# sits detached or on another branch, and local `develop` is usually checked
+# out in some other worktree and weeks behind.
+git fetch origin develop
+git checkout -b "$BRANCH" origin/develop
 git add docs/kaizen/
 git commit -m "$(cat <<EOF
 chore(kaizen): weekly research scan ${DATE}

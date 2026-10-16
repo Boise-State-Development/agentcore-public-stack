@@ -15,7 +15,6 @@ Phase 3 lands incrementally:
 - ``modelConfig`` → ``model_override``, reusing the exact ``AppRoleService.can_access_model``
   gate the harness already enforces (R2). Absent ``modelConfig`` ⇒ no override ⇒ today's
   model-resolution chain is untouched.
-- ``memory_space`` bindings → index injection + ``memory_*`` tools.
 - ``tool`` bindings → the effective tool allowlist (**replace**, mirroring the model
   override): when an Agent binds tools they *are* its toolset, re-resolved per invoker via
   the same ``AppRoleService.can_access_tool`` gate; a bound tool the invoker lacks blocks the
@@ -23,28 +22,37 @@ Phase 3 lands incrementally:
   A ref may be *scoped* (``toolId::mcpToolName``) to bind a subset of an MCP server's tools
   rather than all of them; the scoped id rides through to the runtime, where
   ``collect_tool_name_filters`` turns it into that server's ``allowed_tool_names``.
+  A project harness never falls through: it runs on its own tools only (below).
 - ``skill`` bindings → the effective skill set (**replace**, same shape as tools): when an
   Agent binds skills they *are* the turn's skills, re-resolved per invoker via the
   invoke-through predicate (§6/D7, ``resolve_invocable_skill_ids``); a bound skill the
   invoker lacks — or the skills feature being disabled in this environment — blocks the
   turn (D5). The caller hands the result to ChatAgent as ``accessible_skill_ids``, which
   is what mounts the ``AgentSkills`` disclosure plugin. Absent skill bindings ⇒ the
-  request's ``enabled_skills`` drive the turn as today.
+  request's ``enabled_skills`` drive the turn as today — except on a project harness,
+  which always owns its skills (below).
 - ``knowledge_base`` stays with the existing RAG path.
 
 **Degrade with notice — a Shared Project's harness only** (shared-projects §9.6). A project
 can have 200 members, and blocking the whole turn because one member lacks one bound tool
 would make the project unusable to them. With ``degrade=True`` a missing capability is
 dropped instead of raised: unavailable tools and skills are left out, an unavailable model
-falls through to the invoker's default, an unreachable memory binding is skipped, and
+falls through to the invoker's default, and
 each drop is recorded in ``plan.unavailable`` for the route to surface as an
 ``agent_notice``. Ordinary shared agents keep block-with-message (D5) unchanged. Nothing
 about a drop enters the prompt — the notice is for the person, not the model.
+
+**A project's skills and tools are the project's.** A harness that binds no skills, or
+whose bound skills were all dropped for this member, runs with *no* skills — never the
+member's own. Tools follow the same rule, with one floor: a harness that binds no tools
+still gets the admin's always-on tools (``ResolvedTools.owns_toolset`` is False), because
+otherwise anyone could shed them by creating a project (admin-always-on-tools §7 D4).
+One project conversation must not change with whoever is typing, and a member's own
+picks are not part of what the project's editors chose.
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
 from dataclasses import dataclass, field
 from typing import List, Optional
@@ -53,18 +61,17 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from apis.shared.assistants.models import Assistant
 from apis.shared.auth.models import User
-from apis.shared.feature_flags import memory_spaces_enabled, skills_enabled
-from apis.shared.memory.service import MemorySpaceService
+from apis.shared.feature_flags import skills_enabled
 from apis.shared.models.retirement import (
     EffectiveModel,
     resolve_effective_model,
     retired_model_message,
 )
+from apis.shared.rbac.model_access import model_access_denied_message
 from apis.shared.rbac.service import get_app_role_service
 from apis.shared.skills.access import resolve_invocable_skill_ids
+from apis.shared.skills.pins import binding_pin, pinned_ref
 from apis.shared.tools.scoped_ids import base_tool_id
-
-_ROLE_RANK = {"viewer": 1, "editor": 2, "owner": 3}
 
 
 class AgentBindingBlockedError(Exception):
@@ -88,23 +95,6 @@ class ResolvedModel:
 
 
 @dataclass
-class ResolvedMemoryBinding:
-    """A ``memory_space`` binding resolved for the invoking user.
-
-    ``role``/``access`` decide what the Harness may do: ``access`` is the *authored*
-    intent (``read``|``readwrite``), ``role`` is the invoker's actual grant. A
-    ``readwrite`` binding requires the invoker to be ``editor+`` (else the resolver
-    blocks — no silent read-only downgrade, D5). ``always_load`` drives prompt injection.
-    """
-
-    space_id: str
-    space_name: str
-    role: str
-    access: str
-    always_load: Optional[List[str]] = None
-
-
-@dataclass
 class ResolvedTools:
     """The Agent's ``tool`` bindings resolved to an effective allowlist for the invoker.
 
@@ -124,6 +114,9 @@ class ResolvedTools:
     """
 
     tool_ids: List[str]
+    # False only for a project harness that binds no tools: its toolset is empty, but it
+    # expressed no intent about tools, so the admin's always-on floor still applies (D4).
+    owns_toolset: bool = True
 
 
 @dataclass
@@ -134,10 +127,12 @@ class ResolvedSkills:
     AgentSkills plugin discloses exactly these (an Agent that binds skills owns its skills,
     like tools own the toolset). Every id has already passed the invoker's invoke-through
     predicate (§6); a bound skill the invoker could not access blocks the turn before this
-    is constructed (D5). Always non-empty — the resolver returns ``None`` (no skill
-    binding) rather than an empty ``ResolvedSkills``.
+    is constructed (D5). Empty only for a project harness, where it means "this project
+    runs with no skills" and is distinct from ``plan.skills is None`` (no skill binding,
+    fall through to the request) — the same split ``ResolvedTools`` makes.
     """
 
+    # A pinned binding's id carries its version (``skill_id@3``, ``skills.pins``).
     skill_ids: List[str]
 
 
@@ -148,10 +143,9 @@ class UnavailableCapabilities:
     model_id: Optional[str] = None
     tools: List[str] = field(default_factory=list)
     skills: List[str] = field(default_factory=list)
-    memory: Optional[str] = None
 
     def __bool__(self) -> bool:
-        return bool(self.model_id or self.tools or self.skills or self.memory)
+        return bool(self.model_id or self.tools or self.skills)
 
     def notice(self) -> str:
         """One plain-language sentence naming everything that was left out."""
@@ -162,8 +156,6 @@ class UnavailableCapabilities:
             parts.append(("the tool " if len(self.tools) == 1 else "the tools ") + ", ".join(self.tools))
         if self.skills:
             parts.append(("the skill " if len(self.skills) == 1 else "the skills ") + ", ".join(self.skills))
-        if self.memory:
-            parts.append(f'the memory space "{self.memory}"')
         return (
             "Some of this project's setup isn't available to your account, so this "
             f"conversation runs without {'; '.join(parts)}. Ask an administrator for access."
@@ -189,7 +181,6 @@ class AgentNoticeEvent(BaseModel):
     unavailable_model_id: Optional[str] = Field(None, alias="unavailableModelId")
     unavailable_tools: List[str] = Field(default_factory=list, alias="unavailableTools")
     unavailable_skills: List[str] = Field(default_factory=list, alias="unavailableSkills")
-    unavailable_memory: Optional[str] = Field(None, alias="unavailableMemory")
 
     @classmethod
     def from_unavailable(
@@ -203,7 +194,6 @@ class AgentNoticeEvent(BaseModel):
             unavailable_model_id=dropped.model_id,
             unavailable_tools=list(dropped.tools),
             unavailable_skills=list(dropped.skills),
-            unavailable_memory=dropped.memory,
         )
 
     def to_sse_format(self) -> str:
@@ -215,14 +205,14 @@ class AgentInvocationPlan:
     """What the Harness should apply for this turn after resolving the Agent.
 
     ``model_override`` is ``None`` when the Agent pins no model — the caller then
-    resolves the model exactly as today. ``memory`` is ``None`` when the Agent binds no
-    Memory Space. ``tools`` is ``None`` when the Agent binds no tools — the caller then
+    resolves the model exactly as today. ``tools`` is ``None`` when the Agent binds no tools — the caller then
     uses the request's ``enabled_tools`` unchanged. ``skills`` is ``None`` when the Agent
     binds no skills — the caller then uses the request's ``agent_type``/``enabled_skills``.
+    A project harness never leaves ``tools`` or ``skills`` as ``None``: with nothing bound
+    each is empty, so the member's own picks never reach a project turn.
     """
 
     model_override: Optional[ResolvedModel] = None
-    memory: Optional[ResolvedMemoryBinding] = None
     tools: Optional[ResolvedTools] = None
     skills: Optional[ResolvedSkills] = None
     unavailable: UnavailableCapabilities = field(default_factory=UnavailableCapabilities)
@@ -261,7 +251,7 @@ async def resolve_agent_invocation(
                 plan.unavailable.model_id = model_settings.model_id
             else:
                 raise AgentBindingBlockedError(retired_model_message(effective.retired, agent=True))
-        elif await app_role_service.can_access_model(invoker, model_id):
+        elif await app_role_service.can_access_model(invoker, model_id, record=effective.record):
             plan.model_override = ResolvedModel(
                 model_id=model_id,
                 provider=provider,
@@ -272,13 +262,19 @@ async def resolve_agent_invocation(
             plan.unavailable.model_id = model_id
         else:
             raise AgentBindingBlockedError(
-                f"This agent runs on **{model_id}**, which isn't available "
-                "to your account. Ask an administrator for access, or use a different agent."
+                model_access_denied_message(model_id, effective.record, agent=True)
             )
 
-    plan.memory = await _resolve_memory(assistant, invoker, plan.unavailable if degrade else None)
     plan.tools = await _resolve_tools(assistant, invoker, plan.unavailable if degrade else None)
     plan.skills = await _resolve_skills(assistant, invoker, plan.unavailable if degrade else None)
+    if degrade and plan.tools is None:
+        # A project harness that binds no tools runs on none of the member's picks. It
+        # chose no tools, so the admin's always-on floor still applies (module docstring).
+        plan.tools = ResolvedTools(tool_ids=[], owns_toolset=False)
+    if degrade and plan.skills is None:
+        # A project harness owns its skills: none bound, or none left after degrading,
+        # means none — not the member's own (see the module docstring).
+        plan.skills = ResolvedSkills(skill_ids=[])
     return plan
 
 
@@ -292,9 +288,10 @@ async def _resolve_skills(
     "the Agent's owner authored it". A single missing skill blocks the turn
     (block-with-message, no silent drop — D5). The skills feature being disabled in
     this environment also blocks — design-time refuses to create these while the flag is off,
-    so reaching here with the flag off is environment drift (mirror ``_resolve_memory``).
+    so reaching here with the flag off is environment drift (mirror ``_resolve_tools``).
     Returns ``None`` when the Agent binds no skills, leaving the request's ``agent_type`` /
-    ``enabled_skills`` in force.
+    ``enabled_skills`` in force; ``resolve_agent_invocation`` turns that into an empty set
+    for a project harness.
 
     This is the **only** place invoke-through applies. It is AGENT-scoped, not
     user-scoped: widening the shared ``resolve_accessible_skill_ids`` instead would
@@ -315,9 +312,11 @@ async def _resolve_skills(
         return None
 
     refs: List[str] = []
+    pins: dict = {}
     for binding in skill_bindings:
         if binding.ref not in refs:
             refs.append(binding.ref)
+            pins[binding.ref] = binding_pin(binding.config)
 
     if not skills_enabled():
         if dropped is not None:
@@ -338,9 +337,10 @@ async def _resolve_skills(
         )
     if missing:
         dropped.skills.extend(missing)
-    kept = [ref for ref in refs if ref in invocable]
-    # Always non-empty (see ResolvedSkills): a degraded harness left with no skills runs
-    # as if it bound none.
+    # A pinned binding (shared-projects 3.1) runs as ``skill_id@n``; access was judged on
+    # the catalog id above, and the pin only chooses which content the skill runs.
+    kept = [pinned_ref(ref, pins[ref]) for ref in refs if ref in invocable]
+    # None when every skill was dropped; the caller makes that "no skills" for a project.
     return ResolvedSkills(skill_ids=kept) if kept else None
 
 
@@ -353,8 +353,9 @@ async def _resolve_tools(
     ``AppRoleService.can_access_tool`` gate the harness already enforces (R2), so an author
     cannot compose a tool the invoker is later denied. A single missing tool blocks the turn
     (block-with-message, no silent drop — D5). Returns ``None`` when the Agent binds no tools,
-    leaving the request's ``enabled_tools`` in force. The RBAC service is fetched lazily (only
-    when the Agent actually binds tools) — mirroring how ``_resolve_memory`` builds its own.
+    leaving the request's ``enabled_tools`` in force; ``resolve_agent_invocation`` turns
+    that into an empty toolset for a project harness. The RBAC service is fetched lazily (only
+    when the Agent actually binds tools).
 
     A ref may be **scoped** (``toolId::mcpToolName``) to bind a subset of an MCP server's
     tools. Access is a property of the *server*, so the gate is keyed on the base id — which
@@ -396,63 +397,3 @@ async def _resolve_tools(
     # Possibly empty after degrading, which still means "this agent's toolset is these
     # tools" — never a fall-through to the request's enabled_tools.
     return ResolvedTools(tool_ids=resolved)
-
-
-async def _resolve_memory(
-    assistant: Assistant, invoker: User, dropped: Optional[UnavailableCapabilities] = None
-) -> Optional[ResolvedMemoryBinding]:
-    """Resolve the Agent's ``memory_space`` binding for ``invoker`` (D5); raise on block.
-
-    v1 supports one Memory Space per Agent (Phase-1 UI writes at most one); any extras are
-    ignored. Reads permission via ``MemorySpaceService`` (the same identity-based
-    ``resolve_permission`` the app-api surface uses — D4), wrapped in a thread since it's
-    sync boto3.
-    """
-    memory_bindings = [b for b in (assistant.bindings or []) if b.kind == "memory_space"]
-    if not memory_bindings:
-        return None
-
-    if not memory_spaces_enabled():
-        # Design-time validation refuses to create these while the flag is off, so
-        # hitting this means environment drift — block rather than silently drop (D5).
-        if dropped is not None:
-            dropped.memory = "memory"
-            return None
-        raise AgentBindingBlockedError(
-            "This agent uses Memory, which isn't enabled in this environment."
-        )
-
-    binding = memory_bindings[0]
-    access = (binding.config or {}).get("access", "read")
-
-    service = MemorySpaceService()
-    space, role = await asyncio.to_thread(
-        service.resolve_permission, binding.ref, invoker.user_id, invoker.email
-    )
-    if space is None or space.is_project_space:
-        # A project's space never serves an agent binding (design-time validation
-        # refuses one); it reaches the model only through its project.
-        if dropped is not None:
-            dropped.memory = "memory"
-            return None
-        raise AgentBindingBlockedError(
-            "This agent's Memory Space no longer exists. Ask its owner to reconnect it."
-        )
-
-    required = "editor" if access == "readwrite" else "viewer"
-    if role is None or _ROLE_RANK[role] < _ROLE_RANK[required]:
-        if dropped is not None:
-            dropped.memory = space.name
-            return None
-        raise AgentBindingBlockedError(
-            f"This agent needs **{required}** access to its Memory Space "
-            f'"{space.name}", which your account doesn\'t have.'
-        )
-
-    return ResolvedMemoryBinding(
-        space_id=binding.ref,
-        space_name=space.name,
-        role=role,
-        access=access,
-        always_load=(binding.config or {}).get("alwaysLoad"),
-    )

@@ -1,7 +1,4 @@
 import { Component, ChangeDetectionStrategy, computed, inject, input, signal } from '@angular/core';
-import { toSignal } from '@angular/core/rxjs-interop';
-import { ActivatedRoute, Router } from '@angular/router';
-import { map } from 'rxjs';
 import { CdkMenuTrigger, CdkMenu, CdkMenuItem } from '@angular/cdk/menu';
 import { ConnectedPosition } from '@angular/cdk/overlay';
 import { NgIcon, provideIcons } from '@ng-icons/core';
@@ -13,21 +10,7 @@ import {
   effortLevelLabel,
 } from '../../admin/manage-models/models/managed-model.model';
 import { ModelOptionComponent } from './components/model-option.component';
-import { FEATURES } from '../../services/features';
-import { ProjectsService } from '../../projects/services/projects.service';
-
-/**
- * What picking a different model does to the open conversation. A model switch
- * never changes an existing conversation in place: it starts a fresh one on the
- * new model, bound to whatever the current one was bound to.
- */
-type SwitchTarget = 'chat' | 'agent' | 'project';
-
-const SWITCH_HINT: Record<SwitchTarget, { pill: string; note: string }> = {
-  chat: { pill: 'New chat', note: 'Choosing another model starts a new chat.' },
-  agent: { pill: 'New session', note: 'Choosing another model starts a new session with this agent.' },
-  project: { pill: 'New task', note: 'Choosing another model starts a new task in this project.' },
-};
+import { PromptCacheGuardService } from '../../session/services/prompt-cache/prompt-cache-guard.service';
 
 @Component({
   selector: 'app-model-dropdown',
@@ -55,14 +38,14 @@ const SWITCH_HINT: Record<SwitchTarget, { pill: string; note: string }> = {
           (cdkMenuOpened)="onMenuOpened()"
           (cdkMenuClosed)="onMenuClosed()"
           [class]="triggerSizeClass()"
-          class="flex items-center rounded-lg text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-gray-300"
+          class="group flex items-center rounded-lg text-gray-600 transition-colors hover:bg-gray-200 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-gray-300"
           aria-label="Select model"
         >
           <span>{{ modelService.selectedModel().modelName || 'Loading...' }}</span>
           @if (activeEffortLabel(); as effort) {
             <!-- The active effort rides in the trigger so it's visible without
                  opening the menu — it changes cost and latency, not just output. -->
-            <span class="text-gray-400 dark:text-gray-500">{{ effort }}</span>
+            <span class="text-gray-500 group-hover:text-gray-600 dark:text-gray-500 dark:group-hover:text-gray-500">{{ effort }}</span>
           }
           <svg
             viewBox="0 0 20 20"
@@ -88,14 +71,6 @@ const SWITCH_HINT: Record<SwitchTarget, { pill: string; note: string }> = {
           role="menu"
           aria-orientation="vertical"
         >
-          @if (switchHint(); as hint) {
-            <!-- Said before the choice, not after: picking a row leaves this
-                 conversation for a new one, and in a project or agent the new one
-                 stays on that project or agent. -->
-            <p class="px-3 pt-1.5 pb-2 text-xs/4 text-gray-500 dark:text-gray-400">
-              {{ hint.note }}
-            </p>
-          }
           @if (modelService.modelsLoading()) {
             <div class="px-3 py-2 text-sm/5 text-gray-500 dark:text-gray-400">
               Loading models...
@@ -134,7 +109,6 @@ const SWITCH_HINT: Record<SwitchTarget, { pill: string; note: string }> = {
                 [model]="model"
                 [selected]="isSelected(model)"
                 [successorName]="modelService.modelNameFor(model.replacedBy)"
-                [switchHint]="switchHint()?.pill ?? null"
                 (cdkMenuItemTriggered)="selectModel(model)"
               />
             }
@@ -233,7 +207,6 @@ const SWITCH_HINT: Record<SwitchTarget, { pill: string; note: string }> = {
                       [model]="model"
                       [selected]="isSelected(model)"
                       [successorName]="modelService.modelNameFor(model.replacedBy)"
-                      [switchHint]="switchHint()?.pill ?? null"
                       (cdkMenuItemTriggered)="selectModel(model)"
                     />
                   }
@@ -281,47 +254,7 @@ export class ModelDropdownComponent {
   // Inject services
   protected modelService = inject(ModelService);
   protected sessionService = inject(SessionService);
-  private router = inject(Router);
-  private route = inject(ActivatedRoute);
-  private features = inject(FEATURES);
-  private projectsService = inject(ProjectsService);
-
-  /**
-   * The Agent this conversation is bound to. The URL's `assistantId` is the
-   * session page's single source of truth for that binding (its self-heal
-   * effect fills it in from the session's preferences), so it is read from
-   * there rather than from a second copy that could disagree.
-   */
-  private readonly boundAgentId = toSignal(
-    this.route.queryParamMap.pipe(map(params => params.get('assistantId'))),
-    { initialValue: null },
-  );
-
-  /**
-   * The project whose harness this conversation runs on, or null. The harness
-   * is an ordinary Agent id on the URL, so it is told apart by the project list
-   * (which the sidebar loads), falling back to the session's own preferences.
-   */
-  private readonly boundProjectId = computed<string | null>(() => {
-    if (!this.features.projects) return null;
-    const agentId = this.boundAgentId();
-    if (!agentId) return null;
-    const listed = this.projectsService.projects$().find(p => p.harnessAgentId === agentId);
-    if (listed) return listed.projectId;
-    const prefs = this.sessionService.currentSession().preferences;
-    return prefs?.assistantId === agentId ? (prefs.projectId ?? null) : null;
-  });
-
-  /** What a model switch will do here, or null when it changes nothing but the model. */
-  protected readonly switchHint = computed(() => {
-    if (!this.sessionService.hasCurrentSession()) return null;
-    const target: SwitchTarget = this.boundProjectId()
-      ? 'project'
-      : this.boundAgentId()
-        ? 'agent'
-        : 'chat';
-    return SWITCH_HINT[target];
-  });
+  private cacheGuard = inject(PromptCacheGuardService);
 
   /**
    * Whether the model menu is open, driving the trigger's chevron. Fed by the
@@ -347,6 +280,14 @@ export class ModelDropdownComponent {
    */
   readonly size = input<'default' | 'compact'>('default');
 
+  /**
+   * Which way the compact picker's menu prefers to open. Up suits a thread's
+   * composer pinned to the bottom of the viewport; down suits the empty
+   * state's, which sits mid-page with the room beneath it. Either flips when
+   * the preferred side is cramped.
+   */
+  readonly menuOpens = input<'up' | 'down'>('up');
+
   protected readonly triggerSizeClass = computed(() =>
     this.size() === 'compact' ? 'gap-1 px-2 py-1 text-xs/5' : 'gap-1.5 px-3 py-1.5 text-sm/5',
   );
@@ -356,18 +297,19 @@ export class ModelDropdownComponent {
   );
 
   // Menu positioning - below the trigger's left edge, flipping above when there
-  // is no room; the compact picker prefers above its right edge (see `size`).
-  protected readonly menuPositions = computed<ConnectedPosition[]>(() =>
-    this.size() === 'compact'
-      ? [
-          { originX: 'end', originY: 'top', overlayX: 'end', overlayY: 'bottom', offsetY: -8 },
-          { originX: 'end', originY: 'bottom', overlayX: 'end', overlayY: 'top', offsetY: 8 },
-        ]
-      : [
-          { originX: 'start', originY: 'bottom', overlayX: 'start', overlayY: 'top', offsetY: 8 },
-          { originX: 'start', originY: 'top', overlayX: 'start', overlayY: 'bottom', offsetY: -8 },
-        ],
-  );
+  // is no room; the compact picker anchors to its right edge, above or below
+  // as `menuOpens` prefers.
+  protected readonly menuPositions = computed<ConnectedPosition[]>(() => {
+    if (this.size() === 'compact') {
+      const above: ConnectedPosition = { originX: 'end', originY: 'top', overlayX: 'end', overlayY: 'bottom', offsetY: -8 };
+      const below: ConnectedPosition = { originX: 'end', originY: 'bottom', overlayX: 'end', overlayY: 'top', offsetY: 8 };
+      return this.menuOpens() === 'up' ? [above, below] : [below, above];
+    }
+    return [
+      { originX: 'start', originY: 'bottom', overlayX: 'start', overlayY: 'top', offsetY: 8 },
+      { originX: 'start', originY: 'top', overlayX: 'start', overlayY: 'bottom', offsetY: -8 },
+    ];
+  });
 
   // Submenus fly out to the right of their parent row, flipping to the left
   // when there isn't room — the picker sits in the composer, which can be
@@ -419,24 +361,41 @@ export class ModelDropdownComponent {
     return effortLevelLabel(level);
   }
 
-  protected selectEffort(level: string): void {
+  /**
+   * Change the effort level. The level is part of the request the prompt
+   * cache is keyed on, so in an open conversation the user is asked first
+   * (when the cache is warm and the re-write is worth asking about).
+   */
+  protected async selectEffort(level: string): Promise<void> {
+    const current = this.modelService.selectedEffort();
+    if (level === current) return;
+    if (current && this.sessionService.hasCurrentSession()) {
+      const confirmed = await this.cacheGuard.confirm({
+        kind: 'effort',
+        model: this.modelService.selectedModel(),
+        fromLabel: effortLevelLabel(current),
+        toLabel: effortLevelLabel(level),
+        toLevel: level,
+      });
+      if (!confirmed) return;
+    }
     this.modelService.setEffort(level);
   }
 
   /**
-   * Choose a model. In an open conversation a different model starts a new one,
-   * and the new one keeps the conversation's Agent: a project task's harness
-   * (so the user stays in the project, with its instructions, files and
-   * memory) or an Agent session's Agent. Dropping the binding here once sent a
-   * project member to a plain chat with no warning (B8).
+   * Choose a model. An open conversation continues on the new model in place,
+   * keeping its Agent or project binding. The next message re-processes the
+   * whole conversation on the new model's cache, so the user is asked first
+   * (when the cache is warm and the re-write is worth asking about).
    */
-  protected selectModel(model: ManagedModel): void {
-    const startsNew = this.sessionService.hasCurrentSession() && !this.isSelected(model);
+  protected async selectModel(model: ManagedModel): Promise<void> {
+    const current = this.modelService.selectedModel();
+    if (current.modelId === model.modelId) return;
+    if (current.modelId && this.sessionService.hasCurrentSession()) {
+      const confirmed = await this.cacheGuard.confirm({ kind: 'model', from: current, to: model });
+      if (!confirmed) return;
+    }
     this.modelService.setSelectedModel(model);
-    if (!startsNew) return;
-
-    const assistantId = this.boundAgentId();
-    this.router.navigate(['/'], { queryParams: assistantId ? { assistantId } : {} });
   }
 
   protected isSelected(model: ManagedModel): boolean {

@@ -21,6 +21,7 @@ delete is always two deliberate steps.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -49,6 +50,12 @@ from .models import (
     normalize_email,
 )
 from .repository import ProjectRepository, ProjectWriteConflict
+from .schedules import (
+    REASON_MEMBER_REMOVED,
+    REASON_NOT_EDITOR,
+    REASON_PROJECT_ARCHIVED,
+    ProjectSchedules,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +155,7 @@ class ProjectService:
         self.memory = memory or MemorySpacesGateway()
         self.audit = audit or get_audit_service()
         self.notifications = notifications or NotificationService(table_name=self.repository.table_name)
+        self.schedules = ProjectSchedules(self.repository, self.notifications)
 
     # ── people ──────────────────────────────────────────────────────────
 
@@ -270,6 +278,7 @@ class ProjectService:
         except ProjectWriteConflict as e:
             raise ProjectConflictError("The project changed at the same time. Reload and try again.") from e
         self._record_update(admin, project, saved, reason=reason or "admin")
+        self._status_changed_schedules(admin, project, saved)
         return saved
 
     # ── projects ────────────────────────────────────────────────────────
@@ -402,8 +411,22 @@ class ProjectService:
         self._record_update(user, project, saved)
         if project.status != saved.status:
             self._notify_members("project_archived" if saved.status == "archived" else "project_restored", user, saved)
+            await asyncio.to_thread(self._status_changed_schedules, user, project, saved)
         await self._sync_harness_identity(project, saved)
         return saved, role
+
+    def _status_changed_schedules(self, actor: User, before: Project, after: Project) -> None:
+        """Archiving freezes the project's schedules; restoring thaws what archiving froze.
+
+        No schedule notice on archive: every member has just been told the project
+        is archived, and that is the reason.
+        """
+        if before.status == after.status:
+            return
+        if after.status == "archived":
+            self.schedules.pause_where(after, REASON_PROJECT_ARCHIVED, actor=actor, notify=False)
+        else:
+            self.schedules.resume_archived(after)
 
     async def _sync_harness_identity(self, before: Project, after: Project) -> None:
         """Give the harness the project's new name/description, if either changed.
@@ -464,6 +487,9 @@ class ProjectService:
         # project owns, so a failure here must leave them for the retry.
         for space_id in self._owned_space_ids(project):
             self.memory.purge_space(space_id)
+        # Schedules live in their creators' partitions, found only through the
+        # pointers the row delete below removes, so they go first.
+        await asyncio.to_thread(self.schedules.delete_all, project_id)
         deleted = self.repository.delete_project_rows(project_id)
         logger.info("Purged project %s (%d rows, harness %s)", project_id, deleted, project.harness_agent_id)
         self.record(AuditAction.PROJECT_DELETED, user, project_id, before={"name": project.name})
@@ -618,6 +644,8 @@ class ProjectService:
                 before={"email": target, "role": current.role}, after={"email": target, "role": role},
             )
             self._notify("project_role_changed", target, user, project, role=role)
+            if role == "viewer":
+                self.schedules.pause_where(project, REASON_NOT_EDITOR, owner_email=target, actor=user)
         return updated
 
     def remove_member(self, project_id: str, user: User, email: str) -> None:
@@ -635,6 +663,7 @@ class ProjectService:
             before={"email": target, "role": member.role if member else None},
         )
         self._notify("project_removed", target, user, project)
+        self.schedules.pause_where(project, REASON_MEMBER_REMOVED, owner_email=target, actor=user)
 
     def leave(self, project_id: str, user: User) -> None:
         project, role = self._require(project_id, user, "viewer")
@@ -646,6 +675,7 @@ class ProjectService:
             AuditAction.PROJECT_MEMBER_REMOVED, user, project_id, before={"email": email, "role": role}, reason="left"
         )
         self._notify("project_member_left", project.owner_email, user, project, role=role)
+        self.schedules.pause_where(project, REASON_MEMBER_REMOVED, owner_email=email, actor=user)
 
     def _delete_member(self, project_id: str, email: str) -> None:
         try:

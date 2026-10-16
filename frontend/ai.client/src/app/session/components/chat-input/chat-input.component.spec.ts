@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentMentionService, MentionableAgent } from '../../../agents/services/agent-mention.service';
 import { SkillCommand, SkillCommandService } from '../../../services/skill/skill-command.service';
 import { FileMetadata, FileUploadService } from '../../../services/file-upload';
+import { FileSourceService } from '../../../assistants/services/file-source.service';
 import { SystemPromptsService } from '../../../services/system-prompts/system-prompts.service';
 import { ToastService } from '../../../services/toast/toast.service';
 import { ToolService } from '../../../services/tool/tool.service';
@@ -23,6 +24,8 @@ import { ComposerDraftService } from '../../services/session/composer-draft.serv
 import { NEW_CONVERSATION_DRAFT_KEY } from '../../services/session/composer-draft-storage.service';
 import { ChatInputComponent, spliceDictation } from './chat-input.component';
 import { ComposerHandoffService } from './composer-handoff.service';
+import { SessionPrewarmService } from '../../services/session/session-prewarm.service';
+import { ShortcutTargetsService } from '../../../components/shortcuts/shortcut-targets.service';
 
 const AGENTS: MentionableAgent[] = [
   { agentId: 'a1', name: 'Alpha', group: 'own' },
@@ -91,6 +94,7 @@ const SKILLS: SkillCommand[] = [
 class SkillCommandServiceStub {
   readonly commands = signal<SkillCommand[]>(SKILLS);
   readonly loading = signal(false);
+  readonly agentLocked = signal(false);
   async load(): Promise<void> {}
   search(query: string): SkillCommand[] {
     const needle = query.trim().toLowerCase();
@@ -143,6 +147,7 @@ describe('ChatInputComponent — the `@` menu keyboard path (D11)', () => {
             clearReadyUploads: () => undefined,
             clearPendingUpload: () => undefined,
             listSessionFiles: async () => [],
+            registerKnownFile: () => undefined,
           },
         },
         { provide: ToastService, useValue: { error: () => undefined, warning: () => undefined, info: () => undefined } },
@@ -196,6 +201,15 @@ describe('ChatInputComponent — the `@` menu keyboard path (D11)', () => {
     textarea.dispatchEvent(new KeyboardEvent('keyup', { key, bubbles: true }));
     fixture.detectChanges();
   }
+
+  it('tells session prewarm about every input, which warms an armed conversation once', () => {
+    // The service decides; the composer only reports. Typing and pasting both
+    // arrive as `input` events.
+    const noted = vi.spyOn(TestBed.inject(SessionPrewarmService), 'noteTyping');
+    type('h');
+    type('hi');
+    expect(noted).toHaveBeenCalledTimes(2);
+  });
 
   it('opens the menu on a word-initial `@`', () => {
     type('@');
@@ -288,6 +302,7 @@ describe('ChatInputComponent — the `/` skill-command menu', () => {
             clearReadyUploads: () => undefined,
             clearPendingUpload: () => undefined,
             listSessionFiles: async () => [],
+            registerKnownFile: () => undefined,
           },
         },
         { provide: ToastService, useValue: { error: () => undefined, warning: () => undefined, info: () => undefined } },
@@ -457,6 +472,7 @@ describe('ChatInputComponent — queueing a follow-up mid-stream', () => {
             clearReadyUploads: () => undefined,
             clearPendingUpload: () => undefined,
             listSessionFiles: async () => [],
+            registerKnownFile: () => undefined,
           },
         },
         { provide: ToastService, useValue: { error: () => undefined, warning: () => undefined, info: () => undefined } },
@@ -631,6 +647,25 @@ describe('ChatInputComponent — queueing a follow-up mid-stream', () => {
     expect(cancelled).toBe(1);
   });
 
+  it('does not stop on Shift+Esc, the focus-the-composer shortcut', () => {
+    setStreaming(true);
+    const event = new KeyboardEvent('keydown', { key: 'Escape', shiftKey: true, cancelable: true, bubbles: true });
+    textarea.dispatchEvent(event);
+    expect(cancelled).toBe(0);
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it('is what Shift+Esc focuses', () => {
+    document.body.appendChild(fixture.nativeElement);
+    try {
+      textarea.blur();
+      expect(TestBed.inject(ShortcutTargetsService).focusComposer()).toBe(true);
+      expect(document.activeElement).toBe(textarea);
+    } finally {
+      fixture.nativeElement.remove();
+    }
+  });
+
   it('ignores Escape when nothing is streaming', () => {
     textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true, bubbles: true }));
     expect(cancelled).toBe(0);
@@ -717,6 +752,7 @@ describe('ChatInputComponent — mid-turn steering (PR-5)', () => {
             clearReadyUploads: () => undefined,
             clearPendingUpload: () => undefined,
             listSessionFiles: async () => [],
+            registerKnownFile: () => undefined,
           },
         },
         { provide: ToastService, useValue: { error: () => undefined, warning: () => undefined, info: () => undefined } },
@@ -952,6 +988,7 @@ describe('ChatInputComponent — a queue held behind a paused turn (PR-6)', () =
             clearReadyUploads: () => undefined,
             clearPendingUpload: () => undefined,
             listSessionFiles: async () => [],
+            registerKnownFile: () => undefined,
           },
         },
         { provide: ToastService, useValue: { error: () => undefined, warning: () => undefined, info: () => undefined } },
@@ -1197,6 +1234,7 @@ describe('ChatInputComponent — rotating discovery hints', () => {
             clearReadyUploads: () => undefined,
             clearPendingUpload: () => undefined,
             listSessionFiles: async () => [],
+            registerKnownFile: () => undefined,
           },
         },
         { provide: ToastService, useValue: { error: () => undefined, warning: () => undefined, info: () => undefined } },
@@ -1362,6 +1400,7 @@ describe('ChatInputComponent — composer drafts (feedback retry-with-correction
             clearReadyUploads: () => undefined,
             clearPendingUpload: () => undefined,
             listSessionFiles: async () => [],
+            registerKnownFile: () => undefined,
           },
         },
         { provide: ToastService, useValue: { error: () => undefined, warning: () => undefined, info: () => undefined } },
@@ -1464,6 +1503,7 @@ describe('ChatInputComponent — unsent text survives leaving the conversation',
             clearReadyUploads: () => readyUploads.set([]),
             clearPendingUpload: (uploadId: string) =>
               readyUploads.update((list) => list.filter((u) => u.uploadId !== uploadId)),
+            registerKnownFile: () => undefined,
             listSessionFiles: (sessionId: string) => {
               listedSessions.push(sessionId);
               return listSessionFilesImpl(sessionId);
@@ -1854,6 +1894,7 @@ describe('ChatInputComponent — compact layout, touch and first-send handoff', 
             clearReadyUploads: () => undefined,
             clearPendingUpload: () => undefined,
             listSessionFiles: async () => [],
+            registerKnownFile: () => undefined,
           },
         },
         { provide: ToastService, useValue: { error: () => undefined, warning: () => undefined, info: () => undefined } },
@@ -1938,9 +1979,10 @@ describe('ChatInputComponent — compact layout, touch and first-send handoff', 
     expect(component['unfolded']()).toBe(false);
   });
 
-  it('keeps the model picker in the bar in the empty state and moves it under the shell in compact', () => {
+  it('puts the model picker under the shell in both the empty state and compact', () => {
     render(false);
-    expect(fixture.nativeElement.querySelector('.composer-tools app-model-dropdown')).not.toBeNull();
+    expect(fixture.nativeElement.querySelector('.composer-tools app-model-dropdown')).toBeNull();
+    expect(fixture.nativeElement.querySelector('app-model-dropdown[size="compact"]')).not.toBeNull();
 
     fixture.componentRef.setInput('compact', true);
     fixture.detectChanges();
@@ -2078,6 +2120,7 @@ describe('ChatInputComponent — dictation', () => {
             clearReadyUploads: () => undefined,
             clearPendingUpload: () => undefined,
             listSessionFiles: async () => [],
+            registerKnownFile: () => undefined,
           },
         },
         { provide: ToastService, useValue: toast },
@@ -2292,6 +2335,7 @@ describe('ChatInputComponent voice mode options', () => {
             clearReadyUploads: () => undefined,
             clearPendingUpload: () => undefined,
             listSessionFiles: async () => [],
+            registerKnownFile: () => undefined,
           },
         },
         { provide: ToastService, useValue: { error: () => undefined, warning: () => undefined, info: () => undefined } },
@@ -2462,6 +2506,7 @@ describe('ChatInputComponent — attaching to a text-only model', () => {
             clearReadyUploads: () => undefined,
             clearPendingUpload: () => undefined,
             listSessionFiles: async () => [],
+            registerKnownFile: () => undefined,
             uploadFile: async (_sessionId: string, file: File) => {
               uploaded.push(file.name);
             },
@@ -2559,5 +2604,313 @@ describe('ChatInputComponent — attaching to a text-only model', () => {
     model.selectedModel.set({ modelId: 'x', inputModalities: ['TEXT', 'DOCUMENT'] });
     await drop(file('a.pdf', 'application/pdf'));
     expect(infos).toEqual([]);
+  });
+});
+
+describe('ChatInputComponent — the `+` menu hand-offs', () => {
+  let fixture: ComponentFixture<ChatInputComponent>;
+  let component: ChatInputComponent;
+  let attachToConversation: ReturnType<typeof vi.fn>;
+  let deleteFile: ReturnType<typeof vi.fn>;
+  let registerKnownFile: ReturnType<typeof vi.fn>;
+  let attachedEvents: string[];
+
+  const DRIVE = { providerId: 'google', displayName: 'Google Drive', iconName: 'x', connected: true };
+  const META: FileMetadata = {
+    uploadId: 'up-1',
+    filename: 'Quarterly Notes.docx',
+    mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    sizeBytes: 1234,
+    sessionId: 's1',
+    s3Uri: 's3://b/k',
+    status: 'ready',
+    createdAt: '2026-10-13T00:00:00Z',
+  };
+
+  beforeEach(async () => {
+    attachedEvents = [];
+    attachToConversation = vi.fn(async () => META);
+    deleteFile = vi.fn(async () => undefined);
+    registerKnownFile = vi.fn();
+    await TestBed.configureTestingModule({
+      imports: [ChatInputComponent],
+      providers: [
+        { provide: AgentMentionService, useClass: MentionServiceStub },
+        { provide: SkillCommandService, useClass: SkillCommandServiceStub },
+        {
+          provide: FileUploadService,
+          useValue: {
+            pendingUploadsList: signal([]),
+            hasActivePendingUploads: signal(false),
+            readyUploadIds: signal([]),
+            readyUploads: signal([]),
+            clearReadyUploads: () => undefined,
+            clearPendingUpload: () => undefined,
+            listSessionFiles: async () => [],
+            registerKnownFile,
+            deleteFile,
+          },
+        },
+        { provide: FileSourceService, useValue: { attachToConversation } },
+        { provide: ToastService, useValue: { error: () => undefined, warning: () => undefined, info: () => undefined } },
+        { provide: ToolService, useValue: { enabledToolIds: () => [] } },
+        { provide: ModelService, useClass: ModelServiceStub },
+        {
+          provide: VoiceChatService,
+          useValue: { status: signal('idle'), isVoiceActive: signal(false), agentTranscript: signal('') },
+        },
+        { provide: SystemPromptsService, useValue: { activePrompt: signal(null) } },
+        { provide: Router, useValue: { navigate: () => Promise.resolve(true) } },
+        { provide: SteeringService, useClass: SteeringServiceStub },
+      ],
+    })
+      .overrideComponent(ChatInputComponent, { set: { imports: [], schemas: [NO_ERRORS_SCHEMA] } })
+      .compileComponents();
+
+    fixture = TestBed.createComponent(ChatInputComponent);
+    component = fixture.componentInstance;
+    component.fileAttached.subscribe((file) => attachedEvents.push(file.name));
+    fixture.componentRef.setInput('showVoiceControl', false);
+    fixture.componentRef.setInput('autoFocus', false);
+    fixture.componentRef.setInput('sessionId', 's1');
+    fixture.detectChanges();
+  });
+
+  async function flush(): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    fixture.detectChanges();
+  }
+
+  it('shows a card while app-api fetches a file-source file, then holds it as metadata', async () => {
+    let resolve!: (meta: FileMetadata) => void;
+    attachToConversation.mockImplementationOnce(() => new Promise<FileMetadata>((r) => (resolve = r)));
+
+    component.onSourceFilesPicked({ connector: DRIVE, files: [{ fileId: 'f1', name: 'Quarterly Notes' }] });
+    await flush();
+
+    // The page is asked to stage a session, as it is for a device upload.
+    expect(attachedEvents).toEqual(['Quarterly Notes']);
+    expect(attachToConversation).toHaveBeenCalledWith('s1', 'google', 'f1');
+    const importing = component.importingAttachments();
+    expect(importing).toHaveLength(1);
+    expect(importing[0].status).toBe('uploading');
+    expect(importing[0].statusLabel).toBe('Adding from Google Drive…');
+    expect(importing[0].file.name).toBe('Quarterly Notes');
+    expect(component.hasActivePendingUploads()).toBe(true);
+    expect(component.remainingFileSlots()).toBe(4);
+
+    resolve(META);
+    await flush();
+
+    expect(component.importingAttachments()).toEqual([]);
+    expect(component.restoredAttachments()).toEqual([META]);
+    expect(component.attachmentIds()).toEqual(['up-1']);
+    expect(component.hasActivePendingUploads()).toBe(false);
+    // The thread's user message draws its card through the upload service.
+    expect(registerKnownFile).toHaveBeenCalledWith(META);
+  });
+
+  it('keeps a failed import as an error card that Retry asks for again', async () => {
+    attachToConversation.mockRejectedValueOnce(new Error('Google Drive could not be reached'));
+
+    component.onSourceFilesPicked({ connector: DRIVE, files: [{ fileId: 'f1', name: 'a.pdf' }] });
+    await flush();
+
+    const failed = component.importingAttachments()[0];
+    expect(failed.status).toBe('error');
+    expect(failed.error).toBe('Google Drive could not be reached');
+    expect(component.hasActivePendingUploads()).toBe(false);
+
+    await component.onFileRetry(failed);
+    await flush();
+
+    expect(attachToConversation).toHaveBeenCalledTimes(2);
+    expect(component.importingAttachments()).toEqual([]);
+    expect(component.restoredAttachments()).toEqual([META]);
+  });
+
+  it('a card removed mid-flight takes the landed file back out of storage', async () => {
+    let resolve!: (meta: FileMetadata) => void;
+    attachToConversation.mockImplementationOnce(() => new Promise<FileMetadata>((r) => (resolve = r)));
+
+    component.onSourceFilesPicked({ connector: DRIVE, files: [{ fileId: 'f1', name: 'a.pdf' }] });
+    await flush();
+    component.onFileRemove(component.importingAttachments()[0].uploadId);
+    expect(component.importingAttachments()).toEqual([]);
+
+    resolve(META);
+    await flush();
+
+    expect(component.restoredAttachments()).toEqual([]);
+    expect(deleteFile).toHaveBeenCalledWith('up-1');
+  });
+
+  it('refuses a pick that would exceed the per-message limit', async () => {
+    const files = Array.from({ length: 6 }, (_, i) => ({ fileId: `f${i}`, name: `f${i}.pdf` }));
+
+    component.onSourceFilesPicked({ connector: DRIVE, files });
+    await flush();
+
+    expect(attachToConversation).not.toHaveBeenCalled();
+    expect(component.importingAttachments()).toEqual([]);
+  });
+
+  it('writes a picked skill into the message as its /command, padded from the text', () => {
+    const textarea = fixture.nativeElement.querySelector('textarea') as HTMLTextAreaElement;
+    textarea.value = 'Please';
+    textarea.setSelectionRange(6, 6);
+    textarea.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+
+    component.insertSkillCommand(SKILLS[0]);
+
+    expect(component.userInput()).toBe('Please /brand-deck ');
+    expect(textarea.value).toBe('Please /brand-deck ');
+    expect(textarea.selectionStart).toBe('Please /brand-deck '.length);
+
+    component.insertSkillCommand(SKILLS[2]);
+    expect(component.userInput()).toBe('Please /brand-deck /web-research ');
+  });
+
+  it('starts an empty message with the command and no leading space', () => {
+    component.insertSkillCommand(SKILLS[1]);
+    expect(component.userInput()).toBe('/brand-voice ');
+  });
+});
+
+/**
+ * A project conversation's composer: with no launch card, the placeholder is
+ * what names where a message goes.
+ */
+describe('ChatInputComponent — a project conversation', () => {
+  let fixture: ComponentFixture<ChatInputComponent>;
+  let textarea: HTMLTextAreaElement;
+
+  const PROJECT = { projectId: 'p1', name: 'Biology 101' };
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [ChatInputComponent],
+      providers: [
+        { provide: AgentMentionService, useClass: MentionServiceStub },
+        { provide: SkillCommandService, useClass: SkillCommandServiceStub },
+        {
+          provide: FileUploadService,
+          useValue: {
+            pendingUploadsList: signal([]),
+            hasActivePendingUploads: signal(false),
+            readyUploadIds: signal([]),
+            readyUploads: signal([]),
+            clearReadyUploads: () => undefined,
+            clearPendingUpload: () => undefined,
+            listSessionFiles: async () => [],
+            registerKnownFile: () => undefined,
+          },
+        },
+        { provide: ToastService, useValue: { error: () => undefined, warning: () => undefined, info: () => undefined } },
+        { provide: ToolService, useValue: {} },
+        { provide: ModelService, useClass: ModelServiceStub },
+        {
+          provide: VoiceChatService,
+          useValue: {
+            status: signal('idle'),
+            isVoiceActive: signal(false),
+            agentTranscript: signal(''),
+          },
+        },
+        { provide: SystemPromptsService, useValue: { activePrompt: signal(null) } },
+        { provide: Router, useValue: { navigate: () => Promise.resolve(true) } },
+        { provide: SteeringService, useClass: SteeringServiceStub },
+      ],
+    })
+      .overrideComponent(ChatInputComponent, {
+        set: { imports: [], schemas: [NO_ERRORS_SCHEMA] },
+      })
+      .compileComponents();
+
+    fixture = TestBed.createComponent(ChatInputComponent);
+    fixture.componentRef.setInput('showFileControls', false);
+    fixture.componentRef.setInput('showVoiceControl', false);
+    fixture.componentRef.setInput('autoFocus', false);
+    fixture.detectChanges();
+
+    textarea = fixture.nativeElement.querySelector('textarea') as HTMLTextAreaElement;
+  });
+
+  function setProject(): void {
+    fixture.componentRef.setInput('project', PROJECT);
+    fixture.detectChanges();
+  }
+
+  it('keeps the usual placeholder outside a project', () => {
+    expect(textarea.getAttribute('placeholder')).toBe('How can I help you today?');
+  });
+
+  it('names the project in the placeholder', () => {
+    setProject();
+    expect(textarea.getAttribute('placeholder')).toBe('Ask anything in Biology 101…');
+  });
+
+  it('starts the hint rotation on the project line, so it settles there too', () => {
+    setProject();
+    const hint = fixture.nativeElement.querySelector('.composer-hint') as HTMLElement | null;
+    expect(hint?.textContent?.trim()).toBe('Ask anything in Biology 101…');
+  });
+
+  it('names the project in a thread too', () => {
+    fixture.componentRef.setInput('compact', true);
+    setProject();
+    expect(textarea.getAttribute('placeholder')).toBe('Ask anything in Biology 101…');
+  });
+
+  function hints(): string[] {
+    return (fixture.componentInstance as unknown as { composerHints: () => string[] }).composerHints();
+  }
+
+  function type(value: string): void {
+    textarea.value = value;
+    textarea.setSelectionRange(value.length, value.length);
+    textarea.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+  }
+
+  it('never suggests `@`: a project runs its own harness, not a personal Agent', () => {
+    expect(hints().some((hint) => hint.includes('Type @'))).toBe(true);
+    setProject();
+    expect(hints().some((hint) => hint.includes('Type @'))).toBe(false);
+  });
+
+  it('keeps the `@` menu shut in a project', () => {
+    setProject();
+    type('@');
+    expect(fixture.componentInstance.isMentionMenuOpen()).toBe(false);
+  });
+
+  it('drops a mention picked before the project was, so the send cannot leave the project', () => {
+    const component = fixture.componentInstance;
+    type('@');
+    component.onMentionPicked(AGENTS[0]);
+    fixture.detectChanges();
+    expect(component.mentionedAgent()).not.toBeNull();
+
+    setProject();
+    expect(component.mentionedAgent()).toBeNull();
+
+    const sent: { mentionAgentId?: string }[] = [];
+    component.messageSubmitted.subscribe((event) => sent.push(event));
+    component.submitChatRequest();
+    expect(sent[0].mentionAgentId).toBeUndefined();
+  });
+
+  it("offers `/` as the project's skills when the project binds its own", () => {
+    (TestBed.inject(SkillCommandService) as unknown as SkillCommandServiceStub).agentLocked.set(true);
+    setProject();
+    expect(hints()).toContain("Type / to run one of this project's skills");
+  });
+
+  it("offers `/` as the member's own skills when the project binds none", () => {
+    setProject();
+    expect(hints()).toContain('Type / to run one of your skills');
   });
 });

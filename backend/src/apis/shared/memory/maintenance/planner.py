@@ -94,7 +94,7 @@ TOOL_SPEC = {
 }
 
 
-SPLIT_PROMPT = """You organise one file of a team's shared memory. The file is a list of items, each one fact, decision or note the team saved. It has grown close to its size limit. A large file is worse to use: a task reads a whole file at a time, so a task that needs one fact pays for all of them, and once the file reaches its limit nothing more can be saved to it.
+SPLIT_PROMPT = """You organise one file of a team's shared memory. The file is a list of items, each one fact, decision or note the team saved. It has grown close to its size limit. A large file is worse to use: a conversation reads a whole file at a time, so a conversation that needs one fact pays for all of them, and once the file reaches its limit nothing more can be saved to it.
 
 Find groups of items that are about a sub-topic of their own and would read better as a separate file, and propose moving each group into a new file. Moved items keep their exact words; one line pointing to the new file takes their place, so nothing is lost.
 

@@ -78,6 +78,11 @@ class Document(BaseModel):
     content_hash: Optional[str] = Field(None, alias="contentHash", description="SHA-256 of the last-ingested raw bytes (change-detection second gate)")
     last_synced_at: Optional[str] = Field(None, alias="lastSyncedAt", description="ISO 8601 timestamp of last successful sync run")
     sync_policy_id: Optional[str] = Field(None, alias="syncPolicyId", description="Back-pointer to the covering SyncPolicy (UI badges)")
+    removed_from_source: Optional[bool] = Field(
+        None,
+        alias="removedFromSource",
+        description="Set by a drive_folder sync when the file left its folder; the document is kept",
+    )
 
 
 class CreateDocumentRequest(BaseModel):
@@ -124,6 +129,9 @@ class DocumentResponse(BaseModel):
     source_file_id: Optional[str] = Field(None, alias="sourceFileId", description="Provider-side opaque file identifier")
     sync_policy_id: Optional[str] = Field(None, alias="syncPolicyId", description="Back-pointer to the covering SyncPolicy")
     last_synced_at: Optional[str] = Field(None, alias="lastSyncedAt", description="ISO 8601 timestamp of last successful sync run")
+    removed_from_source: Optional[bool] = Field(
+        None, alias="removedFromSource", description="A folder sync found the file no longer in its folder"
+    )
 
 
 class KbUsage(BaseModel):

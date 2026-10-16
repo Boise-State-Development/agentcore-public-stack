@@ -158,6 +158,25 @@ export class ToolService {
   // be dishonest. Holds the bound tool ids, or null when not agent-bound.
   private readonly _agentLockedToolIds = signal<string[] | null>(null);
 
+  // Whether the lock keeps the admin's always-on floor: true for a Shared Project
+  // that binds no tools, whose turns ignore the member's picks but still get the
+  // pinned tools (admin-always-on-tools §7 D4).
+  private readonly _agentLockKeepsAlwaysOn = signal(false);
+
+  /**
+   * The ids the lock holds: the bound set, plus each tool an admin pinned whole when
+   * the lock keeps that floor. A tool pinned only per sub-tool still runs (the backend
+   * unions its scoped ids) but is not listed here, as with any scoped binding.
+   */
+  private readonly lockedToolIds = computed<string[] | null>(() => {
+    const locked = this._agentLockedToolIds();
+    if (locked === null || !this._agentLockKeepsAlwaysOn()) return locked;
+    const pinned = this._tools()
+      .filter(t => t.alwaysOn && !locked.includes(t.toolId))
+      .map(t => t.toolId);
+    return [...locked, ...pinned];
+  });
+
   // Public readonly signals
   readonly tools = this._tools.asReadonly();
   readonly loading = this._loading.asReadonly();
@@ -188,7 +207,7 @@ export class ToolService {
   readonly enabledToolIds = computed(() => {
     // Agent-bound: the Agent's tools are the effective set (the backend enforces
     // the same, replace semantics). Toggling is disabled, so nothing else feeds in.
-    const locked = this._agentLockedToolIds();
+    const locked = this.lockedToolIds();
     if (locked !== null) {
       return [...locked];
     }
@@ -214,7 +233,7 @@ export class ToolService {
   });
 
   readonly enabledCount = computed(() => {
-    const locked = this._agentLockedToolIds();
+    const locked = this.lockedToolIds();
     if (locked !== null) {
       return locked.length;
     }
@@ -227,7 +246,7 @@ export class ToolService {
    * greyed list); otherwise every accessible tool.
    */
   readonly visibleTools = computed(() => {
-    const locked = this._agentLockedToolIds();
+    const locked = this.lockedToolIds();
     if (locked !== null) {
       return this._tools().filter(t => locked.includes(t.toolId));
     }
@@ -240,7 +259,7 @@ export class ToolService {
    * user's underlying prefs); otherwise the user's own enabled state.
    */
   isToolShownEnabled(tool: Tool): boolean {
-    const locked = this._agentLockedToolIds();
+    const locked = this.lockedToolIds();
     if (locked !== null) {
       return locked.includes(tool.toolId);
     }
@@ -259,14 +278,19 @@ export class ToolService {
     return sub.enabled;
   }
 
-  /** Lock the picker to an Agent's bound tools (Agent Designer). */
-  lockToAgentTools(toolIds: string[]): void {
+  /**
+   * Lock the picker to an Agent's bound tools (Agent Designer). `keepAlwaysOn` adds
+   * the admin's always-on tools, for a project that binds none.
+   */
+  lockToAgentTools(toolIds: string[], options?: { keepAlwaysOn?: boolean }): void {
     this._agentLockedToolIds.set([...toolIds]);
+    this._agentLockKeepsAlwaysOn.set(options?.keepAlwaysOn ?? false);
   }
 
   /** Release an Agent tool lock. */
   clearAgentLock(): void {
     this._agentLockedToolIds.set(null);
+    this._agentLockKeepsAlwaysOn.set(false);
   }
 
   readonly toolsByCategory = computed(() => {

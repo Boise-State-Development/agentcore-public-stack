@@ -626,8 +626,6 @@ export class AgentDetailPage implements OnInit {
         return 'tool';
       case 'skill':
         return 'skill';
-      case 'memory_space':
-        return 'memory';
       default:
         return kind;
     }

@@ -457,6 +457,58 @@ class TestTextOnlyModel:
         inner_stream = model.stream
         mock_bedrock_cls.return_value = model
 
+        AgentFactory.create_agent(
+            model_config=ModelConfig(model_id="amazon.nova-pro-v1:0", provider=ModelProvider.BEDROCK),
+            **_COMMON_KWARGS,
+        )
+
+        assert mock_agent_cls.call_args.kwargs["model"].stream is inner_stream
+
+
+# ---------------------------------------------------------------------------
+# Claude sees history without the unsigned reasoning another model left there
+# ---------------------------------------------------------------------------
+class TestSignedReasoning:
+    """A turn on GPT stores its reasoning unsigned; after a switch to Claude,
+    Claude would be asked to verify a block that has no signature."""
+
+    HISTORY = [
+        {"role": "user", "content": [{"text": "hi"}]},
+        {
+            "role": "assistant",
+            "content": [{"reasoningContent": {"reasoningText": {"text": "thinking"}}}, {"text": "hello"}],
+        },
+        {"role": "user", "content": [{"text": "and now?"}]},
+    ]
+
+    @patch("agents.main_agent.core.agent_factory.Agent")
+    @patch("agents.main_agent.core.agent_factory.CountTokensBedrockModel")
+    def test_claude_streams_without_unsigned_reasoning(self, mock_bedrock_cls, mock_agent_cls):
+        from agents.main_agent.core.agent_factory import AgentFactory
+
+        model = MagicMock()
+        inner_stream = model.stream
+        mock_bedrock_cls.return_value = model
+
         AgentFactory.create_agent(model_config=_bedrock_config(), **_COMMON_KWARGS)
+
+        mock_agent_cls.call_args.kwargs["model"].stream(self.HISTORY, None, "system")
+        sent = inner_stream.call_args.args[0]
+        assert sent[1]["content"] == [{"text": "hello"}]
+        assert "reasoningContent" in self.HISTORY[1]["content"][0], "the shared history is untouched"
+
+    @patch("agents.main_agent.core.agent_factory.Agent")
+    @patch("agents.main_agent.core.agent_factory.build_mantle_model")
+    def test_other_providers_keep_their_reasoning(self, mock_mantle, mock_agent_cls):
+        from agents.main_agent.core.agent_factory import AgentFactory
+
+        model = MagicMock()
+        inner_stream = model.stream
+        mock_mantle.return_value = model
+
+        AgentFactory.create_agent(
+            model_config=ModelConfig(model_id="openai.gpt-oss-120b", provider=ModelProvider.MANTLE),
+            **_COMMON_KWARGS,
+        )
 
         assert mock_agent_cls.call_args.kwargs["model"].stream is inner_stream

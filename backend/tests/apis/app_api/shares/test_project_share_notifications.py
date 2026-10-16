@@ -134,7 +134,9 @@ class TestTheNote:
 
     def test_leaving_the_project_drops_the_note(self, notifying, project):
         share = _create(notifying, project, note="FYI")
-        asyncio.run(notifying.update_share(share.share_id, AUTHOR, UpdateShareRequest(accessLevel="public")))
+        meta_patch, _ = _sources(_session(project_id=project.project_id))
+        with meta_patch:
+            asyncio.run(notifying.update_share(share.share_id, AUTHOR, UpdateShareRequest(accessLevel="public")))
         assert "note" not in notifying._get_share_item(share.share_id)
 
 

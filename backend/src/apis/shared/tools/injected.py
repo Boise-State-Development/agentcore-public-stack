@@ -42,6 +42,12 @@ POWERPOINT_PRESENTATION_TOOL_IDS = frozenset({"create_powerpoint_presentation"})
 # Session workspace files. A single toggle that provisions list/read/write.
 WORKSPACE_TOOL_IDS = frozenset({"workspace_files"})
 
+# Authoring the invoking user's own skills (bound to session/user). A single
+# toggle that provisions all seven ``my_skill_*`` tools
+# (docs/specs/skill-creator.md, Gating); additionally gated on
+# ``skill_authoring_enabled()`` and ``skills_enabled()``.
+SKILL_AUTHORING_TOOL_IDS = frozenset({"my_skill_create"})
+
 # Document retrieval (bound to session/user). Listed for the record, and
 # deliberately NOT folded into ``INJECTED_TOOL_IDS`` below: ``document_read``
 # is gated on the session having a readable attachment, not on
@@ -62,6 +68,7 @@ INJECTED_TOOL_IDS = frozenset(
     | EXCEL_SPREADSHEET_TOOL_IDS
     | POWERPOINT_PRESENTATION_TOOL_IDS
     | WORKSPACE_TOOL_IDS
+    | SKILL_AUTHORING_TOOL_IDS
 )
 
 
@@ -93,7 +100,10 @@ INJECTED_TOOL_IDS = frozenset(
 #   - WORD (`_build_word_document_tools`), EXCEL
 #     (`_build_excel_spreadsheet_tools`), POWERPOINT
 #     (`_build_powerpoint_presentation_tools`), WORKSPACE
-#     (`_build_workspace_tools`).
+#     (`_build_workspace_tools`). With `WORD_TRACKED_CHANGES_ENABLED` on, WORD
+#     also closes over the user's display name, as `redline_word_document`'s
+#     default revision author. That names the same identity as `user_id`, the
+#     equivalence SKILL_AUTHORING's email rests on below.
 #
 #   - SPREADSHEET (`_build_spreadsheet_tools`) closes over `assistant_id` as
 #     well. That was NOT a key element until `_create_cache_key` gained it,
@@ -102,6 +112,15 @@ INJECTED_TOOL_IDS = frozenset(
 #     carrying it, the closure is described and the family is eligible. This
 #     is the dominant cohort: the 2026-08-03 prod read put
 #     `analyze_spreadsheet` on ~2,669 of 3,565 sessions.
+#
+#   - SKILL_AUTHORING (`_build_skill_authoring_tools`) closes over
+#     `(session_id, user_id, user_email)`. The email is not a key element of
+#     its own, but it names the same identity as `user_id` (the Memory-Space
+#     tools below rest on the same equivalence), and the tools only log it. The
+#     binding-reach lookup (skill-creator spec D9) runs per call, at approval
+#     time, so the closure holds nothing else. Admitted with the family rather
+#     than later: an opt-in family left out of this set makes every turn that
+#     enables it rebuild the agent and re-write the prompt-cache prefix.
 #
 # Memory-Space tools are not in any set here (they are not gated on
 # `enabled_tools`), but they are described too: they close over the resolved
@@ -119,6 +138,7 @@ KEY_DESCRIBED_INJECTED_TOOL_IDS = frozenset(
     | POWERPOINT_PRESENTATION_TOOL_IDS
     | WORKSPACE_TOOL_IDS
     | SPREADSHEET_TOOL_IDS
+    | SKILL_AUTHORING_TOOL_IDS
 )
 
 

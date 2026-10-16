@@ -18,6 +18,8 @@ const MOCK_ANATOMY: SessionCostAnatomy = {
   wastedUsd: 0.03,
   agentSwitchMissCount: 0,
   agentSwitchUsd: 0,
+  modelSwitchMissCount: 0,
+  modelSwitchUsd: 0,
   cacheEfficiency: 0.8,
   calls: [
     {
@@ -421,6 +423,29 @@ describe('SessionCostAnatomyPage', () => {
       // a nonsense pair must not render as "-4 unexplained".
       const page = await loadWith({ avoidableMissCount: 1, agentSwitchMissCount: 5 });
       expect(page.unexplainedMisses()).toBe(0);
+    });
+
+    it('subtracts model switches as well as agent switches', async () => {
+      // The pairs are disjoint (a miss with both flags counts as an agent switch), so
+      // subtracting both never double-counts.
+      const page = await loadWith({ avoidableMissCount: 4, agentSwitchMissCount: 1, modelSwitchMissCount: 2 });
+      expect(page.unexplainedMisses()).toBe(1);
+    });
+
+    it('names each explained source under the count', async () => {
+      const page = await loadWith({ avoidableMissCount: 4, agentSwitchMissCount: 1, modelSwitchMissCount: 2 });
+      expect(page.explainedMissNote()).toBe('1 from an agent switch, 2 from a model switch');
+    });
+
+    it('names a model switch alone', async () => {
+      const page = await loadWith({ avoidableMissCount: 1, modelSwitchMissCount: 1 });
+      expect(page.explainedMissNote()).toBe('1 from a model switch');
+      expect(page.unexplainedMisses()).toBe(0);
+    });
+
+    it('says nothing when no miss is explained', async () => {
+      const page = await loadWith({ avoidableMissCount: 2 });
+      expect(page.explainedMissNote()).toBeNull();
     });
 
     it('is zero before the resource resolves', async () => {

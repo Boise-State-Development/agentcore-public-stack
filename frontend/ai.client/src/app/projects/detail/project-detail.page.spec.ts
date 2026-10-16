@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { TestBed } from '@angular/core/testing';
 import { Component, input } from '@angular/core';
 import { HttpErrorResponse } from '@angular/common/http';
-import { Router, provideRouter, withComponentInputBinding } from '@angular/router';
+import { provideRouter, withComponentInputBinding } from '@angular/router';
 import { RouterTestingHarness } from '@angular/router/testing';
 import { Dialog } from '@angular/cdk/dialog';
 import { of, throwError } from 'rxjs';
@@ -11,19 +11,16 @@ import { ProjectComposerComponent } from './project-composer.component';
 import { ProjectOutputsComponent } from './project-outputs.component';
 import { ProjectProposalsComponent } from './project-proposals.component';
 import { ProjectTasksComponent } from './project-tasks.component';
-import { ProjectInstructionsDialogComponent } from '../components/project-instructions-dialog.component';
-import { ProjectMembersDialogComponent } from '../components/project-members-dialog.component';
 import { AgentService } from '../../agents/services/agent.service';
 import { ToastService } from '../../services/toast/toast.service';
 import { ProjectApiService } from '../services/project-api.service';
 import { Project } from '../models/project.model';
 
 /**
- * The detail page through the router: `id` and `tab` are route params bound with
+ * The detail page through the router: `id` is a route param bound with
  * `withComponentInputBinding()`, which is exactly the timing a constructed component
  * would skip. The composer and the task list are stubbed (each has its own spec);
- * the rail is real, because the page's one piece of routing logic is handing a
- * legacy `tab` URL to it.
+ * the rail is real. Where a legacy tab URL lands is `projects.routes.spec.ts`.
  */
 @Component({ selector: 'app-project-composer', template: 'composer' })
 class ComposerStub {
@@ -65,6 +62,7 @@ describe('ProjectDetailPage', () => {
     model: vi.fn(),
     bindings: vi.fn(),
     files: vi.fn(),
+    schedules: vi.fn(),
   };
   const agents = { loadBindable: vi.fn() };
   const dialog = { open: vi.fn() };
@@ -78,13 +76,14 @@ describe('ProjectDetailPage', () => {
     api.model.mockReturnValue(of({ modelConfig: null, version: 2, canEdit: true }));
     api.bindings.mockReturnValue(of({ bindings: [], version: 2, canEdit: true }));
     api.files.mockReturnValue(of({ documents: [], nextToken: null, canEdit: true }));
+    api.schedules.mockReturnValue(of({ schedules: [] }));
     agents.loadBindable.mockResolvedValue([]);
     dialog.open.mockReturnValue({ closed: of(undefined), close: vi.fn() });
     TestBed.configureTestingModule({
       providers: [
         provideRouter(
           [
-            { path: 'projects/:id/:tab', component: ProjectDetailPage },
+            { path: 'projects/:id/overview', component: ProjectDetailPage },
             { path: 'projects/:id', redirectTo: 'projects/:id/overview' },
           ],
           withComponentInputBinding(),
@@ -112,8 +111,8 @@ describe('ProjectDetailPage', () => {
   }
 
   function railRows(el: HTMLElement): string[] {
-    return Array.from(el.querySelectorAll('nav[aria-label="Project settings"] button')).map(
-      b => b.querySelector('span > span')?.textContent?.trim() ?? '',
+    return Array.from(el.querySelectorAll('nav[aria-label="Project settings"] li > *')).map(
+      row => row.querySelector('span > span')?.textContent?.trim() ?? '',
     );
   }
 
@@ -129,7 +128,7 @@ describe('ProjectDetailPage', () => {
 
   it('lists the settings rail, with Activity for an editor', async () => {
     const { el } = await open('/projects/prj_1');
-    expect(railRows(el)).toEqual(['Instructions', 'Files', 'Model', 'Tools & skills', 'Members', 'Activity', 'History']);
+    expect(railRows(el)).toEqual(['Instructions', 'Files', 'Memory', 'Model', 'Tools', 'Skills', 'Schedules', 'Members', 'Activity', 'History']);
   });
 
   it('gives a viewer no Activity row', async () => {
@@ -139,41 +138,11 @@ describe('ProjectDetailPage', () => {
     expect(el.textContent).toContain('You can view it but not change it.');
   });
 
-  it('opens the dialog a legacy tab URL names, then settles the URL on overview', async () => {
-    const { harness } = await open('/projects/prj_1/members');
-    expect(dialog.open).toHaveBeenCalledWith(ProjectMembersDialogComponent, expect.anything());
-    expect(TestBed.inject(Router).url).toBe('/projects/prj_1/overview');
-    harness.detectChanges();
-    expect(dialog.open).toHaveBeenCalledTimes(1);
-  });
-
-  it('sends the old settings tab to the Instructions dialog', async () => {
-    await open('/projects/prj_1/settings');
-    expect(dialog.open).toHaveBeenCalledWith(
-      ProjectInstructionsDialogComponent,
-      expect.objectContaining({ data: expect.objectContaining({ instructions: 'Be terse.', version: 2, canEdit: true }) }),
-    );
-  });
-
-  it('opens nothing for a viewer on /activity, and still settles the URL', async () => {
-    api.get.mockReturnValue(of({ ...PROJECT, role: 'viewer' }));
-    await open('/projects/prj_1/activity');
-    expect(dialog.open).not.toHaveBeenCalled();
-    expect(TestBed.inject(Router).url).toBe('/projects/prj_1/overview');
-  });
-
-  it('opens nothing for a tab it does not know', async () => {
-    await open('/projects/prj_1/nonsense');
-    expect(dialog.open).not.toHaveBeenCalled();
-    expect(TestBed.inject(Router).url).toBe('/projects/prj_1/overview');
-  });
-
   it('tells a non-member the project is not there, without saying whether it exists', async () => {
     api.get.mockReturnValue(throwError(() => new HttpErrorResponse({ status: 404 })));
-    const { el } = await open('/projects/prj_1/members');
+    const { el } = await open('/projects/prj_1/overview');
     expect(el.querySelector('[role=alert]')?.textContent).toContain('doesn’t exist, or you’re not a member');
     expect(el.querySelector('nav[aria-label="Project settings"]')).toBeNull();
-    expect(dialog.open).not.toHaveBeenCalled();
   });
 
   it('shows the archived notice, with the way back for the owner', async () => {

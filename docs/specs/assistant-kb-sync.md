@@ -79,9 +79,10 @@ SK = SYNCPOL#{policy_id}                     policy_id: syn-{12-hex}
 class SyncPolicy(BaseModel):
     policy_id: str
     assistant_id: str
-    source_type: Literal["web_crawl", "drive_file"]
+    source_type: Literal["web_crawl", "drive_file", "drive_folder"]
     # web_crawl: crawl_id of the CrawlJob whose settings we re-run
     # drive_file: document_id of the imported doc (provenance lives there)
+    # drive_folder: "{connector_id}:{folder_id}" (§11)
     source_ref: str
     interval: Literal["daily", "weekly", "monthly"]     # bounded enum, no cron
     state: Literal["active", "paused_error", "paused_inactive",
@@ -442,3 +443,232 @@ AWS AgentCore Identity docs, Google Drive API docs, and code inspection.
 
 PR-1..2 are inert (nothing schedules until a policy exists and the flag is
 on); each subsequent PR is independently shippable behind `KB_SYNC_ENABLED`.
+
+## 11. Drive folders (`drive_folder`)
+
+Added for Save as project (`composer-project-folder-picker.md` §5.3): a project
+saved from a Drive folder can keep its Files in step with that folder. A
+`drive_file` policy cannot do it: it re-fetches one document, so a file added
+to the folder later is never covered, and one policy per file runs into the
+10-per-assistant cap (§7.8) on any real folder. A `drive_folder` policy is
+**one** policy per folder, whatever its file count, on the same dispatcher and
+worker. Nothing about the trigger changes: the dispatcher still reads
+`DueSyncIndex`, the policy is still inert data, and every guard in §7 applies.
+
+**Flag:** `FOLDER_SYNC_ENABLED` / `CDK_FOLDER_SYNC_ENABLED` (app-api and both
+kb-sync Lambdas), `features.folderSync` in the SPA. In development, default
+off. While off, app-api refuses to create a `drive_folder` policy (400) and the
+dispatcher re-arms a due `drive_folder` policy one interval out without
+invoking the worker, so it neither runs nor sits at the head of the due index
+starving other policies (§11.7).
+
+**No new AWS resources.** The worker already holds every grant a folder run
+uses: the vault token read, the assistants table, the documents bucket.
+
+### 11.1 The policy
+
+```
+source_type = "drive_folder"
+source_ref  = "{connector_id}:{folder_id}"     # split on the LAST ':'
+source_name = "Course readings/Week 3"         # display only: the folder's path
+excluded_file_ids = {…}                        # string set, see §11.4
+last_run_summary  = {listed, unchanged, updated, added, removedFromSource,
+                     failed, skipped, deferred, truncated}
+```
+
+- `connector_id` is the OAuth provider id the folder was attached through (the
+  folder row's `connectorId`); the worker resolves its adapter from the
+  provider's `file_source_adapter_id`, as an import does. `folder_id` is the
+  provider's folder id. Drive folder ids never contain `:`, so the last `:` is
+  the separator whatever a connector id holds.
+- One policy per `(connector, folder)` per assistant: the existing
+  duplicate-`source_ref` check.
+- It counts **one** against `KB_SYNC_MAX_POLICIES_PER_ASSISTANT`.
+- `source_name` is the user's own folder path, shown on the project's Files
+  page. Like every folder name in `drive-folder-attachments.md`, it never
+  reaches a log line or a metric.
+- Creating one needs an editor (the existing gate), the flag, and a file
+  source the caller can use (`resolve_file_source`, the import route's check),
+  because the worker will fetch with the creator's credentials.
+- Its first run is **due at creation** (`next_sync_at` = the creation time),
+  not one interval out like the other source types, so it runs at the next
+  dispatcher tick. That run costs a listing and a metadata call: it adopts the
+  copies Save as project just imported, with no downloads (§11.3, step 5).
+  Until it does, each copy has no `syncPolicyId` and offers its own per-file
+  schedule on the Files page; a `drive_file` policy set in that window would
+  keep that document out of the folder's for good, splitting one folder
+  across two kinds of schedule.
+
+**Which documents belong to it.** A document belongs to a folder policy when
+its `syncPolicyId` names that policy. The worker stamps it: on a document it
+creates, and on an existing document it **adopts**, one whose provenance
+(`sourceConnectorId`, `sourceFileId`) matches a file listed in the folder and
+which no other policy covers. That is how the copies Save as project imported
+join the policy on its first run with no extra call from the SPA. A document
+already covered by another policy (a `drive_file` schedule on it) is left to
+that policy, and conversely a `drive_file` policy is refused on a document a
+folder policy has adopted (409). One source of truth per document.
+
+**Liveness.** A folder has no record in the assistants table to look up, so the
+dispatcher's source-liveness check (§7.2) is the assistant alone for this
+type. Whether the folder still exists is the worker's question (§11.3, step 2),
+answered through the same not-found streak as a deleted `drive_file`.
+
+### 11.2 How the worker creates documents
+
+The import route (`documents/routes.py` → `import_service.run_import`) is
+request-context code, but the pieces it uses are not, and the kb-sync image
+already carries them for the web re-crawl path, which creates page documents
+today:
+
+1. **Download first**, through the adapter, with a per-file byte cap. Nothing
+   is written for a file that cannot be fetched, so a failing file does not
+   leave a `failed` document behind on every run.
+2. `document_service.create_document` with the real filename, type, size and
+   final S3 key (`storage_service._get_s3_key`), status `uploading`, and
+   provenance (`source_connector_id`, `source_adapter_key`, `source_file_id`,
+   `source_etag` = the listed Drive `version`, `imported_by_user_id` = the
+   policy's creator, who is therefore also `addedByUserId`).
+3. `records.update_document_sync_fields`: `contentHash`, `syncPolicyId`,
+   `lastSyncedAt`.
+4. PUT the bytes to that key. The bucket's `ObjectCreated` event runs the
+   ingestion that the knowledge base's engine routes to, exactly as an import
+   does. A project's knowledge base is managed, and its consumer reads the new
+   document as a first upload.
+5. If the PUT fails, the document is marked `failed` and its `contentHash` and
+   `sourceEtag` are removed, so the next run sees it as changed and stages it
+   again rather than matching gates on bytes the knowledge base never got.
+
+`create_document` imports nothing heavy at module level: `apis.shared.assistants`
+(and with it the embeddings stack) is reached only from the ownership-checked
+reads and the delete path, both function-local, and the folder path takes
+neither. A changed existing document goes through the `drive_file` path's
+staging, unchanged: pre-stage writes (`previousChunkCount`,
+`stagedContentHash`), overwrite of the document's S3 key, rollback if the PUT
+fails. The two paths share one helper.
+
+The folder walk itself moves out of app-api's expansion task into
+`file_sources/folder_walk.py`, which takes the adapter, token and caps as
+arguments, so the expansion task and the worker list a folder the same way
+(breadth-first, subfolders included, `FOLDER_ATTACH_MAX_FILES` attachable
+files and `FOLDER_ATTACH_MAX_PAGES` pages) and accept the same files
+(`attachable_mime_for`: the chat allowlist minus images, which is what Save as
+project copied). The kb-sync image gains `apis/shared/files/` for those caps
+and that rule: files, not dependencies (boto3 and pydantic, already pinned).
+
+### 11.3 A run
+
+1. Resolve the provider, its adapter, and the creator's vault token (§6.1 step
+   1). Consent needed, or Google rejects the token: `paused_reauth`, with the
+   reauth marker for the connector.
+2. `get_file_metadata(folder_id)`. A 404 is a not-found strike (`failed`,
+   `not_found=True`; paused at 2, §7.5). `trashed=true` is the grace state
+   (`skipped`). This call is needed because a listing cannot tell a deleted
+   folder from an empty one: `'{id}' in parents` on a folder the user lost
+   simply returns nothing.
+3. **Walk** the folder (§11.2). A listing error is a `failed` run (backoff and
+   breaker, §7.4). A listing that stopped at a cap is still used, but marks
+   nothing gone (step 6).
+4. Load the assistant's documents once (`records.list_document_items`, one
+   paginated key query) and index them by `(connector, file id)`.
+5. For each listed file, in listing order, existing documents first, then new
+   files, until a per-run cap (§11.5) is reached:
+   - **excluded** (`excluded_file_ids`): skipped;
+   - **existing, gate 1**: the listed Drive `version` against the document's
+     `sourceEtag`. Equal: `unchanged`, no download. A listing already carries
+     `version`, so an unchanged folder costs its listing pages and one
+     metadata call per run, not one call per file;
+   - **adoption without a download**: a document that has no `sourceEtag` yet
+     (imports do not record one) and was created after the file's
+     `modifiedTime` holds the current bytes, so it takes the listed version and
+     counts unchanged. Without this the first run would re-ingest every file
+     Save as project had just imported;
+   - **existing, gate 2**: download, sha256 against `contentHash`. Equal:
+     advance `sourceEtag`, `unchanged`. Different: stage (§11.2), `updated`;
+   - **new**: create and stage (§11.2), `added`.
+   One file's failure (a download error, a refused type) is counted in the
+   summary and the run goes on; it is not a run failure.
+6. **Gone from the folder.** A document of this policy whose file the listing
+   did not return is marked `removedFromSource=true` (with
+   `removedFromSourceAt`), **only when the walk was complete**: no listing
+   error and no cap reached. It is never deleted: the knowledge base keeps it,
+   the agent can still cite it, and the Files page says "No longer in the
+   folder" beside it so an editor decides. A file that comes back is
+   unmarked on the run that lists it again. Same rule as a refreshed folder
+   attachment's `removed_from_source` (`drive-folder-attachments.md` §4.6), and
+   for the same reason as §7.5: a 404 or an absence cannot say deleted versus
+   unshared, and a moved or briefly trashed file must not vaporize a document.
+7. Record the run: `changed` if anything was staged, created or newly marked
+   gone, else `unchanged`; the summary goes on the policy as
+   `lastRunSummary`, counts only.
+
+### 11.4 A file someone removed from the project
+
+Deleting a document that a folder policy covers adds its provider file id to
+the policy's `excluded_file_ids` (a DynamoDB string-set `ADD`, conditioned on
+the policy being a `drive_folder`), in the same delete route that already
+removes a `drive_file` document's policy. Without it the next run would find
+the file in the folder with no document and import it again. A removed file
+stays removed, as on a folder attachment. The set is bounded by the folder
+(at most the walk cap's worth of ids that matter; the add stops at 500).
+
+Deleting the policy removes the `syncPolicyId` back-pointer from its
+documents (one key query over the assistant's documents) and keeps the
+documents: they become ordinary imported files.
+
+### 11.5 Caps and the 15-minute Lambda
+
+| Bound | Default | Where |
+|---|---|---|
+| Attachable files a walk lists | 100 (`FOLDER_ATTACH_MAX_FILES`) | shared with folder attachments |
+| Listing pages a walk fetches | 200 (`FOLDER_ATTACH_MAX_PAGES`) | shared with folder attachments |
+| Downloads per run (changed + new) | 50 (`KB_SYNC_FOLDER_MAX_FILES_PER_RUN`) | worker |
+| Bytes downloaded per run | 250 MB (`KB_SYNC_FOLDER_MAX_BYTES_PER_RUN`) | worker |
+| Bytes per file | 50 MB (`KB_SYNC_FOLDER_MAX_FILE_BYTES`); a larger file is skipped, refused before its bytes when Drive reports a size | worker |
+| Wall clock | stop starting downloads after 12 min (`KB_SYNC_FOLDER_RUN_BUDGET_SECONDS`) | worker |
+
+Files are processed one at a time, so at most one file's bytes are in memory
+(the worker has 1,024 MB). The budget is checked before each download, so the
+run ends inside the Lambda's 15 minutes with room for the bookkeeping writes;
+a file still in flight at 12 minutes is bounded by the adapter's own request
+timeout. Work a cap leaves undone is counted `deferred` and picked up by the
+next run, which re-lists and finds those files still changed or still new:
+nothing is queued, nothing is carried over. A 100-file folder in which every
+file changed converges in two runs.
+
+Worst case per dispatcher tick is 20 policies × 50 files = 1,000 documents
+staged, the same order as 20 crawls of 50 pages (§6.2), and each run's
+`lastRunSummary` and `KBSync` logs make it visible. An unchanged folder stages
+nothing.
+
+### 11.6 Safeguards, by §7 item
+
+1. **Single trigger, inert state**: unchanged; the folder policy is a row.
+2. **Liveness**: assistant gone ⇒ policy deleted; folder gone ⇒ not-found
+   streak (§11.3 step 2), never a delete of the documents.
+3. **Inactivity pause**: unchanged; a project's chat turns bump the harness's
+   `lastUsedAt`.
+4. **Circuit breaker**: listing failures and failed metadata calls are run
+   failures; per-file failures are not, so one broken file cannot pause a
+   folder, and a folder whose every file fails still records each in its
+   summary.
+5. **Source-gone**: §11.3 step 2, plus §11.3 step 6 per file.
+6. **Auth-gone**: identical; the reauth marker names the policy's connector.
+7. **Change detection before cost**: listing version, then sha256; an
+   unchanged file is never downloaded once its document has a `sourceEtag`.
+8. **Bounded configuration**: §11.5; still one interval enum, still ≤ 10
+   policies per assistant.
+9. **Observability**: the run summary on the policy; the worker logs counts,
+   never names.
+10. **Kill switch**: `KB_SYNC_ENABLED` stops everything; `FOLDER_SYNC_ENABLED`
+    stops folder runs alone.
+
+### 11.7 The dispatcher
+
+Two changes. The source-liveness lookup is skipped for `drive_folder`
+(§11.1). And while `FOLDER_SYNC_ENABLED` is off a due folder policy is
+re-armed one interval out (the same conditional write, no run stamp, no
+worker invoke) and counted `FolderSyncDisabled`. Leaving it due would starve
+the sweep: the index is read most-overdue first, 20 at a time, so policies that
+are never re-armed would fill every tick. The worker checks the flag too and
+records `skipped`, for a run already in flight when it is turned off.

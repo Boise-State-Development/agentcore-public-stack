@@ -148,6 +148,19 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     projects: {
       enabled: false,
     },
+    userGrants: {
+      enabled: false,
+    },
+    sessionPrewarm: {
+      enabled: false,
+    },
+    clientTurnTiming: {
+      enabled: false,
+    },
+    ttftProbe: {
+      userId: '',
+      modelId: '',
+    },
     memoryLint: {
       mode: 'warn',
       sensitivePatterns: '',
@@ -163,6 +176,24 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     },
     feedbackEvalSampling: { enabled: false },
     skills: {
+      enabled: false,
+    },
+    skillAuthoring: {
+      enabled: false,
+    },
+    wordTrackedChanges: {
+      enabled: false,
+    },
+    largeDocumentAttachments: {
+      enabled: false,
+    },
+    attachmentKb: {
+      enabled: false,
+    },
+    folderAttachments: {
+      enabled: false,
+    },
+    folderSync: {
       enabled: false,
     },
     agents: {
