@@ -60,6 +60,8 @@ function setup(options: {
   contextTokens?: number;
   confirmEnabled?: boolean;
   dialogResult?: { dontAskAgain: boolean } | undefined;
+  /** The session's persisted `lastModel`, as loaded from the list. */
+  lastModel?: string;
 } = {}) {
   const open = vi.fn(() => ({ closed: of(options.dialogResult) }));
   const setConfirmCacheReset = vi.fn();
@@ -79,7 +81,12 @@ function setup(options: {
       },
       {
         provide: SessionService,
-        useValue: { currentSession: signal({ sessionId: options.sessionId ?? 's1' }) },
+        useValue: {
+          currentSession: signal({
+            sessionId: options.sessionId ?? 's1',
+            preferences: options.lastModel ? { lastModel: options.lastModel } : undefined,
+          }),
+        },
       },
       { provide: MessageMapService, useValue: { getMessagesForSession: () => messages } },
       {
@@ -102,13 +109,13 @@ describe('estimateCacheResetUsd', () => {
   });
 
   it('prices an effort change as a write against a read on the same model', () => {
-    const change: CacheResetChange = { kind: 'effort', model: SONNET, fromLabel: 'Low', toLabel: 'High' };
+    const change: CacheResetChange = { kind: 'effort', model: SONNET, fromLabel: 'Low', toLabel: 'High', toLevel: 'high' };
     expect(estimateCacheResetUsd(change, 40_000)).toBeCloseTo(0.1518, 4);
   });
 
   it('falls back to the standard multipliers when the row has no cache prices', () => {
     const bare = model({ cacheWritePricePerMillionTokens: null, cacheReadPricePerMillionTokens: null, inputPricePerMillionTokens: 2 });
-    const change: CacheResetChange = { kind: 'effort', model: bare, fromLabel: 'Low', toLabel: 'High' };
+    const change: CacheResetChange = { kind: 'effort', model: bare, fromLabel: 'Low', toLabel: 'High', toLevel: 'high' };
     // 1M tokens × (2 × 1.25 − 2 × 0.1)
     expect(estimateCacheResetUsd(change, 1_000_000)).toBeCloseTo(2.3, 6);
   });
@@ -139,7 +146,7 @@ describe('PromptCacheGuardService', () => {
 
   it('words an effort change in effort levels', async () => {
     const { guard, open } = setup({ dialogResult: { dontAskAgain: false } });
-    await guard.confirm({ kind: 'effort', model: SONNET, fromLabel: 'Low', toLabel: 'High' });
+    await guard.confirm({ kind: 'effort', model: SONNET, fromLabel: 'Low', toLabel: 'High', toLevel: 'high' });
 
     const data = dialogData(open);
     expect(data.title).toBe('Change effort?');
@@ -213,5 +220,53 @@ describe('PromptCacheGuardService', () => {
     await guard.confirm(SWITCH);
     expect(dialogData(open).message).toContain('which uses more of your limit.');
     expect(dialogData(open).message).not.toContain('$');
+  });
+  describe('weighs the change against what the cache holds, not the picker', () => {
+    const SONNET_HIGH: CacheResetChange = { kind: 'effort', model: SONNET, fromLabel: 'Medium', toLabel: 'High', toLevel: 'high' };
+
+    it('asks when leaving the model the last message was sent with', async () => {
+      const { guard, open } = setup({ dialogResult: { dontAskAgain: false } });
+      guard.recordSend('s1', 'haiku', null);
+      await guard.confirm(SWITCH);
+      expect(open).toHaveBeenCalled();
+    });
+
+    it('does not ask on top of a switch picked but not sent: that already pays the re-write', async () => {
+      const { guard, open } = setup();
+      guard.recordSend('s1', 'haiku', null);
+      // Picked Sonnet without sending, now picking Opus, or changing Sonnet's effort.
+      const third: CacheResetChange = { kind: 'model', from: SONNET, to: model({ modelId: 'opus', modelName: 'Opus' }) };
+      expect(await guard.confirm(third)).toBe(true);
+      expect(await guard.confirm(SONNET_HIGH)).toBe(true);
+      expect(open).not.toHaveBeenCalled();
+    });
+
+    it('does not ask when going back to the model the cache holds', async () => {
+      const { guard, open } = setup();
+      guard.recordSend('s1', 'haiku', null);
+      expect(await guard.confirm({ kind: 'model', from: SONNET, to: HAIKU })).toBe(true);
+      expect(open).not.toHaveBeenCalled();
+    });
+
+    it('does not ask when going back to the effort the cache holds', async () => {
+      const { guard, open } = setup();
+      guard.recordSend('s1', 'sonnet', 'high');
+      const back: CacheResetChange = { kind: 'effort', model: SONNET, fromLabel: 'Low', toLabel: 'High', toLevel: 'high' };
+      expect(await guard.confirm(back)).toBe(true);
+      expect(open).not.toHaveBeenCalled();
+    });
+
+    it('asks when changing effort on the model the last message used', async () => {
+      const { guard, open } = setup({ dialogResult: { dontAskAgain: false } });
+      guard.recordSend('s1', 'sonnet', 'medium');
+      await guard.confirm(SONNET_HIGH);
+      expect(open).toHaveBeenCalled();
+    });
+
+    it("falls back to the session's lastModel for a conversation opened from the list", async () => {
+      const { guard, open } = setup({ lastModel: 'haiku' });
+      expect(await guard.confirm({ kind: 'model', from: SONNET, to: HAIKU })).toBe(true);
+      expect(open).not.toHaveBeenCalled();
+    });
   });
 });

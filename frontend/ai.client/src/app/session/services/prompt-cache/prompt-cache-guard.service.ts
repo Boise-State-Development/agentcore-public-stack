@@ -21,7 +21,14 @@ import { MessageMapService } from '../session/message-map.service';
  */
 export type CacheResetChange =
   | { kind: 'model'; from: ManagedModel; to: ManagedModel }
-  | { kind: 'effort'; model: ManagedModel; fromLabel: string; toLabel: string };
+  | { kind: 'effort'; model: ManagedModel; fromLabel: string; toLabel: string; toLevel: string };
+
+/** What the conversation's cache was last written with: the model and effort of its last message. */
+interface CachedWith {
+  modelId: string;
+  /** Null when unknown (a conversation opened from the list, not sent from this tab). */
+  effort: string | null;
+}
 
 /**
  * How long a conversation's history stays cached after its last model call.
@@ -103,6 +110,19 @@ export class PromptCacheGuardService {
   private readonly messageMap = inject(MessageMapService);
   private readonly localSettings = inject(LocalSettingsService);
 
+  /** Per session, the model and effort the last message in this tab was sent with. */
+  private readonly sentWith = new Map<string, CachedWith>();
+
+  /**
+   * Record what a message is being sent with. Called as each chat request is
+   * built, so the guard knows what the cache holds rather than what the
+   * picker shows: a switch the user has picked but not sent yet has not
+   * touched the cache.
+   */
+  recordSend(sessionId: string, modelId: string, effort: string | null): void {
+    this.sentWith.set(sessionId, { modelId, effort });
+  }
+
   /** Resolves true when the change should go ahead. */
   async confirm(change: CacheResetChange): Promise<boolean> {
     if (!this.localSettings.confirmCacheReset()) return true;
@@ -111,6 +131,7 @@ export class PromptCacheGuardService {
 
     const sessionId = this.sessionService.currentSession().sessionId;
     if (!sessionId || !this.isCacheWarm(sessionId)) return true;
+    if (!this.changesCachedPrefix(sessionId, change)) return true;
 
     const tokens = this.chatState.contextTokensFor(sessionId);
     const usd = estimateCacheResetUsd(change, tokens);
@@ -123,6 +144,30 @@ export class PromptCacheGuardService {
     if (!result) return false;
     if (result.dontAskAgain) this.localSettings.setConfirmCacheReset(false);
     return true;
+  }
+
+  /**
+   * Whether the change moves the next message away from what the cache was
+   * written with. Not when the selection already differs from it, because a
+   * switch picked but not sent yet already pays the re-write, and changing
+   * effort on top of it (or picking a third model) adds nothing. Not when it
+   * goes back to what the cache holds, because that is a cache hit.
+   */
+  private changesCachedPrefix(sessionId: string, change: CacheResetChange): boolean {
+    const cached = this.cachedWith(sessionId);
+    if (!cached) return true;
+    if (change.kind === 'model') {
+      return change.from.modelId === cached.modelId && change.to.modelId !== cached.modelId;
+    }
+    if (change.model.modelId !== cached.modelId) return false;
+    return cached.effort === null || change.toLevel !== cached.effort;
+  }
+
+  private cachedWith(sessionId: string): CachedWith | null {
+    const sent = this.sentWith.get(sessionId);
+    if (sent) return sent;
+    const lastModel = this.sessionService.currentSession().preferences?.lastModel;
+    return lastModel ? { modelId: lastModel, effort: null } : null;
   }
 
   /**

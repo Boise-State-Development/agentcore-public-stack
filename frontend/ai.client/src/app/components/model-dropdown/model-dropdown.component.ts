@@ -375,6 +375,7 @@ export class ModelDropdownComponent {
         model: this.modelService.selectedModel(),
         fromLabel: effortLevelLabel(current),
         toLabel: effortLevelLabel(level),
+        toLevel: level,
       });
       if (!confirmed) return;
     }
