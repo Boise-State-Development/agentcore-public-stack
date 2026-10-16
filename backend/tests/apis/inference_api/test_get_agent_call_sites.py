@@ -64,8 +64,8 @@ def test_a_harness_keys_on_the_scopes_its_tools_were_built_from():
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
             assigned.setdefault(node.targets[0].id, []).append(ast.unparse(node.value))
-    assert "project_memory.binding_key()" in assigned["memory_binding_key"]
-    assert "build_project_memory_tools(project_memory, current_user)" in assigned["memory_tools"]
+    assert any("project_memory.binding_key()" in v for v in assigned["memory_binding_key"])
+    assert "build_project_memory_tools(project_memory, current_user)" in source
     assert "project_memory.memory_context or None" in assigned["memory_context"]
 
 

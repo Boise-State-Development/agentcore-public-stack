@@ -316,7 +316,7 @@ class TestTheTurn:
         monkeypatch.setattr(routes, "_build_document_tools", AsyncMock(return_value=[]))
         tools = asyncio.run(routes._build_turn_tools(
             InvocationRequest(session_id="s1"), VIEWER, VIEWER.user_id, [],
-            agent_memory=None, project_memory=project_memory, turn_has_document=False,
+            project_memory=project_memory, turn_has_document=False,
         ))
         return [t.tool_spec["name"] for t in tools.extra_tools]
 

@@ -25,10 +25,9 @@ about to publish it, or whose missing tool is about to be granted, and a save th
 on a condition the admin is mid-way through fixing teaches people to work around the
 console rather than through it.
 
-⚠️ The role-level diff is narrower than the per-user one on purpose. ``memory_space``
-resolves per person and cannot be decided for a role at all, so it is reported as a *note*
-rather than counted as present or missing — "ready" here must never claim to have checked
-something it could not.
+⚠️ The role-level diff is narrower than the per-user one on purpose: anything a role
+cannot decide is reported as a *note* rather than counted as present or missing — "ready"
+here must never claim to have checked something it could not.
 """
 
 import logging
@@ -61,19 +60,13 @@ from apis.app_api.agent_designer.services.agent_detail import (
 logger = logging.getLogger(__name__)
 
 # What a role's ``effective_permissions`` can actually decide, as (binding kind,
-# permission axis) pairs. ``memory_space`` is absent because a role does not grant memory
-# spaces — people do, per space (see ``_MEMORY_NOTE``, applied separately below).
+# permission axis) pairs.
 #
 # Read by the loop in ``role_pin_runnability``. It previously stated the kinds here and
 # then re-stated them as a literal at the loop, so the documented rule and the enforced
 # rule were two objects that could drift; CodeQL flagged the constant as unused, which is
 # what that drift looks like from the outside.
 _ROLE_GATED_KINDS = (("tool", "tools"), ("skill", "skills"))
-
-_MEMORY_NOTE = (
-    "Binds a memory space, which is granted per person — this check cannot decide it for "
-    "a whole role."
-)
 
 
 def _grants(role: AppRole, axis: str) -> Set[str]:
@@ -105,9 +98,6 @@ async def _diff_against_role(
             )
 
     bindings = _gated_bindings(assistant)
-    if any(binding.kind == "memory_space" for binding in bindings):
-        notes.append(_MEMORY_NOTE)
-
     labels = await _labels_by_kind(assistant, admin_user)
     for kind, axis in _ROLE_GATED_KINDS:
         of_kind = [b for b in bindings if b.kind == kind]

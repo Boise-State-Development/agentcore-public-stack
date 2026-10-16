@@ -73,7 +73,7 @@ def _viewer(email: str = "friend@example.com") -> User:
 
 def _patch_sources(heads: list[dict] | Exception):
     """Patch the three things `create_share` reads."""
-    meta = MagicMock()
+    meta = MagicMock(preferences=None)  # not in a project
     meta.model_dump.return_value = {"title": "Chat"}
     messages = MagicMock(
         messages=[

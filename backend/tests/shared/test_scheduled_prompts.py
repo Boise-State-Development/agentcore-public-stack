@@ -17,6 +17,7 @@ import pytest
 
 from apis.shared.scheduled_prompts.models import DUE_INDEX_PK
 from apis.shared.scheduled_prompts.service import (
+    InvalidTimezoneError,
     ScheduledPromptLimitExceeded,
     compute_next_run_at,
     create_scheduled_prompt,
@@ -66,6 +67,12 @@ async def _make_schedule(
 
 
 class TestComputeNextRunAt:
+    @pytest.mark.parametrize("name", ["Mars/Olympus", "America", "America/Boise ", "../etc/passwd", "zone.tab", "a\x00b"])
+    def test_an_unknown_or_malformed_timezone_is_invalid_timezone_error(self, name):
+        # A KeyError (ZoneInfoNotFoundError) used to escape a ValueError-only catch as a 500.
+        with pytest.raises(InvalidTimezoneError):
+            compute_next_run_at("daily", 9, name)
+
     def test_daily_before_hour_fires_today(self):
         # 2026-07-05 06:00 Boise time (MDT, UTC-6); "9am daily" -> today 9am.
         from_time = datetime(2026, 7, 5, 12, 0, tzinfo=timezone.utc)  # 06:00 MDT

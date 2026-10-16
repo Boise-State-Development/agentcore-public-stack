@@ -19,7 +19,7 @@ import os
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from typing import List, Optional, Tuple, Union
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .models import DUE_INDEX_PK, DeliverTo, IntervalUnit, ScheduleCadence, ScheduledPrompt, ScheduledPromptState
 
@@ -58,6 +58,24 @@ DEFAULT_MAX_SCHEDULES_PER_USER = 20
 
 class ScheduledPromptLimitExceeded(Exception):
     """Raised when a user already has the maximum number of schedules."""
+
+
+class InvalidTimezoneError(ValueError):
+    """Raised when a schedule names a timezone that is not a known IANA zone."""
+
+
+def _zone(timezone_name: str) -> ZoneInfo:
+    """The IANA zone ``timezone_name``, or ``InvalidTimezoneError``.
+
+    ``ZoneInfo`` raises ``ZoneInfoNotFoundError`` (a ``KeyError``) for an
+    unknown name, and ``ValueError``/``TypeError``/``OSError`` for a malformed
+    one or a path that is not a zone file, so a caller catching only
+    ``ValueError`` let a typo through as a 500.
+    """
+    try:
+        return ZoneInfo(timezone_name)
+    except (ZoneInfoNotFoundError, ValueError, TypeError, OSError) as e:
+        raise InvalidTimezoneError(f"Unknown timezone: {timezone_name!r}") from e
 
 
 def _iso(dt: datetime) -> str:
@@ -138,7 +156,7 @@ def compute_next_run_at(
         base_utc = (from_time or datetime.now(timezone.utc)).astimezone(timezone.utc)
         return _iso(base_utc + timedelta(minutes=interval_minutes))
 
-    tz = ZoneInfo(timezone_name)
+    tz = _zone(timezone_name)
     base = (from_time or datetime.now(timezone.utc)).astimezone(tz)
 
     candidate = base.replace(hour=hour_local, minute=0, second=0, microsecond=0)
@@ -190,6 +208,7 @@ async def create_scheduled_prompt(
     passes the RBAC-resolved tool set at creation time; it is never
     re-resolved lazily at fire time (Phase A punch #7).
     """
+    _zone(timezone_name)  # an interval cadence never reads it, but stores it
     existing = await list_scheduled_prompts(user_id)
     if len(existing) >= max_schedules_per_user():
         raise ScheduledPromptLimitExceeded(
@@ -502,6 +521,8 @@ async def update_scheduled_prompt(
     default agent / all-RBAC-allowed tools). All other fields keep the plain
     ``None`` == "leave unchanged" contract.
     """
+    if timezone_name is not None:
+        _zone(timezone_name)  # a paused schedule stores it unread until it resumes
     schedule = await get_scheduled_prompt(user_id, schedule_id)
     if schedule is None:
         return None

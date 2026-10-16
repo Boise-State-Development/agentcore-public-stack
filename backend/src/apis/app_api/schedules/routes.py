@@ -34,6 +34,7 @@ from apis.shared.rbac.service import get_app_role_service
 from apis.shared.scheduled_prompts.service import (
     MIN_INTERVAL_MINUTES,
     UNSET,
+    InvalidTimezoneError,
     ScheduledPromptLimitExceeded,
     compute_next_run_at,
     create_scheduled_prompt,
@@ -145,6 +146,8 @@ async def create_schedule(
         )
     except ScheduledPromptLimitExceeded as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except InvalidTimezoneError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
 
@@ -234,21 +237,24 @@ async def update_schedule(
     else:
         tools_arg = UNSET
 
-    schedule = await update_scheduled_prompt(
-        user.user_id,
-        schedule_id,
-        label=request.label,
-        prompt_text=request.prompt_text,
-        cadence=request.cadence,
-        hour_local=request.hour_local,
-        weekday=request.weekday,
-        interval_value=request.interval_value,
-        interval_unit=request.interval_unit,
-        timezone_name=request.timezone,
-        assistant_id=assistant_arg,
-        enabled_tools=tools_arg,
-        deliver_email=request.deliver_email,
-    )
+    try:
+        schedule = await update_scheduled_prompt(
+            user.user_id,
+            schedule_id,
+            label=request.label,
+            prompt_text=request.prompt_text,
+            cadence=request.cadence,
+            hour_local=request.hour_local,
+            weekday=request.weekday,
+            interval_value=request.interval_value,
+            interval_unit=request.interval_unit,
+            timezone_name=request.timezone,
+            assistant_id=assistant_arg,
+            enabled_tools=tools_arg,
+            deliver_email=request.deliver_email,
+        )
+    except InvalidTimezoneError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
     if request.state is not None and request.state != schedule.state:
         if request.state == "active":

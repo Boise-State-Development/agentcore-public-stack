@@ -41,7 +41,7 @@ MAX_BINDINGS = 64
 TemplateStatus = Literal["enabled", "disabled"]
 
 # BindingKind mirrors the frontend union
-# ('knowledge_base' | 'tool' | 'skill' | 'memory_space'). Stored as a free
+# ('knowledge_base' | 'tool' | 'skill'). Stored as a free
 # string so a fork can add binding kinds without a backend change; unknown
 # kinds pass through and the client reconciles/ignores what it cannot bind.
 

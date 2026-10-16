@@ -177,6 +177,18 @@ def test_only_the_creator_changes_it(project_id, service):
     assert "project.schedule_updated" in _audit_actions(service, project_id)
 
 
+@pytest.mark.parametrize("timezone", ["Mars/Olympus", "../etc/passwd"])
+def test_an_unknown_timezone_is_a_400_not_a_500(project_id, timezone):
+    response = client_for(EDITOR).post(f"/projects/{project_id}/schedules", json={**SCHEDULE, "timezone": timezone})
+    assert response.status_code == 400, response.text
+    assert "Unknown timezone" in response.json()["detail"]
+
+    created = _create(project_id)
+    path = f"/projects/{project_id}/schedules/{created['scheduleId']}"
+    assert client_for(EDITOR).patch(path, json={"timezone": timezone}).status_code == 400
+    assert client_for(EDITOR).get(path).json()["timezone"] == "America/Boise"
+
+
 def test_an_editor_pauses_someone_elses_and_the_creator_is_told(project_id, service):
     created = _create(project_id, OWNER)
     path = f"/projects/{project_id}/schedules/{created['scheduleId']}"
