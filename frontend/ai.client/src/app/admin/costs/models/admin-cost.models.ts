@@ -268,6 +268,12 @@ export interface SessionCallRow {
    */
   turnAgentId?: string | null;
   agentSwitched?: boolean;
+  /**
+   * This call ran on a different model than the call before it. A mid-conversation
+   * model switch keeps the conversation, and each model has its own cache, so the first
+   * call on the new model re-writes the prefix with unchanged fingerprints.
+   */
+  modelSwitched?: boolean;
   prefixFingerprints?: PrefixFingerprints | null;
   /** Context ledger — absent on rows written before it shipped or with diagnostics off. */
   prefixTokens?: PrefixTokens | null;
@@ -319,6 +325,12 @@ export interface SessionCostAnatomy {
    */
   agentSwitchMissCount: number;
   agentSwitchUsd: number;
+  /**
+   * The subset a model switch explains, excluding calls already counted as an Agent
+   * switch, so the two pairs never overlap and both can be subtracted.
+   */
+  modelSwitchMissCount: number;
+  modelSwitchUsd: number;
   /** cacheRead / (cacheRead + cacheWrite); null until any cache activity. */
   cacheEfficiency: number | null;
 }

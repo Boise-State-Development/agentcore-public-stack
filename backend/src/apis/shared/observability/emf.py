@@ -50,6 +50,7 @@ def emit_prompt_cache_metrics(
     cache_status: Optional[str] = None,
     agent_switched: bool = False,
     partial_miss: bool = False,
+    model_switched: bool = False,
 ) -> None:
     """Emit one EMF record for a completed model call.
 
@@ -78,6 +79,13 @@ def emit_prompt_cache_metrics(
       number that should never step-change. `turnAgentId` rides along as a
       property, not a dimension, so per-Agent detail is queryable without
       multiplying metric streams.
+    - ``ModelSwitchMiss``: the subset of ``AvoidableMiss`` explained by the call
+      running on a different model than the one before it (a mid-conversation
+      model switch, confirmed by the user against a cost estimate), and *not*
+      already counted as ``AgentSwitchMiss``. Disjoint from it on purpose, so
+      ``AvoidableMiss - AgentSwitchMiss - ModelSwitchMiss`` is unexplained waste
+      without double-subtracting an ``@``-mention to an Agent that pins its own
+      model.
 
     Best-effort: never raises.
     """
@@ -95,6 +103,7 @@ def emit_prompt_cache_metrics(
                             {"Name": "AvoidableMiss", "Unit": "Count"},
                             {"Name": "PartialMiss", "Unit": "Count"},
                             {"Name": "AgentSwitchMiss", "Unit": "Count"},
+                            {"Name": "ModelSwitchMiss", "Unit": "Count"},
                             {"Name": "WastedUsd", "Unit": "None"},
                             {"Name": "PartialMissUsd", "Unit": "None"},
                         ],
@@ -106,6 +115,7 @@ def emit_prompt_cache_metrics(
             "AvoidableMiss": 1 if avoidable_miss else 0,
             "PartialMiss": 1 if partial_miss else 0,
             "AgentSwitchMiss": 1 if (avoidable_miss and agent_switched) else 0,
+            "ModelSwitchMiss": 1 if (avoidable_miss and model_switched and not agent_switched) else 0,
             "WastedUsd": round(float(wasted_usd or 0.0), 6),
             "PartialMissUsd": round(float(wasted_usd or 0.0), 6) if partial_miss else 0.0,
         }
