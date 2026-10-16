@@ -1,6 +1,6 @@
 # AgentCore Runtime V2 migration
 
-**Status:** plan steps 1–3 shipped in 1.27.0. The first dev V2 attempt (2026-10-09) failed on an environment-variable size limit (B4) and was rolled back to V1. Step 4, PR A (#1533) and PR B (#1535), is merged to `develop`, and **dev has run V2 since 2026-10-10 19:10Z** (step 5). V2 must not be selected on any release before PR B ships (§8). **The first GB-hours readout (2026-10-16, §9) is "need more data" for prod:** on dev, V2 used about as many GB-hours per day as V1 while carrying more traffic, and Runtime spend roughly doubled. Tracks `docs/kaizen/review-queue.md ▸ [2026-09-25] A/B the V2 AgentCore Runtime in dev`.
+**Status:** plan steps 1–3 shipped in 1.27.0. The first dev V2 attempt (2026-10-09) failed on an environment-variable size limit (B4) and was rolled back to V1. Step 4, PR A (#1533) and PR B (#1535), is merged to `develop`, and **dev has run V2 since 2026-10-10 19:10Z** (step 5). V2 must not be selected on any release before PR B ships (§8). **The first GB-hours readout (2026-10-16, §9) is "need more data" for prod.** On dev, V2 alone cost about 0.89× V1 per turn. Prewarm's turnless warm sessions add ~27% of the V2 bill, which takes V2 plus prewarm to 1.22× V1 per turn. Tracks `docs/kaizen/review-queue.md ▸ [2026-09-25] A/B the V2 AgentCore Runtime in dev`.
 **Sources:**
 - The AWS ML blog post [The new AgentCore Runtime: elastic, optimized, and consistently fast starts](https://aws.amazon.com/blogs/machine-learning/the-new-agentcore-runtime-elastic-optimized-and-consistently-fast-starts/) (2026-09-18).
 - The [What's New post](https://aws.amazon.com/about-aws/whats-new/2026/09/new-agentcore-runtime-generally-available).
@@ -104,7 +104,7 @@ Under V2, anything computed at import or lifespan time is computed **once per sn
 4. **Cloned randomness and IDs.** Python's `random` module state and any ID generated at init are identical across every restored instance.
    - `uuid4`, `secrets` and `os.urandom` read the kernel RNG, which is fine only if the platform reseeds on restore (unverified).
    - Worth a grep of the inference-api import path for init-time `random` and ID generation. Today it only turns up in app-api modules, which don't run here.
-   - Check the **OTEL resource**: if ADOT (`opentelemetry-instrument` in `Dockerfile.inference-api`) derives `service.instance.id` at SDK init, every session reports the same instance.
+   - Check the **OTEL resource**: if ADOT (`opentelemetry-instrument` in `Dockerfile.inference-api`) derives `service.instance.id` at SDK init, every session reports the same instance. **Confirmed on dev, 2026-10-16:** the V2 window's 367 runtime sessions logged only 135 distinct `service.instance.id` values, so restored sessions share the snapshot's id. Don't key per-session analysis on it. The per-session `runtime-logs-sid-*` log streams, or the conversation id in `turn_prelude`, are the keys that work (§9.5).
 5. **Monotonic clocks across a restore.** Any TTL cache keyed on `time.monotonic()` that is populated at init could be read as fresh after restore. That includes the 60 s catalog cache, `oauth_token_cache` and the agent cache. All of them are empty at init today, so this is only a rule to keep: don't pre-populate time-bounded caches at startup.
 
 ### B3. The plan's latency metric can't see what V2 improves (verified), and V1 hides its cold starts behind a pool
@@ -425,13 +425,52 @@ So the memory reclaim is real: a V2 session holds about 40% of the GB-hours a V1
 4. **V1's pre-booted pool.** On V1, most new sessions land on a microVM booted minutes earlier (B3). Whether that pool time is billed to us, and therefore whether V1's 0.86 GB-hours per session includes it, is not visible from either source.
 5. **V2 vCPU per unit of work rose, and we don't know why yet.** Candidates are restore and page-in CPU billed to the session, the warm sessions' own CPU, and a heavier workload (the Projects features and their tools in the V2 window). This decides whether the per-vCPU-hour normalisation (0.36) can be trusted.
 
-### 9.4 First read for prod: **need more data, leaning no-go on cost alone**
+### 9.4 First read for prod: **need more data. V2 alone is about cost-neutral; prewarm is the cost driver**
 
+*Revised the same day by the warm-session join in §9.5. The first read, before the join, leaned no-go on cost. The bullets below are that first read, kept for the record.*
+
+- **After the join (§9.5).** About 115 of the 205 warms never got a turn. They account for ~27% of V2's Runtime dollars. Without them, V2 cost **$0.0050 per turn against V1's $0.0056 (0.89×; 0.83–0.94 across the estimate's range)**. Memory per turn is 0.44× V1, which clears the 0.56 break-even. vCPU per turn is 1.30× V1 at 1.43× the price, and that eats most of the saving. With dev's prewarm as configured, V2 costs 1.22× V1 per turn. So V2 is a latency win at roughly V1's cost. Prewarm is a separate cost decision: on dev it costs about a quarter of the Runtime bill. Before any prod projection, check whether prod has `SESSION_PREWARM_ENABLED` on.
 - **Cost.** On dev, V2 did not reduce GB-hours. It held them flat while traffic rose about 1.6–2.5×, and the rates turned that into roughly double the Runtime spend. Per unit of work, memory is at or a little under the 56% break-even. The pricier vCPU line takes back the difference, so per real invocation V2 still costs about 1.26× V1. Nothing here says V2 saves money on prod.
 - **Latency.** V2's case is the cold start: ~0.7 s restore-to-request on every new session (B3), against V1's pool misses. Prewarm (§5a) cut the median first token by 1.5 s in a 12-pair dev A/B on 2026-10-10, and it depends on V2's cheap idle time. If prod takes V2, it should be decided as a latency purchase with the premium stated, not as a cost saving.
 - **The committed baseline** ($0.0132 / $0.0997) moves the memory break-even to 72%. That is within reach of the normalised 0.36–0.63. Re-run this readout against it once it can be bought.
 - **Data that would settle it:**
-  1. Join warm invocations to sessions in Logs Insights to get the turnless-warm share. That collapses the 0.40–0.91 per-session range.
-  2. A second V2 week (10-17 → 10-23) with no flip-day burst.
-  3. The V2 vCPU-per-invocation question (9.3 item 5).
-  4. Prod's V1 GB-hours per session on real traffic, read-only, as the baseline any prod projection multiplies.
+  1. ~~Join warm invocations to sessions in Logs Insights to get the turnless-warm share.~~ Done (§9.5).
+  2. A second V2 week (10-17 → 10-23) with no flip-day burst. Read it on or after 10-24, with §9.5's per-turn method. That also gives a second estimate of a turnless warm's cost.
+  3. ~~The V2 vCPU-per-invocation question (9.3 item 5).~~ Mostly explained (§9.5). A ~1.15× per-turn residual remains.
+  4. Prod's V1 GB-hours per turn on real traffic, read-only, as the baseline any prod projection multiplies.
+
+### 9.5 Warm-session join and the vCPU rise (2026-10-16, same windows)
+
+**Turns are the unit.** Every agent turn logs `turn_prelude {"sessionId": …}`. That counts real work in both windows, with no prewarm and no non-turn invocations mixed in: **279 turns in the V1 week (163 conversations), 385 in the V2 window (257 conversations)**, which is 1.61× per day. Smoke and validation turns are real turns too, so they count rather than distort.
+
+**What happened to the 205 warms.** Each warm logs `prewarm invocation for session <conversation id>`. Matching each one to that conversation's next turn:
+
+| Outcome | Warms |
+|---|---|
+| A turn within 15 min, so it landed on the warmed microVM (median 14 s later) | 85 |
+| A turn later, after the warmed microVM had idled out | 5 |
+| **Never a turn** | **115 (56%)** |
+
+That fits the §5a design: a new conversation warms on page load, and most page loads on dev don't send.
+
+**What a turnless warm costs.** Eight turnless warms ran in hours with no turn and no other warm within 25 minutes, so those hours' CloudWatch totals are theirs alone. They came to **~0.31 GB-hours and ~0.008 vCPU-hours each** (0.26–0.38 GB-hours across the samples). That is a restored session idling to the 900 s timeout at roughly 1.2 GB average, plus about 28 vCPU-seconds of background CPU. **A no-op warm is not free on V2.** Eight samples is thin, so §9.4 carries the 0.26–0.38 range through.
+
+**V2 with and without the turnless warms (115 × the estimate):**
+
+| | V1 | V2, as billed | V2, without turnless warms |
+|---|---|---|---|
+| GB-hours | 150.1 | 127.6 | ~91.9 (the turnless warms are ~35.6, 28%) |
+| vCPU-hours | 1.62 | 3.82 | ~2.91 (the turnless warms are ~0.90, 24%) |
+| **GB-hours per turn** | 0.538 | 0.331 (0.62×) | **0.239 (0.44×)** |
+| vCPU-hours per turn | 0.0058 | 0.0099 (1.71×) | 0.0076 (1.30×) |
+| GB-hours per session with a turn | 0.863 | — | 0.365 (0.42×), over 252 sessions |
+| **Runtime $ per turn** | **$0.0056** | **$0.0069 (1.22×)** | **$0.0050 (0.89×)** |
+
+**The vCPU rise, mostly explained:**
+- **About a quarter of V2's vCPU-hours is turnless warm sessions** idling with background CPU. That accounts for most of the 1.71× per turn.
+- **Turns in the V2 window were heavier.** They averaged 19.0 Bedrock-call log lines per turn against 16.7 (1.14×). They also had 1.54 agent builds per turn against 1.41, and a mean prelude of 2.25 s against 1.21 s with similar medians (1.15 s against 0.97 s). That fits the Projects launch QA.
+- **That leaves roughly 1.15× per turn unexplained.** Restore and page-in CPU, and the same idle background CPU on every V2 session after its last turn, are the likely candidates. The second week can test that.
+
+**V1's pool is not a hidden cost.** In the V1 week, hours with no turn billed only 0.07 GB-hours in total. If pre-booted microVMs bill at all, they bill inside hours that had turns, which the per-turn unit already charges to V1.
+
+**Method.** Logs Insights on the runtime log group's `otel-rt-logs` stream: the `prewarm invocation` and `turn_prelude` lines with their timestamps and conversation ids. The join is in Python: a warm counts as turned if the same conversation's next turn starts within 900 s. The per-session `runtime-logs-sid-*` streams exist only on V2: 338 in the window, against 367 from AWS's `Sessions` metric, with a median lifetime of 910 s. `service.instance.id` cannot be the key, because restored sessions share the snapshot's id (B2.4).
