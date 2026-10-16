@@ -8,6 +8,7 @@ import { MessageMapService } from './services/session/message-map.service';
 import { FolderAttachmentData, Message } from './services/models/message.model';
 import { SessionService } from './services/session/session.service';
 import { SessionPrewarmService } from './services/session/session-prewarm.service';
+import { persistedAggregatesOf, samePersistedAggregates } from './services/session/persisted-aggregates';
 import { ScrollPositionService } from './services/session/scroll-position.service';
 import {
   ComposerDraftStorageService,
@@ -207,6 +208,14 @@ export class ConversationPage implements OnDestroy {
   private routeSubscription?: Subscription;
   private queryParamSubscription?: Subscription;
   readonly sessionConversation = this.sessionService.currentSession;
+
+  // The session row's cost/context aggregates, changing only when one of
+  // them (or the session) does — see `samePersistedAggregates`.
+  private readonly persistedAggregates = computed(
+    () => persistedAggregatesOf(this.sessionConversation()),
+    { equal: samePersistedAggregates },
+  );
+
   readonly isChatLoading = this.chatStateService.isChatLoading;
   readonly isLoadingSession = this.messageMapService.isLoadingSession;
 
@@ -322,17 +331,21 @@ export class ConversationPage implements OnDestroy {
     });
 
     // Seed the session cost + context aggregates from session metadata so
-    // the badge shows totals immediately on revisit. Cleared first on route
-    // change (below) to avoid briefly showing stale numbers from a previous
-    // session.
+    // the badge shows totals immediately on revisit. Keyed on the aggregates
+    // themselves, not the whole row: see `persistedAggregates`.
+    effect(() => {
+      const aggregates = this.persistedAggregates();
+      if (!aggregates) return;
+      this.chatStateService.seedSessionAggregates(aggregates.sessionId, {
+        totalCost: aggregates.totalCost,
+        lastContextTokens: aggregates.lastContextTokens,
+        contextWindow: aggregates.contextWindow,
+      });
+    });
+
     effect(() => {
       const session = this.sessionConversation();
       if (!session?.sessionId) return;
-      this.chatStateService.seedSessionAggregates(session.sessionId, {
-        totalCost: session.totalCost,
-        lastContextTokens: session.lastContextTokens,
-        contextWindow: session.contextWindow,
-      });
       // Refresh-survival for the max_tokens "Continue" affordance: the
       // truncated partial is already in restored history; this flag is the
       // missing piece. Only set true here — the live stream_error path owns
