@@ -9,11 +9,13 @@ same upstream (dev, 2026-10-17: two catalog entries pointing at Zoom's hosted
 server, both exposing ``get_file_content``) are enough.
 
 ``resolve_tool_name_conflicts`` runs over the build's tool list before the
-agent sees it. The first source to claim a name keeps it, so the outcome
-follows the list order, which is already deterministic (built-in tools, then
-gateway, then external servers in enabled-id order, then context-bound tools),
-and ``toolConfig`` stays a stable cache prefix. A later MCP server that clashes
-loses only the clashing tools: it is wrapped in a ``ToolProvider`` that hides
+agent sees it. Platform tools (built-in and context-bound ``AgentTool``s) claim
+their names first, wherever they sit in the list: ``whoami`` is a system tool
+appended after the MCP servers, and Canvas for Faculty also exposes a
+``whoami`` that must not shadow it (dev, 2026-10-17). Servers then claim names
+in list order (gateway, then external servers in enabled-id order). Both orders
+are deterministic, so ``toolConfig`` stays a stable cache prefix, and the list
+keeps its order. A server that clashes loses only the clashing tools: it is wrapped in a ``ToolProvider`` that hides
 them for this agent alone. The wrapped client is shared through
 ``ExternalMCPIntegration``'s cache with other agents that may have no clash, so
 it is never changed itself.
@@ -129,39 +131,47 @@ def resolve_tool_name_conflicts(
     provider_tools = _list_provider_tools(providers) if providers else {}
 
     held: Dict[str, str] = {}  # normalized name -> source holding it
-    resolved: List[Any] = []
     skipped: List[SkippedToolName] = []
+    # id(entry) -> what replaces it in the output; None drops it.
+    replacement: Dict[int, Any] = {}
 
+    # Platform tools first, in list order.
     for entry in tools:
-        source = _source_label(entry)
         if isinstance(entry, ToolProvider):
-            listed = provider_tools.get(id(entry))
-            if listed is None:
-                resolved.append(entry)
-                continue
-            excluded = set()
-            for tool in listed:
-                key = _normalized(tool.tool_name)
-                if key in held:
-                    excluded.add(tool.tool_name)
-                    skipped.append(SkippedToolName(tool.tool_name, source, held[key]))
-                else:
-                    held[key] = source
-            resolved.append(
-                NameExcludingToolProvider(entry, frozenset(excluded)) if excluded else entry
-            )
             continue
-
         name = getattr(entry, "tool_name", None)
         if not isinstance(name, str):
-            resolved.append(entry)
             continue
         key = _normalized(name)
         if key in held:
-            skipped.append(SkippedToolName(name, source, held[key]))
+            skipped.append(SkippedToolName(name, _source_label(entry), held[key]))
+            replacement[id(entry)] = None
+        else:
+            held[key] = _source_label(entry)
+
+    # Then servers, in list order.
+    for entry in providers:
+        listed = provider_tools.get(id(entry))
+        if listed is None:
             continue
-        held[key] = source
-        resolved.append(entry)
+        source = _source_label(entry)
+        excluded = set()
+        for tool in listed:
+            key = _normalized(tool.tool_name)
+            if key in held:
+                excluded.add(tool.tool_name)
+                skipped.append(SkippedToolName(tool.tool_name, source, held[key]))
+            else:
+                held[key] = source
+        if excluded:
+            replacement[id(entry)] = NameExcludingToolProvider(entry, frozenset(excluded))
+
+    resolved: List[Any] = []
+    for entry in tools:
+        if id(entry) not in replacement:
+            resolved.append(entry)
+        elif replacement[id(entry)] is not None:
+            resolved.append(replacement[id(entry)])
 
     for s in skipped:
         logger.warning(

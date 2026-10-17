@@ -102,6 +102,25 @@ def test_the_first_source_keeps_the_name():
     assert skipped == [SkippedToolName("fetch_url", "Web MCP", "built-in tools")]
 
 
+def test_a_platform_tool_wins_even_when_it_comes_after_a_server():
+    """dev, 2026-10-17, after #1643: `whoami` is a system tool injected as a
+    context-bound tool, which the build appends after the MCP servers. Canvas
+    for Faculty also exposes `whoami`, and "first wins" let it shadow the
+    platform's own. Before #1643, Strands' hot reload let the built-in win.
+    """
+    canvas = _FakeServer("Canvas for Faculty", ["whoami", "list_courses"])
+    builtin_whoami = _named_tool("whoami")
+
+    resolved, skipped = resolve_tool_name_conflicts([canvas, builtin_whoami])
+
+    assert resolved[1] is builtin_whoami
+    assert isinstance(resolved[0], NameExcludingToolProvider)
+    assert skipped == [SkippedToolName("whoami", "Canvas for Faculty", "built-in tools")]
+    registry = ToolRegistry()
+    registry.process_tools(resolved)
+    assert registry.registry["whoami"] is builtin_whoami
+
+
 def test_names_that_differ_only_by_dash_and_underscore_clash():
     """Strands rejects these as duplicates too."""
     first = _FakeServer("A", ["get-file"])
