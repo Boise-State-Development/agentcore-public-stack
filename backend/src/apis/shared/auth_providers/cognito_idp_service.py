@@ -6,7 +6,7 @@ in a Cognito User Pool, and updating the App Client's supported providers list.
 
 import logging
 import os
-from typing import Dict, List, Optional
+from typing import Dict, Iterable, List, Optional
 
 import boto3
 from botocore.exceptions import ClientError
@@ -266,6 +266,103 @@ class CognitoIdentityProviderService:
             f"Removed '{provider_name}' from App Client supported providers: {updated_providers}"
         )
 
+    def list_identity_provider_names(self) -> List[str]:
+        """Names of every identity provider registered in the user pool."""
+        if not self._enabled:
+            return []
+
+        names: List[str] = []
+        kwargs: dict = {"UserPoolId": self._user_pool_id, "MaxResults": 60}
+        while True:
+            response = self._client.list_identity_providers(**kwargs)
+            names.extend(p["ProviderName"] for p in response.get("Providers", []))
+            token = response.get("NextToken")
+            if not token:
+                return names
+            kwargs["NextToken"] = token
+
+    def ensure_providers_on_app_client(self, provider_names: Iterable[str]) -> List[str]:
+        """Add any of ``provider_names`` missing from the App Client. Never removes.
+
+        A PlatformStack deploy that touches the App Client sends CloudFormation's
+        full property set to UpdateUserPoolClient, and the template's
+        ``SupportedIdentityProviders`` holds only what CDK knows about (COGNITO
+        plus ``CDK_COGNITO_SUPPORTED_IDPS``). Providers an admin added at runtime
+        are dropped. This puts them back.
+
+        A name with no identity provider in the pool is skipped: Cognito refuses
+        an update naming one, and that would block every other name with it.
+
+        Returns:
+            The names added; empty when the client already listed all of them.
+
+        Raises:
+            ClientError: On Cognito API failure.
+        """
+        if not self._enabled:
+            return []
+
+        wanted = sorted({name for name in provider_names if name})
+        if not wanted:
+            return []
+
+        response = self._client.describe_user_pool_client(
+            UserPoolId=self._user_pool_id,
+            ClientId=self._app_client_id,
+        )
+        client_config = response["UserPoolClient"]
+        current = client_config.get("SupportedIdentityProviders", [])
+        missing = [name for name in wanted if name not in current]
+        if not missing:
+            return []
+
+        registered = set(self.list_identity_provider_names())
+        orphaned = [name for name in missing if name not in registered]
+        if orphaned:
+            logger.warning(
+                f"Not adding {orphaned} to the App Client: no such identity provider "
+                "in the user pool."
+            )
+        to_add = [name for name in missing if name in registered]
+        if not to_add:
+            return []
+
+        update_params = self._build_client_update_params(client_config, current + to_add)
+        self._client.update_user_pool_client(**update_params)
+        logger.warning(
+            f"Restored {to_add} to the App Client's supported identity providers "
+            "(dropped outside app-api, usually by a PlatformStack deploy)."
+        )
+        return to_add
+
+    # Every UpdateUserPoolClient field other than the ids and
+    # SupportedIdentityProviders. Cognito resets any field the request omits
+    # to its default, so an update that sends a subset silently rewrites the
+    # rest of the client (token revocation, auth-session length, attribute
+    # permissions...).
+    _PRESERVED_CLIENT_KEYS = (
+        "ClientName",
+        "RefreshTokenValidity",
+        "AccessTokenValidity",
+        "IdTokenValidity",
+        "TokenValidityUnits",
+        "ReadAttributes",
+        "WriteAttributes",
+        "ExplicitAuthFlows",
+        "CallbackURLs",
+        "LogoutURLs",
+        "DefaultRedirectURI",
+        "AllowedOAuthFlows",
+        "AllowedOAuthScopes",
+        "AllowedOAuthFlowsUserPoolClient",
+        "AnalyticsConfiguration",
+        "PreventUserExistenceErrors",
+        "EnableTokenRevocation",
+        "EnablePropagateAdditionalUserContextData",
+        "AuthSessionValidity",
+        "RefreshTokenRotation",
+    )
+
     def _build_client_update_params(
         self, client_config: dict, supported_providers: List[str]
     ) -> dict:
@@ -275,23 +372,7 @@ class CognitoIdentityProviderService:
             "ClientId": self._app_client_id,
             "SupportedIdentityProviders": supported_providers,
         }
-
-        # Preserve key existing settings
-        preserve_keys = [
-            "ClientName",
-            "RefreshTokenValidity",
-            "AccessTokenValidity",
-            "IdTokenValidity",
-            "TokenValidityUnits",
-            "ExplicitAuthFlows",
-            "CallbackURLs",
-            "LogoutURLs",
-            "AllowedOAuthFlows",
-            "AllowedOAuthScopes",
-            "AllowedOAuthFlowsUserPoolClient",
-            "PreventUserExistenceErrors",
-        ]
-        for key in preserve_keys:
+        for key in self._PRESERVED_CLIENT_KEYS:
             if key in client_config:
                 params[key] = client_config[key]
 
