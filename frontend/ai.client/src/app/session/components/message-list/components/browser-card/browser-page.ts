@@ -1,3 +1,4 @@
+import type { ToolResultContent } from '../../../../services/models/message.model';
 import type { ToolCallDisplay } from '../tool-rail/tool-rail.model';
 
 /** The tool whose calls produce a page card. */
@@ -48,13 +49,42 @@ function safeHttpUrl(value: unknown): string | null {
 const IMAGE_FORMATS = new Set(['png', 'jpeg', 'jpg', 'gif', 'webp']);
 
 // Shapes from `browse_tool.py`: navigate returns "Navigated to <url>\nTitle:
-// <title>", click returns "Current URL: <url>".
+// <title>", click returns "Current URL: <url>". Each is read only from its own
+// action's result: navigate's result goes on to carry the page text, which
+// could quote either shape.
 const NAVIGATED = /Navigated to (\S+)\s*\nTitle: ([^\n]*)/;
 const CURRENT_URL = /Current URL: (\S+)/;
 
+type ResultImage = NonNullable<ToolResultContent['image']>;
+
+// Screenshots run to megabytes of base64, and `displayBlocks` recomputes on
+// every streamed delta. Keyed on the result's image object, which is stable
+// across those recomputes, so each screenshot's data URL is built once.
+const dataUrls = new WeakMap<ResultImage, string>();
+
+function screenshotUrl(image: ResultImage | undefined): string | null {
+  if (!image?.data) return null;
+  const cached = dataUrls.get(image);
+  if (cached) return cached;
+  const format = String(image.format).toLowerCase();
+  if (!IMAGE_FORMATS.has(format)) return null;
+  const mime = format === 'jpg' ? 'jpeg' : format;
+  const url = `data:image/${mime};base64,${image.data}`;
+  dataUrls.set(image, url);
+  return url;
+}
+
 /**
- * Summarise a rail's `browse_web` calls into the page the card shows, or null
- * when none of them reached a page.
+ * The card a rail's `browse_web` calls produce, or null when the rail shows
+ * no card.
+ *
+ * A rail ends wherever the agent writes text, so one run of browsing is often
+ * several rails: navigate, a line of narration, screenshot. `previous` is the
+ * last card shown earlier in the same run, and carries the page forward, so a
+ * screenshot-only rail still knows which page it captured. A rail shows a card
+ * only when it changes what the user would see — it navigates, a click lands
+ * on a new URL, or it takes a screenshot. Extracting text or links, typing,
+ * evaluating and closing leave the page as the last card showed it.
  *
  * Reads the tool results rather than adding a new SSE event: the navigate
  * result already carries the URL and title, and a screenshot result already
@@ -63,12 +93,22 @@ const CURRENT_URL = /Current URL: (\S+)/;
  */
 export function browserPageFromCalls(
   calls: readonly ToolCallDisplay[],
+  previous: BrowserPageSummary | null = null,
 ): BrowserPageSummary | null {
-  let url: string | null = null;
-  let title: string | null = null;
-  let screenshot: string | null = null;
+  let url = previous?.url ?? null;
+  let title = previous?.title ?? null;
+  let screenshot = previous?.screenshot ?? null;
   let browsing = false;
   let closed = false;
+  let changed = false;
+
+  // A screenshot belongs to the page it was taken on, so a new page drops it.
+  const moveTo = (next: string, nextTitle: string | null) => {
+    if (next !== url) screenshot = null;
+    url = next;
+    title = nextTitle;
+    changed = true;
+  };
 
   for (const call of calls) {
     if (call.toolName !== BROWSE_WEB_TOOL) continue;
@@ -78,10 +118,7 @@ export function browserPageFromCalls(
       browsing = true;
       if (action === 'navigate') {
         const target = safeHttpUrl(call.input['url']);
-        if (target && target !== url) {
-          url = target;
-          title = null;
-        }
+        if (target) moveTo(target, target === url ? title : null);
       }
       continue;
     }
@@ -93,33 +130,30 @@ export function browserPageFromCalls(
     closed = false;
 
     for (const item of call.result?.content ?? []) {
-      if (item.text) {
+      if (action === 'navigate' && item.text) {
         const navigated = NAVIGATED.exec(item.text);
-        if (navigated) {
-          const next = safeHttpUrl(navigated[1]);
-          if (next) {
-            url = next;
-            title = navigated[2].trim() || null;
-          }
-          continue;
+        const next = navigated ? safeHttpUrl(navigated[1]) : null;
+        if (navigated && next) {
+          // A navigate reloads the page even when the URL is unchanged.
+          screenshot = null;
+          moveTo(next, navigated[2].trim() || null);
         }
+      } else if (action === 'click' && item.text) {
         const current = CURRENT_URL.exec(item.text);
         const next = current ? safeHttpUrl(current[1]) : null;
-        if (next && next !== url) {
-          // A click that changed pages: the old title no longer applies.
-          url = next;
-          title = null;
+        // A click that changed pages: the old title no longer applies.
+        if (next && next !== url) moveTo(next, null);
+      } else if (action === 'screenshot') {
+        const image = screenshotUrl(item.image);
+        if (image) {
+          screenshot = image;
+          changed = true;
         }
-      }
-      const format = String(item.image?.format ?? '').toLowerCase();
-      if (item.image?.data && IMAGE_FORMATS.has(format)) {
-        const mime = format === 'jpg' ? 'jpeg' : format;
-        screenshot = `data:image/${mime};base64,${item.image.data}`;
       }
     }
   }
 
-  if (!url) return null;
+  if (!url || !changed) return null;
   return {
     url,
     host: hostLabel(url) ?? url,
