@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Tuple
 
 import pytest
+from botocore.exceptions import ConnectionClosedError, EndpointConnectionError, ReadTimeoutError
 
 from apis.shared.memory import tokens as memory_tokens
 from apis.shared.memory.format import (
@@ -415,6 +416,11 @@ class TestTokens:
             _Client(error=_ClientError("ThrottlingException")),
             _Client(error=_ClientError("AccessDeniedException")),
             _Client(error=TimeoutError()),
+            # botocore's HTTP errors carry ``response = None``: a pooled connection
+            # reset mid-call 500ed a prod save on 2026-10-16.
+            _Client(error=ConnectionClosedError(endpoint_url="https://bedrock-runtime")),
+            _Client(error=ReadTimeoutError(endpoint_url="https://bedrock-runtime")),
+            _Client(error=EndpointConnectionError(endpoint_url="https://bedrock-runtime")),
             _Client(result={}),
         ],
     )
