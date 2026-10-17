@@ -116,3 +116,19 @@ export interface OIDCDiscoveryResponse {
   response_types_supported?: string[] | null;
   claims_supported?: string[] | null;
 }
+
+/** Sign-in page settings, from GET/PUT /admin/auth-providers/login-page-settings. */
+export interface LoginPageSettings {
+  /** What a system admin asked for. */
+  hide_cognito_login: boolean;
+  /** Whether the sign-in page shows the Cognito button right now. Always true
+   *  while no provider is enabled, whatever `hide_cognito_login` says. */
+  cognito_login_visible: boolean;
+  enabled_provider_count: number;
+  updated_at: string | null;
+  updated_by: string | null;
+}
+
+export interface LoginPageSettingsUpdateRequest {
+  hide_cognito_login: boolean;
+}

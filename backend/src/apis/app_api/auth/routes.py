@@ -28,7 +28,8 @@ async def list_auth_providers() -> AuthProviderPublicListResponse:
     Public endpoint (no authentication required).
 
     Returns enabled auth providers for the login page to display
-    provider selection buttons.
+    provider selection buttons, and whether to show the Cognito button
+    (see ``apis/app_api/system/login_page.py``).
     """
     try:
         from apis.shared.auth_providers.repository import get_auth_provider_repository
@@ -38,6 +39,18 @@ async def list_auth_providers() -> AuthProviderPublicListResponse:
             return AuthProviderPublicListResponse(providers=[])
 
         providers = await repo.list_providers(enabled_only=True)
+        visible = True
+        if providers:
+            from apis.app_api.system.login_page import (
+                cognito_login_visible,
+                read_hide_cognito_login,
+            )
+
+            visible = cognito_login_visible(
+                hide_requested=await read_hide_cognito_login(),
+                enabled_provider_count=len(providers),
+            )
+
         return AuthProviderPublicListResponse(
             providers=[
                 AuthProviderPublicInfo(
@@ -47,7 +60,8 @@ async def list_auth_providers() -> AuthProviderPublicListResponse:
                     button_color=p.button_color,
                 )
                 for p in providers
-            ]
+            ],
+            cognito_login_visible=visible,
         )
     except Exception as e:
         logger.debug(f"Error listing auth providers (may not be configured): {e}")

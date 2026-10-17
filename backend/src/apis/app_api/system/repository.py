@@ -1,4 +1,4 @@
-"""DynamoDB repository for system settings (first-boot state)."""
+"""DynamoDB repository for system settings (first-boot state, login page)."""
 
 import logging
 import os
@@ -13,14 +13,17 @@ logger = logging.getLogger(__name__)
 # DynamoDB key constants
 FIRST_BOOT_PK = "SYSTEM_SETTINGS#first-boot"
 FIRST_BOOT_SK = "SYSTEM_SETTINGS#first-boot"
+LOGIN_PAGE_PK = "SYSTEM_SETTINGS#login-page"
+LOGIN_PAGE_SK = "SYSTEM_SETTINGS#login-page"
 
 
 class SystemSettingsRepository:
     """
     Repository for system settings CRUD operations in DynamoDB.
 
-    Stores the first-boot completion state using a single-item pattern
-    in the auth providers table. Uses conditional writes for race
+    Stores the first-boot completion state and the login-page settings as
+    single items in the auth providers table. Neither row's SK starts with
+    ``AUTH_PROVIDER#``, so provider listings never pick them up. Uses conditional writes for race
     condition protection on first-boot completion.
     """
 
@@ -116,6 +119,59 @@ class SystemSettingsRepository:
         )
 
         logger.info(f"First-boot completed by user_id={user_id}")
+
+    async def get_login_page_settings(self) -> Optional[Dict[str, Any]]:
+        """
+        Get the login-page settings item.
+
+        Returns:
+            The item's attributes, or None when no admin has saved login-page
+            settings yet (every setting then takes its default).
+        """
+        if not self._enabled:
+            return None
+
+        try:
+            response = self._table.get_item(
+                Key={"PK": LOGIN_PAGE_PK, "SK": LOGIN_PAGE_SK}
+            )
+            return response.get("Item")
+        except ClientError as e:
+            logger.error(f"Error reading login-page settings: {e}")
+            raise
+
+    async def put_login_page_settings(
+        self,
+        hide_cognito_login: bool,
+        updated_by: str,
+    ) -> Dict[str, Any]:
+        """
+        Replace the login-page settings item.
+
+        Args:
+            hide_cognito_login: Whether the admin asked to hide the Cognito
+                sign-in button.
+            updated_by: The admin's user id.
+
+        Returns:
+            The item as written.
+        """
+        if not self._enabled:
+            raise RuntimeError("System settings repository is not enabled")
+
+        item = {
+            "PK": LOGIN_PAGE_PK,
+            "SK": LOGIN_PAGE_SK,
+            "hideCognitoLogin": hide_cognito_login,
+            "updatedAt": datetime.now(timezone.utc).isoformat(),
+            "updatedBy": updated_by,
+        }
+        self._table.put_item(Item=item)
+
+        logger.info(
+            f"Login-page settings updated: hide_cognito_login={hide_cognito_login}"
+        )
+        return item
 
 
 # Singleton instance
