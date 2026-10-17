@@ -149,6 +149,27 @@ def get_ui_tool_catalog() -> UIToolCatalog:
     return _ui_tool_catalog
 
 
+def hidden_from_model(tool: Any) -> bool:
+    """True for a tool whose `_meta.ui.visibility` excludes the model.
+
+    Such a tool never reaches `toolConfig`: `record_and_filter_ui_tools` drops
+    it after recording it, so only an embedded MCP App can call it (Google
+    Tasks' `board_snapshot`, which the board calls to refresh). A model-facing
+    allowlist (the admin's "Available Tools" list, a per-tool selection) has
+    nothing to say about it. It must still reach the UI catalog, or
+    `app_tool_dispatch` cannot resolve the App's call. A `tool_filters`
+    `allowed` matcher, so it receives the `MCPAgentTool`.
+
+    False while the host flag is off: nothing is filtered then, so the tool
+    would reach the model and the allowlist must apply to it.
+    """
+    if not is_mcp_apps_host_enabled():
+        return False
+    mcp_tool = getattr(tool, "mcp_tool", None)
+    ui_metadata = ToolUIMetadata.from_meta(getattr(mcp_tool, "meta", None))
+    return ui_metadata is not None and not ui_metadata.visible_to_model()
+
+
 def record_and_filter_ui_tools(
     tools: List[Any], client: Optional[Any] = None
 ) -> List[Any]:

@@ -33,7 +33,10 @@ from apis.shared.tools.models import (
 )
 from apis.shared.tools.scoped_ids import base_tool_id, collect_tool_name_filters
 from agents.main_agent.integrations import oauth_token_cache
-from agents.main_agent.integrations.mcp_apps import UICapableMCPClient
+from agents.main_agent.integrations.mcp_apps import (
+    UICapableMCPClient,
+    hidden_from_model,
+)
 from agents.main_agent.integrations.gateway_auth import get_sigv4_auth
 from agents.main_agent.integrations.token_exchange import (
     TokenExchangeError,
@@ -318,8 +321,10 @@ def create_external_mcp_client(
             # the selected tools. The base MCPClient applies this in
             # list_tools_sync (matched against the raw MCP tool name); the UI
             # filter then layers on top. Sorted for a stable client identity.
+            # A tool hidden from the model passes regardless, so the UI filter
+            # can record it for the App that calls it.
             tool_filters = (
-                {"allowed": sorted(allowed_tool_names)}
+                {"allowed": [*sorted(allowed_tool_names), hidden_from_model]}
                 if allowed_tool_names is not None
                 else None
             )
