@@ -20,6 +20,7 @@ from strands.types.exceptions import (
 )
 
 from agents.main_agent.integrations.external_mcp_client import (
+    ConsentGatedTool,
     ExternalMCPIntegration,
     _is_auth_failure,
     detect_aws_service_from_url,
@@ -884,6 +885,134 @@ class TestOAuthPreflightRecovery:
         assert result == []
         resolve_mock.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_retries_with_a_token_a_parallel_preflight_warmed(self):
+        """Prod, 2026-10-16: `github_orgs` and `github_repos` pre-flighted in
+        parallel on a cold cache. Repos asked the vault and warmed the token
+        while orgs was still failing; orgs then saw a cached token, took it
+        for an expired one, and was dropped for a connected user. A token
+        this pre-flight never tried is a reason to retry, not to give up."""
+        from agents.main_agent.integrations import oauth_token_cache
+
+        integration = ExternalMCPIntegration()
+        repo = SimpleNamespace(get_tool=AsyncMock(return_value=self._oauth_tool()))
+
+        async def _load_tools():
+            if client.load_tools.await_count == 1:
+                # The sibling's vault answer lands while this one is failing.
+                oauth_token_cache.set("alice", self.PROVIDER, "sibling-token")
+                raise _wrapped_preflight_failure(_http_status_error(401))
+            return []
+
+        client = SimpleNamespace(load_tools=AsyncMock(side_effect=_load_tools))
+        resolve_mock = AsyncMock(return_value={"token": None, "url": "https://x"})
+
+        oauth_token_cache.clear_user_provider("alice", self.PROVIDER)
+        try:
+            with patch(
+                "apis.shared.tools.repository.get_tool_catalog_repository",
+                return_value=repo,
+            ), patch(
+                "agents.main_agent.integrations.external_mcp_client."
+                "create_external_mcp_client",
+                return_value=client,
+            ), patch(
+                "apis.shared.oauth.token_resolution.resolve_token_or_consent_url",
+                resolve_mock,
+            ):
+                result = await integration.load_external_tools(
+                    ["github_issues"], user_id="alice"
+                )
+
+            assert result == [client]
+            assert client.load_tools.await_count == 2
+            resolve_mock.assert_not_awaited()
+            assert integration.take_pending_consents("alice") == {}
+        finally:
+            oauth_token_cache.clear_user_provider("alice", self.PROVIDER)
+
+    @pytest.mark.asyncio
+    async def test_a_consent_drop_is_reported_to_the_build(self):
+        """The build needs to know which servers are missing for consent, so it
+        can tell the model and re-check on a cache hit."""
+        tool = self._oauth_tool()
+        tool.display_name = "Github Issues"
+        integration = ExternalMCPIntegration()
+        repo = SimpleNamespace(get_tool=AsyncMock(return_value=tool))
+        client = SimpleNamespace(
+            load_tools=AsyncMock(
+                side_effect=_wrapped_preflight_failure(_http_status_error(401))
+            )
+        )
+        resolved = {"token": None, "url": "https://consent.example/authorize"}
+        gated: list = []
+        timings: list = []
+
+        p1, p2, p3 = self._patches(client, repo, resolved)
+        with p1, p2, p3:
+            await integration.load_external_tools(
+                ["github_issues"], user_id="alice", timings=timings, consent_gated=gated
+            )
+
+        assert gated == [
+            ConsentGatedTool(
+                tool_id="github_issues",
+                display_name="Github Issues",
+                provider_id=self.PROVIDER,
+            )
+        ]
+        assert timings[0]["outcome"] == "consent"
+
+    @pytest.mark.asyncio
+    async def test_other_drops_are_not_reported_as_consent(self):
+        integration = ExternalMCPIntegration()
+        repo = SimpleNamespace(get_tool=AsyncMock(return_value=self._oauth_tool()))
+        client = SimpleNamespace(
+            load_tools=AsyncMock(
+                side_effect=_wrapped_preflight_failure(
+                    httpx.ConnectError("All connection attempts failed")
+                )
+            )
+        )
+        gated: list = []
+
+        p1, p2, p3 = self._patches(client, repo, {"token": None, "url": "https://x"})
+        with p1, p2, p3:
+            await integration.load_external_tools(
+                ["github_issues"], user_id="alice", consent_gated=gated
+            )
+
+        assert gated == []
+
+    @pytest.mark.asyncio
+    async def test_consent_drops_are_sorted_whatever_order_they_finish_in(
+        self, monkeypatch
+    ):
+        """Parallel pre-flights finish in any order; the note built from this
+        list is prefix bytes."""
+        monkeypatch.setenv("MCP_PARALLEL_PREFLIGHT_ENABLED", "true")
+        tools = {}
+        for tool_id, name in (("github_repos", "Github Repos"), ("github_issues", "Github Issues")):
+            tool = self._oauth_tool(tool_id=tool_id)
+            tool.display_name = name
+            tools[tool_id] = tool
+        integration = ExternalMCPIntegration()
+        repo = SimpleNamespace(get_tool=AsyncMock(side_effect=lambda tid: tools[tid]))
+        client = SimpleNamespace(
+            load_tools=AsyncMock(
+                side_effect=_wrapped_preflight_failure(_http_status_error(401))
+            )
+        )
+        gated: list = []
+
+        p1, p2, p3 = self._patches(client, repo, {"token": None, "url": "https://x"})
+        with p1, p2, p3:
+            await integration.load_external_tools(
+                ["github_repos", "github_issues"], user_id="alice", consent_gated=gated
+            )
+
+        assert [g.display_name for g in gated] == ["Github Issues", "Github Repos"]
+
     def test_take_pending_consents_drains_and_is_per_user(self):
         """Draining stops a stale prompt re-firing on an agent-cache hit,
         and one user's consent must never leak into another's stream."""
@@ -902,6 +1031,63 @@ class TestOAuthPreflightRecovery:
             self.PROVIDER: "https://consent.example/b"
         }
         assert integration.take_pending_consents("carol") == {}
+
+
+class TestRecheckConsent:
+    """A cache hit runs no pre-flight, so an agent built before the user
+    connected would otherwise serve them without the tools until it was
+    evicted. `recheck_consent` is the question the hit asks instead."""
+
+    PROVIDER = "github"
+
+    @staticmethod
+    def _resolve(answers):
+        return patch(
+            "apis.shared.oauth.token_resolution.resolve_token_or_consent_url",
+            AsyncMock(side_effect=lambda provider, user: answers[provider]),
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_token_warms_the_cache_and_asks_for_a_rebuild(self):
+        from agents.main_agent.integrations import oauth_token_cache
+
+        integration = ExternalMCPIntegration()
+        oauth_token_cache.clear_user_provider("alice", self.PROVIDER)
+        try:
+            with self._resolve({self.PROVIDER: {"token": "now-connected", "url": None}}):
+                assert await integration.recheck_consent("alice", [self.PROVIDER]) is True
+            assert oauth_token_cache.get("alice", self.PROVIDER) == "now-connected"
+            assert integration.take_pending_consents("alice") == {}
+        finally:
+            oauth_token_cache.clear_user_provider("alice", self.PROVIDER)
+
+    @pytest.mark.asyncio
+    async def test_still_unconnected_re_records_the_prompt(self):
+        """So the turn served from the cache emits `oauth_required` again."""
+        integration = ExternalMCPIntegration()
+        with self._resolve({self.PROVIDER: {"token": None, "url": "https://consent.example/a"}}):
+            assert await integration.recheck_consent("alice", [self.PROVIDER]) is False
+        assert integration.take_pending_consents("alice") == {
+            self.PROVIDER: "https://consent.example/a"
+        }
+
+    @pytest.mark.asyncio
+    async def test_couldnt_ask_changes_nothing(self):
+        integration = ExternalMCPIntegration()
+        with self._resolve({self.PROVIDER: None}):
+            assert await integration.recheck_consent("alice", [self.PROVIDER]) is False
+        assert integration.take_pending_consents("alice") == {}
+
+    @pytest.mark.asyncio
+    async def test_asks_once_per_provider(self):
+        """Three GitHub servers share one connection: one round trip."""
+        integration = ExternalMCPIntegration()
+        resolve = AsyncMock(return_value={"token": None, "url": "https://x"})
+        with patch(
+            "apis.shared.oauth.token_resolution.resolve_token_or_consent_url", resolve
+        ):
+            await integration.recheck_consent("alice", [self.PROVIDER] * 3)
+        assert resolve.await_count == 1
 
 
 class TestLoadExternalToolsTimings:

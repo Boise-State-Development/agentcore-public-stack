@@ -219,6 +219,33 @@ def _is_paused_on_interrupt(agent: BaseAgent) -> bool:
     return bool(state is not None and getattr(state, "activated", False))
 
 
+async def _consent_landed_since_build(agent: BaseAgent, user_id: Optional[str]) -> bool:
+    """Whether a cached agent built without some OAuth-gated server can now have it.
+
+    Only agents whose build dropped a server for missing consent ask, so every
+    other cache hit pays nothing. Those pay one AgentCore Identity round trip
+    per unconnected provider, concurrently: ~200 ms on prod (workload token
+    mint plus the token lookup, 2026-10-16), in exchange for the tools coming
+    back on the first turn after the user connects. A provider still waiting
+    on consent is re-recorded, so the turn re-emits ``oauth_required``.
+    """
+    gated = getattr(agent, "consent_gated_tools", None)
+    if not gated or not user_id:
+        return False
+
+    from agents.main_agent.integrations.external_mcp_client import (
+        get_external_mcp_integration,
+    )
+
+    try:
+        return await get_external_mcp_integration().recheck_consent(
+            user_id, [g.provider_id for g in gated]
+        )
+    except Exception:
+        logger.exception("Consent re-check failed; serving the cached agent")
+        return False
+
+
 def _adopt_session_conversation(
     agent: BaseAgent, session_id: str, user_id: Optional[str]
 ) -> None:
@@ -480,6 +507,14 @@ async def get_agent(
                 scrub_log(session_id), scrub_log(user_id),
             )
             del _agent_cache[cache_key]
+        elif not is_resume and await _consent_landed_since_build(cached, user_id):
+            # Built without a server the user has since connected. Rebuild
+            # rather than serve the agent without its tools. The stale entry
+            # stays in the slot until the rebuild overwrites it, so the new
+            # agent adopts its live conversation instead of re-restoring it.
+            logger.info(
+                "agent_cache outcome=consent_landed session=%s", scrub_log(session_id)
+            )
         else:
             logger.debug("✅ Agent cache hit")
             # Experiment instrument (spec §6): "initialize() invocations per
@@ -591,8 +626,9 @@ async def get_agent(
         logger.debug("⏭️ Not populating cache from a partial-toolset caller")
         return agent
 
-    # Add to cache with LRU eviction
-    if len(_agent_cache) >= _CACHE_MAX_SIZE:
+    # Add to cache with LRU eviction. A rebuild into an occupied slot replaces
+    # it, so it needs no room.
+    if cache_key not in _agent_cache and len(_agent_cache) >= _CACHE_MAX_SIZE:
         # Remove oldest entry (first inserted)
         oldest_key = next(iter(_agent_cache))
         del _agent_cache[oldest_key]
