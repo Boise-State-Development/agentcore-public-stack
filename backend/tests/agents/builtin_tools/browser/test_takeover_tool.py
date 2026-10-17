@@ -106,11 +106,17 @@ class FakeContext:
     afterwards — which is exactly why the tool body runs twice.
     """
 
-    def __init__(self, agent: FakeAgent, response: Any = None) -> None:
+    def __init__(
+        self,
+        agent: FakeAgent,
+        response: Any = None,
+        invocation_state: Optional[Dict[str, Any]] = None,
+    ) -> None:
         self.agent = agent
         self.tool_use = {"toolUseId": "tu-1"}
         self.response = response
         self.reasons: List[Any] = []
+        self.invocation_state: Dict[str, Any] = dict(invocation_state or {})
 
     def interrupt(self, name: str, reason: Any = None, response: Any = None) -> Any:
         self.reasons.append(reason)
@@ -1037,6 +1043,77 @@ class TestWindowFitForTakeover:
 
         assert result["status"] == "success"
         assert fitted.events[-3:] == ["release_control", "connect", "window 1280x800"]
+
+
+class TestHandoverHeightFromThePanel:
+    """The SPA's panel height, carried on the request, sizes the handover."""
+
+    @pytest.mark.asyncio
+    async def test_the_window_takes_the_panels_height(self, fitted) -> None:
+        ref = await session_pool.take_control(FakeAgent(), frame_height=778)
+
+        # 778 snaps down to the display's step of 8, so the frame never needs
+        # more height than the panel has.
+        assert fitted.events == ["window 768x776", "take_control"]
+        assert ref["viewport"] == {"width": 768, "height": 776}
+
+    @pytest.mark.asyncio
+    async def test_no_height_falls_back_to_the_fixed_size(self, fitted) -> None:
+        ref = await session_pool.take_control(FakeAgent(), frame_height=None)
+
+        assert ref["viewport"] == session_pool.TAKEOVER_VIEWPORT
+
+    @pytest.mark.parametrize(("sent", "height"), [(200, 600), (5000, 1000)])
+    @pytest.mark.asyncio
+    async def test_an_extreme_height_is_clamped(self, fitted, sent, height) -> None:
+        ref = await session_pool.take_control(FakeAgent(), frame_height=sent)
+
+        assert ref["viewport"] == {"width": 768, "height": height}
+
+    @pytest.mark.asyncio
+    async def test_the_resume_pass_keeps_the_first_height(self, fitted) -> None:
+        agent = FakeAgent()
+        await session_pool.take_control(agent, frame_height=700)
+        # A resume request from a window since resized carries another height;
+        # the stream is already pinned, and CDP is refused anyway.
+        again = await session_pool.take_control(agent, frame_height=900)
+
+        assert fitted.events == ["window 768x696", "take_control"]
+        assert again["viewport"] == {"width": 768, "height": 696}
+
+    @pytest.mark.asyncio
+    async def test_the_tool_reads_the_height_from_invocation_state(
+        self, fitted
+    ) -> None:
+        context = FakeContext(
+            FakeAgent(),
+            invocation_state={"browser_takeover_frame_height": 778},
+        )
+        with pytest.raises(InterruptException):
+            await _call(request_user_login, tool_context=context, reason="Sign in.")
+
+        assert context.reasons[0]["viewport"] == {"width": 768, "height": 776}
+
+    @pytest.mark.parametrize("junk", ["778", True, 777.5, -1, None])
+    @pytest.mark.asyncio
+    async def test_an_unusable_height_falls_back(self, fitted, junk) -> None:
+        context = FakeContext(
+            FakeAgent(),
+            invocation_state={"browser_takeover_frame_height": junk},
+        )
+        with pytest.raises(InterruptException):
+            await _call(request_user_login, tool_context=context, reason="Sign in.")
+
+        assert context.reasons[0]["viewport"] == session_pool.TAKEOVER_VIEWPORT
+
+    @pytest.mark.asyncio
+    async def test_switch_off_ignores_the_height(self, fitted, monkeypatch) -> None:
+        monkeypatch.setenv("BROWSER_TAKEOVER_FIT_ENABLED", "false")
+
+        ref = await session_pool.take_control(FakeAgent(), frame_height=778)
+
+        assert ref["viewport"] == session_pool.DEFAULT_VIEWPORT
+        assert fitted.events == ["take_control"]
 
 
 class TestSnapDisplaySize:

@@ -305,11 +305,11 @@ size. Measured on dev-ai, 2026-10-17:
 
 So the size is picked **before** the handover and undone **after** it:
 
-1. `session_pool.take_control` sets the window to `TAKEOVER_VIEWPORT`
-   (768x832, snapped to what the display accepts) while CDP still answers, then
-   disables the stream. The event's `viewport` is that size, so `live-view.js`
-   pins the screen to it at `firstFrame`. The agent's own size stays on the
-   session as `viewport`; the handover size is held apart as
+1. `session_pool.take_control` sets the window to 768 wide by the panel's
+   frame height (snapped to what the display accepts) while CDP still answers,
+   then disables the stream. The event's `viewport` is that size, so
+   `live-view.js` pins the screen to it at `firstFrame`. The agent's own size
+   stays on the session as `viewport`; the handover size is held apart as
    `takeover_viewport`. 768 is wide enough that most sites still serve their
    tablet or desktop layout.
 2. `release_control` re-enables the stream, reconnects to the same browser
@@ -331,14 +331,42 @@ see `feature_flags.browser_takeover_fit_enabled`). The SPA needs no switch: it
 reads whatever `viewport` the event carries, so with the switch off it still
 widens the rail, now toward 1280, and scales down.
 
-Not done yet: the handover height is a fixed 832. The panel's header and
-disclosure take about 122px, so the frame is 1:1 only in a window at least
-~954px tall. Measured locally on 2026-10-17 in a 1440x900 window, the rail
-widened to 800 and the frame drew at 718x778 (93%). Expand does not help
-there, because the overlay keeps the same header and the frame is limited by
-height. Sizing the handover from the panel would mean the SPA sending its
-rail height on the chat request and the route threading it to the tool,
-which is a turn-path change of its own.
+**The height comes from the panel.** A fixed 832 drew 1:1 only in windows at
+least ~954px tall; in a 1440x900 window the frame drew at 718x778 (93%),
+measured locally on 2026-10-17. So the SPA sends the height its panel would
+give the stream on every chat request, and the takeover uses it:
+
+* `browserFrameHeight()` (`services/browser-login/browser-frame-height.ts`) is
+  the window's height less the panel's chrome: the header, the disclosure
+  line and the frame container's padding, 122px. The panel covers the window's
+  full height, docked or expanded, so no layout needs to be open to measure
+  it. `chat-http.service` adds it as `browser_frame_height` at the one send
+  path every turn shares, resumes included, because the turn that asks for a
+  sign-in can be any of them.
+* `InvocationRequest.browser_frame_height` turns an unusable value (not a
+  whole number, or outside 1–10,000) into None rather than a 422. A hint
+  about a window must never fail a turn.
+* The route passes it as Strands `invocation_state`
+  (`browser_takeover_frame_height`), and `request_user_login` reads it from
+  `ToolContext`. Strands builds a fresh `invocation_state` per invocation, so
+  the value is one request's and never lingers on a cached agent.
+* `take_control(frame_height=…)` sizes the window through
+  `snap_display_size`, which clamps the height to 600–1000 and snaps it down
+  to the display's step of 8, so an untrusted value can only choose a size
+  inside that range. Without a height (an older tab, a scheduled run), the
+  height is `TAKEOVER_VIEWPORT`'s 832. The resume pass is idempotent and keeps
+  the first height.
+
+Cost: zero prompt tokens. `invocation_state` reaches tools and hooks and is
+never part of the Converse request, so the system prompt, `toolConfig` and
+history are unchanged. On the turn path it adds one optional request field
+and, when present, a one-entry dict, which is microseconds. The SPA adds about
+30 bytes to each request body.
+
+In a window shorter than ~722px the clamp hands over at 600 and the panel
+scales the stream down, as before. The 122px constant must follow the panel
+template; if it drifts, the stream is a few pixels short (letterboxed) or tall
+(scaled a few percent), never broken.
 
 ### D4 — Browser session identity in the session-metadata row
 

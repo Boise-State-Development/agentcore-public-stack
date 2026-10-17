@@ -78,7 +78,9 @@ export const CHAT_FLOOR_PX = 360;
  * ------------------------
  * The backend hands the browser over at a sign-in size (768 wide, set before
  * the automation stream is disabled, since CDP is refused after), and the
- * event's `viewport` says what it chose. On open the rail widens to fit that
+ * event's `viewport` says what it chose. Its height is this panel's frame
+ * height, which every chat request carries (`browser-frame-height.ts`, whose
+ * chrome constant must follow this template's header and disclosure). On open the rail widens to fit that
  * width, when the window has room for the chat beside it, and goes back to
  * the user's own width on close. The frame is never drawn wider than the
  * remote viewport: past 1:1 the page only gets blurrier, so a wider rail

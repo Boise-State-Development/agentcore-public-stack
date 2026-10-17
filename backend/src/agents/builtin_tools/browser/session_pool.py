@@ -68,8 +68,11 @@ DEFAULT_VIEWPORT = {"width": 1280, "height": 800}
 # wide, so a 1280x800 stream drew the login page at about half size: tiny text
 # and clicks that land a few pixels off. 768 wide fits that rail at 1:1 and is
 # still the width most sites serve their tablet/desktop layout at, rather than
-# the phone one. The height fills a typical panel; the rail scales down, never
-# up, when the user's window is shorter.
+# the phone one. The height is the panel's: the SPA sends the height its rail
+# gives the frame on every chat request, and `take_control` uses it (clamped by
+# `snap_display_size`). This height is the fallback when no request carried
+# one (an older tab, a scheduled run); the rail scales down, never up, when the
+# user's window is shorter.
 TAKEOVER_VIEWPORT = {"width": 768, "height": 832}
 
 # What the remote display accepts (measured on dev 2026-10-17): DCV's
@@ -443,8 +446,15 @@ def _describe(live: _LiveSession) -> Dict[str, Any]:
     }
 
 
-async def _fit_for_takeover(live: _LiveSession) -> Optional[Dict[str, int]]:
+async def _fit_for_takeover(
+    live: _LiveSession, frame_height: Optional[int] = None
+) -> Optional[Dict[str, int]]:
     """Resize the window to the sign-in size. Returns it, or None if not.
+
+    ``frame_height`` is the height the user's panel gives the stream, from the
+    chat request; without one the window gets ``TAKEOVER_VIEWPORT``'s height.
+    Either way ``snap_display_size`` clamps it to 600-1000 and the display's
+    step, so an untrusted value can only pick a size inside that range.
 
     Must run BEFORE `take_control`: disabling the automation stream makes the
     service refuse CDP outright (HTTP 403 on the socket), and Chrome will not
@@ -458,7 +468,10 @@ async def _fit_for_takeover(live: _LiveSession) -> Optional[Dict[str, int]]:
     """
     if not browser_takeover_fit_enabled():
         return None
-    size = snap_display_size(TAKEOVER_VIEWPORT["width"], TAKEOVER_VIEWPORT["height"])
+    size = snap_display_size(
+        TAKEOVER_VIEWPORT["width"],
+        frame_height if frame_height is not None else TAKEOVER_VIEWPORT["height"],
+    )
     try:
         await live.cdp.set_window_size(size["width"], size["height"])
     except Exception:  # noqa: BLE001 - the handover still works unfitted
@@ -502,7 +515,9 @@ async def _restore_agent_window(live: _LiveSession) -> None:
 
 
 async def take_control(
-    agent: Any, deadline_seconds: int = TAKEOVER_DEADLINE_SECONDS
+    agent: Any,
+    deadline_seconds: int = TAKEOVER_DEADLINE_SECONDS,
+    frame_height: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Hand this conversation's browser to the user. Idempotent.
 
@@ -513,6 +528,10 @@ async def take_control(
     no-op rather than a second ``UpdateBrowserStream`` call — and must not
     silently extend the deadline, which would make an abandoned takeover
     unreapable for as long as resumes kept arriving.
+
+    ``frame_height`` sizes the handover to the user's panel (see
+    ``_fit_for_takeover``). It is ignored on the idempotent repeat: the window
+    was fitted once, and the stream is already pinned to that size.
 
     Returns the session descriptor (ids + viewport + deadline). Raises if there
     is no session to hand over, or if the service refuses the stream update —
@@ -525,7 +544,7 @@ async def take_control(
         return {**_describe(live), "deadlineAt": _deadline_iso(live, now)}
 
     # Order matters: fit while CDP still answers, then disable it.
-    fitted = await _fit_for_takeover(live)
+    fitted = await _fit_for_takeover(live, frame_height)
     try:
         await asyncio.to_thread(live.client.take_control)
     except Exception:

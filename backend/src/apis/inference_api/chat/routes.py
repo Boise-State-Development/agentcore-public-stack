@@ -22,6 +22,7 @@ from agents.main_agent.core.model_config import KNOWN_CANONICAL_PARAMS
 from agents.main_agent.session.session_factory import SessionFactory
 from apis.shared.auth.dependencies import get_current_user_trusted
 from apis.shared.auth.models import User
+from apis.shared.browser_takeover import FRAME_HEIGHT_STATE_KEY
 from apis.shared.errors import (
     ConversationalErrorEvent,
     ErrorCode,
@@ -5022,6 +5023,16 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 if input_data.interrupt_responses
                 else None
             )
+            # Client data for tools, never for the model: Strands hands
+            # `invocation_state` to tools via ToolContext and leaves it out of
+            # the Converse request, so the cacheable prefix is untouched. A
+            # fresh dict per request (Strands mutates it), and None when there
+            # is nothing to carry, which keeps the coordinator's call as it was.
+            turn_invocation_state = (
+                {FRAME_HEIGHT_STATE_KEY: input_data.browser_frame_height}
+                if input_data.browser_frame_height is not None
+                else None
+            )
 
             async for event in agent.stream_async(
                 final_message,
@@ -5058,6 +5069,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 # The same clock as `turn_prelude`, continued to the first model
                 # output and emitted as `turn_first_token` (turn-path P1b).
                 turn_clock=prelude,
+                invocation_state=turn_invocation_state,
             ):
                 yield event
                 # Interleave the finished title between agent events (same
