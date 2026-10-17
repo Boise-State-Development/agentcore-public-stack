@@ -125,6 +125,11 @@ log "Image $REPO_NAME:$TAG not in ECR — building and pushing."
 aws ecr get-login-password --region "$AWS_REGION" \
     | docker login --username AWS --password-stdin "$REGISTRY" >&2
 
+# 4b. Log in to ECR Public too, so the base-image pull is metered per
+# account instead of per (shared) runner IP. Best-effort: on failure the
+# pull stays anonymous. See ecr-public-login.sh.
+bash "${SCRIPT_DIR}/ecr-public-login.sh"
+
 # 5. Build. The Dockerfile pattern in this repo expects to run from the
 # repo root with the dockerfile referenced relatively (paths inside the
 # Dockerfile are repo-rooted COPY directives like `COPY backend/src ...`).
@@ -135,7 +140,21 @@ BUILD_ARGS=( -f "$DOCKERFILE" -t "$ECR_REPO:$TAG" )
 if [[ -n "$PLATFORM" ]]; then
     BUILD_ARGS+=( --platform "$PLATFORM" )
 fi
-docker build "${BUILD_ARGS[@]}" . >&2
+
+# One bounded retry, and only for a registry 429 (Docker Hub's pull-rate
+# limit or ECR Public's data limit, both "toomanyrequests"). Any other
+# build failure is a real failure and is not retried.
+BUILD_LOG="$(mktemp)"
+trap 'rm -f "$BUILD_LOG"' EXIT
+RETRY_DELAY_SECONDS="${BASE_IMAGE_RETRY_DELAY_SECONDS:-60}"
+if ! docker build "${BUILD_ARGS[@]}" . 2>&1 | tee "$BUILD_LOG" >&2; then
+    if ! grep -qiE '429 Too Many Requests|toomanyrequests' "$BUILD_LOG"; then
+        exit 1
+    fi
+    log "Registry returned 429 — retrying the build once in ${RETRY_DELAY_SECONDS}s."
+    sleep "$RETRY_DELAY_SECONDS"
+    docker build "${BUILD_ARGS[@]}" . >&2
+fi
 
 # 6. Push.
 docker push "$ECR_REPO:$TAG" >&2
