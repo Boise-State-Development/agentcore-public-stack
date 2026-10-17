@@ -497,15 +497,18 @@ class ExternalMCPIntegration:
             try:
                 await self._preflight(client, off_loop=off_loop)
             except Exception as retry_exc:
+                # The provider is left out of these two lines on purpose:
+                # CodeQL's name heuristic treats `requires_oauth_provider` as a
+                # credential, and `tool_id` already names the server (one
+                # provider per server).
                 logger.warning(
                     f"Skipping external MCP tool {tool_id}: pre-flight still failed "
-                    f"with the {provider_id} token a parallel pre-flight warmed "
-                    f"({retry_exc})"
+                    f"with the token a parallel pre-flight warmed ({retry_exc})"
                 )
                 return "dropped"
             logger.info(
                 f"Recovered external MCP tool {tool_id}: retried with the "
-                f"{provider_id} token a parallel pre-flight warmed"
+                "token a parallel pre-flight warmed"
             )
             return "recovered"
 
