@@ -73,4 +73,42 @@ describe('AuthProvidersService', () => {
     });
     await promise;
   });
+
+  it('should fetch login page settings', async () => {
+    const settings = {
+      hide_cognito_login: false,
+      cognito_login_visible: true,
+      enabled_provider_count: 1,
+      updated_at: null,
+      updated_by: null,
+    };
+    const promise = service.fetchLoginPageSettings();
+    await vi.waitFor(() => {
+      httpMock
+        .expectOne('http://localhost:8000/admin/auth-providers/login-page-settings')
+        .flush(settings);
+    });
+    expect(await promise).toEqual(settings);
+  });
+
+  it('should save login page settings and publish the result', async () => {
+    const saved = {
+      hide_cognito_login: true,
+      cognito_login_visible: false,
+      enabled_provider_count: 1,
+      updated_at: '2026-10-17T00:00:00+00:00',
+      updated_by: 'user-001',
+    };
+    const promise = service.updateLoginPageSettings({ hide_cognito_login: true });
+    await vi.waitFor(() => {
+      const req = httpMock.expectOne(
+        (r) => r.method === 'PUT' && r.url === 'http://localhost:8000/admin/auth-providers/login-page-settings',
+      );
+      expect(req.request.body).toEqual({ hide_cognito_login: true });
+      req.flush(saved);
+    });
+    expect(await promise).toEqual(saved);
+    expect(service.loginPageSettingsResource.value()).toEqual(saved);
+  });
 });
+

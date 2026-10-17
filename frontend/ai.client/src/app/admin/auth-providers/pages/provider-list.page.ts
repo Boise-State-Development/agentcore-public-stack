@@ -23,11 +23,12 @@ import {
 import { AuthProvidersService } from '../services/auth-providers.service';
 import { AuthProvider } from '../models/auth-provider.model';
 import { SpinnerComponent } from '../../../components/spinner/spinner.component';
+import { LoginPageSettingsComponent } from '../components/login-page-settings.component';
 
 @Component({
   selector: 'app-auth-provider-list',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, FormsModule, NgIcon, SpinnerComponent],
+  imports: [RouterLink, FormsModule, NgIcon, SpinnerComponent, LoginPageSettingsComponent],
   providers: [
     provideIcons({
       heroPlus,
@@ -61,6 +62,8 @@ import { SpinnerComponent } from '../../../components/spinner/spinner.component'
         Add Provider
       </a>
     </div>
+
+    <app-login-page-settings class="mb-6" />
 
     <!-- Search and Filters -->
     <div class="mb-6 flex flex-wrap items-center gap-4">
