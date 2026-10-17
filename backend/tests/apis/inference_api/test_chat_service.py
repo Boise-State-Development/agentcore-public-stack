@@ -936,3 +936,89 @@ class TestTextOnlyModel:
         built = await service.get_agent(session_id="s3", user_id="u", model_id="zai.glm-5", text_only_model=True)
         again = await service.get_agent(session_id="s3", user_id="u", model_id="zai.glm-5", cache_write=False)
         assert again is built
+
+
+class TestConsentGatedCacheHit:
+    """An agent whose build dropped an OAuth-gated server for missing consent is
+    cached like any other, and a hit runs no pre-flight. So a user who connected
+    the provider kept getting the agent built before they did, without its tools
+    — and, with the unconnected-tools note, one that told them to connect an
+    account they just had. The hit now asks the vault first."""
+
+    @staticmethod
+    def _gated_agent(**kwargs) -> MagicMock:
+        agent = _fake_agent_with_messages(
+            system_prompt=kwargs.get("system_prompt"), restored=[{"role": "user"}]
+        )
+        agent.consent_gated_tools = [
+            SimpleNamespace(tool_id="github_issues", display_name="Github Issues", provider_id="github")
+        ]
+        return agent
+
+    @staticmethod
+    def _recheck(result: bool):
+        integration = SimpleNamespace(recheck_consent=AsyncMock(return_value=result))
+        return integration, patch(
+            "agents.main_agent.integrations.external_mcp_client.get_external_mcp_integration",
+            return_value=integration,
+        )
+
+    @pytest.mark.asyncio
+    async def test_connecting_rebuilds_on_the_next_turn(self, mock_freshness_hash):
+        integration, patched = self._recheck(True)
+        with patch.object(service, "create_agent", side_effect=self._gated_agent) as mock, patched:
+            first = await service.get_agent(session_id="s", user_id="u")
+            first.agent.messages.append({"role": "assistant"})
+            second = await service.get_agent(session_id="s", user_id="u")
+
+        assert second is not first
+        assert mock.call_count == 2
+        integration.recheck_consent.assert_awaited_once_with("u", ["github"])
+        # The rebuild adopts the live conversation rather than re-restoring it.
+        assert second.agent.messages is first.agent.messages
+        # And it took the slot.
+        assert await service.get_agent(session_id="s", user_id="u", is_resume=True) is second
+
+    @pytest.mark.asyncio
+    async def test_still_unconnected_stays_a_hit(self, mock_freshness_hash):
+        integration, patched = self._recheck(False)
+        with patch.object(service, "create_agent", side_effect=self._gated_agent) as mock, patched:
+            first = await service.get_agent(session_id="s", user_id="u")
+            second = await service.get_agent(session_id="s", user_id="u")
+
+        assert second is first
+        assert mock.call_count == 1
+        integration.recheck_consent.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_a_resume_never_rechecks(self, mock_freshness_hash):
+        """A paused turn must resume on the agent that paused."""
+        integration, patched = self._recheck(True)
+        with patch.object(service, "create_agent", side_effect=self._gated_agent), patched:
+            first = await service.get_agent(session_id="s", user_id="u")
+            resumed = await service.get_agent(session_id="s", user_id="u", is_resume=True)
+
+        assert resumed is first
+        integration.recheck_consent.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_an_ungated_hit_pays_nothing(self, mock_create_agent, mock_freshness_hash):
+        integration, patched = self._recheck(True)
+        with patched:
+            first = await service.get_agent(session_id="s", user_id="u")
+            second = await service.get_agent(session_id="s", user_id="u")
+
+        assert second is first
+        integration.recheck_consent.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_failed_recheck_serves_the_cached_agent(self, mock_freshness_hash):
+        integration = SimpleNamespace(recheck_consent=AsyncMock(side_effect=RuntimeError("boom")))
+        with patch.object(service, "create_agent", side_effect=self._gated_agent), patch(
+            "agents.main_agent.integrations.external_mcp_client.get_external_mcp_integration",
+            return_value=integration,
+        ):
+            first = await service.get_agent(session_id="s", user_id="u")
+            second = await service.get_agent(session_id="s", user_id="u")
+
+        assert second is first

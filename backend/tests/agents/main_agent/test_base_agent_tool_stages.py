@@ -25,6 +25,7 @@ def _agent(*, external_ids=None, extra_tools=None):
         extra_tools=extra_tools or [],
         user_id="u",
         auth_token=None,
+        consent_gated_tools=[],
     )
 
 
@@ -32,7 +33,9 @@ class _FakeIntegration:
     def __init__(self):
         self.client = object()
 
-    async def load_external_tools(self, ids, *, user_id, auth_token, timings=None):
+    async def load_external_tools(
+        self, ids, *, user_id, auth_token, timings=None, consent_gated=None
+    ):
         for tool_id in ids:
             timings.append({"id": tool_id, "outcome": "loaded", "totalMs": 5})
         return [self.client]
