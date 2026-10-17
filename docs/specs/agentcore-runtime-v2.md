@@ -1,6 +1,6 @@
 # AgentCore Runtime V2 migration
 
-**Status:** plan steps 1–3 shipped in 1.27.0. The first dev V2 attempt (2026-10-09) failed on an environment-variable size limit (B4) and was rolled back to V1. Step 4: **PR A** (derived names at startup, synth-time payload guard, manifest test, image label) is open as #1533; **PR B** (drop the 26 variables, deploy-order preflight) is a draft stacked on it, to merge only after PR A is validated on dev. V2 must not be selected on any release before PR B ships (§8). Tracks `docs/kaizen/review-queue.md ▸ [2026-09-25] A/B the V2 AgentCore Runtime in dev`.
+**Status:** plan steps 1–3 shipped in 1.27.0. The first dev V2 attempt (2026-10-09) failed on an environment-variable size limit (B4) and was rolled back to V1. Step 4, PR A (#1533) and PR B (#1535), is merged to `develop`, and **dev has run V2 since 2026-10-10 19:10Z** (step 5). V2 must not be selected on any release before PR B ships (§8). **The first GB-hours readout (2026-10-16, §9) is "need more data" for prod:** on dev, V2 used about as many GB-hours per day as V1 while carrying more traffic, and Runtime spend roughly doubled. Tracks `docs/kaizen/review-queue.md ▸ [2026-09-25] A/B the V2 AgentCore Runtime in dev`.
 **Sources:**
 - The AWS ML blog post [The new AgentCore Runtime: elastic, optimized, and consistently fast starts](https://aws.amazon.com/blogs/machine-learning/the-new-agentcore-runtime-elastic-optimized-and-consistently-fast-starts/) (2026-09-18).
 - The [What's New post](https://aws.amazon.com/about-aws/whats-new/2026/09/new-agentcore-runtime-generally-available).
@@ -8,6 +8,7 @@
 - botocore's `bedrock-agentcore-control` service model on `develop`.
 - A read-only `GetAgentRuntime` against the dev runtime.
 - The failed dev V2 update on 2026-10-09 (§3 B4), and read-only `GetAgentRuntime` calls against the dev and prod runtimes that day.
+- The AgentCore pricing page and the Price List API, read on 2026-10-16. Read-only Cost Explorer, CloudWatch and Logs Insights queries against the dev account the same day (§9).
 
 Labels used in this document:
 - **Verified**: checked against AWS or our tree on 2026-09-27.
@@ -35,8 +36,17 @@ The blog lists these as **coming soon**:
 - Larger RAM, vCPU and session storage.
 - A committed-baseline discount: reserve a memory floor and burst above it on demand.
 
+**The V2 price (verified 2026-10-16, us-west-2).** The [AgentCore pricing page](https://aws.amazon.com/bedrock/agentcore/pricing/), the Price List API (`--service-code AmazonBedrockAgentCore`, effective date 2026-10-06) and the rates actually billed on dev all give the same numbers. V2 bills under its own usage types, `USW2-Runtime:Consumption-based:Memory-v2` and `…:vCPU-v2`, so Cost Explorer can tell the two versions apart.
+
+| | V1 | V2 consumption | V2 committed baseline ("launching by October 2026") |
+|---|---|---|---|
+| Memory | $0.00945 / GB-hour | **$0.0169 / GB-hour** (1.79× V1) | $0.0132 / GB-hour (1.40×) |
+| vCPU | $0.0895 / vCPU-hour | **$0.1276 / vCPU-hour** (1.43× V1) | $0.0997 / vCPU-hour (1.11×) |
+| V2 is cheaper only if its usage falls below | — | 56% of V1's GB-hours, 70% of V1's vCPU-hours | 72% of V1's GB-hours, 90% of V1's vCPU-hours |
+
+The pricing page's V2 example says memory "is reclaimed within the session when unused for 120 seconds", and CPU is billed only while it is actively processing, as on V1. The first dev readout against these rates is in §9.
+
 **What AWS does not say:**
-- No V2 price. The pricing page had no V2 row as of the 09-25 research.
 - Nothing about the `/ping`/`/invocations` contract or `lifecycleConfiguration`.
 - **When** in the container's startup the snapshot is taken.
 
@@ -146,8 +156,7 @@ The billing basis inverts, so conclusions from V1 don't carry over:
 - **In-process caches now carry a latency cost.** The agent cache, catalog cache and MCP tool listings were free on V1 as long as they sat under the peak.
   - On V2, a cache entry that goes cold is reclaimed and **paged back in on its next hit**. That is a TTFT cost on exactly the path the cache exists to speed up.
   - The reclaim window isn't published. Watch agent-cache-hit turns for a latency regression that looks like a miss.
-- **Unknown rate.** "Higher rate × fewer GB-hours" nets out unknown until AWS publishes the V2 price. The Cost Explorer sync (#1235) is the measurement.
-  - Check first whether V2 bills under a distinct usage type. If it doesn't, a dev week can only be compared as a before/after, not side by side.
+- **The rate is now known (§1): memory 1.79× and vCPU 1.43× V1.** So V2 wins on memory only below ~56% of V1's GB-hours for the same work. V2 does bill under distinct usage types (`Memory-v2`, `vCPU-v2`). Even so, dev can only be compared before and after, because the runtime is on one version at a time. The first readout is in §9.
 - **W5 instance-based SKUs.** Hold that arithmetic until the committed-baseline pricing lands. That is the V2-native answer to the same question, and V1 crossover math would compare against the wrong basis.
 
 ## 5. Plan
@@ -167,7 +176,7 @@ The billing basis inverts, so conclusions from V1 don't carry over:
    - Watch for 424s on first turns (B2.1).
    - Measure the client-side cold first-token gap with `tests/load` (B3), `PreludeTotalMs` split by cold vs warm, agent-cache-hit turn latency (§4), and Runtime GB-hours from the Cost Explorer sync.
 6. **Decide warm-up placement (B2.2).** Only after step 5 shows whether warm-up work lands in the snapshot.
-7. **Prod.** Only after a clean dev week, with the V2 rate known, and with step 4 deployed to prod.
+7. **Prod.** Only after a clean dev week, with the V2 rate known, and with step 4 deployed to prod. The rate is now known (§1). The first week's readout (§9) does not yet support V2 on cost, so the prod decision rests on latency, with the cost premium stated.
 
 ## 5a. Phase 2: prewarm the session when the user engages (after the dev A/B)
 
@@ -229,7 +238,7 @@ A later step could also pre-build the agent for the currently selected model and
 - When is the snapshot taken: after the first healthy `/ping`, or after some quiescence? Does restore reseed the RNG and step the monotonic clock?
 - ~~Does a full-replace `UpdateAgentRuntime` that omits `platformVersion` reset it to V1, or leave it unchanged?~~ It leaves it unchanged (B1, B4).
 - How does V2 count the 2,560 bytes? Our key-plus-value sum is 69 bytes under AWS's figure for dev (B4). Is the limit a fixed contract or an adjustable quota?
-- Does V2 bill under a distinct Cost Explorer usage type, and at what rate?
+- ~~Does V2 bill under a distinct Cost Explorer usage type, and at what rate?~~ Yes: `Runtime:Consumption-based:Memory-v2` and `…:vCPU-v2`, at $0.0169/GB-hour and $0.1276/vCPU-hour (§1).
 - What is the reclaim window for cold memory, and what does a page-in cost?
 - What does an idle V2 session cost for 900 s after a single no-op invocation? This decides whether §5a pays for itself.
 
@@ -364,3 +373,65 @@ The documented order would be the dangerous one here, so prose is not enough:
 - **Every release's notes state whether V2 is selectable on that release**, in the Deployment notes, until the dev A/B is done and the recommendation is written.
 - **The docs-site page is the durable version** of the warning, the prerequisites and the runbook; the notes link to it rather than repeating the runbook.
 - **Name the exact log line** a deployer should look for, because "check for drift" is not actionable and the line was written to be grepped.
+
+## 9. Dev readout: Runtime GB-hours, V2 against V1 (2026-10-16)
+
+**Read this as a sample of about six days on dev, not a verdict.** Dev traffic is a handful of people plus test runs. Its totals are a few dollars a week, and both windows contain test spikes that are a large share of the total.
+
+### 9.1 The numbers
+
+| | V1 week | V2 window | V2 / V1 |
+|---|---|---|---|
+| Window (UTC) | 10-03 00:00 → 10-10 00:00 (168 h) | 10-10 19:00 → 10-16 19:00 (144 h) | |
+| Memory GB-hours | 150.1 | 127.6 | — |
+| vCPU-hours | 1.62 | 3.82 | — |
+| Runtime sessions (AWS `Sessions`) | 174 | 367 | — |
+| Invocations, of which prewarm | 290, 0 | 595, 205 | — |
+| **GB-hours per day** | **21.4** | **21.3** | **0.99** |
+| vCPU-hours per day | 0.23 | 0.64 | 2.75 |
+| **Runtime $ per day** (memory + vCPU) | **$0.22** | **$0.44** | **1.97 (+$0.22/day)** |
+| Runtime $ over the window | $1.56 | $2.64 (≈ $3.08 for 7 days) | |
+
+V2's memory is 82% of its Runtime dollars and V1's is 91%. V2's vCPU line went from $0.02 to $0.08 a day.
+
+Per unit of work the picture is different, and it depends on the unit you pick:
+
+| Normalised GB-hours | V1 | V2 | V2 / V1 | Bias |
+|---|---|---|---|---|
+| per session | 0.86 | 0.35 | **0.40** | Flatters V2. Prewarm adds sessions that hold little memory (9.3) |
+| per session, if every warm were a separate session with no turn | 0.86 | 0.79 | 0.91 | The opposite bound |
+| per non-warm invocation | 0.52 | 0.33 | **0.63** | Slightly against V2. The numerator includes the warm sessions' memory |
+| per vCPU-hour of work | 92.7 | 33.4 | **0.36** | Flatters V2 if V2 spends more CPU per unit of work, which it appears to (below) |
+
+**Against the break-even.** Raw daily GB-hours (0.99) are nowhere near the 0.56 that V2 needs. Normalised, V2 used 0.36–0.63 of V1's GB-hours per unit of work, which straddles 0.56. vCPU went the wrong way: 0.0064 vCPU-hours per invocation against V1's 0.0056 (1.15×, or 1.75× per non-warm invocation), at a rate 1.43× higher. Priced per non-warm invocation, V2 cost **$0.0068 against V1's $0.0054 (1.26×)**. Per session it cost $0.0072 against $0.0090 (0.80×), but that is the measure prewarm flatters most.
+
+So the memory reclaim is real: a V2 session holds about 40% of the GB-hours a V1 session held, which is what the 120-second reclaim predicts against V1's 900 s idle at peak. It is not yet enough to pay for a 1.79× rate on a 1.43× pricier vCPU line.
+
+### 9.2 Method
+
+- **CloudWatch** (`AWS/Bedrock-AgentCore`, hourly `Sum`): `MemoryUsed-GBHours` and `CPUUsed-vCPUHours` on the runtime's `DEFAULT` endpoint, and `Sessions` and `Invocations` for the same runtime. The hourly series sets the window boundaries.
+- **Cost Explorer** (daily, by `USAGE_TYPE`, service `Amazon Bedrock AgentCore`) sets the rates and the cross-check. **CloudWatch's daily totals match Cost Explorer's to 0.01 GB-hour on every complete UTC day.** After the flip, the V1 usage types fell to zero. The account's other runtimes were idle, so its Runtime line was this runtime alone, and no proxy was needed. Hourly and resource-level Cost Explorer data are payer opt-ins that are not enabled, which is why the hourly split comes from CloudWatch. Cost Explorer lags by about a day, so its 10-16 row is partial.
+- **The flip hour.** Draining V1 microVMs billed about 3.3 GB-hours and 0.01 vCPU-hours under the V1 usage types after 19:00 on 10-10. That usage is subtracted from the V2 window.
+- **Prewarm counts** come from Logs Insights on the runtime's log group (`prewarm invocation` lines). There were 205 in the V2 window and none in the V1 week.
+- **Dollars** apply the published rates (§1) to the usage. They reproduce Cost Explorer's billed amounts.
+
+### 9.3 Confounders
+
+1. **Prewarm (#1543) is on in dev for the whole V2 window and did not exist in the V1 week.** It sent 205 warm invocations. A warm for a conversation with no live microVM starts a session. Whether that session ever gets a turn is not measured here. That share is the gap between the 0.40 and 0.91 per-session bounds. Prewarm is a §5a feature that V2 makes affordable, so its cost belongs to V2's bill in practice, but it is not like-for-like with V1.
+2. **Smoke, load and validation runs land in both windows.**
+   - **V2:** the flip evening (10-10 19:00–24:00) carried four smoke passes, 20 fresh one-turn sessions, a 12-pair cold/warm A/B and prewarm validation. That is 31.8 GB-hours and 83 sessions in five hours, a quarter of the V2 window's memory. Without that evening, V2's daily GB-hours fall to 17.1 (0.80 of V1), and the per-unit ratios barely move (0.40 / 0.64 / 0.35). The window also includes the Projects launch QA on 10-15 and the release smoke on 10-16.
+   - **V1:** 10-09 (the failed V2 flip, its recovery and two smoke passes) is 57.1 GB-hours, 38% of the week.
+3. **More traffic on V2.** Per day it had 2.5× the sessions, 1.6× the non-warm invocations and 2.75× the vCPU-hours. Its GB-hours held flat while traffic rose, which is the reclaim at work. It also means raw totals cannot be compared directly.
+4. **V1's pre-booted pool.** On V1, most new sessions land on a microVM booted minutes earlier (B3). Whether that pool time is billed to us, and therefore whether V1's 0.86 GB-hours per session includes it, is not visible from either source.
+5. **V2 vCPU per unit of work rose, and we don't know why yet.** Candidates are restore and page-in CPU billed to the session, the warm sessions' own CPU, and a heavier workload (the Projects features and their tools in the V2 window). This decides whether the per-vCPU-hour normalisation (0.36) can be trusted.
+
+### 9.4 First read for prod: **need more data, leaning no-go on cost alone**
+
+- **Cost.** On dev, V2 did not reduce GB-hours. It held them flat while traffic rose about 1.6–2.5×, and the rates turned that into roughly double the Runtime spend. Per unit of work, memory is at or a little under the 56% break-even. The pricier vCPU line takes back the difference, so per real invocation V2 still costs about 1.26× V1. Nothing here says V2 saves money on prod.
+- **Latency.** V2's case is the cold start: ~0.7 s restore-to-request on every new session (B3), against V1's pool misses. Prewarm (§5a) cut the median first token by 1.5 s in a 12-pair dev A/B on 2026-10-10, and it depends on V2's cheap idle time. If prod takes V2, it should be decided as a latency purchase with the premium stated, not as a cost saving.
+- **The committed baseline** ($0.0132 / $0.0997) moves the memory break-even to 72%. That is within reach of the normalised 0.36–0.63. Re-run this readout against it once it can be bought.
+- **Data that would settle it:**
+  1. Join warm invocations to sessions in Logs Insights to get the turnless-warm share. That collapses the 0.40–0.91 per-session range.
+  2. A second V2 week (10-17 → 10-23) with no flip-day burst.
+  3. The V2 vCPU-per-invocation question (9.3 item 5).
+  4. Prod's V1 GB-hours per session on real traffic, read-only, as the baseline any prod projection multiplies.

@@ -1,6 +1,9 @@
 import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 
+import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
+
+import { alarmStatusWidgets, MAX_ALARMS_PER_STATUS_WIDGET } from '../lib/constructs/observability/platform-dashboard-construct';
 import { PlatformStack } from '../lib/platform-stack';
 import { createMockConfig, mockSsmContext, MOCK_ACCOUNT, MOCK_PREFIX, MOCK_REGION } from './helpers/mock-config';
 
@@ -139,5 +142,30 @@ describe('Unified platform dashboard', () => {
 
   it('binds the runtime Name dimension identically to the alarms', () => {
     expect(dashboardBody).toContain('::DEFAULT');
+  });
+});
+
+// CloudWatch rejects an alarm-status widget with more than 100 alarms, and the
+// rejection rolled back the whole 1.28.0 prod deploy.
+describe('alarmStatusWidgets', () => {
+  const stack = new cdk.Stack();
+  const fakeAlarms = (n: number): cloudwatch.IAlarm[] =>
+    Array.from({ length: n }, (_, i) =>
+      cloudwatch.Alarm.fromAlarmArn(stack, `A${n}-${i}`, `arn:aws:cloudwatch:us-west-2:123456789012:alarm:a${n}-${i}`));
+  const alarmsIn = (w: cloudwatch.AlarmStatusWidget): string[] =>
+    (w.toJson()[0] as { properties: { alarms: string[] } }).properties.alarms;
+
+  it('keeps one widget up to the limit', () => {
+    const widgets = alarmStatusWidgets(fakeAlarms(MAX_ALARMS_PER_STATUS_WIDGET));
+    expect(widgets).toHaveLength(1);
+    expect(alarmsIn(widgets[0])).toHaveLength(MAX_ALARMS_PER_STATUS_WIDGET);
+  });
+
+  it('splits past the limit, every alarm once, none over 100', () => {
+    const alarms = fakeAlarms(250);
+    const widgets = alarmStatusWidgets(alarms);
+    expect(widgets).toHaveLength(3);
+    for (const w of widgets) expect(alarmsIn(w).length).toBeLessThanOrEqual(MAX_ALARMS_PER_STATUS_WIDGET);
+    expect(widgets.flatMap(alarmsIn)).toEqual(alarms.map((a) => a.alarmArn));
   });
 });

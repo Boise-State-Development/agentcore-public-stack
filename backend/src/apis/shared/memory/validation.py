@@ -211,8 +211,9 @@ def _check_caller_frontmatter(
     *,
     slug: str,
     current: Optional[CurrentFile],
+    renaming_from: Optional[str] = None,
 ) -> None:
-    """Allow the editable fields; allow locked ones only as unchanged echoes."""
+    """Allow the editable fields; allow locked ones only as unchanged echoes (a renamed file's old name, too)."""
     for key in sorted(values):
         if key in EDITABLE_FIELDS:
             continue
@@ -223,7 +224,7 @@ def _check_caller_frontmatter(
             )
         given = values[key]
         if key == "name":
-            if given != slug:
+            if given != slug and given != renaming_from:
                 raise MemoryFormatError(
                     f"The file name is locked: it is '{slug}', not '{given}'. Save under a new "
                     "name to create a new file.",
@@ -269,6 +270,7 @@ def validate_canonical_save(
     aliases: Optional[Sequence[str]] = None,
     mint: Callable[[], str] = new_anchor,
     restorable: Sequence[str] = (),
+    renaming_from: Optional[str] = None,
 ) -> CanonicalSave:
     """Validate one save of a canonical file (§4.3 steps 1–4).
 
@@ -278,6 +280,11 @@ def validate_canonical_save(
     them, and either wins over the current values. ``None`` keeps the current
     value. ``restorable`` names anchors an archived item brings back: they are
     accepted although the current file no longer has them.
+
+    ``renaming_from`` saves ``current`` (the file of that name) under ``slug``
+    instead: its anchors stay known, ``slug`` must be free, the old name may be
+    echoed in frontmatter, and it joins the aliases so links to it still resolve.
+    ``files`` must leave the old file out.
     """
     if (text is None) == (items is None):
         raise ValueError("give exactly one of text or items")
@@ -288,7 +295,7 @@ def validate_canonical_save(
         parsed: ParsedFile = parse_file(text)
         given_items: Sequence[Item] = parsed.items
         if parsed.frontmatter is not None:
-            _check_caller_frontmatter(parsed.frontmatter, slug=slug, current=current)
+            _check_caller_frontmatter(parsed.frontmatter, slug=slug, current=current, renaming_from=renaming_from)
             if "description" in parsed.frontmatter:
                 fm_desc = parsed.frontmatter["description"]
                 description = fm_desc if isinstance(fm_desc, str) else ""
@@ -306,11 +313,13 @@ def validate_canonical_save(
         description = current.frontmatter.description if current else ""
     if aliases is None:
         aliases = current.frontmatter.aliases if current else ()
+    if renaming_from is not None:
+        aliases = [*aliases, renaming_from]
     description = normalize_description(description)
     clean_aliases = normalize_aliases(aliases, slug=slug)
 
     # Step 2: names and aliases are unique across the space.
-    check_name_collisions(slug, clean_aliases, files, is_new=current is None)
+    check_name_collisions(slug, clean_aliases, files, is_new=current is None or renaming_from is not None)
 
     # Step 3: anchors are known, unique, or minted now.
     known = [i.anchor for i in (current.items if current else ()) if i.anchor]

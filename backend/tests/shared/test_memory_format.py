@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Tuple
 
 import pytest
+from botocore.exceptions import ConnectionClosedError, EndpointConnectionError, ReadTimeoutError
 
 from apis.shared.memory import tokens as memory_tokens
 from apis.shared.memory.format import (
@@ -83,17 +84,29 @@ class TestItems:
             ("1. numbered", "prose_in_body"),
             ("- \n- x", "empty_item"),
             ("-", "empty_item"),
-            ("- a <!-- e:123 -->", "misplaced_anchor"),
+            ("- a <!-- e:123 -->", "malformed_anchor"),
+            ("- a <!-- e:team-roster -->", "malformed_anchor"),
             ("- a <!-- e:uuuuuuuu -->", "malformed_anchor"),
             (f"- a <!-- e:{A1} --> tail", "misplaced_anchor"),
             (f"- <!-- e:{A1} --> middle <!-- e:{A2} -->", "misplaced_anchor"),
-            ("- a <!-- e:01J9Z3K4M8N2P5Q7R9S1T3V5W7 -->", "misplaced_anchor"),
+            ("- a <!-- e:01J9Z3K4M8N2P5Q7R9S1T3V5W7 -->", "malformed_anchor"),
+            ("- a <!-- e:team-roster --> tail", "misplaced_anchor"),
+            ("- <!-- e:x --> middle <!-- e:team-roster -->", "misplaced_anchor"),
         ],
     )
     def test_rejections(self, body, code):
         with pytest.raises(MemoryFormatError) as e:
             parse_items(body)
         assert _code(e) == code
+
+    def test_an_invented_anchor_at_the_end_is_named_and_not_called_misplaced(self):
+        """Told it "may only end an item" when it did, Haiku moved it there 4 times (2026-10-16)."""
+        with pytest.raises(MemoryFormatError) as e:
+            parse_items(f"- ok <!-- e:{A1} -->\n- Team: bsu_devs, led by Phil. <!-- e:team-bsu_devs -->")
+        message = str(e.value)
+        assert "line 2" in message and "<!-- e:team-bsu_devs -->" in message
+        assert "not an anchor the system issued" in message and "remove the comment" in message
+        assert "may only end an item" not in message
 
     def test_prose_error_names_the_line(self):
         with pytest.raises(MemoryFormatError, match="Line 2"):
@@ -403,6 +416,11 @@ class TestTokens:
             _Client(error=_ClientError("ThrottlingException")),
             _Client(error=_ClientError("AccessDeniedException")),
             _Client(error=TimeoutError()),
+            # botocore's HTTP errors carry ``response = None``: a pooled connection
+            # reset mid-call 500ed a prod save on 2026-10-16.
+            _Client(error=ConnectionClosedError(endpoint_url="https://bedrock-runtime")),
+            _Client(error=ReadTimeoutError(endpoint_url="https://bedrock-runtime")),
+            _Client(error=EndpointConnectionError(endpoint_url="https://bedrock-runtime")),
             _Client(result={}),
         ],
     )

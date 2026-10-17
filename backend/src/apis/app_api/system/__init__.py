@@ -1,7 +1,13 @@
 """System settings module for first-boot and system status."""
 
 from .cognito_service import CognitoService, get_cognito_service
-from .models import FirstBootRequest, FirstBootResponse, SystemStatusResponse
+from .models import (
+    FirstBootRequest,
+    FirstBootResponse,
+    LoginPageSettingsResponse,
+    LoginPageSettingsUpdate,
+    SystemStatusResponse,
+)
 from .repository import SystemSettingsRepository, get_system_settings_repository
 from .routes import router
 
@@ -9,6 +15,8 @@ __all__ = [
     "CognitoService",
     "FirstBootRequest",
     "FirstBootResponse",
+    "LoginPageSettingsResponse",
+    "LoginPageSettingsUpdate",
     "SystemStatusResponse",
     "SystemSettingsRepository",
     "get_cognito_service",

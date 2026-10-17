@@ -8,10 +8,12 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+from botocore.exceptions import ConnectionClosedError
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from apis.shared.memory.service import MemoryValidationError
+from apis.shared.memory.tokens import count_file_tokens
 from apis.shared.projects.memory_files import (
     ALREADY_EXISTS,
     CHANGED_SINCE,
@@ -191,6 +193,30 @@ class TestRoutes:
         assert client_for(VIEWER).delete(f"{base}/files/people/sis").status_code == 403
         assert client_for(EDITOR).delete(f"{base}/files/people/sis").status_code == 204
         assert client_for(EDITOR).delete(f"{base}/files/people/sis").status_code == 404
+
+    def test_a_dropped_count_tokens_connection_still_saves(self, client_for, memory, team, monkeypatch):
+        # The prod 500 of 2026-10-16: CountTokens' pooled connection was reset, and
+        # the fallback crashed reading ``response`` (None on botocore's HTTP errors).
+        class Dropped:
+            def count_tokens(self, **kwargs):
+                raise ConnectionClosedError(endpoint_url="https://bedrock-runtime.us-west-2.amazonaws.com")
+
+        monkeypatch.setattr(
+            memory, "_count_tokens", lambda text: count_file_tokens(text, client=Dropped(), model_id="m")
+        )
+        body = {
+            "items": [{"text": "No contributions logged yet."}],
+            "description": "Research Computing contributions — none logged yet.",
+            "aliases": ["research computing contributions"],
+            "baseVersion": 0,
+        }
+        saved = client_for(EDITOR).put(
+            f"/projects/{team.project_id}/memory/files/contributions/research-computing",
+            params={"scope": "project"},
+            json=body,
+        )
+        assert saved.status_code == 200
+        assert (saved.json()["slug"], saved.json()["version"]) == ("contributions/research-computing", 1)
 
     def test_mine_needs_a_personal_space_first(self, client_for, projects, team):
         base = f"/projects/{team.project_id}/memory"

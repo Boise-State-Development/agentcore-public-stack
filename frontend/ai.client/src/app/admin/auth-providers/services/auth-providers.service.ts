@@ -8,6 +8,8 @@ import {
   AuthProviderCreateRequest,
   AuthProviderUpdateRequest,
   OIDCDiscoveryResponse,
+  LoginPageSettings,
+  LoginPageSettingsUpdateRequest,
 } from '../models/auth-provider.model';
 
 @Injectable({
@@ -23,6 +25,14 @@ export class AuthProvidersService {
     loader: async () => {
       await Promise.resolve();
       return this.fetchProviders();
+    }
+  });
+
+  /** Depends on which providers are enabled, so every provider write reloads it. */
+  readonly loginPageSettingsResource = resource({
+    loader: async () => {
+      await Promise.resolve();
+      return this.fetchLoginPageSettings();
     }
   });
 
@@ -50,7 +60,7 @@ export class AuthProvidersService {
     const response = await firstValueFrom(
       this.http.post<AuthProvider>(`${this.baseUrl()}/`, data)
     );
-    this.providersResource.reload();
+    this.reloadProviderState();
     return response;
   }
 
@@ -58,7 +68,7 @@ export class AuthProvidersService {
     const response = await firstValueFrom(
       this.http.patch<AuthProvider>(`${this.baseUrl()}/${providerId}`, updates)
     );
-    this.providersResource.reload();
+    this.reloadProviderState();
     return response;
   }
 
@@ -66,7 +76,26 @@ export class AuthProvidersService {
     await firstValueFrom(
       this.http.delete<void>(`${this.baseUrl()}/${providerId}`)
     );
+    this.reloadProviderState();
+  }
+
+  async fetchLoginPageSettings(): Promise<LoginPageSettings> {
+    return firstValueFrom(
+      this.http.get<LoginPageSettings>(`${this.baseUrl()}/login-page-settings`)
+    );
+  }
+
+  async updateLoginPageSettings(updates: LoginPageSettingsUpdateRequest): Promise<LoginPageSettings> {
+    const response = await firstValueFrom(
+      this.http.put<LoginPageSettings>(`${this.baseUrl()}/login-page-settings`, updates)
+    );
+    this.loginPageSettingsResource.set(response);
+    return response;
+  }
+
+  private reloadProviderState(): void {
     this.providersResource.reload();
+    this.loginPageSettingsResource.reload();
   }
 
   async discoverEndpoints(issuerUrl: string): Promise<OIDCDiscoveryResponse> {
@@ -101,6 +130,6 @@ export class AuthProvidersService {
   }
 
   reload(): void {
-    this.providersResource.reload();
+    this.reloadProviderState();
   }
 }

@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { TestBed, ComponentFixture } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
-import { provideHttpClientTesting } from '@angular/common/http/testing';
-import { provideRouter } from '@angular/router';
+import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
+import { ActivatedRoute, convertToParamMap, provideRouter } from '@angular/router';
 import { signal } from '@angular/core';
 import { LoginPage } from './login.page';
 import { SessionService } from '../session.service';
@@ -18,8 +18,9 @@ function pageshow(persisted: boolean): PageTransitionEvent {
 describe('LoginPage', () => {
   let fixture: ComponentFixture<LoginPage>;
   let redirectToLogin: ReturnType<typeof vi.fn>;
+  let http: HttpTestingController;
 
-  beforeEach(() => {
+  function configure(queryParams: Record<string, string> = {}): void {
     redirectToLogin = vi.fn();
     TestBed.resetTestingModule();
     TestBed.configureTestingModule({
@@ -39,16 +40,40 @@ describe('LoginPage', () => {
           provide: BrandingService,
           useValue: { logo: { light: '/l.svg', dark: '/d.svg' }, appName: 'App' },
         },
+        {
+          provide: ActivatedRoute,
+          useValue: { snapshot: { queryParams, queryParamMap: convertToParamMap(queryParams) } },
+        },
       ],
     });
     fixture = TestBed.createComponent(LoginPage);
+    http = TestBed.inject(HttpTestingController);
     fixture.detectChanges();
-  });
+  }
+
+  async function respond(body: object): Promise<void> {
+    http.expectOne('/api/auth/providers').flush(body);
+    await fixture.whenStable();
+    fixture.detectChanges();
+  }
+
+  function buttonLabels(): string[] {
+    const buttons: NodeListOf<HTMLButtonElement> = fixture.nativeElement.querySelectorAll('button');
+    return Array.from(buttons).map((b) => b.textContent?.trim() ?? '');
+  }
+
+  function hasDivider(): boolean {
+    return (fixture.nativeElement.textContent as string).includes('or continue with');
+  }
+
+  const entra = { provider_id: 'entra', display_name: 'Entra' };
+
+  beforeEach(() => configure());
 
   describe('back/forward cache restore', () => {
     it('clears the loading state left by a sign-in redirect', () => {
       const page = fixture.componentInstance;
-      page.handleProviderLogin({ provider_id: 'entra', display_name: 'Entra' });
+      page.handleProviderLogin(entra);
       expect(redirectToLogin).toHaveBeenCalled();
       expect(page.isLoading()).toBe(true);
 
@@ -65,6 +90,48 @@ describe('LoginPage', () => {
       window.dispatchEvent(pageshow(false));
 
       expect(page.isLoading()).toBe(true);
+    });
+  });
+
+  describe('Cognito sign-in button', () => {
+    it('waits for the provider list before showing', () => {
+      expect(buttonLabels()).toEqual([]);
+    });
+
+    it('shows with a divider above the providers by default', async () => {
+      await respond({ providers: [entra], cognito_login_visible: true });
+      expect(buttonLabels()).toEqual(['Sign in with Cognito', 'Sign in with Entra']);
+      expect(hasDivider()).toBe(true);
+    });
+
+    it('shows when the backend predates the setting', async () => {
+      await respond({ providers: [entra] });
+      expect(buttonLabels()).toContain('Sign in with Cognito');
+    });
+
+    it('hides, with no divider, when a system admin hid it', async () => {
+      await respond({ providers: [entra], cognito_login_visible: false });
+      expect(buttonLabels()).toEqual(['Sign in with Entra']);
+      expect(hasDivider()).toBe(false);
+    });
+
+    it('shows when the provider list fails to load', async () => {
+      http
+        .expectOne('/api/auth/providers')
+        .flush('boom', { status: 500, statusText: 'Server Error' });
+      await fixture.whenStable();
+      fixture.detectChanges();
+      expect(buttonLabels()).toEqual(['Sign in with Cognito']);
+    });
+
+    it('shows on the ?local=1 break-glass URL even when hidden', async () => {
+      configure({ local: '1' });
+      expect(buttonLabels()).toEqual(['Sign in with Cognito']);
+
+      await respond({ providers: [entra], cognito_login_visible: false });
+
+      expect(buttonLabels()).toEqual(['Sign in with Cognito', 'Sign in with Entra']);
+      expect(hasDivider()).toBe(true);
     });
   });
 });

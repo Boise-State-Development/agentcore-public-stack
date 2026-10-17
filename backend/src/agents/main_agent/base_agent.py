@@ -181,6 +181,18 @@ class BaseAgent(ABC):
         # A no-op unless the inference-api turn path installed a recorder.
         mark_stage("prompt")
 
+        # Enabled OAuth-gated servers this build left out because the user has
+        # not connected their provider. Filled by `_build_filtered_tools`; read
+        # by the system prompt (so the model knows they exist but are
+        # unavailable) and by `get_agent`'s cache hit (so connecting brings
+        # them back).
+        self.consent_gated_tools: List[Any] = []
+
+        # Tools left out because an earlier source already holds their name
+        # (`resolve_tool_name_conflicts`). Filled by `_build_filtered_tools`;
+        # read by the system prompt so the model knows why one is missing.
+        self.skipped_tool_names: List[Any] = []
+
         # Initialize tool registry and filter
         self.tool_registry = create_default_registry()
         self.tool_filter = ToolFilter(self.tool_registry)
@@ -585,6 +597,7 @@ class BaseAgent(ABC):
                     user_id=self.user_id,
                     auth_token=self.auth_token,
                     timings=server_timings,
+                    consent_gated=self.consent_gated_tools,
                 )
 
             # Probe with ``get_running_loop`` rather than ``get_event_loop``:
@@ -622,6 +635,14 @@ class BaseAgent(ABC):
         if self.extra_tools:
             local_tools.extend(self.extra_tools)
             logger.info(f"Added {len(self.extra_tools)} extra context-bound tools")
+
+        # Two sources offering one tool name would make Strands refuse to build
+        # the agent at all, failing every turn. Keep the first, drop the rest.
+        from agents.main_agent.tools.tool_name_conflicts import (
+            resolve_tool_name_conflicts,
+        )
+
+        local_tools, self.skipped_tool_names = resolve_tool_name_conflicts(local_tools)
         mark_stage("tools.extra")
 
         return local_tools
