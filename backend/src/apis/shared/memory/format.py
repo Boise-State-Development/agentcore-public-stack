@@ -69,6 +69,16 @@ _TRAILING_ANCHOR_RE = re.compile(r"[ \t]*<!--[ \t]*e:([0-9A-Za-z]{8})[ \t]*-->\s
 # Anything that looks like an anchor comment. Used to reject anchors that are
 # malformed or sit anywhere other than the end of an item.
 _ANY_ANCHOR_RE = re.compile(r"<!--\s*e:")
+# An anchor-shaped comment that does end an item but holds no system id, such
+# as ``<!-- e:team-roster -->``. A model writing a new file invents these; told
+# its anchor "may only end an item" when it already did, Haiku 4.5 moved it to
+# the end four times over and made 16 failed saves in one turn (2026-10-16).
+_TRAILING_ANCHOR_LIKE_RE = re.compile(r"[ \t]*<!--[ \t]*e:([^>]*?)[ \t]*-->\s*\Z")
+_NOT_AN_ANCHOR = (
+    "Item on line {lineno} ends in <!-- e:{given} -->, which is not an anchor the system issued. "
+    "Anchors are assigned by the system: remove the comment to save it as a new item, or copy "
+    "the anchor exactly as memory_read returned it to keep an existing one."
+)
 
 _WIKILINK_RE = re.compile(r"\[\[([^\[\]\n]+)\]\]")
 
@@ -557,9 +567,16 @@ def parse_items(body: str) -> Tuple[Item, ...]:
             anchor = match.group(1).lower()
             if not is_valid_anchor(anchor):
                 raise MemoryFormatError(
-                    f"The item on line {lineno} has a malformed anchor.", code="malformed_anchor"
+                    _NOT_AN_ANCHOR.format(lineno=lineno, given=match.group(1)), code="malformed_anchor"
                 )
             joined = joined[: match.start()]
+        else:
+            loose = _TRAILING_ANCHOR_LIKE_RE.search(joined)
+            # Only the last comment: one earlier in the item is misplaced, not malformed.
+            if loose and not _ANY_ANCHOR_RE.search(joined[: loose.start()]):
+                raise MemoryFormatError(
+                    _NOT_AN_ANCHOR.format(lineno=lineno, given=loose.group(1)), code="malformed_anchor"
+                )
         try:
             text = check_item_text(joined)
         except MemoryFormatError as exc:
