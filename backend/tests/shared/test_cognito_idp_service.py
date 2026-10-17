@@ -6,6 +6,7 @@ Covers:
 - cognitoProviderName stored in DynamoDB
 """
 
+import asyncio
 import json
 import pytest
 import boto3
@@ -1175,3 +1176,244 @@ class TestOIDCDiscoveryAutoDiscover:
         # Missing endpoints should be filled from discovery
         assert provider.token_endpoint == "https://discovered.example.com/token"
         assert provider.jwks_uri == "https://discovered.example.com/keys"
+
+
+# ===================================================================
+# App Client reconcile: restoring providers a PlatformStack deploy dropped
+# ===================================================================
+
+
+def _cloudformation_style_update(cognito_pool, **overrides):
+    """What CloudFormation sends when a deploy touches the App Client.
+
+    The template's full property set, whose SupportedIdentityProviders lists
+    only what CDK knows about. Cognito resets everything to that.
+    """
+    params = dict(
+        UserPoolId=cognito_pool["pool_id"],
+        ClientId=cognito_pool["client_id"],
+        ClientName="test-app-client",
+        SupportedIdentityProviders=["COGNITO"],
+        AllowedOAuthFlows=["code"],
+        AllowedOAuthScopes=["openid", "profile", "email"],
+        AllowedOAuthFlowsUserPoolClient=True,
+        CallbackURLs=["https://new.example.com/api/auth/callback"],
+    )
+    params.update(overrides)
+    cognito_pool["boto_client"].update_user_pool_client(**params)
+
+
+def _register_idp(cognito_idp_service, name):
+    cognito_idp_service.create_identity_provider(
+        provider_name=name,
+        issuer_url=f"https://{name}.example.com",
+        client_id="cid",
+        client_secret="secret",
+    )
+
+
+class TestEnsureProvidersOnAppClient:
+    def test_restores_provider_dropped_by_deploy(self, cognito_idp_service, cognito_pool):
+        _register_idp(cognito_idp_service, "okta-1")
+        cognito_idp_service.add_provider_to_app_client("okta-1")
+        _cloudformation_style_update(cognito_pool)
+        assert cognito_idp_service.get_supported_identity_providers() == ["COGNITO"]
+
+        added = cognito_idp_service.ensure_providers_on_app_client(["okta-1"])
+
+        assert added == ["okta-1"]
+        assert cognito_idp_service.get_supported_identity_providers() == ["COGNITO", "okta-1"]
+
+    def test_no_write_when_already_listed(self, cognito_idp_service, cognito_pool):
+        _register_idp(cognito_idp_service, "okta-1")
+        cognito_idp_service.add_provider_to_app_client("okta-1")
+
+        with patch.object(
+            cognito_idp_service._client, "update_user_pool_client"
+        ) as update:
+            added = cognito_idp_service.ensure_providers_on_app_client(["okta-1"])
+
+        assert added == []
+        update.assert_not_called()
+
+    def test_never_removes_a_listed_provider(self, cognito_idp_service, cognito_pool):
+        """A provider CDK manages (CDK_COGNITO_SUPPORTED_IDPS) is not ours to drop."""
+        _register_idp(cognito_idp_service, "cdk-managed")
+        _register_idp(cognito_idp_service, "okta-1")
+        _cloudformation_style_update(
+            cognito_pool, SupportedIdentityProviders=["COGNITO", "cdk-managed"]
+        )
+
+        cognito_idp_service.ensure_providers_on_app_client(["okta-1"])
+
+        assert cognito_idp_service.get_supported_identity_providers() == [
+            "COGNITO",
+            "cdk-managed",
+            "okta-1",
+        ]
+
+    def test_skips_name_with_no_identity_provider_in_pool(
+        self, cognito_idp_service, cognito_pool
+    ):
+        _register_idp(cognito_idp_service, "okta-1")
+
+        added = cognito_idp_service.ensure_providers_on_app_client(["gone", "okta-1"])
+
+        assert added == ["okta-1"]
+        assert "gone" not in cognito_idp_service.get_supported_identity_providers()
+
+    def test_update_preserves_client_settings(self, cognito_idp_service, cognito_pool):
+        """Cognito resets omitted fields, so the write must carry all of them."""
+        _register_idp(cognito_idp_service, "okta-1")
+        _cloudformation_style_update(
+            cognito_pool,
+            EnableTokenRevocation=False,
+            AuthSessionValidity=10,
+            PreventUserExistenceErrors="ENABLED",
+            LogoutURLs=["https://new.example.com"],
+        )
+
+        with patch.object(
+            cognito_idp_service._client,
+            "update_user_pool_client",
+            wraps=cognito_idp_service._client.update_user_pool_client,
+        ) as update:
+            cognito_idp_service.ensure_providers_on_app_client(["okta-1"])
+
+        sent = update.call_args.kwargs
+        assert sent["EnableTokenRevocation"] is False
+        assert sent["AuthSessionValidity"] == 10
+        assert sent["PreventUserExistenceErrors"] == "ENABLED"
+        assert sent["CallbackURLs"] == ["https://new.example.com/api/auth/callback"]
+        assert sent["LogoutURLs"] == ["https://new.example.com"]
+        assert sent["AllowedOAuthFlowsUserPoolClient"] is True
+
+    def test_preserved_keys_cover_every_update_field(self, cognito_idp_service):
+        """A field UpdateUserPoolClient gains later must be added here, or the
+        next add/remove/reconcile resets it to Cognito's default."""
+        model = boto3.client("cognito-idp", region_name=AWS_REGION).meta.service_model
+        update_fields = set(
+            model.operation_model("UpdateUserPoolClient").input_shape.members
+        )
+        update_fields -= {"UserPoolId", "ClientId", "SupportedIdentityProviders"}
+
+        assert update_fields == set(cognito_idp_service._PRESERVED_CLIENT_KEYS)
+
+    def test_disabled_service_is_noop(self):
+        from apis.shared.auth_providers.cognito_idp_service import (
+            CognitoIdentityProviderService,
+        )
+
+        with patch.dict("os.environ", {"COGNITO_USER_POOL_ID": "", "COGNITO_APP_CLIENT_ID": ""}):
+            svc = CognitoIdentityProviderService()
+        assert svc.ensure_providers_on_app_client(["okta-1"]) == []
+
+
+class TestReconcileAppClient:
+    @pytest.mark.asyncio
+    async def test_restores_enabled_providers_only(
+        self, service_with_cognito, cognito_idp_service, cognito_pool
+    ):
+        await service_with_cognito.create_provider(_make_create(provider_id="entra"))
+        await service_with_cognito.create_provider(
+            _make_create(provider_id="old-okta", enabled=False)
+        )
+        _cloudformation_style_update(cognito_pool)
+
+        added = await service_with_cognito.reconcile_app_client()
+
+        assert added == ["entra"]
+        assert cognito_idp_service.get_supported_identity_providers() == ["COGNITO", "entra"]
+
+    @pytest.mark.asyncio
+    async def test_reconcile_is_idempotent(self, service_with_cognito, cognito_pool):
+        await service_with_cognito.create_provider(_make_create(provider_id="entra"))
+        _cloudformation_style_update(cognito_pool)
+
+        assert await service_with_cognito.reconcile_app_client() == ["entra"]
+        assert await service_with_cognito.reconcile_app_client() == []
+
+    @pytest.mark.asyncio
+    async def test_re_enabling_a_provider_restores_it(
+        self, service_with_cognito, cognito_idp_service, cognito_pool
+    ):
+        from apis.shared.auth_providers.models import AuthProviderUpdate
+
+        await service_with_cognito.create_provider(
+            _make_create(provider_id="entra", enabled=False)
+        )
+        _cloudformation_style_update(cognito_pool)
+
+        await service_with_cognito.update_provider("entra", AuthProviderUpdate(enabled=True))
+
+        assert "entra" in cognito_idp_service.get_supported_identity_providers()
+
+    @pytest.mark.asyncio
+    async def test_noop_without_cognito(self, auth_repo):
+        from apis.shared.auth_providers.service import AuthProviderService
+
+        svc = AuthProviderService(repository=auth_repo, cognito_idp_service=None)
+        assert await svc.reconcile_app_client() == []
+
+
+class TestReconcileLoop:
+    @pytest.mark.asyncio
+    async def test_runs_immediately_then_on_interval(self):
+        from apis.shared.auth_providers.app_client_reconciler import run_reconcile_loop
+
+        calls = []
+        sleeps = []
+
+        async def reconcile():
+            calls.append(1)
+            return []
+
+        async def sleep(seconds):
+            sleeps.append(seconds)
+            if len(sleeps) == 3:
+                raise asyncio.CancelledError
+
+        with pytest.raises(asyncio.CancelledError):
+            await run_reconcile_loop(
+                interval_seconds=60, jitter_seconds=10, reconcile=reconcile, sleep=sleep
+            )
+
+        assert len(calls) == 3
+        assert all(60 <= s <= 70 for s in sleeps)
+
+    @pytest.mark.asyncio
+    async def test_a_failed_pass_does_not_stop_the_loop(self):
+        from apis.shared.auth_providers.app_client_reconciler import run_reconcile_loop
+
+        calls = []
+
+        async def reconcile():
+            calls.append(1)
+            if len(calls) == 1:
+                raise ClientError(
+                    {"Error": {"Code": "ConcurrentModificationException", "Message": "x"}},
+                    "UpdateUserPoolClient",
+                )
+            if len(calls) == 2:
+                raise RuntimeError("boom")
+            return ["entra"]
+
+        async def sleep(_seconds):
+            if len(calls) == 3:
+                raise asyncio.CancelledError
+
+        with pytest.raises(asyncio.CancelledError):
+            await run_reconcile_loop(reconcile=reconcile, sleep=sleep)
+
+        assert len(calls) == 3
+
+    @pytest.mark.asyncio
+    async def test_default_pass_skips_without_cognito_env(self, monkeypatch):
+        from apis.shared.auth_providers import app_client_reconciler, service
+
+        monkeypatch.delenv("COGNITO_USER_POOL_ID", raising=False)
+        monkeypatch.delenv("COGNITO_APP_CLIENT_ID", raising=False)
+        monkeypatch.setattr(service, "_service", None)
+
+        assert await app_client_reconciler.reconcile_once() == []
+        assert service._service is None

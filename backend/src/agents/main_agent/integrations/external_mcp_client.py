@@ -17,7 +17,8 @@ import asyncio
 import logging
 import re
 import time
-from typing import Any, Callable, Iterator, Optional, List, Set, Tuple
+from dataclasses import dataclass
+from typing import Any, Callable, Iterator, Literal, Optional, List, Set, Tuple
 from urllib.parse import urlparse
 
 from mcp.client.streamable_http import streamablehttp_client
@@ -28,10 +29,14 @@ from apis.shared.tools.models import (
     MCPAuthType,
     MCPTransport,
     ToolDefinition,
+    is_disabled_status,
 )
 from apis.shared.tools.scoped_ids import base_tool_id, collect_tool_name_filters
 from agents.main_agent.integrations import oauth_token_cache
-from agents.main_agent.integrations.mcp_apps import UICapableMCPClient
+from agents.main_agent.integrations.mcp_apps import (
+    UICapableMCPClient,
+    hidden_from_model,
+)
 from agents.main_agent.integrations.gateway_auth import get_sigv4_auth
 from agents.main_agent.integrations.token_exchange import (
     TokenExchangeError,
@@ -45,6 +50,20 @@ from apis.shared.feature_flags import mcp_parallel_preflight_enabled
 from apis.shared.timestamps import to_iso
 
 logger = logging.getLogger(__name__)
+
+PreflightRecovery = Literal["recovered", "consent", "dropped"]
+
+
+@dataclass(frozen=True)
+class ConsentGatedTool:
+    """An enabled OAuth-gated server left out of a build because the user has
+    not connected its provider. The agent tells the model about it (so the
+    model does not invent its tools) and re-checks the vault on a cache hit
+    (so connecting brings the tools back)."""
+
+    tool_id: str
+    display_name: str
+    provider_id: str
 
 
 def _aws_hostname(url: str) -> str:
@@ -211,8 +230,8 @@ def create_external_mcp_client(
         oauth_token: Optional static token (used for OIDC forwarding)
         token_provider: Optional callable returning the current token
         allowed_tool_names: If provided, only these MCP-server tool names are
-            exposed to the model (per-tool enablement). ``None`` exposes the
-            whole server. Matched against the raw MCP tool name by the SDK's
+            exposed to the model (per-tool enablement, within the admin's
+            "Available Tools" list). ``None`` exposes the whole server. Matched against the raw MCP tool name by the SDK's
             ``ToolFilters`` (no prefix is applied to external clients).
 
     Returns:
@@ -302,8 +321,10 @@ def create_external_mcp_client(
             # the selected tools. The base MCPClient applies this in
             # list_tools_sync (matched against the raw MCP tool name); the UI
             # filter then layers on top. Sorted for a stable client identity.
+            # A tool hidden from the model passes regardless, so the UI filter
+            # can record it for the App that calls it.
             tool_filters = (
-                {"allowed": sorted(allowed_tool_names)}
+                {"allowed": [*sorted(allowed_tool_names), hidden_from_model]}
                 if allowed_tool_names is not None
                 else None
             )
@@ -384,12 +405,43 @@ class ExternalMCPIntegration:
         """Pop and return {provider_id: authorization_url} for `user_id`.
 
         Draining on read keeps the singleton from re-emitting a stale prompt
-        on a later turn: if the user still hasn't consented, the next
-        `load_external_tools` fails pre-flight again and re-records it. On an
-        agent-cache hit no loading happens, nothing is recorded, and nothing
-        is emitted — correct, because the prompt already went out once.
+        on a later turn. If the user still hasn't consented, the prompt is
+        re-recorded each turn: by `load_external_tools` when the agent is
+        rebuilt, or by `recheck_consent` when an agent built without the tool
+        is served from the cache.
         """
         return self._pending_consents.pop(user_id, {})
+
+    async def recheck_consent(self, user_id: str, provider_ids: List[str]) -> bool:
+        """Ask the vault again about providers a cached agent was built without.
+
+        An agent whose build dropped a server for missing consent is cached
+        like any other, and a cache hit runs no pre-flight. Without this, a
+        user who connects the provider keeps getting the agent built before
+        they did, without the tools, for as long as it stays cached.
+
+        Returns True when any provider now has a token: it is warmed into
+        `oauth_token_cache`, so the rebuild's pre-flight succeeds first time.
+        A provider still waiting on consent is re-recorded so this turn emits
+        `oauth_required` again. "Couldn't ask" (None) changes nothing.
+        """
+        from apis.shared.oauth.token_resolution import resolve_token_or_consent_url
+
+        providers = sorted(set(provider_ids))
+        answers = await asyncio.gather(
+            *(resolve_token_or_consent_url(p, user_id) for p in providers),
+            return_exceptions=True,
+        )
+        connected = False
+        for provider_id, resolved in zip(providers, answers):
+            if isinstance(resolved, BaseException) or resolved is None:
+                continue
+            if resolved["token"]:
+                oauth_token_cache.set(user_id, provider_id, resolved["token"])
+                connected = True
+            elif resolved["url"]:
+                self._pending_consents.setdefault(user_id, {})[provider_id] = resolved["url"]
+        return connected
 
     async def _recover_oauth_preflight(
         self,
@@ -399,8 +451,9 @@ class ExternalMCPIntegration:
         user_id: Optional[str],
         provider_id: Optional[str],
         exc: Exception,
+        token_before: Optional[str] = None,
         off_loop: bool = False,
-    ) -> bool:
+    ) -> PreflightRecovery:
         """Second chance for an OAuth-gated tool whose pre-flight failed.
 
         A server that requires auth even for `tools/list` (GitHub's MCP
@@ -425,25 +478,55 @@ class ExternalMCPIntegration:
             not authorized. Record it so the turn can emit `oauth_required`
             rather than dropping the tool with no explanation.
 
-        Returns True when the client is usable and should be registered.
+        Returns ``"recovered"`` when the client is usable and should be
+        registered, ``"consent"`` when it was dropped because the user has not
+        connected the provider, and ``"dropped"`` for any other failure.
+
+        ``token_before`` is the cached token as it stood when this pre-flight
+        started. Servers sharing a provider pre-flight in parallel, so by the
+        time this one fails a sibling may already have warmed the cache from
+        the vault. That token is not one this pre-flight tried, so retry with
+        it rather than mistaking it for an expired one (prod, 2026-10-16:
+        `github_orgs` dropped for a connected user while `github_repos`, in
+        the same build, recovered).
         """
         if not provider_id or not user_id:
             logger.warning(
                 f"Skipping external MCP tool {tool_id}: "
                 f"failed to start client ({exc})"
             )
-            return False
+            return "dropped"
+
+        cached_token = oauth_token_cache.get(user_id, provider_id)
+        if cached_token and cached_token != token_before:
+            try:
+                await self._preflight(client, off_loop=off_loop)
+            except Exception as retry_exc:
+                # The provider is left out of these two lines on purpose:
+                # CodeQL's name heuristic treats `requires_oauth_provider` as a
+                # credential, and `tool_id` already names the server (one
+                # provider per server).
+                logger.warning(
+                    f"Skipping external MCP tool {tool_id}: pre-flight still failed "
+                    f"with the token a parallel pre-flight warmed ({retry_exc})"
+                )
+                return "dropped"
+            logger.info(
+                f"Recovered external MCP tool {tool_id}: retried with the "
+                "token a parallel pre-flight warmed"
+            )
+            return "recovered"
 
         # Only meaningful when the cache was cold. A warm token that still
         # failed is an expiry/refresh case, which `OAuthConsentHook`'s
         # AfterToolCall 401 handler already owns — re-asking the vault with
         # force_authentication=False would just hand back the same token.
-        if oauth_token_cache.get(user_id, provider_id):
+        if cached_token:
             logger.warning(
                 f"Skipping external MCP tool {tool_id}: failed to start client "
                 f"with a cached {provider_id} token ({exc})"
             )
-            return False
+            return "dropped"
 
         # Consent can only fix a refusal to authorize. Anything else — the
         # server is down, the URL is wrong, the host doesn't resolve — keeps
@@ -454,7 +537,7 @@ class ExternalMCPIntegration:
                 f"an auth error, so this is not a {provider_id} consent gap "
                 f"({exc})"
             )
-            return False
+            return "dropped"
 
         from apis.shared.oauth.token_resolution import resolve_token_or_consent_url
 
@@ -467,7 +550,7 @@ class ExternalMCPIntegration:
                 f"Skipping external MCP tool {tool_id}: failed to start client "
                 f"and could not resolve a {provider_id} token ({exc})"
             )
-            return False
+            return "dropped"
 
         if resolved["token"]:
             oauth_token_cache.set(user_id, provider_id, resolved["token"])
@@ -479,12 +562,12 @@ class ExternalMCPIntegration:
                     f"after warming the {provider_id} token from the vault "
                     f"({retry_exc})"
                 )
-                return False
+                return "dropped"
             logger.info(
                 f"Recovered external MCP tool {tool_id}: warmed {provider_id} "
                 "token from the AgentCore vault after a cold-cache pre-flight failure"
             )
-            return True
+            return "recovered"
 
         authorization_url = resolved["url"]
         if not authorization_url:
@@ -492,14 +575,14 @@ class ExternalMCPIntegration:
                 f"Skipping external MCP tool {tool_id}: no {provider_id} token and "
                 f"no authorization URL from AgentCore ({exc})"
             )
-            return False
+            return "dropped"
 
         self._pending_consents.setdefault(user_id, {})[provider_id] = authorization_url
         logger.info(
             f"External MCP tool {tool_id} needs {provider_id} consent; "
             "surfacing oauth_required instead of dropping it silently"
         )
-        return False
+        return "consent"
 
     def _get_cache_key(self, tool_id: str, user_id: Optional[str], requires_oauth: bool) -> str:
         if requires_oauth and user_id:
@@ -542,12 +625,14 @@ class ExternalMCPIntegration:
         user_id: Optional[str],
         auth_token: Optional[str],
         off_loop: bool = False,
+        consent_gated: Optional[List[ConsentGatedTool]] = None,
     ) -> Tuple[Optional[MCPClient], dict]:
         """Build, pre-flight and cache one external MCP server's client.
 
         Returns the client (None when the server is skipped or dropped) and
         its ``timings`` entry. Touches only this server's cache key, so
-        several can run at once.
+        several can run at once. A server dropped for missing consent is
+        appended to ``consent_gated`` when given.
         """
         started = time.perf_counter()
         timing: dict = {"id": tool_id, "outcome": "skipped"}
@@ -563,6 +648,35 @@ class ExternalMCPIntegration:
             if not tool.mcp_config:
                 logger.warning(f"Tool {tool_id} has protocol=mcp_external but no mcp_config")
                 return None, timing
+
+            # "disabled" takes the server out of service for everyone, whatever
+            # their own toggle says. "deprecated" (being retired) keeps working
+            # for those who already have it (mcp-server-retirement.md §7). Read
+            # off the row just fetched, so it applies on the next build with no
+            # cache to wait out.
+            if is_disabled_status(getattr(tool, "status", None)):
+                logger.info(f"Skipping external MCP tool {tool_id}: status is disabled")
+                timing["outcome"] = "disabled"
+                return None, timing
+
+            # The admin's "Available Tools" list is the most of this server the
+            # model may see; empty means "discover at runtime". A user's or an
+            # Agent's selection narrows within it and never reaches past it.
+            listed = {
+                entry.name
+                for entry in (getattr(tool.mcp_config, "tools", None) or [])
+                if getattr(entry, "name", None)
+            }
+            if listed:
+                allowed_tool_names = (
+                    listed if allowed_tool_names is None else allowed_tool_names & listed
+                )
+                if not allowed_tool_names:
+                    logger.info(
+                        f"Skipping external MCP tool {tool_id}: none of the selected "
+                        "tools is in its admin tool list"
+                    )
+                    return None, timing
 
             forward_auth = bool(getattr(tool, "forward_auth_token", False))
             requires_oauth = bool(tool.requires_oauth_provider)
@@ -699,20 +813,34 @@ class ExternalMCPIntegration:
                 # On success this also primes the client's tool cache,
                 # so Strands' subsequent load_tools() is a no-op.
                 preflight_started = time.perf_counter()
+                token_before = (
+                    oauth_token_cache.get(user_id, provider_id)
+                    if provider_id and user_id
+                    else None
+                )
                 try:
                     await self._preflight(client, off_loop=off_loop)
                     timing["outcome"] = "loaded"
                 except Exception as exc:
-                    recovered = await self._recover_oauth_preflight(
+                    recovery = await self._recover_oauth_preflight(
                         tool_id=tool_id,
                         client=client,
                         user_id=user_id,
                         provider_id=provider_id,
                         exc=exc,
+                        token_before=token_before,
                         off_loop=off_loop,
                     )
-                    timing["outcome"] = "recovered" if recovered else "dropped"
-                    if not recovered:
+                    timing["outcome"] = recovery
+                    if recovery == "consent" and consent_gated is not None:
+                        consent_gated.append(
+                            ConsentGatedTool(
+                                tool_id=tool_id,
+                                display_name=getattr(tool, "display_name", None) or tool_id,
+                                provider_id=provider_id,
+                            )
+                        )
+                    if recovery != "recovered":
                         return None, timing
                 finally:
                     timing["preflightMs"] = _elapsed_ms(preflight_started)
@@ -746,6 +874,7 @@ class ExternalMCPIntegration:
         user_id: Optional[str] = None,
         auth_token: Optional[str] = None,
         timings: Optional[List[dict]] = None,
+        consent_gated: Optional[List[ConsentGatedTool]] = None,
     ) -> List[MCPClient]:
         """
         Load external MCP clients for enabled tools.
@@ -764,7 +893,12 @@ class ExternalMCPIntegration:
                 ``{id, outcome, catalogMs, preflightMs, totalMs}`` — so the
                 caller can say which server owned the load (turn-path P1a).
                 ``outcome`` is ``cached``, ``loaded``, ``recovered``,
-                ``dropped`` (pre-flight failed), ``skipped`` or ``error``.
+                ``consent`` (dropped: the user has not connected the
+                provider), ``dropped`` (pre-flight failed otherwise),
+                ``disabled`` (status is disabled), ``skipped`` or ``error``.
+            consent_gated: When given, one ``ConsentGatedTool`` is appended
+                per server dropped for missing consent, sorted by display name
+                and tool id so anything rendered from it is deterministic.
 
         Returns:
             List of MCPClient instances to add to the agent's tools
@@ -780,6 +914,8 @@ class ExternalMCPIntegration:
         name_filters = collect_tool_name_filters(enabled_tool_ids)
 
         servers = list(name_filters.items())
+        # Parallel pre-flights append in completion order; sorted below.
+        gated: List[ConsentGatedTool] = []
         if len(servers) > 1 and mcp_parallel_preflight_enabled():
             # Each server's pre-flight is a network handshake that blocks its
             # thread (see `_preflight`), so N servers used to cost the SUM of
@@ -790,14 +926,27 @@ class ExternalMCPIntegration:
             results = await asyncio.gather(
                 *(
                     self._load_server(
-                        tool_id, names, repository, user_id, auth_token, off_loop=True
+                        tool_id,
+                        names,
+                        repository,
+                        user_id,
+                        auth_token,
+                        off_loop=True,
+                        consent_gated=gated,
                     )
                     for tool_id, names in servers
                 )
             )
         else:
             results = [
-                await self._load_server(tool_id, names, repository, user_id, auth_token)
+                await self._load_server(
+                    tool_id,
+                    names,
+                    repository,
+                    user_id,
+                    auth_token,
+                    consent_gated=gated,
+                )
                 for tool_id, names in servers
             ]
 
@@ -807,6 +956,10 @@ class ExternalMCPIntegration:
             if client is not None:
                 clients.append(client)
 
+        if consent_gated is not None:
+            consent_gated.extend(
+                sorted(gated, key=lambda g: (g.display_name, g.tool_id))
+            )
         return clients
 
     def get_client(self, tool_id: str, user_id: Optional[str] = None) -> Optional[MCPClient]:
@@ -878,7 +1031,9 @@ class ExternalMCPIntegration:
         """
         keys_to_remove = [
             key for key in self.clients.keys()
-            if key == tool_id or key.endswith(f":{tool_id}")
+            # A subset of the server's tools adds an "|allow:<names>" suffix.
+            if (base := key.split("|allow:", 1)[0]) == tool_id
+            or base.endswith(f":{tool_id}")
         ]
         for key in keys_to_remove:
             client = self.clients.pop(key)

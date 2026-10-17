@@ -18,6 +18,7 @@ UI-bearing tools, mirroring the mock-the-boundary style already used in
 
 import base64
 import json
+from concurrent.futures import Future
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -41,7 +42,11 @@ from agents.main_agent.integrations.mcp_apps import (
     record_and_filter_ui_tools,
 )
 from agents.main_agent.integrations.gateway_mcp_client import FilteredMCPClient
-from apis.shared.tools.models import DEFAULT_TOOL_VISIBILITY, ToolUIMetadata
+from apis.shared.tools.models import (
+    DEFAULT_TOOL_VISIBILITY,
+    MCPServerConfig,
+    ToolUIMetadata,
+)
 
 _ENV_FLAG = "AGENTCORE_MCP_APPS_HOST_ENABLED"
 _ENV_SANDBOX_ORIGIN = "AGENTCORE_MCP_APPS_SANDBOX_ORIGIN"
@@ -305,6 +310,91 @@ class TestUICapableMCPClientListTools:
         assert (
             get_ui_tool_catalog().get("app_only").resource_uri == "ui://srv/app"
         )
+
+
+# ── external client: an allowlist never hides an app-only tool from its App ───
+
+
+def _serve_tools_list(client, *tools):
+    """Answer the client's `tools/list` with `tools`, so Strands' own
+    `list_tools_sync` (and the `tool_filters` it applies) runs for real."""
+
+    def invoke(coro):
+        coro.close()
+        done = Future()
+        done.set_result(mcp_types.ListToolsResult(tools=list(tools)))
+        return done
+
+    client._is_session_active = lambda: True
+    client._is_tasks_enabled = lambda: False
+    client._invoke_on_background_thread = invoke
+
+
+def _wire_tool(name, visibility=None):
+    meta = (
+        {"ui": {"resourceUri": "ui://tasks/board", "visibility": visibility}}
+        if visibility is not None
+        else None
+    )
+    return mcp_types.Tool(
+        name=name, inputSchema={"type": "object"}, **{"_meta": meta}
+    )
+
+
+class TestAllowlistKeepsAppOnlyTools:
+    """Google Tasks' board App refreshes by calling `board_snapshot`, an
+    app-only tool no admin list names. The admin "Available Tools" cap (and a
+    per-tool selection) decides what the model sees, so it must not stop the
+    App's tool from being recorded for `app_tool_dispatch`."""
+
+    def _client(self, allowed):
+        from agents.main_agent.integrations.external_mcp_client import (
+            create_external_mcp_client,
+        )
+
+        client = create_external_mcp_client(
+            MCPServerConfig(server_url="https://tasks.example/mcp", auth_type="none"),
+            allowed_tool_names=allowed,
+        )
+        _serve_tools_list(
+            client,
+            _wire_tool("show_task_board", visibility=["model", "app"]),
+            _wire_tool("board_snapshot", visibility=["app"]),
+            _wire_tool("list_tasks"),
+        )
+        return client
+
+    def test_app_only_tool_outside_the_allowlist_is_still_recorded(
+        self, mcp_apps_clean, monkeypatch
+    ):
+        monkeypatch.setenv(_ENV_FLAG, "true")
+        client = self._client({"show_task_board"})
+
+        result = client.list_tools_sync()
+
+        assert [t.tool_name for t in result] == ["show_task_board"]
+        assert get_ui_tool_catalog().get_client("board_snapshot") is client
+
+    def test_allowlist_still_caps_model_visible_tools(
+        self, mcp_apps_clean, monkeypatch
+    ):
+        monkeypatch.setenv(_ENV_FLAG, "true")
+        client = self._client({"show_task_board"})
+
+        names = [t.tool_name for t in client.list_tools_sync()]
+
+        assert "list_tasks" not in names
+
+    def test_allowlist_applies_to_app_only_tools_when_host_is_off(
+        self, mcp_apps_clean
+    ):
+        # Nothing is filtered by visibility with the host off, so an unlisted
+        # app-only tool would otherwise reach the model.
+        client = self._client({"show_task_board"})
+
+        result = client.list_tools_sync()
+
+        assert [t.tool_name for t in result] == ["show_task_board"]
 
 
 # ── gateway client: FilteredMCPClient applies the same filter ─────────────────

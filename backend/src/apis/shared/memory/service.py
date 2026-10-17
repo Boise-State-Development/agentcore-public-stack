@@ -328,6 +328,8 @@ class SaveResult:
     # The description the file had before this save (None for a new file), so a
     # caller can tell whether its index line needs to follow it.
     previous_description: Optional[str] = None
+    # The file's old name, when this save renamed it (``replaces``).
+    renamed_from: Optional[str] = None
 
 
 @dataclass
@@ -352,6 +354,8 @@ class PreparedSave:
     count: TokenCount
     over_soft: bool
     lint: List[LintFinding] = field(default_factory=list)
+    # The name ``current_ref`` is saved under now, when the save renames it.
+    renamed_from: Optional[str] = None
 
 
 @dataclass
@@ -404,6 +408,10 @@ def _clean_note(note: Optional[str]) -> Optional[str]:
             f"A note can be at most {MAX_PROPOSAL_NOTE_CHARS} characters.", code="note_too_long"
         )
     return text or None
+
+
+def _taken(slug: str) -> str:
+    return f"'{slug}' is already the name of another file."
 
 
 def _now_iso() -> str:
@@ -1214,6 +1222,11 @@ class MemorySpaceService:
         cached prompt prefix nothing.
         """
         ref = result.ref
+        if result.renamed_from is not None:
+            # A renamed file's line follows it, wherever the index has one.
+            return self.refresh_index_link(
+                space_id, user_id, user_email, ref, max_tokens=max_tokens, previous_slug=result.renamed_from
+            )
         if ref.version == 1:
             return self.add_index_link(space_id, user_id, user_email, ref, max_tokens=max_tokens)
         if " ".join((ref.description or "").split()) == " ".join((result.previous_description or "").split()):
@@ -1228,6 +1241,7 @@ class MemorySpaceService:
         ref: MemoryEntryRef,
         *,
         max_tokens: int,
+        previous_slug: Optional[str] = None,
     ) -> Literal["refreshed", "link_only", "not_linked"]:
         """Rewrite ``MEMORY.md``'s own line for ``ref`` (one starting ``[[slug]]``) to its current description (editor+).
 
@@ -1237,9 +1251,11 @@ class MemorySpaceService:
         would push the index past ``max_tokens``, it just links the file
         (``link_only``), which drops the old value without being cut off. The
         write is conditional on the index it read, like :meth:`add_index_link`.
+        ``previous_slug``: the line to rewrite is a renamed file's old one.
         """
         space, _ = self._require(space_id, user_id, user_email, "editor")
-        pattern = _own_line_pattern(ref.slug)
+        linked = previous_slug or ref.slug
+        pattern = _own_line_pattern(linked)
         for attempt in range(_MAX_MANIFEST_RETRIES):
             if attempt:
                 space = self.repository.get_space(space_id)
@@ -1249,10 +1265,10 @@ class MemorySpaceService:
             if not any(pattern.match(line) for line in previous.split("\n")):
                 return "not_linked"
             outcome: Literal["refreshed", "link_only"] = "refreshed"
-            text = _with_own_line(previous, ref.slug, _index_line(ref.slug, ref.description))
+            text = _with_own_line(previous, linked, _index_line(ref.slug, ref.description))
             if estimate_tokens(strip_anchors(text)) > max_tokens:
                 outcome = "link_only"
-                text = _with_own_line(previous, ref.slug, _index_line(ref.slug, ""))
+                text = _with_own_line(previous, linked, _index_line(ref.slug, ""))
             if text == previous:
                 return outcome
             content = self._encode(text)
@@ -1364,6 +1380,7 @@ class MemorySpaceService:
         restorable: Sequence[str] = (),
         run_id: Optional[str] = None,
         base_content_hash: Optional[str] = None,
+        replaces: Optional[str] = None,
     ) -> SaveResult:
         """Create or replace an entry through the save pipeline (§4.3), editor+.
 
@@ -1383,13 +1400,20 @@ class MemorySpaceService:
         version ``body`` was derived from (``NEW_FILE`` for a file that must not
         exist yet); a file that has moved on since is a conflict rather than a
         silent overwrite.
+
+        ``replaces`` renames: ``body`` is the file of that name saved as ``slug``,
+        which must be free. One manifest swap takes the old name out and puts the
+        new one in, so no moment has both or neither. The file keeps its anchors,
+        pins, provenance, history and ``created``, and the old name becomes an
+        alias, so ``[[old]]`` links still resolve. ``base_content_hash`` is then
+        the old file's. Canonical spaces only.
         """
         space, _ = self._require(space_id, user_id, user_email, "editor")
         return self._save(
             space, user_id, user_email, slug, body,
             entry_type=entry_type, description=description, indexed=indexed, aliases=aliases, reason=reason,
             proposal_id=proposal_id, context=context, restorable=restorable, run_id=run_id,
-            base_content_hash=base_content_hash,
+            base_content_hash=base_content_hash, replaces=replaces,
         )
 
     def apply_maintenance(
@@ -1559,25 +1583,27 @@ class MemorySpaceService:
         restorable: Sequence[str] = (),
         run_id: Optional[str] = None,
         base_content_hash: Optional[str] = None,
+        replaces: Optional[str] = None,
     ) -> SaveResult:
         """:meth:`save_entry` once the caller's access is settled."""
         space_id = space.space_id
         canonical = space.file_format == "canonical"
         now = _now_iso()
         moved = MemorySpaceConcurrencyError(
-            f"'{slug}' was changed by someone else while this save was in progress. Read it again and retry."
+            f"'{replaces or slug}' was changed by someone else while this save was in progress. Read it again and retry."
         )
         # Before validation: ``body`` was derived from that version, so against a
         # newer one its anchors may not even exist, and that's a conflict, not bad input.
         # ``NEW_FILE`` (``""``) is the base of a file that doesn't exist yet.
         if base_content_hash is not None:
-            base = self._find_ref(space_id, slug)
+            base = self._find_ref(space_id, replaces or slug)
             if (base.content_hash if base is not None else NEW_FILE) != base_content_hash:
                 raise moved
         prepared = self._prepare_save(
             space, slug, body, description=description, aliases=aliases, now=now, restorable=restorable,
             # Items a split moves keep their text: they were checked when they were written.
             lint_skip=set(context.moved) if context else (),
+            replaces=replaces,
         )
         if base_content_hash is not None and (
             prepared.current_ref.content_hash if prepared.current_ref is not None else NEW_FILE
@@ -1604,6 +1630,7 @@ class MemorySpaceService:
         restorable: Sequence[str] = (),
         extra_files: Sequence[FileTarget] = (),
         lint_skip: Collection[str] = (),
+        replaces: Optional[str] = None,
     ) -> PreparedSave:
         """§4.3 steps 1–6 against the current manifest: validate, lint, render, count. Writes nothing.
 
@@ -1627,21 +1654,41 @@ class MemorySpaceService:
             slug = clean_slug
 
         index = self.repository.get_index(space_id)
-        current_ref = next((e for e in index.entries if e.slug == slug), None)
+        files: List[FileTarget] = list(index.entries)
+        if replaces is not None:
+            if not canonical:
+                raise MemoryValidationError("Renaming a file needs a space that uses the item format.", code="not_canonical")
+            try:
+                replaces = validate_slug(replaces, canonical=True)
+            except MemoryFormatError as exc:
+                raise MemoryValidationError.from_format_error(exc) from exc
+            if replaces.casefold() == slug.casefold():
+                raise MemoryValidationError(
+                    f"'{slug}' already has that name. Leave out replaces to save it in place.", code="same_name"
+                )
+            current_ref = next((e for e in index.entries if e.slug == replaces), None)
+            if current_ref is None:
+                raise MemoryEntryNotFoundError(f"entry '{replaces}' not found in space '{space_id}'")
+            if any(e.slug == slug for e in index.entries):
+                raise MemoryValidationError(_taken(slug), code="name_collision")
+            files = [e for e in index.entries if e.slug != replaces]
+        else:
+            current_ref = next((e for e in index.entries if e.slug == slug), None)
         validated: Optional[CanonicalSave] = None
         current_items: Tuple[Item, ...] = ()
         if canonical:
-            current = self._current_file(current_ref, slug) if current_ref is not None else None
+            current = self._current_file(current_ref, current_ref.slug) if current_ref is not None else None
             current_items = current.items if current else ()
             try:
                 validated = validate_canonical_save(
                     slug=slug,
-                    files=[*index.entries, *extra_files],
+                    files=[*files, *extra_files],
                     current=current,
                     text=body,
                     description=description,
                     aliases=aliases,
                     restorable=restorable,
+                    renaming_from=replaces,
                 )
             except MemoryFormatError as exc:
                 raise MemoryValidationError.from_format_error(exc) from exc
@@ -1685,7 +1732,7 @@ class MemorySpaceService:
             warnings.append(f"This file is about {count.tokens:,} tokens, close to the {hard_cap:,}-token limit.")
         return PreparedSave(
             slug=slug, text=text, current_ref=current_ref, validated=validated, current_items=current_items,
-            warnings=warnings, count=count, over_soft=over_soft, lint=lint,
+            warnings=warnings, count=count, over_soft=over_soft, lint=lint, renamed_from=replaces,
         )
 
     @staticmethod
@@ -1729,6 +1776,8 @@ class MemorySpaceService:
         """§4.3 step 7: write the object, swap the manifest conditionally, then write ``FILEVER``."""
         slug, text, current_ref = prepared.slug, prepared.text, prepared.current_ref
         validated, warnings, count, over_soft = prepared.validated, prepared.warnings, prepared.count, prepared.over_soft
+        renamed_from = prepared.renamed_from
+        source = renamed_from or slug
         content = self._encode(text)
         s3_key = self.store.put(space_id=space_id, content=content, content_type="text/markdown")
         ref = MemoryEntryRef(
@@ -1748,7 +1797,10 @@ class MemorySpaceService:
         )
 
         def apply(fresh_index: MemoryIndex) -> Optional[MemoryEntryRef]:
-            fresh = next((e for e in fresh_index.entries if e.slug == slug), None)
+            fresh = next((e for e in fresh_index.entries if e.slug == source), None)
+            # The collision check leaves a file's own name out; a rename's target is someone else's.
+            if renamed_from is not None and any(e.slug == slug for e in fresh_index.entries):
+                raise MemoryValidationError(_taken(slug), code="name_collision")
             if canonical:
                 # Validation read one version of this file; another save of the
                 # same file since then means the anchors checked are stale.
@@ -1756,19 +1808,20 @@ class MemorySpaceService:
                     fresh is not None and current_ref is not None and fresh.content_hash != current_ref.content_hash
                 ):
                     raise MemorySpaceConcurrencyError(
-                        f"'{slug}' was changed by someone else while this save was in progress. "
+                        f"'{source}' was changed by someone else while this save was in progress. "
                         "Read it again and retry."
                     )
                 try:
                     check_name_collisions(
-                        slug, validated.aliases, fresh_index.entries, is_new=current_ref is None
+                        slug, validated.aliases, [e for e in fresh_index.entries if e.slug != source],
+                        is_new=current_ref is None or renamed_from is not None,
                     )
                 except MemoryFormatError as exc:
                     raise MemoryValidationError.from_format_error(exc) from exc
                 # Pins live on the manifest entry, which this save replaces: carry them.
                 ref.pinned = list(fresh.pinned) if fresh is not None else []
             ref.version = _next_version(fresh)
-            kept = [e for e in fresh_index.entries if e.slug != slug]
+            kept = [e for e in fresh_index.entries if e.slug not in (slug, source)]
             kept.append(ref)
             kept.sort(key=lambda e: e.slug)
             fresh_index.entries = kept
@@ -1776,6 +1829,8 @@ class MemorySpaceService:
 
         pre_history, _ = self._mutate_index(space_id, apply)
 
+        if renamed_from is not None:
+            self._move_history(space_id, renamed_from, slug)
         if pre_history is not None:
             self._record_version(
                 space_id,
@@ -1814,7 +1869,25 @@ class MemorySpaceService:
             over_soft_threshold=over_soft,
             lint=list(prepared.lint),
             previous_description=current_ref.description if current_ref is not None else None,
+            renamed_from=renamed_from,
         )
+
+    def _move_history(self, space_id: str, old_slug: str, new_slug: str) -> None:
+        """A renamed file's ``FILEVER`` rows, re-keyed to its new name. Best-effort, like :meth:`_record_version`.
+
+        Objects are content-addressed, so nothing moves in the store.
+        """
+        try:
+            versions = self.repository.list_file_versions(space_id, old_slug)
+            for version in versions:
+                self.repository.put_file_version(space_id, version.model_copy(update={"slug": new_slug}))
+            if versions:
+                self.repository.delete_file_versions(space_id, old_slug)
+        except Exception:
+            logger.warning(
+                "memory-spaces: could not move the history of '%s' to '%s' in space=%s",
+                old_slug, new_slug, space_id, exc_info=True,
+            )
 
     def delete_entry(
         self,
@@ -1896,7 +1969,7 @@ class MemorySpaceService:
             return
         space_id, slug = space.space_id, prepared.slug
         try:
-            before = self.repository.get_provenance(space_id, slug)
+            before = self.repository.get_provenance(space_id, prepared.renamed_from or slug)
             old_text = {i.anchor: i.text for i in prepared.current_items if i.anchor}
             minted = set(validated.minted_anchors)
             stamp = {
@@ -1929,6 +2002,9 @@ class MemorySpaceService:
             self._archive(
                 space, slug, leaving, reason="removed", actor=actor, now=now, reasons=ctx.archive_reasons
             )
+            if prepared.renamed_from is not None:
+                self.repository.delete_provenance(space_id, prepared.renamed_from)
+                self.repository.delete_retrieval_stats(space_id, prepared.renamed_from)
         except Exception:
             logger.warning("Could not record item provenance for '%s' in space %s", slug, space_id, exc_info=True)
 

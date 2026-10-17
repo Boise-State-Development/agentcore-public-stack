@@ -214,3 +214,75 @@ def test_prompt_marks_a_failed_call_as_failed():
     calls[0]["result"] = "422 rubric association required"
 
     assert "FAILED" in _build_prompt(calls)
+
+
+# -- failed calls name the integration from the catalog, never a guess -----
+#
+# prod session 343ccea9, 2026-10-17: a lone failed `search_issues` (GitHub)
+# was headed "Couldn't reach Canvas", and a failed `projects_list` (GitHub
+# Projects) "Couldn't reach Canvas for Boise-State-Development projects". The
+# prompt's only failure example was "Couldn't reach Canvas", and the model
+# never saw which system a tool belonged to.
+
+
+def _failed(name, integration=None, result="error"):
+    return {
+        "toolUseId": name,
+        "toolName": name,
+        "input": "{}",
+        "result": result,
+        "ok": False,
+        "durationMs": 5,
+        "integration": integration,
+    }
+
+
+@pytest.mark.asyncio
+async def test_an_all_failed_batch_is_headed_from_the_catalog_name(bedrock):
+    bedrock.converse.return_value = _response("Couldn't reach Canvas")
+
+    summary = await summarize_tool_batch([_failed("projects_list", "GitHub Projects")])
+
+    assert summary == "Couldn't use GitHub Projects"
+    bedrock.converse.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_an_unresolved_failed_tool_is_headed_by_its_name(bedrock):
+    bedrock.converse.return_value = _response("Couldn't reach Canvas")
+
+    summary = await summarize_tool_batch(
+        [_failed("search_issues", result="Unknown tool: search_issues")]
+    )
+
+    assert summary == "Couldn't use search_issues"
+    bedrock.converse.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_several_failed_sources_are_each_named_once(bedrock):
+    summary = await summarize_tool_batch(
+        [
+            _failed("projects_list", "GitHub Projects"),
+            _failed("projects_get", "GitHub Projects"),
+            _failed("search_issues"),
+        ]
+    )
+
+    assert summary == "Couldn't use GitHub Projects or search_issues"
+
+
+def test_the_prompt_tells_the_model_which_integration_a_call_is():
+    calls = _calls() + [_failed("projects_list", "GitHub Projects")]
+    calls[0]["integration"] = "Canvas for Faculty"
+
+    prompt = _build_prompt(calls)
+
+    assert "list_courses [Canvas for Faculty]" in prompt
+    assert "projects_list [GitHub Projects]" in prompt
+
+
+def test_the_system_prompt_no_longer_models_a_canvas_failure():
+    from apis.shared.tool_summaries.summarizer import _SUMMARY_SYSTEM_PROMPT
+
+    assert "Couldn't reach Canvas" not in _SUMMARY_SYSTEM_PROMPT

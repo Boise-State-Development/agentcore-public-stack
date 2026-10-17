@@ -45,7 +45,8 @@ import logging
 import time
 from typing import Dict, FrozenSet, List, Optional, Tuple
 from apis.shared.timestamps import to_iso
-from apis.shared.tools.scoped_ids import SCOPE_DELIMITER, base_tool_ids
+from apis.shared.tools.models import is_disabled_status
+from apis.shared.tools.scoped_ids import SCOPE_DELIMITER, base_tool_id, base_tool_ids
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +81,12 @@ _always_on_tool_ids_cache: List[Optional[Tuple[FrozenSet[str], float]]] = [None]
 # ADMIN_ALWAYS_ON_TOOLS_ENABLED flag — see resolve_system_tool_ids.
 _system_tool_ids_cache: List[Optional[Tuple[FrozenSet[str], float]]] = [None]
 
+# Single-slot snapshot of (frozen_set_of_disabled_tool_ids, monotonic_fetched_at).
+# Bare catalog ids whose status is `disabled`, filled by the same catalog pass.
+# Read by `drop_disabled_tools` on every turn, which is why it must cost no
+# extra DynamoDB read.
+_disabled_tool_ids_cache: List[Optional[Tuple[FrozenSet[str], float]]] = [None]
+
 _TTL_SECONDS = 10.0
 
 
@@ -89,6 +96,7 @@ def _reset_for_tests() -> None:
     _public_tool_ids_cache[0] = None
     _always_on_tool_ids_cache[0] = None
     _system_tool_ids_cache[0] = None
+    _disabled_tool_ids_cache[0] = None
 
 
 async def _fetch_updated_at(tool_id: str) -> Optional[str]:
@@ -220,6 +228,40 @@ async def get_system_tool_ids() -> FrozenSet[str]:
     return await _get_snapshot(_system_tool_ids_cache, "system")
 
 
+async def get_disabled_tool_ids() -> FrozenSet[str]:
+    """Return the ids of tools an admin has set to `disabled`, TTL-cached.
+
+    Bare catalog ids. Same single catalog read and never-raise contract as
+    `get_all_tool_ids`.
+    """
+    return await _get_snapshot(_disabled_tool_ids_cache, "disabled")
+
+
+async def drop_disabled_tools(tool_ids: Optional[List[str]]) -> Optional[List[str]]:
+    """``tool_ids`` without any tool whose catalog status is `disabled`.
+
+    `disabled` takes a tool out of service for everyone, including users whose
+    saved toggles, Agent bindings or admin pins still name it; before this it
+    kept loading for them until each turned it off (dev, 2026-10-17).
+    `deprecated` is "being retired": it stays for those who already have it
+    (docs/specs/mcp-server-retirement.md §7). A scoped id (``base::tool``) goes
+    with its base. Order is kept, since the list reaches the cacheable
+    ``toolConfig``. Fails open: if the catalog can't be read, nothing is dropped.
+    """
+    if not tool_ids:
+        return tool_ids
+    disabled = await get_disabled_tool_ids()
+    if not disabled:
+        return list(tool_ids)
+    kept = [tid for tid in tool_ids if base_tool_id(tid) not in disabled]
+    if len(kept) != len(tool_ids):
+        logger.info(
+            "Dropped disabled tools from the turn: %s",
+            sorted({base_tool_id(t) for t in tool_ids} & disabled),
+        )
+    return kept
+
+
 def _always_on_ids_for(tool) -> List[str]:
     """The pinned ids one catalog row contributes.
 
@@ -303,6 +345,10 @@ async def _get_snapshot(
         ),
         now,
     )
+    _disabled_tool_ids_cache[0] = (
+        frozenset(t.tool_id for t in tools if is_disabled_status(getattr(t, "status", None))),
+        now,
+    )
     return slot[0][0]  # type: ignore[index]
 
 
@@ -334,3 +380,4 @@ def invalidate(tool_id: Optional[str] = None) -> None:
     _public_tool_ids_cache[0] = None
     _always_on_tool_ids_cache[0] = None
     _system_tool_ids_cache[0] = None
+    _disabled_tool_ids_cache[0] = None

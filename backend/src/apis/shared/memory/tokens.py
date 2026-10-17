@@ -112,7 +112,10 @@ def count_file_tokens(text: str, *, client: Any = None, model_id: Optional[str] 
             raise ValueError("CountTokens returned no inputTokens")
         return TokenCount(tokens=int(tokens), method="count")
     except Exception as exc:  # noqa: BLE001 - fall back on anything; a save must not fail here
-        code = getattr(exc, "response", {}).get("Error", {}).get("Code", "") if hasattr(exc, "response") else ""
+        # botocore's connection and read-timeout errors have ``response = None``,
+        # not a missing attribute; only a ClientError carries a dict.
+        error_response = getattr(exc, "response", None)
+        code = error_response.get("Error", {}).get("Code", "") if isinstance(error_response, dict) else ""
         if code in _THROTTLE_CODES:
             logger.info("memory-spaces: CountTokens throttled (%s); estimating this save", code)
         else:

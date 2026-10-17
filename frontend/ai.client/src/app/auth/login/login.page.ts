@@ -1,4 +1,4 @@
-import { Component, signal, ChangeDetectionStrategy, inject, OnInit, OnDestroy } from '@angular/core';
+import { Component, signal, computed, ChangeDetectionStrategy, inject, OnInit, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
 import { ActivatedRoute, Router } from '@angular/router';
@@ -19,6 +19,8 @@ interface AuthProviderPublicInfo {
 
 interface AuthProviderPublicListResponse {
   providers: AuthProviderPublicInfo[];
+  /** Absent on backends that predate the setting; treat as true. */
+  cognito_login_visible?: boolean;
 }
 
 @Component({
@@ -88,35 +90,40 @@ interface AuthProviderPublicListResponse {
 
             <!-- Login buttons -->
             <div class="w-full flex flex-col gap-3">
-              <!-- Primary Cognito login button -->
-              <button
-                type="button"
-                (click)="handleCognitoLogin()"
-                [disabled]="isLoading()"
-                class="w-full px-4 py-3 text-white font-medium rounded-2xl transition-all duration-200 flex items-center justify-center gap-3 bg-primary-accessible hover:brightness-95 shadow-lg shadow-primary-500/20 disabled:opacity-60"
-              >
-                @if (isLoading() && !activeProviderId()) {
-                  <app-spinner size="md" variant="on-solid" label="Connecting" />
-                  <span>Connecting...</span>
-                } @else {
-                  <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                  </svg>
-                  <span>Sign in with Cognito</span>
-                }
-              </button>
+              <!-- Cognito login button. Waits for the provider list, which says
+                   whether a system admin hid it, so it never flashes in and out. -->
+              @if (showCognitoLogin()) {
+                <button
+                  type="button"
+                  (click)="handleCognitoLogin()"
+                  [disabled]="isLoading()"
+                  class="w-full px-4 py-3 text-white font-medium rounded-2xl transition-all duration-200 flex items-center justify-center gap-3 bg-primary-accessible hover:brightness-95 shadow-lg shadow-primary-500/20 disabled:opacity-60"
+                >
+                  @if (isLoading() && !activeProviderId()) {
+                    <app-spinner size="md" variant="on-solid" label="Connecting" />
+                    <span>Connecting...</span>
+                  } @else {
+                    <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                    </svg>
+                    <span>Sign in with Cognito</span>
+                  }
+                </button>
+              }
 
               <!-- Federated providers section -->
               @if (providers().length > 0) {
-                <!-- Divider -->
-                <div class="relative my-2">
-                  <div class="absolute inset-0 flex items-center">
-                    <div class="w-full border-t border-gray-300/60 dark:border-white/10"></div>
+                @if (showCognitoLogin()) {
+                  <!-- Divider -->
+                  <div class="relative my-2">
+                    <div class="absolute inset-0 flex items-center">
+                      <div class="w-full border-t border-gray-300/60 dark:border-white/10"></div>
+                    </div>
+                    <div class="relative flex justify-center text-xs">
+                      <span class="login-divider-text px-2 text-gray-600 dark:text-gray-300">or continue with</span>
+                    </div>
                   </div>
-                  <div class="relative flex justify-center text-xs">
-                    <span class="login-divider-text px-2 text-gray-600 dark:text-gray-300">or continue with</span>
-                  </div>
-                </div>
+                }
 
                 @for (provider of providers(); track provider.provider_id) {
                   <button
@@ -147,7 +154,7 @@ interface AuthProviderPublicListResponse {
               <!-- Loading spinner for federated providers -->
               @if (providersLoading()) {
                 <div class="flex justify-center py-2">
-                  <app-spinner size="md" label="Loading federated providers" />
+                  <app-spinner size="md" label="Loading sign-in options" />
                 </div>
               }
             </div>
@@ -176,6 +183,19 @@ export class LoginPage implements OnInit, OnDestroy {
   providers = signal<AuthProviderPublicInfo[]>([]);
   providersLoading = signal(true);
   activeProviderId = signal<string | null>(null);
+  cognitoLoginVisible = signal(true);
+
+  /**
+   * `?local=1` is the break-glass path: it shows the Cognito button even when
+   * a system admin hid it, so the first-boot admin (a Cognito user) can still
+   * sign in if the federated provider breaks. Hiding is cosmetic; Cognito
+   * stays an identity provider on the app client either way.
+   */
+  private readonly forceCognitoLogin = this.route.snapshot.queryParamMap.get('local') === '1';
+
+  readonly showCognitoLogin = computed(
+    () => this.forceCognitoLogin || (!this.providersLoading() && this.cognitoLoginVisible()),
+  );
 
   ngOnInit(): void {
     // If the BFF round-tripped an already-authenticated user back to /auth/login
@@ -225,9 +245,11 @@ export class LoginPage implements OnInit, OnDestroy {
       );
 
       this.providers.set(response?.providers ?? []);
+      this.cognitoLoginVisible.set(response?.cognito_login_visible ?? true);
     } catch (error) {
       // Federated providers failed to load — Cognito button still works
       this.providers.set([]);
+      this.cognitoLoginVisible.set(true);
     } finally {
       this.providersLoading.set(false);
     }

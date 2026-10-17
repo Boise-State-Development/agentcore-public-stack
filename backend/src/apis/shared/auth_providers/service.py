@@ -1,5 +1,6 @@
 """Service layer for OIDC authentication provider management."""
 
+import asyncio
 import logging
 import re
 from typing import Any, Dict, List, Optional
@@ -379,7 +380,37 @@ class AuthProviderService:
                             detail=f"Failed to update provider in Cognito: {e.response['Error']['Message']}",
                         )
 
-        return await self._repo.update_provider(provider_id, updates)
+        updated = await self._repo.update_provider(provider_id, updates)
+
+        # Re-enabling a provider after a deploy dropped it from the App Client
+        # would otherwise leave its button broken until the next reconcile tick.
+        if updated and updated.enabled and updated.cognito_provider_name:
+            try:
+                await self.reconcile_app_client()
+            except Exception:
+                logger.exception("App Client reconcile after provider update failed")
+
+        return updated
+
+    async def reconcile_app_client(self) -> List[str]:
+        """Put every enabled provider back on the Cognito App Client.
+
+        Idempotent and add-only: a provider already listed, a disabled one, or
+        a name CDK manages is left alone. See
+        ``CognitoIdentityProviderService.ensure_providers_on_app_client`` for
+        why the list drifts.
+
+        Returns:
+            The Cognito provider names that were missing and were added.
+        """
+        if not (self._cognito_idp and self._cognito_idp.enabled and self._repo.enabled):
+            return []
+
+        providers = await self._repo.list_providers(enabled_only=True)
+        names = [p.cognito_provider_name for p in providers if p.cognito_provider_name]
+        if not names:
+            return []
+        return await asyncio.to_thread(self._cognito_idp.ensure_providers_on_app_client, names)
 
     async def get_provider(self, provider_id: str) -> Optional[AuthProvider]:
         """Get a provider by ID."""

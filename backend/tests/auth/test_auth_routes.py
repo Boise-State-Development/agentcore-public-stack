@@ -73,3 +73,50 @@ class TestListAuthProviders:
 
         assert resp.status_code == 200
         assert resp.json()["providers"] == []
+
+
+class TestCognitoLoginVisible:
+    """GET /auth/providers says whether the login page shows the Cognito button."""
+
+    def _get(self, client, providers, hide_requested):
+        mock_repo = AsyncMock()
+        mock_repo.enabled = True
+        mock_repo.list_providers = AsyncMock(return_value=providers)
+        read_hide = AsyncMock(return_value=hide_requested)
+
+        with patch(
+            "apis.shared.auth_providers.repository.get_auth_provider_repository",
+            return_value=mock_repo,
+        ), patch(
+            "apis.app_api.system.login_page.read_hide_cognito_login", read_hide
+        ):
+            resp = client.get("/auth/providers")
+
+        assert resp.status_code == 200
+        return resp.json(), read_hide
+
+    def test_visible_by_default(self, client, make_provider):
+        body, _ = self._get(client, [make_provider()], hide_requested=False)
+        assert body["cognito_login_visible"] is True
+
+    def test_hidden_when_requested_and_a_provider_is_enabled(self, client, make_provider):
+        body, _ = self._get(client, [make_provider()], hide_requested=True)
+        assert body["cognito_login_visible"] is False
+        assert len(body["providers"]) == 1
+
+    def test_visible_when_requested_but_no_provider_is_enabled(self, client):
+        body, read_hide = self._get(client, [], hide_requested=True)
+        assert body["cognito_login_visible"] is True
+        read_hide.assert_not_called()
+
+    def test_visible_when_repo_disabled(self, client):
+        mock_repo = AsyncMock()
+        mock_repo.enabled = False
+
+        with patch(
+            "apis.shared.auth_providers.repository.get_auth_provider_repository",
+            return_value=mock_repo,
+        ):
+            resp = client.get("/auth/providers")
+
+        assert resp.json()["cognito_login_visible"] is True

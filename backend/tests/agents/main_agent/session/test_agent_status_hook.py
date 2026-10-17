@@ -325,3 +325,47 @@ def test_first_model_call_is_stamped_with_narration_off(hook, monkeypatch):
 
     assert hook.first_model_call_at is not None
     assert hook.drain_statuses() == []
+
+
+# -- 6. which integration a call belongs to -------------------------------
+#
+# prod, 2026-10-17: a failed GitHub call was headed "Couldn't reach Canvas".
+# The summarizer only ever saw the tool name, so it guessed the system.
+
+
+def test_a_call_records_its_servers_catalog_name(hook):
+    from types import SimpleNamespace
+
+    selected = SimpleNamespace(mcp_client=SimpleNamespace(context_label="GitHub Projects"))
+    hook._on_after_tool_call(_after_tool_event(name="projects_list", selected_tool=selected))
+    hook._on_after_tools(MagicMock())
+
+    (batch,) = hook.drain_batches()
+    assert batch["calls"][0]["integration"] == "GitHub Projects"
+
+
+def test_an_unknown_tool_records_no_integration(hook):
+    """The model invented `search_issues`; nothing resolved it to a server."""
+    hook._on_after_tool_call(
+        _after_tool_event(
+            name="search_issues",
+            selected_tool=None,
+            result={"status": "error", "content": [{"text": "Unknown tool: search_issues"}]},
+        )
+    )
+    hook._on_after_tools(MagicMock())
+
+    (batch,) = hook.drain_batches()
+    assert batch["calls"][0]["integration"] is None
+
+
+def test_a_built_in_tool_records_no_integration(hook):
+    from types import SimpleNamespace
+
+    hook._on_after_tool_call(
+        _after_tool_event(name="calculator", selected_tool=SimpleNamespace(tool_name="calculator"))
+    )
+    hook._on_after_tools(MagicMock())
+
+    (batch,) = hook.drain_batches()
+    assert batch["calls"][0]["integration"] is None

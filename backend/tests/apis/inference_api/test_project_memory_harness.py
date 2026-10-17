@@ -745,3 +745,159 @@ def test_a_memory_tab_save_that_loses_the_race_after_its_check_is_a_conflict(pro
             [EditedItem(text="Editor's edit.", anchor=items[0].anchor)], base_version=1,
         )
     assert "Owner's edit." in runtime.read_entry(project.shared_space_id, OWNER.user_id, OWNER.email, "pilot")
+
+
+# ── renaming a file (2026-10-16) ────────────────────────────────────────
+#
+# Asked to rename team/bsu_devs, the assistant saved its items under a new name,
+# left the old file in place and said it had renamed it. With anchors invented
+# for new files, an error that called a trailing anchor misplaced cost 16 saves.
+
+TEAM = "- bsu_devs team, led by Phil.\n- Members: philmerrell, colinmxs.\n"
+NEW_TEAM = "team/cloud-architecture-development"
+
+
+def _team_file(project, runtime, ctx):
+    """team/bsu_devs, a file that links to it, and both index lines; returns the editor's tools."""
+    tools = _tools(project, EDITOR)
+    _call(tools["memory_save"], scope="project", slug="team/bsu_devs", text=TEAM, description="bsu_devs team", tool_context=ctx)
+    _call(tools["memory_save"], scope="project", slug="sprints", text="- [[team/bsu_devs]] runs two-week sprints.\n", description="Sprints", tool_context=ctx)
+    return tools
+
+
+def test_a_rename_moves_the_file_with_its_anchors_history_and_index_line(projects, runtime):
+    project, ctx = _team(projects), _in("rename")
+    tools = _team_file(project, runtime, ctx)
+    space = project.shared_space_id
+    body = _text(_call(tools["memory_read"], scope="project", slug="team/bsu_devs", tool_context=ctx)).split("---\n")[-1]
+    anchors = [line.rsplit("<!-- e:", 1)[1][:8] for line in body.splitlines() if "<!-- e:" in line]
+    pinned = runtime.set_pinned(space, OWNER.user_id, OWNER.email, "team/bsu_devs", anchors[1], pinned=True)
+    _call(tools["memory_read"], scope="project", slug="team/bsu_devs", tool_context=ctx)  # the pin is a new version
+
+    renamed = _call(
+        tools["memory_save"], scope="project", slug=NEW_TEAM, replaces="team/bsu_devs",
+        text=body.replace("bsu_devs team", "Cloud Architecture & Development team"),
+        description="Cloud Architecture & Development team", tool_context=ctx,
+    )
+    assert renamed["status"] == "success", renamed
+    out = _text(renamed)
+    assert out.startswith(f'Renamed "team/bsu_devs" to "{NEW_TEAM}" in project memory (version 2')
+    assert "links to [[team/bsu_devs]] still resolve" in out
+
+    slugs = [e.slug for e in runtime.list_entries(space, OWNER.user_id, OWNER.email)]
+    assert "team/bsu_devs" not in slugs and NEW_TEAM in slugs
+    ref, items, provenance = runtime.read_file_items(space, OWNER.user_id, OWNER.email, NEW_TEAM)
+    assert [i.anchor for i in items] == anchors and "Cloud Architecture & Development team" in items[0].text
+    assert ref.aliases == ["team/bsu_devs"] and ref.pinned == pinned
+    assert set(provenance) == set(anchors) and provenance[anchors[0]].updated_by == EDITOR.email
+    assert [v.version for v in runtime.list_file_versions(space, OWNER.user_id, OWNER.email, NEW_TEAM)] == [2, 1]
+    assert runtime.repository.list_file_versions(space, "team/bsu_devs") == []
+
+    index = _index(runtime, space)
+    assert f"- [[{NEW_TEAM}]] — Cloud Architecture & Development team" in index
+    assert "[[team/bsu_devs]]" not in index
+    # The file that links the old name still saves: the old name is an alias now.
+    sprints = _text(_call(tools["memory_read"], scope="project", slug="sprints", tool_context=ctx)).split("---\n")[-1]
+    again = _call(tools["memory_save"], scope="project", slug="sprints", text=sprints + "- Reviews on Tuesdays.\n", description="Sprints", tool_context=ctx)
+    assert again["status"] == "success" and "no longer points" not in _text(again), again
+    # The next save of the renamed file builds on the rename.
+    after = _call(tools["memory_save"], scope="project", slug=NEW_TEAM, text=_read_items(tools, "project", NEW_TEAM), description="Cloud Architecture & Development team", tool_context=ctx)
+    assert after["status"] == "success" and "version 3" in _text(after), after
+
+
+def test_a_rename_without_a_read_of_the_old_file_is_refused(projects, runtime):
+    project = _team(projects)
+    _team_file(project, runtime, _in("a"))
+    refused = _call(
+        _tools(project, EDITOR)["memory_save"], scope="project", slug=NEW_TEAM, replaces="team/bsu_devs",
+        text=TEAM, description="CAD team", tool_context=_in("b"),
+    )
+    assert refused["status"] == "error" and 'memory_read "team/bsu_devs" first' in _text(refused)
+    assert "team/bsu_devs" in [e.slug for e in runtime.list_entries(project.shared_space_id, OWNER.user_id, OWNER.email)]
+
+
+def test_a_rename_onto_an_existing_file_leaves_both(projects, runtime):
+    project, ctx = _team(projects), _in("a")
+    tools = _team_file(project, runtime, ctx)
+    _call(tools["memory_save"], scope="project", slug=NEW_TEAM, text=ITEMS, description="CAD", tool_context=ctx)
+    body = _read_items(tools, "project", "team/bsu_devs")
+    refused = _call(
+        tools["memory_save"], scope="project", slug=NEW_TEAM, replaces="team/bsu_devs", text=body,
+        description="CAD", tool_context=ctx,
+    )
+    assert refused["status"] == "error" and "already exists" in _text(refused) and "both files are unchanged" in _text(refused)
+    slugs = [e.slug for e in runtime.list_entries(project.shared_space_id, OWNER.user_id, OWNER.email)]
+    assert "team/bsu_devs" in slugs and NEW_TEAM in slugs
+
+
+def test_a_rename_of_a_file_changed_since_it_was_read_is_a_conflict(projects, runtime):
+    project, ctx = _team(projects), _in("a")
+    tools = _team_file(project, runtime, ctx)
+    body = _read_items(tools, "project", "team/bsu_devs")
+    owner_ctx = _in("owner")
+    owners = _text(_call(_tools(project, OWNER)["memory_read"], scope="project", slug="team/bsu_devs", tool_context=owner_ctx)).split("---\n")[-1]
+    _call(_tools(project, OWNER)["memory_save"], scope="project", slug="team/bsu_devs", text=owners + "- Owner's fact.\n", description="bsu_devs team", tool_context=owner_ctx)
+    refused = _call(
+        tools["memory_save"], scope="project", slug=NEW_TEAM, replaces="team/bsu_devs", text=body,
+        description="CAD", tool_context=ctx,
+    )
+    assert refused["status"] == "error" and "'team/bsu_devs' changed since you read it" in _text(refused)
+    assert NEW_TEAM not in [e.slug for e in runtime.list_entries(project.shared_space_id, OWNER.user_id, OWNER.email)]
+
+
+def test_another_files_anchors_under_a_new_name_point_at_the_rename(projects, runtime):
+    """The 2026-10-16 turn: the old file's items, anchors and all, sent to a new name."""
+    project, ctx = _team(projects), _in("a")
+    tools = _team_file(project, runtime, ctx)
+    body = _read_items(tools, "project", "team/bsu_devs")
+    refused = _call(tools["memory_save"], scope="project", slug=NEW_TEAM, text=body, description="CAD", tool_context=ctx)
+    assert refused["status"] == "error", refused
+    assert 'Those anchors are from "team/bsu_devs", which you read' in _text(refused)
+    assert 'replaces="team/bsu_devs"' in _text(refused)
+
+
+def test_invented_anchors_on_a_new_file_are_named_not_called_misplaced(projects, runtime):
+    project = _team(projects)
+    refused = _call(
+        _tools(project, EDITOR)["memory_save"], scope="project", slug="team/sprint-rhythm",
+        text="- Biweekly sprints, Wednesday to Tuesday. <!-- e:sprint-window -->\n", description="Sprints",
+    )
+    assert refused["status"] == "error"
+    assert "<!-- e:sprint-window -->" in _text(refused) and "not an anchor the system issued" in _text(refused)
+    assert "may only end an item" not in _text(refused)
+
+
+def test_a_scheduled_run_cannot_rename(projects, runtime):
+    from apis.shared.scheduled_prompts.models import HEADLESS_SESSION_PREFIX
+
+    project = _team(projects)
+    _team_file(project, runtime, _in("a"))
+    refused = _call(
+        _tools(project, EDITOR)["memory_save"], scope="project", slug=NEW_TEAM, replaces="team/bsu_devs",
+        text=TEAM, description="CAD", tool_context=_in(f"{HEADLESS_SESSION_PREFIX}run-1"),
+    )
+    assert refused["status"] == "error" and "can't rename" in _text(refused)
+
+
+def test_a_rename_whose_new_name_is_taken_before_it_commits_overwrites_nothing(projects, runtime, monkeypatch):
+    """The collision check leaves a file's own name out; a rename's target is someone else's file."""
+    project, ctx = _team(projects), _in("a")
+    tools = _team_file(project, runtime, ctx)
+    body = _read_items(tools, "project", "team/bsu_devs")
+    space = project.shared_space_id
+    prepare = runtime._prepare_save
+
+    def then_a_teammate_takes_the_name(*args, **kwargs):
+        prepared = prepare(*args, **kwargs)
+        if kwargs.get("replaces"):
+            runtime.save_entry(space, OWNER.user_id, OWNER.email, NEW_TEAM, "- The owner's file.\n", reason="save")
+        return prepared
+
+    monkeypatch.setattr(runtime, "_prepare_save", then_a_teammate_takes_the_name)
+    refused = _call(
+        tools["memory_save"], scope="project", slug=NEW_TEAM, replaces="team/bsu_devs", text=body,
+        description="CAD", tool_context=ctx,
+    )
+    assert refused["status"] == "error" and "already exists" in _text(refused), refused
+    assert "The owner's file." in runtime.read_entry(space, OWNER.user_id, OWNER.email, NEW_TEAM)
+    assert "bsu_devs team" in runtime.read_entry(space, OWNER.user_id, OWNER.email, "team/bsu_devs")

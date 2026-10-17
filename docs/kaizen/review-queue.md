@@ -5,6 +5,93 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 ## Open
 <!-- Newest at top. -->
 
+### [2026-10-16] Curate Claude Haiku 5.5 behind the preserved-thinking probe, with a price-tier field or a 100K effective window
+- **Source**: research/2026-10-16.md ▸ Top 5 #1 (supersedes the curation half of [2026-10-09] "Run the preserved-thinking compaction probe on Bedrock, then curate Claude Haiku 5.5 behind it"; the probe half carries over unchanged)
+- **Surface**: cross-cutting (`curated-models.ts` `CuratedModel` + a new row, the backend cost calculator, model-relative compaction, `backend/scripts/probe_bedrock_cache_point_support.py`)
+- **Effort × Impact**: M × H
+- **Subtracts**: yes — starts Haiku 4.5's retirement path (never a hard delete); a tier field also meets the [2026-10-03] Astra decision's re-open condition, using the same field
+- **Unlocks**: a default ~10× cheaper than Haiku 4.5 below 100K prompt tokens (Price List API: $0.11 / $0.55 Regional), with effort control
+- **Notes**: the Price List API carries 20 Haiku 5.5 SKUs in us-west-2. Every bucket costs 5× more above 100K prompt tokens. A row declared at 1M with flat rates, as every other 1M Claude row is, lets compaction run long conversations in the expensive tier, priced at the cheap one. The safe first shape is `maxInputTokens: 100_000`. Regional SKUs imply a `us.anthropic.claude-haiku-5-5` profile the dev SCP allows; invoke it once. Read the model card before trusting the rates. Don't make it the default in the same PR.
+- **Status**: open
+
+### [2026-10-16] Take Strands 1.61.1: delete our reasoning projection and the cache-write shim, port voice
+- **Source**: research/2026-10-16.md ▸ Top 5 #2 (supersedes [2026-10-09] "Take Strands 1.59 with voice ported…"; the voice port is unchanged)
+- **Surface**: backend (`pyproject.toml`, `uv.lock`, `apis/shared/models/signed_reasoning.py`, `history_projection.py`, `core/agent_factory.py`, `usage_normalization.py`, `voice_agent.py:42-52`)
+- **Effort × Impact**: M × M
+- **Subtracts**: yes — `signed_reasoning.py` and the Claude projection from `29b05de1` (upstream #5166 does the same filtering in `BedrockModel._format_bedrock_messages`), the cache-write shim (#4193 has been in our pinned 1.57.2 all along, so this can go **now** without a bump), `_convert_nova_event` and `usage_modality_details()`
+- **Unlocks**:
+  - #4067: a text block that was silently dropped when a toolUse ended on the same block-stop is fixed
+  - reasoning hygiene for Claude → GPT/Nova on Bedrock, which we don't handle today
+  - `MCPClient(meta=...)` (#4660) and #3675 nested interrupt resume
+- **Notes**: the caching watch is clear: #4618 has not moved and Bedrock usage is still disjoint at 1.61.1. `TestBidiProviderContract` (10-02) should turn red on the 1.58.0 `ModalityUsage` removal rather than letting voice switch off silently. Dev-validate GPT→Claude, Claude→GPT and one voice turn.
+- **Status**: open
+
+### [2026-10-16] Make the resource guard synthesize dev's real flag set, and reclaim headroom before the next feature
+- **Source**: research/2026-10-16.md ▸ Top 5 #3; live dev `PlatformStack` count **494 / 500** (2026-10-16); continues the unshipped half of [2026-10-09] "One synth-time budget test for every platform ceiling" (the V2 payload guard shipped in `420b0aad`)
+- **Surface**: infrastructure (`infrastructure/test/` — a `platform-ceilings.test.ts` absorbing the `< 465` guard in `observability-dynamodb-alarms.test.ts:132`; a test helper with every opt-in flag on)
+- **Effort × Impact**: L × H
+- **Subtracts**: yes — replaces a guard that synthesizes default flags (and so passes while dev is 6 from the limit), plus the budget paragraphs at the top of feature tests; then one PR reclaiming about 20 resources (composite or metric-math alarms, merged managed policies, shared EventBridge targets)
+- **Unlocks**: the next flagged feature and the V2 retry deploy without a deploy-time failure
+- **Notes**: also assert the rendered IAM policy sizes against 6,144 in the same file. Splitting stacks contradicts the single-stack convention; it's flagged for Phil, not proposed.
+- **Status**: open
+
+### [2026-10-16] Authenticate ECR Public pulls in the image build action
+- **Source**: research/2026-10-16.md ▸ Top 5 #4; Backend Deploy runs 38850758469, 38587486323, 38577145616 (`429 … toomanyrequests: Data limit exceeded` on `public.ecr.aws/docker/library/python:3.13-slim`)
+- **Surface**: CI (`.github/actions/build-and-push-image`)
+- **Effort × Impact**: L × M
+- **Subtracts**: yes — removes manual deploy re-runs, and ends a second registry rate-limit incident (after Docker Hub, `5143d896`) instead of moving to a third registry
+- **Notes**: `aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin public.ecr.aws` before the build. The deploy role needs `ecr-public:GetAuthorizationToken` and `sts:GetServiceBearerToken`. The alternative is a private-ECR pull-through cache.
+- **Status**: open
+
+### [2026-10-16] Re-price AgentCore Memory under consumption billing and add it to the per-session cost model
+- **Source**: research/2026-10-16.md ▸ Top 5 #5; https://aws.amazon.com/about-aws/whats-new/2026/10/agentcore-memory-consumption-based-pricing
+- **Surface**: backend + docs (`TurnBasedSessionManager` event sizes and restore volume, admin cost surfaces, platform cost sync)
+- **Effort × Impact**: L × M
+- **Subtracts**: no — addition only, justified because the 365-day retention decision and restore/prefetch on the turn path were priced against a model AWS replaced on 10-06 (now $1.00/GB ingest, $0.20/GB retrieve, $0.10/GB-month; 12 KB minimum and 64 KB maximum billable per event)
+- **Unlocks**: an all-in cost per conversation (model plus Memory)
+- **Notes**: deliver it as a readout first: one week's `CreateEvent`/`ListEvents` volumes, the old versus new monthly cost, and the split across ingest, retrieval and storage. Build nothing until the number says to.
+- **Status**: open
+
+### [2026-10-16] Spec sync: multi-agent-patterns.md §6.1 (`Binding.kind` enum)
+- **Source**: research/2026-10-16.md ▸ Spec sync row 1
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Subtracts**: yes — removes a retired kind from the spec
+- **Notes**: Stale: "`Binding.kind` is an open enum (`'knowledge_base' | 'tool' | 'skill' | 'memory_space' | …`)." Evidence: `044d303e`; `apis/shared/assistants/models.py:10-11`. Replace with: "`Binding.kind` is an open enum (`'knowledge_base' | 'tool' | 'skill' | …`; `memory_space` was retired in 044d303e when memory moved to Projects)."
+- **Status**: open
+
+### [2026-10-16] Spec sync: multi-agent-patterns.md §4 table ("Resolving the sub-agent")
+- **Source**: research/2026-10-16.md ▸ Spec sync row 2
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Subtracts**: yes
+- **Notes**: Stale: "…project-harness refusal, KB and Memory Space hydration." Evidence: `044d303e`; `inference_api/chat/routes.py:4307-4314`. Replace with: "Access, the published version snapshot for non-owners, RBAC-filtered tools, project-harness refusal, KB search, and, for a project harness only, project memory hydration."
+- **Status**: open
+
+### [2026-10-16] Spec sync: agent-handoffs-and-consults.md §3 (resolution order, step 8)
+- **Source**: research/2026-10-16.md ▸ Spec sync row 3
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Subtracts**: yes
+- **Notes**: Stale: "8. Memory Space hydration". Evidence: `044d303e`. Replace with: "8. project memory hydration (project harness only; agent Memory Space bindings were retired in 044d303e)".
+- **Status**: open
+
+### [2026-10-16] Spec sync: multi-agent-patterns.md §3 and agent-handoffs-and-consults.md §8.3 (interrupted tool re-runs from the top)
+- **Source**: research/2026-10-16.md ▸ Spec sync row 4
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Subtracts**: no — adds one qualifying sentence
+- **Notes**: Stale: "Strands re-runs an interrupted tool from the top, so an OAuth pause inside the consult would re-run the whole consult on resume." Evidence: harness-sdk #3675 (python/v1.59.0). Append: "As of strands-agents 1.59.0 (#3675), Strands' own agent-as-tool parks the sub-agent's interrupted turn and reinstates it on resume instead of re-running it. A hand-written consult tool, or our 1.57.2 pin, still re-runs from the top."
+- **Status**: open
+
+### [2026-10-16] Spec sync: agent-handoffs-and-consults.md §4.2 ("Inside a Shared Project")
+- **Source**: research/2026-10-16.md ▸ Spec sync row 5
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Subtracts**: yes — removes a trigger that no longer exists
+- **Notes**: Stale: "A mention in a project task hands off to an ordinary conversation with the Agent." Evidence: `91ebae67` (no `@`-mentions in a project conversation). Replace with: "The SPA doesn't offer `@`-mentions in a project conversation (91ebae67), so Phase 0a has no trigger there. If a handoff from a project task is wanted later, it needs a non-mention entry point, and it would hand off to an ordinary conversation that doesn't inherit `projectId`."
+- **Status**: open
+
 ### [2026-10-09] Run the preserved-thinking compaction probe on Bedrock, then curate Claude Haiku 5.5 behind it
 - **Source**: research/2026-10-09.md ▸ Top 5 #1 (supersedes part (a) of [2026-10-02] "Verify compaction and offload on preserved-thinking models")
 - **Surface**: cross-cutting (`session/turn_based_session_manager.py`, `session/compaction_summary.py`, `core/model_config.py:132-137`, `curated-models.ts`)
@@ -16,23 +103,7 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Notes**: preserved-thinking models 400 by default when anything before a thinking block changes; client-side compaction that keeps recent turns is named as failing. Bedrock enforcement unverified. A Haiku 5.5 row must declare no `thinking` param (it rejects `budget_tokens`). Check for a `us.*` id; the dev SCP blocks `global.*`. Don't flip the default in the curation PR.
 - **Status**: open
 - **Status 2026-10-09 (review)**: absorbs the Sonnet 5.5 push from the superseded [2026-10-02] entry. Branch `claude/sonnet-5-5-bedrock-dev-e9a13e` (`d708b358`) is still local only, and its cache-read rate is stale: Sonnet 5.5 reads dropped to $0.10/MTok on 10-07; confirm against the Price List API before pushing. reviews/2026-10-09.md ▸ #2 recommends running part (a), the probe, this week regardless of other picks.
-
-### [2026-10-09] Take Strands 1.59 with voice ported to the new Bidi usage shape, and delete our Nova speech/text split
-- **Source**: research/2026-10-09.md ▸ Top 5 #2
-- **Surface**: backend (`pyproject.toml`, `voice_agent.py:42-48,542,600`, `voice_routes.py:222,277`, `usage_normalization.py`)
-- **Effort × Impact**: M × M
-- **Subtracts**: yes — `_convert_nova_event`, `usage_modality_details()`, the cache-write shim in `usage_normalization.py`, and the silent voice-off failure class (add a test that fails when `BIDI_AVAILABLE` is False)
-- **Unlocks**: #4499 (no hang on MCP drop mid-tool-call), #4813/#4603 (Bidi session save + snapshots), #3675 (nested interrupt resume)
-- **Notes**: 1.58.0 removed `ModalityUsage`, which `voice_agent.py:45` imports inside an `except ImportError` → voice turns off silently on bump. #4618 has not shipped; Bedrock usage is still disjoint at 1.59.0.
-- **Status**: open
-
-### [2026-10-09] One synth-time budget test for every platform ceiling (IAM policy size, Runtime env count + V2 payload, stack resources)
-- **Source**: research/2026-10-09.md ▸ Top 5 #3; Platform Stack failure 10-08 (`PolicySize: 6144`); V2 rollback 10-09 (3,007 / 2,560 B)
-- **Surface**: infrastructure (`infrastructure/test/`)
-- **Effort × Impact**: L × H
-- **Subtracts**: yes — folds the per-grant size tests and the hand counts kept in notes into one CI output; it is the V2 plan's §7.5 payload guard, widened
-- **Unlocks**: the V2 retry with a measured margin; PR-time headroom instead of deploy-time rollbacks
-- **Status**: open
+- **Status 2026-10-16 (review)**: not run, **third cycle**. The curation half is superseded by [2026-10-16] *Curate Claude Haiku 5.5 … with a price-tier field or a 100K effective window* (#1634): the Price List API now carries Haiku 5.5 with a 5× step above 100K prompt tokens. The probe half stays here. The Sonnet 5.5 branch is still local only.
 
 ### [2026-10-09] Ignore IME-composition Enter in every Enter handler, and restore focus after a question/approval prompt settles
 - **Source**: research/2026-10-09.md ▸ Top 5 #4 (assistant-ui #9155, #9141)
@@ -50,6 +121,7 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Notes**: latent; whether the Gateway paginates today is unverified.
 - **Status**: open
 - **Status 2026-10-09 (review)**: **no longer latent in its sibling form.** Issue #1527: duplicate MCP tool names (`whoami` on two servers; one server under two catalog records) fail the whole agent; 5 failed prod scheduled runs on 10-09. reviews/2026-10-09.md ▸ #1 folds this entry and #1527 into one PR: dedupe clients by URL, skip duplicate names deterministically (sorted order, never load-completion order), honour the cursor with a 20-page cap, drop names over 64 characters.
+- **Status 2026-10-16 (review)**: not started. #1527 is open with no comments; `gateway_mcp_client.py:140` still calls `super().list_tools_sync()` without its arguments. reviews/2026-10-16.md ▸ #1 (second cycle as the top proposal).
 
 ### [2026-10-08] ⚠️ URGENT Ops: find any AgentCore agent in our accounts that still runs on a default execution role (AgentCorruption)
 - **Source**: Phil-initiated, from Zenity Labs' AgentCorruption disclosure (2026-10-08, SecTor). A prompt-injected agent used a web-request tool to read the instance metadata endpoint, returned its execution role's credentials, and used them from outside AWS. The **default** AgentCore execution role was account- and region-wide, so the credentials reached every agent in the account: `InvokeAgentRuntime`, `ListEvents` (other users' conversations), `CreateEvent` (planted memories), `GetResourceApiKey`, `secretsmanager:GetSecretValue`, and ECR pulls. AWS made new agents IMDSv2-only on 2026-02-14 and narrowed the default role on 2026-09-29. AWS calls it documented behavior, and there is no CVE.
@@ -130,6 +202,7 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
   - **Eligible now** (shipped in 1.24.0 or earlier): `AGENT_STATUS_LIVE_DRAIN_ENABLED`, `AGENT_PREPARING_PHASE_ENABLED`, `ATTACHMENT_TURN_GUARD_ENABLED`, `CONFIG_CACHE_ENABLED`. ⚠️ Confirm none of them is set in prod's task definition or Runtime environment before recommending Ship.
   - **Eligible two weeks after the next release reaches prod**: `MCP_PARALLEL_PREFLIGHT_ENABLED`, `KB_SEARCH_AHEAD_ENABLED`, `MEMORY_RETRIEVAL_PREFETCH_ENABLED`, `HISTORY_COUNT_PREFETCH_ENABLED`, `INLINE_ATTACHMENT_PERSIST_ENABLED`.
   - **Gated on something else**: `AGENT_BUILD_SHARED_SESSION_ENABLED` (Runtime V2 plus a clean snapshot restore, see the V2 entries below), `COMPACTION_SUMMARY_EXTRACT_ENABLED` (prod quality readout), `DOCUMENT_OFFLOAD_ENABLED` / `_REHYDRATE_` / `_DIGEST_` (the quality check waived in `docs/specs/document-offload-evaluation.md`, see [2026-09-21] *The cheap quality veto does not exist*).
+- **Status 2026-10-16 (review)**: no pass yet. All four eligible readers are still in `feature_flags.py` (:439, :471, :554, :644). 1.28.0 (#1628) is the third release since #1420 without the cleanup. reviews/2026-10-16.md ▸ #6.
 
 ### [2026-10-02] Re-base the V2 Runtime plan on the published price, land B1, and use CDK's typed `platformVersion`
 - **Source**: research/2026-10-02.md
@@ -139,6 +212,8 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Unlocks**: a go/no-go threshold written down before the dev A/B. V2 memory is $0.0169/GB-hour against V1's $0.00945 (1.79×), so V2 wins only if billed GB-hours fall below ~56% of V1's. Idle memory is reclaimed after 120 s.
 - **Status**: open. Plan step 1 (B1 allow-list) is still not started; it is harmless on V1.
 - **Status 2026-10-09**: B1 shipped (#1512), per-env platform version (#1514), B2 idle clock after snapshot restore (#1515). The first dev flip was rolled back on an undocumented 2,560-byte env payload cap (3,007 B; #1516 records it and the §7 refactor plan). Price still not in the spec (`agentcore-runtime-v2.md:39`); `aws-cdk-lib` still 2.265.0. reviews/2026-10-09.md ▸ #8 defers the retry to 2026-10-16, behind the platform-ceilings test and the rollout-switch removals (which free env slots).
+- **Status 2026-10-16 (review)**: dev has run on **V2 since 2026-10-10** (Runtime v613/v614; #1535, #1542; prewarm #1543). `agentcore-runtime-v2.md:39` still says "No V2 price" although the pricing page now lists V2 rates; `aws-cdk-lib` still 2.265.0. What remains is the GB-hours readout against the ~56% break-even, which six days of dev data can now answer. reviews/2026-10-16.md ▸ #4.
+- **Status 2026-10-16**: the price is now in the spec (`agentcore-runtime-v2.md` §1), checked on the pricing page, in the Price List API and against the rates billed on dev: V2 memory $0.0169 and vCPU $0.1276 (1.79× and 1.43× V1); committed baseline $0.0132 / $0.0997. V2 bills under distinct `Memory-v2` / `vCPU-v2` usage types. The first readout (§9, about 6 days on dev) puts V2 at 0.99× V1's GB-hours per day, and about 2× the Runtime dollars ($0.22 → $0.44/day). Per unit of work it is 0.36–0.63, straddling the 56% break-even. First read: **need more data, leaning no-go on cost alone**. Typed `platformVersion` is still pending a CDK bump.
 
 ### [2026-10-02] Make the nightly teardown survive an AgentCore Runtime that won't delete
 - **Source**: research/2026-10-02.md
@@ -155,6 +230,7 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Subtracts**: yes. `ask_user_question` and `request_user_login` leave the headless `toolConfig`.
 - **Status**: open. Verified: `RunStatus` (`apis/shared/harness/models.py:20`) has no paused state, and `runner.py:266-272` marks any `done` as `completed`. Unverified: whether any scheduled run's `enabled_tools` includes `ask_user_question` today.
 - **Status 2026-10-09**: not started. New context: #1527 confirms in prod that `_resolve_enabled_tools_snapshot` snapshots every tool a role allows, which is why schedules hit duplicate-name clashes. reviews/2026-10-09.md ▸ #6 recommends shipping this as the follow-on to #1.
+- **Status 2026-10-16 (review)**: not started; still the natural follow-on to #1527. reviews/2026-10-16.md ▸ #8.
 
 ### [2026-09-30] Backend test suite: shard across runners (#1390) and fix fixture scope (#1391)
 - **Source**: Phil-initiated. The PR gate ran every suite on every pull request: a two-file docs PR paid the same 7–8 minutes as a backend change, and the backend pytest job alone was 7:02 with every other job under 2 minutes. Two things landed together in the path-filter PR: the `changes` job in `ci.yml` now runs only the suites a PR's paths can reach (`scripts/ci/classify-changes.sh`, fail-open, pinned by `test_ci_path_filter.py`), and the backend job runs `-n logical` — `-n auto` counts physical cores when psutil is installed, so the 4-vCPU runner started 2 workers.
@@ -337,6 +413,7 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
   - ⚠️ **The turn-latency EMF (#1184) can't see a Runtime cold start**, because it starts at handler entry. Measure cold starts from the client side (`tests/load`) (B3).
 - **Status 2026-10-02**: plan merged as `docs/specs/agentcore-runtime-v2.md` (#1376, 2026-09-28). **Re-based by the [2026-10-02] entry above** on the published V2 price (memory 1.79× V1 → wins only below ~56% of V1 GB-hours) and on `aws-cdk-lib` 2.272.0's typed `platformVersion`. B1 still unstarted. Second week as the review's #1 (reviews/2026-10-02.md ▸ #1).
 - **Status 2026-10-09**: B1 (#1512), the per-environment version (#1514) and the idle-clock fix (#1515) shipped in 1.27.0. **The first dev V2 flip failed** on a 2,560-byte environment-payload limit (spec §3 B4) and wedged the stack until a manual recovery. Plan re-sequenced (spec §7–§8): PR A derives the `{prefix}-{suffix}` names in `apis.shared.config` at process start (no read-site churn), adds a synth-time payload guard that refuses V2 over the limit, and a CDK test pinning the manifest to the template; PR B drops the 26 variables from the Runtime; then the dev A/B. 1.27.0's notes offer V2 without this warning and stay as published (no amendments); the docs-site and the next release's notes carry it.
+- **Status 2026-10-16**: PR A (#1533) and PR B (#1535) merged. **Dev has been on V2 since 2026-10-10 19:10Z.** Warm-up moved before readiness (#1542), session prewarm (#1543) is on in dev, and B1's real test passed on a live image roll. GB-hours readout (spec §9, about 6 days on dev): V2 used 21.3 GB-hours/day against V1's 21.4 (0.99×) while carrying 1.6–2.5× the traffic. Runtime spend went from $0.22 to $0.44/day (+$0.22/day). Normalised, V2 used 0.40 of V1's GB-hours per session, 0.63 per non-warm invocation and 0.36 per vCPU-hour, but vCPU per invocation rose. Confounders: 205 prewarm invocations, and test bursts in both windows (the V2 flip evening is a quarter of V2's memory; 10-09 is 38% of V1's). **Prod call: need more data, leaning no-go on cost.** Make the prod decision as a latency purchase with the premium stated. Next: join warms to sessions, run a second V2 week (10-17 → 10-23), explain the vCPU rise, and take a prod V1 per-session baseline.
 
 ### [2026-09-25] Curate Claude Opus 5.5 — and measure GPT-6 Luna as a side-channel candidate
 - **Source**: research/2026-09-25.md ▸ Top 5 #5 — https://aws.amazon.com/blogs/machine-learning/claude-opus-5-5-is-now-available-on-aws/ ; https://aws.amazon.com/about-aws/whats-new/2026/09/openai-gpt-6-sol-luna-on-amazon-bedrock/
@@ -865,6 +942,29 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Status**: open — deferred 4 weeks in reviews/2026-05-15.md (revisit 2026-06-12). Earns its keep when an A2A construct lands.
 
 ## Resolved
+
+### [2026-10-09] Take Strands 1.59 with voice ported to the new Bidi usage shape, and delete our Nova speech/text split → RESOLVED — **SUPERSEDED**
+- **Decision**: superseded by [2026-10-16] *Take Strands 1.61.1: delete our reasoning projection and the cache-write shim, port voice* (added by the research scan, #1634). The voice port is unchanged; the target is now 1.61.1, and the cache-write shim can go without a bump (#4193 is already in 1.57.2).
+- **Reasoning**: not started in its cycle; three Strands releases later the same work also retires `signed_reasoning.py` (upstream #5166). Part (a), the silent voice-off guard, is covered by the 10-02 `TestBidiProviderContract`.
+- **Reviewed in**: reviews/2026-10-09.md ▸ #4; reviews/2026-10-16.md ▸ scorecard
+- **Source**: research/2026-10-09.md ▸ Top 5 #2
+- **Surface**: backend (`pyproject.toml`, `voice_agent.py:42-48,542,600`, `voice_routes.py:222,277`, `usage_normalization.py`)
+- **Effort × Impact**: M × M
+- **Subtracts**: yes — `_convert_nova_event`, `usage_modality_details()`, the cache-write shim in `usage_normalization.py`, and the silent voice-off failure class (add a test that fails when `BIDI_AVAILABLE` is False)
+- **Unlocks**: #4499 (no hang on MCP drop mid-tool-call), #4813/#4603 (Bidi session save + snapshots), #3675 (nested interrupt resume)
+- **Notes**: 1.58.0 removed `ModalityUsage`, which `voice_agent.py:45` imports inside an `except ImportError` → voice turns off silently on bump. #4618 has not shipped; Bedrock usage is still disjoint at 1.59.0.
+- **Status**: open
+
+### [2026-10-09] One synth-time budget test for every platform ceiling (IAM policy size, Runtime env count + V2 payload, stack resources) → RESOLVED — **SHIPPED IN PART, rest SUPERSEDED**
+- **Decision**: the V2 env payload half shipped (`420b0aad`, `runtime-environment-payload-guard.test.ts`; derived names `4666721a`). The resource and IAM-size halves continue in [2026-10-16] *Make the resource guard synthesize dev's real flag set, and reclaim headroom* (#1634).
+- **Reasoning**: dev went from 460 to 494 / 500 resources in a week while the default-flags `< 465` guard stayed green, so the remaining half is now about which configuration the guard synthesizes, not only where it lives.
+- **Reviewed in**: reviews/2026-10-09.md ▸ #3; reviews/2026-10-16.md ▸ scorecard
+- **Source**: research/2026-10-09.md ▸ Top 5 #3; Platform Stack failure 10-08 (`PolicySize: 6144`); V2 rollback 10-09 (3,007 / 2,560 B)
+- **Surface**: infrastructure (`infrastructure/test/`)
+- **Effort × Impact**: L × H
+- **Subtracts**: yes — folds the per-grant size tests and the hand counts kept in notes into one CI output; it is the V2 plan's §7.5 payload guard, widened
+- **Unlocks**: the V2 retry with a measured margin; PR-time headroom instead of deploy-time rollbacks
+- **Status**: open
 
 ### [2026-10-02] Verify compaction and offload on preserved-thinking models (Opus 5.5), then push the stranded Sonnet 5.5 curation → RESOLVED — **SUPERSEDED**
 - **Decision**: superseded by [2026-10-09] *Run the preserved-thinking compaction probe on Bedrock, then curate Claude Haiku 5.5 behind it*, which carries part (a) (the probe, now also the gate on Haiku 5.5) and the Sonnet 5.5 push (with the cache read corrected to $0.10/MTok).

@@ -1,3 +1,80 @@
+# Release Notes — v1.28.2
+
+**Release Date:** October 17, 2026
+**Previous Release:** v1.28.1 (October 16, 2026)
+
+---
+
+## Highlights
+
+The first day of Shared Projects in production turned up a handful of bugs, and this release fixes them. The most serious: two MCP servers exposing the same tool name stopped chat from building at all for anyone who had both on. That now degrades to "the later server loses its clashing tool". OAuth-gated tools no longer disappear silently for a member who hasn't connected, and connecting brings them back in the same conversation. Project memory gains a rename and stops returning 500s and misleading errors. Sign-in providers added in the admin console now survive Platform Stack deploys. One behavior changes: **an MCP server's admin tool list now caps what the model is offered**, so check partial lists before you deploy (see Deployment notes). There is no infrastructure change.
+
+---
+
+## 🐛 Bug fixes
+
+- **One misconfigured tool no longer takes chat down.** Before, if two enabled MCP servers exposed the same tool name, Strands refused to register the second copy and the agent never built. Every conversation of every user with both servers on failed.
+  - Now the first source to claim a name keeps it. The order is the existing one: platform tools, then gateway, then external servers in enabled-id order.
+  - A later server loses only the clashing tools, through a per-agent wrapper (`NameExcludingToolProvider`). The cached MCP client shared with other agents is untouched.
+  - Each skip is logged at WARNING. The model gets a short note naming what was left out. The note is sorted and byte-stable, and it changes only when `toolConfig` does, so it adds no prompt-cache writes of its own (#1643, #1644).
+- **Platform tools win a clash over MCP servers.** Built-in and context-bound tools such as `whoami` claim their names before any server does (#1644).
+- **A `disabled` tool stops loading.** Before, a disabled tool kept loading for anyone whose toggle, Agent binding or admin pin still named it. `disabled` is now the runtime off switch, enforced before the agent cache key and in the voice route. `deprecated` still loads for existing users, as the retirement spec intends (§7a) (#1643).
+- **Failed tool calls name the right integration.** A failed GitHub search was headed "Couldn't reach Canvas" in a project with no Canvas tool.
+  - A batch where every call failed now gets a deterministic "Couldn't use <integration>" heading, with no model call.
+  - In a mixed batch, the summarizer sees each call's integration and may not name one that no call carries (#1643).
+- **OAuth-gated tools no longer vanish without a word.** Before, in a project conversation where the member hadn't connected GitHub, the turn ran without the GitHub tools, and the model invented one.
+  - The model is now told which servers are waiting on a connection, and to point the user at Connect.
+  - After the user connects, the next turn re-checks the token vault and rebuilds the agent with the tools, in the same conversation.
+  - A race between parallel pre-flights that share a provider no longer drops one of them.
+  - Latency: the re-check costs about 200 ms. It runs only on a cache hit for an agent that dropped a server for missing consent; no other turn pays it (#1639).
+- **Project memory saves no longer return 500 on a dropped CountTokens connection.** The token count is meant to fall back to an estimate on any failure, but botocore's connection errors broke the fallback itself. They now fall back as documented (#1640).
+- **Project memory files can be renamed.** Before, asked to rename a file, the model wrote a second copy under the new name and then reported a rename that hadn't happened.
+  - `memory_save(replaces=…)` renames in one manifest swap. Anchors, pins, provenance, history and the index line carry over, and the old name keeps resolving as an alias.
+  - It is refused if the name is taken, the old file wasn't read or has changed since, or a scheduled run is saving.
+  - An invented anchor such as `<!-- e:team-roster -->` now gets an error that says to remove it. Before, a misleading message led to 16 failed saves in one conversation.
+  - The `memory_save` spec grows by about 126 tokens: one cache write per harness after deploy (#1640, #1641).
+- **Redlining a Word file with a space in its name works the first time.** The redline tool named its output `<source>-redline` and then rejected that name, because file names it saves may hold only letters, digits, underscores and hyphens. Most real Drive file names have spaces, so the call failed and the model had to retry with a name of its own. The default is now cleaned up first: `Q3 Budget (draft)` becomes `Q3-Budget-draft-redline`. A name the model chooses is still checked as given. Found in the production test pass for this release.
+- **Sign-in providers added in Admin → Auth Providers survive Platform Stack deploys.** A deploy that changes any property of the BFF app client resets the client's identity providers to the template's list. That dropped every admin-added provider: the button still showed, but Cognito refused the sign-in.
+  - app-api now restores every enabled provider once at startup and then every 60 seconds. It only ever adds providers, never removes them.
+  - app-api's own client updates now preserve every client setting, not just 12 of them.
+  - Federated sign-in can still fail for up to about a minute after such a deploy; `/auth/login?local=1` works throughout (#1645).
+
+## ✨ Improvements
+
+- **Admins can hide "Sign in with Cognito".** This is for organizations that sign in only through Entra, Okta or another federated provider. A system admin turns it off with a switch at the top of Admin → Auth Providers. It is visible by default, so nothing changes until an admin flips it. Lockout guards:
+  - It can't be hidden while no other provider is enabled.
+  - It comes back on its own if every provider is later disabled.
+  - `/auth/login?local=1` always shows it.
+
+  No infrastructure or flag. The setting is one item in the auth-providers table (#1642).
+
+## ⚠️ Behavior change
+
+- **An MCP server's admin "Available Tools" list is now an allowlist.** Before, the list only carried per-tool approval and always-on flags, and turning on the whole server loaded every tool it had. Now a non-empty list caps what the model is offered. An empty list still means "every tool the server has" (#1643).
+  - The list caps only tools the model can see. Some tools exist only for a server's MCP App: the model never sees them, and the App calls them itself, as the Google Tasks board does to refresh. Those still pass, so you don't need to list them, and an App keeps working whatever the list holds. They still never reach the model, so the cached prompt doesn't change (#1649).
+
+---
+
+## 🚀 Deployment notes
+
+- **No infrastructure change.** Run `backend.yml`, then `frontend-deploy.yml`. `platform.yml` has nothing to apply.
+- **Before deploying, review every MCP server whose admin tool list isn't empty.** For each one, open it in Admin → Tools and click **Discover from server**. Any tool that discovery shows but the saved list lacks stops reaching the model once this release deploys. Add the tool to the list if users need it, or clear the list to expose everything. Tools that only an MCP App uses don't need to be listed. Discovery on an OAuth-gated server runs as the signed-in admin, so connect that account first. A server that won't answer discovery has to be compared against its published tool list. In the maintainers' deployment, the check found a GitHub Issues tool and a group of newer Canvas for Faculty tools missing from their lists.
+- **Check for `disabled` tools that users still depend on.** Each one stops loading for everyone after this deploy. If one should keep working for its current users, set it to `deprecated` instead.
+- **After deploying:** expect one prompt-cache write per project harness, from the larger `memory_save` spec. The next Platform Stack deploy that touches the app client should log `Restored [...] to the App Client's supported identity providers` from app-api. If the line is absent, nothing was dropped.
+
+### Other deployments
+
+- **Coming from 1.27.x or earlier?** 1.28.2 adds no infrastructure, flags, environment variables, tables, indexes or backfills. Everything 1.28.0 and 1.28.1 need still applies, though. Run `backend.yml` before `platform.yml`, then re-run "Deploy large-document-prepare Lambda image", and check the platform dashboard. 1.28.1's split of the alarm widget into groups of 100 is included.
+- **app-api now writes to your Cognito app client by itself.** About once a minute it adds back any **enabled** Admin → Auth Providers entry that's missing from the client. It uses permissions its task role already has, and it never removes anything.
+  - To take a provider off the sign-in page, disable or delete it in the admin console. If you remove it from the client in the AWS console instead, app-api adds it back within a minute.
+  - Federated sign-in can still fail for up to about a minute after a Platform deploy that touches the client. To close that gap, list the provider's id in `CDK_COGNITO_SUPPORTED_IDPS`, but only once the provider exists in the user pool.
+- **Check any app client settings you changed outside CDK.** Before this release, adding or removing a provider in the admin console reset the client's other settings to Cognito defaults: token revocation, auth-session validity, read/write attributes and the default redirect URI. 1.28.2 preserves every setting from now on, but it doesn't restore what an earlier write reset.
+  - If you only ever set these through CDK, there's nothing to do.
+  - Otherwise, compare `aws cognito-idp describe-user-pool-client` against what you expect.
+- **"Hide Cognito sign-in" is off until an admin turns it on.** It can't be turned on while no other provider is enabled. `/auth/login?local=1` always shows the Cognito button, so keep that URL for recovery.
+
+---
+
 # Release Notes — v1.28.1
 
 **Release Date:** October 16, 2026

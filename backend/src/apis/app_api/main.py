@@ -19,6 +19,7 @@ load_dotenv(dotenv_path=env_path, override=True)
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
+import asyncio
 import logging
 
 # Set up logging
@@ -89,10 +90,20 @@ async def lifespan(app: FastAPI):
     log_environment_report(audit_derived_environment(), logger, service="app-api")
     logger.info("Agent execution engine initialized")
 
+    # A PlatformStack deploy can drop admin-added identity providers from the
+    # Cognito App Client; this puts them back (see the module docstring).
+    from apis.shared.auth_providers.app_client_reconciler import run_reconcile_loop
+
+    reconcile_task = asyncio.create_task(run_reconcile_loop())
+
     yield  # Application is running
 
     # Shutdown
     logger.info("=== Agent Core Service Shutting Down ===")
+    reconcile_task.cancel()
+    # return_exceptions swallows the task's CancelledError, so shutdown waits
+    # for the loop to finish without re-raising it.
+    await asyncio.gather(reconcile_task, return_exceptions=True)
     # TODO: Cleanup agent pool, MCP clients, etc.
 
 # Create FastAPI app with lifespan

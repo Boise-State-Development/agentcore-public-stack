@@ -85,7 +85,7 @@ Verified empirically, here is every place it is read:
 | `ToolCatalogService._get_all_active_tools()` from `get_user_accessible_tools` ([`tools/service.py:87`](../../backend/src/apis/app_api/tools/service.py#L87)) | **No.** Passes `status=None`. The name is a lie |
 | `freshness._get_snapshot` → `get_public_tool_ids` / `get_all_tool_ids` / `get_always_on_tool_ids` | **No — deliberately.** The docstring says so: enforcement and the picker must agree about which tools `isPublic` reaches |
 | `AppRoleService` (every gate) | **No.** Never reads the catalog row at all, only role records ∪ the public set |
-| `agents/` runtime — `base_agent`, `external_mcp_client`, `tool_filter`, `gateway_integration` | **No.** Grep for `.status` under `backend/src/agents/` returns HTTP status codes and one document-rehydration check. Nothing tool-catalog |
+| `agents/` runtime — `base_agent`, `external_mcp_client`, `tool_filter`, `gateway_integration` | **No** when this was written. Since §7a, **`disabled` only**: `get_agent` and the voice route drop it, and `external_mcp_client` skips it. `deprecated` is still never read at runtime |
 | `BindableItem.meta` for `kind=tool` ([`bindable_catalog.py:111`](../../backend/src/apis/app_api/agent_designer/services/bindable_catalog.py#L111)) | **Does not carry `status` at all.** The Agent Designer picker is structurally blind to it |
 | SPA `reconcileToolRefs` ([`tool-ref-reconcile.ts`](../../frontend/ai.client/src/app/agents/agent-form/tool-ref-reconcile.ts)) | Yes — the one real consumer. Flags a non-`active` ref on *template prefill*, and still applies it |
 
@@ -95,11 +95,11 @@ Two consequences worth stating before anyone's first move:
    describes. It still gates nothing on the *access* or *runtime* paths and
    never will — §4 is emphatic about that — but as of §7 the pickers read it.
 2. So `DELETE /api/admin/tools/{id}` without `hard=true` (`soft_delete_tool`,
-   which sets `status: DISABLED`) is no longer a no-op: it now performs Stage 1's
-   third step as a side effect. It still does **not** revoke anything, so it is
-   safe — but it is not the "remove the tool" an admin reaching for Delete
-   probably means, and it is not reversible through the Delete button. Flip
-   `status` back to `active` on the tool form to undo it.
+   which sets `status: DISABLED`) is no longer a no-op. Since §7a it takes the
+   tool out of service for everyone on their next turn, which is closer to what
+   an admin reaching for Delete means. It still does **not** revoke the grant,
+   and it is not reversible through the Delete button. Flip `status` back to
+   `active` on the tool form to undo it.
 3. The word we needed already existed. `DEPRECATED` needed readers, not a new
    enum value, and §7 adds them.
 
@@ -611,6 +611,29 @@ guards are intact.
 `reconcileToolRefs` already flagged non-`active` refs on template prefill and
 still applied them — the right behaviour, and the precedent the badge copy
 follows.
+
+## 7a. `disabled` is the runtime off switch (2026-10-17)
+
+§7 treated every non-`active` status alike: a user who already had the tool
+kept it. That is right for `deprecated`, which is what Stage 1 sets. It was
+wrong for `disabled`. On dev an admin disabled two broken test servers and every
+user who had toggled them on kept loading them, so a duplicate tool name
+between them failed every conversation until each user turned the toggles off.
+
+So the two statuses now mean different things:
+
+| Status | Picker (§7) | Runtime |
+|---|---|---|
+| `deprecated` | Can be turned off, not on | Loads for whoever already has it |
+| `disabled` | Can be turned off, not on | **Never loads.** Dropped from the turn's `enabled_tools` whatever named it: a saved toggle, an Agent binding, an admin pin |
+
+Where: `freshness.drop_disabled_tools` (one more set from the existing catalog
+snapshot, so no new DynamoDB read) runs in `get_agent` before the agent cache
+key and in the voice route; `ExternalMCPIntegration._load_server` also checks
+the row it has just fetched. Nothing changes at the grant layer, so §4 holds:
+an Agent that binds a disabled tool still saves and still runs, without that
+tool. Stage 1 must keep using `deprecated`; reach for `disabled` only to stop a
+tool now.
 
 ## 8. What to tell Agent authors
 

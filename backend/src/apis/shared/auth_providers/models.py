@@ -377,6 +377,9 @@ class AuthProviderPublicListResponse(BaseModel):
     """Response for the public providers endpoint used by the login page."""
 
     providers: List[AuthProviderPublicInfo]
+    # Defaults to True so a client that predates the field, or a backend that
+    # cannot read the setting, keeps the Cognito button.
+    cognito_login_visible: bool = True
 
 
 class OIDCDiscoveryRequest(BaseModel):

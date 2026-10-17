@@ -11,9 +11,16 @@ registry entry is ``admin.auth_providers``, marked ``delegable=False`` in
 """
 
 import logging
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
+from apis.app_api.system.login_page import cognito_login_visible
+from apis.app_api.system.models import (
+    LoginPageSettingsResponse,
+    LoginPageSettingsUpdate,
+)
+from apis.app_api.system.repository import get_system_settings_repository
 from apis.shared.auth import User, require_admin
 from apis.shared.auth_providers.models import (
     AuthProviderCreate,
@@ -117,6 +124,83 @@ async def get_cognito_redirect_uri(
         )
 
     return {"redirect_uri": f"{cognito_domain}/oauth2/idpresponse"}
+
+
+def _login_page_settings_response(
+    item: Optional[dict], enabled_provider_count: int
+) -> LoginPageSettingsResponse:
+    hide_requested = bool(item and item.get("hideCognitoLogin"))
+    return LoginPageSettingsResponse(
+        hide_cognito_login=hide_requested,
+        cognito_login_visible=cognito_login_visible(
+            hide_requested=hide_requested,
+            enabled_provider_count=enabled_provider_count,
+        ),
+        enabled_provider_count=enabled_provider_count,
+        updated_at=item.get("updatedAt") if item else None,
+        updated_by=item.get("updatedBy") if item else None,
+    )
+
+
+async def _enabled_provider_count() -> int:
+    service = get_auth_provider_service()
+    return len(await service.list_providers(enabled_only=True))
+
+
+@router.get(
+    "/login-page-settings",
+    response_model=LoginPageSettingsResponse,
+    summary="Get the sign-in page settings",
+)
+async def get_login_page_settings(
+    admin_user: User = Depends(require_admin),
+) -> LoginPageSettingsResponse:
+    """Return whether the Cognito sign-in button is hidden, and how that resolves."""
+    repo = get_system_settings_repository()
+    item = await repo.get_login_page_settings() if repo.enabled else None
+    return _login_page_settings_response(item, await _enabled_provider_count())
+
+
+@router.put(
+    "/login-page-settings",
+    response_model=LoginPageSettingsResponse,
+    summary="Update the sign-in page settings",
+)
+async def update_login_page_settings(
+    updates: LoginPageSettingsUpdate,
+    admin_user: User = Depends(require_admin),
+) -> LoginPageSettingsResponse:
+    """Hide or show the Cognito sign-in button.
+
+    Hiding is refused while no federated provider is enabled: the Cognito
+    button would be the only way in, and the login page shows it regardless
+    (``apis/app_api/system/login_page.py``), so accepting the request would
+    save a setting that silently does nothing.
+    """
+    logger.info("Admin updating login-page settings")
+
+    repo = get_system_settings_repository()
+    if not repo.enabled:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="System settings storage is not configured",
+        )
+
+    enabled_provider_count = await _enabled_provider_count()
+    if updates.hide_cognito_login and enabled_provider_count == 0:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "Enable at least one authentication provider before hiding "
+                "the Cognito sign-in option"
+            ),
+        )
+
+    item = await repo.put_login_page_settings(
+        hide_cognito_login=updates.hide_cognito_login,
+        updated_by=admin_user.user_id,
+    )
+    return _login_page_settings_response(item, enabled_provider_count)
 
 
 @router.post(
