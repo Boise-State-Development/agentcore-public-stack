@@ -27,7 +27,7 @@ Fixes found in the first day of Shared Projects in production: tools, project me
 
 ### ⚠️ Changed
 
-- **An MCP server's admin "Available Tools" list is now an allowlist.** It used to set only per-tool approval and always-on flags, and a whole-server toggle loaded every tool the server had. Now a non-empty list caps what the model is offered; an empty list still means "discover at runtime" (#1643)
+- **An MCP server's admin "Available Tools" list is now an allowlist.** It used to set only per-tool approval and always-on flags, and a whole-server toggle loaded every tool the server had. Now a non-empty list caps what the model is offered; an empty list still means "discover at runtime" (#1643). Tools a server marks for its MCP App only (`_meta.ui` hiding them from the model) pass the list and per-tool selections, so an App keeps the tools it calls itself, such as the Google Tasks board's `board_snapshot` refresh; they still never reach the model, so `toolConfig` is unchanged (`mcp_apps.hidden_from_model`) (#1649)
 
 ## [1.28.1] - 2026-10-16
 

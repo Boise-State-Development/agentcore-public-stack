@@ -51,15 +51,27 @@ The first day of Shared Projects in production turned up a handful of bugs, and 
 ## ⚠️ Behavior change
 
 - **An MCP server's admin "Available Tools" list is now an allowlist.** Before, the list only carried per-tool approval and always-on flags, and turning on the whole server loaded every tool it had. Now a non-empty list caps what the model is offered. An empty list still means "every tool the server has" (#1643).
+  - The list caps only tools the model can see. Some tools exist only for a server's MCP App: the model never sees them, and the App calls them itself, as the Google Tasks board does to refresh. Those still pass, so you don't need to list them, and an App keeps working whatever the list holds. They still never reach the model, so the cached prompt doesn't change (#1649).
 
 ---
 
 ## 🚀 Deployment notes
 
 - **No infrastructure change.** Run `backend.yml`, then `frontend-deploy.yml`. `platform.yml` has nothing to apply.
-- **Before deploying, review every MCP server whose admin tool list isn't empty.** For each one, open it in Admin → Tools and click **Discover from server**. Any tool that discovery shows but the saved list lacks stops reaching the model once this release deploys. Add the tool to the list if users need it, or clear the list to expose everything.
+- **Before deploying, review every MCP server whose admin tool list isn't empty.** For each one, open it in Admin → Tools and click **Discover from server**. Any tool that discovery shows but the saved list lacks stops reaching the model once this release deploys. Add the tool to the list if users need it, or clear the list to expose everything. Tools that only an MCP App uses don't need to be listed. Discovery on an OAuth-gated server runs as the signed-in admin, so connect that account first. A server that won't answer discovery has to be compared against its published tool list. In the maintainers' deployment, the check found a GitHub Issues tool and a group of newer Canvas for Faculty tools missing from their lists.
 - **Check for `disabled` tools that users still depend on.** Each one stops loading for everyone after this deploy. If one should keep working for its current users, set it to `deprecated` instead.
 - **After deploying:** expect one prompt-cache write per project harness, from the larger `memory_save` spec. The next Platform Stack deploy that touches the app client should log `Restored [...] to the App Client's supported identity providers` from app-api. If the line is absent, nothing was dropped.
+
+### Other deployments
+
+- **Coming from 1.27.x or earlier?** 1.28.2 adds no infrastructure, flags, environment variables, tables, indexes or backfills. Everything 1.28.0 and 1.28.1 need still applies, though. Run `backend.yml` before `platform.yml`, then re-run "Deploy large-document-prepare Lambda image", and check the platform dashboard. 1.28.1's split of the alarm widget into groups of 100 is included.
+- **app-api now writes to your Cognito app client by itself.** About once a minute it adds back any **enabled** Admin → Auth Providers entry that's missing from the client. It uses permissions its task role already has, and it never removes anything.
+  - To take a provider off the sign-in page, disable or delete it in the admin console. If you remove it from the client in the AWS console instead, app-api adds it back within a minute.
+  - Federated sign-in can still fail for up to about a minute after a Platform deploy that touches the client. To close that gap, list the provider's id in `CDK_COGNITO_SUPPORTED_IDPS`, but only once the provider exists in the user pool.
+- **Check any app client settings you changed outside CDK.** Before this release, adding or removing a provider in the admin console reset the client's other settings to Cognito defaults: token revocation, auth-session validity, read/write attributes and the default redirect URI. 1.28.2 preserves every setting from now on, but it doesn't restore what an earlier write reset.
+  - If you only ever set these through CDK, there's nothing to do.
+  - Otherwise, compare `aws cognito-idp describe-user-pool-client` against what you expect.
+- **"Hide Cognito sign-in" is off until an admin turns it on.** It can't be turned on while no other provider is enabled. `/auth/login?local=1` always shows the Cognito button, so keep that URL for recovery.
 
 ---
 
