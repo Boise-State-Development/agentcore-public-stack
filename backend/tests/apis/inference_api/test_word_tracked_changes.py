@@ -191,6 +191,49 @@ class TestRedlineTool:
         assert b'w:author="Outside Counsel"' in _document_xml(store["data"])
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "source_name,expected",
+        [
+            ("Q3 Budget (draft).docx", "Q3-Budget-draft-redline.docx"),
+            ("Policy - Final v2.docx", "Policy-Final-v2-redline.docx"),
+            ("Résumé notes.docx", "Resume-notes-redline.docx"),
+            ("規約.docx", "document-redline.docx"),
+        ],
+    )
+    async def test_the_default_name_is_valid_for_any_source_name(self, store, monkeypatch, source_name, expected):
+        """Prod, 2026-10-17: a Drive file with a space failed its own default name."""
+        import agents.builtin_tools.word_document_tool as word
+        from agents.builtin_tools.word_document_tool import make_redline_word_document_tool
+
+        source = SimpleNamespace(filename=source_name, s3_bucket="b", s3_key="k")
+
+        async def find(user_id, session_id, name):
+            return source
+
+        monkeypatch.setattr(word, "_find_word_document", find)
+        tool = make_redline_word_document_tool("s1", "u1", "Pat Reviewer")
+        result = await _call(tool, document_name=source_name, changes=[{"find": "Idaho", "replace": "Utah"}])
+
+        assert json.loads(result)["payload"]["filename"] == expected
+        assert store["filename"] == expected
+
+    @pytest.mark.asyncio
+    async def test_an_invalid_output_name_given_by_the_model_is_still_refused(self, store):
+        from agents.builtin_tools.word_document_tool import make_redline_word_document_tool
+
+        tool = make_redline_word_document_tool("s1", "u1", "Pat Reviewer")
+        result = await _call(
+            tool,
+            document_name="services-agreement",
+            changes=[{"find": "Idaho", "replace": "Utah"}],
+            output_name="my redline",
+        )
+
+        assert result["status"] == "error"
+        assert "Invalid output name 'my redline'" in result["content"][0]["text"]
+        assert store == {}
+
+    @pytest.mark.asyncio
     async def test_a_change_that_cannot_be_placed_saves_nothing(self, store):
         from agents.builtin_tools.word_document_tool import make_redline_word_document_tool
 

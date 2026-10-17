@@ -33,6 +33,7 @@ The first day of Shared Projects in production turned up a handful of bugs, and 
   - It is refused if the name is taken, the old file wasn't read or has changed since, or a scheduled run is saving.
   - An invented anchor such as `<!-- e:team-roster -->` now gets an error that says to remove it. Before, a misleading message led to 16 failed saves in one conversation.
   - The `memory_save` spec grows by about 126 tokens: one cache write per harness after deploy (#1640, #1641).
+- **Redlining a Word file with a space in its name works the first time.** The redline tool named its output `<source>-redline` and then rejected that name, because file names it saves may hold only letters, digits, underscores and hyphens. Most real Drive file names have spaces, so the call failed and the model had to retry with a name of its own. The default is now cleaned up first: `Q3 Budget (draft)` becomes `Q3-Budget-draft-redline`. A name the model chooses is still checked as given. Found in the production test pass for this release.
 - **Sign-in providers added in Admin → Auth Providers survive Platform Stack deploys.** A deploy that changes any property of the BFF app client resets the client's identity providers to the template's list. That dropped every admin-added provider: the button still showed, but Cognito refused the sign-in.
   - app-api now restores every enabled provider once at startup and then every 60 seconds. It only ever adds providers, never removes them.
   - app-api's own client updates now preserve every client setting, not just 12 of them.
