@@ -331,10 +331,14 @@ see `feature_flags.browser_takeover_fit_enabled`). The SPA needs no switch: it
 reads whatever `viewport` the event carries, so with the switch off it still
 widens the rail, now toward 1280, and scales down.
 
-Not done yet: the handover height is a fixed 832. A user whose panel is
-shorter sees the frame scaled down a little. Sizing it from the panel would
-mean the SPA sending its rail height on the chat request and the route
-threading it to the tool, which is a turn-path change of its own.
+Not done yet: the handover height is a fixed 832. The panel's header and
+disclosure take about 122px, so the frame is 1:1 only in a window at least
+~954px tall. Measured locally on 2026-10-17 in a 1440x900 window, the rail
+widened to 800 and the frame drew at 718x778 (93%). Expand does not help
+there, because the overlay keeps the same header and the frame is limited by
+height. Sizing the handover from the panel would mean the SPA sending its
+rail height on the chat request and the route threading it to the tool,
+which is a turn-path change of its own.
 
 ### D4 — Browser session identity in the session-metadata row
 
