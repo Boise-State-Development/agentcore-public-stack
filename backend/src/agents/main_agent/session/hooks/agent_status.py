@@ -148,6 +148,21 @@ def _tool_use_fields(event: Any) -> tuple[Optional[str], Optional[str], Any]:
     )
 
 
+def _integration_of(event: Any) -> Optional[str]:
+    """The catalog display name of the server a call ran on, or None.
+
+    External MCP clients carry it as ``context_label`` (the catalog row's
+    ``display_name``, set when the client is built). Built-in tools have none,
+    and nor does a call the model invented (``selected_tool`` is None). The
+    summarizer names a failed call by this, never by a guess: given only a tool
+    name it headed a failed GitHub call "Couldn't reach Canvas" (prod,
+    2026-10-17).
+    """
+    client = getattr(getattr(event, "selected_tool", None), "mcp_client", None)
+    label = getattr(client, "context_label", None)
+    return label if isinstance(label, str) and label else None
+
+
 class AgentStatusHook(HookProvider):
     """Record model-call and tool-call transitions for the live status line.
 
@@ -288,6 +303,7 @@ class AgentStatusHook(HookProvider):
                         "result": _stringify(result, _MAX_RESULT_CHARS),
                         "ok": ok,
                         "durationMs": duration_ms,
+                        "integration": _integration_of(event),
                     }
                 )
         except Exception:  # noqa: BLE001
