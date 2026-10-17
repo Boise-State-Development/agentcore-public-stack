@@ -13,6 +13,7 @@ reported `closed is False` forever while holding a dead socket, and
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any, List, Optional
 
 import pytest
@@ -91,3 +92,71 @@ class TestPeerClose:
 
         with pytest.raises(CdpError, match="closed"):
             await session.command("Page.navigate", {"url": "https://example.edu"})
+
+
+class AnsweringWebSocket:
+    """A websocket that answers every command, and remembers what was sent."""
+
+    def __init__(self, results: Optional[dict] = None) -> None:
+        self.results = results or {}
+        self.sent: List[dict] = []
+        self._replies: asyncio.Queue = asyncio.Queue()
+
+    def __aiter__(self) -> "AnsweringWebSocket":
+        return self
+
+    async def __anext__(self) -> str:
+        return await self._replies.get()
+
+    async def send(self, payload: str) -> None:
+        message = json.loads(payload)
+        self.sent.append(message)
+        result = self.results.get(message["method"], {})
+        await self._replies.put(json.dumps({"id": message["id"], "result": result}))
+
+    async def close(self) -> None:
+        pass
+
+
+class TestSetWindowSize:
+    """Chrome on a bare X display only re-fits through `setWindowBounds`."""
+
+    @pytest.mark.asyncio
+    async def test_finds_the_page_window_then_normalizes_then_sizes(self) -> None:
+        ws = AnsweringWebSocket({"Browser.getWindowForTarget": {"windowId": 7}})
+        session = CdpSession(ws)
+        session._target_id = "page-1"
+        session._page_session_id = "s-1"
+        session._reader = asyncio.create_task(session._read_loop())
+        try:
+            await session.set_window_size(768, 832)
+        finally:
+            await session.close()
+
+        assert [(m["method"], m.get("params")) for m in ws.sent] == [
+            ("Browser.getWindowForTarget", {"targetId": "page-1"}),
+            (
+                "Browser.setWindowBounds",
+                {"windowId": 7, "bounds": {"windowState": "normal"}},
+            ),
+            (
+                "Browser.setWindowBounds",
+                {
+                    "windowId": 7,
+                    "bounds": {"left": 0, "top": 0, "width": 768, "height": 832},
+                },
+            ),
+        ]
+        # Browser-scoped: a page sessionId would address the tab, not the window.
+        assert all("sessionId" not in m for m in ws.sent)
+
+    @pytest.mark.asyncio
+    async def test_no_window_is_an_error_not_a_silent_no_op(self) -> None:
+        ws = AnsweringWebSocket({"Browser.getWindowForTarget": {}})
+        session = CdpSession(ws)
+        session._reader = asyncio.create_task(session._read_loop())
+        try:
+            with pytest.raises(CdpError, match="windowId"):
+                await session.set_window_size(768, 832)
+        finally:
+            await session.close()

@@ -167,6 +167,171 @@ describe('BrowserPanelComponent', () => {
     });
   });
 
+  describe('drawing the stream at 1:1', () => {
+    let innerWidth: PropertyDescriptor | undefined;
+
+    beforeEach(() => {
+      innerWidth = Object.getOwnPropertyDescriptor(window, 'innerWidth');
+    });
+
+    afterEach(() => {
+      if (innerWidth) Object.defineProperty(window, 'innerWidth', innerWidth);
+    });
+
+    function windowWidth(px: number) {
+      Object.defineProperty(window, 'innerWidth', { value: px, configurable: true });
+    }
+
+    const signIn = () => request({ viewport: { width: 768, height: 832 } });
+
+    function frameWidth(): string {
+      return (fixture.componentInstance['frameWidth'] as () => string)();
+    }
+
+    it('never draws the frame wider than the remote viewport', async () => {
+      await openPanel(signIn());
+
+      // A wider rail centres the frame; it does not upscale it.
+      expect(frameWidth()).toMatch(/^min\(.*, 768px\)$/);
+    });
+
+    it('still scales down to fit a narrower or shorter rail', async () => {
+      await openPanel(signIn());
+
+      expect(frameWidth()).toContain('100cqw');
+      expect(frameWidth()).toContain('calc(100cqh * 0.9231)');
+    });
+
+    it('widens the rail to fit the stream, and restores it on close', async () => {
+      windowWidth(1600);
+      expect(docked.width()).toBe(672);
+
+      const el = await openPanel(signIn());
+      expect(docked.width()).toBe(768 + 32);
+
+      (el.querySelector('[aria-label="Close browser panel"]') as HTMLButtonElement).click();
+      fixture.detectChanges();
+      expect(docked.width()).toBe(672);
+    });
+
+    it('takes only what the window can spare above the chat floor', async () => {
+      windowWidth(1100);
+
+      await openPanel(signIn());
+
+      expect(docked.width()).toBe(1100 - 360);
+    });
+
+    it('leaves the rail alone when the window has no room to widen it', async () => {
+      windowWidth(1000);
+
+      await openPanel(signIn());
+
+      expect(docked.width()).toBe(672);
+    });
+
+    it('never narrows a rail the user already made wider', async () => {
+      windowWidth(1600);
+      docked.setWidth(1000);
+
+      await openPanel(signIn());
+      expect(docked.width()).toBe(1000);
+
+      pane.close();
+      fixture.detectChanges();
+      expect(docked.width()).toBe(1000);
+    });
+
+    it('keeps a width the user dragged to while it was open', async () => {
+      windowWidth(1600);
+      await openPanel(signIn());
+
+      docked.setWidth(900);
+      pane.close();
+      fixture.detectChanges();
+
+      expect(docked.width()).toBe(900);
+    });
+
+    it('gives the width back when another pane takes the rail', async () => {
+      windowWidth(1600);
+      await openPanel(signIn());
+
+      docked.claim('artifact');
+      TestBed.tick();
+
+      expect(docked.width()).toBe(672);
+    });
+  });
+
+  describe('expanding to the full window', () => {
+    function toggle(el: HTMLElement): HTMLButtonElement {
+      return el.querySelector(
+        '[aria-label="Expand browser to full window"], [aria-label="Return browser to the side panel"]',
+      ) as HTMLButtonElement;
+    }
+
+    it('restyles the pane in place, so the stream is never reloaded', async () => {
+      const el = await openPanel();
+      const frame = el.querySelector('iframe');
+
+      toggle(el).click();
+      fixture.detectChanges();
+      const aside = el.querySelector('aside')!;
+      expect(aside.getAttribute('role')).toBe('dialog');
+      expect(aside.getAttribute('aria-modal')).toBe('true');
+      expect(aside.style.maxWidth).toBe('');
+      // The same element: moving or re-creating it would drop the DCV stream.
+      expect(el.querySelector('iframe')).toBe(frame);
+
+      toggle(el).click();
+      fixture.detectChanges();
+      expect(aside.getAttribute('role')).toBeNull();
+      expect(el.querySelector('iframe')).toBe(frame);
+      expect(service.mintLiveView).toHaveBeenCalledTimes(1);
+    });
+
+    it('is a labelled toggle a keyboard user can reach', async () => {
+      const el = await openPanel();
+      const button = toggle(el);
+
+      expect(button.tagName).toBe('BUTTON');
+      expect(button.getAttribute('aria-label')).toBe('Expand browser to full window');
+      button.click();
+      fixture.detectChanges();
+      expect(toggle(el).getAttribute('aria-label')).toBe(
+        'Return browser to the side panel',
+      );
+    });
+
+    it('collapses on Escape but never closes the pane', async () => {
+      const el = await openPanel();
+      toggle(el).click();
+      fixture.detectChanges();
+
+      el.querySelector('aside')!.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+      );
+      fixture.detectChanges();
+
+      expect(el.querySelector('aside')!.getAttribute('role')).toBeNull();
+      expect(docked.owner()).toBe('browser');
+      expect(el.querySelector('iframe')).not.toBeNull();
+    });
+
+    it('does nothing on Escape while docked', async () => {
+      const el = await openPanel();
+
+      el.querySelector('aside')!.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+      );
+      fixture.detectChanges();
+
+      expect(docked.owner()).toBe('browser');
+      expect(service.complete).not.toHaveBeenCalled();
+    });
+  });
+
   describe('the ready handshake', () => {
     function stubFrame(el: HTMLElement) {
       const post = vi.fn();

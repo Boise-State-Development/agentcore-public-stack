@@ -10,10 +10,13 @@ import {
   untracked,
   viewChild,
 } from '@angular/core';
+import { A11yModule } from '@angular/cdk/a11y';
 import { DomSanitizer, SafeResourceUrl } from '@angular/platform-browser';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroArrowPath,
+  heroArrowsPointingIn,
+  heroArrowsPointingOut,
   heroCheck,
   heroExclamationTriangle,
   heroLockClosed,
@@ -28,6 +31,16 @@ import {
 import { BrowserPaneStateService } from '../../../../services/browser-pane/browser-pane-state.service';
 import { DockedPaneService } from '../../../../services/docked-pane/docked-pane.service';
 import { hostLabel } from '../browser-card/browser-page';
+
+/**
+ * Rail width beyond the remote viewport: the frame container's `p-3` on both
+ * sides plus the rail's border, rounded up. A rail this much wider than the
+ * stream shows it at exactly 1:1.
+ */
+export const BROWSER_RAIL_GUTTER_PX = 32;
+
+/** The chat column the rail never squeezes below — same floor as a drag. */
+export const CHAT_FLOOR_PX = 360;
 
 /**
  * Right-docked pane holding the live browser the user drives to sign in
@@ -60,14 +73,30 @@ import { hostLabel } from '../browser-card/browser-page';
  * Escape deliberately does not close this pane, unlike its siblings: the user
  * is typing into a remote page, and a stray Escape that tore down the stream
  * mid-password would cost a re-mint and their place.
+ *
+ * Scale: 1:1, never larger
+ * ------------------------
+ * The backend hands the browser over at a sign-in size (768 wide, set before
+ * the automation stream is disabled, since CDP is refused after), and the
+ * event's `viewport` says what it chose. On open the rail widens to fit that
+ * width, when the window has room for the chat beside it, and goes back to
+ * the user's own width on close. The frame is never drawn wider than the
+ * remote viewport: past 1:1 the page only gets blurrier, so a wider rail
+ * centres the frame and a narrower one scales it down.
+ *
+ * **Expand** shows the same stream over the whole window, by restyling the
+ * pane in place. The iframe is not moved, for the reason above; collapsing
+ * puts it back on the rail with the stream still up.
  */
 @Component({
   selector: 'app-browser-panel',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon],
+  imports: [NgIcon, A11yModule],
   providers: [
     provideIcons({
       heroArrowPath,
+      heroArrowsPointingIn,
+      heroArrowsPointingOut,
       heroCheck,
       heroExclamationTriangle,
       heroLockClosed,
@@ -76,13 +105,26 @@ import { hostLabel } from '../browser-card/browser-page';
   ],
   template: `
     @if (request(); as req) {
+      <!-- Expanded is the same element restyled to cover the window, never a
+           second viewer or a moved one: moving the iframe reloads it. While
+           expanded it is a modal surface, so it takes the dialog role and
+           traps focus; docked, it is neither. -->
       <aside
-        class="fixed inset-y-0 right-0 z-40 flex w-full flex-col border-l border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900"
-        [style.maxWidth]="paneWidthCss()"
+        class="fixed inset-y-0 right-0 flex w-full flex-col border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900"
+        [class.z-40]="!expanded()"
+        [class.z-60]="expanded()"
+        [class.left-0]="expanded()"
+        [class.border-l]="!expanded()"
+        [style.maxWidth]="expanded() ? null : paneWidthCss()"
         [class.select-none]="dragging()"
+        [attr.role]="expanded() ? 'dialog' : null"
+        [attr.aria-modal]="expanded() ? 'true' : null"
         [attr.aria-label]="'Browser: ' + title()"
+        [cdkTrapFocus]="expanded()"
+        (keydown.escape)="onEscape()"
       >
         <div
+          [class.hidden]="expanded()"
           role="separator"
           aria-orientation="vertical"
           tabindex="0"
@@ -131,6 +173,19 @@ import { hostLabel } from '../browser-card/browser-page';
             I've signed in
           </button>
           <button
+            #expandToggle
+            type="button"
+            class="flex size-8 shrink-0 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-accessible dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
+            [attr.aria-label]="expanded() ? 'Return browser to the side panel' : 'Expand browser to full window'"
+            [attr.title]="expanded() ? 'Collapse' : 'Expand'"
+            (click)="toggleExpanded()"
+          >
+            <ng-icon
+              [name]="expanded() ? 'heroArrowsPointingIn' : 'heroArrowsPointingOut'"
+              size="18"
+            />
+          </button>
+          <button
             type="button"
             class="flex size-8 shrink-0 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-accessible dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
             aria-label="Close browser panel"
@@ -154,7 +209,8 @@ import { hostLabel } from '../browser-card/browser-page';
         <!-- Container-sized so the frame can letterbox: DCV's
              remoteWidth/remoteHeight must match the browser session or the
              stream crops, so the frame keeps the event's aspect ratio at
-             whatever width the user drags the rail to. -->
+             whatever width the user drags the rail to, and stops growing at
+             the remote viewport's own size. -->
         <div
           class="relative flex min-h-0 flex-1 items-center justify-center bg-gray-100 p-3 [container-type:size] dark:bg-gray-950"
           [class.pointer-events-none]="dragging()"
@@ -267,13 +323,33 @@ export class BrowserPanelComponent {
       : '16 / 10';
   });
 
-  /** As wide as the pane allows without the height overflowing it. */
+  /**
+   * As wide as the pane allows without the height overflowing it, and never
+   * wider than the remote viewport: a stream drawn past 1:1 is only an
+   * upscaled, softer copy of the same pixels.
+   */
   protected readonly frameWidth = computed(() => {
     const viewport = this.request()?.viewport;
     const ratio =
       viewport && viewport.height > 0 ? viewport.width / viewport.height : 1.6;
-    return `min(100cqw, calc(100cqh * ${ratio.toFixed(4)}))`;
+    const fit = `100cqw, calc(100cqh * ${ratio.toFixed(4)})`;
+    return viewport && viewport.width > 0
+      ? `min(${fit}, ${viewport.width}px)`
+      : `min(${fit})`;
   });
+
+  /** Whether the stream is shown over the whole window rather than the rail. */
+  protected readonly expanded = signal(false);
+
+  private readonly expandToggle =
+    viewChild<ElementRef<HTMLButtonElement>>('expandToggle');
+
+  /**
+   * The rail width from before this pane widened it, and the width it set.
+   * Null when the pane left the rail alone (it was already wide enough, or
+   * the window had no room).
+   */
+  private railBefore: { width: number; fitted: number } | null = null;
 
   /**
    * The viewer page, with the CSP it needs declared in the query.
@@ -334,11 +410,16 @@ export class BrowserPanelComponent {
     // different prompt tears the old stream down first.
     effect((onCleanup) => {
       if (!this.requestId()) return;
-      untracked(() => void this.mint());
+      untracked(() => {
+        this.fitRail();
+        void this.mint();
+      });
       const tick = setInterval(() => this.now.set(Date.now()), 1000);
       onCleanup(() => {
         clearInterval(tick);
         this.teardown();
+        this.expanded.set(false);
+        this.restoreRail();
       });
     });
 
@@ -461,6 +542,53 @@ export class BrowserPanelComponent {
 
   protected close(): void {
     this.pane.close();
+  }
+
+  /**
+   * Widen the rail so the stream fits at 1:1, if the window has room.
+   *
+   * Only ever widens: a user whose rail is already wider keeps it, and the
+   * frame centres. Bounded by the same 360px chat floor a drag is, so a small
+   * window gets as much as it can spare and the frame scales down the rest.
+   */
+  private fitRail(): void {
+    const viewport = this.request()?.viewport;
+    if (!viewport || viewport.width <= 0 || typeof window === 'undefined') return;
+    const before = this.dockedPane.width();
+    const room = window.innerWidth - CHAT_FLOOR_PX;
+    const target = Math.min(viewport.width + BROWSER_RAIL_GUTTER_PX, room);
+    if (target <= before) return;
+    this.dockedPane.setWidth(target);
+    this.railBefore = { width: before, fitted: this.dockedPane.width() };
+  }
+
+  /**
+   * Give the rail back at the width the user had before it opened.
+   *
+   * Unless they resized it while it was open: that width is their choice
+   * now, and the rail keeps a user-set width across panes on purpose.
+   */
+  private restoreRail(): void {
+    const saved = this.railBefore;
+    this.railBefore = null;
+    if (!saved || this.dockedPane.width() !== saved.fitted) return;
+    this.dockedPane.setWidth(saved.width);
+  }
+
+  protected toggleExpanded(): void {
+    this.expanded.update((v) => !v);
+    // The toggle is the one control in both layouts, so focus stays on it:
+    // keyboard users land where they can collapse again, inside the trap.
+    queueMicrotask(() => this.expandToggle()?.nativeElement.focus());
+  }
+
+  /**
+   * Escape collapses the expanded view, and does nothing else. It never
+   * closes the pane (see the class comment), and a key pressed inside the
+   * remote page never reaches here anyway: the iframe is its own document.
+   */
+  protected onEscape(): void {
+    if (this.expanded()) this.toggleExpanded();
   }
 
   protected async finish(req: BrowserLoginRequest): Promise<void> {
