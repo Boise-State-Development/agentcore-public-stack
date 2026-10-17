@@ -172,12 +172,17 @@ def _active_session(client: Any):
                         )
 
 
-def _resolve_client(agent: Any, tool_name: str):
-    """The MCP client that surfaced `tool_name`.
+def _resolve_client(agent: Any, tool_name: str, user_id: Optional[str] = None):
+    """The MCP client that surfaced `tool_name` for `user_id`.
 
     Primary source is the `UIToolCatalog` (recorded when the agent's MCP
     client ran `tools/list` during build). Lazy import keeps the agent
     layer off inference-api's cold-start path when MCP Apps is disabled.
+
+    `user_id` is load-bearing: the catalog is process-global, and a client
+    carrying one user's credential is recorded under that user. Resolving
+    without it would only see shared clients; resolving by name alone used
+    to return whichever user's client was recorded last.
     """
     from agents.main_agent.integrations.mcp_apps import (
         get_ui_tool_catalog,
@@ -187,8 +192,8 @@ def _resolve_client(agent: Any, tool_name: str):
     if not is_mcp_apps_host_enabled():
         return None, None
     catalog = get_ui_tool_catalog()
-    ui_metadata = catalog.get(tool_name)
-    client = catalog.get_client(tool_name)
+    ui_metadata = catalog.get(tool_name, user_id)
+    client = catalog.get_client(tool_name, user_id)
     return ui_metadata, client
 
 
@@ -396,7 +401,7 @@ def _refresh_ui_resource(user_id: str, session_id: str, tool_use_id: str) -> Non
     # between turns Strands has already stopped the client's session — the
     # same reason an app-initiated call needs this wrapper.
     with _active_session(client):
-        payload = fetch_ui_resource(producing_tool, tool_use_id)
+        payload = fetch_ui_resource(producing_tool, tool_use_id, user_id)
     if not payload or not payload.get("html"):
         return
 
@@ -466,7 +471,7 @@ async def dispatch_app_tool_call(
     JSON response app-api relays to the iframe. Raises `AppToolCallError`
     for visibility / unknown-tool / dispatch failures.
     """
-    ui_metadata, client = _resolve_client(agent, tool_name)
+    ui_metadata, client = _resolve_client(agent, tool_name, user_id)
 
     # Spec MUST: reject tools/call from apps for tools whose visibility
     # excludes "app". With the host flag off the catalog is empty, so

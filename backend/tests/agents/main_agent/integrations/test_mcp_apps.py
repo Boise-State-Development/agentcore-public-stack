@@ -831,3 +831,110 @@ class TestStartRetry:
             with pytest.raises(MCPClientInitializationError):
                 client.start()
         assert calls["n"] == mcp_apps._MCP_START_MAX_ATTEMPTS
+
+
+# ── Per-user catalog partitioning ─────────────────────────────────────────────
+#
+# The catalog is process-global. A client carrying one user's credential is
+# stamped `owner_user_id` and its entries must never be handed back for any
+# other user — otherwise an app-initiated tools/call (or resources/read) for
+# user A runs on user B's client, with B's token.
+
+
+def _owned_client(owner, label):
+    client = _FakeMCPClient(result=_html_resource(text=f"<p>{label}</p>"))
+    client.owner_user_id = owner
+    client.label = label
+    return client
+
+
+class TestPerUserCatalog:
+    def _record(self, monkeypatch, client, name="widget"):
+        monkeypatch.setenv(_ENV_FLAG, "true")
+        record_and_filter_ui_tools(
+            [_fake_tool(name, ui={"resourceUri": "ui://srv/widget"})],
+            client=client,
+        )
+
+    def test_two_users_same_tool_name_never_cross(self, mcp_apps_clean, monkeypatch):
+        alice = _owned_client("alice", "alice")
+        bob = _owned_client("bob", "bob")
+        self._record(monkeypatch, alice)
+        # Bob's build runs later and would have overwritten Alice's entry.
+        self._record(monkeypatch, bob)
+
+        catalog = get_ui_tool_catalog()
+        assert catalog.get_client("widget", "alice") is alice
+        assert catalog.get_client("widget", "bob") is bob
+
+    def test_owned_entry_invisible_to_other_users_and_anonymous(
+        self, mcp_apps_clean, monkeypatch
+    ):
+        self._record(monkeypatch, _owned_client("alice", "alice"))
+
+        catalog = get_ui_tool_catalog()
+        assert catalog.get("widget", "bob") is None
+        assert catalog.get_client("widget", "bob") is None
+        assert catalog.get("widget") is None
+        assert catalog.get_client("widget") is None
+
+    def test_shared_client_visible_to_everyone(self, mcp_apps_clean, monkeypatch):
+        shared = _FakeMCPClient(result=_html_resource())
+        self._record(monkeypatch, shared)
+
+        catalog = get_ui_tool_catalog()
+        assert catalog.get_client("widget", "alice") is shared
+        assert catalog.get_client("widget", "bob") is shared
+        assert catalog.get_client("widget") is shared
+
+    def test_own_entry_preferred_over_shared(self, mcp_apps_clean, monkeypatch):
+        shared = _FakeMCPClient(result=_html_resource())
+        alice = _owned_client("alice", "alice")
+        self._record(monkeypatch, shared)
+        self._record(monkeypatch, alice)
+
+        catalog = get_ui_tool_catalog()
+        assert catalog.get_client("widget", "alice") is alice
+        assert catalog.get_client("widget", "bob") is shared
+
+    def test_fetch_ui_resource_reads_from_the_callers_client(
+        self, mcp_apps_clean, monkeypatch
+    ):
+        alice = _owned_client("alice", "alice")
+        bob = _owned_client("bob", "bob")
+        self._record(monkeypatch, alice)
+        self._record(monkeypatch, bob)
+
+        payload = fetch_ui_resource("widget", "tu-1", "alice")
+
+        assert payload is not None and "alice" in payload["html"]
+        assert alice.read_calls == ["ui://srv/widget"]
+        assert bob.read_calls == []
+        # And no fetch at all for a user with no client of their own.
+        assert fetch_ui_resource("widget", "tu-2", "carol") is None
+
+    def test_build_ui_app_header_scoped_to_user(self, mcp_apps_clean, monkeypatch):
+        self._record(monkeypatch, _owned_client("alice", "alice"))
+
+        assert build_ui_app_header("widget", "tu-1", "alice") is not None
+        assert build_ui_app_header("widget", "tu-1", "bob") is None
+
+    def test_forget_user_drops_only_that_users_entries(
+        self, mcp_apps_clean, monkeypatch
+    ):
+        shared = _FakeMCPClient(result=_html_resource())
+        self._record(monkeypatch, shared, name="shared_widget")
+        self._record(monkeypatch, _owned_client("alice", "alice"))
+        bob = _owned_client("bob", "bob")
+        self._record(monkeypatch, bob)
+
+        catalog = get_ui_tool_catalog()
+        catalog.forget_user("alice")
+
+        assert catalog.get("widget", "alice") is None
+        assert catalog.get_client("widget", "bob") is bob
+        assert catalog.get_client("shared_widget", "alice") is shared
+
+    def test_ui_capable_client_starts_unowned(self, mcp_apps_clean):
+        client = UICapableMCPClient(lambda: None, server_url="https://x.test/mcp")
+        assert client.owner_user_id is None

@@ -103,11 +103,34 @@ class UIToolCatalog:
     `resources/read`. The client's session stays alive for the agent's
     lifetime (Strands holds MCP clients as tool providers), so it is still
     active when a tool result arrives mid-stream.
+
+    Entries are partitioned by the client's OWNER. A client that carries one
+    user's credential (forwarded OIDC token, OAuth token, exchanged token)
+    is stamped with ``owner_user_id`` by the integration that built it, and
+    its entries are only ever returned for that same user. A client with no
+    owner (SigV4 Gateway, static API key, unauthenticated) is shared and
+    recorded under ``None``. Keying by tool name alone let two users of one
+    process overwrite each other's entry, so an app-initiated ``tools/call``
+    for user A could run on user B's client — with B's credential.
+
+    Lookup for a user tries that user's own entry, then the shared one. It
+    never returns another user's entry; a lookup with no user sees only
+    shared entries.
     """
 
     def __init__(self) -> None:
-        self._by_tool_name: dict[str, ToolUIMetadata] = {}
-        self._client_by_tool_name: dict[str, Any] = {}
+        self._by_key: dict[Tuple[Optional[str], str], ToolUIMetadata] = {}
+        self._client_by_key: dict[Tuple[Optional[str], str], Any] = {}
+
+    @staticmethod
+    def _owner_of(client: Optional[Any]) -> Optional[str]:
+        owner = getattr(client, "owner_user_id", None) if client is not None else None
+        return owner if isinstance(owner, str) and owner else None
+
+    def _keys_for(self, tool_name: str, user_id: Optional[str]):
+        if user_id:
+            yield (user_id, tool_name)
+        yield (None, tool_name)
 
     def record(
         self,
@@ -115,27 +138,48 @@ class UIToolCatalog:
         ui_metadata: ToolUIMetadata,
         client: Optional[Any] = None,
     ) -> None:
-        self._by_tool_name[tool_name] = ui_metadata
+        key = (self._owner_of(client), tool_name)
+        self._by_key[key] = ui_metadata
         if client is not None:
-            self._client_by_tool_name[tool_name] = client
+            self._client_by_key[key] = client
 
-    def get(self, tool_name: str) -> Optional[ToolUIMetadata]:
-        return self._by_tool_name.get(tool_name)
+    def get(
+        self, tool_name: str, user_id: Optional[str] = None
+    ) -> Optional[ToolUIMetadata]:
+        for key in self._keys_for(tool_name, user_id):
+            found = self._by_key.get(key)
+            if found is not None:
+                return found
+        return None
 
-    def get_client(self, tool_name: str) -> Optional[Any]:
-        """The MCP client that surfaced `tool_name`, or None.
+    def get_client(self, tool_name: str, user_id: Optional[str] = None) -> Optional[Any]:
+        """The MCP client that surfaced `tool_name` for `user_id`, or None.
 
         Used by `fetch_ui_resource` to issue `resources/read` against the
-        same server the tool came from (spec MUST: never inline).
+        same server the tool came from (spec MUST: never inline), and by
+        app-initiated `tools/call` dispatch. Returns the user's own client,
+        else a shared one — never a client owned by a different user.
         """
-        return self._client_by_tool_name.get(tool_name)
+        for key in self._keys_for(tool_name, user_id):
+            if key in self._by_key:
+                # Pair the client with the metadata entry that matched, so a
+                # user's own metadata is never served with a shared client.
+                return self._client_by_key.get(key)
+        return None
+
+    def forget_user(self, user_id: str) -> None:
+        """Drop every entry owned by `user_id` (their clients were torn down)."""
+        for key in [k for k in self._by_key if k[0] == user_id]:
+            self._by_key.pop(key, None)
+            self._client_by_key.pop(key, None)
 
     def snapshot(self) -> dict[str, ToolUIMetadata]:
-        return dict(self._by_tool_name)
+        """Tool name -> metadata across all owners (diagnostics/tests only)."""
+        return {name: meta for (_owner, name), meta in self._by_key.items()}
 
     def clear(self) -> None:
-        self._by_tool_name.clear()
-        self._client_by_tool_name.clear()
+        self._by_key.clear()
+        self._client_by_key.clear()
 
 
 _ui_tool_catalog: Optional[UIToolCatalog] = None
@@ -473,7 +517,7 @@ def _resolve_server_identity(
 
 
 def fetch_ui_resource(
-    tool_name: str, tool_use_id: str
+    tool_name: str, tool_use_id: str, user_id: Optional[str] = None
 ) -> Optional[Dict[str, Any]]:
     """Fetch a tool's MCP App UI resource and build the `ui_resource` payload.
 
@@ -488,16 +532,19 @@ def fetch_ui_resource(
     false: returns None on flag-off, non-UI tool, unknown hosting client,
     inactive session, fetch error, or a body with no inline HTML. Never
     raises into the stream.
+
+    `user_id` selects that user's own client for a per-user server (see
+    `UIToolCatalog`); without it only shared clients are visible.
     """
     if not is_mcp_apps_host_enabled():
         return None
 
     catalog = get_ui_tool_catalog()
-    ui_metadata = catalog.get(tool_name)
+    ui_metadata = catalog.get(tool_name, user_id)
     if ui_metadata is None or not ui_metadata.resource_uri:
         return None
 
-    client = catalog.get_client(tool_name)
+    client = catalog.get_client(tool_name, user_id)
     if client is None:
         logger.warning(
             "MCP Apps: tool %s has resourceUri %s but no hosting client "
@@ -557,7 +604,7 @@ def fetch_ui_resource(
 
 
 def build_ui_app_header(
-    tool_name: str, tool_use_id: str
+    tool_name: str, tool_use_id: str, user_id: Optional[str] = None
 ) -> Optional[Dict[str, Any]]:
     """Build a metadata-only `ui_resource` (empty `html`) WITHOUT `resources/read`.
 
@@ -580,7 +627,7 @@ def build_ui_app_header(
     if not is_mcp_apps_host_enabled():
         return None
     catalog = get_ui_tool_catalog()
-    ui_metadata = catalog.get(tool_name)
+    ui_metadata = catalog.get(tool_name, user_id)
     if ui_metadata is None or not ui_metadata.resource_uri:
         return None
 
@@ -590,7 +637,7 @@ def build_ui_app_header(
         raw["permissions"] if isinstance(raw.get("permissions"), dict) else {}
     )
     server_name, icon = _resolve_server_identity(
-        catalog.get_client(tool_name), ui_metadata.resource_uri
+        catalog.get_client(tool_name, user_id), ui_metadata.resource_uri
     )
     return {
         "type": "ui_resource",
@@ -766,6 +813,10 @@ class UICapableMCPClient(MCPClient):
         self, *args: Any, server_url: Optional[str] = None, **kwargs: Any
     ) -> None:
         self.server_url = server_url
+        # Set by the integration that built this client when it carries one
+        # user's credential; partitions this client's `UIToolCatalog` entries
+        # to that user. None = shared client (see `UIToolCatalog`).
+        self.owner_user_id: Optional[str] = None
         ensure_ui_extension_session_patch()
         super().__init__(*args, **kwargs)
 

@@ -50,10 +50,10 @@ class _FakeCatalog:
         self._meta = meta
         self._client = client
 
-    def get(self, _name):
+    def get(self, _name, _user_id=None):
         return self._meta
 
-    def get_client(self, _name):
+    def get_client(self, _name, _user_id=None):
         return self._client
 
 
@@ -97,6 +97,50 @@ async def test_rejects_unknown_tool(monkeypatch):
     with pytest.raises(AppToolCallError) as ei:
         await _call()
     assert ei.value.code == 403
+
+
+@pytest.mark.asyncio
+async def test_dispatch_runs_on_the_callers_own_client(monkeypatch):
+    """Two users' per-user clients for one tool name must never cross.
+
+    Uses the REAL process-global catalog: Bob's client is recorded after
+    Alice's (as a later agent build would), and Alice's app-initiated call
+    must still run on Alice's client — not Bob's, which carries his token.
+    """
+    monkeypatch.setattr(mcp_apps_mod, "is_mcp_apps_host_enabled", lambda: True)
+    catalog = mcp_apps_mod.UIToolCatalog()
+    monkeypatch.setattr(mcp_apps_mod, "get_ui_tool_catalog", lambda: catalog)
+
+    alice, bob = _FakeClient(_FakeResult("alice")), _FakeClient(_FakeResult("bob"))
+    alice.owner_user_id, bob.owner_user_id = "alice", "bob"
+    catalog.record("widget_tool", _ui(["app"]), client=alice)
+    catalog.record("widget_tool", _ui(["app"]), client=bob)
+
+    payload = await dispatch_app_tool_call(
+        agent=None,
+        session_id="disp-cross",
+        user_id="alice",
+        tool_use_id="tu-x",
+        tool_name="widget_tool",
+        arguments={},
+    )
+
+    assert payload["result"]["content"] == [{"type": "text", "text": "alice"}]
+    assert len(alice.calls) == 1
+    assert bob.calls == []
+
+    # A user with no client of their own is refused, not served someone else's.
+    with pytest.raises(AppToolCallError) as ei:
+        await dispatch_app_tool_call(
+            agent=None,
+            session_id="disp-cross",
+            user_id="carol",
+            tool_use_id="tu-y",
+            tool_name="widget_tool",
+            arguments={},
+        )
+    assert ei.value.code == 403
+    assert bob.calls == []
 
 
 @pytest.mark.asyncio
@@ -542,8 +586,9 @@ def test_refresh_rereads_the_producing_tool_and_preserves_the_anchor(monkeypatch
     )
     seen = {}
 
-    def _fetch(tool_name, tool_use_id):
+    def _fetch(tool_name, tool_use_id, user_id=None):
         seen["tool_name"] = tool_name
+        seen["user_id"] = user_id
         return {
             "resourceUri": "ui://tasks/board",
             "html": "<html>fresh</html>",
@@ -562,6 +607,8 @@ def test_refresh_rereads_the_producing_tool_and_preserves_the_anchor(monkeypatch
     # Re-read is keyed on the tool that PRODUCED the frame, not whatever the
     # App just called — the resourceUri hangs off the producing tool.
     assert seen["tool_name"] == "view_task_board"
+    # Resolved for the calling user, so a per-user server's own client is used.
+    assert seen["user_id"] == "u1"
     assert len(store.stored) == 1
     written = store.stored[0]
     assert written["html"] == "<html>fresh</html>"
