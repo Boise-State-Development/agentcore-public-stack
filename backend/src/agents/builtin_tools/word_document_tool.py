@@ -40,6 +40,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
+import unicodedata
 from typing import Any, Dict, List, Optional, Tuple
 
 from strands import tool
@@ -466,6 +468,20 @@ def _parse_changes(changes: Any) -> Tuple[List[Change], List[str]]:
     return parsed, problems
 
 
+def _default_redline_name(source_base: str) -> str:
+    """``<source>-redline``, reduced to what ``_validate_document_name`` accepts.
+
+    Real file names carry spaces and punctuation ("Q3 Budget (draft)"), and
+    the validator allows only letters, digits, ``_`` and single inner hyphens.
+    Accents are folded to ASCII, every other run of disallowed characters
+    becomes one hyphen, and a name with nothing left falls back to "document".
+    A name the model passes is still validated as given.
+    """
+    ascii_base = unicodedata.normalize("NFKD", source_base).encode("ascii", "ignore").decode()
+    safe = re.sub(r"[^A-Za-z0-9_]+", "-", ascii_base).strip("-")
+    return f"{safe or 'document'}-redline"
+
+
 def make_redline_word_document_tool(session_id: str, user_id: str, user_name: Optional[str]):
     """Create a ``redline_word_document`` tool bound to the given identity.
 
@@ -530,7 +546,7 @@ def make_redline_word_document_tool(session_id: str, user_id: str, user_name: Op
             )
 
         source_base = source.filename[: -len(".docx")] if source.filename.lower().endswith(".docx") else source.filename
-        out_base = output_name or f"{source_base}-redline"
+        out_base = output_name or _default_redline_name(source_base)
         if out_base.lower().endswith(".docx"):
             out_base = out_base[: -len(".docx")]
         is_valid, error_msg = _validate_document_name(out_base)

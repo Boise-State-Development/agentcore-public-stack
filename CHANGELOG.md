@@ -4,6 +4,31 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [1.28.2] - 2026-10-17
+
+Fixes found in the first day of Shared Projects in production: tools, project memory, and sign-in. Also adds one opt-in admin setting. No infrastructure change, so this ships with `backend.yml` and `frontend-deploy.yml` only.
+
+### 🐛 Fixed
+
+- **One bad tool no longer takes chat down.** Two enabled MCP servers that expose the same tool name made Strands refuse to build the agent, so every conversation of every user with both turned on failed. Now the first source to claim a name keeps it, a later server loses only its clashing tools (through a per-agent `NameExcludingToolProvider`; the shared client is untouched), each skip is logged, and the model gets a sorted, byte-stable note naming what was left out (`tool_name_conflicts.py`) (#1643)
+- **Platform tools win a name clash over MCP servers.** Built-in and context-bound tools claim their names before any server, so a server's `whoami` can no longer displace the platform's. `toolConfig` keeps its original order (#1644)
+- **`disabled` tools never load.** A tool set to `disabled` kept loading for anyone whose toggle, Agent binding or admin pin still named it. `disabled` is now the runtime off switch (`freshness.drop_disabled_tools`, before the agent cache key and in the voice route); `deprecated` still loads for existing users (`docs/specs/mcp-server-retirement.md` §7a) (#1643)
+- **Failed tool-call headings name the right integration.** A failed GitHub call was headed "Couldn't reach Canvas". `AgentStatusHook` records each call's integration, a batch where every call failed gets a deterministic "Couldn't use <name>" heading with no model call, and the summarizer may no longer name a system no call carries (#1643)
+- **OAuth-gated MCP tools no longer vanish without a word.** When a member hasn't connected an OAuth provider, the model is now told which servers are waiting on a connection and not to invent their tools (a sorted note that changes only when `toolConfig` does). After the user connects, a cache hit re-checks the vault and rebuilds the agent with the tools, in the same conversation; still unconnected re-emits `oauth_required`. A parallel pre-flight race that dropped a sibling server sharing a provider is fixed. Adds about 200 ms only to cache hits on an agent that dropped a server for missing consent (#1639)
+- **A project memory save no longer returns 500 when CountTokens drops the connection.** botocore's connection errors carry `response=None`, so the estimate fallback in `count_file_tokens` raised `AttributeError`. Any failure now falls back to the chars/4 estimate as documented (#1640)
+- **Project memory files can be renamed.** `memory_save(replaces=old)` renames a file in one manifest swap, keeps anchors, pins, provenance and history, re-keys `FILEVER` rows, leaves the old name as an alias, and rewrites its `MEMORY.md` line. Refused when the new name is taken, the old file wasn't read or has changed since, or the save comes from a scheduled run. `memory_save`'s spec grows by about 126 tokens (#1641)
+- **An invented memory anchor gets an error that says what to do.** A trailing `<!-- e:… -->` that isn't a system id is now `malformed_anchor` and the message says to remove it, instead of a `misplaced_anchor` message that sent the model in circles (#1641)
+- **A redline of a file with a space in its name saves on the first try.** `redline_word_document` defaulted its output to `<source>-redline` and then refused that name under its own rule (letters, digits, `_` and inner hyphens), so the default failed for most real Drive file names and the tool rail showed a failed call before the model retried. The default is now folded to ASCII, with each run of other characters as one hyphen (`Q3 Budget (draft)` → `Q3-Budget-draft-redline`); a name the model passes is still validated as given (`_default_redline_name`)
+- **Admin-added sign-in providers survive Platform Stack deploys.** A deploy that changes any property of the BFF app client resets its `SupportedIdentityProviders` to the template's, dropping providers added in Admin → Auth Providers. app-api now restores every enabled provider at startup and every 60 s (add-only, `app_client_reconciler`), and its own client writes preserve every `UpdateUserPoolClient` field instead of 12 (#1645)
+
+### ✨ Improved
+
+- **Hide the Cognito sign-in option.** A system admin can hide **Sign in with Cognito** from the sign-in page with a switch in Admin → Auth Providers. Visible by default; refused (422) while no other provider is enabled, and it reappears on its own if every provider is later disabled. `/auth/login?local=1` always shows it. One `SYSTEM_SETTINGS#login-page` item in the auth-providers table; `GET /auth/providers` gains `cognito_login_visible` (#1642)
+
+### ⚠️ Changed
+
+- **An MCP server's admin "Available Tools" list is now an allowlist.** It used to set only per-tool approval and always-on flags, and a whole-server toggle loaded every tool the server had. Now a non-empty list caps what the model is offered; an empty list still means "discover at runtime" (#1643). Tools a server marks for its MCP App only (`_meta.ui` hiding them from the model) pass the list and per-tool selections, so an App keeps the tools it calls itself, such as the Google Tasks board's `board_snapshot` refresh; they still never reach the model, so `toolConfig` is unchanged (`mcp_apps.hidden_from_model`) (#1649)
+
 ## [1.28.1] - 2026-10-16
 
 Fixes the Platform Stack deploy that 1.28.0's feature launch rolled back.
