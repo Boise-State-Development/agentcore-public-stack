@@ -37,12 +37,18 @@ A save is conditional on the version this conversation read (B6). ``memory_read`
 the content hash it returned, per conversation and member; ``memory_save`` sends it as the
 save's base, so a teammate's save in between is a conflict rather than lost, and a file
 this conversation never read can't be replaced blind.
+
+``memory_save(replaces=...)`` renames a file (2026-10-16). With no way to rename, a model
+asked to "update the team name" saved the file's items under a new name, leaving the old
+file in place, and told the member it had renamed it. A save to a new name that carries
+another file's anchors now says which file they came from and how to rename it.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import threading
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -82,6 +88,13 @@ _UNATTENDED_INDEX = (
     "This is a scheduled run, so it can't change the project's MEMORY.md index. "
     "Use memory_propose for the file instead; an editor adds it to the index on approval."
 )
+_UNATTENDED_RENAME = (
+    "This is a scheduled run, so it can't rename project files. Leave the file as it is "
+    "and say in your answer which file should be renamed, and to what."
+)
+# How many of the files a conversation read the unknown-anchor hint looks through.
+_ANCHOR_HINT_FILES = 5
+_ANCHOR_IN_TEXT_RE = re.compile(r"<!--\s*e:([0-9A-Za-z]{8})\s*-->")
 
 
 def _session_of(tool_context: Optional[ToolContext]) -> Optional[str]:
@@ -131,6 +144,45 @@ def _read_base(key: Tuple[str, str, str, str]) -> Optional[str]:
 def _forget_base(key: Tuple[str, str, str, str]) -> None:
     with _READ_BASES_LOCK:
         _READ_BASES.pop(key, None)
+
+
+def _read_slugs(session_id: Optional[str], user_id: str, space_id: str) -> list[str]:
+    """The files this conversation read in a space, most recent first (the index left out)."""
+    with _READ_BASES_LOCK:
+        keys = list(_READ_BASES)
+    session, user = session_id or "", user_id or ""
+    return [
+        k[3] for k in reversed(keys)
+        if k[0] == session and k[1] == user and k[2] == space_id and not _is_index_slug(k[3])
+    ]
+
+
+async def _anchor_hint(
+    service: MemorySpaceService, space_id: str, session_id: Optional[str], user: User, slug: str, text: str
+) -> str:
+    """For a new file carrying another file's anchors: name that file, and how to rename it.
+
+    The 2026-10-16 failure: asked to rename ``team/bsu_devs``, the model sent its
+    items, anchors and all, to a new name; told only to drop the anchors, it made a
+    second file and said it had renamed the first. Error path only, so the reads
+    here cost a save that works nothing.
+    """
+    given = {a.lower() for a in _ANCHOR_IN_TEXT_RE.findall(text or "")}
+    if not given:
+        return ""
+    for other in _read_slugs(session_id, user.user_id, space_id)[:_ANCHOR_HINT_FILES]:
+        if other == slug.strip().casefold():
+            continue
+        try:
+            body = await asyncio.to_thread(lambda: service.read_entry(space_id, user.user_id, user.email, other))
+        except MemorySpaceError:
+            continue
+        if given & {a.lower() for a in _ANCHOR_IN_TEXT_RE.findall(body)}:
+            return (
+                f' Those anchors are from "{other}", which you read. To rename it, save again with '
+                f'replaces="{other}" and keep them; to start a separate file, remove them.'
+            )
+    return ""
 
 
 def _error(text: str) -> dict[str, Any]:
@@ -351,7 +403,12 @@ def make_project_memory_query_tool(scopes: ProjectMemoryScopes):
 def make_project_memory_save_tool(scopes: ProjectMemoryScopes):
     @tool(context=True)
     async def memory_save(
-        scope: Scope, slug: str, text: str, description: str, tool_context: Optional[ToolContext] = None
+        scope: Scope,
+        slug: str,
+        text: str,
+        description: str,
+        replaces: str = "",
+        tool_context: Optional[ToolContext] = None,
     ) -> dict[str, Any]:
         """Save a memory file, creating it or replacing it whole. It persists across conversations.
 
@@ -366,7 +423,13 @@ def make_project_memory_save_tool(scopes: ProjectMemoryScopes):
         March 3."; prose and headings are rejected. To change a file, `memory_read` it
         first (a save to a file this conversation hasn't read is refused) and send back
         the whole list: keep each item's `<!-- e:… -->` anchor, add new items without
-        one, and leave out items to remove them. Link other files with `[[name]]`.
+        one, and leave out items to remove them. Link other files with `[[name]]`. A new
+        file's items have no anchors: the system adds them.
+
+        To rename a file, `memory_read` it, then save it under the new name with
+        `replaces` set to the old one, keeping its anchors: it moves with its history,
+        and the old name stays as an alias so links to it still work. A save under a
+        new name without `replaces` makes a second file and leaves the old one as it was.
 
         `description` is the file's line in that scope's MEMORY.md index, which appears
         in every conversation and is often all a later one reads. Send it on every save,
@@ -385,20 +448,28 @@ def make_project_memory_save_tool(scopes: ProjectMemoryScopes):
             text: The file's items, one "- " line each.
             description: One line summing up the file as saved; it is the file's MEMORY.md
                 line. For a preference or rule, the rule itself. Ignored for "MEMORY.md".
+            replaces: Only to rename a file: its current name. Leave empty otherwise.
         """
         if (bad := _bad_scope(scope)) is not None:
             return bad
         user = scopes.user
         label = _LABELS[scope]
         session_id = _session_of(tool_context)
+        renaming = (replaces or "").strip()
+        if renaming and (_is_index_slug(slug) or _is_index_slug(renaming)):
+            return _error("MEMORY.md can't be renamed, and no file can take its name.")
         if scope == "project" and is_headless_session(session_id):
             # Nobody is watching a scheduled run, so what it would add to the
             # project's shared memory waits for an editor (shared-projects §9.3).
             if _is_index_slug(slug):
                 return _error(_UNATTENDED_INDEX)
+            if renaming:
+                return _error(_UNATTENDED_RENAME)
             return await _propose(scopes, slug, text, description, session_id, unattended=True)
         key: Optional[Tuple[str, str, str, str]] = None
+        old_key: Optional[Tuple[str, str, str, str]] = None
         base: Optional[str] = None
+        service: Optional[MemorySpaceService] = None
         try:
             if scope == "mine":
                 space_id = await asyncio.to_thread(scopes.ensure_personal_space)
@@ -408,6 +479,15 @@ def make_project_memory_save_tool(scopes: ProjectMemoryScopes):
                     return _error(f'{_missing(scope)} Save it to "mine" instead.')
             key = _base_key(session_id, user.user_id, space_id, slug)
             base = _read_base(key)
+            if renaming:
+                # A rename moves the file this conversation read, so that read is the base.
+                old_key = _base_key(session_id, user.user_id, space_id, renaming)
+                base = _read_base(old_key)
+                if base is None:
+                    return _error(
+                        f'Not saved: memory_read "{renaming}" first, then save it as "{slug}" with '
+                        f'replaces="{renaming}", keeping its anchors.'
+                    )
             service = MemorySpaceService()
             if _is_index_slug(slug):
                 if base is None:
@@ -426,13 +506,31 @@ def make_project_memory_save_tool(scopes: ProjectMemoryScopes):
                     space_id, user.user_id, user.email, slug, text,
                     description=description or None, reason="save", context=context,
                     base_content_hash=NEW_FILE if base is None else base,
+                    replaces=renaming or None,
                 )
             )
         except MemoryValidationError as exc:
-            return _error(f"Not saved: {exc}")
+            if renaming and exc.code == "name_collision":
+                return _error(
+                    f'Not saved: "{slug}" already exists in {label}, so "{renaming}" can\'t take that name, '
+                    "and both files are unchanged. Pick another name, or tell the member both exist: "
+                    "they can delete one from the project's Memory tab."
+                )
+            hint = ""
+            if exc.code == "unknown_anchor" and base is None and service is not None:
+                hint = await _anchor_hint(service, space_id, session_id, user, slug, text)
+            return _error(f"Not saved: {exc}{hint}")
+        except MemoryEntryNotFoundError:
+            return _error(f'Not saved: {label} has no file named "{renaming or slug}".')
         except MemorySpaceConcurrencyError:
             if key is not None:
                 _forget_base(key)
+            if old_key is not None:
+                _forget_base(old_key)
+                return _error(
+                    f"Not saved: '{renaming}' changed since you read it (someone else saved it). "
+                    "memory_read it again and rename that version."
+                )
             if base is None:
                 return _error(
                     f"Not saved: '{slug}' already exists in {label}. memory_read it first, "
@@ -452,6 +550,8 @@ def make_project_memory_save_tool(scopes: ProjectMemoryScopes):
             return _error(_project_error(exc))
         # The next save of this file in this conversation builds on this one.
         _remember_base(key, result.ref.content_hash)
+        if old_key is not None:
+            _forget_base(old_key)
         indexed = await _index_saved_file(service, space_id, scopes, scope, result)
         return {"content": [{"text": _saved(result, label, indexed, _INDEX_BUDGETS[scope])}], "status": "success"}
 
@@ -569,8 +669,14 @@ def _project_error(exc: ProjectError) -> str:
 
 def _saved(result: Any, label: str, indexed: Optional[str], budget: int) -> str:
     ref = result.ref
-    text = f'Saved "{ref.slug}" to {label} (version {ref.version}'
+    old = getattr(result, "renamed_from", None)
+    if old:
+        text = f'Renamed "{old}" to "{ref.slug}" in {label} (version {ref.version}'
+    else:
+        text = f'Saved "{ref.slug}" to {label} (version {ref.version}'
     text += f", about {ref.tokens:,} tokens)." if ref.tokens is not None else ")."
+    if old:
+        text += f' There is no "{old}" now; links to [[{old}]] still resolve, as an alias of the new name.'
     suggested = f'"- [[{ref.slug}]] — what it holds"'
     if indexed == "added":
         line = f"- [[{ref.slug}]] — {ref.description}" if ref.description else f"- [[{ref.slug}]]"
