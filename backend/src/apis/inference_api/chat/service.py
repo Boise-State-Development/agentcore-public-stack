@@ -439,7 +439,12 @@ async def get_agent(
     Returns:
         BaseAgent subclass instance (cached or newly created)
     """
-    from apis.shared.tools.freshness import get_freshness_hash
+    from apis.shared.tools.freshness import drop_disabled_tools, get_freshness_hash
+
+    # A tool an admin has disabled never loads, whatever the request carries
+    # (a user's saved toggle, an Agent binding, an admin pin). Before the cache
+    # key, so the key describes the toolset that is actually built.
+    enabled_tools = await drop_disabled_tools(enabled_tools)
 
     # Merge legacy temperature/max_tokens into inference_params so the cache
     # key and BaseAgent see the same canonical dict.

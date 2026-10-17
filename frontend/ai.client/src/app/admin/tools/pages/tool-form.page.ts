@@ -326,6 +326,9 @@ import {
                       No tools listed. Leave empty to discover tools at runtime — per-tool approval flags will not apply.
                     </p>
                   } @else {
+                    <p class="mb-2 text-xs/5 text-gray-500 dark:text-gray-400">
+                      Only the tools listed here are offered to the model. Remove every row to expose all of the server's tools.
+                    </p>
                     <div class="space-y-2">
                       @for (row of mcpToolsArray.controls; track row) {
                         <div [formGroupName]="$index" class="flex items-start gap-2 rounded-2xl border border-gray-200 bg-white p-2 dark:border-gray-700 dark:bg-gray-800">

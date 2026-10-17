@@ -62,11 +62,18 @@ def mock_create_agent():
 
 @pytest.fixture
 def mock_freshness_hash():
-    """Stable freshness hash so cache keys depend only on the inputs we care about."""
+    """Stable freshness hash so cache keys depend only on the inputs we care about.
+
+    Also stands in for the disabled-tool snapshot, the other catalog read
+    `get_agent` makes, with nothing disabled.
+    """
     with patch(
         "apis.shared.tools.freshness.get_freshness_hash",
         new=AsyncMock(return_value="fresh"),
-    ) as mock:
+    ) as mock, patch(
+        "apis.shared.tools.freshness.get_disabled_tool_ids",
+        new=AsyncMock(return_value=frozenset()),
+    ):
         yield mock
 
 
@@ -1022,3 +1029,25 @@ class TestConsentGatedCacheHit:
             second = await service.get_agent(session_id="s", user_id="u")
 
         assert second is first
+
+
+# ---------------------------------------------------------------------------
+# A disabled tool never reaches the agent, whatever the request carries
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_disabled_tool_is_dropped_before_the_build(mock_create_agent, mock_freshness_hash):
+    """The SPA sends the user's saved toggles, which may still name a tool an
+    admin has since disabled (dev, 2026-10-17). It must not load."""
+    with patch(
+        "apis.shared.tools.freshness.get_disabled_tool_ids",
+        new=AsyncMock(return_value=frozenset({"race_test_zoom_search_2"})),
+    ):
+        await service.get_agent(
+            session_id="s",
+            user_id="u",
+            enabled_tools=["search_web", "race_test_zoom_search_2", "race_test_zoom_search_2::search"],
+        )
+
+    assert mock_create_agent.call_args.kwargs["enabled_tools"] == ["search_web"]

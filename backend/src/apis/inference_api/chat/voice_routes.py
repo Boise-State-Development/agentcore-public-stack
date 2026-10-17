@@ -35,6 +35,7 @@ from apis.shared.sessions.metadata import (
     store_session_metadata,
 )
 from apis.shared.tools.always_on import union_enabled_tools
+from apis.shared.tools.freshness import drop_disabled_tools
 from apis.shared.sessions.models import SessionMetadata
 
 logger = logging.getLogger(__name__)
@@ -537,6 +538,8 @@ async def voice_stream(
     # under-report by exactly the tools this feature adds.
     always_on_ids = await _always_on_tool_ids_for_voice(auth_token, user_id)
     enabled_tools_list = union_enabled_tools(enabled_tools_list, always_on_ids)
+    # Same rule as the text path (`get_agent`): a disabled tool never loads.
+    enabled_tools_list = await drop_disabled_tools(enabled_tools_list)
 
     logger.info(
         f"Voice WebSocket connected: session={_sanitize_log(session_id)}, "

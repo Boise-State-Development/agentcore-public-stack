@@ -29,6 +29,7 @@ from apis.shared.tools.models import (
     MCPAuthType,
     MCPTransport,
     ToolDefinition,
+    is_disabled_status,
 )
 from apis.shared.tools.scoped_ids import base_tool_id, collect_tool_name_filters
 from agents.main_agent.integrations import oauth_token_cache
@@ -226,8 +227,8 @@ def create_external_mcp_client(
         oauth_token: Optional static token (used for OIDC forwarding)
         token_provider: Optional callable returning the current token
         allowed_tool_names: If provided, only these MCP-server tool names are
-            exposed to the model (per-tool enablement). ``None`` exposes the
-            whole server. Matched against the raw MCP tool name by the SDK's
+            exposed to the model (per-tool enablement, within the admin's
+            "Available Tools" list). ``None`` exposes the whole server. Matched against the raw MCP tool name by the SDK's
             ``ToolFilters`` (no prefix is applied to external clients).
 
     Returns:
@@ -640,6 +641,35 @@ class ExternalMCPIntegration:
                 logger.warning(f"Tool {tool_id} has protocol=mcp_external but no mcp_config")
                 return None, timing
 
+            # "disabled" takes the server out of service for everyone, whatever
+            # their own toggle says. "deprecated" (being retired) keeps working
+            # for those who already have it (mcp-server-retirement.md §7). Read
+            # off the row just fetched, so it applies on the next build with no
+            # cache to wait out.
+            if is_disabled_status(getattr(tool, "status", None)):
+                logger.info(f"Skipping external MCP tool {tool_id}: status is disabled")
+                timing["outcome"] = "disabled"
+                return None, timing
+
+            # The admin's "Available Tools" list is the most of this server the
+            # model may see; empty means "discover at runtime". A user's or an
+            # Agent's selection narrows within it and never reaches past it.
+            listed = {
+                entry.name
+                for entry in (getattr(tool.mcp_config, "tools", None) or [])
+                if getattr(entry, "name", None)
+            }
+            if listed:
+                allowed_tool_names = (
+                    listed if allowed_tool_names is None else allowed_tool_names & listed
+                )
+                if not allowed_tool_names:
+                    logger.info(
+                        f"Skipping external MCP tool {tool_id}: none of the selected "
+                        "tools is in its admin tool list"
+                    )
+                    return None, timing
+
             forward_auth = bool(getattr(tool, "forward_auth_token", False))
             requires_oauth = bool(tool.requires_oauth_provider)
             exchange_audience = getattr(tool, "token_exchange_audience", None)
@@ -857,7 +887,7 @@ class ExternalMCPIntegration:
                 ``outcome`` is ``cached``, ``loaded``, ``recovered``,
                 ``consent`` (dropped: the user has not connected the
                 provider), ``dropped`` (pre-flight failed otherwise),
-                ``skipped`` or ``error``.
+                ``disabled`` (status is disabled), ``skipped`` or ``error``.
             consent_gated: When given, one ``ConsentGatedTool`` is appended
                 per server dropped for missing consent, sorted by display name
                 and tool id so anything rendered from it is deterministic.
@@ -993,7 +1023,9 @@ class ExternalMCPIntegration:
         """
         keys_to_remove = [
             key for key in self.clients.keys()
-            if key == tool_id or key.endswith(f":{tool_id}")
+            # A subset of the server's tools adds an "|allow:<names>" suffix.
+            if (base := key.split("|allow:", 1)[0]) == tool_id
+            or base.endswith(f":{tool_id}")
         ]
         for key in keys_to_remove:
             client = self.clients.pop(key)

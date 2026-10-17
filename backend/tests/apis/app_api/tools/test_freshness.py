@@ -339,3 +339,81 @@ async def test_hash_is_stable_regardless_of_input_order():
         h2 = await freshness.get_freshness_hash(["jira", "gmail"])
 
     assert h1 == h2
+
+
+# --- disabled tools: the runtime off-switch for every tool -------------------
+
+
+@pytest.mark.asyncio
+async def test_disabled_snapshot_holds_only_disabled_tools():
+    """`disabled` is out of service; `deprecated` (being retired) still runs
+    for whoever has it (docs/specs/mcp-server-retirement.md §7)."""
+    from apis.shared.tools.models import ToolStatus
+
+    repo = _repo_with_tools(
+        _sys_tool("search_web", status="active"),
+        _sys_tool("zoom_race_2", status="disabled"),
+        _sys_tool("zoom_race_3", status=ToolStatus.DISABLED),
+        _sys_tool("old_canvas", status="deprecated"),
+    )
+    with patch(
+        "apis.shared.tools.repository.get_tool_catalog_repository",
+        return_value=repo,
+    ):
+        disabled = await freshness.get_disabled_tool_ids()
+
+    assert disabled == frozenset({"zoom_race_2", "zoom_race_3"})
+
+
+@pytest.mark.asyncio
+async def test_disabled_snapshot_shares_the_one_catalog_read():
+    repo = _repo_with_tools(_sys_tool("zoom_race_2", status="disabled"))
+    with patch(
+        "apis.shared.tools.repository.get_tool_catalog_repository",
+        return_value=repo,
+    ):
+        await freshness.get_all_tool_ids()
+        await freshness.get_disabled_tool_ids()
+
+    assert repo.list_tools.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_drop_disabled_tools_removes_bare_and_scoped_ids_in_order():
+    repo = _repo_with_tools(
+        _sys_tool("zoom_race_2", status="disabled"),
+        _sys_tool("canvas", status="active"),
+    )
+    with patch(
+        "apis.shared.tools.repository.get_tool_catalog_repository",
+        return_value=repo,
+    ):
+        kept = await freshness.drop_disabled_tools(
+            ["search_web", "zoom_race_2", "canvas::list_courses", "zoom_race_2::search"]
+        )
+
+    assert kept == ["search_web", "canvas::list_courses"]
+
+
+@pytest.mark.asyncio
+async def test_drop_disabled_tools_passes_none_and_empty_through_without_a_read():
+    repo = _repo_with_tools()
+    with patch(
+        "apis.shared.tools.repository.get_tool_catalog_repository",
+        return_value=repo,
+    ):
+        assert await freshness.drop_disabled_tools(None) is None
+        assert await freshness.drop_disabled_tools([]) == []
+
+    repo.list_tools.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_drop_disabled_tools_fails_open_on_a_catalog_error():
+    """A DynamoDB blip must not strip every tool from the turn."""
+    repo = SimpleNamespace(list_tools=AsyncMock(side_effect=RuntimeError("boom")))
+    with patch(
+        "apis.shared.tools.repository.get_tool_catalog_repository",
+        return_value=repo,
+    ):
+        assert await freshness.drop_disabled_tools(["zoom_race_2"]) == ["zoom_race_2"]
