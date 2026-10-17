@@ -194,6 +194,7 @@ scripts/
 ├── build/                      # Content-hash Docker build pipeline
 │   ├── compute-content-hash.sh
 │   ├── build-and-push-if-changed.sh
+│   ├── ecr-public-login.sh       # Authenticated base-image pulls (ECR Public)
 │   ├── build-one.sh
 │   └── build-all-images.sh
 ├── platform/                   # Infrastructure (CDK) deploy scripts

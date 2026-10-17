@@ -531,5 +531,13 @@ jobs:
       - name: Fetch Amazon DCV Web Client SDK
         run: bash scripts/build/fetch-dcv-sdk.sh
 
+      # CDK builds the infrastructure/bootstrap-assets/* stub images when
+      # their asset hash is new, and every stub's base image comes from
+      # public.ecr.aws. Authenticate so that pull is not subject to ECR
+      # Public's anonymous per-IP data limit on this shared x86 runner.
+      # Best-effort; see the script header.
+      - name: Log in to ECR Public
+        run: bash scripts/build/ecr-public-login.sh
+
       - name: Deploy PlatformStack
         run: bash scripts/platform/deploy.sh
