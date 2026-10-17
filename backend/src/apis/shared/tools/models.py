@@ -131,6 +131,17 @@ class ToolStatus(str, Enum):
     COMING_SOON = "coming_soon"
 
 
+def is_disabled_status(status: Any) -> bool:
+    """Whether a catalog row's status takes the tool out of service.
+
+    Accepts the enum or its bare string (rows round-trip through DynamoDB as
+    strings); a missing status is active. Only ``disabled`` counts:
+    ``deprecated`` means "being retired" and keeps working for anyone who
+    already has the tool (docs/specs/mcp-server-retirement.md §7).
+    """
+    return getattr(status, "value", status) == ToolStatus.DISABLED.value
+
+
 # =============================================================================
 # External Tool Configuration Models
 # =============================================================================
@@ -232,6 +243,7 @@ class MCPServerConfig(BaseModel):
     tools: List[MCPToolEntry] = Field(
         default_factory=list,
         description="Tools available on this MCP server, with per-tool flags. "
+        "When non-empty, only these tools are offered to the model. "
         "Empty means discover at runtime (no per-tool flags applied).",
     )
 

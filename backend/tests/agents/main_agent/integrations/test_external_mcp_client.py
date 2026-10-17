@@ -276,6 +276,18 @@ class TestClearToolClients:
 
         assert integration.clients["super-gmail"] is super_gmail
 
+    def test_clears_tool_subset_keys(self):
+        """Scoped and admin-listed clients carry an `|allow:` suffix."""
+        integration = ExternalMCPIntegration()
+        scoped = object()
+        user_scoped = object()
+        integration.clients["gmail|allow:send"] = scoped
+        integration.clients["alice:gmail|allow:search,send"] = user_scoped
+
+        integration.clear_tool_clients("gmail")
+
+        assert integration.clients == {}
+
     def test_no_op_when_tool_not_cached(self):
         integration = ExternalMCPIntegration()
         integration.clear_tool_clients("never-loaded")
@@ -476,6 +488,144 @@ class TestLoadExternalToolsScoped:
         assert first == [client_a]
         assert second == [client_b]
         assert len(integration.clients) == 2
+
+
+def _listed_tool(updated_at, names, tool_id="zoom", status=None):
+    """A catalog row whose admin "Available Tools" list names ``names``."""
+    tool = _fake_tool(updated_at, tool_id=tool_id)
+    tool.mcp_config.tools = [SimpleNamespace(name=n) for n in names]
+    if status is not None:
+        tool.status = status
+    return tool
+
+
+async def _load(integration, ids, tool):
+    repo = SimpleNamespace(get_tool=AsyncMock(return_value=tool))
+    client = SimpleNamespace(load_tools=AsyncMock(return_value=[]))
+    with patch(
+        "apis.shared.tools.repository.get_tool_catalog_repository",
+        return_value=repo,
+    ), patch(
+        "agents.main_agent.integrations.external_mcp_client.create_external_mcp_client",
+        return_value=client,
+    ) as create_mock:
+        result = await integration.load_external_tools(ids)
+    return result, create_mock
+
+
+class TestAdminToolListIsAnAllowlist:
+    """The admin tool form's "Available Tools" list says which of a server's
+    tools reach the model ("Leave empty to discover tools at runtime"). It was
+    only ever read for approval flags, so a server limited to nine tools still
+    registered all of them (dev, 2026-10-17)."""
+
+    @pytest.mark.asyncio
+    async def test_whole_server_is_limited_to_the_listed_tools(self):
+        tool = _listed_tool(datetime(2025, 1, 1, tzinfo=timezone.utc), ["search", "send"])
+
+        _, create_mock = await _load(ExternalMCPIntegration(), ["zoom"], tool)
+
+        assert create_mock.call_args.kwargs["allowed_tool_names"] == {"search", "send"}
+
+    @pytest.mark.asyncio
+    async def test_a_scoped_selection_cannot_reach_past_the_list(self):
+        tool = _listed_tool(datetime(2025, 1, 1, tzinfo=timezone.utc), ["search", "send"])
+
+        _, create_mock = await _load(
+            ExternalMCPIntegration(), ["zoom::send", "zoom::get_file_content"], tool
+        )
+
+        assert create_mock.call_args.kwargs["allowed_tool_names"] == {"send"}
+
+    @pytest.mark.asyncio
+    async def test_a_selection_with_nothing_listed_loads_no_client(self):
+        tool = _listed_tool(datetime(2025, 1, 1, tzinfo=timezone.utc), ["search"])
+
+        result, create_mock = await _load(
+            ExternalMCPIntegration(), ["zoom::get_file_content"], tool
+        )
+
+        assert result == []
+        create_mock.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_an_empty_list_still_means_discover_everything(self):
+        tool = _listed_tool(datetime(2025, 1, 1, tzinfo=timezone.utc), [])
+
+        _, create_mock = await _load(ExternalMCPIntegration(), ["zoom"], tool)
+
+        assert create_mock.call_args.kwargs["allowed_tool_names"] is None
+
+    @pytest.mark.asyncio
+    async def test_a_listed_server_still_resolves_by_its_bare_id(self):
+        """The allowlist puts an `|allow:` suffix on a whole-server key, which
+        `get_client` (OAuth and approval lookups) must still find."""
+        tool = _listed_tool(datetime(2025, 1, 1, tzinfo=timezone.utc), ["search"])
+        integration = ExternalMCPIntegration()
+
+        result, _ = await _load(integration, ["zoom"], tool)
+
+        assert integration.get_client("zoom") is result[0]
+
+
+class TestDisabledToolsNeverLoad:
+    """Status "disabled" takes a server out of service even for users whose
+    toggle is still on. "deprecated" (being retired) keeps working for them,
+    as docs/specs/mcp-server-retirement.md §7 requires."""
+
+    @pytest.mark.asyncio
+    async def test_a_disabled_server_is_skipped(self):
+        tool = _listed_tool(datetime(2025, 1, 1, tzinfo=timezone.utc), [], status="disabled")
+        timings: list = []
+        integration = ExternalMCPIntegration()
+        repo = SimpleNamespace(get_tool=AsyncMock(return_value=tool))
+
+        with patch(
+            "apis.shared.tools.repository.get_tool_catalog_repository",
+            return_value=repo,
+        ), patch(
+            "agents.main_agent.integrations.external_mcp_client.create_external_mcp_client",
+        ) as create_mock:
+            result = await integration.load_external_tools(["zoom"], timings=timings)
+
+        assert result == []
+        create_mock.assert_not_called()
+        assert timings[0]["outcome"] == "disabled"
+
+    @pytest.mark.asyncio
+    async def test_the_enum_value_is_read_the_same_as_the_string(self):
+        from apis.shared.tools.models import ToolStatus
+
+        tool = _listed_tool(
+            datetime(2025, 1, 1, tzinfo=timezone.utc), [], status=ToolStatus.DISABLED
+        )
+
+        result, create_mock = await _load(ExternalMCPIntegration(), ["zoom"], tool)
+
+        assert result == []
+        create_mock.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_a_cached_client_is_not_served_once_disabled(self):
+        integration = ExternalMCPIntegration()
+        active = _listed_tool(datetime(2025, 1, 1, tzinfo=timezone.utc), [])
+        first, _ = await _load(integration, ["zoom"], active)
+        assert len(first) == 1
+
+        disabled = _listed_tool(
+            datetime(2025, 1, 1, tzinfo=timezone.utc), [], status="disabled"
+        )
+        second, _ = await _load(integration, ["zoom"], disabled)
+
+        assert second == []
+
+    @pytest.mark.asyncio
+    async def test_a_deprecated_server_still_loads(self):
+        tool = _listed_tool(datetime(2025, 1, 1, tzinfo=timezone.utc), [], status="deprecated")
+
+        result, _ = await _load(ExternalMCPIntegration(), ["zoom"], tool)
+
+        assert len(result) == 1
 
 
 class TestGetClientResolvesScopedBindings:

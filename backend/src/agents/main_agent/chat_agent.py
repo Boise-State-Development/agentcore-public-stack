@@ -12,6 +12,7 @@ from typing import Any, AsyncGenerator, Callable, Dict, List, Optional
 from agents.main_agent.base_agent import BaseAgent
 from agents.main_agent.core import AgentFactory
 from agents.main_agent.skills.strands_mapping import build_skills_runtime
+from agents.main_agent.tools.tool_name_conflicts import skipped_tools_note
 
 from apis.shared.observability.build_stages import mark_stage
 
@@ -167,6 +168,9 @@ class ChatAgent(BaseAgent):
         The note changes only when the set of unconnected servers does, and
         that set changing means ``toolConfig`` changed too, which already
         re-writes the cached prefix; so it adds no cache writes of its own.
+
+        Likewise a note naming tools left out because another source already
+        holds their name (``skipped_tool_names``), on the same cache terms.
         """
         from agents.builtin_tools.ask_user_question import SYSTEM_PROMPT_GUIDANCE
 
@@ -179,6 +183,9 @@ class ChatAgent(BaseAgent):
         gated = getattr(self, "consent_gated_tools", None)
         if gated:
             prompt = f"{prompt}\n\n{unconnected_tools_note(gated)}"
+        skipped = getattr(self, "skipped_tool_names", None)
+        if skipped:
+            prompt = f"{prompt}\n\n{skipped_tools_note(skipped)}"
         return prompt
 
     async def stream_async(

@@ -93,8 +93,9 @@ export interface Tool {
 /**
  * An administrator has marked this tool non-`active` — it is being retired and
  * must not be newly enabled. Existing selections are untouched: the backend
- * still grants it, still builds its client, and an Agent that binds it still
- * runs. This is a picker rule, never an access decision
+ * still grants it, and for `deprecated` still builds its client, so an Agent
+ * that binds it still runs. A `disabled` tool is never loaded, whatever the
+ * selection says (§7a). This is a picker rule, never an access decision
  * (docs/specs/mcp-server-retirement.md §7). The predicate and the date/copy
  * helpers live in `shared/utils/retirement.ts`, shared with model retirement.
  */
