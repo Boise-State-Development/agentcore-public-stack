@@ -12,6 +12,7 @@ import { OAuthConsentPromptComponent } from './components/oauth-consent-prompt/o
 import { ToolApprovalPromptComponent } from './components/tool-approval-prompt/tool-approval-prompt.component';
 import { UserQuestionPromptComponent } from './components/user-question-prompt/user-question-prompt.component';
 import { BrowserLoginPromptComponent } from './components/browser-login-prompt/browser-login-prompt.component';
+import { BrowserPanelComponent } from './components/browser-panel/browser-panel.component';
 import { CompactionSummaryComponent } from './components/compaction-summary/compaction-summary.component';
 import { ArtifactCardComponent } from './components/artifact/artifact-card.component';
 import { ArtifactPanelComponent } from './components/artifact/artifact-panel.component';
@@ -129,6 +130,7 @@ function segmentTurn(messages: readonly Message[]): TurnSegment[] {
     ToolApprovalPromptComponent,
     UserQuestionPromptComponent,
     BrowserLoginPromptComponent,
+    BrowserPanelComponent,
     CompactionSummaryComponent,
     ArtifactCardComponent,
     ArtifactPanelComponent,
