@@ -20,7 +20,6 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import asyncio
-import contextlib
 import logging
 
 # Set up logging
@@ -102,8 +101,9 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logger.info("=== Agent Core Service Shutting Down ===")
     reconcile_task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await reconcile_task
+    # return_exceptions swallows the task's CancelledError, so shutdown waits
+    # for the loop to finish without re-raising it.
+    await asyncio.gather(reconcile_task, return_exceptions=True)
     # TODO: Cleanup agent pool, MCP clients, etc.
 
 # Create FastAPI app with lifespan
