@@ -10,6 +10,7 @@ import { MessageFeedbackService } from '../session/message-feedback.service';
 import { SessionService } from '../session/session.service';
 import { SessionPrewarmService } from '../session/session-prewarm.service';
 import { TurnTimingService } from './turn-timing.service';
+import { FEATURES } from '../../../services/features';
 import { UserService } from '../../../auth/user.service';
 import { ModelService } from '../model/model.service';
 import { ToolService } from '../../../services/tool/tool.service';
@@ -68,6 +69,8 @@ describe('ChatRequestService', () => {
         { provide: ChatStateService, useValue: { setChatLoading: vi.fn(), setLastTurnContinuable: vi.fn(), setLastTurnInterrupted: vi.fn(), setViewedSession: vi.fn(), isSessionLoading: vi.fn().mockReturnValue(false), lastTurnEndedAt: vi.fn().mockReturnValue(null) } },
         { provide: MessageMapService, useValue: { addUserMessage: vi.fn(), startStreaming: vi.fn(), beginContinuationStreaming: vi.fn(), endStreaming: vi.fn(), reloadMessagesForSession: vi.fn().mockResolvedValue(undefined), markSendFailed: vi.fn(), removeTrailingMessage: vi.fn().mockReturnValue(true) } },
         { provide: SessionService, useValue: { addSessionToCache: vi.fn() } },
+        // Turn timing and prewarm off: the tests that need them turn them on.
+        { provide: FEATURES, useValue: { clientTurnTiming: false, sessionPrewarm: false } },
         { provide: MessageFeedbackService, useValue: { consumePendingRetry: vi.fn() } },
         { provide: UserService, useValue: { getUser: vi.fn().mockReturnValue({ user_id: 'user1' }) } },
         { provide: ModelService, useValue: mockModelService },

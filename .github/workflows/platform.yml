@@ -252,15 +252,15 @@ jobs:
       # variable to "false" in an environment only to dark-stop the feature there.
       CDK_MEMORY_SPACES_ENABLED: ${{ vars.CDK_MEMORY_SPACES_ENABLED }}
       # Shared Projects (project workspace, membership, harness, project memory).
-      # Opt-in while in development (CLAUDE.md "Feature flags"): set the
-      # `CDK_PROJECTS_ENABLED` variable to "true" in an environment to turn it on
-      # there. Unset (empty string) or anything else means off. The SPA's
-      # matching switch is `features.projects` in src/environments/*.ts.
+      # Default ON with a kill switch (CLAUDE.md "Feature flags"): unset (empty
+      # string) means on; set the `CDK_PROJECTS_ENABLED` variable to "false" in an
+      # environment to turn it off there. The SPA's matching switch is
+      # `features.projects` in src/environments/*.ts.
       CDK_PROJECTS_ENABLED: ${{ vars.CDK_PROJECTS_ENABLED }}
       # Direct user grants (tools/models/skills granted to one user beside their
-      # roles; the admin surface at /admin/user-grants). Opt-in while in
-      # development: set `CDK_USER_GRANTS_ENABLED` to "true" in an environment to
-      # turn it on there. app-api only. The SPA's matching switch is
+      # roles; the admin surface at /admin/user-grants). Default ON with a kill
+      # switch: set `CDK_USER_GRANTS_ENABLED` to "false" in an environment to
+      # turn it off there. app-api only. The SPA's matching switch is
       # `features.userGrants` in src/environments/*.ts.
       CDK_USER_GRANTS_ENABLED: ${{ vars.CDK_USER_GRANTS_ENABLED }}
       # Session prewarm: POST /chat/prewarm starts a conversation's AgentCore
@@ -271,9 +271,9 @@ jobs:
       CDK_SESSION_PREWARM_ENABLED: ${{ vars.CDK_SESSION_PREWARM_ENABLED }}
       # Client-measured time to first token: POST /telemetry/turn-timing records the
       # SPA's own send-to-first-token in AgentCoreStack/TurnLatency
-      # (docs/specs/turn-path-ttft.md §6). Opt-in while in development: set
-      # `CDK_CLIENT_TURN_TIMING_ENABLED` to "true" in an environment to turn it on
-      # there. app-api only. The SPA's matching switch is `features.clientTurnTiming`.
+      # (docs/specs/turn-path-ttft.md §6). Default ON with a kill switch: set
+      # `CDK_CLIENT_TURN_TIMING_ENABLED` to "false" in an environment to turn it
+      # off there. app-api only. The SPA's matching switch is `features.clientTurnTiming`.
       CDK_CLIENT_TURN_TIMING_ENABLED: ${{ vars.CDK_CLIENT_TURN_TIMING_ENABLED }}
       # Scheduled time-to-first-token probe (docs/specs/turn-path-ttft.md §6E).
       # Configuration, not a flag: set `CDK_TTFT_PROBE_USER_ID` to the Cognito sub
@@ -308,17 +308,17 @@ jobs:
       CDK_SKILLS_ENABLED: ${{ vars.CDK_SKILLS_ENABLED }}
       # Skill authoring tools: the seven `my_skill_*` agent tools that create
       # and edit the invoking user's own skills (docs/specs/skill-creator.md
-      # D12). Opt-in while in development: set the
-      # `CDK_SKILL_AUTHORING_ENABLED` variable to "true" in an environment to
-      # turn it on there. Unset (empty string) or anything else means off. The
-      # `my_skill_create` catalog row must also be seeded and granted to a role.
+      # D12). Default ON with a kill switch: unset (empty string) means on; set
+      # the `CDK_SKILL_AUTHORING_ENABLED` variable to "false" in an environment
+      # to turn it off there. Nobody gets the tools until the `my_skill_create`
+      # catalog row is seeded and granted to a role.
       CDK_SKILL_AUTHORING_ENABLED: ${{ vars.CDK_SKILL_AUTHORING_ENABLED }}
       # Word tracked changes: a .docx's tracked changes reach the model written
       # out as [deleted: …] / [inserted: …], and the Word tools gain
-      # redline_word_document (docs/specs/word-tracked-changes.md). Opt-in while
-      # in development: set the `CDK_WORD_TRACKED_CHANGES_ENABLED` variable to
-      # "true" in an environment to turn it on there. Unset (empty string) or
-      # anything else means off. Sets the flag on both app-api and the Runtime.
+      # redline_word_document (docs/specs/word-tracked-changes.md). Default ON
+      # with a kill switch: unset (empty string) means on; set the
+      # `CDK_WORD_TRACKED_CHANGES_ENABLED` variable to "false" in an environment
+      # to turn it off there. Sets the flag on both app-api and the Runtime.
       CDK_WORD_TRACKED_CHANGES_ENABLED: ${{ vars.CDK_WORD_TRACKED_CHANGES_ENABLED }}
       # Assistant KB full-context mode: an assistant whose whole knowledge base
       # fits 50,000 tokens gets it in the system prompt instead of retrieved
@@ -329,11 +329,11 @@ jobs:
       CDK_ASSISTANT_KB_FULL_CONTEXT_ENABLED: ${{ vars.CDK_ASSISTANT_KB_FULL_CONTEXT_ENABLED }}
       # Large document attachments: documents over the 4 MB inline limit are
       # attached by reference and read from sidecars a preparation Lambda
-      # builds (docs/specs/large-document-attachments.md). Opt-in while in
-      # development: set the `CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED` variable
-      # to "true" in an environment to turn it on there. Unset (empty string)
-      # or anything else means off, and the prepare queue and Lambda are not
-      # deployed at all. Sets the flag on app-api only.
+      # builds (docs/specs/large-document-attachments.md). Default ON with a
+      # kill switch: unset (empty string) means on; set the
+      # `CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED` variable to "false" in an
+      # environment to turn it off there, and the prepare queue and Lambda are
+      # not deployed at all. Sets the flag on app-api only.
       CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED: ${{ vars.CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED }}
       # The shared `attachments` managed knowledge base for large documents
       # (docs/specs/large-document-attachments.md §4E). Opt-in while in
@@ -343,14 +343,14 @@ jobs:
       # first ingest and billed at $5/GB-month of indexed source bytes.
       CDK_ATTACHMENT_KB_ENABLED: ${{ vars.CDK_ATTACHMENT_KB_ENABLED }}
       # Folder attachments: a conversation can attach a Google Drive folder
-      # (docs/specs/drive-folder-attachments.md). Opt-in while in development,
-      # and only together with CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED (synth
-      # fails otherwise). Sets the flag on app-api and the Runtime; no resources.
+      # (docs/specs/drive-folder-attachments.md). Default ON with a kill switch;
+      # unset follows CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED, and "true" without
+      # it fails synth. Sets the flag on app-api and the Runtime; no resources.
       CDK_FOLDER_ATTACHMENTS_ENABLED: ${{ vars.CDK_FOLDER_ATTACHMENTS_ENABLED }}
       # Folder sync: a project saved from a Drive folder can keep its Files in
-      # step with the folder (docs/specs/assistant-kb-sync.md §11). Opt-in while
-      # in development. Sets the flag on app-api and both kb-sync Lambdas; no
-      # resources. The SPA's matching switch is `features.folderSync`.
+      # step with the folder (docs/specs/assistant-kb-sync.md §11). Default ON
+      # with a kill switch ("false" turns it off). Sets the flag on app-api and
+      # both kb-sync Lambdas; no resources. The SPA's matching switch is `features.folderSync`.
       CDK_FOLDER_SYNC_ENABLED: ${{ vars.CDK_FOLDER_SYNC_ENABLED }}
       # SageMaker fine-tuning. The tables, bucket, SageMaker role and IAM
       # grants deploy unconditionally, but these two decide whether the feature

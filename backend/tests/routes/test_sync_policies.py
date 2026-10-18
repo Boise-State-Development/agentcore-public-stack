@@ -480,13 +480,10 @@ class TestFolderPolicy:
         ):
             yield resolve
 
-    @pytest.mark.parametrize("value", [None, "", "false", "yes"])
+    @pytest.mark.parametrize("value", ["false", " FALSE "])
     def test_flag_off_400(self, app, monkeypatch, value):
         _override_user(app)
-        if value is None:
-            monkeypatch.delenv("FOLDER_SYNC_ENABLED", raising=False)
-        else:
-            monkeypatch.setenv("FOLDER_SYNC_ENABLED", value)
+        monkeypatch.setenv("FOLDER_SYNC_ENABLED", value)
         create = AsyncMock()
         with (
             patch(f"{ROUTES_MODULE}.resolve_assistant_permission", _resolve("owner")),
@@ -497,7 +494,7 @@ class TestFolderPolicy:
         create.assert_not_awaited()
 
     def test_flag_off_still_authenticates_first(self, app, monkeypatch):
-        monkeypatch.delenv("FOLDER_SYNC_ENABLED", raising=False)
+        monkeypatch.setenv("FOLDER_SYNC_ENABLED", "false")
         mock_no_auth(app)
         assert self._post(app).status_code == 401
 

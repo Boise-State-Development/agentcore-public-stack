@@ -13,8 +13,8 @@ Identity & Access group. Browse users and inspect their detail/sessions; backed 
 
 ## Direct access
 
-With direct user grants turned on (`CDK_USER_GRANTS_ENABLED=true` and
-`features.userGrants: true`, off by default), a user's detail page gains a
+With direct user grants on (the default; `CDK_USER_GRANTS_ENABLED=false` and
+`features.userGrants: false` turn them off), a user's detail page gains a
 **Direct access** section for system admins. It grants tools, models and
 skills to **this one user** beside whatever their roles give: a pilot user, one
 researcher's model, a temporary exception.

@@ -76,7 +76,7 @@ def _no_digest(monkeypatch):
     # The in-process digest reads the object back and calls a model; it is
     # not what these tests are about. One test turns it back on explicitly.
     monkeypatch.setenv("DOCUMENT_DIGEST_ENABLED", "false")
-    monkeypatch.delenv("LARGE_DOCUMENT_ATTACHMENTS_ENABLED", raising=False)
+    monkeypatch.setenv("LARGE_DOCUMENT_ATTACHMENTS_ENABLED", "false")
 
 
 @pytest.mark.asyncio

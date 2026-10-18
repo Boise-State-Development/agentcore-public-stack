@@ -30,16 +30,16 @@ Every admin change is recorded on the project's trail with the admin as actor.
 Members with the editor role see the same trail, by email and without user ids,
 in the project's **Activity** dialog.
 
-## Turning Projects on
+## Turning Projects off
 
-Projects are still in development, so they are **off unless a deployment turns
-them on**. Two switches, one per side, and they should agree:
+Projects are **on by default**. A deployment that doesn't want them turns them
+off with two switches, one per side, and they should agree:
 
 - **Backend (the real gate):** set the GitHub environment variable
-  `CDK_PROJECTS_ENABLED` to `true` and run the platform deploy. CDK passes
-  `PROJECTS_ENABLED=true` to app-api, the AgentCore Runtime and the
-  scheduled-runs dispatcher and worker. Unset or any other value means off.
-  Turning it off later pauses every project schedule at its next due time.
+  `CDK_PROJECTS_ENABLED` to `false` and run the platform deploy. CDK passes
+  `PROJECTS_ENABLED=false` to app-api, the AgentCore Runtime and the
+  scheduled-runs dispatcher and worker. Unset or any other value means on.
+  Turning it off pauses every project schedule at its next due time.
 - **Front end:** `features.projects` in the SPA's environment file for that
   build: `environment.development.ts` for the deployed dev site,
   `environment.production.ts` for prod, `environment.ts` for local `ng serve`.

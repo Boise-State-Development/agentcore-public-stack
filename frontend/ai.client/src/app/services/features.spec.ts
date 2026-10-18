@@ -15,7 +15,17 @@ describe('FEATURES', () => {
   it('keeps local development opt-in: in-development features start off', () => {
     // environment.ts is what `ng serve` builds. A developer turns a feature on there
     // (and its backend *_ENABLED) by choice; see CLAUDE.md "Feature flags".
-    expect(environment.features.projects).toBe(false);
+    expect(environment.features.sessionPrewarm).toBe(false);
+    expect(environment.features.attachmentKb).toBe(false);
+  });
+
+  it('turns finished features on locally, matching their default-on backend switches', () => {
+    expect(environment.features.projects).toBe(true);
+    expect(environment.features.userGrants).toBe(true);
+    expect(environment.features.clientTurnTiming).toBe(true);
+    expect(environment.features.largeDocumentAttachments).toBe(true);
+    expect(environment.features.folderAttachments).toBe(true);
+    expect(environment.features.folderSync).toBe(true);
   });
 });
 

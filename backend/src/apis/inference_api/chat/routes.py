@@ -960,7 +960,7 @@ def _build_skill_authoring_tools(
 
     A single toggle: ``my_skill_create`` in the turn's tools provisions all
     seven (list / read / read_file / create / update / write_file /
-    delete_file). Also gated on the in-development ``SKILL_AUTHORING_ENABLED``
+    delete_file). Also gated on ``SKILL_AUTHORING_ENABLED`` (default on)
     and on ``SKILLS_ENABLED``. No IO. A turn without the id returns after one
     set intersection. With it, building the seven tools costs ~9 ms on a
     session's first turn and a memo lookup after that (see

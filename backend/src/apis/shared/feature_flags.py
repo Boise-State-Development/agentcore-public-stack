@@ -2,8 +2,8 @@
 
 These gate optional product surfaces per environment. Each flag documents
 its own default. **New and in-development features default off** until a
-deployment turns them on (only ``"true"`` enables; ``PROJECTS_ENABLED`` is the
-current example). Finished features default on with a kill switch (the
+deployment turns them on (only ``"true"`` enables; ``SESSION_PREWARM_ENABLED``
+is the current example). Finished features default on with a kill switch (the
 ``KB_SYNC_ENABLED`` pattern), and moving a feature there is a deliberate change.
 The SPA has a matching compile-time switch per feature in
 ``frontend/ai.client/src/environments`` (see CLAUDE.MD "Feature Flags").
@@ -47,17 +47,20 @@ def skill_authoring_enabled() -> bool:
 
     Covers the seven ``my_skill_*`` tools (``docs/specs/skill-creator.md`` D12),
     built per request by ``_build_skill_authoring_tools`` in the inference API.
-    **Opt-in while the feature is in development** (CLAUDE.md "Feature flags"):
-    only ``"true"`` (case-insensitive) enables it; unset, empty or anything else
-    is off. CDK sets it on the AgentCore Runtime only, and only when on (an unset
-    variable costs the Runtime's environment budget nothing). There is no SPA
-    switch: the tools reuse the existing approval card.
+    **Default ON with a kill switch**: unset or empty resolves to enabled; only
+    the literal ``"false"`` (case-insensitive) disables. A **feature switch**:
+    it widens what the agent can write on a user's behalf. CDK sets it on the
+    AgentCore Runtime only, and only when off (the default costs the Runtime's
+    environment budget nothing). There is no SPA switch: the tools reuse the
+    existing approval card.
 
     It ANDs with :func:`skills_enabled` and with the ``my_skill_create`` tool id
-    being in the turn's tools. Off, the tools are never built, so their specs
-    never reach ``toolConfig``.
+    being in the turn's tools, so on by default still grants nobody anything:
+    that catalog tool is seeded ``enabledByDefault: false`` and reaches a user
+    only through a role. Off, the tools are never built, so their specs never
+    reach ``toolConfig``.
     """
-    return os.environ.get("SKILL_AUTHORING_ENABLED", "").strip().lower() == "true"
+    return os.environ.get("SKILL_AUTHORING_ENABLED", "").strip().lower() != "false"
 
 
 def word_tracked_changes_enabled() -> bool:
@@ -67,16 +70,17 @@ def word_tracked_changes_enabled() -> bool:
     written out as ``[deleted: …]`` / ``[inserted: …]`` — as an inline
     attachment, through ``document_read`` and the upload digest, and through
     ``read_word_document`` — and the Word family gains ``redline_word_document``.
-    Off, each of those reads the file exactly as before and the tool is never
-    built. **Opt-in while the feature is in development**: only ``"true"``
-    (case-insensitive) enables it; unset, empty or anything else is off.
+    Off, each of those reads the file merged, as before, and the tool is never
+    built. **Default ON with a kill switch**: unset or empty resolves to
+    enabled; only the literal ``"false"`` (case-insensitive) disables. A
+    **feature switch** (it adds ``redline_word_document`` to ``toolConfig``).
 
-    CDK sets it on the AgentCore Runtime and on app-api, and only while on. Both
-    are needed: app-api builds the upload digest, whose paragraph numbers have to
-    match what ``document_read`` returns on the Runtime. No SPA switch: the
-    redline comes back on the existing download card.
+    CDK sets it on app-api always and on the AgentCore Runtime only while off.
+    Both must agree: app-api builds the upload digest, whose paragraph numbers
+    have to match what ``document_read`` returns on the Runtime. No SPA switch:
+    the redline comes back on the existing download card.
     """
-    return os.environ.get("WORD_TRACKED_CHANGES_ENABLED", "").strip().lower() == "true"
+    return os.environ.get("WORD_TRACKED_CHANGES_ENABLED", "").strip().lower() != "false"
 
 
 def assistant_kb_full_context_enabled() -> bool:
@@ -105,17 +109,20 @@ def large_document_attachments_enabled() -> bool:
     On, a reference-class upload (``is_reference_document``: a pdf, docx, txt,
     md or html file over 4 MB and up to 50 MB) completes by enqueueing it for
     the ``large-document-prepare`` Lambda, which writes the ``_derived/``
-    sidecars ``document_read`` reads. Off, nothing is enqueued. **Opt-in while
-    the feature is in development**: only ``"true"`` (case-insensitive) enables
-    it; unset, empty or anything else is off.
+    sidecars ``document_read`` reads. Off, nothing is enqueued. **Default ON
+    with a kill switch**: unset or empty resolves to enabled; only the literal
+    ``"false"`` (case-insensitive) disables. A **feature switch**: it deploys a
+    queue and a Lambda, and widens what an upload may be.
 
     app-api only. CDK sets it from ``CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED``,
     together with the prepare queue's URL, which exists only while it is on.
+    Without that URL (a local app-api) an upload is never queued; the miss is
+    logged in ``_enqueue_preparation``.
     The Runtime needs no copy: ``document_read`` branches on the file row's
     ``preparation``, not on a switch, so files already prepared stay readable
     after the flag is turned off.
     """
-    return os.environ.get("LARGE_DOCUMENT_ATTACHMENTS_ENABLED", "").strip().lower() == "true"
+    return os.environ.get("LARGE_DOCUMENT_ATTACHMENTS_ENABLED", "").strip().lower() != "false"
 
 
 def attachment_kb_enabled() -> bool:
@@ -148,19 +155,20 @@ def folder_attachments_enabled() -> bool:
     On, app-api mounts ``POST/GET/DELETE /sessions/{id}/folders`` and runs the
     expansion task that lists the folder and imports each readable file as a
     session file delivered by reference, whatever its size. Off, the routes
-    404 and nothing is expanded. **Opt-in while the feature is in
-    development**: only ``"true"`` (case-insensitive) enables it; unset, empty
-    or anything else is off.
+    404 and nothing is expanded. **Default ON with a kill switch**: unset or
+    empty resolves to enabled; only the literal ``"false"`` (case-insensitive)
+    disables. A **feature switch**: it widens what a user can bring into a
+    conversation.
 
     Read on app-api (the routes) and on the AgentCore Runtime (a turn's
     ``folder_attachment_ids``: off, the field is ignored and no manifest is
-    rendered). CDK sets it from ``CDK_FOLDER_ATTACHMENTS_ENABLED`` on both, the
-    Runtime's copy only while on, and refuses it without
-    ``CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED``: a folder file is read through
-    the prepare Lambda's sidecars, so without that pipeline there is nothing to
-    read small files through.
+    rendered). CDK sets it from ``CDK_FOLDER_ATTACHMENTS_ENABLED`` on app-api
+    always and on the Runtime only while off. Its CDK default follows
+    ``CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED``, and synth refuses it on without
+    that: a folder file is read through the prepare Lambda's sidecars, so
+    without that pipeline there is nothing to read small files through.
     """
-    return os.environ.get("FOLDER_ATTACHMENTS_ENABLED", "").strip().lower() == "true"
+    return os.environ.get("FOLDER_ATTACHMENTS_ENABLED", "").strip().lower() != "false"
 
 
 def folder_sync_enabled() -> bool:
@@ -172,16 +180,17 @@ def folder_sync_enabled() -> bool:
     changed files, imports new ones and marks files gone from the folder. Off,
     creating one is refused (400) and the dispatcher re-arms a due folder
     policy one interval out without running it, so existing policies wait
-    rather than starve the sweep. **Opt-in while the feature is in
-    development**: only ``"true"`` (case-insensitive) enables it.
+    rather than starve the sweep. **Default ON with a kill switch**: unset or
+    empty resolves to enabled; only the literal ``"false"`` (case-insensitive)
+    disables.
 
     Read on app-api and on both kb-sync Lambdas; CDK sets it on all three from
     ``CDK_FOLDER_SYNC_ENABLED``. The SPA's matching switch is
     ``features.folderSync`` (the "Keep in sync with the folder" option on Save
-    as project). A **feature switch** once finished: it widens what a schedule
-    can fetch and ingest on a user's behalf.
+    as project). A **feature switch**: it widens what a schedule can fetch and
+    ingest on a user's behalf.
     """
-    return os.environ.get("FOLDER_SYNC_ENABLED", "").strip().lower() == "true"
+    return os.environ.get("FOLDER_SYNC_ENABLED", "").strip().lower() != "false"
 
 
 def scheduled_runs_enabled() -> bool:
@@ -782,17 +791,17 @@ def projects_enabled() -> bool:
     """Whether Shared Projects exist in this environment.
 
     Covers app-api's ``/projects`` surface and the project harness everywhere it
-    is reachable (``docs/specs/shared-projects.md``). **Opt-in while the feature
-    is in development** (CLAUDE.md "Feature flags"): only ``"true"``
-    (case-insensitive) enables it; unset or anything else is off, so a
-    deployment turns Projects on by choice. CDK sets it on app-api and the
-    AgentCore Runtime from ``config.projects.enabled``. The SPA's matching
-    switch is ``features.projects`` in ``frontend/ai.client/src/environments``.
+    is reachable (``docs/specs/shared-projects.md``). **Default ON with a kill
+    switch**: unset or empty resolves to enabled; only the literal ``"false"``
+    (case-insensitive) disables. A **feature switch**: Projects is a product
+    surface a deployment may not want. CDK sets it on app-api and the AgentCore
+    Runtime from ``config.projects.enabled``. The SPA's matching switch is
+    ``features.projects`` in ``frontend/ai.client/src/environments``.
 
     While off the routes 404 after authentication (the auth sweep requires a
     401 first), the harness refuses everyone, and existing rows are left untouched.
     """
-    return os.environ.get("PROJECTS_ENABLED", "").strip().lower() == "true"
+    return os.environ.get("PROJECTS_ENABLED", "").strip().lower() != "false"
 
 
 def client_turn_timing_enabled() -> bool:
@@ -803,17 +812,18 @@ def client_turn_timing_enabled() -> bool:
     ``AgentCoreStack/TurnLatency``. It is the only metric that covers the whole
     wait a user sees: the browser, the app-api hop, Runtime routing and session
     start, which the server-side ``FirstTokenMs`` (handler entry onward) cannot
-    see (``docs/specs/turn-path-ttft.md`` §6). **Opt-in while the feature is in
-    development** (CLAUDE.md "Feature flags"): only ``"true"`` (case-insensitive)
-    enables it; while off the route 404s after authentication. CDK sets it on
-    app-api from ``config.clientTurnTiming.enabled``. The SPA's matching switch
-    is ``features.clientTurnTiming``.
+    see (``docs/specs/turn-path-ttft.md`` §6). **Default ON with a kill
+    switch**: unset or empty resolves to enabled; only the literal ``"false"``
+    (case-insensitive) disables; while off the route 404s after
+    authentication. CDK sets it on app-api from
+    ``config.clientTurnTiming.enabled``. The SPA's matching switch is
+    ``features.clientTurnTiming``.
 
-    A **feature switch** once finished: it is observability a deployment may not
-    want (a handful of custom metrics, one small log line per turn). It records
-    timings and a model id, never message content, user ids or session ids.
+    A **feature switch**: it is observability a deployment may not want (a
+    handful of custom metrics, one small log line per turn). It records timings
+    and a model id, never message content, user ids or session ids.
     """
-    return os.environ.get("CLIENT_TURN_TIMING_ENABLED", "").strip().lower() == "true"
+    return os.environ.get("CLIENT_TURN_TIMING_ENABLED", "").strip().lower() != "false"
 
 
 def session_prewarm_enabled() -> bool:
@@ -843,10 +853,11 @@ def user_grants_enabled() -> bool:
     """Whether the admin surface for direct user grants is mounted on app-api.
 
     A direct grant (``apis.shared.rbac.models.UserGrant``) hands tools, models
-    and skills to one user beside their roles. **Opt-in while the feature is
-    in development** (CLAUDE.md "Feature flags"): only ``"true"``
-    (case-insensitive) enables it. CDK sets it on app-api from
-    ``config.userGrants.enabled``. The SPA's matching switch is
+    and skills to one user beside their roles. **Default ON with a kill
+    switch**: unset or empty resolves to enabled; only the literal ``"false"``
+    (case-insensitive) disables. A **feature switch**: it is an access-control
+    surface a deployment may want to keep to roles alone. CDK sets it on
+    app-api from ``config.userGrants.enabled``. The SPA's matching switch is
     ``features.userGrants``.
 
     **This gates the write surface only.** Permission resolution reads a
@@ -859,7 +870,7 @@ def user_grants_enabled() -> bool:
     stops new grants and edits but does not revoke what was granted — delete
     the grant to revoke it.
     """
-    return os.environ.get("USER_GRANTS_ENABLED", "").strip().lower() == "true"
+    return os.environ.get("USER_GRANTS_ENABLED", "").strip().lower() != "false"
 
 
 def conversation_index_enabled() -> bool:

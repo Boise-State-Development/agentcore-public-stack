@@ -7,7 +7,7 @@
 
 ## Highlights
 
-This release fixes how an Agent (assistant) chat builds what the model sees. An instructor reported that course assistants answered ambiguous questions worse than the legacy system did, and four causes turned up. Long-term memory leaked facts from one assistant's knowledge base into another's chats. Retrieval cut the excerpts down to almost nothing. An Agent that bound no tools or skills ran on the viewer's own. And the Runtime could not read knowledge-base spreadsheets at all. All four are fixed. It also adds full-context mode for small knowledge bases, which is in development and off by default. **One behavior change needs attention:** an Agent that binds no tools or skills now runs with none (see Breaking changes). The only infrastructure change is one IAM statement, with no new resource, so run `platform.yml` first.
+This release fixes how an Agent (assistant) chat builds what the model sees. An instructor reported that course assistants answered ambiguous questions worse than the legacy system did, and four causes turned up. Long-term memory leaked facts from one assistant's knowledge base into another's chats. Retrieval cut the excerpts down to almost nothing. An Agent that bound no tools or skills ran on the viewer's own. And the Runtime could not read knowledge-base spreadsheets at all. All four are fixed. Eight finished features (Shared Projects, user grants, large-document and folder attachments, folder sync, Word tracked changes, skill authoring and client turn timing) now default on, so a deployment that never set their variables gets them on its next deploy. This release also adds full-context mode for small knowledge bases, which is in development and off by default. **Two things need attention:** an Agent that binds no tools or skills now runs with none (see Breaking changes), and **`backend.yml` must deploy before `platform.yml`** (see Deployment notes).
 
 ---
 
@@ -55,6 +55,40 @@ An assistant whose whole knowledge base is small can now get all of it, instead 
 
 The load starts next to the KB search and overlaps everything up to the agent build. The new prelude stage `agent_build.kb_full_context` measures what is left. Locally, parsing a 345K-character docx takes ~3 ms and rendering a ~50k-token block 0.3 ms. The network half (one Query every turn, plus parallel GetObjects on a conversation's first turn) has not been measured on dev yet. It needs that readout, and the TTFT sign-off `docs/specs/turn-path-ttft.md` asks for, before it is turned on beyond dev.
 
+## Eight finished features default on
+
+Eight features that were opt-in while in development have run in production since 1.28.0, and they are now ordinary feature switches: on unless a deployment sets the variable to `false` (#1674).
+
+| Feature | Variable | SPA flag |
+|---|---|---|
+| Shared Projects | `CDK_PROJECTS_ENABLED` | `features.projects` |
+| Direct user grants | `CDK_USER_GRANTS_ENABLED` | `features.userGrants` |
+| Client turn timing | `CDK_CLIENT_TURN_TIMING_ENABLED` | `features.clientTurnTiming` |
+| Skill authoring tools | `CDK_SKILL_AUTHORING_ENABLED` | — |
+| Word tracked changes | `CDK_WORD_TRACKED_CHANGES_ENABLED` | — |
+| Large document attachments | `CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED` | `features.largeDocumentAttachments` |
+| Folder attachments | `CDK_FOLDER_ATTACHMENTS_ENABLED` | `features.folderAttachments` |
+| Folder sync | `CDK_FOLDER_SYNC_ENABLED` | `features.folderSync` |
+
+This also fixes a mismatch. Since 1.28.0 the production SPA build has offered these features while their backend defaults were off, so a deployment that built it without setting the variables saw UI whose APIs returned 404.
+
+Session prewarm, the conversation index and the attachments KB stay opt-in.
+
+### Backend
+
+- Each reader in `apis/shared/feature_flags.py` now treats unset or empty as on, and only `"false"` turns its feature off.
+
+### Frontend
+
+- The local build (`environment.ts`) now offers the five features that have an SPA flag. The deployed builds already did.
+
+### Infrastructure
+
+- CDK defaults for all eight flip to on in `infrastructure/lib/config.ts`.
+- Folder attachments' default follows large document attachments. Setting `CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED=false` turns folder attachments off with it instead of failing synth. Setting `CDK_FOLDER_ATTACHMENTS_ENABLED=true` explicitly without large documents still fails synth.
+- The Runtime now carries `SKILL_AUTHORING_ENABLED`, `WORD_TRACKED_CHANGES_ENABLED` and `FOLDER_ATTACHMENTS_ENABLED` only while they are off (as `false`). With all three on, the Runtime environment drops three variables. On dev that took it from 29 to 26 variables and from 1,297 to 1,208 bytes of the 2,560-byte budget.
+- Skill authoring stays inert until a role is granted the `my_skill_create` catalog tool, which is seeded `enabledByDefault: false`.
+
 ---
 
 ## ⚠️ Breaking changes
@@ -87,11 +121,13 @@ Before this release, an Agent with no `tool` bindings ran on the viewer's own to
 ## 🐛 Bug fixes
 
 - **Spreadsheet analysis works on assistant knowledge-base files in cloud.** `list_spreadsheets` listed a KB spreadsheet (it only reads DynamoDB), then `analyze_spreadsheet` failed. The Runtime role had no read on the rag-documents bucket, so `GetObject` returned AccessDenied. The tool returned that error to the model as its result instead of logging it, so it showed up nowhere. Local dev hid it because developer credentials stood in for the role (#1668).
+- **Spreadsheet analysis finds a file whose name starts or ends with a space.** Files synced from Drive can keep a leading space. `list_spreadsheets` showed the name with the space, the model passed it trimmed, and `analyze_spreadsheet` said "not found". `_find_file` now strips both sides in its exact and same-stem passes (#1673).
 
 ## 🏗️ Infrastructure
 
 - **`AssistantDocumentsRead`**: `s3:GetObject` on `rag-documents/assistants/*`, added as a statement on the existing `RuntimeMemoryStatsPolicy` managed policy rather than the role, whose statements already spill into overflow policies near IAM's 6,144-character cap. It is read-only with no `ListBucket`, because the key comes from the assistant's `DOC#` row. The policy's `Description` is unchanged, so the policy is updated in place, not replaced. **No new resource** (#1668).
 - `platform.yml` forwards the new `CDK_ASSISTANT_KB_FULL_CONTEXT_ENABLED` variable. Unset means off (#1667).
+- CDK defaults for the eight promoted flags are now on, and the Runtime drops three env vars where they are on (#1674). See "Eight finished features default on".
 
 ## 🧪 Test coverage
 
@@ -101,10 +137,28 @@ About 1,270 lines of new and updated tests. They cover memory isolation with rea
 
 ## 🚀 Deployment notes
 
-- **Order: `platform.yml`, then `backend.yml`, then `frontend-deploy.yml`.** `platform.yml` adds the Runtime's read on `rag-documents/assistants/*`. Until it runs, spreadsheet analysis on KB files keeps failing.
-- **Tell Agent authors about the tool and skill change before you deploy.** Any Agent that binds no tools or skills loses its viewers' tools and skills (see Breaking changes). It's not behind a flag.
+### Order: `backend.yml` → `platform.yml` → `frontend-deploy.yml`
+
+**This release must deploy the backend before the platform stack.** `platform.yml` removes `SKILL_AUTHORING_ENABLED`, `WORD_TRACKED_CHANGES_ENABLED` and `FOLDER_ATTACHMENTS_ENABLED` from the Runtime. The 1.29.0 image reads an unset variable as off. So if the platform deploy runs first, skill authoring, Word tracked changes and folder attachments switch off until `backend.yml` finishes, which took about 13 minutes on dev. The new image reads unset as on, so backend first has no gap.
+
+**A merge to `main` does not guarantee this order.** Both workflows trigger on the same push and share the `deploy-<ref>` concurrency slot, so whichever claims it first runs first. On dev, Platform Stack was evicted from the slot and re-dispatched after Backend Deploy, which happened to give the safe order. Watch the merge:
+
+- If **Backend Deploy** is running and Platform Stack is pending, let both finish.
+- If **Platform Stack** claims the slot first, cancel it before its CDK deploy step starts. Let Backend Deploy finish, then run Platform Stack with `workflow_dispatch` on `main`.
+
+Backend first is safe for everything else in this release. The one thing that waits for `platform.yml` is the Runtime's read on `rag-documents/assistants/*`. Until it lands, spreadsheet analysis on KB files keeps failing, as it does today.
+
+### Also
+
+- **Tell Agent authors about the tool and skill change before you deploy.** Any Agent that binds no tools or skills loses its viewers' tools and skills (see Breaking changes). It is not behind a flag.
 - **Full-context mode stays off** unless you set `CDK_ASSISTANT_KB_FULL_CONTEXT_ENABLED=true` in an environment. Leave it off in production until its first-turn latency has been read on dev.
 - No new tables, indexes or backfills.
+
+### Other deployments
+
+- **Review the eight promoted flags before deploying.** A deployment that never set them gains all eight features on its next platform deploy. Set any you don't want to `false` in the GitHub environment first.
+- **Large document attachments adds about 11 resources** if it wasn't already on: the prepare queue, its dead-letter queue, the Lambda and its wiring. After the platform deploy that creates them, re-run Backend Deploy's "Deploy large-document-prepare Lambda image" job, so the Lambda runs the real image instead of the bootstrap stub. That re-run is the one step that comes after `platform.yml`.
+- **Turning large documents off now turns folder attachments off with it** instead of failing synth.
 
 ---
 

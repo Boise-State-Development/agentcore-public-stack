@@ -374,12 +374,9 @@ class TestDriveFolder:
         assert invoked_workers == []
         assert await get_sync_policy(assistant_id, policy.policy_id) is None
 
-    @pytest.mark.parametrize("value", [None, "", "false"])
+    @pytest.mark.parametrize("value", ["false", " FALSE "])
     async def test_flag_off_rearms_without_running(self, assistants_table, invoked_workers, monkeypatch, value):
-        if value is None:
-            monkeypatch.delenv("FOLDER_SYNC_ENABLED", raising=False)
-        else:
-            monkeypatch.setenv("FOLDER_SYNC_ENABLED", value)
+        monkeypatch.setenv("FOLDER_SYNC_ENABLED", value)
         assistant_id = await _make_assistant()
         policy = await _make_due_folder_policy(assistant_id)
 
@@ -395,7 +392,7 @@ class TestDriveFolder:
         assert stored.next_sync_at > datetime.now(timezone.utc).isoformat()
 
     async def test_flag_off_leaves_other_policies_running(self, assistants_table, invoked_workers, monkeypatch):
-        monkeypatch.delenv("FOLDER_SYNC_ENABLED", raising=False)
+        monkeypatch.setenv("FOLDER_SYNC_ENABLED", "false")
         assistant_id = await _make_assistant()
         await _make_due_folder_policy(assistant_id)
         await _make_document(assistant_id)

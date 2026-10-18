@@ -77,8 +77,8 @@ class TestMaxSizeFor:
     def test_other_classes_keep_their_caps(self, service, flag_on, filename, mime, cap):
         assert service.max_size_for(filename, mime) == cap
 
-    @pytest.mark.parametrize("value", ["", "false", "1", "yes"])
-    def test_off_unless_exactly_true(self, service, monkeypatch, value):
+    @pytest.mark.parametrize("value", ["false", " FALSE "])
+    def test_off_only_when_false(self, service, monkeypatch, value):
         monkeypatch.setenv("LARGE_DOCUMENT_ATTACHMENTS_ENABLED", value)
 
         assert service.max_size_for("manual.pdf", "application/pdf") == GENERAL_CAP
@@ -105,7 +105,8 @@ class TestPresign:
         assert exc.value.max_size == 50 * MB
 
     @pytest.mark.asyncio
-    async def test_with_the_flag_off_a_large_pdf_is_refused_at_the_inline_limit(self, service):
+    async def test_with_the_flag_off_a_large_pdf_is_refused_at_the_inline_limit(self, service, monkeypatch):
+        monkeypatch.setenv("LARGE_DOCUMENT_ATTACHMENTS_ENABLED", "false")
         request = PresignRequest(sessionId="s1", filename="manual.pdf", mimeType="application/pdf", sizeBytes=5 * MB)
 
         with pytest.raises(FileTooLargeError) as exc:
