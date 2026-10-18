@@ -7,6 +7,7 @@ import {
 } from '@angular/common/http/testing';
 import { signal } from '@angular/core';
 import { McpAppProxyService } from './mcp-app-proxy.service';
+import { SUPPRESS_ERROR_TOAST } from '../../../auth/error.interceptor';
 import { ConfigService } from '../../../services/config.service';
 import { SessionService as BffSessionService } from '../../../auth/session.service';
 import { SessionService } from '../session/session.service';
@@ -53,6 +54,7 @@ describe('McpAppProxyService', () => {
     expect(req.request.method).toBe('POST');
     expect(req.request.withCredentials).toBe(true);
     expect(req.request.headers.get('X-CSRF-Token')).toBe('t');
+    expect(req.request.context.get(SUPPRESS_ERROR_TOAST)).toBe(true);
     expect(req.request.body).toEqual({
       sessionId: 's1',
       toolUseId: 'tu-1',
