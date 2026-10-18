@@ -3,7 +3,7 @@ Tests for FilteredMCPClient, get_gateway_client_if_enabled, and create_filtered_
 
 Requirements: 24.1–24.3
 """
-import httpx
+import httpx2
 import pytest
 from unittest.mock import patch, MagicMock
 
@@ -131,7 +131,7 @@ class TestBuildGatewayAuth:
         assert isinstance(auth, OAuthBearerAuth)
 
         # Verify the token actually lands on the Authorization header.
-        request = httpx.Request("POST", "https://gateway.example.com/mcp")
+        request = httpx2.Request("POST", "https://gateway.example.com/mcp")
         next(auth.auth_flow(request))
         assert request.headers["Authorization"] == "Bearer user-token-abc"
 
@@ -168,8 +168,8 @@ class TestBuildGatewayAuth:
         auth_a = _build_gateway_auth("us-west-2", "token-user-a")
         auth_b = _build_gateway_auth("us-west-2", "token-user-b")
 
-        req_a = httpx.Request("POST", "https://gateway.example.com/mcp")
-        req_b = httpx.Request("POST", "https://gateway.example.com/mcp")
+        req_a = httpx2.Request("POST", "https://gateway.example.com/mcp")
+        req_b = httpx2.Request("POST", "https://gateway.example.com/mcp")
         next(auth_a.auth_flow(req_a))
         next(auth_b.auth_flow(req_b))
 

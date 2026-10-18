@@ -1,15 +1,19 @@
 """A cached agent's MCP session that died on its own reconnects on the next call.
 
 The dev sequence (2026-10-18): GitHub's MCP endpoint answered a `tools/call` it
-had already performed with 503. The MCP SDK ends the whole session on any
-non-2xx POST, Strands' background thread exits, and nothing calls `stop()`. The
+had already performed with 503. On mcp 1.x that ended the whole session; on
+2.x a broken-off response still does (the transport error escapes its task
+group). Strands' background thread exits, and nothing calls `stop()`. The
 client is shared by every agent built over it and agents are cached across
 turns, so every later model-driven call on it failed with "the client session
 is not running" until the agent was evicted.
 
+On 2.x the 503 itself leaves the session up, and the call is reported as an
+unknown outcome all the same (`test_a_5xx_on_a_live_session_is_an_unknown_outcome`).
+
 The integration tests drive the real loop: a real `Agent` holding a real
 Strands `MCPClient` as its tool provider, against a real streamable-HTTP MCP
-server that 503s. Only the model is scripted.
+server that drops or 503s a call it has performed. Only the model is scripted.
 """
 
 from __future__ import annotations
@@ -115,6 +119,14 @@ def _text(result: dict) -> str:
 
 
 @contextlib.contextmanager
+def _dropping_server():
+    """A server that performs each `tools/call`, then breaks off the answer."""
+    with FlakyMCPServer(fail_calls=False) as server:
+        server.drop_calls = True
+        yield server
+
+
+@contextlib.contextmanager
 def _stopping(client: Any):
     try:
         yield client
@@ -125,14 +137,14 @@ def _stopping(client: Any):
 
 @pytest.mark.asyncio
 async def test_a_call_whose_session_dies_resolves_rather_than_hangs():
-    """Upstream, the call the 503 answered never returns (strands 1.57.2).
+    """Upstream, the call whose session dies never returns (strands 1.57.2).
 
     Its `run_async` task is mid-cleanup when the dying session stops the
     background loop. The `cancel_signal` every agent passes makes it lose
     that race every time, so the turn hung. If the plain client stops
     hanging, Strands has fixed it and `ReleasesCallsOnSessionEnd` can go.
     """
-    with FlakyMCPServer() as server:
+    with _dropping_server() as server:
         for cls, hangs in ((MCPClient, True), (_Client, False)):
             with _stopping(server.client(cls)) as client:
                 await client.load_tools()
@@ -153,13 +165,13 @@ async def test_a_call_whose_session_dies_resolves_rather_than_hangs():
 @pytest.mark.asyncio
 async def test_without_healing_a_cached_agent_stays_on_the_dead_session():
     """The premise: a crashed shared session never comes back by itself."""
-    with FlakyMCPServer() as server, _stopping(server.client(_Client)) as client:
+    with _dropping_server() as server, _stopping(server.client(_Client)) as client:
         agent = _agent(client, ["first", "second"], heal=False)
         await _turn(agent)
         assert server.writes == ["first"]
         assert mcp_session.session_crashed(client)
 
-        server.fail_calls = False
+        server.drop_calls = False
         result = await _turn(agent)
 
         assert result["status"] == "error"
@@ -169,13 +181,13 @@ async def test_without_healing_a_cached_agent_stays_on_the_dead_session():
 
 @pytest.mark.asyncio
 async def test_a_cached_agents_next_model_driven_call_reconnects():
-    """The 503 kills the session; the same agent's next turn reconnects.
+    """The dropped call kills the session; the same agent's next turn reconnects.
 
     The call the 503 answered is never re-run, and the model is told its
     outcome is unknown, so it does not retry a write that already happened
     now that a retry would succeed.
     """
-    with FlakyMCPServer() as server, _stopping(server.client(_Client)) as client:
+    with _dropping_server() as server, _stopping(server.client(_Client)) as client:
         agent = _agent(client, ["first", "second"])
 
         lost = await _turn(agent)
@@ -185,7 +197,7 @@ async def test_a_cached_agents_next_model_driven_call_reconnects():
         assert "issue_write" in _text(lost)
         assert mcp_session.session_crashed(client)
 
-        server.fail_calls = False
+        server.drop_calls = False
         result = await _turn(agent)
 
         assert result["status"] == "success", _text(result)
@@ -203,12 +215,12 @@ async def test_a_new_agent_built_over_the_crashed_client_reconnects():
     That list is still right — it is the cached agents' `toolConfig`, byte for
     byte — so the build keeps it, and the first call reconnects.
     """
-    with FlakyMCPServer() as server, _stopping(server.client(_Client)) as client:
+    with _dropping_server() as server, _stopping(server.client(_Client)) as client:
         first = _agent(client, ["first"])
         await _turn(first)
         assert mcp_session.session_crashed(client)
 
-        server.fail_calls = False
+        server.drop_calls = False
         second = _agent(client, ["second"])
         assert sorted(second.tool_names) == sorted(first.tool_names)
         result = await _turn(second)
@@ -224,7 +236,7 @@ async def test_a_new_agent_built_over_the_crashed_client_reconnects():
 @pytest.mark.asyncio
 async def test_a_failed_reconnect_is_tried_again_on_the_next_call():
     """A server still down when the agent reconnects fails that call only."""
-    with FlakyMCPServer() as server, _stopping(server.client(_Client)) as client:
+    with _dropping_server() as server, _stopping(server.client(_Client)) as client:
         agent = _agent(client, ["first", "second", "third"])
         await _turn(agent)
         assert mcp_session.session_crashed(client)
@@ -238,10 +250,30 @@ async def test_a_failed_reconnect_is_tried_again_on_the_next_call():
         assert mcp_session.is_tool_provider(client)
 
         server.down = False
-        server.fail_calls = False
+        server.drop_calls = False
         result = await _turn(agent)
         assert result["status"] == "success", _text(result)
         assert server.writes == ["first", "third"]
+
+
+@pytest.mark.asyncio
+async def test_a_5xx_on_a_live_session_is_an_unknown_outcome():
+    """mcp 2.x answers GitHub's write-then-503 with an error and keeps the
+    session. The write happened, so the model is told the outcome is unknown,
+    and nothing reconnects a session that never died."""
+    with FlakyMCPServer() as server, _stopping(server.client(_Client)) as client:
+        agent = _agent(client, ["first", "second"])
+
+        lost = await _turn(agent)
+        assert server.writes == ["first"]
+        assert lost["status"] == "error"
+        assert "may have completed" in _text(lost)
+        assert mcp_session.session_is_active(client)
+
+        server.fail_calls = False
+        result = await _turn(agent)
+        assert result["status"] == "success", _text(result)
+        assert server.writes == ["first", "second"]
 
 
 # --- The hook in isolation -------------------------------------------------
@@ -354,6 +386,42 @@ def test_an_ordinary_error_on_a_healthy_session_is_left_alone():
     hook._after_tool_call(event)
     assert event.result == _ERROR
     assert hook._session_at_call == {}
+
+
+def test_a_5xx_on_a_healthy_session_reports_an_unknown_outcome():
+    client = _Session(active=True)
+    tool = _mcp_tool(client)
+    hook = MCPSessionHealHook()
+    asyncio.run(hook._before_tool_call(_before(tool)))
+    event = _after(
+        tool,
+        {
+            "status": "error",
+            "toolUseId": "tu-1",
+            "content": [
+                {"text": "Tool execution failed: Server returned HTTP 503 Service Unavailable"}
+            ],
+        },
+    )
+    hook._after_tool_call(event)
+    assert "may have completed" in event.result["content"][0]["text"]
+    assert client.starts == 0
+
+
+def test_a_4xx_on_a_healthy_session_is_left_alone():
+    """A refused call never ran; a 401 must keep its text for the consent hook."""
+    client = _Session(active=True)
+    tool = _mcp_tool(client)
+    hook = MCPSessionHealHook()
+    asyncio.run(hook._before_tool_call(_before(tool)))
+    result = {
+        "status": "error",
+        "toolUseId": "tu-1",
+        "content": [{"text": "Tool execution failed: Server returned HTTP 401 Unauthorized"}],
+    }
+    event = _after(tool, dict(result))
+    hook._after_tool_call(event)
+    assert event.result == result
 
 
 def test_a_session_replaced_under_the_call_reports_an_unknown_outcome():

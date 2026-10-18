@@ -4,7 +4,7 @@ Tests for SigV4HTTPXAuth and get_gateway_region_from_url.
 Requirements: 20.1–20.5
 """
 import pytest
-import httpx
+import httpx2
 from unittest.mock import patch, MagicMock
 
 from agents.main_agent.integrations.gateway_auth import (
@@ -45,7 +45,7 @@ class TestSigV4HTTPXAuthFlow:
     def test_auth_flow_adds_signature_headers(self):
         """Req 20.1: auth_flow adds AWS signature headers to the request."""
         auth, mock_signer = self._make_auth()
-        request = httpx.Request("POST", "https://gateway.example.com/mcp", content=b"body")
+        request = httpx2.Request("POST", "https://gateway.example.com/mcp", content=b"body")
 
         flow = auth.auth_flow(request)
         signed_request = next(flow)
@@ -57,7 +57,7 @@ class TestSigV4HTTPXAuthFlow:
     def test_auth_flow_removes_connection_header(self):
         """Req 20.2: auth_flow removes the 'connection' header before signing."""
         auth, mock_signer = self._make_auth()
-        request = httpx.Request(
+        request = httpx2.Request(
             "POST",
             "https://gateway.example.com/mcp",
             headers={"connection": "keep-alive"},

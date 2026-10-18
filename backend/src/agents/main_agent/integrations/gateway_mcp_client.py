@@ -6,11 +6,11 @@ Creates MCP client with SigV4 authentication for Gateway tools
 import logging
 import os
 from typing import Optional, List, Callable, Any
-from mcp.client.streamable_http import streamablehttp_client
 from strands.tools.mcp import MCPClient
 from agents.main_agent.config.constants import EnvVars, Defaults
 from agents.main_agent.integrations.mcp_session_end import ReleasesCallsOnSessionEnd
 from agents.main_agent.integrations.gateway_auth import get_sigv4_auth, get_gateway_region_from_url
+from agents.main_agent.integrations.mcp_transport import streamable_http_transport
 from agents.main_agent.integrations.oauth_auth import create_oauth_bearer_auth
 from apis.shared.tools.gateway_identity import resolve_gateway_id, gateway_url_from_id
 from agents.main_agent.integrations.mcp_apps import (
@@ -233,9 +233,9 @@ def create_gateway_mcp_client(
     # UICapableMCPClient advertises the MCP Apps UI extension on initialize and
     # records/filters `_meta.ui` tools (inert unless the host flag is enabled).
     mcp_client = UICapableMCPClient(
-        lambda: streamablehttp_client(
+        lambda: streamable_http_transport(
             gateway_url,
-            auth=auth  # httpx Auth: bearer (jwt mode) or SigV4 (iam mode)
+            auth=auth  # httpx2 Auth: bearer (jwt mode) or SigV4 (iam mode)
         )
     )
 
@@ -295,9 +295,9 @@ def create_filtered_gateway_client(
     logger.info(f"Creating FilteredMCPClient with {len(gateway_tool_ids)} enabled tool IDs")
 
     mcp_client = FilteredMCPClient(
-        lambda: streamablehttp_client(
+        lambda: streamable_http_transport(
             gateway_url,
-            auth=auth  # httpx Auth: bearer (jwt mode) or SigV4 (iam mode)
+            auth=auth  # httpx2 Auth: bearer (jwt mode) or SigV4 (iam mode)
         ),
         enabled_tool_ids=gateway_tool_ids,
         prefix=prefix

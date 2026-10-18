@@ -41,13 +41,20 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urljoin, urlsplit
 from urllib.request import Request, urlopen
 
-import mcp.types as mcp_types
 from mcp.client.session import ClientSession
+from mcp.shared.exceptions import MCPError
+from mcp.types import METHOD_NOT_FOUND, REQUEST_TIMEOUT, DiscoverResult
 from strands.tools.mcp import MCPClient
 from strands.types import PaginatedList
 
 from agents.main_agent.config.constants import Defaults, EnvVars
 from agents.main_agent.integrations.mcp_session_end import ReleasesCallsOnSessionEnd
+from agents.main_agent.integrations.mcp_transport import (
+    forget_legacy_server,
+    is_known_legacy_server,
+    remember_legacy_server,
+)
+from apis.shared.tools.mcp_session import server_error_outcome_unknown
 from apis.shared.tools.models import ToolUIMetadata
 
 logger = logging.getLogger(__name__)
@@ -292,7 +299,7 @@ def _extract_html_content(result: Any) -> Tuple[Optional[str], str]:
         text = getattr(item, "text", None)
         if not isinstance(text, str):
             continue
-        mime = getattr(item, "mimeType", None) or ""
+        mime = getattr(item, "mime_type", None) or ""
         if mime == MCP_APPS_UI_MIME_TYPE:
             return text, mime
         if html_fallback is None and mime.startswith("text/html"):
@@ -484,14 +491,17 @@ def _resolve_server_identity(
 ) -> Tuple[str, str]:
     """Resolve `(serverName, icon)` for a tool's `ui_resource` event.
 
-    Name: server-advertised `serverInfo` (`title` > `name`, captured off
-    `initialize`) → `ui://` authority. Icon: `serverInfo.icons` (spec) → the
+    Name: server-advertised `serverInfo` (`title` > `name`, the session's
+    `server_info`) → `ui://` authority. Icon: `serverInfo.icons` (spec) → the
     server's served-manifest icon (Claude parity, pre-warmed cache keyed by the
     client's `server_url`) → "" (frontend glyph). Wholly best-effort.
     """
+    # `server_info` is None until the session negotiates, and on a
+    # 2026-07-28 connection it is the discover result's optional stamp, so a
+    # server may legitimately not name itself.
     info = getattr(
         getattr(client, "_background_thread_session", None),
-        "_mcp_apps_server_info",
+        "server_info",
         None,
     )
     name = getattr(info, "title", None) or getattr(info, "name", None) or ""
@@ -599,7 +609,7 @@ def build_ui_app_header(
     show in the plain tool rail before its frame mounts. This builds the same
     event shape with everything that's known *instantly* at the tool's
     `content_block_start` — `resourceUri` + `serverName` + `icon` (from the
-    catalog + captured `serverInfo`) + tool-level `csp`/`permissions` — and an
+    catalog + the session's `server_info`) + tool-level `csp`/`permissions` — and an
     EMPTY `html`. Emitting it first lets the host promote the App frame's
     HEADER (icon + server + tool + shimmer) immediately; the full
     `fetch_ui_resource` payload follows and, last-write-wins on the frontend,
@@ -647,65 +657,86 @@ def build_ui_app_header(
 # =============================================================================
 
 
-class _UIExtensionClientSession(ClientSession):
-    """`ClientSession` that advertises the MCP Apps UI extension on `initialize`.
+def _rejection_is_era_evidence(exc: MCPError) -> bool:
+    """Whether a rejected `server/discover` says the server is legacy-only.
 
-    Drop-in for the SDK `ClientSession` — identical constructor, identical
-    behavior, except that the outbound `InitializeRequest` gets
-    `capabilities.extensions["io.modelcontextprotocol/ui"]` added when the
-    host flag is enabled. We augment in `send_request` rather than reimplement
-    `initialize()` so we inherit whatever capabilities the SDK computes
-    (sampling/elicitation/roots/tasks) and stay robust to SDK changes.
+    A timeout or a 5xx says the server is struggling, not which protocol it
+    speaks: GitHub answering one probe 503 must not drop it to the legacy
+    protocol (and its awaiting-submission marker) for an hour.
+    """
+    if exc.error.code == REQUEST_TIMEOUT:
+        return False
+    return not server_error_outcome_unknown(
+        {"status": "error", "content": [{"text": exc.error.message}]}
+    )
+
+
+class _UIExtensionClientSession(ClientSession):
+    """`ClientSession` that advertises the MCP Apps UI extension.
+
+    Drop-in for the SDK `ClientSession`: identical constructor and behavior,
+    except for two things.
+
+    **The UI extension.** `extensions["io.modelcontextprotocol/ui"]` is added
+    when the host flag is enabled. mcp 2.x builds the client capabilities from
+    `extensions` itself (`ClientSession._build_capabilities`), for the legacy
+    `initialize` handshake and for the per-request `_meta` envelope a
+    2026-07-28 connection carries instead. So adding the key here reaches
+    both kinds of server. Any `extensions` the caller passes (Strands' tasks
+    extension) are kept, so their `result_claims` still have an entry.
+
+    **No repeat probe of a legacy server.** Strands negotiates with mcp 2.x's
+    `negotiate_auto`, which sends `server/discover` first and falls back to
+    `initialize` when that is rejected: one wasted round trip per connect to a
+    pre-2026-07-28 server. When the read stream comes from `mcp_transport` it
+    names the server (`server_url`). A rejected probe followed by a successful
+    handshake records the server as legacy, and while that verdict is fresh
+    `send_discover` refuses locally (METHOD_NOT_FOUND), so `negotiate_auto`
+    goes straight to `initialize`. Not gated on the host flag: it changes
+    nothing a server can see except the missing probe.
+
+    The server's identity (`serverInfo`: name/title/icons) for the App header
+    is the session's own `server_info`, read by `_resolve_server_identity`.
     """
 
-    #: `serverInfo` (`Implementation`) captured off this session's
-    #: `initialize` result — the App header's source of truth for the server's
-    #: display name + icon (SEP-1865 header parity with Claude). Neither the
-    #: MCP SDK `ClientSession` nor Strands' `MCPClient` retains it (Strands
-    #: keeps only `instructions`), so we stash it here and `fetch_ui_resource`
-    #: reads it back via the client's `_background_thread_session`. None until
-    #: `initialize` returns.
-    _mcp_apps_server_info: Optional[Any] = None
+    def __init__(
+        self,
+        read_stream: Any = None,
+        *args: Any,
+        extensions: Optional[Dict[str, Dict[str, Any]]] = None,
+        **kwargs: Any,
+    ) -> None:
+        if is_mcp_apps_host_enabled():
+            extensions = dict(extensions or {})
+            extensions.setdefault(
+                MCP_APPS_UI_EXTENSION_KEY, dict(MCP_APPS_UI_CAPABILITY)
+            )
+        self._mcp_server_url: Optional[str] = getattr(read_stream, "server_url", None)
+        self._discover_rejected = False
+        super().__init__(read_stream, *args, extensions=extensions, **kwargs)
 
-    async def send_request(self, request: Any, *args: Any, **kwargs: Any) -> Any:
-        is_initialize = isinstance(
-            getattr(request, "root", None), mcp_types.InitializeRequest
-        )
-        if is_mcp_apps_host_enabled() and is_initialize:
-            try:
-                root = request.root
-                caps = root.params.capabilities
-                caps_data = caps.model_dump(by_alias=True, exclude_none=True)
-                extensions = dict(caps_data.get("extensions") or {})
-                extensions.setdefault(
-                    MCP_APPS_UI_EXTENSION_KEY, dict(MCP_APPS_UI_CAPABILITY)
-                )
-                caps_data["extensions"] = extensions
-                # `ClientCapabilities` is `extra="allow"`, so the extra
-                # `extensions` key round-trips through model_dump and onto
-                # the JSON-RPC wire in BaseSession.send_request.
-                root.params.capabilities = mcp_types.ClientCapabilities(
-                    **caps_data
-                )
-            except Exception:
-                # Advertising the extension must never break a connection;
-                # a server that never sees it simply won't return MCP Apps.
-                logger.warning(
-                    "failed to advertise MCP Apps UI extension on initialize; "
-                    "continuing without it",
-                    exc_info=True,
-                )
+    async def send_discover(self, version: str) -> Dict[str, Any]:
+        if is_known_legacy_server(self._mcp_server_url):
+            raise MCPError(
+                code=METHOD_NOT_FOUND,
+                message="server/discover skipped: this server took the legacy handshake",
+            )
+        try:
+            return await super().send_discover(version)
+        except MCPError as exc:
+            self._discover_rejected = _rejection_is_era_evidence(exc)
+            raise
 
-        result = await super().send_request(request, *args, **kwargs)
-
-        # Capture the server's `Implementation` (name/title/icons) off the
-        # `initialize` response so the App header can show the server's
-        # identity. Best-effort: a missing/odd `serverInfo` just leaves the
-        # header to fall back to the `ui://` authority + a generic glyph.
-        if is_initialize:
-            self._mcp_apps_server_info = getattr(result, "serverInfo", None)
-
+    async def initialize(self) -> Any:
+        result = await super().initialize()
+        if self._discover_rejected:
+            remember_legacy_server(self._mcp_server_url)
         return result
+
+    def adopt(self, result: Any) -> None:
+        super().adopt(result)
+        if isinstance(result, DiscoverResult):
+            forget_legacy_server(self._mcp_server_url)
 
 
 def ensure_ui_extension_session_patch() -> None:

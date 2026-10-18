@@ -10,14 +10,17 @@ in github/github-mcp-server ``pkg/utils/result.go``). The App submits the
 write itself when the user clicks Submit.
 
 GitHub only attaches that ``structuredContent`` when the session negotiated
-MCP ``2026-07-28`` (``TestTypedIssueWriteAwaitingForm``). The ``mcp`` 1.x SDK
-we run negotiates ``2025-11-25``, so on our sessions the stub arrives as a
-bare error whose text opens with :data:`_GITHUB_FORM_STUB_PREFIX`.
-:func:`awaiting_user_submission` recognizes both shapes, and
-:func:`mark_awaiting_user_submission` writes the marker onto the second so
-everything downstream (the ``tool_result`` SSE, the persisted message, the
-SPA) reads one shape. The text match retires once an ``mcp`` 2.x upgrade
-negotiates ``2026-07-28`` and GitHub sends the marker itself.
+MCP ``2026-07-28`` (``TestTypedIssueWriteAwaitingForm``). Since the ``mcp``
+2.1.1 upgrade our sessions negotiate it with any server that supports it, so
+GitHub sends the marker itself. A server on an older protocol (a self-hosted
+``github-mcp-server`` that predates it, or one that falls back to
+``initialize``) still sends a bare error whose text opens with
+:data:`_GITHUB_FORM_STUB_PREFIX`. :func:`awaiting_user_submission` recognizes
+both shapes, and :func:`mark_awaiting_user_submission` writes the marker onto
+the second so everything downstream (the ``tool_result`` SSE, the persisted
+message, the SPA) reads one shape. The text match retires once dev shows the
+marker arriving from ``api.githubcopilot.com``
+(docs/kaizen/scoping/2026-10-17-mcp-sdk-v2-upgrade.md).
 
 The marker lives on the tool result's ``structuredContent``, which no model
 formatter sends to a provider (Bedrock and OpenAI-compatible formatters keep

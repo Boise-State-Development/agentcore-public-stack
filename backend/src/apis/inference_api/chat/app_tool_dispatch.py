@@ -49,6 +49,7 @@ from apis.shared.tools.mcp_session import (
     is_tool_provider,
     reset_crashed_session,
     revive_provider_session,
+    server_error_outcome_unknown,
     session_is_active,
 )
 
@@ -144,7 +145,7 @@ def _structured_content(result: Any) -> Any:
     """The tool's `structuredContent`, or None when it returned none."""
     if isinstance(result, dict):
         return result.get("structuredContent")
-    return getattr(result, "structuredContent", None)
+    return getattr(result, "structured_content", None)
 
 
 def _is_error(result: Any) -> bool:
@@ -609,8 +610,13 @@ async def dispatch_app_tool_call(
         # thread rather than on the event loop.
         with _active_session(client):
             result = client.call_tool_sync(synth_id, tool_name, args)
-            # Read before the context resets a crashed session.
-            return result, _is_error(result) and not session_is_active(client)
+            # Read before the context resets a crashed session. A 5xx on a
+            # session that stayed up is the same unknown outcome (mcp 2.x
+            # keeps the session; 1.x tore it down).
+            outcome_unknown = (
+                _is_error(result) and not session_is_active(client)
+            ) or server_error_outcome_unknown(result)
+            return result, outcome_unknown
 
     try:
         result, connection_lost = await asyncio.to_thread(_invoke)
@@ -629,12 +635,12 @@ async def dispatch_app_tool_call(
     is_error = _is_error(result)
     status = "error" if is_error else "success"
     if connection_lost:
-        # The session ended while the request was out, so the server may
-        # well have acted on it: GitHub created the issue, then answered
-        # 503. "Failed" would invite a retry and a duplicate; say what we
-        # actually know.
+        # The session ended while the request was out, or the server
+        # answered it with a 5xx, so the server may well have acted on it:
+        # GitHub created the issue, then answered 503. "Failed" would invite
+        # a retry and a duplicate; say what we actually know.
         logger.warning(
-            "app tools/call lost its MCP connection mid-call; outcome unknown "
+            "app tools/call lost its connection or got a 5xx; outcome unknown "
             "(tool=%s session=%s): %s",
             scrub_log(tool_name),
             scrub_log(session_id),

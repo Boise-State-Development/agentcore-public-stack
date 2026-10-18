@@ -1,22 +1,24 @@
 """
 OAuth Bearer Token Authentication for External MCP Servers
 
-Provides an httpx Auth class that injects OAuth Bearer tokens into requests.
+Provides an httpx2 Auth class that injects OAuth Bearer tokens into requests.
 The token is retrieved dynamically at request time based on user context.
+httpx2, not httpx: the mcp 2.x streamable-HTTP transport is built on httpx2,
+whose client rejects an ``httpx.Auth`` (see ``mcp_transport``).
 """
 
 import inspect
 import logging
 from typing import AsyncGenerator, Generator, Optional, Callable
 
-import httpx
+import httpx2
 
 logger = logging.getLogger(__name__)
 
 
-class OAuthBearerAuth(httpx.Auth):
+class OAuthBearerAuth(httpx2.Auth):
     """
-    HTTPX Auth class that adds OAuth Bearer tokens to requests.
+    HTTPX2 Auth class that adds OAuth Bearer tokens to requests.
 
     The token is retrieved dynamically via a callback function,
     allowing user-specific tokens to be injected at request time.
@@ -26,7 +28,7 @@ class OAuthBearerAuth(httpx.Auth):
             return await oauth_service.get_decrypted_token(user_id, provider_id)
 
         auth = OAuthBearerAuth(token_provider=get_token)
-        client = httpx.AsyncClient(auth=auth)
+        client = httpx2.AsyncClient(auth=auth)
     """
 
     def __init__(
@@ -61,7 +63,7 @@ class OAuthBearerAuth(httpx.Auth):
                 # baffling 401 at the far end.
                 raise RuntimeError(
                     "async token_provider requires the async request path "
-                    "(httpx will call async_auth_flow); this is a wiring bug"
+                    "(httpx2 will call async_auth_flow); this is a wiring bug"
                 )
             return self._token_provider()
         return self._token
@@ -74,7 +76,7 @@ class OAuthBearerAuth(httpx.Auth):
             return self._token_provider()
         return self._token
 
-    def _apply(self, request: httpx.Request, token: Optional[str]) -> None:
+    def _apply(self, request: httpx2.Request, token: Optional[str]) -> None:
         if token:
             request.headers["Authorization"] = f"Bearer {token}"
             logger.debug("Added OAuth Bearer token to request")
@@ -82,23 +84,23 @@ class OAuthBearerAuth(httpx.Auth):
             logger.warning("No OAuth token available for request")
 
     def auth_flow(
-        self, request: httpx.Request
-    ) -> Generator[httpx.Request, httpx.Response, None]:
+        self, request: httpx2.Request
+    ) -> Generator[httpx2.Request, httpx2.Response, None]:
         """
         Add Bearer token to the request Authorization header.
 
-        This method is called by httpx for each request.
+        This method is called by httpx2 for each request.
         """
         self._apply(request, self._get_token())
         yield request
 
     async def async_auth_flow(
-        self, request: httpx.Request
-    ) -> AsyncGenerator[httpx.Request, httpx.Response]:
+        self, request: httpx2.Request
+    ) -> AsyncGenerator[httpx2.Request, httpx2.Response]:
         """
         Async counterpart of `auth_flow`.
 
-        httpx calls this on async clients, which is what the MCP streamable-HTTP
+        httpx2 calls this on async clients, which is what the MCP streamable-HTTP
         transport uses. Overriding it is what makes an async token provider
         possible: the default implementation delegates to the sync `auth_flow`,
         which cannot await. Without this, a network-backed provider would have to
@@ -108,14 +110,14 @@ class OAuthBearerAuth(httpx.Auth):
         yield request
 
 
-class CompositeAuth(httpx.Auth):
+class CompositeAuth(httpx2.Auth):
     """
     Combines multiple auth methods (e.g., SigV4 + OAuth Bearer).
 
     Useful when an MCP server requires both AWS IAM auth and user OAuth tokens.
     """
 
-    def __init__(self, *auth_handlers: httpx.Auth):
+    def __init__(self, *auth_handlers: httpx2.Auth):
         """
         Initialize with multiple auth handlers.
 
@@ -125,8 +127,8 @@ class CompositeAuth(httpx.Auth):
         self._handlers = auth_handlers
 
     def auth_flow(
-        self, request: httpx.Request
-    ) -> Generator[httpx.Request, httpx.Response, None]:
+        self, request: httpx2.Request
+    ) -> Generator[httpx2.Request, httpx2.Response, None]:
         """
         Apply all auth handlers to the request.
         """
@@ -153,6 +155,6 @@ def create_oauth_bearer_auth(
         token_provider: Function that returns current token
 
     Returns:
-        OAuthBearerAuth instance for use with httpx clients
+        OAuthBearerAuth instance for use with httpx2 clients
     """
     return OAuthBearerAuth(token=token, token_provider=token_provider)

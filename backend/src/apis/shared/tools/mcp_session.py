@@ -2,21 +2,28 @@
 
 One MCPClient per (user, MCP server) is shared process-wide: by every cached
 Agent built over it, and by the App-initiated `tools/call` dispatch. Its
-session can die on its own. The MCP SDK's streamable-HTTP transport treats any
-non-2xx answer to a POST as fatal for the whole session (mcp 1.30.0,
-`_handle_post_request` → `raise_for_status()`); GitHub's MCP endpoint answering
-a `tools/call` with 503 ends it (dev, 2026-10-18). Strands' background thread
-then exits, but nothing calls `stop()`, so the client keeps the dead thread, a
-resolved init future and the stored error:
+session can die on its own: a dropped connection, a transport error, or (on the
+mcp 1.x SDK) any non-2xx answer to a POST, which 1.x treated as fatal for the
+whole session. Strands' background thread then exits, but nothing calls
+`stop()`, so the client keeps the dead thread, a resolved init future and the
+stored error:
 
 * every `MCPAgentTool` call fails with "the client session is not running";
 * `start()` returns before any handshake (the old init future is resolved);
 * `load_tools()` (`_tool_provider_started` still True) hands a new agent the
   old tool list on the dead session.
 
-Nothing here re-runs a call. A call whose session died under it may well have
-been performed by the server, so it is reported as an unknown outcome
-(`connection_lost_message`) and the next call reconnects.
+Nothing here re-runs a call. Two kinds of failed call may well have been
+performed by the server, so they are reported as an unknown outcome
+(`connection_lost_message`):
+
+* a call whose session died under it;
+* a call the server answered with an HTTP 5xx while the session stayed up.
+  This is how mcp 2.x reports GitHub's "created the issue, then answered
+  503" (dev, 2026-10-18). `agents.main_agent.integrations.mcp_transport`
+  writes the status onto the error as `http_error_message`.
+
+The next call reconnects if it has to.
 
 Both callers sit on either side of the import boundary — the agent's
 `MCPSessionHealHook` (`agents/`) and the App dispatch (`inference_api/`) — so
@@ -28,6 +35,7 @@ change degrades to today's behavior rather than to a broken call.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 from typing import Any
 
@@ -149,3 +157,32 @@ def connection_lost_message(tool_name: str) -> str:
         "so it may have completed anyway. Check whether it took effect "
         "before trying again."
     )
+
+
+def http_error_message(status: int, reason: str = "") -> str:
+    """The error text for an MCP request the server answered with HTTP ``status``.
+
+    Kept in the same words for every status, so the auth heuristics
+    (`apis.shared.oauth.auth_failure`, the pre-flight's `_is_auth_failure`)
+    find a 401 in it, and `server_error_outcome_unknown` finds a 5xx.
+    """
+    return f"Server returned HTTP {status} {reason}".rstrip()
+
+
+_SERVER_ERROR_RE = re.compile(r"\bServer returned HTTP 5\d\d\b")
+
+
+def server_error_outcome_unknown(result: Any) -> bool:
+    """Whether a failed call's result says the server answered it with a 5xx.
+
+    Such a call reached the server, and the server may have acted on it before
+    failing. Telling the model only "failed" invites a retry and a duplicate
+    write.
+    """
+    if not isinstance(result, dict) or result.get("status") != "error":
+        return False
+    for block in result.get("content") or ():
+        text = block.get("text") if isinstance(block, dict) else None
+        if isinstance(text, str) and _SERVER_ERROR_RE.search(text):
+            return True
+    return False
