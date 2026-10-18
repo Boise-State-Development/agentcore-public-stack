@@ -1,9 +1,37 @@
 # Scoping — `mcp` Python SDK 1.30.0 → 2.1.1 (protocol 2026-07-28)
 
-> Status: Scoping only. No dependency has been changed; installing or upgrading a package needs Phil's approval.
+> Status: **Implemented** on `feature/mcp-sdk-v2` (approved by Phil 2026-10-17). The scope below is kept as written. "As built" lists where the implementation differs from it.
 > Owner: Phil Merrell
 > Source: PR #1662 (MCP App "form shown, nothing written yet" result shows as Failed). Its text-match fallback retires after this upgrade.
 > Base: `develop` at `e87a40d3` (after #1657, #1659, #1660, #1661), with #1662 read from `fix/mcp-app-awaiting-user-submission`.
+
+## As built (2026-10-17)
+
+- **Pins as recommended:**
+  - `mcp==2.1.1`, `httpx2`/`httpcore2==2.13.1` and `truststore==0.10.4` as `[tool.uv]` constraints;
+  - `idna==3.20`;
+  - `mcp-types` 2.1.1 locked.
+
+  `pydantic-settings` and `httpx-sse` left the lock (1.x-only dependencies; nothing imports them).
+- **The scheduled-runs Lambda image was a second SDK line.** It installs Strands, and so `mcp`, from its own `requirements.txt`, pinned `mcp==1.30.0`, and no guard checked it. Both files now carry the same set as the lock, and `test_lambda_images_that_install_strands_carry_the_same_mcp_set` enforces it. The set resolves on the image's Python 3.12.
+- **Transport:** a new `integrations/mcp_transport.py` (`streamable_http_transport`) builds the 2.x transport over httpx2. `OAuthBearerAuth`, `CompositeAuth` and `SigV4HTTPXAuth` are now `httpx2.Auth`. `SigV4HTTPXAuth` declares `requires_request_body`. It did not use Strands' private `_compat` adapter.
+- **R4 and R5 share one fix, and it differs from the scope.** A response hook records each failed POST's HTTP status by JSON-RPC id. The read stream then rewrites the SDK's stand-in message to `Server returned HTTP <status> <reason>` (`mcp_session.http_error_message`). So a 401 reads as a 401 again, and the existing detectors (`_is_auth_failure`, `looks_like_auth_failure`) work unchanged; no per-client auth record was needed. `server_error_outcome_unknown` turns a 5xx on a live session into the unknown-outcome text, in both `MCPSessionHealHook` and the App dispatch. A server's own JSON-RPC error body keeps its message.
+- **R1, measured and removed.** `mcp.excalidraw.com` (legacy):
+  - 1.30.0: 201 ms p50 connect;
+  - 2.1.1 as shipped: 325 ms;
+  - 2.1.1 with the legacy verdict: 205 ms after the first connect per process.
+
+  The verdict works like this. `_UIExtensionClientSession` records a URL as legacy for an hour when its probe was rejected and `initialize` then succeeded; a 5xx or timeout is not a verdict. While the verdict is fresh, `send_discover` refuses locally. A modern server (GitHub) is never marked. Noted in `docs/specs/turn-path-ttft.md`.
+- **R6 settled.** ADOT 0.19.0 declares `mcp >= 1.10.0` (no upper bound), so its MCP instrumentor still loads, and it emits nothing (it wraps the removed `BaseSession`). The SDK's own `mcp-python-sdk` client spans carry method and tool name only. `test_otel_content_capture.py` now pins both facts, and its `test_adot_mcp_instrumentor_cannot_see_the_sdk` fails the day ADOT instruments 2.x again. The SDK also injects W3C `traceparent` into every request's `_meta` (SEP-414): trace ids, no content, reach third-party servers.
+- **`ReleasesCallsOnSessionEnd` stays.** Two different failures now behave differently on 2.x:
+  - a 503 no longer kills the session;
+  - a response broken off mid-body still does (the transport error escapes its task group).
+
+  The upstream hang still reproduces with a dropped connection. `FlakyMCPServer` gained `drop_calls`, `down_status`, `discover_reply`, request recording and `MCPServer` identity kwargs.
+- **#1662's text fallback is kept** until dev shows the marker from `api.githubcopilot.com`. A real-wire test (`test_a_2026_07_28_server_sends_the_marker_itself`) shows a 2.x server's marker reaching the Strands result whole.
+- **Also seen:**
+  - Strands attaches each result's `_meta` as `metadata`, which on a modern connection always includes the server-info stamp. It is persisted, and no model formatter sends it.
+  - `MCPServer` adds `structuredContent: {"result": …}` to plain-string tools.
 
 ## Recommendation
 
