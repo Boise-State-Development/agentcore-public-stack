@@ -89,31 +89,31 @@ describe('wordTrackedChanges config', () => {
     warn.mockRestore();
   });
 
-  it('is off by default', () => {
-    expect(load().wordTrackedChanges.enabled).toBe(false);
+  it('is on by default', () => {
+    expect(load().wordTrackedChanges.enabled).toBe(true);
   });
 
-  it.each(['', 'false', 'yes', '1'])('treats %j as off', (value) => {
-    process.env[FLAG_ENV] = value;
-    expect(load().wordTrackedChanges.enabled).toBe(false);
-  });
-
-  it.each(['true', ' TRUE '])('turns on for %j', (value) => {
+  it.each(['', 'true', 'yes', '1'])('treats %j as on', (value) => {
     process.env[FLAG_ENV] = value;
     expect(load().wordTrackedChanges.enabled).toBe(true);
   });
 
+  it.each(['false', ' FALSE '])('turns off for %j', (value) => {
+    process.env[FLAG_ENV] = value;
+    expect(load().wordTrackedChanges.enabled).toBe(false);
+  });
+
   it('falls back to context, and the variable beats it', () => {
-    expect(load({ wordTrackedChanges: { enabled: true } }).wordTrackedChanges.enabled).toBe(true);
-    process.env[FLAG_ENV] = 'false';
-    expect(load({ wordTrackedChanges: { enabled: true } }).wordTrackedChanges.enabled).toBe(false);
+    expect(load({ wordTrackedChanges: { enabled: false } }).wordTrackedChanges.enabled).toBe(false);
+    process.env[FLAG_ENV] = 'true';
+    expect(load({ wordTrackedChanges: { enabled: false } }).wordTrackedChanges.enabled).toBe(true);
   });
 });
 
 describe('word tracked changes wiring', () => {
-  it('spends no Runtime env bytes while off, and sets the flag only while on', () => {
-    expect(runtimeEnv(synth())).not.toHaveProperty('WORD_TRACKED_CHANGES_ENABLED');
-    expect(runtimeEnv(synth({ wordTrackedChanges: { enabled: true } })).WORD_TRACKED_CHANGES_ENABLED).toBe('true');
+  it('spends no Runtime env bytes while on (the default), and sets the flag only while off', () => {
+    expect(runtimeEnv(synth({ wordTrackedChanges: { enabled: true } }))).not.toHaveProperty('WORD_TRACKED_CHANGES_ENABLED');
+    expect(runtimeEnv(synth({ wordTrackedChanges: { enabled: false } })).WORD_TRACKED_CHANGES_ENABLED).toBe('false');
   });
 
   it('sets app-api to match the Runtime, on and off', () => {

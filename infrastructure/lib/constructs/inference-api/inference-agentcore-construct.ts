@@ -394,24 +394,24 @@ export class InferenceAgentCoreConstruct extends Construct {
         // there, so a mismatch would let an Agent be built with skills the
         // runtime then blocks.
         SKILLS_ENABLED: config.skills.enabled ? 'true' : 'false',
-        // Skill authoring tools (in development, default off; skill-creator
-        // spec D12). Spread in only while on: the code reads unset as off, so
-        // an environment that leaves it off spends no bytes on it.
-        ...(config.skillAuthoring.enabled ? { SKILL_AUTHORING_ENABLED: 'true' } : {}),
-        // Word tracked changes (in development, default off). Spread in only
-        // while on, like skill authoring; must match app-api's copy.
-        ...(config.wordTrackedChanges.enabled ? { WORD_TRACKED_CHANGES_ENABLED: 'true' } : {}),
+        // Skill authoring tools (default on; skill-creator spec D12). Spread in
+        // only while OFF: the code reads unset as on, so an environment on the
+        // default spends no bytes on it.
+        ...(config.skillAuthoring.enabled ? {} : { SKILL_AUTHORING_ENABLED: 'false' }),
+        // Word tracked changes (default on). Spread in only while off, like
+        // skill authoring; must match app-api's copy.
+        ...(config.wordTrackedChanges.enabled ? {} : { WORD_TRACKED_CHANGES_ENABLED: 'false' }),
         // Assistant KB full-context mode (in development, default off). Spread in
-        // only while on, like the two above; Runtime only.
+        // only while on: the code reads unset as off. Runtime only.
         ...(config.assistantKbFullContext.enabled ? { ASSISTANT_KB_FULL_CONTEXT_ENABLED: 'true' } : {}),
-        // Folder attachments (in development, default off): a turn's
-        // folder_attachment_ids are resolved and rendered as manifests. Spread in
-        // only while on, like the two above; app-api carries its own copy.
-        ...(config.folderAttachments.enabled ? { FOLDER_ATTACHMENTS_ENABLED: 'true' } : {}),
+        // Folder attachments (default on): a turn's folder_attachment_ids are
+        // resolved and rendered as manifests. Spread in only while off, like
+        // skill authoring; app-api carries its own copy.
+        ...(config.folderAttachments.enabled ? {} : { FOLDER_ATTACHMENTS_ENABLED: 'false' }),
         // Attachments KB (in development, default off; large-document spec §4F).
         // Adds document_read's `query` argument: a tool-spec change once per
-        // deployment, never per session. Spread in only while on, like the ones
-        // above; must match app-api's and the prepare Lambda's copies.
+        // deployment, never per session. Spread in only while on, like
+        // full-context mode; must match app-api's and the prepare Lambda's copies.
         ...(config.attachmentKb.enabled ? { ATTACHMENT_KB_ENABLED: 'true' } : {}),
         // Agent Designer harness resolution: the runtime resolves an Agent's
         // bindings + modelConfig at invocation. Default off, mirrors app-api.

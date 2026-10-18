@@ -54,7 +54,7 @@ def test_requires_a_session_cookie(emitted) -> None:
 
 
 def test_404_while_the_flag_is_off(monkeypatch: pytest.MonkeyPatch, emitted) -> None:
-    monkeypatch.setenv("CLIENT_TURN_TIMING_ENABLED", "")
+    monkeypatch.setenv("CLIENT_TURN_TIMING_ENABLED", "false")
     assert _post(TestClient(_app(_user()))).status_code == 404
     assert emitted == []
 

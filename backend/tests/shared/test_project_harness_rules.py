@@ -303,6 +303,6 @@ def test_the_kill_switch_shuts_the_harness_for_everyone(project, monkeypatch):
     monkeypatch.setenv("PROJECTS_ENABLED", "true")
     assert access(created.harness_agent_id, EDITOR)[1] == "editor"
 
-    # Opt-in: unset is off, like "false".
+    # Default on: unset is on, like "true".
     monkeypatch.delenv("PROJECTS_ENABLED")
-    assert access(created.harness_agent_id, EDITOR) == (None, None)
+    assert access(created.harness_agent_id, EDITOR)[1] == "editor"

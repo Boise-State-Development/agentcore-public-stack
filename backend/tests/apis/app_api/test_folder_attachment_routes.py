@@ -184,7 +184,7 @@ BODY = {"connectorId": "google", "folderId": "drive-folder-1", "folderName": "BI
 
 
 class TestFlag:
-    @pytest.mark.parametrize("value", ["", "false", "yes"])
+    @pytest.mark.parametrize("value", ["false", " FALSE "])
     def test_every_route_404s_while_off(self, build, monkeypatch, value):
         client, rows, _, scheduled, _ = build()
         monkeypatch.setenv("FOLDER_ATTACHMENTS_ENABLED", value)

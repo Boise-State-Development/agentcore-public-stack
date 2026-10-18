@@ -4,6 +4,18 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [Unreleased]
+
+### ✨ Improved
+
+- **Eight finished features now default on.** Each was opt-in while in development and has run in production since 1.28.0. They are now feature switches: on unless a deployment sets the variable to `false`. Backend readers treat unset or empty as on, CDK defaults to on, and the local SPA build (`environment.ts`) offers them. The eight are Shared Projects (`CDK_PROJECTS_ENABLED`, `features.projects`), direct user grants (`CDK_USER_GRANTS_ENABLED`, `features.userGrants`), client turn timing (`CDK_CLIENT_TURN_TIMING_ENABLED`, `features.clientTurnTiming`), skill authoring tools (`CDK_SKILL_AUTHORING_ENABLED`; still inert until a role is granted `my_skill_create`), Word tracked changes (`CDK_WORD_TRACKED_CHANGES_ENABLED`), large document attachments (`CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED`, `features.largeDocumentAttachments`), folder attachments (`CDK_FOLDER_ATTACHMENTS_ENABLED`, `features.folderAttachments`) and folder sync (`CDK_FOLDER_SYNC_ENABLED`, `features.folderSync`). This also fixes a mismatch: since 1.28.0 the production SPA build has offered these features while their backend defaults were off, so a deployment that built it without setting the variables saw UI whose APIs 404'd. Session prewarm, the conversation index and the attachments KB stay opt-in.
+
+### ⚠️ Upgrade notes
+
+- **A deployment that never set these variables gains the features on its next platform deploy.** Set any you don't want to `false` in the GitHub environment before deploying. Large document attachments adds about 11 resources (the prepare queue, its dead-letter queue, the Lambda and what wires them together). After the first platform deploy that creates them, re-run Backend Deploy's "Deploy large-document-prepare Lambda image" job so the Lambda runs the real image instead of the bootstrap stub.
+- **Folder attachments' CDK default follows large document attachments.** Setting `CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED=false` turns folder attachments off with it instead of failing synth. Setting `CDK_FOLDER_ATTACHMENTS_ENABLED=true` explicitly without large document attachments still fails synth.
+- **The AgentCore Runtime now carries `SKILL_AUTHORING_ENABLED`, `WORD_TRACKED_CHANGES_ENABLED` and `FOLDER_ATTACHMENTS_ENABLED` only while they are off** (as `false`), where it used to carry them only while on. An environment that had all three on drops three variables from the Runtime's environment.
+
 ## [1.29.0] - 2026-10-17
 
 MCP Apps work reliably against GitHub's App tools, browser sign-in moves into a docked panel shown at 1:1, and admins can send static custom headers to an external MCP server. Also fixes the 1.28.2 prod backend build that failed on ECR Public's anonymous pull limit. No infrastructure change.

@@ -442,9 +442,9 @@ def test_assembled_shards_keep_page_order_and_identity():
 
 @pytest.mark.parametrize(
     "value,expected",
-    [(None, False), ("", False), ("false", False), ("1", False), ("yes", False), ("true", True), (" TRUE ", True)],
+    [(None, True), ("", True), ("true", True), ("1", True), ("yes", True), ("false", False), (" FALSE ", False)],
 )
-def test_feature_flag_is_opt_in(monkeypatch, value, expected):
+def test_feature_flag_is_on_unless_false(monkeypatch, value, expected):
     from apis.shared.feature_flags import large_document_attachments_enabled
 
     if value is None:

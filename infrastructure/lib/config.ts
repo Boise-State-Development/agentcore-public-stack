@@ -422,11 +422,10 @@ export interface MemorySpacesConfig {
 }
 
 /**
- * Shared Projects feature flag (docs/specs/shared-projects.md). **Opt-in while the
- * feature is in development**: off unless CDK_PROJECTS_ENABLED=true (or a
- * `projects.enabled: true` cdk.json context), so a deployment turns it on by choice.
- * See CLAUDE.md "Feature flags". Sets the PROJECTS_ENABLED env var
- * on app-api and inference-api. The projects table is provisioned
+ * Shared Projects feature flag (docs/specs/shared-projects.md). **Default ON with a
+ * kill switch**: on unless CDK_PROJECTS_ENABLED=false (or a `projects.enabled: false`
+ * cdk.json context). A feature switch, see CLAUDE.md "Feature flags". Sets the
+ * PROJECTS_ENABLED env var on app-api and inference-api. The projects table is provisioned
  * unconditionally, so this only gates route mounting and the project harness on
  * the invocation path at runtime.
  */
@@ -436,9 +435,9 @@ export interface ProjectsConfig {
 
 /**
  * Direct user grants (tools, models and skills granted to one user beside their
- * roles). **Opt-in while the feature is in development**: off unless
- * CDK_USER_GRANTS_ENABLED=true (or a `userGrants.enabled: true` cdk.json context).
- * See CLAUDE.md "Feature flags". Sets USER_GRANTS_ENABLED on **app-api only**: it
+ * roles). **Default ON with a kill switch**: on unless CDK_USER_GRANTS_ENABLED=false
+ * (or a `userGrants.enabled: false` cdk.json context). A feature switch, see
+ * CLAUDE.md "Feature flags". Sets USER_GRANTS_ENABLED on **app-api only**: it
  * gates the admin write surface (`/admin/user-grants`), and permission resolution
  * reads an existing grant row wherever it runs without a switch — the AgentCore
  * Runtime is at its environment-variable cap, and an absent row is the off state
@@ -465,10 +464,10 @@ export interface SessionPrewarmConfig {
 
 /**
  * Client-measured time to first token (docs/specs/turn-path-ttft.md §6).
- * **Opt-in while the feature is in development**: off unless
- * CDK_CLIENT_TURN_TIMING_ENABLED=true (or a `clientTurnTiming.enabled: true`
- * cdk.json context). Sets CLIENT_TURN_TIMING_ENABLED on **app-api only**, which
- * serves `POST /telemetry/turn-timing`: the SPA reports each turn's
+ * **Default ON with a kill switch**: on unless CDK_CLIENT_TURN_TIMING_ENABLED=false
+ * (or a `clientTurnTiming.enabled: false` cdk.json context). A feature switch. Sets
+ * CLIENT_TURN_TIMING_ENABLED on **app-api only**, which serves
+ * `POST /telemetry/turn-timing`: the SPA reports each turn's
  * send-to-first-token, and app-api records it as EMF in AgentCoreStack/TurnLatency.
  * It is the only metric covering the browser, the app-api hop, Runtime routing
  * and session start. Spends none of the Runtime's environment budget.
@@ -644,13 +643,14 @@ export interface SkillsConfig {
 
 /**
  * Skill authoring tools (docs/specs/skill-creator.md D12): the seven `my_skill_*`
- * agent tools that create and edit the invoking user's own skills. **Opt-in while
- * in development**: off unless CDK_SKILL_AUTHORING_ENABLED=true (or a
- * `skillAuthoring.enabled: true` cdk.json context). Sets SKILL_AUTHORING_ENABLED on
- * the AgentCore Runtime only, and only while on, so an environment that leaves it
- * off spends none of the Runtime's environment budget. No app-api or SPA switch:
- * the tools run in the Runtime and reuse the existing approval card. ANDs with
- * `skills.enabled` and the `my_skill_create` tool grant.
+ * agent tools that create and edit the invoking user's own skills. **Default ON
+ * with a kill switch**: on unless CDK_SKILL_AUTHORING_ENABLED=false (or a
+ * `skillAuthoring.enabled: false` cdk.json context). A feature switch. Sets
+ * SKILL_AUTHORING_ENABLED=false on the AgentCore Runtime only, and only while off,
+ * so an environment on the default spends none of the Runtime's environment budget.
+ * No app-api or SPA switch: the tools run in the Runtime and reuse the existing
+ * approval card. ANDs with `skills.enabled` and the `my_skill_create` tool grant,
+ * which no role holds until an admin grants it.
  */
 export interface SkillAuthoringConfig {
   enabled: boolean;
@@ -659,13 +659,13 @@ export interface SkillAuthoringConfig {
 /**
  * Word tracked changes (docs/specs/word-tracked-changes.md): a .docx's tracked
  * changes reach the model written out as `[deleted: …]` / `[inserted: …]`, and
- * the Word tools gain `redline_word_document`. **Opt-in while in development**:
- * off unless CDK_WORD_TRACKED_CHANGES_ENABLED=true (or a
- * `wordTrackedChanges.enabled: true` cdk.json context). Sets
- * WORD_TRACKED_CHANGES_ENABLED on the AgentCore Runtime only while on, so an
- * environment that leaves it off spends none of the Runtime's environment
- * budget, and on app-api, which builds the upload digest whose paragraph
- * numbers must match `document_read`'s. No SPA switch.
+ * the Word tools gain `redline_word_document`. **Default ON with a kill switch**:
+ * on unless CDK_WORD_TRACKED_CHANGES_ENABLED=false (or a
+ * `wordTrackedChanges.enabled: false` cdk.json context). A feature switch. Sets
+ * WORD_TRACKED_CHANGES_ENABLED on app-api, which builds the upload digest whose
+ * paragraph numbers must match `document_read`'s, and on the AgentCore Runtime
+ * only while off, so an environment on the default spends none of the Runtime's
+ * environment budget. No SPA switch.
  */
 export interface WordTrackedChangesConfig {
   enabled: boolean;
@@ -692,11 +692,12 @@ export interface AssistantKbFullContextConfig {
  * Large document attachments (docs/specs/large-document-attachments.md): a
  * pdf, docx, txt, md or html attachment over the 4 MB inline limit is attached
  * by reference and read through `document_read` from sidecars a preparation
- * Lambda builds. **Opt-in while in development**: off unless
- * CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED=true (or a
- * `largeDocumentAttachments.enabled: true` cdk.json context). While off, the
- * `LargeDocumentPrepareConstruct` (prepare queue, its dead-letter queue, the
- * Lambda) is not synthesized at all. Sets LARGE_DOCUMENT_ATTACHMENTS_ENABLED
+ * Lambda builds. **Default ON with a kill switch**: on unless
+ * CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED=false (or a
+ * `largeDocumentAttachments.enabled: false` cdk.json context). A feature switch:
+ * while on, the `LargeDocumentPrepareConstruct` (prepare queue, its dead-letter
+ * queue, the Lambda) adds about 11 resources; while off it is not synthesized
+ * at all. Sets LARGE_DOCUMENT_ATTACHMENTS_ENABLED
  * and, while on, the prepare queue's URL on **app-api only**: the Runtime reads
  * a prepared file by its row, never by a switch, so it spends none of its
  * environment budget.
@@ -725,14 +726,14 @@ export interface AttachmentKbConfig {
 /**
  * Folder attachments (docs/specs/drive-folder-attachments.md): a conversation
  * can attach a Google Drive folder, whose readable files app-api imports as
- * session files delivered by reference whatever their size. **Opt-in while in
- * development**: off unless CDK_FOLDER_ATTACHMENTS_ENABLED=true (or a
- * `folderAttachments.enabled: true` cdk.json context), and refused without
- * `largeDocumentAttachments.enabled`, because a folder file is read through
- * the prepare Lambda's sidecars: without that pipeline there is nothing to
- * read a small file through. Sets FOLDER_ATTACHMENTS_ENABLED on app-api (the
- * routes and the expansion task) and, only while on, on the AgentCore Runtime
- * (a turn's folder manifests). No resources.
+ * session files delivered by reference whatever their size. **Default ON with a
+ * kill switch**, following `largeDocumentAttachments.enabled` when
+ * CDK_FOLDER_ATTACHMENTS_ENABLED (and the `folderAttachments.enabled` cdk.json
+ * context) is unset, and refused on without it, because a folder file is read
+ * through the prepare Lambda's sidecars: without that pipeline there is nothing
+ * to read a small file through. A feature switch. Sets FOLDER_ATTACHMENTS_ENABLED
+ * on app-api (the routes and the expansion task) and, only while off, on the
+ * AgentCore Runtime (a turn's folder manifests). No resources.
  */
 export interface FolderAttachmentsConfig {
   enabled: boolean;
@@ -741,10 +742,11 @@ export interface FolderAttachmentsConfig {
 /**
  * Folder sync (docs/specs/assistant-kb-sync.md §11): a `drive_folder` KB sync
  * policy keeps a knowledge base (a project saved from a Drive folder) in step
- * with that folder on the existing kb-sync dispatcher and worker. **Opt-in while
- * in development**: off unless CDK_FOLDER_SYNC_ENABLED=true (or a
- * `folderSync.enabled: true` cdk.json context). Sets FOLDER_SYNC_ENABLED on
- * app-api (creating a folder policy) and on both kb-sync Lambdas (running one).
+ * with that folder on the existing kb-sync dispatcher and worker. **Default ON
+ * with a kill switch**: on unless CDK_FOLDER_SYNC_ENABLED=false (or a
+ * `folderSync.enabled: false` cdk.json context). A feature switch. Sets
+ * FOLDER_SYNC_ENABLED on app-api (creating a folder policy) and on both kb-sync
+ * Lambdas (running one).
  * No resources: the worker already holds every grant a folder run uses.
  */
 export interface FolderSyncConfig {
@@ -1176,6 +1178,12 @@ export function loadConfig(scope: cdk.App): AppConfig {
   validateAwsAccount(awsAccount);
   validateAwsRegion(awsRegion);
 
+  // Large document attachments: default ON with a kill switch. Read once here
+  // because folder attachments' default follows it.
+  const largeDocumentAttachmentsEnabled: boolean = process.env.CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED
+    ? process.env.CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED.trim().toLowerCase() !== 'false'
+    : scope.node.tryGetContext('largeDocumentAttachments')?.enabled ?? true;
+
   // Top-level shared CORS origins — always includes https://{domainName} when set.
   // CDK_CORS_ORIGINS provides ADDITIONAL origins on top of the domain.
   const domainName = process.env.CDK_DOMAIN_NAME || scope.node.tryGetContext('domainName');
@@ -1457,19 +1465,18 @@ export function loadConfig(scope: cdk.App): AppConfig {
         : scope.node.tryGetContext('memorySpaces')?.enabled ?? true,
     },
     projects: {
-      // Opt-in while in development (CLAUDE.md "Feature flags"): only the literal
-      // "true" turns it on. The workflow forwards an EMPTY STRING when the variable
-      // is unset, which falls through to the context and then to off.
+      // Default ON with a kill switch (CLAUDE.md "Feature flags"): only the literal
+      // "false" turns it off. The workflow forwards an EMPTY STRING when the
+      // variable is unset, which falls through to the context and then to on.
       enabled: process.env.CDK_PROJECTS_ENABLED
-        ? process.env.CDK_PROJECTS_ENABLED.trim().toLowerCase() === 'true'
-        : scope.node.tryGetContext('projects')?.enabled ?? false,
+        ? process.env.CDK_PROJECTS_ENABLED.trim().toLowerCase() !== 'false'
+        : scope.node.tryGetContext('projects')?.enabled ?? true,
     },
     userGrants: {
-      // Opt-in while in development (CLAUDE.md "Feature flags"): only the literal
-      // "true" turns it on; an unset workflow variable arrives as "" and is off.
+      // Default ON with a kill switch, same parsing as projects above.
       enabled: process.env.CDK_USER_GRANTS_ENABLED
-        ? process.env.CDK_USER_GRANTS_ENABLED.trim().toLowerCase() === 'true'
-        : scope.node.tryGetContext('userGrants')?.enabled ?? false,
+        ? process.env.CDK_USER_GRANTS_ENABLED.trim().toLowerCase() !== 'false'
+        : scope.node.tryGetContext('userGrants')?.enabled ?? true,
     },
     sessionPrewarm: {
       // Opt-in while in development (CLAUDE.md "Feature flags"): only the literal
@@ -1479,11 +1486,10 @@ export function loadConfig(scope: cdk.App): AppConfig {
         : scope.node.tryGetContext('sessionPrewarm')?.enabled ?? false,
     },
     clientTurnTiming: {
-      // Opt-in while in development (CLAUDE.md "Feature flags"): only the literal
-      // "true" turns it on; an unset workflow variable arrives as "" and is off.
+      // Default ON with a kill switch, same parsing as projects above.
       enabled: process.env.CDK_CLIENT_TURN_TIMING_ENABLED
-        ? process.env.CDK_CLIENT_TURN_TIMING_ENABLED.trim().toLowerCase() === 'true'
-        : scope.node.tryGetContext('clientTurnTiming')?.enabled ?? false,
+        ? process.env.CDK_CLIENT_TURN_TIMING_ENABLED.trim().toLowerCase() !== 'false'
+        : scope.node.tryGetContext('clientTurnTiming')?.enabled ?? true,
     },
     ttftProbe: {
       // Configuration, not a flag: unset workflow variables arrive as "".
@@ -1533,48 +1539,48 @@ export function loadConfig(scope: cdk.App): AppConfig {
         : scope.node.tryGetContext('skills')?.enabled ?? true,
     },
     skillAuthoring: {
-      // Opt-in while in development, same parsing as projects above: '' (an
-      // unset workflow variable) and anything but "true" are off.
+      // Default ON with a kill switch, same parsing as projects above: '' (an
+      // unset workflow variable) and anything but "false" are on.
       enabled: process.env.CDK_SKILL_AUTHORING_ENABLED
-        ? process.env.CDK_SKILL_AUTHORING_ENABLED.trim().toLowerCase() === 'true'
-        : scope.node.tryGetContext('skillAuthoring')?.enabled ?? false,
+        ? process.env.CDK_SKILL_AUTHORING_ENABLED.trim().toLowerCase() !== 'false'
+        : scope.node.tryGetContext('skillAuthoring')?.enabled ?? true,
     },
     wordTrackedChanges: {
-      // Opt-in while in development, same parsing as skillAuthoring above.
+      // Default ON with a kill switch, same parsing as skillAuthoring above.
       enabled: process.env.CDK_WORD_TRACKED_CHANGES_ENABLED
-        ? process.env.CDK_WORD_TRACKED_CHANGES_ENABLED.trim().toLowerCase() === 'true'
-        : scope.node.tryGetContext('wordTrackedChanges')?.enabled ?? false,
+        ? process.env.CDK_WORD_TRACKED_CHANGES_ENABLED.trim().toLowerCase() !== 'false'
+        : scope.node.tryGetContext('wordTrackedChanges')?.enabled ?? true,
     },
     assistantKbFullContext: {
-      // Opt-in while in development, same parsing as skillAuthoring above.
+      // Opt-in while in development: '' (an unset workflow variable) and
+      // anything but "true" are off.
       enabled: process.env.CDK_ASSISTANT_KB_FULL_CONTEXT_ENABLED
         ? process.env.CDK_ASSISTANT_KB_FULL_CONTEXT_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('assistantKbFullContext')?.enabled ?? false,
     },
     largeDocumentAttachments: {
-      // Opt-in while in development, same parsing as skillAuthoring above:
-      // '' (an unset workflow variable) and anything but "true" are off.
-      enabled: process.env.CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED
-        ? process.env.CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED.trim().toLowerCase() === 'true'
-        : scope.node.tryGetContext('largeDocumentAttachments')?.enabled ?? false,
+      // Default ON with a kill switch, same parsing as skillAuthoring above.
+      enabled: largeDocumentAttachmentsEnabled,
     },
     attachmentKb: {
-      // Opt-in while in development, same parsing as largeDocumentAttachments.
+      // Opt-in while in development, same parsing as assistantKbFullContext.
       enabled: process.env.CDK_ATTACHMENT_KB_ENABLED
         ? process.env.CDK_ATTACHMENT_KB_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('attachmentKb')?.enabled ?? false,
     },
     folderAttachments: {
-      // Opt-in while in development, same parsing as attachmentKb.
+      // Default ON with a kill switch, same parsing as skillAuthoring, except that
+      // unset follows large-document attachments: a deployment that turns those
+      // off loses folder attachments with them instead of failing synth.
       enabled: process.env.CDK_FOLDER_ATTACHMENTS_ENABLED
-        ? process.env.CDK_FOLDER_ATTACHMENTS_ENABLED.trim().toLowerCase() === 'true'
-        : scope.node.tryGetContext('folderAttachments')?.enabled ?? false,
+        ? process.env.CDK_FOLDER_ATTACHMENTS_ENABLED.trim().toLowerCase() !== 'false'
+        : scope.node.tryGetContext('folderAttachments')?.enabled ?? largeDocumentAttachmentsEnabled,
     },
     folderSync: {
-      // Opt-in while in development, same parsing as folderAttachments.
+      // Default ON with a kill switch, same parsing as skillAuthoring above.
       enabled: process.env.CDK_FOLDER_SYNC_ENABLED
-        ? process.env.CDK_FOLDER_SYNC_ENABLED.trim().toLowerCase() === 'true'
-        : scope.node.tryGetContext('folderSync')?.enabled ?? false,
+        ? process.env.CDK_FOLDER_SYNC_ENABLED.trim().toLowerCase() !== 'false'
+        : scope.node.tryGetContext('folderSync')?.enabled ?? true,
     },
     agents: {
       // Default ON with a kill switch (house style, mirroring memorySpaces /
@@ -2212,14 +2218,14 @@ function validateConfig(config: AppConfig): void {
   // The attachments KB rides the large-document pipeline (its queue and Lambda).
   if (config.attachmentKb.enabled && !config.largeDocumentAttachments.enabled) {
     throw new Error(
-      'CDK_ATTACHMENT_KB_ENABLED=true requires CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED=true: '
+      'CDK_ATTACHMENT_KB_ENABLED=true requires CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED (on by default): '
       + 'the attachments knowledge base is fed by the large-document preparation pipeline.',
     );
   }
   // A folder's files are read through the prepare Lambda's sidecars.
   if (config.folderAttachments.enabled && !config.largeDocumentAttachments.enabled) {
     throw new Error(
-      'CDK_FOLDER_ATTACHMENTS_ENABLED=true requires CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED=true: '
+      'CDK_FOLDER_ATTACHMENTS_ENABLED=true requires CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED (on by default): '
       + 'a folder\'s files are delivered by reference and read from the sidecars the large-document pipeline prepares.',
     );
   }

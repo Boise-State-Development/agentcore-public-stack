@@ -81,28 +81,36 @@ describe('folderAttachments config', () => {
     warn.mockRestore();
   });
 
-  it('is off by default', () => {
-    expect(load().folderAttachments.enabled).toBe(false);
-  });
-
-  it.each(['', 'false', 'yes'])('treats %j as off', (value) => {
-    process.env.CDK_FOLDER_ATTACHMENTS_ENABLED = value;
-    expect(load().folderAttachments.enabled).toBe(false);
-  });
-
-  it('turns on with large-document attachments', () => {
-    process.env.CDK_FOLDER_ATTACHMENTS_ENABLED = 'true';
-    process.env.CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED = 'true';
+  it('is on by default', () => {
     expect(load().folderAttachments.enabled).toBe(true);
   });
 
-  it('is refused without large-document attachments', () => {
+  it.each(['', 'true', 'yes'])('treats %j as on', (value) => {
+    process.env.CDK_FOLDER_ATTACHMENTS_ENABLED = value;
+    expect(load().folderAttachments.enabled).toBe(true);
+  });
+
+  it('treats "false" as off', () => {
+    process.env.CDK_FOLDER_ATTACHMENTS_ENABLED = ' False ';
+    expect(load().folderAttachments.enabled).toBe(false);
+  });
+
+  it('follows large-document attachments off when unset, instead of failing synth', () => {
+    process.env.CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED = 'false';
+    expect(load().folderAttachments.enabled).toBe(false);
+    process.env.CDK_FOLDER_ATTACHMENTS_ENABLED = '';
+    expect(load().folderAttachments.enabled).toBe(false);
+  });
+
+  it('is refused when set on with large-document attachments off', () => {
     process.env.CDK_FOLDER_ATTACHMENTS_ENABLED = 'true';
+    process.env.CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED = 'false';
     expect(() => load()).toThrow(/CDK_FOLDER_ATTACHMENTS_ENABLED=true requires CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED/);
   });
 
   it('reads the cdk.json context when the variable is unset', () => {
-    expect(load({ largeDocumentAttachments: { enabled: true }, folderAttachments: { enabled: true } }).folderAttachments.enabled).toBe(true);
+    expect(load({ folderAttachments: { enabled: false } }).folderAttachments.enabled).toBe(false);
+    expect(load({ largeDocumentAttachments: { enabled: false } }).folderAttachments.enabled).toBe(false);
   });
 });
 
@@ -110,15 +118,16 @@ describe('folder attachments in PlatformStack', () => {
   const docsOnly = synth({ largeDocumentAttachments: { enabled: true } });
   const withFolders = synth({ largeDocumentAttachments: { enabled: true }, folderAttachments: { enabled: true } });
 
-  it('gives app-api the flag, and the Runtime the flag only while on', () => {
+  it('gives app-api the flag, and the Runtime the flag only while off', () => {
     expect(appApiEnv(withFolders).FOLDER_ATTACHMENTS_ENABLED).toBe('true');
     expect(appApiEnv(docsOnly).FOLDER_ATTACHMENTS_ENABLED).toBe('false');
     const runtimeEnv = (t: Template) =>
       (Object.values(t.findResources('AWS::BedrockAgentCore::Runtime'))[0] as any).Properties.EnvironmentVariables;
-    expect(runtimeEnv(withFolders).FOLDER_ATTACHMENTS_ENABLED).toBe('true');
-    expect(runtimeEnv(docsOnly)).not.toHaveProperty('FOLDER_ATTACHMENTS_ENABLED');
-    const { FOLDER_ATTACHMENTS_ENABLED: _flag, ...rest } = runtimeEnv(withFolders);
-    expect(rest).toEqual(runtimeEnv(docsOnly));
+    // On (the default) spends no bytes of the V2 environment budget.
+    expect(runtimeEnv(withFolders)).not.toHaveProperty('FOLDER_ATTACHMENTS_ENABLED');
+    expect(runtimeEnv(docsOnly).FOLDER_ATTACHMENTS_ENABLED).toBe('false');
+    const { FOLDER_ATTACHMENTS_ENABLED: _flag, ...rest } = runtimeEnv(docsOnly);
+    expect(rest).toEqual(runtimeEnv(withFolders));
   });
 
   it('adds no resource', () => {

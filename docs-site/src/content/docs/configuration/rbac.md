@@ -42,5 +42,5 @@ lists' before and after. The surface is **system admin only** and never
 scope-delegable: whoever can write a grant can write one for themselves, which
 is role editing by another route.
 
-Opt-in while in development: `CDK_USER_GRANTS_ENABLED=true` (app-api) and
-`features.userGrants: true` (SPA). See [Feature flags](/configuration/feature-flags/).
+On by default. `CDK_USER_GRANTS_ENABLED=false` (app-api) and
+`features.userGrants: false` (SPA) turn the surface off. See [Feature flags](/configuration/feature-flags/).
