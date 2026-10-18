@@ -1470,3 +1470,90 @@ class TestLoadExternalToolsConcurrentPreflight:
         assert result == [clients["a"], clients["b"], clients["c"]]
         assert peak == 1
         assert set(seen_threads) == {threading.current_thread()}
+
+
+class TestCustomHeaders:
+    """An admin's static `customHeaders` (e.g. GitHub's `X-MCP-Toolsets`)
+    reach the MCP transport, and changing them rebuilds a cached client."""
+
+    def _config(self, headers):
+        from apis.shared.tools.models import MCPServerConfig
+
+        return MCPServerConfig(
+            server_url="https://api.githubcopilot.com/mcp/",
+            auth_type="none",
+            custom_headers=headers,
+        )
+
+    def test_transport_receives_the_headers(self):
+        from agents.main_agent.integrations.external_mcp_client import (
+            create_external_mcp_client,
+        )
+
+        client = create_external_mcp_client(
+            self._config({"X-MCP-Toolsets": "issues,context"}), oauth_token="tok"
+        )
+        with patch(
+            "agents.main_agent.integrations.external_mcp_client.streamablehttp_client"
+        ) as transport:
+            client._transport_callable()
+
+        transport.assert_called_once()
+        args, kwargs = transport.call_args
+        assert args == ("https://api.githubcopilot.com/mcp/",)
+        assert kwargs["headers"] == {"X-MCP-Toolsets": "issues,context"}
+        # The bearer still rides the auth handler, not a static header.
+        assert kwargs["auth"] is not None
+
+    def test_no_headers_sends_none(self):
+        from agents.main_agent.integrations.external_mcp_client import (
+            create_external_mcp_client,
+        )
+
+        client = create_external_mcp_client(self._config({}))
+        with patch(
+            "agents.main_agent.integrations.external_mcp_client.streamablehttp_client"
+        ) as transport:
+            client._transport_callable()
+
+        assert transport.call_args.kwargs["headers"] is None
+
+    @pytest.mark.asyncio
+    async def test_a_header_change_rebuilds_the_cached_client(self):
+        """Same `updated_at`, different headers: the cached client must not be
+        served, because the headers are part of the connection itself."""
+        integration = ExternalMCPIntegration()
+        updated_at = datetime(2025, 1, 1, tzinfo=timezone.utc)
+        before = _fake_tool(updated_at, tool_id="github")
+        before.mcp_config.custom_headers = {"X-MCP-Toolsets": "issues"}
+        after = _fake_tool(updated_at, tool_id="github")
+        after.mcp_config.custom_headers = {"X-MCP-Toolsets": "issues,context"}
+
+        repo = SimpleNamespace(get_tool=AsyncMock(side_effect=[before, after, after]))
+        client_before = SimpleNamespace(load_tools=AsyncMock(return_value=[]))
+        client_after = SimpleNamespace(load_tools=AsyncMock(return_value=[]))
+
+        with patch(
+            "apis.shared.tools.repository.get_tool_catalog_repository",
+            return_value=repo,
+        ), patch(
+            "agents.main_agent.integrations.external_mcp_client.create_external_mcp_client",
+            side_effect=[client_before, client_after],
+        ) as create_mock:
+            first = await integration.load_external_tools(["github"])
+            second = await integration.load_external_tools(["github"])
+            third = await integration.load_external_tools(["github"])
+
+        assert first == [client_before]
+        assert second == [client_after]
+        # Unchanged headers on the next turn reuse the rebuilt client.
+        assert third == [client_after]
+        assert create_mock.call_count == 2
+
+    def test_header_digest_ignores_order_and_name_case(self):
+        from agents.main_agent.integrations.external_mcp_client import _headers_digest
+
+        assert _headers_digest({"X-A": "1", "X-B": "2"}) == _headers_digest(
+            {"x-b": "2", "X-A": "1"}
+        )
+        assert _headers_digest({"X-A": "1"}) != _headers_digest({"X-A": "2"})
