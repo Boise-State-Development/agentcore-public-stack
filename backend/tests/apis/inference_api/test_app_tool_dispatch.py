@@ -192,8 +192,60 @@ async def test_dict_shaped_result_keeps_its_content(monkeypatch):
 
     payload = await _call(session_id="disp-dict")
 
-    assert payload["result"]["content"] == [{"text": '{"lists": []}'}]
+    assert payload["result"]["content"] == [{"type": "text", "text": '{"lists": []}'}]
     assert payload["result"]["isError"] is False
+
+
+@pytest.mark.asyncio
+async def test_app_receives_tagged_mcp_content(monkeypatch):
+    """The App gets an MCP `CallToolResult`, not Strands' untagged blocks.
+
+    GitHub's issue_write App finds its data with `c.type === "text"`; with
+    Strands' `{"text": ...}` passed through, every picker it fills (labels,
+    assignees, milestones) rendered "No labels available" although the
+    `ui_get` call succeeded. The thread event keeps the Strands shape.
+    """
+    result = {
+        "toolUseId": "mcp-1",
+        "status": "success",
+        "content": [
+            {"text": '{"labels": [{"name": "bug"}]}'},
+            {"json": {"count": 1}},
+            {"image": {"format": "png", "source": {"bytes": b"\x89PNG"}}},
+            {"type": "text", "text": "already tagged"},
+        ],
+        "structuredContent": {"labels": [{"name": "bug"}]},
+    }
+    client = _FakeClient(result)
+    _patch(monkeypatch, enabled=True, meta=_ui(["model", "app"]), client=client)
+
+    broker = get_app_tool_event_broker()
+    q = broker.add_subscriber("disp-tagged")
+    try:
+        payload = await _call(session_id="disp-tagged")
+        events = broker.drain(q)
+    finally:
+        broker.remove_subscriber("disp-tagged", q)
+
+    assert payload["result"]["content"] == [
+        {"type": "text", "text": '{"labels": [{"name": "bug"}]}'},
+        {"type": "text", "text": '{"count": 1}'},
+        {"type": "image", "data": "iVBORw==", "mimeType": "image/png"},
+        {"type": "text", "text": "already tagged"},
+    ]
+    assert payload["result"]["structuredContent"] == {"labels": [{"name": "bug"}]}
+    thread_result = events[1]["data"]["tool_result"]
+    assert thread_result["content"][0] == {"text": '{"labels": [{"name": "bug"}]}'}
+
+
+@pytest.mark.asyncio
+async def test_no_structured_content_key_when_the_tool_returned_none(monkeypatch):
+    client = _FakeClient({"status": "success", "content": [{"text": "ok"}]})
+    _patch(monkeypatch, enabled=True, meta=_ui(["model", "app"]), client=client)
+
+    payload = await _call(session_id="disp-nostruct")
+
+    assert "structuredContent" not in payload["result"]
 
 
 class _SessionClient(_FakeClient):
