@@ -103,10 +103,13 @@ class TestDegrade:
         assert plan.tools.owns_toolset is True
 
     @pytest.mark.asyncio
-    async def test_an_ordinary_agent_with_no_tools_still_falls_through(self, monkeypatch):
+    async def test_an_ordinary_agent_with_no_tools_resolves_like_a_harness(self, monkeypatch):
+        # Tools no longer differ by harness-ness: neither falls through to the picker.
         _patch_tool_access(monkeypatch, True)
         plan = await resolve_agent_invocation(_assistant(bindings=[]), _user())
-        assert plan.tools is None
+        harness = await resolve_agent_invocation(_assistant(bindings=[]), _user(), degrade=True)
+        assert plan.tools == harness.tools
+        assert plan.tools.tool_ids == [] and plan.tools.owns_toolset is False
 
     @pytest.mark.asyncio
     async def test_a_denied_model_falls_through_to_the_members_default(self, monkeypatch):

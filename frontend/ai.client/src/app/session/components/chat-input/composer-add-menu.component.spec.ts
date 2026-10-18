@@ -367,6 +367,16 @@ describe('ComposerAddMenuComponent', () => {
     expect(toolsMenu.querySelector('[data-tool-id="web_search"]')!.getAttribute('aria-disabled')).toBe('true');
   });
 
+  it('says an Agent with no tools uses none, instead of promising tools the turn will not get', async () => {
+    agentLocked.set(true);
+    tools.set([]);
+    await openMenu();
+    await openSubmenu('composer-add-tools');
+    const toolsMenu = overlay('composer-tools-menu')!;
+    expect(toolsMenu.textContent).toContain("This agent doesn't use tools.");
+    expect(toolsMenu.textContent).not.toContain('No tools available.');
+  });
+
   it('lists connectors as switches with their connection state and probes the unknown ones', async () => {
     await openMenu();
     await openSubmenu('composer-add-connectors');

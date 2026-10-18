@@ -70,7 +70,10 @@ something you add rather than something you're stuck with:
 - **Delegate to another agent** — point the agent at a remote A2A agent for
   whole workflows it can hand off.
 - **Control who sees what** — tool visibility is governed by RBAC and per-agent
-  `enabled_tools`, filtered through the `ToolFilter`. See
+  `enabled_tools`, filtered through the `ToolFilter`. In a chat with an Agent,
+  the Agent's bound tools replace the user's own tool picks, and an Agent that
+  binds no tools runs without them. Only admin always-on and platform system
+  tools are added. See
   [RBAC and Permissions](/agentcore-public-stack/configuration/rbac/).
 - **Curate from the admin console** — the
   [Tools admin page](/agentcore-public-stack/admin/tools/) manages the catalog

@@ -1039,10 +1039,11 @@ export class ConversationPage implements OnDestroy {
   }
 
   /**
-   * Lock each picker to the Agent's binding, or release it when unbound. A
-   * project's tools and skills are always locked, to none if it binds none: the
-   * backend runs a project on its own, never the member's. A project that binds
-   * no tools still gets the admin's always-on tools, so its lock keeps them.
+   * Lock each picker to the Agent's binding. Tools are always locked, to none if
+   * the Agent binds none: the backend runs every Agent on its own tools, never the
+   * viewer's picks. An Agent that binds no tools still gets the admin's always-on
+   * tools, so its lock keeps them. Skills are released when unbound, except on a
+   * project, which always runs on its own skills.
    */
   private applyAgentBindingLocks(agent: Agent, isProjectHarness: boolean): void {
     const modelId = agent.modelConfig?.modelId;
@@ -1055,10 +1056,8 @@ export class ConversationPage implements OnDestroy {
     const toolIds = agent.bindings.filter(b => b.kind === 'tool').map(b => b.ref);
     if (toolIds.length > 0) {
       this.toolService.lockToAgentTools(toolIds);
-    } else if (isProjectHarness) {
-      this.toolService.lockToAgentTools([], { keepAlwaysOn: true });
     } else {
-      this.toolService.clearAgentLock();
+      this.toolService.lockToAgentTools([], { keepAlwaysOn: true });
     }
 
     const skillIds = agent.bindings.filter(b => b.kind === 'skill').map(b => b.ref);
