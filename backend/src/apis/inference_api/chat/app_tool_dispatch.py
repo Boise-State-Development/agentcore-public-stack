@@ -5,10 +5,11 @@ MCP App calls a server tool over the postMessage bridge; app-api relays it
 to `/invocations` with an `app_tool_call` directive. This module runs that
 single tool call WITHOUT a model turn:
 
-1. Rebuild the conversation's agent via `get_agent` (the same path resume
-   uses) so the MCP client session + transport auth (SigV4, OIDC
-   forwarding, the lazy OAuth token provider) are wired exactly as for a
-   model-driven tool call.
+1. Reuse the conversation's live cached agent when it carries the tool's
+   MCP client (`agent_carries_tool_client`); otherwise rebuild it via
+   `get_agent` (the same path resume uses) so the MCP client session +
+   transport auth (SigV4, OIDC forwarding, the lazy OAuth token provider)
+   are wired exactly as for a model-driven tool call.
 1a. Resolve the OAuth token this call needs. A model-driven call gets this
    from `OAuthConsentHook`, which fires on `BeforeToolCallEvent` — an event
    this path never raises, because it calls the MCP client directly instead
@@ -305,6 +306,28 @@ def _resolve_client(agent: Any, tool_name: str):
     ui_metadata = catalog.get(tool_name)
     client = catalog.get_client(tool_name)
     return ui_metadata, client
+
+
+def agent_carries_tool_client(agent: Any, tool_name: str) -> bool:
+    """Whether `agent` was built over the MCP client that serves `tool_name`.
+
+    The dispatch calls the client the catalog names, not one it reads off the
+    agent, so a live agent can stand in for a build only when that client is
+    one of its tool providers. An App-only tool (visibility without "model")
+    is never registered as a tool, but its client still is a provider. A
+    Strands upgrade that renames `_tool_providers` makes this answer False,
+    which falls back to the build rather than to a wrong client.
+    """
+    _, client = _resolve_client(agent, tool_name)
+    if client is None:
+        return False
+    registry = getattr(getattr(agent, "agent", None), "tool_registry", None)
+    if registry is None:
+        return False
+    if any(provider is client for provider in getattr(registry, "_tool_providers", None) or ()):
+        return True
+    tools = getattr(registry, "registry", None) or {}
+    return any(getattr(tool, "mcp_client", None) is client for tool in tools.values())
 
 
 def _provider_for_client(client: Any) -> Optional[str]:
