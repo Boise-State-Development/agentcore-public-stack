@@ -48,15 +48,17 @@ describe('Runtime memory stats grant', () => {
     template = Template.fromStack(stack);
   });
 
-  it('is a one-statement managed policy on the Runtime role, pinned to the stats attributes', () => {
+  it('is a managed policy on the Runtime role whose one memory-table statement is pinned to the stats attributes', () => {
     const policies = Object.entries(template.findResources('AWS::IAM::ManagedPolicy')).filter(([id]) =>
       id.includes('RuntimeMemoryStatsPolicy'),
     );
     expect(policies).toHaveLength(1);
     const [, policy] = policies[0];
-    const statements: Statement[] = policy.Properties.PolicyDocument.Statement;
+    // The policy also carries the rag-documents read (runtime-rag-documents-read.test.ts).
+    const statements: Statement[] = (policy.Properties.PolicyDocument.Statement as Statement[]).filter(onMemoryTable);
     expect(statements).toHaveLength(1);
     const [st] = statements;
+    expect(st.Sid).toBe('MemorySpacesStatsUpdate');
     expect(actions(st)).toEqual(['dynamodb:UpdateItem']);
     expect(onMemoryTable(st)).toBe(true);
     // The table itself, not its indexes: UpdateItem never targets an index.
