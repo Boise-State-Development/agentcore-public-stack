@@ -72,6 +72,10 @@ from strands.hooks import (
     HookRegistry,
 )
 
+from agents.main_agent.session.hooks.mcp_app_awaiting import (
+    call_awaits_user_submission,
+)
+
 logger = logging.getLogger(__name__)
 
 # Queue caps. A normal turn produces a handful of transitions; these exist so a
@@ -276,7 +280,10 @@ class AgentStatusHook(HookProvider):
             duration_ms = _duration_ms(getattr(event, "duration", None))
             ok = getattr(event, "exception", None) is None
             result = getattr(event, "result", None)
-            if ok and isinstance(result, dict):
+            # An MCP App's form waiting for the user reports `isError` on
+            # purpose; it has not failed, and it has not done anything yet.
+            awaiting = ok and call_awaits_user_submission(event)
+            if ok and not awaiting and isinstance(result, dict):
                 # A tool can fail *inside* a successful invocation; Strands
                 # reports that as a result with status "error", not as a raised
                 # exception. The rail's red dot depends on catching both.
@@ -302,6 +309,7 @@ class AgentStatusHook(HookProvider):
                         "input": _stringify(tool_input, _MAX_INPUT_CHARS),
                         "result": _stringify(result, _MAX_RESULT_CHARS),
                         "ok": ok,
+                        "awaiting": awaiting,
                         "durationMs": duration_ms,
                         "integration": _integration_of(event),
                     }

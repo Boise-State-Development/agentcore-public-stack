@@ -15,7 +15,10 @@ import { Message } from '../models/message.model';
  */
 export function matchToolResultsToToolUses(messages: Message[]): Message[] {
   // Create a map of toolUseId -> tool result for quick lookup
-  const toolResultMap = new Map<string, { content: any[]; status: 'success' | 'error' }>();
+  const toolResultMap = new Map<
+    string,
+    { content: any[]; status: 'success' | 'error'; structuredContent?: unknown }
+  >();
 
   // First pass: collect all tool results from user messages
   // Note: Tool results are now embedded in toolUse.result, but we still check
@@ -58,7 +61,10 @@ export function matchToolResultsToToolUses(messages: Message[]): Message[] {
 
             toolResultMap.set(toolUseId, {
               content: toolResult.content || [],
-              status: status
+              status: status,
+              ...(toolResult.structuredContent !== undefined
+                ? { structuredContent: toolResult.structuredContent }
+                : {}),
             });
           }
         }

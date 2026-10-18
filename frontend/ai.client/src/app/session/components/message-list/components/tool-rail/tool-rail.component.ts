@@ -8,7 +8,12 @@ import {
 import { KeyValuePipe } from '@angular/common';
 import { JsonSyntaxHighlightPipe } from '../tool-use/json-syntax-highlight.pipe';
 import { ToolCallGroup, ToolCallDisplay, ToolCallBatch } from './tool-rail.model';
-import { describeToolCall, describeToolGroup } from './tool-summary';
+import {
+  describeToolCall,
+  describeToolGroup,
+  isAwaitingUserCall,
+  isFailedCall,
+} from './tool-summary';
 import { PinScrollToBottomDirective } from './pin-scroll-to-bottom.directive';
 import { ToolResultContent } from '../../../../services/models/message.model';
 
@@ -102,11 +107,20 @@ export class ToolRailComponent {
 
   /** How many calls in the group failed, or null when none did. */
   failureCount = computed(() => {
-    const failures = this.group().calls.filter(
-      c => c.status === 'error' || c.result?.status === 'error',
-    ).length;
+    const failures = this.group().calls.filter(isFailedCall).length;
     return failures > 0 ? failures : null;
   });
+
+  /** Whether a call failed (an App form waiting for the user has not). */
+  callFailed(call: ToolCallDisplay): boolean {
+    return isFailedCall(call);
+  }
+
+  /** The label over a call's raw result. */
+  resultLabel(call: ToolCallDisplay): string {
+    if (isAwaitingUserCall(call)) return 'Waiting for you';
+    return isFailedCall(call) ? 'Error' : 'Result';
+  }
 
   /** The human line for one call inside the expanded rail. */
   describe(call: ToolCallDisplay): string {
@@ -149,7 +163,8 @@ export class ToolRailComponent {
       case 'complete':       return 'status-dot bg-state-success-500';
       case 'pending':        return 'status-dot bg-state-warning-400 shimmer';
       case 'error':          return 'status-dot bg-state-danger-500';
-      case 'awaiting_auth':  return 'status-dot bg-primary-500 ring-2 ring-primary-300/40 dark:ring-primary-400/30';
+      case 'awaiting_auth':
+      case 'awaiting_user':  return 'status-dot bg-primary-500 ring-2 ring-primary-300/40 dark:ring-primary-400/30';
       default:               return 'status-dot bg-gray-400';
     }
   }

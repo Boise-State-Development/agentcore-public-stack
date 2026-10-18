@@ -1,3 +1,4 @@
+import { isAwaitingUserSubmission } from '../../../../services/mcp-apps/awaiting-submission';
 import type { ToolCallDisplay } from './tool-rail.model';
 
 /**
@@ -25,6 +26,23 @@ import type { ToolCallDisplay } from './tool-rail.model';
  * there is no tool today the pattern gets wrong, and an empty registry is a
  * seam to maintain rather than a feature.
  */
+
+/** The line for an MCP App call whose form is open for the user to submit. */
+export const AWAITING_USER_LINE = 'Waiting for you to submit the form';
+
+/** True when an MCP App's form is open for the user (not a failure). */
+export function isAwaitingUserCall(call: ToolCallDisplay): boolean {
+  return call.status === 'awaiting_user' || isAwaitingUserSubmission(call.result);
+}
+
+/**
+ * True when a call failed. An MCP App form waiting for the user reports an
+ * error result on purpose and is not counted.
+ */
+export function isFailedCall(call: ToolCallDisplay): boolean {
+  if (isAwaitingUserCall(call)) return false;
+  return call.status === 'error' || call.result?.status === 'error';
+}
 
 /** Leading verb tokens we recognize, mapped to their past-tense display form. */
 const VERB_FORMS: ReadonlyMap<string, { ok: string; failed: string }> = new Map([
@@ -165,8 +183,11 @@ function withArticle(subject: string): string {
  * happened yet.
  */
 export function describeToolCall(call: ToolCallDisplay): string {
+  // An MCP App's form is open: nothing ran yet, so no verb applies.
+  if (isAwaitingUserCall(call)) return AWAITING_USER_LINE;
+
   const { verb, subject } = splitToolName(call.toolName);
-  const failed = call.status === 'error' || call.result?.status === 'error';
+  const failed = isFailedCall(call);
   const running = call.status === 'pending';
 
   if (!verb) {
@@ -226,9 +247,7 @@ export function describeToolGroup(calls: readonly ToolCallDisplay[]): string {
     return done > 0 ? `${label} (${done} of ${calls.length} done)` : label;
   }
 
-  const failures = calls.filter(
-    c => c.status === 'error' || c.result?.status === 'error',
-  ).length;
+  const failures = calls.filter(isFailedCall).length;
 
   const subjects = new Set(calls.map(c => splitToolName(c.toolName).subject));
   if (subjects.size === 1) {

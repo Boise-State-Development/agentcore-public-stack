@@ -587,6 +587,8 @@ export interface ToolResultEventData {
       };
     }>;
     status?: 'success' | 'error';
+    /** The tool's MCP `structuredContent`, when it returned one. */
+    structuredContent?: unknown;
   };
 }
 
@@ -692,6 +694,7 @@ export interface ContentBlockBuilder {
   result?: {
     content: ToolResultContent[];
     status: 'success' | 'error';
+    structuredContent?: unknown;
   };
   status?: 'pending' | 'complete' | 'error';
   isComplete: boolean;

@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
+  AWAITING_USER_LINE,
   describeToolCall,
   describeToolGroup,
+  isFailedCall,
   resultCardinality,
   splitToolName,
 } from './tool-summary';
@@ -230,5 +232,39 @@ describe('describeToolGroup', () => {
 
   it('is empty for an empty group', () => {
     expect(describeToolGroup([])).toBe('');
+  });
+});
+
+describe('an MCP App form waiting for the user', () => {
+  // GitHub's issue_write returns `isError` on purpose while its form is open;
+  // the rail read "Couldn't write issue" for a form nobody had submitted yet.
+  const awaiting = (overrides: Partial<ToolCallDisplay> = {}) =>
+    call({
+      toolName: 'issue_write',
+      status: 'awaiting_user',
+      result: {
+        status: 'error',
+        content: [{ text: 'An interactive form has been shown to the user' }],
+        structuredContent: { status: 'awaiting_user_submission' },
+      },
+      ...overrides,
+    });
+
+  it('is described as waiting, not as a failure', () => {
+    expect(describeToolCall(awaiting())).toBe(AWAITING_USER_LINE);
+  });
+
+  it('is recognized from the result alone, whatever its status says', () => {
+    expect(describeToolCall(awaiting({ status: 'error' }))).toBe(AWAITING_USER_LINE);
+    expect(isFailedCall(awaiting({ status: 'error' }))).toBe(false);
+  });
+
+  it('is not counted among a group\'s failures', () => {
+    const line = describeToolGroup([withJson([1, 2]), awaiting({ id: 't2' })]);
+    expect(line).not.toContain('failed');
+  });
+
+  it('leaves a real failure counted', () => {
+    expect(isFailedCall(call({ status: 'error' }))).toBe(true);
   });
 });
