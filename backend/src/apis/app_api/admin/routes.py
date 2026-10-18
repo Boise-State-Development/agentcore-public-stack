@@ -1119,7 +1119,7 @@ if projects_enabled():
     router.include_router(projects_admin_router)
 
 # ========== Include User Grants Admin Subrouter (conditional) ==========
-# Mounted only while USER_GRANTS_ENABLED (opt-in while in development). The
+# Mounted only while USER_GRANTS_ENABLED (default on). The
 # routes are full-admin only, never scope-delegated: see the module docstring
 # for why a grant surface cannot be delegated.
 if user_grants_enabled():

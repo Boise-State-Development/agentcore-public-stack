@@ -91,7 +91,7 @@ class TestManifestReachesTheAgent:
         assert repo.calls == [("user-1", "fa-1")]
 
     def test_flag_off_the_field_is_ignored(self, make_user, monkeypatch):
-        resp, prompt, repo = _post(make_user, monkeypatch, flag="", body={
+        resp, prompt, repo = _post(make_user, monkeypatch, flag="false", body={
             "session_id": "sess-folder-2", "message": "what is due?", "folder_attachment_ids": ["fa-1"],
         })
         assert resp.status_code == 200

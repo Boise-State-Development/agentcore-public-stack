@@ -133,8 +133,14 @@ describe('attachmentKb config', () => {
     expect(load().attachmentKb.enabled).toBe(true);
   });
 
-  it('is refused without large-document attachments', () => {
+  it('turns on with large-document attachments left at their default', () => {
     process.env.CDK_ATTACHMENT_KB_ENABLED = 'true';
+    expect(load().attachmentKb.enabled).toBe(true);
+  });
+
+  it('is refused with large-document attachments turned off', () => {
+    process.env.CDK_ATTACHMENT_KB_ENABLED = 'true';
+    process.env.CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED = 'false';
     expect(() => load()).toThrow(/requires CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED/);
   });
 });

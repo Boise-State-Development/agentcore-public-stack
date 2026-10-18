@@ -101,31 +101,31 @@ describe('skillAuthoring config', () => {
     warn.mockRestore();
   });
 
-  it('is off by default', () => {
-    expect(load().skillAuthoring.enabled).toBe(false);
+  it('is on by default', () => {
+    expect(load().skillAuthoring.enabled).toBe(true);
   });
 
-  it.each(['', 'false', 'yes', '1'])('treats %j as off', (value) => {
-    process.env[FLAG_ENV] = value;
-    expect(load().skillAuthoring.enabled).toBe(false);
-  });
-
-  it.each(['true', ' TRUE '])('turns on for %j', (value) => {
+  it.each(['', 'true', 'yes', '1'])('treats %j as on', (value) => {
     process.env[FLAG_ENV] = value;
     expect(load().skillAuthoring.enabled).toBe(true);
   });
 
+  it.each(['false', ' FALSE '])('turns off for %j', (value) => {
+    process.env[FLAG_ENV] = value;
+    expect(load().skillAuthoring.enabled).toBe(false);
+  });
+
   it('falls back to context, and the variable beats it', () => {
-    expect(load({ skillAuthoring: { enabled: true } }).skillAuthoring.enabled).toBe(true);
-    process.env[FLAG_ENV] = 'false';
-    expect(load({ skillAuthoring: { enabled: true } }).skillAuthoring.enabled).toBe(false);
+    expect(load({ skillAuthoring: { enabled: false } }).skillAuthoring.enabled).toBe(false);
+    process.env[FLAG_ENV] = 'true';
+    expect(load({ skillAuthoring: { enabled: false } }).skillAuthoring.enabled).toBe(true);
   });
 });
 
 describe('skill authoring wiring', () => {
-  it('spends no Runtime env bytes while off, and sets the flag only while on', () => {
-    expect(runtimeEnv(synth())).not.toHaveProperty('SKILL_AUTHORING_ENABLED');
-    expect(runtimeEnv(synth({ skillAuthoring: { enabled: true } })).SKILL_AUTHORING_ENABLED).toBe('true');
+  it('spends no Runtime env bytes while on (the default), and sets the flag only while off', () => {
+    expect(runtimeEnv(synth({ skillAuthoring: { enabled: true } }))).not.toHaveProperty('SKILL_AUTHORING_ENABLED');
+    expect(runtimeEnv(synth({ skillAuthoring: { enabled: false } })).SKILL_AUTHORING_ENABLED).toBe('false');
   });
 
   it('never reaches app-api', () => {

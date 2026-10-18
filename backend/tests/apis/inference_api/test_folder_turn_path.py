@@ -100,7 +100,7 @@ class TestRequestedFolderIds:
         return InvocationRequest(session_id="s", message="m", folder_attachment_ids=ids)
 
     def test_ignored_while_the_flag_is_off(self, monkeypatch):
-        monkeypatch.delenv("FOLDER_ATTACHMENTS_ENABLED", raising=False)
+        monkeypatch.setenv("FOLDER_ATTACHMENTS_ENABLED", "false")
         assert routes._requested_folder_ids(self._req(["fa-1"])) == ([], 0)
 
     def test_deduped_in_order_and_capped_at_two(self, flag_on):
@@ -199,7 +199,7 @@ class TestAttachmentPhase:
 
     @pytest.mark.asyncio
     async def test_flag_off_reads_nothing(self, repo, phase, monkeypatch):
-        monkeypatch.delenv("FOLDER_ATTACHMENTS_ENABLED", raising=False)
+        monkeypatch.setenv("FOLDER_ATTACHMENTS_ENABLED", "false")
         run, _ = phase
         repo["repo"] = FakeFolderRepo({"fa-1": _folder("fa-1")})
         out = await run(["fa-1"])

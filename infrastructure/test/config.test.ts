@@ -627,40 +627,40 @@ describe('RAG Ingestion Configuration', () => {
   });
 
   // ============================================================
-  // Shared Projects feature flag — opt-in while in development
-  // (unset / empty GitHub Actions variable means off)
+  // Shared Projects feature flag — default ON with a kill switch
+  // (unset / empty GitHub Actions variable means on)
   // ============================================================
 
   describe('Shared Projects feature flag', () => {
-    test('defaults to disabled when CDK_PROJECTS_ENABLED is unset', () => {
+    test('defaults to enabled when CDK_PROJECTS_ENABLED is unset', () => {
       delete process.env.CDK_PROJECTS_ENABLED;
 
-      expect(loadConfig(app).projects.enabled).toBe(false);
+      expect(loadConfig(app).projects.enabled).toBe(true);
     });
 
-    test('treats empty string (unset GitHub Actions variable) as disabled', () => {
+    test('treats empty string (unset GitHub Actions variable) as enabled', () => {
       process.env.CDK_PROJECTS_ENABLED = '';
 
+      expect(loadConfig(app).projects.enabled).toBe(true);
+    });
+
+    test('CDK_PROJECTS_ENABLED="false" turns it off', () => {
+      process.env.CDK_PROJECTS_ENABLED = ' False ';
+
       expect(loadConfig(app).projects.enabled).toBe(false);
     });
 
-    test('CDK_PROJECTS_ENABLED="true" turns it on', () => {
-      process.env.CDK_PROJECTS_ENABLED = 'true';
+    test('anything but "false" leaves it on', () => {
+      process.env.CDK_PROJECTS_ENABLED = 'no';
 
       expect(loadConfig(app).projects.enabled).toBe(true);
     });
 
-    test('anything but "true" leaves it off', () => {
-      process.env.CDK_PROJECTS_ENABLED = 'yes';
-
-      expect(loadConfig(app).projects.enabled).toBe(false);
-    });
-
-    test('cdk.json context projects.enabled=true enables when env is unset', () => {
+    test('cdk.json context projects.enabled=false disables when env is unset', () => {
       delete process.env.CDK_PROJECTS_ENABLED;
-      app.node.setContext('projects', { enabled: true });
+      app.node.setContext('projects', { enabled: false });
 
-      expect(loadConfig(app).projects.enabled).toBe(true);
+      expect(loadConfig(app).projects.enabled).toBe(false);
     });
   });
 
@@ -689,7 +689,7 @@ describe('RAG Ingestion Configuration', () => {
   });
 
   // ============================================================
-  // Client turn timing feature flag — opt-in while in development
+  // Folder sync and client turn timing — default ON with a kill switch
   // ============================================================
 
   describe('Folder sync feature flag', () => {
@@ -697,18 +697,18 @@ describe('RAG Ingestion Configuration', () => {
       delete process.env.CDK_FOLDER_SYNC_ENABLED;
     });
 
-    test('defaults to disabled, and "" (unset GitHub variable) is disabled', () => {
+    test('defaults to enabled, and "" (unset GitHub variable) is enabled', () => {
       delete process.env.CDK_FOLDER_SYNC_ENABLED;
-      expect(loadConfig(app).folderSync.enabled).toBe(false);
+      expect(loadConfig(app).folderSync.enabled).toBe(true);
       process.env.CDK_FOLDER_SYNC_ENABLED = '';
-      expect(loadConfig(app).folderSync.enabled).toBe(false);
+      expect(loadConfig(app).folderSync.enabled).toBe(true);
     });
 
-    test('only "true" turns it on', () => {
-      process.env.CDK_FOLDER_SYNC_ENABLED = 'True';
-      expect(loadConfig(app).folderSync.enabled).toBe(true);
-      process.env.CDK_FOLDER_SYNC_ENABLED = 'yes';
+    test('only "false" turns it off', () => {
+      process.env.CDK_FOLDER_SYNC_ENABLED = 'False';
       expect(loadConfig(app).folderSync.enabled).toBe(false);
+      process.env.CDK_FOLDER_SYNC_ENABLED = 'no';
+      expect(loadConfig(app).folderSync.enabled).toBe(true);
     });
   });
 
@@ -717,18 +717,18 @@ describe('RAG Ingestion Configuration', () => {
       delete process.env.CDK_CLIENT_TURN_TIMING_ENABLED;
     });
 
-    test('defaults to disabled, and "" (unset GitHub variable) is disabled', () => {
+    test('defaults to enabled, and "" (unset GitHub variable) is enabled', () => {
       delete process.env.CDK_CLIENT_TURN_TIMING_ENABLED;
-      expect(loadConfig(app).clientTurnTiming.enabled).toBe(false);
+      expect(loadConfig(app).clientTurnTiming.enabled).toBe(true);
       process.env.CDK_CLIENT_TURN_TIMING_ENABLED = '';
-      expect(loadConfig(app).clientTurnTiming.enabled).toBe(false);
+      expect(loadConfig(app).clientTurnTiming.enabled).toBe(true);
     });
 
-    test('only "true" turns it on', () => {
-      process.env.CDK_CLIENT_TURN_TIMING_ENABLED = 'True';
-      expect(loadConfig(app).clientTurnTiming.enabled).toBe(true);
-      process.env.CDK_CLIENT_TURN_TIMING_ENABLED = 'yes';
+    test('only "false" turns it off', () => {
+      process.env.CDK_CLIENT_TURN_TIMING_ENABLED = 'False';
       expect(loadConfig(app).clientTurnTiming.enabled).toBe(false);
+      process.env.CDK_CLIENT_TURN_TIMING_ENABLED = 'no';
+      expect(loadConfig(app).clientTurnTiming.enabled).toBe(true);
     });
   });
 
@@ -763,7 +763,7 @@ describe('RAG Ingestion Configuration', () => {
   });
 
   // ============================================================
-  // Direct user grants feature flag — opt-in while in development
+  // Direct user grants feature flag — default ON with a kill switch
   // ============================================================
 
   describe('Direct user grants feature flag', () => {
@@ -771,35 +771,35 @@ describe('RAG Ingestion Configuration', () => {
       delete process.env.CDK_USER_GRANTS_ENABLED;
     });
 
-    test('defaults to disabled when CDK_USER_GRANTS_ENABLED is unset', () => {
+    test('defaults to enabled when CDK_USER_GRANTS_ENABLED is unset', () => {
       delete process.env.CDK_USER_GRANTS_ENABLED;
 
-      expect(loadConfig(app).userGrants.enabled).toBe(false);
+      expect(loadConfig(app).userGrants.enabled).toBe(true);
     });
 
-    test('treats empty string (unset GitHub Actions variable) as disabled', () => {
+    test('treats empty string (unset GitHub Actions variable) as enabled', () => {
       process.env.CDK_USER_GRANTS_ENABLED = '';
 
+      expect(loadConfig(app).userGrants.enabled).toBe(true);
+    });
+
+    test('CDK_USER_GRANTS_ENABLED="false" turns it off', () => {
+      process.env.CDK_USER_GRANTS_ENABLED = 'false';
+
       expect(loadConfig(app).userGrants.enabled).toBe(false);
     });
 
-    test('CDK_USER_GRANTS_ENABLED="true" turns it on', () => {
-      process.env.CDK_USER_GRANTS_ENABLED = 'true';
+    test('anything but "false" leaves it on', () => {
+      process.env.CDK_USER_GRANTS_ENABLED = 'no';
 
       expect(loadConfig(app).userGrants.enabled).toBe(true);
     });
 
-    test('anything but "true" leaves it off', () => {
-      process.env.CDK_USER_GRANTS_ENABLED = 'yes';
-
-      expect(loadConfig(app).userGrants.enabled).toBe(false);
-    });
-
-    test('cdk.json context userGrants.enabled=true enables when env is unset', () => {
+    test('cdk.json context userGrants.enabled=false disables when env is unset', () => {
       delete process.env.CDK_USER_GRANTS_ENABLED;
-      app.node.setContext('userGrants', { enabled: true });
+      app.node.setContext('userGrants', { enabled: false });
 
-      expect(loadConfig(app).userGrants.enabled).toBe(true);
+      expect(loadConfig(app).userGrants.enabled).toBe(false);
     });
   });
 

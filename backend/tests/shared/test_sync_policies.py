@@ -500,20 +500,20 @@ class TestDriveFolderPolicies:
         assert not await service.exclude_folder_file(ASSISTANT_ID, policy.policy_id, "c")
 
 
-@pytest.mark.parametrize("value", ["true", "TRUE", " True "])
-async def test_folder_sync_flag_on(monkeypatch, value):
+@pytest.mark.parametrize("value", ["false", "FALSE", " False "])
+async def test_folder_sync_flag_off(monkeypatch, value):
     from apis.shared.feature_flags import folder_sync_enabled
 
     monkeypatch.setenv("FOLDER_SYNC_ENABLED", value)
-    assert folder_sync_enabled()
+    assert not folder_sync_enabled()
 
 
-@pytest.mark.parametrize("value", [None, "", "false", "1", "yes"])
-async def test_folder_sync_flag_defaults_off(monkeypatch, value):
+@pytest.mark.parametrize("value", [None, "", "true", "1", "yes"])
+async def test_folder_sync_flag_defaults_on(monkeypatch, value):
     from apis.shared.feature_flags import folder_sync_enabled
 
     if value is None:
         monkeypatch.delenv("FOLDER_SYNC_ENABLED", raising=False)
     else:
         monkeypatch.setenv("FOLDER_SYNC_ENABLED", value)
-    assert not folder_sync_enabled()
+    assert folder_sync_enabled()

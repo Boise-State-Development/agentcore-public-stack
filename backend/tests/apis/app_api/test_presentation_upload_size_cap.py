@@ -33,7 +33,10 @@ PRESENTATION_CAP = 25 * 1024 * 1024
 
 
 @pytest.fixture
-def service():
+def service(monkeypatch):
+    # Ordinary documents keep the general cap only with large-document
+    # attachments off (they are on by default); this file is about the caps.
+    monkeypatch.setenv("LARGE_DOCUMENT_ATTACHMENTS_ENABLED", "false")
     repository = MagicMock()
     repository.get_user_quota = AsyncMock(
         return_value=SimpleNamespace(total_bytes=0)
