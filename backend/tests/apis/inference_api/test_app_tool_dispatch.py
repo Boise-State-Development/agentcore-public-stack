@@ -16,8 +16,10 @@ from apis.inference_api.chat.app_tool_dispatch import (
     dispatch_app_tool_call,
 )
 from apis.shared.mcp_apps.broker import get_app_tool_event_broker
+from apis.shared.tools import mcp_session
 from apis.shared.tools.models import ToolUIMetadata
 from agents.main_agent.integrations import mcp_apps as mcp_apps_mod
+from tests.fixtures.flaky_mcp_server import FlakyMCPServer
 
 
 class _FakeContent:
@@ -358,98 +360,6 @@ async def test_leaves_a_live_client_session_alone(monkeypatch):
     assert client.active is True
 
 
-class _FlakyMCPServer:
-    """A real streamable-HTTP MCP server whose `tools/call` can 503.
-
-    With `fail_calls` set it runs the tool and then answers HTTP 503 — what
-    GitHub's MCP endpoint did on dev 2026-10-18: the issue was created, the
-    POST came back 503. The MCP SDK treats any non-2xx POST as fatal for the
-    session, so the in-flight call surfaces from Strands as "Connection to
-    the MCP server was closed".
-    """
-
-    def __init__(self) -> None:
-        import socket
-        import threading
-
-        import uvicorn
-        from mcp.server.fastmcp import FastMCP
-
-        self.writes: list = []
-        self.fail_calls = True
-        server = FastMCP("flaky", stateless_http=True, json_response=True)
-
-        @server.tool()
-        def issue_write(title: str) -> str:
-            self.writes.append(title)
-            return f"created {title}"
-
-        inner = server.streamable_http_app()
-
-        async def app(scope, receive, send):
-            if scope["type"] != "http":
-                return await inner(scope, receive, send)
-            messages = []
-            body = b""
-            while True:
-                message = await receive()
-                messages.append(message)
-                body += message.get("body", b"")
-                if not message.get("more_body"):
-                    break
-            replay_iter = iter(messages)
-
-            async def replay():
-                return next(replay_iter, {"type": "http.disconnect"})
-
-            if not (self.fail_calls and b'"tools/call"' in body):
-                return await inner(scope, replay, send)
-
-            async def discard(_message):
-                pass
-
-            await inner(scope, replay, discard)  # the write happens...
-            await send(  # ...and the answer is a 503
-                {
-                    "type": "http.response.start",
-                    "status": 503,
-                    "headers": [(b"content-type", b"text/plain")],
-                }
-            )
-            await send({"type": "http.response.body", "body": b"unavailable"})
-
-        sock = socket.socket()
-        sock.bind(("127.0.0.1", 0))
-        self.url = f"http://127.0.0.1:{sock.getsockname()[1]}/mcp"
-        port = sock.getsockname()[1]
-        sock.close()
-        self._server = uvicorn.Server(
-            uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error")
-        )
-        self._thread = threading.Thread(target=self._server.run, daemon=True)
-
-    def __enter__(self):
-        import time
-
-        self._thread.start()
-        deadline = time.monotonic() + 10
-        while not self._server.started:
-            if time.monotonic() > deadline:
-                raise RuntimeError("MCP test server did not start")
-            time.sleep(0.02)
-        return self
-
-    def __exit__(self, *_exc) -> None:
-        self._server.should_exit = True
-        self._thread.join(timeout=10)
-
-    def client(self):
-        from mcp.client.streamable_http import streamablehttp_client
-        from strands.tools.mcp import MCPClient
-
-        return MCPClient(lambda: streamablehttp_client(self.url))
-
-
 @pytest.mark.asyncio
 async def test_a_connection_lost_mid_call_reports_an_unknown_outcome(monkeypatch):
     """A write the server performed must not come back as a plain failure.
@@ -461,7 +371,7 @@ async def test_a_connection_lost_mid_call_reports_an_unknown_outcome(monkeypatch
     and every agent built over it got the dead session's tool list.
     """
     monkeypatch.setattr(dispatch_mod, "_schedule_ui_resource_refresh", lambda *a: None)
-    with _FlakyMCPServer() as server:
+    with FlakyMCPServer() as server:
         client = server.client()
         # As the agent build does: the tool provider starts the session.
         await client.load_tools()
@@ -496,6 +406,12 @@ async def test_a_connection_lost_mid_call_reports_an_unknown_outcome(monkeypatch
             )
             assert again["result"]["isError"] is False
             assert server.writes == ["first", "second"]
+            # The client came back as the agents' tool provider, not as a
+            # session borrowed for one call: still running, still counting
+            # the registry that holds it.
+            assert mcp_session.session_is_active(client)
+            assert mcp_session.is_tool_provider(client)
+            assert "agent-registry" in client._consumers
 
             # ...and an agent built over the client next gets a live session
             # rather than the dead one's cached tool list.
@@ -516,12 +432,12 @@ async def test_a_crashed_session_is_reset_before_it_is_revived(monkeypatch):
     not running.
     """
     monkeypatch.setattr(dispatch_mod, "_schedule_ui_resource_refresh", lambda *a: None)
-    with _FlakyMCPServer() as server:
+    with FlakyMCPServer() as server:
         client = server.client()
         client.start()
         # Crash it outside the dispatch, the way a model-driven call would.
         client.call_tool_sync("t-1", "issue_write", {"title": "model"})
-        assert dispatch_mod._session_crashed(client)
+        assert mcp_session.session_crashed(client)
 
         server.fail_calls = False
         _patch(monkeypatch, enabled=True, meta=_ui(["model", "app"]), client=client)

@@ -42,6 +42,14 @@ from apis.shared.mcp_apps.broker import get_app_tool_event_broker
 from apis.shared.oauth.auth_failure import looks_like_auth_failure
 
 from apis.shared.security.log_sanitize import scrub_log
+from apis.shared.tools.mcp_session import (
+    SESSION_LOCK,
+    connection_lost_message,
+    is_tool_provider,
+    reset_crashed_session,
+    revive_provider_session,
+    session_is_active,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -159,64 +167,10 @@ def _is_error(result: Any) -> bool:
     return bool(val) or getattr(result, "status", None) == "error"
 
 
-# Guards the start/stop refcount below. Sessions are cheap to hold but must
-# not be torn down under a concurrent call, so overlapping app calls against
-# the same client share one revived session.
-_revive_lock = threading.Lock()
+# How many app calls share each session this module revived (by client
+# identity), so overlapping calls against one client share one revived session
+# and only the last one out stops it. Guarded by `SESSION_LOCK`.
 _revived_users: Dict[int, int] = {}
-
-
-def _session_is_active(client: Any) -> bool:
-    """Whether `client` currently has a live MCP session.
-
-    Strands exposes this only as a private predicate; treat an unexpected
-    client shape as "active" so we never start a session we cannot own.
-    """
-    probe = getattr(client, "_is_session_active", None)
-    if not callable(probe):
-        return True
-    try:
-        return bool(probe())
-    except Exception:  # noqa: BLE001 - a broken probe must not block the call
-        return True
-
-
-def _session_crashed(client: Any) -> bool:
-    """Whether `client`'s session died on its own and was never stopped.
-
-    The MCP SDK's streamable-HTTP transport treats any non-2xx answer to a
-    POST as fatal for the whole session — GitHub's MCP endpoint answering a
-    `tools/call` with 503 ends it. Strands' background thread then exits but
-    nothing calls `stop()`, so the client keeps the dead thread, a resolved
-    init future and the stored error. In that state `start()` returns before
-    any handshake (and the next call fails), and `load_tools()` hands a new
-    agent the old tool list on a session that is gone.
-    """
-    if getattr(client, "_background_thread", None) is None:
-        return False
-    return not _session_is_active(client)
-
-
-def _reset_crashed_session(client: Any) -> None:
-    """Return a crashed client to its stopped state so it can reconnect.
-
-    `stop()` on a dead session joins a finished thread and resets every
-    field, then re-raises the error that ended the session; that error is
-    already handled by whoever was mid-call when it happened, so it is
-    logged here, not raised. The reset also clears Strands' tool-provider
-    bookkeeping, so the next agent built over this client reconnects in
-    `load_tools()` instead of reusing the dead session.
-
-    Caller holds `_revive_lock`.
-    """
-    if not _session_crashed(client):
-        return
-    try:
-        client.stop(None, None, None)
-    except Exception as exc:  # noqa: BLE001 - the error that killed the session
-        logger.info(
-            "reset a crashed MCP client session (%s)", scrub_log(exc)
-        )
 
 
 @contextlib.contextmanager
@@ -235,23 +189,27 @@ def _active_session(client: Any):
     is still running — is used as-is and never stopped here, because it
     belongs to that turn.
 
-    A session that crashed (see `_session_crashed`) is reset before the
-    revive, and reset again on the way out if it crashed during this call —
-    including one this call did not start, since a dead session serves
-    nobody and left as it is would fail every later call on this client.
+    A tool provider whose session died (`session_crashed`) is brought back as
+    the provider it was (`revive_provider_session`) and then left running: it
+    belongs to the agents built over it. Any other crashed session is reset
+    before the revive. A session that dies during this call is left for the
+    next caller to revive, so a provider keeps its bookkeeping, and the last
+    one out never stops a session an agent has taken over meanwhile.
     """
     key = id(client)
     joined = False
 
-    with _revive_lock:
+    with SESSION_LOCK:
         if _revived_users.get(key):
             # Another app call already revived it; join that session.
             _revived_users[key] += 1
             joined = True
-        elif _session_is_active(client):
+        elif session_is_active(client):
             pass  # Live session owned by an in-flight turn — use, don't touch.
+        elif is_tool_provider(client):
+            revive_provider_session(client)
         else:
-            _reset_crashed_session(client)
+            reset_crashed_session(client)
             client.start()
             _revived_users[key] = 1
             joined = True
@@ -259,32 +217,25 @@ def _active_session(client: Any):
     try:
         yield client
     finally:
-        with _revive_lock:
-            if joined:
+        if joined:
+            with SESSION_LOCK:
                 remaining = _revived_users.get(key, 0) - 1
                 if remaining > 0:
                     _revived_users[key] = remaining
                 else:
                     _revived_users.pop(key, None)
-                    try:
-                        client.stop(None, None, None)
-                    except Exception as exc:  # noqa: BLE001 - best-effort teardown
-                        # A session that crashed under the call re-raises
-                        # its error here; stop() has still reset the client.
-                        logger.info(
-                            "stopped a revived MCP client session (%s)",
-                            scrub_log(exc),
-                        )
-            elif not _revived_users.get(key):
-                _reset_crashed_session(client)
-
-
-def _connection_lost_message(tool_name: str) -> str:
-    return (
-        f"The connection to the server closed before '{tool_name}' returned, "
-        "so it may have completed anyway. Check whether it took effect "
-        "before trying again."
-    )
+                    # An agent that found this session dead mid-call revived
+                    # it as its tool provider; it is no longer ours to stop.
+                    if not is_tool_provider(client):
+                        try:
+                            client.stop(None, None, None)
+                        except Exception as exc:  # noqa: BLE001 - best-effort teardown
+                            # A session that crashed under the call re-raises
+                            # its error here; stop() has still reset the client.
+                            logger.info(
+                                "stopped a revived MCP client session (%s)",
+                                scrub_log(exc),
+                            )
 
 
 def _resolve_client(agent: Any, tool_name: str):
@@ -611,7 +562,7 @@ async def dispatch_app_tool_call(
         with _active_session(client):
             result = client.call_tool_sync(synth_id, tool_name, args)
             # Read before the context resets a crashed session.
-            return result, _is_error(result) and not _session_is_active(client)
+            return result, _is_error(result) and not session_is_active(client)
 
     try:
         result, connection_lost = await asyncio.to_thread(_invoke)
@@ -641,7 +592,7 @@ async def dispatch_app_tool_call(
             scrub_log(session_id),
             scrub_log(content),
         )
-        content = [{"text": _connection_lost_message(tool_name)}]
+        content = [{"text": connection_lost_message(tool_name)}]
 
     if provider_id and looks_like_auth_failure(
         {"status": status, "content": content}

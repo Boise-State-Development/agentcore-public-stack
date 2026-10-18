@@ -121,7 +121,7 @@ between B11 and B12 and the `preparing`/`prepared` frames are never sent.
 | `registry` | `create_default_registry` (imports; sympy behind `calculator`), `ToolFilter`, `_register_external_mcp_tools`: a `ThreadPoolExecutor` + fresh event loop + `asyncio.run`, **one `get_tool` GetItem per enabled tool** (uncached; `repository.get_tool` is a direct `get_item`). | C ×N | 50 |
 | `session_mgr` | `SessionFactory.create_session_manager`: `load_memory_config`; **`_discover_strategy_ids`** (`MemoryClient(region)` → 2 clients on a fresh session, then a control-plane `get_memory_strategies` call; `lru_cache` per process, so **once per fresh process = once per conversation**); retrieval config; `TurnBasedSessionManager(...)` → SDK ctor builds **`MemoryClient()` (fresh session + 2 clients) and then a second fresh session + 2 clients that replace the first pair**; Strands `RepositorySessionManager.__init__` → `read_session` (**1 `ListEvents`, 2 on a new session** via the legacy fallback) → `create_session` (**1 `CreateEvent`** on a new session). | 4 parses, M ×2–3 | 616–830 |
 | `tools` | `filter_tools_extended`; gateway: `_expand_gateway_tool_ids` (executor + `asyncio.run`, `get_tool` per gateway id) and `get_gateway_client_if_enabled` (client object; started later by Strands); external MCP: capture contextvars, executor + `asyncio.run` → `load_external_tools`: `get_tool` per server, `create_external_mcp_client`, **`await client.load_tools()` per server, serially** = `MCPClient.start()` (a background thread with its own loop, HTTP `initialize`) + `tools/list`; OAuth pre-flight recovery; `extra_tools` appended. | C ×N, MCP ×servers | **2039** (62% of the build) with **one** server on dev — undecomposed |
-| `hooks` | Ten hooks constructed (no IO). | — | 0 |
+| `hooks` | Eleven hooks constructed (no IO). | — | 0 |
 | `plugins` | Skills runtime (skill records if any), `build_tool_result_offloader`. | 0–1 | 13 |
 | `finalize` (#1377 splits it into `strands_agent` + `finalize`) | `AgentFactory.create_agent`: `CountTokensBedrockModel` → Strands `BedrockModel` → **fresh `boto3.Session()` + `bedrock-runtime` client (another parse)**; `Agent(...)`: tool registry `process_tools` (MCP clients register as consumers; `load_tools` is a no-op because the pre-flight primed the cache); `AgentInitializedEvent` → `TurnBasedSessionManager.initialize` → SDK `read_agent` (**1–2 `ListEvents`**, skipped on a new session) → `list_messages` (**1 `ListEvents`, `MAX_FETCH_ALL`**) → converter → document-byte strip → sanitize → compaction (`_load_compaction_state`: **1 DynamoDB GSI read**; possibly `_retrieve_session_summaries`) → pairing repair. New session: `create_agent` `CreateEvent`. Then `_adopt_session_conversation`, snapshot stamping, cache insert. | 1 parse, M ×2–3, D ×1 | 194 |
 
@@ -812,6 +812,11 @@ In the order the V2 spec gives, with two additions from this map:
   status poll stays. None of them are on this list because each was already measured and
   chosen.
 - Every hook on `BeforeModelCallEvent` keeps capturing raw facts only (CLAUDE.md).
+- A `BeforeToolCallEvent` hook does no IO for a call that can proceed as it is. It fires
+  after the first token, but once per tool call, so its cost repeats on every tool round.
+  `MCPSessionHealHook` probes the MCP client's session (~1–2µs on top of Strands' ~1.6µs
+  dispatch of any callback pair) and reconnects only a session that already died, off the
+  loop, on the call that would otherwise fail.
 - Nothing in P2–P5 touches the prompt, `toolConfig` or restored history. If a change here
   ever needs to, it is a different spec.
 
