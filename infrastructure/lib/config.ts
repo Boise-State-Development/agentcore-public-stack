@@ -90,6 +90,7 @@ export interface AppConfig {
   skills: SkillsConfig;
   skillAuthoring: SkillAuthoringConfig;
   wordTrackedChanges: WordTrackedChangesConfig;
+  assistantKbFullContext: AssistantKbFullContextConfig;
   largeDocumentAttachments: LargeDocumentAttachmentsConfig;
   attachmentKb: AttachmentKbConfig;
   folderAttachments: FolderAttachmentsConfig;
@@ -667,6 +668,23 @@ export interface SkillAuthoringConfig {
  * numbers must match `document_read`'s. No SPA switch.
  */
 export interface WordTrackedChangesConfig {
+  enabled: boolean;
+}
+
+/**
+ * Assistant knowledge base full-context mode
+ * (backend/src/apis/shared/assistants/kb_full_context.py): when an assistant's
+ * whole knowledge base fits the token budget (50,000 by default, the Runtime's
+ * `ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS`), the full text of its documents goes
+ * at the end of the system prompt instead of retrieved chunks in the user
+ * message. **Opt-in while in development**: off unless
+ * CDK_ASSISTANT_KB_FULL_CONTEXT_ENABLED=true (or an
+ * `assistantKbFullContext.enabled: true` cdk.json context). While on, sets
+ * ASSISTANT_KB_FULL_CONTEXT_ENABLED on the AgentCore Runtime; while off, the
+ * variable is absent. The text comes from the documents bucket, which the
+ * Runtime can always read (`AssistantDocumentsRead`). No SPA switch.
+ */
+export interface AssistantKbFullContextConfig {
   enabled: boolean;
 }
 
@@ -1526,6 +1544,12 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_WORD_TRACKED_CHANGES_ENABLED
         ? process.env.CDK_WORD_TRACKED_CHANGES_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('wordTrackedChanges')?.enabled ?? false,
+    },
+    assistantKbFullContext: {
+      // Opt-in while in development, same parsing as skillAuthoring above.
+      enabled: process.env.CDK_ASSISTANT_KB_FULL_CONTEXT_ENABLED
+        ? process.env.CDK_ASSISTANT_KB_FULL_CONTEXT_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('assistantKbFullContext')?.enabled ?? false,
     },
     largeDocumentAttachments: {
       // Opt-in while in development, same parsing as skillAuthoring above:

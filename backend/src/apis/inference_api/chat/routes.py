@@ -34,6 +34,7 @@ from apis.shared.feature_flags import (
     agent_preparing_phase_enabled,
     kb_search_ahead_enabled,
     agents_enabled,
+    assistant_kb_full_context_enabled,
     attachment_kb_enabled,
     attachment_turn_guard_enabled,
     folder_attachments_enabled,
@@ -2053,6 +2054,7 @@ async def stream_conversational_message(
     user_id: str,
     user_input: str,
     persist: bool = True,
+    long_term_memory: bool = True,
 ) -> AsyncGenerator[str, None]:
     """Stream a message as an assistant response with optional metadata event.
 
@@ -2067,6 +2069,8 @@ async def stream_conversational_message(
         user_id: User ID for persistence
         user_input: The user's original message to save
         persist: False streams the message without writing either turn to history
+        long_term_memory: False in an Agent conversation, whose writes skip
+            long-term memory extraction (``SessionFactory.create_session_manager``)
     """
     # Emit message_start event (assistant response)
     yield f"event: message_start\ndata: {json.dumps({'role': 'assistant'})}\n\n"
@@ -2106,7 +2110,12 @@ async def stream_conversational_message(
     try:
         from agents.main_agent.session.persistence import persist_synthetic_messages
 
-        session_manager = SessionFactory.create_session_manager(session_id=session_id, user_id=user_id, caching_enabled=False)
+        session_manager = SessionFactory.create_session_manager(
+            session_id=session_id,
+            user_id=user_id,
+            caching_enabled=False,
+            long_term_memory=long_term_memory,
+        )
         persist_synthetic_messages(
             session_manager,
             session_id,
@@ -2277,6 +2286,7 @@ def _refuse_turn(
             user_id=user_id,
             user_input=input_data.message,
             persist=persist,
+            long_term_memory=not input_data.rag_assistant_id,
         ),
         media_type="text/event-stream",
         headers=_sse_headers(input_data.session_id),
@@ -3532,8 +3542,27 @@ def _validate_resume_interrupts(agent, input_data: InvocationRequest) -> None:
         )
 
 
+async def _resume_knowledge_context(
+    assistant_id: Optional[str], current_user: User, user_id: str
+) -> Optional[str]:
+    """A resumed turn's full-context block, re-loaded under a fresh grant."""
+    if not assistant_id:
+        return None
+    from apis.shared.assistants.kb_access import resolve_kb_access
+    from apis.shared.assistants.kb_full_context import load_full_kb_context
+
+    if not assistant_kb_full_context_enabled():
+        return None
+    access = await resolve_kb_access(assistant_id, user_id, user_email=current_user.email)
+    return await load_full_kb_context(assistant_id, access=access)
+
+
 async def _search_and_augment(
-    *, assistant_id: str, message: str, access: Any
+    *,
+    assistant_id: str,
+    message: str,
+    access: Any,
+    full_context: Optional["asyncio.Task[Optional[str]]"] = None,
 ) -> Tuple[Optional[list], str]:
     """Search an assistant's knowledge base and augment ``message`` with it.
 
@@ -3542,6 +3571,12 @@ async def _search_and_augment(
     retrieved context. Never raises, which also means a turn that exits before
     awaiting it (a refusal after the search started) leaves no unretrieved
     exception behind.
+
+    ``full_context`` is the turn's ``load_full_kb_context`` task. When it
+    yields a block, the whole knowledge base is already in the system prompt,
+    so the chunks are returned for the citation cards and ``message`` comes
+    back unaugmented. The search still runs alongside, not after it, so a turn
+    that ends up retrieving waits no longer than before.
     """
     from apis.shared.assistants.rag_service import (
         augment_prompt_with_context,
@@ -3559,6 +3594,9 @@ async def _search_and_augment(
             access=access,
         )
         logger.info(f"Knowledge base search returned {len(context_chunks) if context_chunks else 0} chunks")
+        if full_context is not None and await full_context:
+            logger.info("Knowledge base sent whole (full-context mode) - message not augmented")
+            return context_chunks, message
         if not context_chunks:
             logger.info("No context chunks found for assistant - using original message without augmentation")
             return context_chunks, message
@@ -4009,6 +4047,10 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # awaited after the agent build instead (turn-path spec §5 P3b). None on a
     # plain turn, a continuation, or once its result has been applied.
     kb_search: Optional["asyncio.Task[Tuple[Optional[list], str]]"] = None
+    # The whole knowledge base when it fits the budget (``kb_full_context``),
+    # loaded alongside everything up to the agent build and awaited by it: the
+    # block goes into the system prompt. None on a plain turn or a resume.
+    kb_full_context_task: Optional["asyncio.Task[Optional[str]]"] = None
     system_prompt = input_data.system_prompt  # Start with provided system prompt
     # One settings read per turn: the default model and personal instructions both
     # come from it. A preview is an author testing an agent, so it gets none of theirs.
@@ -4386,6 +4428,21 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             except AgentBindingBlockedError as block:
                 return _forbidden_turn(input_data, user_id, block.message)
 
+        # Full-context mode. Started here, with the search, and awaited by the agent
+        # build, so its DynamoDB Query (and on a conversation's first turn, its
+        # downloads) overlaps everything between here and the build. Runs on a
+        # continuation too: the block is part of the system prompt, and dropping it
+        # would rebuild the agent under a different key mid-answer.
+        if assistant_kb_full_context_enabled():
+            from apis.shared.assistants.kb_full_context import load_full_kb_context
+
+            kb_full_context_task = asyncio.create_task(
+                load_full_kb_context(
+                    input_data.rag_assistant_id,
+                    access=granted(input_data.rag_assistant_id, user_id, assistant_permission),
+                )
+            )
+
         # Skipped on a continuation: the turn carries an empty message, so a
         # knowledge-base search would spend a query on "" and augment nothing. The
         # context the original turn retrieved is already in the history being continued.
@@ -4401,6 +4458,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                     assistant_id=input_data.rag_assistant_id,
                     message=input_data.message,
                     access=granted(input_data.rag_assistant_id, user_id, assistant_permission),
+                    full_context=kb_full_context_task,
                 )
             )
             if not kb_search_ahead_enabled():
@@ -4707,6 +4765,12 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 memory_binding=snapshot.memory_binding,
                 # The memory block is hashed with the system prompt in the key.
                 memory_context=snapshot.memory_context,
+                # So is a full-context knowledge base, which is too large for the
+                # snapshot row. Re-load it: the block is deterministic, so an
+                # unchanged knowledge base yields the same bytes and the same
+                # slot; one changed during the pause misses and rebuilds, the
+                # pre-existing eviction path.
+                knowledge_context=await _resume_knowledge_context(snapshot.assistant_id, current_user, user_id),
                 text_only_model=bool(snapshot.text_only_model),
                 # Resume never builds injected tools, so an agent built on a
                 # resume *miss* lacks them. Writing it would put a tool-less
@@ -4819,6 +4883,13 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 call sites — see `defer_agent_build` below — and eighteen
                 keyword arguments that must not drift between them.
                 """
+                knowledge_context = None
+                if kb_full_context_task is not None:
+                    knowledge_context = await kb_full_context_task
+                    # What was left of the full-context load once everything ahead
+                    # of the build was done: ~0 on a warm turn, its downloads on a
+                    # conversation's first.
+                    prelude.mark("agent_build.kb_full_context")
                 return await get_agent(
                     session_id=input_data.session_id,
                     user_id=user_id,
@@ -4843,6 +4914,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                     memory_binding=turn_tools.memory_binding_key,
                     memory_context=memory_context,
                     text_only_model=turn_model.text_only,
+                    knowledge_context=knowledge_context,
                 )
 
             # Defer the build into the stream so it can be narrated.
@@ -5244,6 +5316,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                             session_id=input_data.session_id,
                             user_id=user_id,
                             user_input=input_data.message,
+                            long_term_memory=not input_data.rag_assistant_id,
                         ):
                             yield frame
                         return

@@ -66,6 +66,7 @@ def _create_cache_key(
     assistant_id: Optional[str] = None,
     memory_binding: str = "",
     memory_context: Optional[str] = None,
+    knowledge_context: Optional[str] = None,
 ) -> Tuple:
     """
     Create a cache key for agent instances.
@@ -84,6 +85,11 @@ def _create_cache_key(
     prompt (Shared Projects 2.2). It used to be part of `system_prompt`, so it
     is folded into the same prompt hash rather than adding an element; a turn
     without memory hashes exactly as before.
+
+    `knowledge_context` is the assistant's whole knowledge base when it runs in
+    full-context mode (``kb_full_context``), sent at the end of the system
+    prompt. Folded into the same prompt hash as `memory_context`, for the same
+    reason: a turn without it hashes exactly as before.
 
     `assistant_id` is the assistant (RAG corpus) the turn ran against. The
     spreadsheet-analysis builders close over it, so without it in the key a
@@ -116,10 +122,12 @@ def _create_cache_key(
 
     # Hash system prompt if provided (can be very long)
     prompt_hash = None
-    if system_prompt or memory_context:
+    if system_prompt or memory_context or knowledge_context:
         prompt_material = system_prompt or ""
         if memory_context:
             prompt_material += "\x00memory\x00" + memory_context
+        if knowledge_context:
+            prompt_material += "\x00knowledge\x00" + knowledge_context
         prompt_hash = hashlib.md5(prompt_material.encode()).hexdigest()[:8]
 
     return (
@@ -399,6 +407,7 @@ async def get_agent(
     memory_binding: Optional[Dict[str, Any]] = None,
     memory_context: Optional[str] = None,
     text_only_model: bool = False,
+    knowledge_context: Optional[str] = None,
 ) -> BaseAgent:
     """
     Get or create agent instance with current configuration for session
@@ -436,6 +445,12 @@ async def get_agent(
         memory_context: The rendered Memory-Space block, sent after the system
             prompt behind its own cache point. Hashed with the prompt in the
             key and snapshotted by ``BaseAgent`` for resume.
+        knowledge_context: The assistant's whole knowledge base in full-context
+            mode, appended to the system prompt. Hashed with the prompt in the
+            key. Deliberately NOT on the construction snapshot: it can be ~200 KB
+            and the snapshot is written into the session's metadata row, so a
+            resume re-loads it (deterministic, so the same bytes hit the same
+            slot) rather than replaying it.
         text_only_model: The model's catalog row declares TEXT input only
             (``is_text_only_model``), so the agent's model sees history with
             image, document and video blocks replaced by text. Not a key
@@ -495,6 +510,7 @@ async def get_agent(
         assistant_id=assistant_id,
         memory_binding=memory_binding_digest(memory_binding),
         memory_context=memory_context,
+        knowledge_context=knowledge_context,
     )
 
     # Whether this turn's injected tools (if any) let it use the cache at all.
@@ -572,8 +588,16 @@ async def get_agent(
     )
     if memory_context:
         create_kwargs["memory_context"] = memory_context
+    if knowledge_context:
+        create_kwargs["knowledge_context"] = knowledge_context
     if text_only_model:
         create_kwargs["text_only_model"] = True
+    # An Agent conversation is isolated from the user's long-term memory, both
+    # ways: memory is keyed to the user alone, so it carried one Agent's
+    # knowledge base into the next. `assistant_id` is already a key element and
+    # on the snapshot, so this needs neither.
+    if assistant_id:
+        create_kwargs["long_term_memory"] = False
     # Skills v2: ChatAgent (now the target of both "chat" and "skill" types)
     # accepts accessible_skill_ids and conditionally adds the AgentSkills
     # plugin. Pass it through whenever resolved — VoiceAgent does not take the
