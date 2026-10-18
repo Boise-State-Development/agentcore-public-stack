@@ -1,6 +1,7 @@
-import { HttpClient, HttpErrorResponse } from '@angular/common/http';
+import { HttpClient, HttpContext, HttpErrorResponse } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
+import { SUPPRESS_ERROR_TOAST } from '../../../auth/error.interceptor';
 import { ConfigService } from '../../../services/config.service';
 import { SessionService as BffSessionService } from '../../../auth/session.service';
 import { ToolService } from '../../../services/tool/tool.service';
@@ -68,7 +69,15 @@ export class McpAppProxyService {
         this.http.post<{ toolUseId: string; result: ProxyToolCallResult }>(
           `${appApiUrl}/mcp-apps/proxy-call`,
           body,
-          { headers: this.bffSession.csrfHeaders(), withCredentials: true },
+          {
+            headers: this.bffSession.csrfHeaders(),
+            withCredentials: true,
+            // The App owns this failure: the rejection below becomes the
+            // JSON-RPC error it receives, and it renders its own state. A
+            // global toast per call stacks up (GitHub's issue form fires
+            // five `ui_get` calls at once) for something the user can't act on.
+            context: new HttpContext().set(SUPPRESS_ERROR_TOAST, true),
+          },
         ),
       );
       return resp.result;
