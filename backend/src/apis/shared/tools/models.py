@@ -5,12 +5,16 @@ Pydantic models for tool catalog, user tool access, and preferences.
 Integrates with the existing AppRole RBAC system.
 """
 
+import logging
+import re
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Set, Union
+from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 from apis.shared.timestamps import from_iso, to_iso
+
+logger = logging.getLogger(__name__)
 
 # EntityTypeIndex (GSI5) partition value for tool-catalog rows.
 #
@@ -207,6 +211,113 @@ def _parse_mcp_tools(raw: object) -> List[MCPToolEntry]:
     return entries
 
 
+# Static headers an admin may add to every request to an external MCP server
+# (e.g. `X-MCP-Toolsets: issues,context` for GitHub's MCP server). They are
+# stored in plain text on the catalog row and shown on the admin form, so they
+# are configuration, never credentials — secrets belong in `secret_arn`.
+MAX_CUSTOM_HEADERS = 10
+MAX_CUSTOM_HEADER_NAME_LENGTH = 128
+MAX_CUSTOM_HEADER_VALUE_LENGTH = 1024
+
+# Names the transport or an auth mode already owns. Letting a static header
+# set one would either clobber the auth the server checks (Authorization,
+# Cookie, the SigV4 `x-amz-*` set), hijack the MCP session (Mcp-Session-Id,
+# Mcp-Protocol-Version) or corrupt framing (Content-Length, ...).
+RESERVED_CUSTOM_HEADER_NAMES = frozenset(
+    {
+        "accept",
+        "authorization",
+        "connection",
+        "content-length",
+        "content-type",
+        "cookie",
+        "host",
+        "mcp-protocol-version",
+        "mcp-session-id",
+        "proxy-authorization",
+        "transfer-encoding",
+    }
+)
+RESERVED_CUSTOM_HEADER_PREFIXES = ("x-amz-",)
+
+# RFC 9110 field-name token, and a value of printable ASCII plus tab — no
+# CR/LF, so a value can never smuggle a second header line.
+_HEADER_NAME_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
+_HEADER_VALUE_RE = re.compile(r"^[\t\x20-\x7e]*$")
+
+
+def validate_custom_headers(raw: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    """Validate and normalize an MCP connector's static custom headers.
+
+    Returns a new dict with stripped names and values, sorted by name so the
+    stored row, the wire request and any cache identity are deterministic.
+    Raises ``ValueError`` (a 422 on a request model) for a reserved or
+    malformed name, a case-insensitive duplicate, an empty or malformed value,
+    or more than ``MAX_CUSTOM_HEADERS`` entries.
+    """
+    if not raw:
+        return {}
+    if not isinstance(raw, dict):
+        raise ValueError("customHeaders must be an object of header name to value")
+    if len(raw) > MAX_CUSTOM_HEADERS:
+        raise ValueError(f"At most {MAX_CUSTOM_HEADERS} custom headers are allowed")
+
+    normalized: Dict[str, str] = {}
+    seen: Set[str] = set()
+    for raw_name, raw_value in raw.items():
+        name = str(raw_name).strip()
+        if not name:
+            raise ValueError("Custom header names cannot be empty")
+        if len(name) > MAX_CUSTOM_HEADER_NAME_LENGTH or not _HEADER_NAME_RE.match(name):
+            raise ValueError(f"'{name}' is not a valid HTTP header name")
+        lowered = name.lower()
+        if lowered in RESERVED_CUSTOM_HEADER_NAMES or lowered.startswith(
+            RESERVED_CUSTOM_HEADER_PREFIXES
+        ):
+            raise ValueError(
+                f"'{name}' is set by the MCP transport or its authentication "
+                "and cannot be a custom header"
+            )
+        if lowered in seen:
+            raise ValueError(f"Custom header '{name}' is listed more than once")
+        seen.add(lowered)
+
+        if not isinstance(raw_value, str):
+            raise ValueError(f"Custom header '{name}' must have a text value")
+        value = raw_value.strip()
+        if not value:
+            raise ValueError(f"Custom header '{name}' needs a value")
+        if len(value) > MAX_CUSTOM_HEADER_VALUE_LENGTH or not _HEADER_VALUE_RE.match(value):
+            raise ValueError(
+                f"Custom header '{name}' must be printable ASCII of at most "
+                f"{MAX_CUSTOM_HEADER_VALUE_LENGTH} characters"
+            )
+        normalized[name] = value
+
+    return dict(sorted(normalized.items(), key=lambda item: item[0].lower()))
+
+
+def _stored_custom_headers(raw: object) -> Dict[str, str]:
+    """Read a catalog row's headers, dropping any that no longer validate.
+
+    Rows were validated on write, so this only matters if the rules tighten
+    later (a newly reserved name). Dropping the offending header keeps the
+    rest of the row, and the tool, loadable instead of failing the read.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    kept: Dict[str, Tuple[str, str]] = {}
+    for name, value in raw.items():
+        try:
+            ((clean_name, clean_value),) = validate_custom_headers({name: value}).items()
+        except ValueError as exc:
+            logger.warning("Dropping stored MCP custom header: %s", exc)
+            continue
+        kept.setdefault(clean_name.lower(), (clean_name, clean_value))
+    survivors = sorted(kept.values(), key=lambda item: item[0].lower())
+    return dict(survivors[:MAX_CUSTOM_HEADERS])
+
+
 class MCPServerConfig(BaseModel):
     """
     Configuration for external MCP server connections.
@@ -238,6 +349,13 @@ class MCPServerConfig(BaseModel):
         None,
         description="Secrets Manager ARN for credentials (API key, OAuth client secrets)",
     )
+    custom_headers: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Static headers sent on every request to the server, e.g. "
+        "`X-MCP-Toolsets: issues,context`. Stored and displayed in plain text, so "
+        "NOT for secrets — credentials belong in `secret_arn`. Names the transport "
+        "or auth owns (Authorization, Cookie, Host, Mcp-Session-Id, ...) are refused.",
+    )
 
     # MCP tool discovery
     tools: List[MCPToolEntry] = Field(
@@ -257,6 +375,11 @@ class MCPServerConfig(BaseModel):
 
     model_config = {"use_enum_values": True}
 
+    @field_validator("custom_headers", mode="before")
+    @classmethod
+    def _validate_custom_headers(cls, value: Any) -> Dict[str, str]:
+        return validate_custom_headers(value)
+
     def to_dict(self) -> dict:
         """Convert to dictionary for DynamoDB storage."""
         return {
@@ -270,6 +393,7 @@ class MCPServerConfig(BaseModel):
             "awsRegion": self.aws_region,
             "apiKeyHeader": self.api_key_header,
             "secretArn": self.secret_arn,
+            "customHeaders": dict(self.custom_headers),
             "tools": [entry.to_dict() for entry in self.tools],
             "healthCheckEnabled": self.health_check_enabled,
             "healthCheckIntervalSeconds": self.health_check_interval_seconds,
@@ -287,6 +411,7 @@ class MCPServerConfig(BaseModel):
             aws_region=data.get("awsRegion"),
             api_key_header=data.get("apiKeyHeader"),
             secret_arn=data.get("secretArn"),
+            custom_headers=_stored_custom_headers(data.get("customHeaders")),
             tools=_parse_mcp_tools(data.get("tools", [])),
             health_check_enabled=data.get("healthCheckEnabled", False),
             health_check_interval_seconds=data.get("healthCheckIntervalSeconds", 300),
@@ -1201,6 +1326,9 @@ class MCPServerConfigRequest(BaseModel):
     aws_region: Optional[str] = Field(None, alias="awsRegion")
     api_key_header: Optional[str] = Field(None, alias="apiKeyHeader")
     secret_arn: Optional[str] = Field(None, alias="secretArn")
+    custom_headers: Dict[str, str] = Field(
+        default_factory=dict, alias="customHeaders"
+    )
     tools: List[MCPToolEntryPayload] = Field(default_factory=list)
     health_check_enabled: bool = Field(default=False, alias="healthCheckEnabled")
     health_check_interval_seconds: int = Field(
@@ -1208,6 +1336,11 @@ class MCPServerConfigRequest(BaseModel):
     )
 
     model_config = {"populate_by_name": True, "use_enum_values": True}
+
+    @field_validator("custom_headers", mode="before")
+    @classmethod
+    def _validate_custom_headers(cls, value: Any) -> Dict[str, str]:
+        return validate_custom_headers(value)
 
     def to_model(self) -> MCPServerConfig:
         """Convert to MCPServerConfig model."""
@@ -1218,6 +1351,7 @@ class MCPServerConfigRequest(BaseModel):
             aws_region=self.aws_region,
             api_key_header=self.api_key_header,
             secret_arn=self.secret_arn,
+            custom_headers=self.custom_headers,
             tools=[entry.to_model() for entry in self.tools],
             health_check_enabled=self.health_check_enabled,
             health_check_interval_seconds=self.health_check_interval_seconds,
@@ -1420,6 +1554,9 @@ class MCPServerConfigResponse(BaseModel):
     aws_region: Optional[str] = Field(None, alias="awsRegion")
     api_key_header: Optional[str] = Field(None, alias="apiKeyHeader")
     secret_arn: Optional[str] = Field(None, alias="secretArn")
+    custom_headers: Dict[str, str] = Field(
+        default_factory=dict, alias="customHeaders"
+    )
     tools: List[MCPToolEntryPayload] = Field(default_factory=list)
     health_check_enabled: bool = Field(default=False, alias="healthCheckEnabled")
     health_check_interval_seconds: int = Field(
@@ -1442,6 +1579,7 @@ class MCPServerConfigResponse(BaseModel):
             aws_region=config.aws_region,
             api_key_header=config.api_key_header,
             secret_arn=config.secret_arn,
+            custom_headers=dict(config.custom_headers),
             tools=[MCPToolEntryPayload.from_model(entry) for entry in config.tools],
             health_check_enabled=config.health_check_enabled,
             health_check_interval_seconds=config.health_check_interval_seconds,
@@ -1649,6 +1787,9 @@ class MCPDiscoverRequest(BaseModel):
     aws_region: Optional[str] = Field(None, alias="awsRegion")
     api_key_header: Optional[str] = Field(None, alias="apiKeyHeader")
     secret_arn: Optional[str] = Field(None, alias="secretArn")
+    custom_headers: Dict[str, str] = Field(
+        default_factory=dict, alias="customHeaders"
+    )
     forward_auth_token: bool = Field(default=False, alias="forwardAuthToken")
     token_exchange_audience: Optional[str] = Field(None, alias="tokenExchangeAudience")
     requires_oauth_provider: Optional[str] = Field(
@@ -1656,6 +1797,11 @@ class MCPDiscoverRequest(BaseModel):
     )
 
     model_config = {"populate_by_name": True, "use_enum_values": True}
+
+    @field_validator("custom_headers", mode="before")
+    @classmethod
+    def _validate_custom_headers(cls, value: Any) -> Dict[str, str]:
+        return validate_custom_headers(value)
 
     def to_config(self) -> MCPServerConfig:
         return MCPServerConfig(
@@ -1665,6 +1811,7 @@ class MCPDiscoverRequest(BaseModel):
             aws_region=self.aws_region,
             api_key_header=self.api_key_header,
             secret_arn=self.secret_arn,
+            custom_headers=self.custom_headers,
             tools=[],
         )
 
