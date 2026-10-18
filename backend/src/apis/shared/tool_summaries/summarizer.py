@@ -54,6 +54,10 @@ _MAX_INPUT_CHARS = 300
 _MAX_RESULT_CHARS = 700
 _MAX_CALLS = 8
 
+# What a call that left an MCP App's form open for the user shows the model
+# in place of its result (``AgentStatusHook`` records ``awaiting``).
+_AWAITING_LINE = "WAITING FOR USER: a form is open for them to submit; nothing done yet"
+
 _SUMMARY_SYSTEM_PROMPT = """You describe what an AI assistant just did, in one short past-tense line.
 
 You are given the tool calls the assistant made and what they returned. Write a single line a non-technical person would understand, naming the specific things that were found.
@@ -66,6 +70,7 @@ Guidelines:
 - Never mention that you are an AI or that tools were used.
 - A call may name the system it belongs to in [brackets]. Refer to a system only by that name, and only when a call carries it. Never guess which system a call belongs to.
 - If a call failed, say so plainly, naming its system from the brackets.
+- A call marked WAITING FOR USER did nothing yet: a form is open for the user to submit. Never say it created, updated or sent anything.
 
 Examples:
 Calls: list_courses [Canvas for Faculty] -> 3 courses (BIO 101, HIST 210, CS 121)
@@ -99,7 +104,12 @@ def _build_prompt(calls: List[Dict[str, Any]]) -> str:
             name = f"{name} [{integration}]"
         tool_input = _truncate(str(call.get("input") or ""), _MAX_INPUT_CHARS)
         result = _truncate(str(call.get("result") or ""), _MAX_RESULT_CHARS)
-        if not call.get("ok", True):
+        if call.get("awaiting"):
+            # Never the result text: it is an instruction to the agent
+            # ("STOP — do not call any other tools"), and given it a small
+            # model heads the batch as if the write had happened.
+            lines.append(f"{name}({tool_input}) -> {_AWAITING_LINE}")
+        elif not call.get("ok", True):
             lines.append(f"{name}({tool_input}) -> FAILED: {result}")
         else:
             lines.append(f"{name}({tool_input}) -> {result}")
@@ -107,6 +117,36 @@ def _build_prompt(calls: List[Dict[str, Any]]) -> str:
     if overflow > 0:
         lines.append(f"...and {overflow} more call(s)")
     return "Calls:\n" + "\n".join(lines)
+
+
+def _source_names(calls: List[Dict[str, Any]]) -> List[str]:
+    return list(
+        dict.fromkeys(
+            str(c.get("integration") or c.get("toolName") or "a tool") for c in calls
+        )
+    )
+
+
+def _join_names(names: List[str]) -> str:
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " or " + names[-1]
+
+
+def _awaiting_heading(calls: List[Dict[str, Any]]) -> str:
+    """The heading for a batch whose every call is an App form left open.
+
+    No model involved, for the same reason as ``_failure_heading``, and
+    because the only honest summary of "a form is open, nothing was written"
+    is fixed. Named by catalog display name only: a raw tool name
+    ("issue_write") reads worse than no name at all.
+    """
+    integrations = list(
+        dict.fromkeys(str(c["integration"]) for c in calls if c.get("integration"))
+    )
+    if not integrations:
+        return "Waiting for you to submit the form"
+    return _truncate(
+        f"Waiting for you to submit the form in {_join_names(integrations)}", 90
+    )
 
 
 def _failure_heading(calls: List[Dict[str, Any]]) -> str:
@@ -118,13 +158,7 @@ def _failure_heading(calls: List[Dict[str, Any]]) -> str:
     source is named by its catalog display name (``integration``), or by the
     tool's own name when it has none (built-in, or a tool the model invented).
     """
-    names = list(
-        dict.fromkeys(
-            str(c.get("integration") or c.get("toolName") or "a tool") for c in calls
-        )
-    )
-    joined = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " or " + names[-1]
-    return _truncate(f"Couldn't use {joined}", 90)
+    return _truncate(f"Couldn't use {_join_names(_source_names(calls))}", 90)
 
 
 def _unwrap_quotes(summary: str) -> str:
@@ -178,9 +212,10 @@ async def summarize_tool_batch(calls: List[Dict[str, Any]]) -> Optional[str]:
     """Summarize one finished tool batch, or return ``None``.
 
     ``calls`` are the bounded records captured by ``AgentStatusHook`` —
-    ``{toolUseId, toolName, input, result, ok, durationMs, integration}``.
-    A batch where every call failed is headed deterministically
-    (``_failure_heading``) without a model call.
+    ``{toolUseId, toolName, input, result, ok, awaiting, durationMs,
+    integration}``. A batch where every call failed is headed
+    deterministically (``_failure_heading``) without a model call, and so is
+    one where every call left an MCP App form open (``_awaiting_heading``).
 
     Returns ``None`` on an empty batch, a disabled flag, a missing Bedrock
     client, a model error, or an empty generation. Every one of those means
@@ -192,6 +227,8 @@ async def summarize_tool_batch(calls: List[Dict[str, Any]]) -> Optional[str]:
     if not calls or not tool_summaries_enabled():
         return None
 
+    if all(c.get("awaiting") for c in calls):
+        return _awaiting_heading(calls)
     if not any(c.get("ok", True) for c in calls):
         return _failure_heading(calls)
 

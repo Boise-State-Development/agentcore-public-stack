@@ -24,6 +24,7 @@ import { McpAppMessageService } from '../../../../../services/mcp-apps/mcp-app-m
 import { McpAppConsentService } from '../../../../../services/mcp-apps/mcp-app-consent.service';
 import { McpAppTeardownService } from '../../../../../services/mcp-apps/mcp-app-teardown.service';
 import { buildProxyUrl } from '../../../../../services/mcp-apps/proxy-url';
+import { isAwaitingUserSubmission } from '../../../../../services/mcp-apps/awaiting-submission';
 import { McpAppConsentPromptComponent } from '../../mcp-app-consent-prompt/mcp-app-consent-prompt.component';
 import { McpAppActionsComponent } from '../../mcp-app-actions/mcp-app-actions.component';
 import { McpAppCardStateService } from '../../../../../services/mcp-apps/mcp-app-card-state.service';
@@ -215,7 +216,11 @@ import { SessionService } from '../../../../../services/session/session.service'
             >{{ displayToolName() }}</span
           >
 
-          @if (isError()) {
+          @if (isAwaitingUser()) {
+            <span class="shrink-0 text-xs font-medium text-gray-600 dark:text-gray-300"
+              >Waiting for you</span
+            >
+          } @else if (isError()) {
             <span
               class="shrink-0 text-xs font-medium text-state-danger-600 dark:text-state-danger-400"
               >Failed</span
@@ -324,7 +329,9 @@ import { SessionService } from '../../../../../services/session/session.service'
                   class="mb-1 flex items-center gap-1.5 text-xs font-medium text-gray-700 dark:text-gray-300"
                 >
                   <span>Response</span>
-                  @if (isError()) {
+                  @if (isAwaitingUser()) {
+                    <span class="text-gray-600 dark:text-gray-300">(Waiting for you)</span>
+                  } @else if (isError()) {
                     <span class="text-state-danger-600 dark:text-state-danger-400">(Error)</span>
                   }
                 </div>
@@ -567,19 +574,28 @@ export class McpAppFrameComponent implements ToolResultRenderer {
     () => this.resource()?.toolName || this.toolName(),
   );
 
-  /** The tool produced an error result (drives the header's "Failed" badge). */
+  /**
+   * The App's form is open and waiting for the user: the tool reported an
+   * error on purpose so the agent stops, but nothing has failed. Shown as a
+   * neutral "Waiting for you" in place of "Failed".
+   */
+  protected readonly isAwaitingUser = computed(() =>
+    isAwaitingUserSubmission(this.result()),
+  );
+
+  /** The tool failed (drives the header's "Failed" badge). */
   protected readonly isError = computed(
-    () => this.result()?.status === 'error',
+    () => this.result()?.status === 'error' && !this.isAwaitingUser(),
   );
 
   /**
    * Whether the tool is still running — drives the tool-name shimmer. True
    * from mount until the real result lands (`inputComplete`), covering both
    * the argument-streaming and tool-execution windows. Never shimmers a
-   * failed call.
+   * failed call, or one waiting on the user.
    */
   protected readonly isRunning = computed(
-    () => !this.inputComplete() && !this.isError(),
+    () => !this.inputComplete() && !this.isError() && !this.isAwaitingUser(),
   );
 
   /** Pretty-printed request arguments for the expanded details strip. */

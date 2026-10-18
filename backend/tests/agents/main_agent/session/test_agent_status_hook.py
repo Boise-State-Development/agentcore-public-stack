@@ -164,6 +164,47 @@ def test_tool_failure_inside_a_successful_invocation_is_not_ok(hook):
     assert status["ok"] is False
 
 
+def _github_form_stub_event():
+    from types import SimpleNamespace
+
+    return _after_tool_event(
+        name="issue_write",
+        selected_tool=SimpleNamespace(
+            tool_name="issue_write",
+            mcp_tool=SimpleNamespace(meta={"ui": {"resourceUri": "ui://github/issue_write"}}),
+            mcp_client=SimpleNamespace(context_label="GitHub"),
+        ),
+        result={
+            "status": "error",
+            "isError": True,
+            "content": [
+                {"text": "An interactive form has been shown to the user for creating a "
+                         "new issue in owner/repo. STOP — do not call any other tools."}
+            ],
+        },
+    )
+
+
+def test_an_app_form_waiting_for_the_user_is_not_a_failure(hook):
+    """GitHub's App stub is `isError` on purpose; nothing failed (2026-10-18)."""
+    hook._on_after_tool_call(_github_form_stub_event())
+    hook._on_after_tools(MagicMock())
+
+    (status,) = hook.drain_statuses()
+    assert status["ok"] is True
+    (batch,) = hook.drain_batches()
+    assert batch["calls"][0]["ok"] is True
+    assert batch["calls"][0]["awaiting"] is True
+
+
+def test_an_ordinary_call_is_not_awaiting(hook):
+    hook._on_after_tool_call(_after_tool_event())
+    hook._on_after_tools(MagicMock())
+
+    (batch,) = hook.drain_batches()
+    assert batch["calls"][0]["awaiting"] is False
+
+
 def test_raised_exception_is_not_ok(hook):
     hook._on_after_tool_call(_after_tool_event(exception=RuntimeError("boom")))
 

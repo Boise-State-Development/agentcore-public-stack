@@ -15,6 +15,7 @@ import {
   OAuthConsentService,
 } from '../../../../services/oauth-consent/oauth-consent.service';
 import { McpAppStateService } from '../../../services/mcp-apps/mcp-app-state.service';
+import { isAwaitingUserSubmission } from '../../../services/mcp-apps/awaiting-submission';
 import { ChatStateService } from '../../../services/chat/chat-state.service';
 import { ToolInsightService } from '../../../services/chat/tool-insight.service';
 import type { ToolResultData } from './tool-use/tool-renderer-registry.service';
@@ -555,7 +556,9 @@ export class AssistantMessageComponent {
           const status: ToolCallDisplay['status'] =
             hasPendingInterruptHere && hasNoResult && baseStatus === 'pending'
               ? 'awaiting_auth'
-              : baseStatus;
+              : isAwaitingUserSubmission(toolUse.result)
+                ? 'awaiting_user'
+                : baseStatus;
           // Duration comes from the runtime's `tool_end` status (measured by
           // the event loop, not inferred from stream arrival times), so it is
           // absent on a reload — deliberately, see ToolInsightService.

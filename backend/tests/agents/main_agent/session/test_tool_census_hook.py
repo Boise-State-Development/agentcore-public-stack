@@ -129,3 +129,20 @@ def test_distinct_tool_cap_holds_but_known_tools_keep_counting(hook):
     assert len(tally) == _MAX_TOOLS_PER_CALL
     assert tally["tool_0"]["calls"] == 2
     assert f"tool_{_MAX_TOOLS_PER_CALL + 1}" not in tally
+
+
+def test_an_app_form_waiting_for_the_user_is_not_an_error(hook):
+    """GitHub's App stub is `isError` on purpose while its form is open."""
+    from types import SimpleNamespace
+
+    event = _after("issue_write", status="error")
+    event.selected_tool = SimpleNamespace(
+        mcp_tool=SimpleNamespace(meta={"ui": {"resourceUri": "ui://github/issue_write"}})
+    )
+    event.result["content"] = [
+        {"text": "An interactive form has been shown to the user for creating a new issue"}
+    ]
+
+    _turn(hook, [event])
+
+    assert hook.tally_for_call(0) == {"issue_write": {"calls": 1, "errors": 0}}

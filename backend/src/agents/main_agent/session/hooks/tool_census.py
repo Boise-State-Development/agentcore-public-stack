@@ -10,7 +10,8 @@ that call's ``C#`` cost row as ``toolCalls`` (the same way ``turnAgentId``
 and ``prefixFingerprints`` ride that row).
 
 Tool names are catalog ids and MCP tool names — structural, not content.
-Nothing here reads a tool's input or result beyond ``status``.
+Nothing here reads a tool's input, and nothing of its result beyond
+``status`` and the MCP App awaiting-submission check; none of it is recorded.
 
 Attribution uses the same cycle counter ``AgentStatusHook`` uses: ``cycle``
 increments on every ``BeforeModelCallEvent``, and a tool that runs during
@@ -45,6 +46,9 @@ from strands.hooks import (
     HookRegistry,
 )
 
+from agents.main_agent.session.hooks.mcp_app_awaiting import (
+    call_awaits_user_submission,
+)
 from apis.shared.feature_flags import cost_diagnostics_enabled
 
 logger = logging.getLogger(__name__)
@@ -65,11 +69,14 @@ def _tool_name(event: Any) -> Optional[str]:
 
 def _call_failed(event: Any) -> bool:
     """A raised exception OR a result reporting ``status == "error"`` —
-    the same definition ``AgentStatusHook`` uses for ``ok=False``."""
+    the same definition ``AgentStatusHook`` uses for ``ok=False``, which
+    likewise does not count an MCP App form waiting for the user."""
     if getattr(event, "exception", None) is not None:
         return True
     result = getattr(event, "result", None)
-    return isinstance(result, dict) and result.get("status") == "error"
+    if not (isinstance(result, dict) and result.get("status") == "error"):
+        return False
+    return not call_awaits_user_submission(event)
 
 
 class ToolCensusHook(HookProvider):

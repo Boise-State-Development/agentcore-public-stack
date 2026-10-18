@@ -94,6 +94,26 @@ class TestHandleLifecycleEvents:
         assert len(tr_events) == 1
         assert tr_events[0]["data"]["tool_result"]["toolUseId"] == "tu-1"
 
+    def test_tool_result_carries_structured_content_to_the_client(self):
+        """The SPA reads an MCP App's `awaiting_user_submission` marker off the
+        `tool_result` event, so the whole result (structuredContent included)
+        must ride it, not just content and status."""
+        result = {
+            "toolUseId": "tu-1",
+            "status": "error",
+            "isError": True,
+            "content": [{"text": "An interactive form has been shown to the user"}],
+            "structuredContent": {"status": "awaiting_user_submission"},
+        }
+        raw = {"message": {"role": "user", "content": [{"toolResult": result}]}}
+
+        (tr_event,) = [
+            e for e in _handle_lifecycle_events(raw) if e["type"] == "tool_result"
+        ]
+        assert tr_event["data"]["tool_result"]["structuredContent"] == {
+            "status": "awaiting_user_submission"
+        }
+
 
 # ---------------------------------------------------------------------------
 # 23.2  Content block start events
