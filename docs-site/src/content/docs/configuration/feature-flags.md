@@ -121,6 +121,7 @@ removing it).
 | `RESPONSE_FEEDBACK_ENABLED` | ON | Feature | none | Thumbs up/down on assistant messages |
 | `ASK_USER_QUESTION_ENABLED` | ON | Feature | none | `ask_user_question` built-in tool (pauses a turn for structured input) |
 | `BROWSER_TAKEOVER_ENABLED` | ON | Feature | none | `request_user_login` — hand the browser to the user to sign in |
+| `BROWSER_TAKEOVER_FIT_ENABLED` | ON | Rollout — retires after one prod release + 2 weeks clean | none | Resizes the remote browser window to 768x832 before a sign-in handover, so the docked panel shows the page at 1:1, and restores the agent's 1280x800 on handback. Off ⇒ the handover runs at 1280x800, scaled down in the panel, as before |
 | `BROWSER_TOOL_ENABLED` | ON | Feature | usage-based | The `browse_web` tool itself (AgentCore Browser sessions bill while active) |
 | `WORKSPACE_TOOLS_ENABLED` | ON | Feature | none | `workspace_list` / `read` / `write` file tools |
 | `DOCUMENT_READ_ENABLED` | ON | Feature | none | `document_read` tool for sessions carrying a readable attachment |

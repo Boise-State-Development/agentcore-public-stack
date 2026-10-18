@@ -967,6 +967,7 @@ export class StreamParserService {
     const toolUseId = data.tool_result.toolUseId;
     const content = data.tool_result.content || [];
     const status = data.tool_result.status || 'success';
+    const structuredContent = data.tool_result.structuredContent;
 
     const currentBuilder = state.currentMessageBuilder();
     if (!currentBuilder) {
@@ -1008,6 +1009,9 @@ export class StreamParserService {
         result: {
           content: resultContent,
           status: status,
+          // Kept so an MCP App's "waiting for you" result is not read as a
+          // failure (`isAwaitingUserSubmission`).
+          ...(structuredContent !== undefined ? { structuredContent } : {}),
         },
         status: status === 'error' ? 'error' : 'complete',
       };

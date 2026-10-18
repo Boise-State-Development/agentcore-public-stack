@@ -284,6 +284,7 @@ class StreamCoordinator:
         turn_started_at: Optional[float] = None,
         poll_side_frame: Optional[Callable[[], Optional[str]]] = None,
         turn_clock: Any = None,
+        invocation_state: Optional[Dict[str, Any]] = None,
     ) -> AsyncGenerator[str, None]:
         """
         Stream agent responses with proper lifecycle management
@@ -326,6 +327,11 @@ class StreamCoordinator:
                 ``BeforeModelCallEvent`` stamp) and ``model`` at the first model
                 output, then ``emit_first_token`` once that output has been
                 yielded. Per turn, like ``turn_lease``; None disables it.
+            invocation_state: Per-request client data for tools (the sign-in
+                panel's frame height), passed to Strands as its
+                ``invocation_state``. Strands gives it to tools and hooks and
+                never to the model, so it cannot touch the cacheable prefix.
+                None calls ``stream_async(prompt)`` exactly as before.
 
         Yields:
             str: SSE formatted events
@@ -530,7 +536,11 @@ class StreamCoordinator:
         turn_archived = False
         try:
             # Get raw agent stream
-            agent_stream = agent.stream_async(prompt)
+            agent_stream = (
+                agent.stream_async(prompt, invocation_state=invocation_state)
+                if invocation_state
+                else agent.stream_async(prompt)
+            )
 
             # Process through new stream processor and format as SSE.
             #

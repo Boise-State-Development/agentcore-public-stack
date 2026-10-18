@@ -622,6 +622,33 @@ def browser_takeover_enabled() -> bool:
     return os.environ.get("BROWSER_TAKEOVER_ENABLED", "").strip().lower() != "false"
 
 
+def browser_takeover_fit_enabled() -> bool:
+    """Whether a sign-in takeover resizes the browser window to fit the panel.
+
+    ``request_user_login`` sets the remote Chrome window to a sign-in size
+    (768 wide) before handing it over, so the docked panel shows the page at
+    1:1 instead of a 1280x800 window scaled to about half, and restores the
+    agent's 1280x800 once the user hands it back
+    (``docs/specs/authenticated-web-assessment.md``, "Sizing the handover").
+    **Default ON with a kill switch**: unset or empty resolves to enabled;
+    only the literal ``"false"`` (case-insensitive) disables.
+
+    This is a **rollout switch**, not a feature switch: the change is meant to
+    be invisible apart from the page being readable. While off the window is
+    left at the agent's size and the event's ``viewport`` is 1280x800, exactly
+    as before. Its known risk is the restore: if it failed the agent would go
+    on browsing at 768 wide (a tablet layout, narrower screenshots), which is
+    why the restore is logged.
+
+    Retires on the default condition: shipped in a production release, then at
+    least two weeks there with the switch never flipped, and a readout that no
+    ``browser: could not restore the agent window`` warning appeared.
+
+    Costs nothing against the model: the window size never reaches the prompt.
+    """
+    return os.environ.get("BROWSER_TAKEOVER_FIT_ENABLED", "").strip().lower() != "false"
+
+
 def response_feedback_enabled() -> bool:
     """Whether users can thumb an assistant message up or down.
 

@@ -5,10 +5,11 @@ MCP App calls a server tool over the postMessage bridge; app-api relays it
 to `/invocations` with an `app_tool_call` directive. This module runs that
 single tool call WITHOUT a model turn:
 
-1. Rebuild the conversation's agent via `get_agent` (the same path resume
-   uses) so the MCP client session + transport auth (SigV4, OIDC
-   forwarding, the lazy OAuth token provider) are wired exactly as for a
-   model-driven tool call.
+1. Reuse the conversation's live cached agent when it carries the tool's
+   MCP client (`agent_carries_tool_client`); otherwise rebuild it via
+   `get_agent` (the same path resume uses) so the MCP client session +
+   transport auth (SigV4, OIDC forwarding, the lazy OAuth token provider)
+   are wired exactly as for a model-driven tool call.
 1a. Resolve the OAuth token this call needs. A model-driven call gets this
    from `OAuthConsentHook`, which fires on `BeforeToolCallEvent` — an event
    this path never raises, because it calls the MCP client directly instead
@@ -30,7 +31,9 @@ rejected as not app-visible.
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
+import json
 import logging
 import threading
 import uuid
@@ -40,6 +43,14 @@ from apis.shared.mcp_apps.broker import get_app_tool_event_broker
 from apis.shared.oauth.auth_failure import looks_like_auth_failure
 
 from apis.shared.security.log_sanitize import scrub_log
+from apis.shared.tools.mcp_session import (
+    SESSION_LOCK,
+    connection_lost_message,
+    is_tool_provider,
+    reset_crashed_session,
+    revive_provider_session,
+    session_is_active,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -92,35 +103,75 @@ def _serialize_content(result: Any) -> List[Dict[str, Any]]:
     return blocks
 
 
+def _to_mcp_content(blocks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Strands content blocks -> MCP `CallToolResult` content for the App.
+
+    Strands maps each MCP block to its own untagged shape (`{"text": ...}`,
+    `{"json": ...}`, `{"image": {"format", "source": {"bytes"}}}`), but the
+    App reads the spec's tagged shape: GitHub's issue_write App looks for
+    `c.type === "text"`, so an untagged block reads as no data at all and
+    every picker it fills shows empty. The thread keeps the Strands shape;
+    only the result handed back to the App is converted.
+    """
+    converted: List[Dict[str, Any]] = []
+    for block in blocks:
+        if "type" in block:
+            converted.append(block)
+        elif isinstance(block.get("text"), str):
+            converted.append({"type": "text", "text": block["text"]})
+        elif "json" in block:
+            converted.append(
+                {"type": "text", "text": json.dumps(block["json"], default=str)}
+            )
+        elif isinstance(block.get("image"), dict):
+            image = block["image"]
+            raw = (image.get("source") or {}).get("bytes")
+            fmt = image.get("format") or "png"
+            if isinstance(raw, (bytes, bytearray)):
+                converted.append(
+                    {
+                        "type": "image",
+                        "data": base64.b64encode(raw).decode("ascii"),
+                        "mimeType": f"image/{fmt}",
+                    }
+                )
+        else:
+            converted.append({"type": "text", "text": json.dumps(block, default=str)})
+    return converted
+
+
+def _structured_content(result: Any) -> Any:
+    """The tool's `structuredContent`, or None when it returned none."""
+    if isinstance(result, dict):
+        return result.get("structuredContent")
+    return getattr(result, "structuredContent", None)
+
+
 def _is_error(result: Any) -> bool:
+    """Whether the tool call failed.
+
+    MCP marks a failure with `isError`; Strands' `MCPToolResult` marks it with
+    `status: "error"` and drops `isError`. When `call_tool_sync` catches an
+    exception (a dropped connection, a timeout) it returns only the latter, so
+    reading `isError` alone told the App `isError: false` beside the text
+    "Tool execution failed: ...".
+    """
+    if isinstance(result, dict):
+        return bool(
+            result.get("isError")
+            or result.get("is_error")
+            or result.get("status") == "error"
+        )
     val = getattr(result, "isError", None)
     if val is None:
         val = getattr(result, "is_error", None)
-    if val is None and isinstance(result, dict):
-        val = result.get("isError") or result.get("is_error")
-    return bool(val)
+    return bool(val) or getattr(result, "status", None) == "error"
 
 
-# Guards the start/stop refcount below. Sessions are cheap to hold but must
-# not be torn down under a concurrent call, so overlapping app calls against
-# the same client share one revived session.
-_revive_lock = threading.Lock()
+# How many app calls share each session this module revived (by client
+# identity), so overlapping calls against one client share one revived session
+# and only the last one out stops it. Guarded by `SESSION_LOCK`.
 _revived_users: Dict[int, int] = {}
-
-
-def _session_is_active(client: Any) -> bool:
-    """Whether `client` currently has a live MCP session.
-
-    Strands exposes this only as a private predicate; treat an unexpected
-    client shape as "active" so we never start a session we cannot own.
-    """
-    probe = getattr(client, "_is_session_active", None)
-    if not callable(probe):
-        return True
-    try:
-        return bool(probe())
-    except Exception:  # noqa: BLE001 - a broken probe must not block the call
-        return True
 
 
 @contextlib.contextmanager
@@ -138,38 +189,54 @@ def _active_session(client: Any):
     it. A session that is already live — the mid-stream case, where the turn
     is still running — is used as-is and never stopped here, because it
     belongs to that turn.
+
+    A tool provider whose session died (`session_crashed`) is brought back as
+    the provider it was (`revive_provider_session`) and then left running: it
+    belongs to the agents built over it. Any other crashed session is reset
+    before the revive. A session that dies during this call is left for the
+    next caller to revive, so a provider keeps its bookkeeping, and the last
+    one out never stops a session an agent has taken over meanwhile.
     """
     key = id(client)
-    started_here = False
+    joined = False
 
-    with _revive_lock:
+    with SESSION_LOCK:
         if _revived_users.get(key):
             # Another app call already revived it; join that session.
             _revived_users[key] += 1
-        elif _session_is_active(client):
+            joined = True
+        elif session_is_active(client):
             pass  # Live session owned by an in-flight turn — use, don't touch.
+        elif is_tool_provider(client):
+            revive_provider_session(client)
         else:
+            reset_crashed_session(client)
             client.start()
             _revived_users[key] = 1
-            started_here = True
+            joined = True
 
     try:
         yield client
     finally:
-        if started_here or _revived_users.get(key):
-            with _revive_lock:
+        if joined:
+            with SESSION_LOCK:
                 remaining = _revived_users.get(key, 0) - 1
                 if remaining > 0:
                     _revived_users[key] = remaining
                 else:
                     _revived_users.pop(key, None)
-                    try:
-                        client.stop(None, None, None)
-                    except Exception:  # noqa: BLE001 - best-effort teardown
-                        logger.warning(
-                            "failed to stop a revived MCP client session",
-                            exc_info=True,
-                        )
+                    # An agent that found this session dead mid-call revived
+                    # it as its tool provider; it is no longer ours to stop.
+                    if not is_tool_provider(client):
+                        try:
+                            client.stop(None, None, None)
+                        except Exception as exc:  # noqa: BLE001 - best-effort teardown
+                            # A session that crashed under the call re-raises
+                            # its error here; stop() has still reset the client.
+                            logger.info(
+                                "stopped a revived MCP client session (%s)",
+                                scrub_log(exc),
+                            )
 
 
 def _resolve_client(agent: Any, tool_name: str):
@@ -190,6 +257,28 @@ def _resolve_client(agent: Any, tool_name: str):
     ui_metadata = catalog.get(tool_name)
     client = catalog.get_client(tool_name)
     return ui_metadata, client
+
+
+def agent_carries_tool_client(agent: Any, tool_name: str) -> bool:
+    """Whether `agent` was built over the MCP client that serves `tool_name`.
+
+    The dispatch calls the client the catalog names, not one it reads off the
+    agent, so a live agent can stand in for a build only when that client is
+    one of its tool providers. An App-only tool (visibility without "model")
+    is never registered as a tool, but its client still is a provider. A
+    Strands upgrade that renames `_tool_providers` makes this answer False,
+    which falls back to the build rather than to a wrong client.
+    """
+    _, client = _resolve_client(agent, tool_name)
+    if client is None:
+        return False
+    registry = getattr(getattr(agent, "agent", None), "tool_registry", None)
+    if registry is None:
+        return False
+    if any(provider is client for provider in getattr(registry, "_tool_providers", None) or ()):
+        return True
+    tools = getattr(registry, "registry", None) or {}
+    return any(getattr(tool, "mcp_client", None) is client for tool in tools.values())
 
 
 def _provider_for_client(client: Any) -> Optional[str]:
@@ -462,16 +551,42 @@ async def dispatch_app_tool_call(
     """Execute one app-initiated tool call and publish thread events.
 
     `agent` is the already-built conversation agent (its MCP clients are
-    live). Returns ``{"toolUseId", "result": {content, isError}}`` for the
-    JSON response app-api relays to the iframe. Raises `AppToolCallError`
+    live). Returns ``{"toolUseId", "result": CallToolResult}`` (tagged MCP
+    content, ``isError``, and ``structuredContent`` when the tool returned
+    one) for the JSON response app-api relays to the iframe. Raises `AppToolCallError`
     for visibility / unknown-tool / dispatch failures.
     """
     ui_metadata, client = _resolve_client(agent, tool_name)
 
+    # The catalog only holds tools a connected server listed with `_meta.ui`
+    # and that survived the connector's tool filter. A miss is usually a
+    # server URL scoped too narrowly: GitHub's `/mcp/x/issues` serves
+    # `issue_write` (whose App calls `ui_get`) but not `ui_get`, which lives
+    # in the `context` toolset. Name the tool in the log, because the App
+    # only sees the 403. With the host flag off the catalog is empty, so
+    # every proxied call is rejected here.
+    if ui_metadata is None:
+        logger.warning(
+            "mcp-apps: refused app tools/call for %s: no connected MCP server "
+            "listed it as an app tool (session=%s)",
+            scrub_log(tool_name),
+            scrub_log(session_id),
+        )
+        raise AppToolCallError(
+            f"Tool '{tool_name}' is not offered by this conversation's MCP "
+            "servers",
+            code=403,
+        )
     # Spec MUST: reject tools/call from apps for tools whose visibility
-    # excludes "app". With the host flag off the catalog is empty, so
-    # ui_metadata is None and every proxied call is rejected here.
-    if ui_metadata is None or not ui_metadata.visible_to_app():
+    # excludes "app".
+    if not ui_metadata.visible_to_app():
+        logger.warning(
+            "mcp-apps: refused app tools/call for %s: visibility %s excludes "
+            "app (session=%s)",
+            scrub_log(tool_name),
+            ui_metadata.visibility,
+            scrub_log(session_id),
+        )
         raise AppToolCallError(
             f"Tool '{tool_name}' is not callable from an MCP App", code=403
         )
@@ -489,14 +604,16 @@ async def dispatch_app_tool_call(
     synth_id = f"app-{tool_use_id}-{uuid.uuid4().hex[:8]}"
     args = dict(arguments or {})
 
-    def _invoke() -> Any:
+    def _invoke() -> tuple:
         # `start()` blocks on the handshake, so revive inside the worker
         # thread rather than on the event loop.
         with _active_session(client):
-            return client.call_tool_sync(synth_id, tool_name, args)
+            result = client.call_tool_sync(synth_id, tool_name, args)
+            # Read before the context resets a crashed session.
+            return result, _is_error(result) and not session_is_active(client)
 
     try:
-        result = await asyncio.to_thread(_invoke)
+        result, connection_lost = await asyncio.to_thread(_invoke)
     except Exception as exc:  # noqa: BLE001 - surfaced to the App as an error
         logger.warning(
             "app tools/call dispatch failed (tool=%s session=%s): %s",
@@ -511,6 +628,19 @@ async def dispatch_app_tool_call(
     content = _serialize_content(result)
     is_error = _is_error(result)
     status = "error" if is_error else "success"
+    if connection_lost:
+        # The session ended while the request was out, so the server may
+        # well have acted on it: GitHub created the issue, then answered
+        # 503. "Failed" would invite a retry and a duplicate; say what we
+        # actually know.
+        logger.warning(
+            "app tools/call lost its MCP connection mid-call; outcome unknown "
+            "(tool=%s session=%s): %s",
+            scrub_log(tool_name),
+            scrub_log(session_id),
+            scrub_log(content),
+        )
+        content = [{"text": connection_lost_message(tool_name)}]
 
     if provider_id and looks_like_auth_failure(
         {"status": status, "content": content}
@@ -553,7 +683,11 @@ async def dispatch_app_tool_call(
     # re-reading this App's shell costs almost nothing. See the note above.
     _schedule_ui_resource_refresh(user_id, session_id, tool_use_id)
 
-    return {
-        "toolUseId": tool_use_id,
-        "result": {"content": content, "isError": is_error},
+    app_result: Dict[str, Any] = {
+        "content": _to_mcp_content(content),
+        "isError": is_error,
     }
+    structured = _structured_content(result)
+    if structured is not None:
+        app_result["structuredContent"] = structured
+    return {"toolUseId": tool_use_id, "result": app_result}

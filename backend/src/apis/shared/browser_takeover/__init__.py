@@ -6,6 +6,11 @@ persistence layer (``apis.shared.sessions``), which is why it lives here rather
 than in any one of them — see the import-boundary rule in CLAUDE.md.
 """
 
+from .frame_height import (
+    FRAME_HEIGHT_STATE_KEY,
+    coerce_frame_height,
+    frame_height_from,
+)
 from .models import (
     BrowserLoginRequiredEvent,
     BrowserSessionRef,
@@ -19,6 +24,9 @@ from .models import (
 )
 
 __all__ = [
+    "FRAME_HEIGHT_STATE_KEY",
+    "coerce_frame_height",
+    "frame_height_from",
     "BrowserLoginRequiredEvent",
     "BrowserSessionRef",
     "TakeoverOutcome",

@@ -106,11 +106,17 @@ class FakeContext:
     afterwards — which is exactly why the tool body runs twice.
     """
 
-    def __init__(self, agent: FakeAgent, response: Any = None) -> None:
+    def __init__(
+        self,
+        agent: FakeAgent,
+        response: Any = None,
+        invocation_state: Optional[Dict[str, Any]] = None,
+    ) -> None:
         self.agent = agent
         self.tool_use = {"toolUseId": "tu-1"}
         self.response = response
         self.reasons: List[Any] = []
+        self.invocation_state: Dict[str, Any] = dict(invocation_state or {})
 
     def interrupt(self, name: str, reason: Any = None, response: Any = None) -> Any:
         self.reasons.append(reason)
@@ -128,7 +134,13 @@ class _FakeInterrupt:
 
 @pytest.fixture
 def pooled(monkeypatch):
-    """A live session in the pool, wired to fakes instead of AWS."""
+    """A live session in the pool, wired to fakes instead of AWS.
+
+    Runs with the window fit OFF: these tests pin the handover itself, which is
+    exactly what the fit's rollout switch falls back to. The fit and restore
+    are covered with it on in `TestWindowFitForTakeover`.
+    """
+    monkeypatch.setenv("BROWSER_TAKEOVER_FIT_ENABLED", "false")
     session_pool._live.clear()
     client = FakeClient()
     live = session_pool._LiveSession(
@@ -813,3 +825,314 @@ class TestSessionUrlPolicy:
         await session_pool._start_remote_session()
 
         assert "enterprise_policies" not in captured
+
+
+# ---------------------------------------------------------------------------
+# Sizing the handover (BROWSER_TAKEOVER_FIT_ENABLED)
+# ---------------------------------------------------------------------------
+
+
+class RecordingClient(FakeClient):
+    """A `FakeClient` that also writes its stream flips to a shared log."""
+
+    def __init__(self, events: List[str]) -> None:
+        super().__init__()
+        self.events = events
+
+    def take_control(self) -> None:
+        super().take_control()
+        self.events.append("take_control")
+
+    def release_control(self) -> None:
+        super().release_control()
+        self.events.append("release_control")
+
+
+@dataclass
+class SizingCdp(FakeCdp):
+    """A CDP socket that records window resizes into the same log."""
+
+    events: List[str] = field(default_factory=list)
+    fail_sizes: bool = False
+
+    async def set_window_size(self, width: int, height: int) -> None:
+        if self.closed:
+            raise RuntimeError("CDP session is closed")
+        if self.fail_sizes:
+            raise RuntimeError("Browser.setWindowBounds failed")
+        self.events.append(f"window {width}x{height}")
+
+
+@pytest.fixture
+def fitted(monkeypatch, pooled):
+    """`pooled`, with the fit switch on and every CDP/stream call logged.
+
+    The order is the whole point: CDP is refused (HTTP 403) while the stream is
+    DISABLED, so a resize after `take_control` or before `release_control`
+    cannot land.
+    """
+    monkeypatch.setenv("BROWSER_TAKEOVER_FIT_ENABLED", "true")
+    events: List[str] = []
+    pooled.client = RecordingClient(events)
+    pooled.cdp = SizingCdp(events=events)  # type: ignore[assignment]
+    connects: List[Any] = []
+
+    async def _connect(client: Any):
+        connects.append(client)
+        events.append("connect")
+        return SizingCdp(events=events)
+
+    async def _never(*_a: Any, **_k: Any):
+        raise AssertionError("started a second browser")
+
+    monkeypatch.setattr(session_pool, "_connect", _connect)
+    monkeypatch.setattr(session_pool, "_start_remote_session", _never)
+    pooled.events = events  # type: ignore[attr-defined]
+    pooled.connects = connects  # type: ignore[attr-defined]
+    return pooled
+
+
+class TestWindowFitForTakeover:
+    @pytest.mark.asyncio
+    async def test_the_window_is_fitted_before_the_stream_is_disabled(
+        self, fitted
+    ) -> None:
+        ref = await session_pool.take_control(FakeAgent())
+
+        assert fitted.events == ["window 768x832", "take_control"]
+        # The viewer pins DCV's display to this, so it must be the window's
+        # real size, not the agent's.
+        assert ref["viewport"] == {"width": 768, "height": 832}
+        assert fitted.takeover_viewport == {"width": 768, "height": 832}
+        # The agent's own size is kept apart, for the restore.
+        assert fitted.viewport == session_pool.DEFAULT_VIEWPORT
+
+    @pytest.mark.asyncio
+    async def test_the_agent_window_is_restored_after_the_stream_is_re_enabled(
+        self, fitted
+    ) -> None:
+        agent = FakeAgent()
+        await session_pool.take_control(agent)
+        old_socket = fitted.cdp
+        old_socket.closed = True  # the service kills it on DISABLED
+
+        assert await session_pool.release_control(agent) is True
+
+        assert fitted.events == [
+            "window 768x832",
+            "take_control",
+            "release_control",
+            "connect",
+            "window 1280x800",
+        ]
+        # Reconnected to the SAME browser, where the user's login now lives,
+        # and the fresh socket is pooled for the agent's next browse.
+        assert fitted.connects == [fitted.client]
+        assert fitted.cdp is not old_socket and fitted.cdp.closed is False
+        assert fitted.takeover_viewport is None
+
+    @pytest.mark.asyncio
+    async def test_a_failed_restore_does_not_fail_the_handback(
+        self, fitted, monkeypatch, caplog
+    ) -> None:
+        agent = FakeAgent()
+        await session_pool.take_control(agent)
+
+        async def _refused(_client: Any):
+            raise RuntimeError("HTTP 403")
+
+        monkeypatch.setattr(session_pool, "_connect", _refused)
+
+        with caplog.at_level(logging.WARNING):
+            assert await session_pool.release_control(agent) is True
+        assert fitted.client.stream == ["DISABLED", "ENABLED"]
+        assert "could not restore the agent window" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_a_failed_fit_still_hands_over_at_the_agent_size(
+        self, fitted, caplog
+    ) -> None:
+        agent = FakeAgent()
+        fitted.cdp.fail_sizes = True
+
+        with caplog.at_level(logging.WARNING):
+            ref = await session_pool.take_control(agent)
+
+        assert fitted.client.stream == ["DISABLED"]
+        assert ref["viewport"] == session_pool.DEFAULT_VIEWPORT
+        assert "could not fit session" in caplog.text
+
+        # Nothing was refit, so nothing is restored: no reconnect, no resize.
+        await session_pool.release_control(agent)
+        assert fitted.connects == []
+        assert fitted.events == ["take_control", "release_control"]
+
+    @pytest.mark.asyncio
+    async def test_a_refused_handover_puts_the_window_back(self, fitted) -> None:
+        fitted.client.take_fails = True
+
+        with pytest.raises(RuntimeError):
+            await session_pool.take_control(FakeAgent())
+
+        # The agent keeps the browser, so it must keep its own window size.
+        assert fitted.events == ["window 768x832", "window 1280x800"]
+        assert fitted.takeover_viewport is None
+
+    @pytest.mark.asyncio
+    async def test_the_resume_pass_does_not_refit(self, fitted) -> None:
+        agent = FakeAgent()
+        await session_pool.take_control(agent)
+        again = await session_pool.take_control(agent)
+
+        # CDP is refused by now; a second resize would only log a failure.
+        assert fitted.events == ["window 768x832", "take_control"]
+        assert again["viewport"] == {"width": 768, "height": 832}
+
+    @pytest.mark.asyncio
+    async def test_a_handback_in_another_container_restores_by_reconnecting(
+        self, fitted, monkeypatch
+    ) -> None:
+        agent = FakeAgent()
+        session_pool._write_state(
+            agent,
+            {"sessionId": "bs-1", "identifier": "browser-abc", "viewport": {"width": 1280, "height": 800}},
+        )
+        session_pool._live.clear()
+        remote = RecordingClient(fitted.events)
+        monkeypatch.setattr(
+            "bedrock_agentcore.tools.browser_client.BrowserClient",
+            lambda **_: remote,
+        )
+
+        assert await session_pool.release_control(agent) is True
+
+        assert fitted.events == ["release_control", "connect", "window 1280x800"]
+        assert "bs-1" in session_pool._live
+
+    @pytest.mark.asyncio
+    async def test_switch_off_leaves_the_window_alone(
+        self, fitted, monkeypatch
+    ) -> None:
+        monkeypatch.setenv("BROWSER_TAKEOVER_FIT_ENABLED", "false")
+        agent = FakeAgent()
+
+        ref = await session_pool.take_control(agent)
+        await session_pool.release_control(agent)
+
+        assert ref["viewport"] == session_pool.DEFAULT_VIEWPORT
+        assert fitted.events == ["take_control", "release_control"]
+        assert fitted.connects == []
+
+    @pytest.mark.asyncio
+    async def test_the_tool_pauses_on_the_fitted_size_and_restores_on_resume(
+        self, fitted
+    ) -> None:
+        agent = FakeAgent()
+        context = FakeContext(agent)
+        with pytest.raises(InterruptException):
+            await _call(request_user_login, tool_context=context, reason="Sign in.")
+
+        assert context.reasons[0]["viewport"] == {"width": 768, "height": 832}
+
+        fitted.cdp.closed = True
+        result = await _call(
+            request_user_login,
+            tool_context=FakeContext(agent, response={"completed": True}),
+            reason="Sign in.",
+        )
+
+        assert result["status"] == "success"
+        assert fitted.events[-3:] == ["release_control", "connect", "window 1280x800"]
+
+
+class TestHandoverHeightFromThePanel:
+    """The SPA's panel height, carried on the request, sizes the handover."""
+
+    @pytest.mark.asyncio
+    async def test_the_window_takes_the_panels_height(self, fitted) -> None:
+        ref = await session_pool.take_control(FakeAgent(), frame_height=778)
+
+        # 778 snaps down to the display's step of 8, so the frame never needs
+        # more height than the panel has.
+        assert fitted.events == ["window 768x776", "take_control"]
+        assert ref["viewport"] == {"width": 768, "height": 776}
+
+    @pytest.mark.asyncio
+    async def test_no_height_falls_back_to_the_fixed_size(self, fitted) -> None:
+        ref = await session_pool.take_control(FakeAgent(), frame_height=None)
+
+        assert ref["viewport"] == session_pool.TAKEOVER_VIEWPORT
+
+    @pytest.mark.parametrize(("sent", "height"), [(200, 600), (5000, 1000)])
+    @pytest.mark.asyncio
+    async def test_an_extreme_height_is_clamped(self, fitted, sent, height) -> None:
+        ref = await session_pool.take_control(FakeAgent(), frame_height=sent)
+
+        assert ref["viewport"] == {"width": 768, "height": height}
+
+    @pytest.mark.asyncio
+    async def test_the_resume_pass_keeps_the_first_height(self, fitted) -> None:
+        agent = FakeAgent()
+        await session_pool.take_control(agent, frame_height=700)
+        # A resume request from a window since resized carries another height;
+        # the stream is already pinned, and CDP is refused anyway.
+        again = await session_pool.take_control(agent, frame_height=900)
+
+        assert fitted.events == ["window 768x696", "take_control"]
+        assert again["viewport"] == {"width": 768, "height": 696}
+
+    @pytest.mark.asyncio
+    async def test_the_tool_reads_the_height_from_invocation_state(
+        self, fitted
+    ) -> None:
+        context = FakeContext(
+            FakeAgent(),
+            invocation_state={"browser_takeover_frame_height": 778},
+        )
+        with pytest.raises(InterruptException):
+            await _call(request_user_login, tool_context=context, reason="Sign in.")
+
+        assert context.reasons[0]["viewport"] == {"width": 768, "height": 776}
+
+    @pytest.mark.parametrize("junk", ["778", True, 777.5, -1, None])
+    @pytest.mark.asyncio
+    async def test_an_unusable_height_falls_back(self, fitted, junk) -> None:
+        context = FakeContext(
+            FakeAgent(),
+            invocation_state={"browser_takeover_frame_height": junk},
+        )
+        with pytest.raises(InterruptException):
+            await _call(request_user_login, tool_context=context, reason="Sign in.")
+
+        assert context.reasons[0]["viewport"] == session_pool.TAKEOVER_VIEWPORT
+
+    @pytest.mark.asyncio
+    async def test_switch_off_ignores_the_height(self, fitted, monkeypatch) -> None:
+        monkeypatch.setenv("BROWSER_TAKEOVER_FIT_ENABLED", "false")
+
+        ref = await session_pool.take_control(FakeAgent(), frame_height=778)
+
+        assert ref["viewport"] == session_pool.DEFAULT_VIEWPORT
+        assert fitted.events == ["take_control"]
+
+
+class TestSnapDisplaySize:
+    """DCV takes widths >= 640 and snaps both sides down to multiples of 8."""
+
+    @pytest.mark.parametrize(
+        ("requested", "snapped"),
+        [
+            ((768, 832), (768, 832)),
+            ((600, 900), (640, 896)),
+            ((1001, 700), (1000, 696)),
+            ((800, 400), (800, 600)),
+            ((800, 1500), (800, 1000)),
+        ],
+    )
+    def test_sizes_are_what_the_display_will_accept(self, requested, snapped) -> None:
+        size = session_pool.snap_display_size(*requested)
+        assert (size["width"], size["height"]) == snapped
+
+    def test_the_takeover_size_survives_snapping_unchanged(self) -> None:
+        size = session_pool.snap_display_size(**session_pool.TAKEOVER_VIEWPORT)
+        assert size == session_pool.TAKEOVER_VIEWPORT

@@ -26,6 +26,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Tuple
 
+from apis.shared.feature_flags import browser_takeover_fit_enabled
+
 from .cdp_client import CdpError, CdpSession
 
 logger = logging.getLogger(__name__)
@@ -61,6 +63,37 @@ TAKEOVER_GRACE_SECONDS = int(os.environ.get("BROWSER_TAKEOVER_GRACE_SECONDS", 60
 
 DEFAULT_VIEWPORT = {"width": 1280, "height": 800}
 
+# The size the browser is handed to a human at. The agent browses at
+# DEFAULT_VIEWPORT, but the docked panel the user signs in through is ~800px
+# wide, so a 1280x800 stream drew the login page at about half size: tiny text
+# and clicks that land a few pixels off. 768 wide fits that rail at 1:1 and is
+# still the width most sites serve their tablet/desktop layout at, rather than
+# the phone one. The height is the panel's: the SPA sends the height its rail
+# gives the frame on every chat request, and `take_control` uses it (clamped by
+# `snap_display_size`). This height is the fallback when no request carried
+# one (an older tab, a scheduled run); the rail scales down, never up, when the
+# user's window is shorter.
+TAKEOVER_VIEWPORT = {"width": 768, "height": 832}
+
+# What the remote display accepts (measured on dev 2026-10-17): DCV's
+# `requestDisplayLayout` refuses a width under 640 and snaps both sides DOWN to
+# a multiple of 8. The window is sized to the snapped value so the screen the
+# viewer pins and the window Chrome draws are the same rectangle.
+_DISPLAY_MIN_WIDTH = 640
+_DISPLAY_STEP = 8
+_TAKEOVER_MIN_HEIGHT = 600
+_TAKEOVER_MAX_HEIGHT = 1000
+
+
+def snap_display_size(width: int, height: int) -> Dict[str, int]:
+    """A takeover size the remote display will accept exactly as given."""
+    w = max(_DISPLAY_MIN_WIDTH, int(width))
+    h = min(_TAKEOVER_MAX_HEIGHT, max(_TAKEOVER_MIN_HEIGHT, int(height)))
+    return {
+        "width": w - w % _DISPLAY_STEP,
+        "height": h - h % _DISPLAY_STEP,
+    }
+
 
 @dataclass
 class _LiveSession:
@@ -85,6 +118,11 @@ class _LiveSession:
     viewport: Dict[str, int] = field(
         default_factory=lambda: dict(DEFAULT_VIEWPORT)
     )
+    # The window size a human was handed, while they hold it. Kept apart from
+    # `viewport` on purpose: that is the agent's size, the one the window goes
+    # back to on release. None when the window was never refit (switch off,
+    # or the resize failed and the handover went ahead at the agent's size).
+    takeover_viewport: Optional[Dict[str, int]] = None
 
     def user_controlled(self, now: Optional[float] = None) -> bool:
         """True while a human holds the browser and the deadline has not passed."""
@@ -393,17 +431,93 @@ async def release(agent: Any) -> bool:
 
 
 def _describe(live: _LiveSession) -> Dict[str, Any]:
-    """The identifiers a takeover needs, and nothing more."""
+    """The identifiers a takeover needs, and nothing more.
+
+    `viewport` is the size the stream is really drawn at right now: the
+    takeover size from the refit until the handback restores it, else the
+    agent's. The
+    viewer pins DCV's display to it, so it must be the window's actual size.
+    """
     return {
         "browserSessionId": live.session_id,
         "browserId": live.identifier,
-        "viewport": dict(live.viewport),
+        "viewport": dict(live.takeover_viewport or live.viewport),
         "controlState": live.control_state,
     }
 
 
+async def _fit_for_takeover(
+    live: _LiveSession, frame_height: Optional[int] = None
+) -> Optional[Dict[str, int]]:
+    """Resize the window to the sign-in size. Returns it, or None if not.
+
+    ``frame_height`` is the height the user's panel gives the stream, from the
+    chat request; without one the window gets ``TAKEOVER_VIEWPORT``'s height.
+    Either way ``snap_display_size`` clamps it to 600-1000 and the display's
+    step, so an untrusted value can only pick a size inside that range.
+
+    Must run BEFORE `take_control`: disabling the automation stream makes the
+    service refuse CDP outright (HTTP 403 on the socket), and Chrome will not
+    follow a screen resize on its own. So this is the only moment the window
+    can be fitted to the panel; nothing can re-fit it during the takeover
+    without re-enabling the agent, which is the property the takeover exists
+    to guarantee.
+
+    Best-effort: a failure hands the browser over at the agent's size, which
+    is exactly the pre-fit behaviour (scaled down in the panel, but working).
+    """
+    if not browser_takeover_fit_enabled():
+        return None
+    size = snap_display_size(
+        TAKEOVER_VIEWPORT["width"],
+        frame_height if frame_height is not None else TAKEOVER_VIEWPORT["height"],
+    )
+    try:
+        await live.cdp.set_window_size(size["width"], size["height"])
+    except Exception:  # noqa: BLE001 - the handover still works unfitted
+        logger.warning(
+            "browser: could not fit session %s for takeover; handing over at %sx%s",
+            live.session_id, live.viewport["width"], live.viewport["height"],
+            exc_info=True,
+        )
+        return None
+    return size
+
+
+async def _restore_agent_window(live: _LiveSession) -> None:
+    """Put the window back to the agent's size after a handback.
+
+    Needs a live socket, and the one we had died when the stream was disabled,
+    so this reconnects to the same remote browser and leaves the new socket on
+    the pool entry: the agent's next `browse_web` would have reconnected
+    anyway, so the reconnect is not extra work, only earlier.
+
+    Best-effort and logged. The resume must not fail on it: the user has
+    signed in, and an agent browsing at 768 wide is a worse page, not a broken
+    one. The agent's screenshots follow the window, not the screen, so the
+    display size DCV left behind does not matter here.
+    """
+    try:
+        if live.cdp.closed:
+            live.cdp = await _connect(live.client)
+        await live.cdp.set_window_size(live.viewport["width"], live.viewport["height"])
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "browser: could not restore the agent window on %s to %sx%s",
+            live.session_id, live.viewport["width"], live.viewport["height"],
+            exc_info=True,
+        )
+        return
+    logger.info(
+        "browser: restored the agent window on %s to %sx%s",
+        live.session_id, live.viewport["width"], live.viewport["height"],
+    )
+
+
 async def take_control(
-    agent: Any, deadline_seconds: int = TAKEOVER_DEADLINE_SECONDS
+    agent: Any,
+    deadline_seconds: int = TAKEOVER_DEADLINE_SECONDS,
+    frame_height: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Hand this conversation's browser to the user. Idempotent.
 
@@ -415,6 +529,10 @@ async def take_control(
     silently extend the deadline, which would make an abandoned takeover
     unreapable for as long as resumes kept arriving.
 
+    ``frame_height`` sizes the handover to the user's panel (see
+    ``_fit_for_takeover``). It is ignored on the idempotent repeat: the window
+    was fitted once, and the stream is already pinned to that size.
+
     Returns the session descriptor (ids + viewport + deadline). Raises if there
     is no session to hand over, or if the service refuses the stream update —
     the caller turns that into a tool error rather than pausing the turn.
@@ -425,7 +543,16 @@ async def take_control(
     if live.user_controlled(now):
         return {**_describe(live), "deadlineAt": _deadline_iso(live, now)}
 
-    await asyncio.to_thread(live.client.take_control)
+    # Order matters: fit while CDP still answers, then disable it.
+    fitted = await _fit_for_takeover(live, frame_height)
+    try:
+        await asyncio.to_thread(live.client.take_control)
+    except Exception:
+        # The agent keeps the browser, so it must keep its own window size.
+        if fitted is not None:
+            await _restore_agent_window(live)
+        raise
+    live.takeover_viewport = fitted
     live.control_state = "user"
     live.control_deadline = now + max(deadline_seconds, 1)
     live.last_used = now
@@ -452,11 +579,18 @@ async def release_control(agent: Any) -> bool:
         return False
 
     live = _live.get(session_id)
+    # Whether the window was refit for the human and so needs putting back.
+    # Known here when this process did the handover; a handback in another
+    # container cannot tell, so it restores whenever fitting is on — setting
+    # the agent's own size on a window already at it is a no-op.
+    refit = browser_takeover_fit_enabled()
     if live is not None:
         if live.control_state != "user":
             return False
+        refit = live.takeover_viewport is not None
         live.control_state = "agent"
         live.control_deadline = 0.0
+        live.takeover_viewport = None
         live.last_used = time.monotonic()
         client = live.client
     else:
@@ -487,6 +621,14 @@ async def release_control(agent: Any) -> bool:
     # the *same* remote browser — which is the whole point, since that browser
     # is where the user's login now lives. The remote session is untouched.
     await _close_socket(session_id)
+    if refit:
+        # CDP answers again now that the stream is re-enabled, so this is the
+        # first moment the window can go back to the agent's size.
+        if live is None:
+            async with _pool_lock:
+                live = _live.get(session_id) or await _try_reconnect(entry)
+        if live is not None:
+            await _restore_agent_window(live)
     return True
 
 

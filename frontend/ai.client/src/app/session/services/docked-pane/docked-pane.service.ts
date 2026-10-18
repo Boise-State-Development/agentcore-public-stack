@@ -2,7 +2,7 @@ import { Injectable, computed, inject, signal } from '@angular/core';
 import { SidenavService } from '../../../services/sidenav/sidenav.service';
 
 /** Which feature currently owns the right-docked rail. */
-export type DockedPaneOwner = 'artifact' | 'file-preview';
+export type DockedPaneOwner = 'artifact' | 'file-preview' | 'browser';
 
 /**
  * The single right-docked rail, shared by every feature that wants to

@@ -17,10 +17,12 @@ from agents.main_agent.session.hooks import (
     ContextLedgerHook,
     ToolCensusHook,
     DisplayTextHook,
+    McpAppAwaitingSubmissionHook,
     SteeringHook,
     StopHook,
     OAuthConsentHook,
     MCPExternalApprovalHook,
+    MCPSessionHealHook,
     ContextAttributionHook,
     PrefixFingerprintHook,
 )
@@ -325,6 +327,8 @@ class BaseAgent(ABC):
           OAuth-gated MCP tool is about to run without a cached token
         - AgentStatusHook: Records model/tool boundaries so the UI can say what
           the agent is doing while the turn streams
+        - McpAppAwaitingSubmissionHook: Marks an MCP App's "form shown,
+          nothing written yet" result so the UI does not call it a failure
         - Approval hooks: Gate dangerous operations for user confirmation
 
         Returns:
@@ -365,6 +369,13 @@ class BaseAgent(ABC):
         # without a flag.
         hooks.append(self._build_mcp_external_approval_hook())
 
+        # Reconnects a shared MCP client whose session died on its own (e.g.
+        # a server answering 503) before the next call on it, and reports a
+        # call that session dropped as an unknown outcome rather than a
+        # failure. After the two gates so a call they stop is not reconnected
+        # for nothing; a healthy call pays one session probe.
+        hooks.append(MCPSessionHealHook())
+
         # Per-turn context-token attribution (system / tools / messages).
         # Best-effort; computes the breakdown on BeforeModelCallEvent and
         # stashes it on the agent for the stream coordinator to surface on the
@@ -381,6 +392,13 @@ class BaseAgent(ABC):
         # return immediately when AGENT_STATUS_ENABLED=false.
         self.agent_status_hook = AgentStatusHook()
         hooks.append(self.agent_status_hook)
+
+        # An MCP App write tool that handed the operation to its form returns
+        # `isError: true` on purpose; mark it `awaiting_user_submission` at
+        # intake so the stream and the persisted message both say "waiting
+        # for you" rather than "failed". Only `structuredContent` changes,
+        # which no model formatter sends.
+        hooks.append(McpAppAwaitingSubmissionHook())
 
         # Content-free tool census (tool name → calls/errors per model call).
         # Held on the wrapper so the stream coordinator can read each call's

@@ -8,6 +8,7 @@ import {
   ElementRef,
   inject,
 } from '@angular/core';
+import { NgTemplateOutlet } from '@angular/common';
 import { RouterLink } from '@angular/router';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
@@ -54,14 +55,15 @@ export interface AgentGovernance {
  * phone the crumb shrinks to its emoji or avatar; the name stays in the
  * button's accessible label and at the head of the menu.
  *
- * A project task binds the project's hidden harness Agent, which the platform
- * refuses to edit or share as an Agent (the project is its only write path).
- * With `projectId` set the crumb is the project instead: the project mark, New
- * task and Open project, and no Edit / Share.
+ * A project conversation binds the project's hidden harness Agent, which the
+ * platform refuses to edit or share as an Agent (the project is its only write
+ * path). With `projectId` set the crumb is the project instead: the project
+ * mark, as a plain link to the project's overview, with no menu. The overview
+ * already holds the composer and the project's conversations.
  */
 @Component({
   selector: 'app-agent-indicator',
-  imports: [NgIcon, RouterLink],
+  imports: [NgIcon, NgTemplateOutlet, RouterLink],
   providers: [
     provideIcons({
       heroPencilSquare,
@@ -78,15 +80,33 @@ export interface AgentGovernance {
   },
   template: `
     <div class="indicator-wrapper">
-      <button
-        type="button"
-        (click)="toggleMenu()"
-        class="agent-pill"
-        [class.open]="menuOpen()"
-        [attr.aria-label]="(projectId() ? 'Project: ' : 'Agent: ') + name() + '. Click for options.'"
-        [attr.aria-expanded]="menuOpen()"
-        aria-haspopup="menu"
-      >
+      @if (projectId(); as id) {
+        <!-- A project's crumb is a plain link: the overview already holds the
+             composer and the project's conversations, so a menu would only
+             repeat it. -->
+        <a
+          class="agent-pill"
+          [routerLink]="['/projects', id, 'overview']"
+          [attr.aria-label]="projectLinkLabel()"
+          [attr.title]="governanceLabel() || null"
+        >
+          <ng-container *ngTemplateOutlet="pillContent" />
+        </a>
+      } @else {
+        <button
+          type="button"
+          (click)="toggleMenu()"
+          class="agent-pill"
+          [class.open]="menuOpen()"
+          [attr.aria-label]="'Agent: ' + name() + '. Click for options.'"
+          [attr.aria-expanded]="menuOpen()"
+          aria-haspopup="menu"
+        >
+          <ng-container *ngTemplateOutlet="pillContent" />
+        </button>
+      }
+
+      <ng-template #pillContent>
         @if (emoji()) {
           <span class="pill-emoji" aria-hidden="true">{{ emoji() }}</span>
         } @else if (projectId()) {
@@ -105,17 +125,13 @@ export interface AgentGovernance {
             [attr.aria-label]="governanceLabel()"
           />
         }
-      </button>
+      </ng-template>
 
-      @if (menuOpen()) {
-        <div class="indicator-menu" role="menu" [attr.aria-label]="projectId() ? 'Project actions' : 'Agent actions'">
+      @if (menuOpen() && !projectId()) {
+        <div class="indicator-menu" role="menu" aria-label="Agent actions">
           <div class="menu-header">
             <span class="menu-title">{{ name() }}</span>
-            <!-- A harness keeps its creator as owner even after the project is
-                 transferred, so a project names no one here. -->
-            @if (projectId()) {
-              <span class="menu-owner">Project</span>
-            } @else if (ownerName()) {
+            @if (ownerName()) {
               <span class="menu-owner">by {{ ownerName() }}</span>
             }
           </div>
@@ -124,7 +140,7 @@ export interface AgentGovernance {
             <div class="menu-governance">
               <p class="governance-title">
                 <ng-icon name="heroLockClosed" class="governance-icon" aria-hidden="true" />
-                <span>Fixed by this {{ projectId() ? 'project' : 'agent' }}</span>
+                <span>Fixed by this agent</span>
               </p>
               <ul class="governance-list">
                 @if (governance()?.modelName; as modelName) {
@@ -150,20 +166,10 @@ export interface AgentGovernance {
             (click)="onNewSession()"
           >
             <ng-icon name="heroPlusCircle" class="menu-icon" />
-            <span>{{ projectId() ? 'New conversation' : 'New session' }}</span>
+            <span>New session</span>
           </button>
 
-          @if (projectId(); as id) {
-            <a
-              class="menu-item"
-              role="menuitem"
-              [routerLink]="['/projects', id]"
-              (click)="menuOpen.set(false)"
-            >
-              <ng-icon name="heroRectangleStack" class="menu-icon" />
-              <span>Open project</span>
-            </a>
-          } @else if (isOwner()) {
+          @if (isOwner()) {
             <button
               type="button"
               class="menu-item"
@@ -221,6 +227,7 @@ export interface AgentGovernance {
       font-size: 0.875rem;
       line-height: 1.25rem;
       color: var(--color-gray-600);
+      text-decoration: none;
       cursor: pointer;
       animation: pill-enter 0.2s ease-out backwards;
       transition: background 0.15s ease, color 0.15s ease;
@@ -526,8 +533,9 @@ export class AgentIndicatorComponent {
   readonly ownerName = input<string>('');
   readonly isOwner = input<boolean>(false);
   /**
-   * The owning project when this is a project's harness. Set, the crumb is the
-   * project: Open project replaces Edit / Share, which the harness refuses.
+   * The owning project when this is a project's harness. Set, the crumb is a
+   * link to the project's overview instead of a menu: the harness refuses
+   * Edit / Share, and the overview is where a new conversation starts.
    */
   readonly projectId = input<string | null>(null);
   /**
@@ -574,6 +582,16 @@ export class AgentIndicatorComponent {
     if (skills) parts.push(skills);
     if (parts.length === 0) return '';
     return `This ${this.projectId() ? 'project' : 'agent'} fixes ${joinList(parts)} for this conversation.`;
+  });
+
+  /**
+   * The project link's accessible name. The link's own label hides the lock
+   * glyph's, so what the project fixes is folded in here.
+   */
+  readonly projectLinkLabel = computed(() => {
+    const label = `Project: ${this.name()}. Open project overview.`;
+    const governance = this.governanceLabel();
+    return governance ? `${label} ${governance}` : label;
   });
 
   // Computed: first letter for avatar fallback

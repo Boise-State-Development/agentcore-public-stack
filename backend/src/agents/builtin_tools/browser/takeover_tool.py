@@ -67,6 +67,7 @@ from apis.shared.browser_takeover import (
     BrowserSessionRef,
     assert_no_url,
     format_outcome,
+    frame_height_from,
     parse_outcome,
 )
 from apis.shared.feature_flags import browser_takeover_enabled
@@ -194,7 +195,15 @@ async def request_user_login(
         # last moment we can name the page the user is about to sign into.
         target_url = await _current_url(agent)
         try:
-            descriptor = await session_pool.take_control(agent)
+            # The height the user's panel gives the stream, if the chat
+            # request carried one: client data on `invocation_state`, never
+            # anything the model wrote, so it cannot be steered by a prompt.
+            descriptor = await session_pool.take_control(
+                agent,
+                frame_height=frame_height_from(
+                    getattr(tool_context, "invocation_state", None)
+                ),
+            )
         except Exception as exc:  # noqa: BLE001 - surface the reason, not a traceback
             logger.error("browser: could not hand over control: %s", exc, exc_info=True)
             return _error(

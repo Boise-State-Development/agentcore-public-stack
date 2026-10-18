@@ -18,13 +18,16 @@ export interface ToolCallDisplay {
   result?: {
     status: string;
     content: ToolResultContent[];
+    structuredContent?: unknown;
   };
 
   /** Execution status (from toolUseData.status, defaults to 'pending').
    *  ``awaiting_auth`` is derived in the message renderer when the tool was
    *  paused on an OAuth consent gate — the tool didn't fail, it's waiting
-   *  for the user to authorize. */
-  status: 'pending' | 'complete' | 'error' | 'awaiting_auth';
+   *  for the user to authorize. ``awaiting_user`` is derived when an MCP
+   *  App's form is open for the user to submit: the tool reported an error
+   *  on purpose, but nothing failed and nothing was written yet. */
+  status: 'pending' | 'complete' | 'error' | 'awaiting_auth' | 'awaiting_user';
 
   /**
    * Partially-generated long output (e.g. an artifact's HTML) decoded from the

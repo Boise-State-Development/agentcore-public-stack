@@ -189,6 +189,70 @@ describe('AssistantMessageComponent', () => {
     });
   });
 
+  describe('browser page cards', () => {
+    function browse(input: Record<string, unknown>, content: unknown[]): ContentBlock {
+      return makeToolBlock('browse_web', {
+        input,
+        result: { status: 'success', content },
+      });
+    }
+
+    const navigate = () =>
+      browse({ action: 'navigate', url: 'https://a.test/' }, [
+        { text: '✅ Navigated to https://a.test/\nTitle: Home\n\nbody' },
+      ]);
+    const screenshot = () =>
+      browse({ action: 'screenshot' }, [
+        { text: '✅ Screenshot of the current viewport:' },
+        { image: { format: 'png', data: 'AAAA' } },
+      ]);
+
+    function pages() {
+      return component
+        .displayBlocks()
+        .filter((b) => b.type === 'browser_page')
+        .map((b) => b.browserPage!);
+    }
+
+    it('shows a screenshot taken after narration on the page navigated to before it', () => {
+      fixture.componentRef.setInput('messages', [makeMessage([
+        navigate(),
+        makeTextBlock('The page loaded. Taking a screenshot.'),
+        screenshot(),
+        makeTextBlock('Here is what it looks like.'),
+      ])]);
+
+      const cards = pages();
+      expect(cards.length).toBe(2);
+      expect(cards[0].screenshot).toBeNull();
+      expect(cards[1]).toMatchObject({
+        url: 'https://a.test/',
+        title: 'Home',
+        screenshot: 'data:image/png;base64,AAAA',
+      });
+    });
+
+    it('shows one card for navigate and screenshot in one rail', () => {
+      fixture.componentRef.setInput('messages', [makeMessage([navigate(), screenshot()])]);
+
+      const cards = pages();
+      expect(cards.length).toBe(1);
+      expect(cards[0].screenshot).toBe('data:image/png;base64,AAAA');
+    });
+
+    it('adds no card for rails that only read the page or close it', () => {
+      fixture.componentRef.setInput('messages', [makeMessage([
+        navigate(),
+        makeTextBlock('Reading it.'),
+        browse({ action: 'extract_text' }, [{ text: 'Page text' }]),
+        makeTextBlock('Done.'),
+        browse({ action: 'close' }, [{ text: '✅ Browser session closed.' }]),
+      ])]);
+
+      expect(pages().length).toBe(1);
+    });
+  });
+
   describe('promoted visuals break tool groups', () => {
     it('should extract promoted visual and render minimized tool + visual', () => {
       fixture.componentRef.setInput('messages', [makeMessage([

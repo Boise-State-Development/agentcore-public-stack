@@ -246,6 +246,18 @@ async def _consent_landed_since_build(agent: BaseAgent, user_id: Optional[str]) 
         return False
 
 
+def live_conversation_agents(session_id: str, user_id: Optional[str]) -> List[BaseAgent]:
+    """The agents this process has cached for one conversation, newest first.
+
+    Matches on ``(session, user)`` (``_conversation_owner_key``), never on the
+    session id alone, for the reason ``_adopt_session_conversation`` gives.
+    Newest is insertion order: a dict keeps it, and a rebuild into an existing
+    slot keeps that slot's place.
+    """
+    owner = _conversation_owner_key(session_id, user_id)
+    return [cached for key, cached in reversed(list(_agent_cache.items())) if key[:2] == owner]
+
+
 def _adopt_session_conversation(
     agent: BaseAgent, session_id: str, user_id: Optional[str]
 ) -> None:
@@ -306,16 +318,14 @@ def _adopt_session_conversation(
     if inner is None or not isinstance(getattr(inner, "messages", None), list):
         return
 
-    owner = _conversation_owner_key(session_id, user_id)
     live = None
     live_wrapper = None
-    for key, cached in _agent_cache.items():
-        if key[:2] != owner:
-            continue
+    for cached in live_conversation_agents(session_id, user_id):
         cached_inner = getattr(cached, "agent", None)
         if isinstance(getattr(cached_inner, "messages", None), list):
-            live = cached_inner  # newest wins — dict preserves insertion order
+            live = cached_inner
             live_wrapper = cached
+            break
 
     if live is None or live.messages is inner.messages:
         return

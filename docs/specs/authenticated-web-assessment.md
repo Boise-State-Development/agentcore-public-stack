@@ -288,6 +288,86 @@ than a wildcard. This resolves risk 3 below.
 via `requestDisplayLayout`; a mismatch crops or letterboxes the stream, which is
 why the viewport is carried rather than re-declared in the frontend.
 
+### D3a — Sizing the handover: 1:1 in the docked panel
+
+The agent browses at 1280x800, but the user signs in through a docked rail
+about 800px wide, so the unfitted stream drew the login page at roughly half
+size. Measured on dev-ai, 2026-10-17:
+
+* DCV's `requestDisplayLayout` resizes the remote X screen at any time, takeover
+  included. It refuses widths under 640 and snaps both sides down to multiples
+  of 8. The size persists across reconnects.
+* Chrome's window does **not** follow the screen. There is no window manager,
+  so maximize is ignored, and fullscreen and F11 do not re-fit it. Only CDP
+  `Browser.setWindowBounds` does, and the page reflows.
+* CDP is refused (HTTP 403) while the automation stream is DISABLED.
+* The agent's CDP screenshots follow the window, not the screen.
+
+So the size is picked **before** the handover and undone **after** it:
+
+1. `session_pool.take_control` sets the window to 768 wide by the panel's
+   frame height (snapped to what the display accepts) while CDP still answers,
+   then disables the stream. The event's `viewport` is that size, so
+   `live-view.js` pins the screen to it at `firstFrame`. The agent's own size
+   stays on the session as `viewport`; the handover size is held apart as
+   `takeover_viewport`. 768 is wide enough that most sites still serve their
+   tablet or desktop layout.
+2. `release_control` re-enables the stream, reconnects to the same browser
+   and sets the window back to the agent's size. This is best-effort and
+   logged; a failure never fails the resume.
+3. The SPA widens the rail to the viewport plus its padding when the window
+   leaves 360px for the chat, and gives the user's width back on close. The
+   frame is never drawn wider than the remote viewport: a wider rail centres
+   it, a narrower one scales it down. **Expand** shows the same stream over
+   the whole window by restyling the pane in place, because moving the iframe
+   would reload it and drop the stream.
+
+Live re-fitting while the user drags the rail is deliberately not done. It
+would need CDP during the takeover, which means re-enabling the agent's stream,
+and that is the one property the takeover exists to guarantee.
+
+`BROWSER_TAKEOVER_FIT_ENABLED=false` skips steps 1 and 2 (a rollout switch;
+see `feature_flags.browser_takeover_fit_enabled`). The SPA needs no switch: it
+reads whatever `viewport` the event carries, so with the switch off it still
+widens the rail, now toward 1280, and scales down.
+
+**The height comes from the panel.** A fixed 832 drew 1:1 only in windows at
+least ~954px tall; in a 1440x900 window the frame drew at 718x778 (93%),
+measured locally on 2026-10-17. So the SPA sends the height its panel would
+give the stream on every chat request, and the takeover uses it:
+
+* `browserFrameHeight()` (`services/browser-login/browser-frame-height.ts`) is
+  the window's height less the panel's chrome: the header, the disclosure
+  line and the frame container's padding, 122px. The panel covers the window's
+  full height, docked or expanded, so no layout needs to be open to measure
+  it. `chat-http.service` adds it as `browser_frame_height` at the one send
+  path every turn shares, resumes included, because the turn that asks for a
+  sign-in can be any of them.
+* `InvocationRequest.browser_frame_height` turns an unusable value (not a
+  whole number, or outside 1–10,000) into None rather than a 422. A hint
+  about a window must never fail a turn.
+* The route passes it as Strands `invocation_state`
+  (`browser_takeover_frame_height`), and `request_user_login` reads it from
+  `ToolContext`. Strands builds a fresh `invocation_state` per invocation, so
+  the value is one request's and never lingers on a cached agent.
+* `take_control(frame_height=…)` sizes the window through
+  `snap_display_size`, which clamps the height to 600–1000 and snaps it down
+  to the display's step of 8, so an untrusted value can only choose a size
+  inside that range. Without a height (an older tab, a scheduled run), the
+  height is `TAKEOVER_VIEWPORT`'s 832. The resume pass is idempotent and keeps
+  the first height.
+
+Cost: zero prompt tokens. `invocation_state` reaches tools and hooks and is
+never part of the Converse request, so the system prompt, `toolConfig` and
+history are unchanged. On the turn path it adds one optional request field
+and, when present, a one-entry dict, which is microseconds. The SPA adds about
+30 bytes to each request body.
+
+In a window shorter than ~722px the clamp hands over at 600 and the panel
+scales the stream down, as before. The 122px constant must follow the panel
+template; if it drifts, the stream is a few pixels short (letterboxed) or tall
+(scaled a few percent), never broken.
+
 ### D4 — Browser session identity in the session-metadata row
 
 Today the browser session id lives in `agent.state`, which the Strands session
@@ -736,8 +816,8 @@ through.
    minted URL's own origin there. Still to confirm against a live session:
    that DCV needs nothing beyond `connect-src` (its workers and decoders are
    same-origin, and `worker-src 'self' blob:` is already granted).
-4. **Mobile.** DCV interaction on a phone, for a login form in a 1280x800
-   remote viewport, is likely poor. May need an explicit "open in a new tab"
+4. **Mobile.** DCV interaction on a phone, for a login form in a 768x832
+   remote viewport (D3a), is likely poor. May need an explicit "open in a new tab"
    escape hatch rather than pretending the frame works everywhere.
 5. **Concurrency.** Two evaluators sharing a Library account, both taking
    control of different sessions against the same vendor, may collide on a

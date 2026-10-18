@@ -9,7 +9,15 @@ import {
 } from '@angular/core';
 import { Router, ActivatedRoute, RouterLink } from '@angular/router';
 import { HttpErrorResponse } from '@angular/common/http';
-import { FormArray, FormBuilder, FormGroup, Validators, ReactiveFormsModule } from '@angular/forms';
+import {
+  AbstractControl,
+  FormArray,
+  FormBuilder,
+  FormGroup,
+  ReactiveFormsModule,
+  ValidationErrors,
+  Validators,
+} from '@angular/forms';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroArrowLeft,
@@ -44,7 +52,14 @@ import {
   ToolEnablement,
   toolEnablementOf,
   toolEnablementFlags,
+  HEADER_NAME_PATTERN,
+  MAX_CUSTOM_HEADERS,
+  isReservedHeaderName,
 } from '../models/admin-tool.model';
+
+function reservedHeaderValidator(control: AbstractControl): ValidationErrors | null {
+  return isReservedHeaderName(control.value ?? '') ? { reservedHeader: true } : null;
+}
 
 @Component({
   selector: 'app-tool-form',
@@ -289,6 +304,66 @@ import {
                     </div>
                   </div>
                 }
+
+                <!-- Custom Headers -->
+                <div formArrayName="mcpHeaders">
+                  <div class="mb-2 flex items-center justify-between">
+                    <span class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                      Custom headers
+                    </span>
+                    <button
+                      type="button"
+                      (click)="addMcpHeader()"
+                      [disabled]="mcpHeadersArray.length >= maxCustomHeaders"
+                      class="inline-flex items-center gap-1 rounded-2xl px-2.5 py-1 text-sm/6 font-medium text-primary-accessible hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-primary-accessible-dark dark:hover:bg-gray-700 dark:hover:text-primary-50"
+                    >
+                      <ng-icon name="heroPlus" class="size-4" aria-hidden="true" />
+                      Add Header
+                    </button>
+                  </div>
+                  @if (mcpHeadersArray.length > 0) {
+                    <div class="space-y-2">
+                      @for (row of mcpHeadersArray.controls; track row) {
+                        <div [formGroupName]="$index" class="flex items-start gap-2 rounded-2xl border border-gray-200 bg-white p-2 dark:border-gray-700 dark:bg-gray-800">
+                          <input
+                            type="text"
+                            formControlName="name"
+                            placeholder="X-Header-Name"
+                            autocomplete="off"
+                            [attr.aria-label]="'Header name ' + ($index + 1)"
+                            class="block w-2/5 rounded-2xl border border-gray-300 bg-white px-3 py-1.5 font-mono text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
+                          />
+                          <input
+                            type="text"
+                            formControlName="value"
+                            placeholder="value"
+                            autocomplete="off"
+                            [attr.aria-label]="'Header value ' + ($index + 1)"
+                            class="block min-w-0 flex-1 rounded-2xl border border-gray-300 bg-white px-3 py-1.5 font-mono text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
+                          />
+                          <button
+                            type="button"
+                            (click)="removeMcpHeader($index)"
+                            [attr.aria-label]="'Remove header ' + ($index + 1)"
+                            class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-state-danger-50 hover:text-state-danger-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500 dark:text-gray-500 dark:hover:bg-state-danger-900/20 dark:hover:text-state-danger-400"
+                          >
+                            <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
+                          </button>
+                        </div>
+                        @if (reservedHeaderName(row.get('name')?.value); as reserved) {
+                          <p class="text-xs/5 text-state-danger-600 dark:text-state-danger-400">
+                            {{ reserved }} is set by the connection's transport or authentication and can't be a custom header.
+                          </p>
+                        }
+                      }
+                    </div>
+                  }
+                  <p class="mt-2 text-xs/5 text-gray-500 dark:text-gray-400">
+                    Sent with every request to this server, and used by "Discover from server" — for example
+                    <code class="font-mono">X-MCP-Toolsets: issues,context</code> for GitHub's MCP server.
+                    Values are stored and shown in plain text: never put a secret here.
+                  </p>
+                </div>
 
                 <!-- MCP Tools -->
                 <div formArrayName="mcpTools">
@@ -1214,6 +1289,7 @@ export class ToolFormPage implements OnInit {
     mcpAwsRegion: [''],
     mcpApiKeyHeader: [''],
     mcpSecretArn: [''],
+    mcpHeaders: this.fb.array([] as FormGroup[]),
     mcpTools: this.fb.array([] as FormGroup[]),
     mcpHealthCheckEnabled: [false],
     // A2A Agent configuration
@@ -1343,6 +1419,45 @@ export class ToolFormPage implements OnInit {
     this.mcpToolsArray.removeAt(index);
   }
 
+  get mcpHeadersArray(): FormArray<FormGroup> {
+    return this.form.get('mcpHeaders') as FormArray<FormGroup>;
+  }
+
+  readonly maxCustomHeaders = MAX_CUSTOM_HEADERS;
+
+  private buildMcpHeaderRow(name = '', value = ''): FormGroup {
+    return this.fb.group({
+      name: [name, [Validators.required, Validators.pattern(HEADER_NAME_PATTERN), reservedHeaderValidator]],
+      value: [value, [Validators.required]],
+    });
+  }
+
+  addMcpHeader(): void {
+    this.mcpHeadersArray.push(this.buildMcpHeaderRow());
+  }
+
+  removeMcpHeader(index: number): void {
+    this.mcpHeadersArray.removeAt(index);
+  }
+
+  /** The trimmed name when it is one the backend refuses, else null. */
+  reservedHeaderName(name: string | null | undefined): string | null {
+    const trimmed = (name ?? '').trim();
+    return isReservedHeaderName(trimmed) ? trimmed : null;
+  }
+
+  /** The header rows as the backend's `customHeaders` map (blank names dropped). */
+  private mcpCustomHeaders(): Record<string, string> {
+    const headers: Record<string, string> = {};
+    for (const ctrl of this.mcpHeadersArray.controls) {
+      const name = (ctrl.get('name')?.value ?? '').trim();
+      if (name) {
+        headers[name] = (ctrl.get('value')?.value ?? '').trim();
+      }
+    }
+    return headers;
+  }
+
   get gwToolsArray(): FormArray<FormGroup> {
     return this.form.get('gwTools') as FormArray<FormGroup>;
   }
@@ -1371,6 +1486,7 @@ export class ToolFormPage implements OnInit {
         awsRegion: formValue.mcpAwsRegion || null,
         apiKeyHeader: formValue.mcpApiKeyHeader || null,
         secretArn: formValue.mcpSecretArn || null,
+        customHeaders: this.mcpCustomHeaders(),
         forwardAuthToken: formValue.forwardAuthToken || false,
         tokenExchangeAudience: formValue.tokenExchangeAudience || null,
         requiresOauthProvider: formValue.requiresOauthProvider || null,
@@ -1635,6 +1751,10 @@ export class ToolFormPage implements OnInit {
           mcpSecretArn: tool.mcpConfig.secretArn || '',
           mcpHealthCheckEnabled: tool.mcpConfig.healthCheckEnabled,
         });
+        this.mcpHeadersArray.clear();
+        for (const [name, value] of Object.entries(tool.mcpConfig.customHeaders ?? {})) {
+          this.mcpHeadersArray.push(this.buildMcpHeaderRow(name, value));
+        }
         this.mcpToolsArray.clear();
         for (const entry of tool.mcpConfig.tools) {
           this.mcpToolsArray.push(this.buildMcpToolRow(entry));
@@ -1713,6 +1833,7 @@ export class ToolFormPage implements OnInit {
           awsRegion: formValue.mcpAwsRegion || null,
           apiKeyHeader: formValue.mcpApiKeyHeader || null,
           secretArn: formValue.mcpSecretArn || null,
+          customHeaders: this.mcpCustomHeaders(),
           tools: mcpTools,
           healthCheckEnabled: formValue.mcpHealthCheckEnabled,
           healthCheckIntervalSeconds: 300,

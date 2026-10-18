@@ -10,6 +10,11 @@ import { DefaultToolResultComponent } from './renderers/default-tool-result.comp
 export interface ToolResultData {
   content: ToolResultContent[];
   status: 'success' | 'error';
+  /**
+   * The tool's MCP `structuredContent`, when it returned one. Read for the
+   * `awaiting_user_submission` marker (see `isAwaitingUserSubmission`).
+   */
+  structuredContent?: unknown;
 }
 
 /**

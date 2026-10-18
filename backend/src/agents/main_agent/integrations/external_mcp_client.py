@@ -14,6 +14,7 @@ OAuth Support:
 """
 
 import asyncio
+import hashlib
 import logging
 import re
 import time
@@ -159,6 +160,18 @@ _AUTH_STATUS_CODES = frozenset({401, 403})
 _AUTH_TEXT_RE = re.compile(
     r"\b(?:401|403)\b|\bunauthorized\b|\bforbidden\b", re.IGNORECASE
 )
+
+
+def _headers_digest(headers: dict) -> str:
+    """Order-independent digest of a server's custom headers.
+
+    Values are hashed rather than embedded, so a cache key never carries one.
+    """
+    material = "\n".join(
+        f"{name.lower()}:{value}"
+        for name, value in sorted(headers.items(), key=lambda item: item[0].lower())
+    )
+    return hashlib.sha256(material.encode()).hexdigest()[:12]
 
 
 def _elapsed_ms(started: float) -> int:
@@ -328,13 +341,18 @@ def create_external_mcp_client(
                 if allowed_tool_names is not None
                 else None
             )
+            # Admin-configured static headers (e.g. GitHub's X-MCP-Toolsets).
+            # Validated on the model, so none can collide with the auth above;
+            # None when empty, so header-less servers connect exactly as before.
+            headers = dict(config.custom_headers) or None
             # UICapableMCPClient advertises the MCP Apps UI extension on
             # initialize and filters app-only tools out of the model's tool
             # list (both inert unless AGENTCORE_MCP_APPS_HOST_ENABLED=true).
             mcp_client = UICapableMCPClient(
-                lambda url=config.server_url, auth=auth: streamablehttp_client(
+                lambda url=config.server_url, auth=auth, headers=headers: streamablehttp_client(
                     url,
-                    auth=auth
+                    headers=headers,
+                    auth=auth,
                 ),
                 tool_filters=tool_filters,
                 # Retained so the MCP Apps header can resolve the server's
@@ -695,6 +713,13 @@ class ExternalMCPIntegration:
             tool_version = (
                 to_iso(tool.updated_at) if tool.updated_at else ""
             )
+            # Any admin edit bumps `updated_at`, but the headers are part of
+            # the connection itself, so they are folded in directly: a header
+            # change always rebuilds the client. Omitted when there are none,
+            # so header-less servers keep their existing version string.
+            custom_headers = getattr(tool.mcp_config, "custom_headers", None) or {}
+            if custom_headers:
+                tool_version += "|headers:" + _headers_digest(custom_headers)
 
             if (
                 cache_key in self.clients

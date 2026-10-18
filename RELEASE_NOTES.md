@@ -1,3 +1,107 @@
+# Release Notes — v1.29.0
+
+**Release Date:** October 17, 2026
+**Previous Release:** v1.28.2 (October 17, 2026)
+
+---
+
+## Highlights
+
+This release makes MCP Apps hold up against GitHub's App tools, which ask the user to fill in and submit a form. The form now shows as waiting instead of failed, and its pickers fill in. What the App tells the model reaches the next turn, and a dropped connection reconnects instead of breaking every later call. Browser sign-in moves into a docked side panel and shows the page at its real size, and `browse_web` runs get a page card with a screenshot. Admins can now send static custom headers to an external MCP server. CI fixes the ECR Public rate limit that stopped 1.28.2's prod app-api build. There is no infrastructure change, flag to set or backfill to run.
+
+---
+
+## Browser sign-in in a docked panel, and browser cards
+
+When the agent hands the browser to a user to sign in, the page now opens in a panel docked to the right of the conversation, drawn at 1:1, instead of an inline viewer scaled to about half size. Separately, every `browse_web` run shows which page it reached (#1654, #1650).
+
+### Frontend
+
+- `BrowserCardComponent`: a shared card in the shape of a framed page preview, with title, host · status, **Open** and an overflow menu. Both the sign-in prompt and the new `browse_web` page card use it.
+- `BrowserPanelComponent`: the sign-in card opens the live viewer here, on the `DockedPaneService` rail (owner `browser`). It replaces the inline viewer and its full-screen overlay. The panel owns minting and re-minting the live-view URL and the origin-checked frame handshake. It letterboxes the stream to the session viewport and gives the rail back when the prompt resolves or the sign-in window lapses. It widens the rail to fit the stream when the window leaves at least 360px for the chat, never draws the frame past 1:1, and restores the user's rail width on close. **Expand** covers the window without reloading the frame.
+- `browse_web` page card (`browser-page.ts`): derived from the navigate, click and screenshot results already in the thread, so there is no new SSE event. The page (URL, title, latest screenshot) carries across tool rails, so when the agent writes text between browser calls, a screenshot taken in a later rail still reaches the card. A rail shows a card only when it navigates, a click lands on a new URL, or it takes a screenshot. A screenshot is dropped when the browser moves to another page, and only `http(s)` URLs render. Each screenshot's data URL is built once, not on every streamed delta.
+- `browserFrameHeight()` (window height less the panel's 122px chrome) is sent as `browser_frame_height` on every chat request, from the one send path all turns share.
+
+### Backend
+
+- `request_user_login`'s `take_control` sets the remote Chrome window to 768 wide and to the panel's frame height (`Browser.setWindowBounds` over CDP), then disables the automation stream. The size goes on the event's `viewport`, so the DCV display matches it. `release_control` reconnects and restores the agent's 1280x800. Both steps are best-effort and logged, and neither can fail the handover or the resume.
+- `InvocationRequest.browser_frame_height`: clamped through `snap_display_size` (600–1000 in steps of 8), falling back to 832. An unusable value becomes `None`, never a 422. It travels as Strands `invocation_state`, so it never reaches the Converse request.
+- **Rollout switch `BROWSER_TAKEOVER_FIT_ENABLED`** (default on). `=false` keeps the old fixed 1280x800 handover. It retires after one production release plus two weeks with no `browser: could not restore the agent window` warning.
+
+### Cost and latency
+
+Nothing reaches the prompt. The frame height adds about 0.1 µs per request on the turn path.
+
+## Custom headers on external MCP connectors
+
+Admins can now give an external MCP server (`mcp_external`) up to 10 static headers, sent on every request and on **Discover from server**. This is for server options that live in a header. The case it was built for is GitHub: its `/mcp/x/<toolset>` URLs leave out the `context` toolset, so `issue_write`'s App can't call `ui_get`. Point the server at GitHub's base MCP URL with `X-MCP-Toolsets: issues,context` instead (#1655).
+
+### Backend
+
+- `customHeaders` on the tool model, the admin request and response, and the discover request. Rows stored without it read as empty. A stored header that no longer validates is dropped rather than failing the row.
+- Validation refuses names that the transport or its auth already sets (`Authorization`, `Proxy-Authorization`, `Cookie`, `Host`, `Mcp-Session-Id`, `Mcp-Protocol-Version`, `Accept`, `Content-Type`, `Content-Length`, `Transfer-Encoding`, `Connection`, anything starting `X-Amz-`). It also refuses case-insensitive duplicates, non-ASCII or CR/LF values, and more than 10 headers. Headers are normalized and sorted.
+- `external_mcp_client` passes them to `streamablehttp_client`. A digest of the headers is part of the client-cache version, so saving a change rebuilds the client on the next turn.
+
+### Frontend
+
+- The admin tool form gains a key/value editor for the headers, and **Discover from server** sends them.
+
+> Header values are stored on the catalog row and shown on the form in plain text. They are configuration, not credentials. A secret still belongs in the server's Secret ARN.
+
+---
+
+## 🐛 Bug fixes
+
+All of these turned up driving GitHub's `issue_write` App on dev.
+
+- **An App form waiting for the user no longer shows as failed.** GitHub's App write tools (`issue_write` and the PR writes) return `isError` on purpose while their form waits for **Submit**. The frame showed "Failed", and the summary said "Couldn't use GitHub".
+  - GitHub sends `structuredContent.status = "awaiting_user_submission"` only on a newer MCP protocol than we negotiate, so the new `McpAppAwaitingSubmissionHook` writes it at `AfterToolCall` onto a recognized stub. The live `tool_result` and the persisted message therefore agree.
+  - The frame header, response strip and tool rail show a neutral "Waiting for you". `AgentStatusHook` reports the call as ok, and a batch that is all waiting is headed "Waiting for you to submit the form in <integration>" with no model call.
+  - Only `structuredContent` changes, and no model formatter sends it, so the prompt is untouched (#1662).
+- **What an App tells the model reaches the next turn.** After GitHub's App created an issue, the next turn said it hadn't. `ui/update-model-context` was stashed on an agent the App route built for itself, whose cache key almost never matched the real turn's, so the context was thrown away with it. Pending context now lives in a bounded in-process store keyed by `(session, user)`. Runtime affinity pins that pair to one container, so the push and the next turn always meet there. The next turn drains it with one dict lookup and prepends it to the new user message, after the cached prefix. The push no longer builds an agent at all (#1660).
+- **A dropped MCP connection no longer breaks every later call.** Any non-2xx reply ends the MCP SDK's streamable-HTTP session, for example GitHub answering a `tools/call` with 503. Nothing restarted it, so every cached agent holding that client failed each tool call until the agent was evicted.
+  - `MCPSessionHealHook` (`BeforeToolCall`, after the consent and approval gates) restarts a dead session before the call. The failed call is never re-run.
+  - A call whose session ended under it is reported as an unknown outcome, so the model doesn't retry a write that may have happened.
+  - In Strands 1.57.2, such a call hung forever when it carried a `cancel_signal`, which every agent call does. A mixin (`ReleasesCallsOnSessionEnd`) bounds that at 3 s. Recheck it on the next Strands upgrade.
+  - Latency: nothing before the first token, and about 1–2 µs per MCP tool call on a healthy session (#1659).
+- **An App call whose connection dropped says it may have completed.** The App was told `isError: false` beside "Connection to the MCP server was closed". It now gets an error saying the action may have gone through, so the user checks before retrying. The shared client is reset, so the next press and the next agent build reconnect (#1657).
+- **GitHub's issue pickers fill in.** The labels, assignees and milestones lists showed empty although `ui_get` succeeded, because an App's `tools/call` result came back in Strands' untagged block shape rather than MCP's tagged content. It is now converted (`{"type": "text", …}`, images and JSON too) and carries `structuredContent`. The thread's `tool_result` keeps the Strands shape (#1656).
+- **A refused App tool call says why.** A tool missing from the UI catalog and one whose visibility excludes `app` got the same message and logged nothing. They now get distinct messages and a warning naming the tool. App call failures also stopped stacking one error toast per call (five for GitHub's issue form); the App already shows its own error state (#1658).
+
+## ⚡ Performance
+
+- **App button presses no longer build an agent.** Each App-initiated `tools/call` paid a full agent build and an AgentCore Memory restore, then discarded the agent. It now reuses the conversation's live agent that holds the right MCP client, matched on `(session, user)`, and builds only when there is none (#1661).
+
+## ✨ Improvements
+
+- **The project crumb goes straight to the project overview.** The crumb in the conversation header opened a menu that only repeated the overview's own actions. It is now a link to `/projects/:id/overview`, and what the project fixes (model, tools, skills) moves into its accessible name and tooltip. Agent crumbs keep their menu (#1647).
+
+## 🔧 CI/CD
+
+- **Backend images pull their base images as an authenticated client.** The 1.28.2 prod Backend Deploy failed "Build app-api image" twice with `429 Too Many Requests - Data limit exceeded` from public.ecr.aws. ECR Public caps anonymous pulls by data per source IP, and the shared x86 runners had used it up. A failed build skips its deploy, so prod app-api stayed on 1.28.1.
+  - `scripts/build/ecr-public-login.sh` logs Docker in to ECR Public with a us-east-1 token. `build-and-push-if-changed.sh` runs it before every backend image build and retries a build once, only on a registry 429. `platform.yml` runs it before the CDK deploy, which builds the bootstrap stub images.
+  - Best-effort: a CI role without `ecr-public:GetAuthorizationToken` and `sts:GetServiceBearerToken` gets a warning and pulls anonymously, as before (#1652).
+
+## 🧪 Test coverage
+
+About 3,800 lines of new tests, mostly the App dispatch path (session revival, tagged content, agent reuse, per-conversation context), the session-heal hook against a flaky MCP fixture server, the browser panel and page card, header validation, and the ECR Public login script.
+
+---
+
+## 🚀 Deployment notes
+
+- **No infrastructure change.** Run `backend.yml`, then `frontend-deploy.yml`. `platform.yml` has nothing to apply, though its next run also logs in to ECR Public.
+- **Check that every backend image builds.** If prod app-api is still on 1.28.1 after 1.28.2's failed build, this deploy also brings it 1.28.2's app-api changes: the sign-in provider reconciler and the **Hide Cognito sign-in** switch. Follow 1.28.2's deployment notes for those.
+- **GitHub's MCP App needs the `context` toolset.** If your GitHub connector points at `https://api.githubcopilot.com/mcp/x/issues` (or another `/mcp/x/<toolset>` URL), `issue_write`'s pickers stay empty. Switch it to the base MCP URL with the custom header `X-MCP-Toolsets: issues,context` (or whichever toolsets you want, plus `context`).
+- **After deploying:** check the Runtime logs for `browser: could not restore the agent window`. If it appears, set `BROWSER_TAKEOVER_FIT_ENABLED=false` on the Runtime; that's the readout that lets the switch retire.
+
+### Other deployments
+
+- **ECR Public login is best-effort.** If your CI role lacks `ecr-public:GetAuthorizationToken` and `sts:GetServiceBearerToken`, builds warn and keep pulling anonymously. Add them if you've hit the 429.
+- **Coming from 1.27.x or earlier?** 1.29.0 adds no infrastructure, flags, environment variables, tables, indexes or backfills. Everything 1.28.0–1.28.2 need still applies: run `backend.yml` before `platform.yml`, then re-run "Deploy large-document-prepare Lambda image", and review MCP tool allowlists as 1.28.2 describes.
+
+---
+
 # Release Notes — v1.28.2
 
 **Release Date:** October 17, 2026

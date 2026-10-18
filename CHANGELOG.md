@@ -4,6 +4,35 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [1.29.0] - 2026-10-17
+
+MCP Apps work reliably against GitHub's App tools, browser sign-in moves into a docked panel shown at 1:1, and admins can send static custom headers to an external MCP server. Also fixes the 1.28.2 prod backend build that failed on ECR Public's anonymous pull limit. No infrastructure change.
+
+### 🚀 Added
+
+- **Custom headers on external MCP connectors**: an `mcp_external` server's config gains an optional `customHeaders` map (up to 10), sent on every request and on **Discover from server**, edited as key/value rows on the admin tool form. For server options that live in a header, such as GitHub's `X-MCP-Toolsets: issues,context`. Names the transport or auth owns (`Authorization`, `Cookie`, `Host`, `Mcp-Session-Id`, `X-Amz-*`, …), case-insensitive duplicates and non-ASCII or CR/LF values are refused; values are stored and shown in plain text, so a secret still belongs in the Secret ARN. A header change rebuilds the server's client (#1655)
+- **Browser cards**: a `browse_web` run shows a framed page card under its tool rail (title, host · status, thumbnail of the latest screenshot, Open in a new tab), derived from the tool results with no new SSE event. The card carries the page across rails, so a screenshot taken after the agent writes text still reaches it; only `http(s)` URLs render (#1654, #1650)
+
+### ✨ Improved
+
+- **Browser sign-in opens in a docked panel**: the sign-in prompt is now a card that opens the live viewer in a right-docked `BrowserPanelComponent` on the shared docked-pane rail, replacing the inline viewer and its full-screen overlay. The panel owns URL minting and the origin-checked frame handshake, and releases the rail when the prompt resolves or the window lapses (#1654)
+- **The sign-in page is shown at 1:1**: `request_user_login` resizes the remote Chrome window to 768 wide and to the height the SPA's panel gives the frame (`browser_frame_height` on each chat request, clamped 600–1000, default 832) before disabling automation, then restores the agent's 1280x800 on handback. The panel widens the rail when the window leaves room, never draws past 1:1, and offers Expand. Rollout switch `BROWSER_TAKEOVER_FIT_ENABLED` (default on). Adds nothing to the prompt (#1654)
+- **The project crumb links straight to the project overview** instead of opening a two-item menu; what the project fixes (model, tools, skills) moves into the link's accessible name and title. Agent crumbs keep their menu (#1647)
+
+### 🐛 Fixed
+
+- **An MCP App form waiting for Submit no longer shows as failed.** GitHub's App write tools (`issue_write`, the PR writes) return `isError` on purpose while their form waits. `McpAppAwaitingSubmissionHook` marks the result `awaiting_user_submission`, and the frame header, response strip, tool rail and summary show "Waiting for you" (#1662)
+- **An App's model context reaches the next turn.** `ui/update-model-context` was stored on a throwaway agent, so after GitHub's App created an issue the next turn said it had not. Pending context now lives in a bounded per-conversation store keyed by `(session, user)` and is prepended to the next user message, after the cached prefix (#1660)
+- **An App-initiated `tools/call` reuses the conversation's live agent** instead of building one per press (a full agent build plus an AgentCore Memory restore, then discarded) (#1661)
+- **A cached agent's dead MCP session reconnects on the next tool call.** A non-2xx POST from the server (e.g. GitHub answering 503) ended the shared session, and every cached agent holding it failed each call until eviction. `MCPSessionHealHook` restarts it before the call, a call whose session ended under it is reported as an unknown outcome so the model doesn't retry a write, and a Strands 1.57.2 hang on a cancelled call during session death is bounded at 3 s. Nothing before the first token; ~1–2 µs per MCP tool call (#1659)
+- **An App call whose connection dropped is reported as "may have completed"**, not as success, and the shared client is reset so the next press and the next agent build reconnect (#1657)
+- **App-initiated tool calls get tagged MCP content** (`{"type": "text", …}` plus `structuredContent`), so GitHub's issue pickers (labels, assignees, milestones) fill in (#1656)
+- **A refused App tool call says why and is logged**: a tool missing from the UI catalog and one whose visibility excludes `app` now get distinct messages, and App call failures no longer stack one error toast per call (#1658)
+
+### 🔧 CI/CD
+
+- **Base images pull from ECR Public as an authenticated client.** The 1.28.2 prod Backend Deploy failed "Build app-api image" on ECR Public's anonymous data limit (`429 Too Many Requests`), leaving prod app-api on 1.28.1. `scripts/build/ecr-public-login.sh` logs Docker in before every backend image build and before the CDK deploy; the build retries once on a registry 429. Best-effort: without `ecr-public:GetAuthorizationToken` and `sts:GetServiceBearerToken` it warns and pulls anonymously as before (#1652)
+
 ## [1.28.2] - 2026-10-17
 
 Fixes found in the first day of Shared Projects in production: tools, project memory, and sign-in. Also adds one opt-in admin setting. No infrastructure change, so this ships with `backend.yml` and `frontend-deploy.yml` only.

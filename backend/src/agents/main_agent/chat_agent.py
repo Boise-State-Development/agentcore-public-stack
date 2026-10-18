@@ -204,6 +204,7 @@ class ChatAgent(BaseAgent):
         turn_started_at: Optional[float] = None,
         poll_side_frame: Optional[Callable[[], Optional[str]]] = None,
         turn_clock: Any = None,
+        invocation_state: Optional[Dict[str, Any]] = None,
     ) -> AsyncGenerator[str, None]:
         """
         Stream agent responses.
@@ -244,6 +245,10 @@ class ChatAgent(BaseAgent):
             turn_clock: The turn's latency clock, continued by the coordinator
                 to the first model output (`turn_first_token`). Per turn, like
                 `turn_lease`; None disables it.
+            invocation_state: Per-request client data for tools, handed to
+                Strands as its `invocation_state` (tools read it from
+                `ToolContext`; the model never sees it). Per turn, like
+                `turn_lease`. None passes nothing.
 
         Yields:
             str: SSE formatted events
@@ -282,5 +287,6 @@ class ChatAgent(BaseAgent):
             turn_started_at=turn_started_at,
             poll_side_frame=poll_side_frame,
             turn_clock=turn_clock,
+            invocation_state=invocation_state,
         ):
             yield event

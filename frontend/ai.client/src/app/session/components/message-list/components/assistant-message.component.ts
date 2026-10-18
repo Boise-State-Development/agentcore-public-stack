@@ -8,11 +8,14 @@ import { StreamingTextComponent } from './streaming-text.component';
 import { InlineVisualComponent } from './inline-visual';
 import { OAuthConsentPromptComponent } from './oauth-consent-prompt/oauth-consent-prompt.component';
 import { McpAppFrameComponent } from './tool-use/renderers/mcp-app-frame.component';
+import { BrowserPageCardComponent } from './browser-card/browser-page-card.component';
+import { BrowserPageSummary, browserPageFromCalls } from './browser-card/browser-page';
 import {
   OAuthConsentRequest,
   OAuthConsentService,
 } from '../../../../services/oauth-consent/oauth-consent.service';
 import { McpAppStateService } from '../../../services/mcp-apps/mcp-app-state.service';
+import { isAwaitingUserSubmission } from '../../../services/mcp-apps/awaiting-submission';
 import { ChatStateService } from '../../../services/chat/chat-state.service';
 import { ToolInsightService } from '../../../services/chat/tool-insight.service';
 import type { ToolResultData } from './tool-use/tool-renderer-registry.service';
@@ -117,8 +120,11 @@ interface DisplayBlock {
     | 'promoted_visual'
     | 'mcp_app_frame'
     | 'reasoningContent'
-    | 'oauth_required';
+    | 'oauth_required'
+    | 'browser_page';
   data?: ContentBlock;
+  // For browser page cards: where a rail's browse_web calls left the browser.
+  browserPage?: BrowserPageSummary;
   // For tool groups (inline rail)
   group?: ToolCallGroup;
   // For promoted visuals
@@ -155,6 +161,7 @@ interface DisplayBlock {
     InlineVisualComponent,
     OAuthConsentPromptComponent,
     McpAppFrameComponent,
+    BrowserPageCardComponent,
   ],
   template: `
     <div class="block-container">
@@ -233,6 +240,14 @@ interface DisplayBlock {
                 [toolInput]="block.toolInput ?? {}"
                 [toolName]="block.toolName ?? ''"
               />
+            </div>
+          }
+          @case ('browser_page') {
+            <div
+              class="message-block visual-block"
+              [style.animation-delay]="$index * 0.1 + 's'"
+            >
+              <app-browser-page-card [page]="block.browserPage!" />
             </div>
           }
           @case ('oauth_required') {
@@ -371,6 +386,7 @@ export class AssistantMessageComponent {
     const hasPendingInterruptHere = pendingInterruptsHere.length > 0;
     const result: DisplayBlock[] = [];
     let pendingToolCalls: ToolCallDisplay[] = [];
+    let lastBrowserPage: BrowserPageSummary | null = null;
 
     // Read once per recomputation, not per call: these are signal reads, and
     // the computed must re-run when a late-arriving summary lands.
@@ -422,6 +438,16 @@ export class AssistantMessageComponent {
           batches: segmentIntoBatches(calls),
         },
       });
+      // The page a rail's browse_web calls reached gets its own card under
+      // the rail, so the user can see where the agent went without opening
+      // the rail. Derived from the results, so it costs nothing on the turn
+      // path and survives a reload. The page carries across rails: narration
+      // between a navigate and a screenshot splits them into two rails.
+      const browserPage = browserPageFromCalls(calls, lastBrowserPage);
+      if (browserPage) {
+        lastBrowserPage = browserPage;
+        result.push({ type: 'browser_page', browserPage });
+      }
     };
 
     // Flatten the run. A tool group deliberately spans message boundaries:
@@ -530,7 +556,9 @@ export class AssistantMessageComponent {
           const status: ToolCallDisplay['status'] =
             hasPendingInterruptHere && hasNoResult && baseStatus === 'pending'
               ? 'awaiting_auth'
-              : baseStatus;
+              : isAwaitingUserSubmission(toolUse.result)
+                ? 'awaiting_user'
+                : baseStatus;
           // Duration comes from the runtime's `tool_end` status (measured by
           // the event loop, not inferred from stream arrival times), so it is
           // absent on a reload — deliberately, see ToolInsightService.

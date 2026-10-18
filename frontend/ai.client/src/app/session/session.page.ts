@@ -25,6 +25,7 @@ import { CompactionSummaryService } from './services/chat/compaction-summary.ser
 import { SteeringService } from './services/chat/steering.service';
 import { ArtifactStateService } from './services/artifacts/artifact-state.service';
 import { FilePreviewStateService } from './services/file-preview/file-preview-state.service';
+import { BrowserPaneStateService } from './services/browser-pane/browser-pane-state.service';
 import { ArtifactHttpService } from './services/artifacts/artifact-http.service';
 import { McpAppCardStateService } from './services/mcp-apps/mcp-app-card-state.service';
 import { McpAppCardHttpService } from './services/mcp-apps/mcp-app-card-http.service';
@@ -76,6 +77,7 @@ export class ConversationPage implements OnDestroy {
   private steering = inject(SteeringService);
   private artifactState = inject(ArtifactStateService);
   private filePreviewState = inject(FilePreviewStateService);
+  private browserPaneState = inject(BrowserPaneStateService);
   private mcpAppCardState = inject(McpAppCardStateService);
   private mcpAppCardHttp = inject(McpAppCardHttpService);
   private mcpAppTeardown = inject(McpAppTeardownService);
@@ -579,6 +581,8 @@ export class ConversationPage implements OnDestroy {
       // one rail, so leaving it open would also hold the gutter for a
       // session that has nothing to show in it.
       this.filePreviewState.reset();
+      // And the sign-in browser, which belongs to the conversation being left.
+      this.browserPaneState.reset();
 
       // Tell every open MCP App it is going away BEFORE its iframe
       // unmounts with the message list (SEP-1865: the host sends

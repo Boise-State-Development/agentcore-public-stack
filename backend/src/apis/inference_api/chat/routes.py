@@ -22,6 +22,7 @@ from agents.main_agent.core.model_config import KNOWN_CANONICAL_PARAMS
 from agents.main_agent.session.session_factory import SessionFactory
 from apis.shared.auth.dependencies import get_current_user_trusted
 from apis.shared.auth.models import User
+from apis.shared.browser_takeover import FRAME_HEIGHT_STATE_KEY
 from apis.shared.errors import (
     ConversationalErrorEvent,
     ErrorCode,
@@ -112,10 +113,15 @@ from .app_context_dispatch import (
 )
 from apis.shared.mcp_apps.error_envelope import app_tool_error_response
 
-from .app_tool_dispatch import AppToolCallError, dispatch_app_tool_call
+from .app_tool_dispatch import AppToolCallError, agent_carries_tool_client, dispatch_app_tool_call
 from .agent_binding_policy import binds_conversation
 from .models import FileContent, InvocationRequest
-from .service import generate_conversation_title, get_agent, process_build_count
+from .service import (
+    generate_conversation_title,
+    get_agent,
+    live_conversation_agents,
+    process_build_count,
+)
 from .turn_timing import TurnPrelude
 from .system_prompt_resolver import (
     append_active_prompt,
@@ -2293,6 +2299,17 @@ def _forbidden_turn(
     )
 
 
+def _with_pending_app_context(message: str, session_id: str, user_id: str) -> str:
+    """Prepend what this conversation's MCP Apps pushed since its last turn.
+
+    One dict lookup on the turn path (``merge_and_clear_pending_context``
+    drains a process-level store keyed by ``(session, user)``). The block
+    rides in the new user message, after the cached prefix.
+    """
+    block = merge_and_clear_pending_context(session_id, user_id)
+    return f"{block}\n\n{message}" if block else message
+
+
 async def _agent_for_app_dispatch(
     input_data: InvocationRequest,
     current_user: User,
@@ -2304,9 +2321,10 @@ async def _agent_for_app_dispatch(
 ):
     """The conversation's agent for an MCP App dispatch (map stage B3).
 
-    An App's ``tools/call`` and ``ui/update-model-context`` run no model turn,
-    but they need the same ``Agent`` the real turns use: the MCP client session,
-    its auth, and ``agent.state``, where pushed context lives. So the model, its
+    An App's ``tools/call`` runs no model turn, but it needs the same ``Agent``
+    the real turns use: the MCP client session and its auth. (``ui/update-model-
+    context`` needs no agent; it is held per conversation in
+    ``app_context_dispatch``.) So the model, its
     settings and the effective tool list are resolved exactly as the main turn
     resolves them, and ``get_agent`` reads the same cache slot with
     ``cache_write=False`` — this path builds no injected tools, so an agent it
@@ -2353,6 +2371,43 @@ async def _agent_for_app_dispatch(
         cache_write=False,
         assistant_id=input_data.rag_assistant_id,
         text_only_model=is_text_only_model(input_modalities),
+    )
+
+
+async def _agent_for_app_tool_call(
+    input_data: InvocationRequest,
+    current_user: User,
+    user_id: str,
+    auth_token: Optional[str],
+    *,
+    agent_type: str,
+    accessible_skill_ids: Optional[list],
+):
+    """The agent an App's ``tools/call`` dispatches against.
+
+    ``_agent_for_app_dispatch`` cannot rebuild the turn's cache key: the turn's
+    system prompt, memory context, injected tools and memory binding are all
+    resolved later in the route, so its key missed on every press and paid a
+    full build and a memory restore (~1.5 s cold on dev). The conversation's
+    turns have already built an agent over the tool's MCP client, so the
+    newest one that carries it is used as is. Nothing on the agent is read or
+    written here: the dispatch calls the catalog's client, and the build only
+    ever served to wire and start it. The walk matches ``(session, user)``, so
+    another user's agent under the same session id is never a candidate.
+    """
+    session_id = input_data.session_id
+    tool_name = input_data.app_tool_call.tool_name
+    for live in live_conversation_agents(session_id, user_id):
+        if agent_carries_tool_client(live, tool_name):
+            logger.info("agent_cache outcome=app_reuse session=%s", scrub_log(session_id))
+            return live
+    return await _agent_for_app_dispatch(
+        input_data,
+        current_user,
+        user_id,
+        auth_token,
+        agent_type=agent_type,
+        accessible_skill_ids=accessible_skill_ids,
     )
 
 
@@ -3734,8 +3789,9 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
 
     # App-initiated tools/call (MCP Apps PR #5). Like resume/continuation it
     # bypasses quota / RAG / file resolution / title — there is no model
-    # turn. We rebuild the conversation agent (so the MCP client session +
-    # auth are wired exactly as for a model-driven call), dispatch the one
+    # turn. We reuse the conversation's live agent when it carries the tool's
+    # MCP client, else rebuild it (so the MCP client session + auth are wired
+    # exactly as for a model-driven call), dispatch the one
     # named tool, publish synthesized tool_use/tool_result into the thread
     # via the per-session broker, and return the CallToolResult as JSON for
     # app-api to relay back to the iframe. Inert behind the host flag (the
@@ -3744,7 +3800,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     if input_data.app_tool_call is not None:
         atc = input_data.app_tool_call
         try:
-            agent = await _agent_for_app_dispatch(
+            agent = await _agent_for_app_tool_call(
                 input_data,
                 current_user,
                 user_id,
@@ -3776,23 +3832,16 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
 
     # App-pushed model context (MCP Apps PR #6, `ui/update-model-context`).
     # Like app_tool_call it bypasses quota / RAG / file resolution / title
-    # and runs NO model turn — we rebuild the conversation agent (so the
-    # same cached `agent.state` is reused) and stash the payload under
-    # `mcp_apps.context[resource_uri]`. The next real user turn merges and
-    # clears it. Inert behind the host flag (no live App ever calls this).
+    # and runs NO model turn. It builds no agent either: the payload is held
+    # per `(session, user)`, off any agent instance, and the next real user
+    # turn merges and clears it. Inert behind the host flag (no live App
+    # ever calls this).
     if input_data.app_context_update is not None:
         acu = input_data.app_context_update
         try:
-            agent = await _agent_for_app_dispatch(
-                input_data,
-                current_user,
-                user_id,
-                auth_token,
-                agent_type=effective_agent_type,
-                accessible_skill_ids=effective_skill_ids,
-            )
             payload = dispatch_app_context_update(
-                agent,
+                session_id=input_data.session_id,
+                user_id=user_id,
                 resource_uri=acu.resource_uri,
                 content=acu.content,
                 structured_content=acu.structured_content,
@@ -4957,12 +5006,14 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             # to this turn only. Skipped on resume/continuation (Strands
             # ignores `final_message` there) so a pending update survives
             # until the next real user turn instead of being silently
-            # cleared. Kept out of persisted history via the
-            # `original_message` path below (cache-prefix-safe).
+            # cleared. It is persisted as part of this user message, so later
+            # turns still know what the App did, and hidden from the UI by the
+            # `original_message` displayText split below. Appended history,
+            # never the cached prefix.
             if not is_resume and not is_continuation:
-                pending_ctx_block = merge_and_clear_pending_context(agent)
-                if pending_ctx_block:
-                    final_message = f"{pending_ctx_block}\n\n{final_message}"
+                final_message = _with_pending_app_context(
+                    final_message, input_data.session_id, user_id
+                )
 
                 # Interrupted-turn context: the prior turn ended early (Stop /
                 # refresh / dropped connection) and its marker was popped at
@@ -5022,6 +5073,16 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 if input_data.interrupt_responses
                 else None
             )
+            # Client data for tools, never for the model: Strands hands
+            # `invocation_state` to tools via ToolContext and leaves it out of
+            # the Converse request, so the cacheable prefix is untouched. A
+            # fresh dict per request (Strands mutates it), and None when there
+            # is nothing to carry, which keeps the coordinator's call as it was.
+            turn_invocation_state = (
+                {FRAME_HEIGHT_STATE_KEY: input_data.browser_frame_height}
+                if input_data.browser_frame_height is not None
+                else None
+            )
 
             async for event in agent.stream_async(
                 final_message,
@@ -5058,6 +5119,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 # The same clock as `turn_prelude`, continued to the first model
                 # output and emitted as `turn_first_token` (turn-path P1b).
                 turn_clock=prelude,
+                invocation_state=turn_invocation_state,
             ):
                 yield event
                 # Interleave the finished title between agent events (same

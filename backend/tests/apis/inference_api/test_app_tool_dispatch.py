@@ -6,6 +6,8 @@ at the inference-api dispatch, and that a successful call publishes
 synthesized tool_use/tool_result into the per-session broker.
 """
 
+import contextlib
+
 import pytest
 
 from apis.inference_api.chat import app_tool_dispatch as dispatch_mod
@@ -14,8 +16,10 @@ from apis.inference_api.chat.app_tool_dispatch import (
     dispatch_app_tool_call,
 )
 from apis.shared.mcp_apps.broker import get_app_tool_event_broker
+from apis.shared.tools import mcp_session
 from apis.shared.tools.models import ToolUIMetadata
 from agents.main_agent.integrations import mcp_apps as mcp_apps_mod
+from tests.fixtures.flaky_mcp_server import FlakyMCPServer
 
 
 class _FakeContent:
@@ -93,10 +97,16 @@ async def test_rejects_when_host_flag_disabled(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_rejects_unknown_tool(monkeypatch):
+    # e.g. GitHub's issue_write App calling ui_get against `/mcp/x/issues`,
+    # which never lists it. The message names the tool and says it isn't
+    # offered, not that its visibility forbids the App.
     _patch(monkeypatch, enabled=True, meta=None, client=_FakeClient())
     with pytest.raises(AppToolCallError) as ei:
-        await _call()
+        await _call(tool_name="ui_get")
     assert ei.value.code == 403
+    assert ei.value.message == (
+        "Tool 'ui_get' is not offered by this conversation's MCP servers"
+    )
 
 
 @pytest.mark.asyncio
@@ -111,6 +121,9 @@ async def test_rejects_tool_not_app_visible(monkeypatch):
     with pytest.raises(AppToolCallError) as ei:
         await _call()
     assert ei.value.code == 403
+    assert ei.value.message == (
+        "Tool 'widget_tool' is not callable from an MCP App"
+    )
 
 
 @pytest.mark.asyncio
@@ -192,8 +205,100 @@ async def test_dict_shaped_result_keeps_its_content(monkeypatch):
 
     payload = await _call(session_id="disp-dict")
 
-    assert payload["result"]["content"] == [{"text": '{"lists": []}'}]
+    assert payload["result"]["content"] == [{"type": "text", "text": '{"lists": []}'}]
     assert payload["result"]["isError"] is False
+
+
+@pytest.mark.asyncio
+async def test_app_receives_tagged_mcp_content(monkeypatch):
+    """The App gets an MCP `CallToolResult`, not Strands' untagged blocks.
+
+    GitHub's issue_write App finds its data with `c.type === "text"`; with
+    Strands' `{"text": ...}` passed through, every picker it fills (labels,
+    assignees, milestones) rendered "No labels available" although the
+    `ui_get` call succeeded. The thread event keeps the Strands shape.
+    """
+    result = {
+        "toolUseId": "mcp-1",
+        "status": "success",
+        "content": [
+            {"text": '{"labels": [{"name": "bug"}]}'},
+            {"json": {"count": 1}},
+            {"image": {"format": "png", "source": {"bytes": b"\x89PNG"}}},
+            {"type": "text", "text": "already tagged"},
+        ],
+        "structuredContent": {"labels": [{"name": "bug"}]},
+    }
+    client = _FakeClient(result)
+    _patch(monkeypatch, enabled=True, meta=_ui(["model", "app"]), client=client)
+
+    broker = get_app_tool_event_broker()
+    q = broker.add_subscriber("disp-tagged")
+    try:
+        payload = await _call(session_id="disp-tagged")
+        events = broker.drain(q)
+    finally:
+        broker.remove_subscriber("disp-tagged", q)
+
+    assert payload["result"]["content"] == [
+        {"type": "text", "text": '{"labels": [{"name": "bug"}]}'},
+        {"type": "text", "text": '{"count": 1}'},
+        {"type": "image", "data": "iVBORw==", "mimeType": "image/png"},
+        {"type": "text", "text": "already tagged"},
+    ]
+    assert payload["result"]["structuredContent"] == {"labels": [{"name": "bug"}]}
+    thread_result = events[1]["data"]["tool_result"]
+    assert thread_result["content"][0] == {"text": '{"labels": [{"name": "bug"}]}'}
+
+
+@pytest.mark.asyncio
+async def test_no_structured_content_key_when_the_tool_returned_none(monkeypatch):
+    client = _FakeClient({"status": "success", "content": [{"text": "ok"}]})
+    _patch(monkeypatch, enabled=True, meta=_ui(["model", "app"]), client=client)
+
+    payload = await _call(session_id="disp-nostruct")
+
+    assert "structuredContent" not in payload["result"]
+
+
+@pytest.mark.asyncio
+async def test_strands_error_status_reaches_the_app_as_is_error(monkeypatch):
+    """`status: "error"` without `isError` is still an error.
+
+    That is the shape `call_tool_sync` returns when it catches an exception
+    itself. Read for `isError` alone, the App got `isError: false` beside
+    "Tool execution failed: ..." — found on dev with GitHub's issue_write.
+    """
+    client = _FakeClient(
+        {
+            "toolUseId": "mcp-1",
+            "status": "error",
+            "content": [{"text": "Tool execution failed: boom"}],
+        }
+    )
+    _patch(monkeypatch, enabled=True, meta=_ui(["model", "app"]), client=client)
+
+    broker = get_app_tool_event_broker()
+    q = broker.add_subscriber("disp-status")
+    try:
+        payload = await _call(session_id="disp-status")
+        events = broker.drain(q)
+    finally:
+        broker.remove_subscriber("disp-status", q)
+
+    assert payload["result"]["isError"] is True
+    assert payload["result"]["content"] == [
+        {"type": "text", "text": "Tool execution failed: boom"}
+    ]
+    assert events[1]["data"]["tool_result"]["status"] == "error"
+
+
+def test_is_error_reads_every_failure_marker():
+    assert dispatch_mod._is_error({"isError": True}) is True
+    assert dispatch_mod._is_error({"status": "error"}) is True
+    assert dispatch_mod._is_error({"status": "success"}) is False
+    assert dispatch_mod._is_error(_FakeResult(is_error=True)) is True
+    assert dispatch_mod._is_error(_FakeResult(is_error=False)) is False
 
 
 class _SessionClient(_FakeClient):
@@ -262,6 +367,103 @@ async def test_leaves_a_live_client_session_alone(monkeypatch):
     assert client.starts == 0
     assert client.stops == 0
     assert client.active is True
+
+
+@pytest.mark.asyncio
+async def test_a_connection_lost_mid_call_reports_an_unknown_outcome(monkeypatch):
+    """A write the server performed must not come back as a plain failure.
+
+    The dev sequence: an agent's tool provider owns a live session, the App
+    presses Create issue, GitHub creates it and answers 503. The App was told
+    `isError: false` with "Tool execution failed: Connection to the MCP server
+    was closed", and the shared client was left dead — the next press 502'd
+    and every agent built over it got the dead session's tool list.
+    """
+    monkeypatch.setattr(dispatch_mod, "_schedule_ui_resource_refresh", lambda *a: None)
+    with FlakyMCPServer() as server:
+        client = server.client()
+        # As the agent build does: the tool provider starts the session.
+        await client.load_tools()
+        client.add_consumer("agent-registry")
+        _patch(monkeypatch, enabled=True, meta=_ui(["model", "app"]), client=client)
+        try:
+            payload = await dispatch_app_tool_call(
+                agent=None,
+                session_id="disp-lost",
+                user_id="u1",
+                tool_use_id="tu-1",
+                tool_name="issue_write",
+                arguments={"title": "first"},
+            )
+
+            assert server.writes == ["first"]  # performed once, never retried
+            assert payload["result"]["isError"] is True
+            text = payload["result"]["content"][0]["text"]
+            assert "may have completed" in text
+            assert "issue_write" in text
+
+            # The crashed session was reset, so the client reconnects: the
+            # next press works...
+            server.fail_calls = False
+            again = await dispatch_app_tool_call(
+                agent=None,
+                session_id="disp-lost",
+                user_id="u1",
+                tool_use_id="tu-1",
+                tool_name="issue_write",
+                arguments={"title": "second"},
+            )
+            assert again["result"]["isError"] is False
+            assert server.writes == ["first", "second"]
+            # The client came back as the agents' tool provider, not as a
+            # session borrowed for one call: still running, still counting
+            # the registry that holds it.
+            assert mcp_session.session_is_active(client)
+            assert mcp_session.is_tool_provider(client)
+            assert "agent-registry" in client._consumers
+
+            # ...and an agent built over the client next gets a live session
+            # rather than the dead one's cached tool list.
+            await client.load_tools()
+            result = client.call_tool_sync("t-3", "issue_write", {"title": "third"})
+            assert result["status"] == "success"
+        finally:
+            with contextlib.suppress(Exception):
+                client.stop(None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_a_crashed_session_is_reset_before_it_is_revived(monkeypatch):
+    """`start()` on a crashed client returns before any handshake.
+
+    Its init future is still the resolved one from the dead session, so a
+    plain revive "succeeded" and the call then failed on a session that was
+    not running.
+    """
+    monkeypatch.setattr(dispatch_mod, "_schedule_ui_resource_refresh", lambda *a: None)
+    with FlakyMCPServer() as server:
+        client = server.client()
+        client.start()
+        # Crash it outside the dispatch, the way a model-driven call would.
+        client.call_tool_sync("t-1", "issue_write", {"title": "model"})
+        assert mcp_session.session_crashed(client)
+
+        server.fail_calls = False
+        _patch(monkeypatch, enabled=True, meta=_ui(["model", "app"]), client=client)
+        try:
+            payload = await dispatch_app_tool_call(
+                agent=None,
+                session_id="disp-crashed",
+                user_id="u1",
+                tool_use_id="tu-1",
+                tool_name="issue_write",
+                arguments={"title": "app"},
+            )
+            assert payload["result"]["isError"] is False
+            assert server.writes == ["model", "app"]
+        finally:
+            with contextlib.suppress(Exception):
+                client.stop(None, None, None)
 
 
 class _FakeIntegration:

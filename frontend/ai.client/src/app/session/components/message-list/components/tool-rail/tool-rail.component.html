@@ -170,11 +170,11 @@
               <div class="call-result">
                 <div
                   class="detail-label"
-                  [class.text-gray-500]="call.result.status !== 'error'"
-                  [class.dark:text-gray-400]="call.result.status !== 'error'"
-                  [class.text-state-danger-600]="call.result.status === 'error'"
-                  [class.dark:text-state-danger-400]="call.result.status === 'error'"
-                >{{ call.result.status === 'error' ? 'Error' : 'Result' }}</div>
+                  [class.text-gray-500]="!callFailed(call)"
+                  [class.dark:text-gray-400]="!callFailed(call)"
+                  [class.text-state-danger-600]="callFailed(call)"
+                  [class.dark:text-state-danger-400]="callFailed(call)"
+                >{{ resultLabel(call) }}</div>
                 @if (hasResultBody(call)) {
                   <div
                     class="result-block detail-scroll max-h-80 text-gray-500 dark:text-gray-400"

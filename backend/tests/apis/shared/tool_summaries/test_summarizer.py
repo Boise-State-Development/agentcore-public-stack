@@ -286,3 +286,48 @@ def test_the_system_prompt_no_longer_models_a_canvas_failure():
     from apis.shared.tool_summaries.summarizer import _SUMMARY_SYSTEM_PROMPT
 
     assert "Couldn't reach Canvas" not in _SUMMARY_SYSTEM_PROMPT
+
+
+
+# -- an MCP App form left open is waiting, not failed, and not done ---------
+#
+# dev 2026-10-18: GitHub's issue_write App returns `isError` on purpose while
+# its form waits for Submit. Headed as a failure it read "Couldn't use GitHub";
+# handed to the model with the stub text it could read as "Created an issue".
+
+
+def _awaiting(name="issue_write", integration="GitHub"):
+    return {
+        "toolUseId": name,
+        "toolName": name,
+        "input": '{"method": "create"}',
+        "result": "An interactive form has been shown to the user... STOP",
+        "ok": True,
+        "awaiting": True,
+        "durationMs": 5,
+        "integration": integration,
+    }
+
+
+@pytest.mark.asyncio
+async def test_an_all_awaiting_batch_is_headed_without_a_model(bedrock):
+    summary = await summarize_tool_batch([_awaiting()])
+
+    assert summary == "Waiting for you to submit the form in GitHub"
+    bedrock.converse.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_an_awaiting_tool_with_no_catalog_name_is_not_named_by_its_tool(bedrock):
+    summary = await summarize_tool_batch([_awaiting(integration=None)])
+
+    assert summary == "Waiting for you to submit the form"
+
+
+def test_the_prompt_says_an_awaiting_call_did_nothing_and_hides_its_text():
+    prompt = _build_prompt(_calls() + [_awaiting()])
+
+    assert "issue_write [GitHub]" in prompt
+    assert "WAITING FOR USER" in prompt
+    assert "FAILED" not in prompt
+    assert "STOP" not in prompt

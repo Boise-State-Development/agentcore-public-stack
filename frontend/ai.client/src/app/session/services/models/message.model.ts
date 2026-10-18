@@ -89,6 +89,8 @@ export interface ToolUseData {
   result?: {
     content: ToolResultContent[];
     status: 'success' | 'error';
+    /** The tool's MCP `structuredContent`, when it returned one. */
+    structuredContent?: unknown;
   };
   /** Tool execution status */
   status?: 'pending' | 'complete' | 'error';
