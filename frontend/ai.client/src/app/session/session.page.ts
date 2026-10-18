@@ -988,7 +988,7 @@ export class ConversationPage implements OnDestroy {
       this.assistant.set(loadedAssistant);
       // Reflect the Agent's governed bindings in the chat-input (Agent Designer).
       // Best-effort and independent of the assistant fetch above.
-      await this.loadAgentBindings(assistantId, !!loadedAssistant.projectId);
+      await this.loadAgentBindings(assistantId);
     } catch (error: any) {
       console.error('Failed to load assistant:', error);
       
@@ -1016,11 +1016,11 @@ export class ConversationPage implements OnDestroy {
    * and the conversation is never blocked on this. The backend still governs
    * bindings at invocation regardless, so this is UI honesty, not enforcement.
    */
-  private async loadAgentBindings(assistantId: string, isProjectHarness: boolean): Promise<void> {
+  private async loadAgentBindings(assistantId: string): Promise<void> {
     try {
       const agent = await this.agentService.getAgent(assistantId);
       this.agent.set(agent);
-      this.applyAgentBindingLocks(agent, isProjectHarness);
+      this.applyAgentBindingLocks(agent);
     } catch {
       this.agent.set(null);
       this.runnability.set(null);
@@ -1039,13 +1039,13 @@ export class ConversationPage implements OnDestroy {
   }
 
   /**
-   * Lock each picker to the Agent's binding. Tools are always locked, to none if
-   * the Agent binds none: the backend runs every Agent on its own tools, never the
-   * viewer's picks. An Agent that binds no tools still gets the admin's always-on
-   * tools, so its lock keeps them. Skills are released when unbound, except on a
-   * project, which always runs on its own skills.
+   * Lock each picker to the Agent's binding. Tools and skills are always locked, to
+   * none if the Agent binds none: the backend runs every Agent (a project's included)
+   * on its own tools and skills, never the viewer's picks. An Agent that binds no
+   * tools still gets the admin's always-on tools, so its lock keeps them; skills have
+   * no such floor.
    */
-  private applyAgentBindingLocks(agent: Agent, isProjectHarness: boolean): void {
+  private applyAgentBindingLocks(agent: Agent): void {
     const modelId = agent.modelConfig?.modelId;
     if (modelId) {
       this.modelService.lockToAgentModel(modelId);
@@ -1061,16 +1061,12 @@ export class ConversationPage implements OnDestroy {
     }
 
     const skillIds = agent.bindings.filter(b => b.kind === 'skill').map(b => b.ref);
-    if (skillIds.length > 0 || isProjectHarness) {
-      this.skillService.lockToAgentSkills(skillIds);
-      // Load the accessible skills so the locked rows can render their names.
-      // Only fires when an Agent actually binds skills (a skills-enabled
-      // context), so there is no /skills fetch in flag-off environments.
-      if (skillIds.length > 0 && !this.skillService.initialized()) {
-        void this.skillService.loadSkills();
-      }
-    } else {
-      this.skillService.clearAgentLock();
+    this.skillService.lockToAgentSkills(skillIds);
+    // Load the accessible skills so the locked rows can render their names.
+    // Only fires when an Agent actually binds skills (a skills-enabled
+    // context), so there is no /skills fetch in flag-off environments.
+    if (skillIds.length > 0 && !this.skillService.initialized()) {
+      void this.skillService.loadSkills();
     }
   }
 

@@ -83,6 +83,7 @@ from apis.shared.skills.pins import base_skill_id
 from apis.inference_api.chat.agent_binding_resolver import (
     AgentBindingBlockedError,
     AgentNoticeEvent,
+    ResolvedSkills,
     resolve_agent_invocation,
 )
 from apis.shared.sessions.metadata import (
@@ -2203,6 +2204,25 @@ def _apply_enabled_skills_filter(
     return [sid for sid in accessible_skill_ids if sid in requested]
 
 
+def _apply_agent_skills_override(
+    agent_type: str,
+    skill_ids: Optional[list[str]],
+    override: Optional[ResolvedSkills],
+) -> tuple[str, Optional[list[str]]]:
+    """The turn's ``(agent_type, skill ids)`` once an Agent's skills are known.
+
+    An Agent's skills replace the request's for the turn, so ChatAgent's AgentSkills
+    plugin discloses exactly what the Agent was given (D5, resolved per invoker). That
+    includes an empty set: an Agent that binds no skills runs with none, never the
+    viewer's ``enabled_skills``. With no skills ``build_skills_runtime`` mounts nothing
+    and the turn behaves as a plain chat. ``override`` is ``None`` only when no Agent ran
+    (plain chat, or the agents feature off); the request then drives skills and type.
+    """
+    if override is None:
+        return agent_type, skill_ids
+    return "skill", list(override.skill_ids)
+
+
 def _resolve_invoked_skill_slugs(
     effective_skill_ids: Optional[list[str]], invoked_skills: Optional[list[str]]
 ) -> list[str]:
@@ -3811,7 +3831,8 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # plugin. The opt-in default (D6) is what keeps this cheap: an absent or
     # empty selection short-circuits to [] without touching RBAC or the skill
     # table, so every turn that doesn't ask for skills costs exactly what it did
-    # before. An Agent's skill bindings override this further down.
+    # before. An Agent turn replaces this further down with the Agent's own skills
+    # (none, when it binds none).
     effective_skill_ids = None
     if skills_enabled() and input_data.enabled_skills:
         effective_skill_ids = _apply_enabled_skills_filter(
@@ -4094,9 +4115,10 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # the request's ``enabled_tools`` for the turn (like ``model_override`` replaces the
     # model). None ⇒ the Agent binds no tools ⇒ the request's enabled_tools drive the turn.
     agent_tools_override = None
-    # An Agent's ``skill`` bindings, resolved per invoker (D5). When set they replace the
-    # request's skills AND force skill-mode (agent_type="skill") for the turn. None ⇒ the
-    # Agent binds no skills ⇒ the request's agent_type/enabled_skills drive the turn.
+    # An Agent's ``skill`` bindings, resolved per invoker (D5). On an Agent turn they replace
+    # the request's skills AND force skill-mode (agent_type="skill"); an Agent that binds no
+    # skills resolves to an empty set, so it runs with none. None ⇒ not an Agent turn ⇒ the
+    # request's agent_type/enabled_skills drive the turn.
     agent_skills_override = None
     # Shared Projects: set when this turn's agent is a project's hidden harness. Carried to
     # the session binding and to every cost row of the turn (``projectId`` plus the
@@ -4860,16 +4882,12 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 or _folders_have(attachments.folders, is_tabular_file),
             )
 
-            # An Agent's skill bindings replace the request's skills for this turn so
-            # ChatAgent's AgentSkills plugin discloses exactly the bound set (D5,
-            # resolved per invoker above). Reassigning these function-scope locals here
-            # (before the main-turn get_agent below) makes them flow into construction —
-            # and thus the paused-turn snapshot — so a bound-skill agent resumes on the
-            # same skills_hash. None ⇒ no skill binding ⇒ the request drives skills/type.
-            # A project harness is never None here: an empty set runs it with no skills.
-            if agent_skills_override is not None:
-                effective_agent_type = "skill"
-                effective_skill_ids = agent_skills_override.skill_ids
+            # Reassigning these function-scope locals here (before the main-turn
+            # get_agent below) makes them flow into construction — and thus the
+            # paused-turn snapshot — so an Agent turn resumes on the same skills_hash.
+            effective_agent_type, effective_skill_ids = _apply_agent_skills_override(
+                effective_agent_type, effective_skill_ids, agent_skills_override
+            )
 
             turn_tools = await _build_turn_tools(
                 input_data,

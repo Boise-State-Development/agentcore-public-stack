@@ -150,6 +150,7 @@ export class ComposerAddMenuComponent {
   // --- Skills -----------------------------------------------------------------
 
   protected readonly skills = this.skillCommands.commands;
+  protected readonly skillsLocked = this.skillCommands.agentLocked;
 
   // --- Tools ------------------------------------------------------------------
 
