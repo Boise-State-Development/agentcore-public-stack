@@ -8,10 +8,13 @@ import { SessionService } from '../session/session.service';
 import { ModelService } from '../model/model.service';
 
 /** Shape returned to the bridge → forwarded to the App as the JSON-RPC
- *  `tools/call` result (a minimal MCP `CallToolResult`). */
+ *  `tools/call` result (an MCP `CallToolResult`: content blocks are tagged
+ *  `{type: 'text', text}` / `{type: 'image', data, mimeType}`). */
 export interface ProxyToolCallResult {
   content: unknown[];
   isError: boolean;
+  /** Present only when the tool returned structured output. */
+  structuredContent?: unknown;
 }
 
 /**

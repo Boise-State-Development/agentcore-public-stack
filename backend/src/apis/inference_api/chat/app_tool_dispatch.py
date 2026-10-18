@@ -30,7 +30,9 @@ rejected as not app-visible.
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
+import json
 import logging
 import threading
 import uuid
@@ -90,6 +92,50 @@ def _serialize_content(result: Any) -> List[Dict[str, Any]]:
             else:
                 blocks.append({"type": "text", "text": str(item)})
     return blocks
+
+
+def _to_mcp_content(blocks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Strands content blocks -> MCP `CallToolResult` content for the App.
+
+    Strands maps each MCP block to its own untagged shape (`{"text": ...}`,
+    `{"json": ...}`, `{"image": {"format", "source": {"bytes"}}}`), but the
+    App reads the spec's tagged shape: GitHub's issue_write App looks for
+    `c.type === "text"`, so an untagged block reads as no data at all and
+    every picker it fills shows empty. The thread keeps the Strands shape;
+    only the result handed back to the App is converted.
+    """
+    converted: List[Dict[str, Any]] = []
+    for block in blocks:
+        if "type" in block:
+            converted.append(block)
+        elif isinstance(block.get("text"), str):
+            converted.append({"type": "text", "text": block["text"]})
+        elif "json" in block:
+            converted.append(
+                {"type": "text", "text": json.dumps(block["json"], default=str)}
+            )
+        elif isinstance(block.get("image"), dict):
+            image = block["image"]
+            raw = (image.get("source") or {}).get("bytes")
+            fmt = image.get("format") or "png"
+            if isinstance(raw, (bytes, bytearray)):
+                converted.append(
+                    {
+                        "type": "image",
+                        "data": base64.b64encode(raw).decode("ascii"),
+                        "mimeType": f"image/{fmt}",
+                    }
+                )
+        else:
+            converted.append({"type": "text", "text": json.dumps(block, default=str)})
+    return converted
+
+
+def _structured_content(result: Any) -> Any:
+    """The tool's `structuredContent`, or None when it returned none."""
+    if isinstance(result, dict):
+        return result.get("structuredContent")
+    return getattr(result, "structuredContent", None)
 
 
 def _is_error(result: Any) -> bool:
@@ -462,8 +508,9 @@ async def dispatch_app_tool_call(
     """Execute one app-initiated tool call and publish thread events.
 
     `agent` is the already-built conversation agent (its MCP clients are
-    live). Returns ``{"toolUseId", "result": {content, isError}}`` for the
-    JSON response app-api relays to the iframe. Raises `AppToolCallError`
+    live). Returns ``{"toolUseId", "result": CallToolResult}`` (tagged MCP
+    content, ``isError``, and ``structuredContent`` when the tool returned
+    one) for the JSON response app-api relays to the iframe. Raises `AppToolCallError`
     for visibility / unknown-tool / dispatch failures.
     """
     ui_metadata, client = _resolve_client(agent, tool_name)
@@ -553,7 +600,11 @@ async def dispatch_app_tool_call(
     # re-reading this App's shell costs almost nothing. See the note above.
     _schedule_ui_resource_refresh(user_id, session_id, tool_use_id)
 
-    return {
-        "toolUseId": tool_use_id,
-        "result": {"content": content, "isError": is_error},
+    app_result: Dict[str, Any] = {
+        "content": _to_mcp_content(content),
+        "isError": is_error,
     }
+    structured = _structured_content(result)
+    if structured is not None:
+        app_result["structuredContent"] = structured
+    return {"toolUseId": tool_use_id, "result": app_result}
