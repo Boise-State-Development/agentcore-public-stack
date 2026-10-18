@@ -166,7 +166,9 @@
     }
     <div class="max-h-72 overflow-y-auto">
       @if (tools().length === 0) {
-        <p class="px-2.5 py-2 text-sm/5 text-gray-500 dark:text-gray-400">No tools available.</p>
+        <p class="px-2.5 py-2 text-sm/5 text-gray-500 dark:text-gray-400">
+          {{ toolsLocked() ? "This agent doesn't use tools." : 'No tools available.' }}
+        </p>
       }
       @for (tool of tools(); track tool.toolId) {
         <button

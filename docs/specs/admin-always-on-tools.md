@@ -1,8 +1,9 @@
 # Admin "always-on" tools
 
 **Status:** Proposed — not implemented
-**Scope:** Any turn whose toolset comes from the user's picker. An Agent that
-binds its own tools is exempt; an Agent that binds none is not (see §7, D4)
+**Scope:** Any turn whose toolset comes from the user's picker, and any Agent
+turn whose Agent binds no tools. An Agent that binds its own tools is exempt
+(see §7, D4)
 **Refs:** `_apply_attachment_tool_autoenable` (`inference_api/chat/routes.py`) is
 the pattern this follows; `docs/specs/turn-latency-preamble.md` is the latency
 budget it must not spend.
@@ -386,53 +387,88 @@ always-on into such a turn would override the author's explicit intent and break
 that contract. So `_apply_admin_always_on_tools` is skipped when
 `agent_tools_override is not None`.
 
-But `_resolve_tools` returns `None` — not an empty `ResolvedTools` — when an
-Agent carries **no `tool` bindings at all** (`agent_binding_resolver.py:241`:
-`if not tool_bindings: return None`). Such a turn falls straight through to the
-request's `enabled_tools`, i.e. the user's own picker. **Always-on applies
-there, and must.**
+An Agent that carries **no `tool` bindings at all** resolves to an empty
+toolset: `resolve_agent_invocation` returns `ResolvedTools(tool_ids=[],
+owns_toolset=False)`, the same value a Shared Project harness with no tools
+gets. The viewer's picker never reaches the turn. **Always-on applies there,
+and must.**
 
-Two reasons:
+> **Changed 2026-10-18 (Phil).** Until then an unbound Agent fell through to
+> the request's `enabled_tools`, the viewer's own picker, and always-on was
+> unioned into that. That made an Agent's toolset a property of whoever was
+> chatting with it. An instructor's knowledge-base-only course assistant on dev
+> called the viewer's personal Canvas for Faculty MCP tool and paused the turn
+> on an OAuth prompt, because the viewer had that tool on in their picker. A
+> student with web browsing and GitHub on would have got a different assistant
+> again. An author who selects no tools means no tools, so the fall-through is
+> gone. What stays is the floor below.
 
-1. That Agent is expressing no intent about tools. It is a custom system prompt
-   over the default toolset, and always-on is precisely the floor under that
-   toolset.
+Why the floor stays for an unbound Agent:
+
+1. That Agent is expressing no intent about tools. Always-on is the admin's
+   floor under every toolset that nobody scoped, and an unbound Agent's empty
+   toolset is one of those.
 2. Otherwise always-on becomes opt-out-by-construction. A user who wants to shed
    a pinned tool creates a trivial Agent with a custom prompt and zero tool
    bindings, and the governance property evaporates. A policy with a one-click
    bypass is not a policy.
+3. The thing that went wrong in the incident does not apply to it. The bug was
+   a toolset that varied with the viewer's own choices. The pinned set is the
+   admin's per-deployment decision, the same for every turn of every
+   conversation the role reaches. An admin pins a tool because they want it
+   everywhere, and a course assistant is not an exception they asked for. A
+   deployment that does not want a pinned tool inside Agents should not pin
+   it.
 
 So the honest one-line summary is: *always-on does not apply to an Agent that
-defines its own toolset; it does apply to an Agent that leaves the toolset to
-the user.*
+defines its own toolset; it does apply to an Agent that binds no tools, whose
+toolset is otherwise empty.* An author who wants an Agent with the pinned set
+gone binds the tools it needs; binding even one makes the toolset theirs.
+
+What else still reaches an unbound Agent's turn, none of it from the picker:
+
+- **System tools** (`resolve_system_tool_ids`: `whoami`, `get_my_quota`, …),
+  unioned in on every turn, bound Agents included.
+- **The attachment auto-enable** (§1): a session holding a spreadsheet gets the
+  analysis tools, and a readable attachment gets `document_read`.
+- **The knowledge-base spreadsheet auto-enable**: when the Agent's knowledge
+  base holds a complete CSV/XLSX, `list_spreadsheets`/`analyze_spreadsheet`
+  are enabled, RBAC-gated, through the same seam and kill switch as the
+  attachment case (`apis/shared/assistants/kb_tabular.py`). Before the change
+  those tools reached an unbound Agent only through the picker, and its own
+  knowledge base is the clearest statement of what its content needs. An Agent
+  that binds tools does not get this: its author chose the toolset.
+
+**No "inherit the viewer's tools" option.** An Agent is shared, so inheriting
+the viewer's picker is exactly the per-viewer variance this change removes. An
+author who wants a tool in the Agent binds it, and the D5 per-invoker access
+check still governs who can run it. Revisit only with a concrete use case that
+binding cannot serve.
 
 **The governing tenet: an Agent is a blank canvas.** Authors are expected to
 bind only the tools relevant to that Agent's task, and a bound toolset is a
-deliberate statement about scope. An Agent with *no* tool bindings has not made
-that statement yet — it is an unfinished canvas, not a claim that the org's
-pinned tools should fall away. Reading it as the latter is what would turn
-always-on into an opt-out button.
+deliberate statement about scope. An Agent with *no* tool bindings has made a
+statement too: it uses no tools of its own. It has not said the org's pinned
+tools should fall away, and reading it that way is what would turn always-on
+into an opt-out button.
 
 ⚠️ **This is the common starting shape, not an edge case.** The seeded agent
 templates ship with **empty `bindings`** on purpose — "no organization-specific
 tool refs, so a fork with a different tool catalog shows no dropped-tool
 notices" (`apis/shared/agent_templates/seed.py`). Every Agent created from a
-template therefore starts with zero tool bindings and inherits the picker. The
-population that receives always-on via this path is large, and it is the
-population the tenet above says *should* receive it — but see the rollout note
-in PR-4. Note that the dataclass docstring for `ResolvedTools` contemplates a
-meaningful empty `tool_ids` ("the Agent deliberately runs with *no* tools"), but
-`_resolve_tools` cannot currently produce one — a non-empty binding list always
-yields at least one ref. **If that ever changes, empty must be treated as
-"binds its own toolset" (skip the union), or "no tools" silently becomes "some
-tools".** Cover it with a test now, not when it regresses.
+template therefore starts with zero tool bindings, and so with only the floor
+above. **Releasing the 2026-10-18 change removes the picker's tools from every
+existing unbound Agent at once** (each pays one `toolConfig` rewrite on its
+next turn, §5); say so in the release notes. An empty `tool_ids` with
+`owns_toolset` True is a different case: a project harness whose bound tools
+were all dropped for this member. It owns its toolset, so it skips the union,
+and "no tools" never silently becomes "some tools".
 
 This is a **deliberate divergence from the CSV precedent**, which applies to the
 effective list and therefore does reach Agent-bound turns. The difference:
 CSV auto-enable serves the *user's* governing intent (they attached the file);
 always-on serves the *admin's*, and the Agent author is also exercising admin
-intent. Revisit if Agents grow an explicit "inherit org tools" binding — that
-binding is the clean way to let an author opt back in.
+intent.
 
 **D5 — Scheduled runs and voice: in scope, and both come for free.** A
 scheduled run reaches the model through `run_agent_headless`
@@ -489,14 +525,17 @@ Two cases that must be exercised explicitly, because they are the D4 boundary:
 
 - an Agent **with** tool bindings → the union is absent, the bound set is exact;
 - an Agent **without** tool bindings (the template-derived default shape) → the
-  union is present.
-- a Shared Project harness **without** tool bindings → the member's picker is
-  ignored (the toolset is empty, `ResolvedTools.owns_toolset` False), and the
-  union is still present. Without that floor, creating a project would be the
-  one-click bypass this decision exists to prevent.
+  viewer's picker is ignored (the toolset is empty, `ResolvedTools.owns_toolset`
+  False), and the union is still present.
+- a Shared Project harness **without** tool bindings → the same: the member's
+  picker is ignored, and the union is still present. Without that floor,
+  creating a project would be the one-click bypass this decision exists to
+  prevent.
 
 ⚠️ **Rollout note.** Because template-derived Agents carry empty `bindings`,
-flipping the flag changes the effective toolset of every such Agent at once —
+flipping the flag changes the effective toolset of every such Agent at once (since
+2026-10-18 from nothing to the pinned set, before that from the picker to the
+picker plus the pinned set) —
 each one pays a `toolConfig` rewrite on its next turn (§5), and its answers may
 change. This is intended behaviour, but it is a fleet-wide behaviour change on a
 single toggle, so: flip off-peak, start with one small tool, and say so in the
@@ -522,13 +561,15 @@ once and then ships stale code under an unchanged content-hash tag.
   more surface — wait for the ask.
 - **Agent Designer: nudge authors to bind a toolset, and to keep it tight.**
   Today the Designer does nothing to move an author off the empty canvas, so a
-  template-derived Agent can ship unbound indefinitely — and under D4 it then
-  carries the picker's whole toolset on every turn. Two halves, both cheap:
+  template-derived Agent can ship unbound indefinitely. Before 2026-10-18 it then
+  carried the picker's whole toolset on every turn; now it carries none, which
+  is cheaper but can surprise an author who expected tools. The Designer's Tools
+  section now says that no tools selected means no tools. Two halves, both cheap:
 
   1. *Nudge to bind.* A non-blocking prompt on the Agent form when `bindings`
      carries no `tool` entry, on the same footing as the existing dropped-tool
-     notices. Not a validation error — an unbound Agent is legitimate (D4), just
-     rarely what the author meant.
+     notices. Not a validation error — an unbound Agent is legitimate (a
+     knowledge-base-only course assistant is exactly this shape).
   2. *Nudge to keep it tight.* Guidance next to the tool picker in the Designer,
      with a live count and, ideally, the same token readout §6 specifies for the
      admin form.
@@ -642,6 +683,10 @@ a tool — neither fires on deploy:
   than a tool-less agent (§5);
 - template-derived Agents with no tool bindings gain the pinned tools (D4,
   PR-4).
+
+A third, from 2026-10-18 and not gated: an Agent with no tool bindings no
+longer runs on the viewer's picker tools (D4). It fires on release, for every
+existing unbound Agent.
 
 These belong in the release notes. "Backward compatible on deploy, behaviour
 change on enablement" is the honest summary.
@@ -779,6 +824,12 @@ container warmth, many unrelated merges since — so that delta is not
 attributable to this feature and was not treated as such.
 
 ### 11.3 D4 validated live, both sides
+
+> Validated before the 2026-10-18 change, when an unbound Agent still read the
+> picker: the "unbound" arm below sends `enabled_tools` that an unbound Agent
+> now ignores. The property it shows (the pinned set reaches an unbound Agent)
+> still holds; re-running it today would show the pinned `create_visualization`
+> (plus any system tools) whatever the client sends.
 
 Five throwaway Agents on dev (since deleted), same cache oracle, each arm with
 its own control.

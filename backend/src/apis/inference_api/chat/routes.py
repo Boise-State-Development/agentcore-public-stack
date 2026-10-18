@@ -1274,15 +1274,19 @@ async def _session_has_tabular(
     session_id: str,
     user_id: str,
     turn_has_tabular: bool = False,
+    kb_assistant_id: Optional[str] = None,
 ) -> bool:
     """Whether this session's turns need the Spreadsheet Analysis tools.
 
     True when this turn attaches a CSV/XLSX (already partitioned, no query),
     when the session was seen holding one earlier in this process, or when
-    the session's READY uploads include one. Sticky by design: the answer
-    feeds ``enabled_tools`` and therefore the agent-cache key, so it must
-    not flip between the attach turn and the follow-up. Fail-closed on
-    error: a turn without the tools is today's behavior, never a broken turn.
+    the session's READY uploads include one. With ``kb_assistant_id`` (an
+    Agent that binds no tools), also when that assistant's knowledge base
+    holds one: the picker used to be the only way those tools reached such an
+    Agent, and it no longer does. Sticky by design: the answer feeds
+    ``enabled_tools`` and therefore the agent-cache key, so it must not flip
+    between the attach turn and the follow-up. Fail-closed on error: a turn
+    without the tools is today's behavior, never a broken turn.
     """
     if turn_has_tabular:
         _remember_tabular_session(session_id)
@@ -1294,7 +1298,18 @@ async def _session_has_tabular(
     try:
         from apis.shared.files.document_read import session_has_tabular_files
 
-        present = await session_has_tabular_files(user_id, session_id)
+        if kb_assistant_id:
+            from apis.shared.assistants.kb_tabular import assistant_kb_has_tabular_documents
+
+            # Both reads at once: neither waits on the other, and the gate sits on the
+            # path to the first token.
+            in_session, in_kb = await asyncio.gather(
+                session_has_tabular_files(user_id, session_id),
+                assistant_kb_has_tabular_documents(kb_assistant_id),
+            )
+            present = in_session or in_kb
+        else:
+            present = await session_has_tabular_files(user_id, session_id)
     except Exception:  # noqa: BLE001 - the gate must never fail a turn
         logger.warning("spreadsheet auto-enable lookup failed; tools not injected this turn", exc_info=True)
         return False
@@ -1319,10 +1334,12 @@ async def _auto_enabled_attachment_tool_ids(
     session_id: str,
     user_id: str,
     turn_has_tabular: bool = False,
+    kb_assistant_id: Optional[str] = None,
 ) -> list[str]:
     """The Spreadsheet Analysis ids this turn should carry regardless of the
     picker, in a fixed order: every id in ``SPREADSHEET_TOOL_IDS`` the
-    caller's RBAC grant admits, when the session holds a spreadsheet.
+    caller's RBAC grant admits, when the session holds a spreadsheet (or,
+    given ``kb_assistant_id``, when that assistant's knowledge base does).
 
     Enables, never grants: ``can_access_tool`` is the same predicate the
     picker and Agent bindings answer to (role grant ∪ public tools). A user
@@ -1333,7 +1350,7 @@ async def _auto_enabled_attachment_tool_ids(
 
     if not attachment_tool_autoenable_enabled():
         return []
-    if not await _session_has_tabular(session_id, user_id, turn_has_tabular):
+    if not await _session_has_tabular(session_id, user_id, turn_has_tabular, kb_assistant_id):
         return []
     role_service = get_app_role_service()
     allowed: list[str] = []
@@ -1357,16 +1374,19 @@ async def _apply_attachment_tool_autoenable(
     session_id: str,
     user_id: str,
     turn_has_tabular: bool = False,
+    kb_assistant_id: Optional[str] = None,
 ) -> list | None:
     """``enabled_tools`` for this turn with the attachment auto-enable applied.
 
     The single seam every ``get_agent`` caller on the invocation path goes
     through, so the main turn and the MCP App dispatch paths compute the same
     effective list — and therefore the same agent-cache slot — for a session
-    holding a spreadsheet.
+    holding a spreadsheet. ``kb_assistant_id`` extends the gate to that
+    assistant's knowledge base; only an Agent that binds no tools passes it.
     """
     auto_ids = await _auto_enabled_attachment_tool_ids(
-        current_user, session_id, user_id, turn_has_tabular=turn_has_tabular
+        current_user, session_id, user_id, turn_has_tabular=turn_has_tabular,
+        kb_assistant_id=kb_assistant_id,
     )
     return _with_auto_enabled_tools(enabled_tools, auto_ids)
 
@@ -1389,16 +1409,14 @@ async def _apply_admin_always_on_tools(
     it would override the author's explicit scoping.
 
     ⚠️ The exemption is "the Agent binds its own toolset", NOT "the turn ran an
-    Agent". ``_resolve_tools`` returns ``None`` — so ``agent_bound_tools`` is
-    False — for an Agent with no ``tool`` bindings, and such a turn falls
-    through to the user's picker and **does** get the pinned set. That is
-    deliberate: a template-derived Agent starts with empty ``bindings``
-    (``agent_templates/seed.py``), and exempting it would make always-on
-    opt-out-by-construction — anyone could shed a pinned tool with a trivial
-    unbound Agent. See docs/specs/admin-always-on-tools.md §7 D4. A project
-    harness that binds no tools is the same case, though it no longer falls
-    through to the picker: its toolset is empty with ``owns_toolset`` False,
-    so the pinned set is still unioned in.
+    Agent". An Agent with no ``tool`` bindings (a project harness included)
+    resolves to an empty toolset with ``owns_toolset`` False — so
+    ``agent_bound_tools`` is False — and **does** get the pinned set, though
+    never the user's picker. That is deliberate: a template-derived Agent
+    starts with empty ``bindings`` (``agent_templates/seed.py``), and exempting
+    it would make always-on opt-out-by-construction — anyone could shed a
+    pinned tool with a trivial unbound Agent. See
+    docs/specs/admin-always-on-tools.md §7 D4.
 
     This is a deliberate divergence from the attachment auto-enable above,
     which applies to the effective list and so does reach Agent-bound turns:
@@ -3346,11 +3364,13 @@ async def _resolve_effective_tools(
 ) -> Optional[list]:
     """Map stage B11 (in ``tools``): the tool ids this turn actually carries.
 
-    The Agent's bindings if it has any, else the request's picker; then the
-    spreadsheet auto-enable for a session holding a spreadsheet, then the
-    admin's always-on set and the platform's system tools. One value, so the
-    cache key, every builder, the attachment guidance and the paused-turn
-    snapshot all see the same list.
+    On an Agent turn, the Agent's bindings — empty when it binds none, never
+    the request's picker; on a plain chat, the request's picker. Then the
+    spreadsheet auto-enable for a session holding a spreadsheet (or an unbound
+    Agent whose knowledge base holds one), then the admin's always-on set
+    unless the Agent binds its own tools, then the platform's system tools.
+    One value, so the cache key, every builder, the attachment guidance and
+    the paused-turn snapshot all see the same list.
     """
     # Get agent instance with user-specific configuration
     # AgentCore Memory tracks preferences across sessions per user_id
@@ -3363,15 +3383,21 @@ async def _resolve_effective_tools(
     # lifetime, so we can trust `input_data.rag_assistant_id`
     # directly; no preferences fallback needed.
     # An Agent's tool bindings replace the request's enabled_tools for this
-    # turn (D5, resolved per invoker above). None ⇒ no tool binding ⇒ the
-    # request drives the toolset exactly as today. A project harness is never
-    # None: binding no tools, it runs on none of the member's. Drives both the built-in
-    # extra tools (spreadsheet/artifact gate on specific ids) and get_agent.
+    # turn (D5, resolved per invoker above). An Agent that binds no tools gets
+    # an empty list here, not the viewer's picker: its toolset must not change
+    # with whoever is chatting. None ⇒ not an Agent turn (plain chat, or the
+    # Agent surface is off) ⇒ the request drives the toolset exactly as today.
+    # Drives both the built-in extra tools (spreadsheet/artifact gate on
+    # specific ids) and get_agent.
     effective_enabled_tools = (
         agent_tools_override.tool_ids
         if agent_tools_override is not None
         else input_data.enabled_tools
     )
+    # An unbound Agent's knowledge base is the one signal of what tools its own
+    # content needs: a spreadsheet there is unreadable without the analysis
+    # tools, which the picker used to supply.
+    agent_unbound = agent_tools_override is not None and not agent_tools_override.owns_toolset
     # A session holding a spreadsheet gets the Spreadsheet Analysis
     # tools whether or not the picker has them on, gated on the
     # caller's RBAC grant. Applied to the *effective* list so it
@@ -3385,6 +3411,7 @@ async def _resolve_effective_tools(
         input_data.session_id,
         user_id,
         turn_has_tabular=turn_has_tabular,
+        kb_assistant_id=input_data.rag_assistant_id if agent_unbound else None,
     )
 
     # Tools an admin pinned are unioned in for users whose roles grant

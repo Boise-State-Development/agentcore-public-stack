@@ -59,18 +59,19 @@ class TestAgentBindingExemption:
     async def test_an_agent_with_no_tool_bindings_still_gets_the_pinned_set(self):
         """§7 D4 — the anti-bypass case, and the COMMON one.
 
-        `_resolve_tools` returns None (so `agent_bound_tools` is False) for an
-        Agent with no tool bindings, and template-derived Agents ship with
-        empty `bindings` by design. Exempting them would let anyone shed a
-        pinned tool with a trivial unbound Agent.
+        An Agent with no tool bindings resolves to an empty toolset with
+        `owns_toolset` False (so `agent_bound_tools` is False), and
+        template-derived Agents ship with empty `bindings` by design.
+        Exempting them would let anyone shed a pinned tool with a trivial
+        unbound Agent.
         """
         with patch.object(
             routes, "resolve_always_on_tool_ids", _resolver(["pinned"])
         ), patch.object(routes, "resolve_system_tool_ids", _resolver([])):
             result = await routes._apply_admin_always_on_tools(
-                ["picker_tool"], USER, agent_bound_tools=False
+                [], USER, agent_bound_tools=False
             )
-        assert result == ["picker_tool", "pinned"]
+        assert result == ["pinned"]
 
     @pytest.mark.asyncio
     async def test_the_default_chat_turn_gets_the_pinned_set(self):
@@ -81,40 +82,120 @@ class TestAgentBindingExemption:
         assert result == ["picker_tool", "pinned"]
 
 
-class TestProjectHarnessWithNoTools:
-    """A project harness that binds no tools ignores the member's picker, but it
-    expressed no intent about tools, so the pinned floor still applies (D4).
-    Exempting it would make creating a project the one-click bypass."""
+class TestEffectiveToolsByTurnShape:
+    """`_resolve_effective_tools` for each kind of turn. The viewer's picker is
+    `picker_tool`; whether it survives is what separates the shapes.
+
+    An Agent that binds no tools ignores the picker: an author who selected no
+    tools must not get an Agent whose tools change with whoever is chatting.
+    It still expressed no intent about tools, so the pinned floor applies
+    (D4). Exempting it would make creating an Agent the one-click bypass."""
 
     @staticmethod
-    async def _effective(override):
-        input_data = SimpleNamespace(enabled_tools=["picker_tool"], session_id="s1")
+    async def _effective(override, *, enabled_tools=("picker_tool",), system=(), pinned=("pinned",)):
+        input_data = SimpleNamespace(
+            enabled_tools=list(enabled_tools), session_id="s1", rag_assistant_id="ast-1"
+        )
+        autoenable = AsyncMock(side_effect=lambda tools, *args, **kwargs: tools)
         with patch.object(
-            routes,
-            "_apply_attachment_tool_autoenable",
-            AsyncMock(side_effect=lambda tools, *args, **kwargs: tools),
+            routes, "_apply_attachment_tool_autoenable", autoenable
         ), patch.object(
-            routes, "resolve_always_on_tool_ids", _resolver(["pinned"])
-        ) as always_on:
+            routes, "resolve_always_on_tool_ids", _resolver(pinned)
+        ) as always_on, patch.object(
+            routes, "resolve_system_tool_ids", _resolver(system)
+        ):
             result = await routes._resolve_effective_tools(
                 input_data, USER, "u1", override, turn_has_tabular=False
             )
-        return result, always_on
+        return result, always_on, autoenable
 
     @pytest.mark.asyncio
-    async def test_the_members_picker_is_ignored_and_the_pinned_set_kept(self):
+    async def test_an_unbound_agent_ignores_the_picker_and_keeps_pinned_and_system(self):
         from apis.inference_api.chat.agent_binding_resolver import ResolvedTools
 
-        result, _ = await self._effective(ResolvedTools(tool_ids=[], owns_toolset=False))
+        result, _, _ = await self._effective(
+            ResolvedTools(tool_ids=[], owns_toolset=False), system=["whoami"]
+        )
+        assert result == ["pinned", "whoami"]
+
+    @pytest.mark.asyncio
+    async def test_an_unbound_agent_with_nothing_pinned_runs_on_no_tools(self):
+        """Empty, not None: None would mean "no tool filter" downstream."""
+        from apis.inference_api.chat.agent_binding_resolver import ResolvedTools
+
+        result, _, _ = await self._effective(
+            ResolvedTools(tool_ids=[], owns_toolset=False), pinned=()
+        )
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_an_unbound_agent_checks_its_knowledge_base_for_spreadsheets(self):
+        from apis.inference_api.chat.agent_binding_resolver import ResolvedTools
+
+        _, _, autoenable = await self._effective(ResolvedTools(tool_ids=[], owns_toolset=False))
+        assert autoenable.await_args.kwargs["kb_assistant_id"] == "ast-1"
+
+    @pytest.mark.asyncio
+    async def test_a_bound_agent_is_unchanged(self):
+        from apis.inference_api.chat.agent_binding_resolver import ResolvedTools
+
+        result, always_on, autoenable = await self._effective(
+            ResolvedTools(tool_ids=["agent_tool_a"]), system=["whoami"]
+        )
+        assert result == ["agent_tool_a", "whoami"]
+        always_on.assert_not_awaited()
+        # Its author chose its toolset; the knowledge base does not add to it.
+        assert autoenable.await_args.kwargs["kb_assistant_id"] is None
+
+    @pytest.mark.asyncio
+    async def test_a_plain_chat_turn_is_unchanged(self):
+        result, _, autoenable = await self._effective(None, system=["whoami"])
+        assert result == ["picker_tool", "pinned", "whoami"]
+        assert autoenable.await_args.kwargs["kb_assistant_id"] is None
+
+    @pytest.mark.asyncio
+    async def test_a_project_harness_with_no_tools_keeps_the_pinned_set(self):
+        """A harness that binds no tools resolves exactly like any unbound Agent."""
+        from apis.inference_api.chat.agent_binding_resolver import ResolvedTools
+
+        result, _, _ = await self._effective(ResolvedTools(tool_ids=[], owns_toolset=False))
         assert result == ["pinned"]
 
     @pytest.mark.asyncio
     async def test_a_project_whose_bound_tools_were_all_dropped_still_owns_its_toolset(self):
         from apis.inference_api.chat.agent_binding_resolver import ResolvedTools
 
-        result, always_on = await self._effective(ResolvedTools(tool_ids=[]))
+        result, always_on, _ = await self._effective(ResolvedTools(tool_ids=[]))
         assert result == []
         always_on.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_two_viewers_of_an_unbound_agent_share_one_cache_slot(self):
+        """`enabled_tools` is the tools element of the agent-cache key, so a picker
+        reaching an unbound Agent's turn would also key its cached agent by viewer
+        — and a cached agent built with one viewer's picker tools could serve a
+        turn that should have none. The effective list, and the key, must not
+        depend on the picker; a plain chat's still does."""
+        from apis.inference_api.chat import service
+        from apis.inference_api.chat.agent_binding_resolver import ResolvedTools
+
+        def key(tools):
+            return service._create_cache_key(
+                session_id="s1", user_id="u1", enabled_tools=tools, model_id="m",
+                inference_params={}, system_prompt=None, caching_enabled=False,
+                provider="bedrock", freshness_hash="f", agent_type="chat",
+                assistant_id="ast-1",
+            )
+
+        unbound = ResolvedTools(tool_ids=[], owns_toolset=False)
+        canvas, _, _ = await self._effective(unbound, enabled_tools=["canvas-faculty"])
+        bare, _, _ = await self._effective(unbound, enabled_tools=[])
+        assert canvas == bare
+        assert key(canvas) == key(bare)
+
+        plain_canvas, _, _ = await self._effective(None, enabled_tools=["canvas-faculty"])
+        plain_bare, _, _ = await self._effective(None, enabled_tools=[])
+        assert key(plain_canvas) != key(plain_bare)
 
 
 class TestSystemTools:

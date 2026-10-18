@@ -212,13 +212,34 @@ class TestModelResolution:
 
 class TestToolResolution:
     @pytest.mark.asyncio
-    async def test_no_tool_binding_is_none(self, monkeypatch):
-        # No tool binding ⇒ plan.tools is None (request's enabled_tools stay in force) and
-        # we never even consult tool RBAC — the service is fetched lazily.
+    async def test_no_tool_binding_is_an_empty_toolset_not_the_picker(self, monkeypatch):
+        # No tool binding ⇒ an empty toolset, never None: None would leave the viewer's
+        # picker (the request's enabled_tools) in force, so the Agent's tools would change
+        # with whoever is chatting. owns_toolset is False, so the admin's always-on floor
+        # still applies (always-on §7 D4). Tool RBAC is never consulted — the service is
+        # fetched lazily.
         svc = _patch_tool_access(monkeypatch, True)
         plan = await resolve_agent_invocation(_assistant(bindings=[]), _user())
-        assert plan.tools is None
+        assert plan.tools is not None
+        assert plan.tools.tool_ids == []
+        assert plan.tools.owns_toolset is False
         svc.can_access_tool.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_kb_only_agent_gets_an_empty_toolset(self, monkeypatch):
+        # The course-assistant shape: a knowledge base and nothing else.
+        _patch_tool_access(monkeypatch, True)
+        kb = AgentBinding(kind="knowledge_base", ref="kb-1", config={})
+        plan = await resolve_agent_invocation(_assistant(bindings=[kb]), _user())
+        assert plan.tools.tool_ids == [] and plan.tools.owns_toolset is False
+
+    @pytest.mark.asyncio
+    async def test_bound_tools_still_own_the_toolset(self, monkeypatch):
+        _patch_tool_access(monkeypatch, True)
+        plan = await resolve_agent_invocation(
+            _assistant(bindings=[_tool_binding("web_search")]), _user()
+        )
+        assert plan.tools.owns_toolset is True
 
     @pytest.mark.asyncio
     async def test_accessible_tools_become_override(self, monkeypatch):
@@ -438,4 +459,6 @@ class TestRetiredMemoryBinding:
         # resolves to nothing and neither blocks nor degrades the turn.
         legacy = AgentBinding(kind="memory_space", ref="spc_1", config={"access": "read"})
         plan = await resolve_agent_invocation(_assistant(bindings=[legacy]), _user())
-        assert plan.tools is None and plan.skills is None and not plan.unavailable
+        assert plan.skills is None and not plan.unavailable
+        # Binding no tools, it owns an empty toolset like any unbound Agent.
+        assert plan.tools.tool_ids == [] and plan.tools.owns_toolset is False

@@ -415,11 +415,11 @@
           </button>
         </h2>
         @if (toolsOpen()) {
-          <p class="mt-0.5 text-xs/5 text-gray-500 dark:text-gray-400">Capabilities this agent can call.</p>
+          <p class="mt-0.5 text-xs/5 text-gray-500 dark:text-gray-400">Capabilities this agent can call. It never uses the tools people turn on for their own chats, so with none selected it runs without tools.</p>
         } @else {
           <!-- Collapsed, the summary IS the section: the names are the whole point of
                closing it, and a bare "Tools ▸" would trade a click for nothing. -->
-          <p class="mt-0.5 truncate text-xs/5 text-gray-500 dark:text-gray-400">{{ selectedToolSummary() || 'No tools selected.' }}</p>
+          <p class="mt-0.5 truncate text-xs/5 text-gray-500 dark:text-gray-400">{{ selectedToolSummary() || 'No tools selected. This agent runs without tools.' }}</p>
         }
 
         <!--
