@@ -1,3 +1,167 @@
+# Release Notes — v1.30.0
+
+**Release Date:** October 18, 2026
+**Previous Release:** v1.29.0 (October 17, 2026)
+
+---
+
+## Highlights
+
+This release fixes how an Agent (assistant) chat builds what the model sees. An instructor reported that course assistants answered ambiguous questions worse than the legacy system did, and four causes turned up. Long-term memory leaked facts from one assistant's knowledge base into another's chats. Retrieval cut the excerpts down to almost nothing. An Agent that bound no tools or skills ran on the viewer's own. And the Runtime could not read knowledge-base spreadsheets at all. All four are fixed. Eight finished features (Shared Projects, user grants, large-document and folder attachments, folder sync, Word tracked changes, skill authoring and client turn timing) now default on, so a deployment that never set their variables gets them on its next deploy. This release also adds full-context mode for small knowledge bases, which is in development and off by default. **Two things need attention:** an Agent that binds no tools or skills now runs with none (see Breaking changes), and **`backend.yml` must deploy before `platform.yml`** (see Deployment notes).
+
+---
+
+## Assistant chats stay out of the user's long-term memory
+
+AgentCore long-term memory is keyed to the user alone. Assistant chats read from it on every turn, and the text they wrote to it was the knowledge-base-augmented prompt, chunks included. So facts extracted from one assistant's knowledge base came back as `<user_context>` in a different assistant. One new assistant, whose only file never mentions a particular assignment, still answered questions about it (#1667).
+
+### Backend
+
+- An assistant turn (`get_agent` with an `assistant_id`) builds its `TurnBasedSessionManager` with `long_term_memory=False`. It retrieves no long-term-memory namespace, so no `<user_context>` block is added, and the manager's own switch also guards the retrieval hook.
+- Every event it writes carries `extractionMode="SKIP"`. Short-term history still stores the augmented prompt, which restore needs. SKIP is applied through a per-manager proxy around the data-plane client (`_SkipExtractionClient`). With shared clients on, that boto3 client is process-wide, so patching it directly would have switched extraction off for every chat in the container.
+- The stream coordinator's error and partial persists, and the pre-agent refusal path, inherit the setting.
+- Plain chats are unchanged. Preview sessions already had no long-term memory.
+
+### Trade-off
+
+SKIP is all-or-nothing per event, so it also stops the per-session summary strategy. A long assistant chat that reaches compaction gets the fallback summary (the first lines of each turn) instead of an extracted one. The summary namespace was per-session and never leaked, but the semantic strategy, where the leak happened, cannot be skipped on its own.
+
+> Records already extracted from past assistant chats stay in users' long-term memory until each user deletes them. This release stops new ones and keeps all of them out of assistant chats. Plain chats can still retrieve the old records.
+
+## Retrieved excerpts reach the model whole
+
+- **Legacy cap.** The legacy (S3 Vectors) context cap was 2,000 characters, under half of one full-size Docling chunk, so top_k=5 often reached the model as a single truncated excerpt. `MAX_CONTEXT_CHARS` is now **22,000**, which fits five full-size chunks. It only binds when chunks are large. Managed KBs keep their measured 8,000.
+- **Preamble.** The excerpt template used to say "use this information to answer accurately and comprehensively". It now says the excerpts are partial search hits and the knowledge base may hold more. It also says that an ambiguous question the excerpts don't settle (which assignment, course or section) should get a clarifying question (`RETRIEVED_EXCERPTS_PREAMBLE`). Earlier turns keep their persisted bytes, so existing conversations' cached prefixes are untouched (#1667).
+
+## Full-context mode for small knowledge bases (in development)
+
+An assistant whose whole knowledge base is small can now get all of it, instead of the top few search hits. **Off by default.** It turns on per environment with the GitHub variable `CDK_ASSISTANT_KB_FULL_CONTEXT_ENABLED=true` (#1667).
+
+### Backend
+
+- `apis/shared/assistants/kb_full_context.py`: the block is used when every `complete` document of the assistant has a text layer (pdf, docx, txt, md, html) and their text fits the budget. Their full text then goes at the end of the system prompt as one `<knowledge_base>` block, inside the system cache segment. The user message is not augmented, and retrieval still runs alongside for the citation cards.
+- **Budget:** 50,000 estimated tokens (chars/4), set by `ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS` on the Runtime (`0` switches it off with the flag on). That is a quarter of the smallest context window we curate.
+- **Same checks as retrieval:** the access check runs first, then a single exact `PK = AST#{id}` Query. The listing is re-read every turn and never cached, so a deleted document leaves the block on the next turn.
+- **Falls back to retrieval** on any error, a spreadsheet, deck, image or scan, more than 16 MB of raw files, or text over budget.
+- **Byte-stable** until a document changes: documents are in creation order, extraction is pure, and per-document text is cached in process.
+- **Never on the paused-turn snapshot**, because the block can be ~200 KB. A resume re-loads it.
+- `knowledge_context` is folded into the agent cache key like `memory_context`. Keys without it are byte-identical to before.
+
+### Infrastructure
+
+- While on, CDK sets the Runtime env var (absent while off). The read it needs is the standing `AssistantDocumentsRead` grant below, so turning it on changes no IAM and adds no resource.
+
+### Latency
+
+The load starts next to the KB search and overlaps everything up to the agent build. The new prelude stage `agent_build.kb_full_context` measures what is left. Locally, parsing a 345K-character docx takes ~3 ms and rendering a ~50k-token block 0.3 ms. The network half (one Query every turn, plus parallel GetObjects on a conversation's first turn) has not been measured on dev yet. It needs that readout, and the TTFT sign-off `docs/specs/turn-path-ttft.md` asks for, before it is turned on beyond dev.
+
+## Eight finished features default on
+
+Eight features that were opt-in while in development have run in production since 1.28.0, and they are now ordinary feature switches: on unless a deployment sets the variable to `false` (#1674).
+
+| Feature | Variable | SPA flag |
+|---|---|---|
+| Shared Projects | `CDK_PROJECTS_ENABLED` | `features.projects` |
+| Direct user grants | `CDK_USER_GRANTS_ENABLED` | `features.userGrants` |
+| Client turn timing | `CDK_CLIENT_TURN_TIMING_ENABLED` | `features.clientTurnTiming` |
+| Skill authoring tools | `CDK_SKILL_AUTHORING_ENABLED` | — |
+| Word tracked changes | `CDK_WORD_TRACKED_CHANGES_ENABLED` | — |
+| Large document attachments | `CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED` | `features.largeDocumentAttachments` |
+| Folder attachments | `CDK_FOLDER_ATTACHMENTS_ENABLED` | `features.folderAttachments` |
+| Folder sync | `CDK_FOLDER_SYNC_ENABLED` | `features.folderSync` |
+
+This also fixes a mismatch. Since 1.28.0 the production SPA build has offered these features while their backend defaults were off, so a deployment that built it without setting the variables saw UI whose APIs returned 404.
+
+Session prewarm, the conversation index and the attachments KB stay opt-in.
+
+### Backend
+
+- Each reader in `apis/shared/feature_flags.py` now treats unset or empty as on, and only `"false"` turns its feature off.
+
+### Frontend
+
+- The local build (`environment.ts`) now offers the five features that have an SPA flag. The deployed builds already did.
+
+### Infrastructure
+
+- CDK defaults for all eight flip to on in `infrastructure/lib/config.ts`.
+- Folder attachments' default follows large document attachments. Setting `CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED=false` turns folder attachments off with it instead of failing synth. Setting `CDK_FOLDER_ATTACHMENTS_ENABLED=true` explicitly without large documents still fails synth.
+- The Runtime now carries `SKILL_AUTHORING_ENABLED`, `WORD_TRACKED_CHANGES_ENABLED` and `FOLDER_ATTACHMENTS_ENABLED` only while they are off (as `false`). With all three on, the Runtime environment drops three variables. On dev that took it from 29 to 26 variables and from 1,297 to 1,208 bytes of the 2,560-byte budget.
+- Skill authoring stays inert until a role is granted the `my_skill_create` catalog tool, which is seeded `enabledByDefault: false`.
+
+---
+
+## ⚠️ Breaking changes
+
+### An Agent that binds no tools or skills now runs with none
+
+Before this release, an Agent with no `tool` bindings ran on the viewer's own tool picker, and one with no `skill` bindings ran on the viewer's own skills. So a shared Agent changed with whoever was chatting. On dev, a course assistant that binds only its knowledge base called a viewer's personal Canvas MCP tool and paused the turn on an OAuth prompt. A student with web browsing, GitHub or artifacts turned on would get yet another assistant (#1669, #1671).
+
+**Tools.** An unbound Agent now gets an empty owned toolset and ignores the picker. What still reaches its turn:
+
+| Source | Unbound Agent | Bound Agent | Plain chat |
+|---|---|---|---|
+| Viewer's picker | **no (was yes)** | no | yes |
+| System tools (`whoami`, `get_my_quota`, …) | yes | yes | yes |
+| Admin always-on tools | yes | no | yes |
+| Attachment auto-enable (spreadsheet tools, `document_read`) | yes | yes | yes |
+| KB spreadsheet auto-enable (new) | yes | no | n/a |
+
+- **KB spreadsheets.** `list_spreadsheets` and `analyze_spreadsheet` used to reach an unbound Agent only through the picker. Now they are auto-enabled when its knowledge base has a complete CSV or XLSX (`apis/shared/assistants/kb_tabular.py`). This is RBAC-gated (it enables, never grants), sticky per session, and under the existing `ATTACHMENT_TOOL_AUTOENABLE_ENABLED` switch.
+- **Always-on tools stay** for unbound Agents. They are the admin's floor under any toolset nobody scoped, and exempting Agents would let anyone shed a pinned tool by creating a trivial one (`admin-always-on-tools.md` §7 D4).
+
+**Skills.** An unbound Agent runs with no skills, and `/` commands activate nothing on it. The turn runs as `agent_type="skill"` with no skill ids, the path a project harness without skills has taken since 2026-10-14.
+
+**UI.** The composer's tool picker, skill picker and `/` menu are locked for every Agent conversation. When an Agent uses none, its menus say "This agent doesn't use tools." and "This agent doesn't use skills." The Agent Designer's Tools and Skills sections say that an Agent never uses the viewer's own tools and skills.
+
+**Cache key.** The effective tool and skill lists no longer depend on the viewer, so every viewer of an unbound Agent shares one cached agent. An agent built with one viewer's tools can no longer serve another viewer.
+
+**What to tell Agent authors.** An Agent that relied on its viewers' tools (web search, artifacts, a Canvas connector) or personal skills stops using them when this deploys. The remedy is to bind them in the Agent Designer. There is no migration and no "inherit the viewer's tools" option, because inheriting is exactly the per-viewer variance this removes. Each unbound Agent pays one `toolConfig` cache rewrite on its next turn.
+
+## 🐛 Bug fixes
+
+- **Spreadsheet analysis works on assistant knowledge-base files in cloud.** `list_spreadsheets` listed a KB spreadsheet (it only reads DynamoDB), then `analyze_spreadsheet` failed. The Runtime role had no read on the rag-documents bucket, so `GetObject` returned AccessDenied. The tool returned that error to the model as its result instead of logging it, so it showed up nowhere. Local dev hid it because developer credentials stood in for the role (#1668).
+- **Spreadsheet analysis finds a file whose name starts or ends with a space.** Files synced from Drive can keep a leading space. `list_spreadsheets` showed the name with the space, the model passed it trimmed, and `analyze_spreadsheet` said "not found". `_find_file` now strips both sides in its exact and same-stem passes (#1673).
+
+## 🏗️ Infrastructure
+
+- **`AssistantDocumentsRead`**: `s3:GetObject` on `rag-documents/assistants/*`, added as a statement on the existing `RuntimeMemoryStatsPolicy` managed policy rather than the role, whose statements already spill into overflow policies near IAM's 6,144-character cap. It is read-only with no `ListBucket`, because the key comes from the assistant's `DOC#` row. The policy's `Description` is unchanged, so the policy is updated in place, not replaced. **No new resource** (#1668).
+- `platform.yml` forwards the new `CDK_ASSISTANT_KB_FULL_CONTEXT_ENABLED` variable. Unset means off (#1667).
+- CDK defaults for the eight promoted flags are now on, and the Runtime drops three env vars where they are on (#1674). See "Eight finished features default on".
+
+## 🧪 Test coverage
+
+About 1,270 lines of new and updated tests. They cover memory isolation with real session managers built through the factory, full-context eligibility and fallbacks against moto, the full-context turn (placement, resume, snapshot, cache key), effective tools and skills by turn shape, including a shared cache key across viewers, KB spreadsheet auto-enable, and the Runtime's rag-documents grant.
+
+---
+
+## 🚀 Deployment notes
+
+### Order: `backend.yml` → `platform.yml` → `frontend-deploy.yml`
+
+**This release must deploy the backend before the platform stack.** `platform.yml` removes `SKILL_AUTHORING_ENABLED`, `WORD_TRACKED_CHANGES_ENABLED` and `FOLDER_ATTACHMENTS_ENABLED` from the Runtime. The 1.29.0 image reads an unset variable as off. So if the platform deploy runs first, skill authoring, Word tracked changes and folder attachments switch off until `backend.yml` finishes, which took about 13 minutes on dev. The new image reads unset as on, so backend first has no gap.
+
+**A merge to `main` does not guarantee this order.** Both workflows trigger on the same push and share the `deploy-<ref>` concurrency slot, so whichever claims it first runs first. On dev, Platform Stack was evicted from the slot and re-dispatched after Backend Deploy, which happened to give the safe order. Watch the merge:
+
+- If **Backend Deploy** is running and Platform Stack is pending, let both finish.
+- If **Platform Stack** claims the slot first, cancel it before its CDK deploy step starts. Let Backend Deploy finish, then run Platform Stack with `workflow_dispatch` on `main`.
+
+Backend first is safe for everything else in this release. The one thing that waits for `platform.yml` is the Runtime's read on `rag-documents/assistants/*`. Until it lands, spreadsheet analysis on KB files keeps failing, as it does today.
+
+### Also
+
+- **Tell Agent authors about the tool and skill change before you deploy.** Any Agent that binds no tools or skills loses its viewers' tools and skills (see Breaking changes). It is not behind a flag.
+- **Full-context mode stays off** unless you set `CDK_ASSISTANT_KB_FULL_CONTEXT_ENABLED=true` in an environment. Leave it off in production until its first-turn latency has been read on dev.
+- No new tables, indexes or backfills.
+
+### Other deployments
+
+- **Review the eight promoted flags before deploying.** A deployment that never set them gains all eight features on its next platform deploy. Set any you don't want to `false` in the GitHub environment first.
+- **Large document attachments adds about 11 resources** if it wasn't already on: the prepare queue, its dead-letter queue, the Lambda and its wiring. After the platform deploy that creates them, re-run Backend Deploy's "Deploy large-document-prepare Lambda image" job, so the Lambda runs the real image instead of the bootstrap stub. That re-run is the one step that comes after `platform.yml`.
+- **Turning large documents off now turns folder attachments off with it** instead of failing synth.
+
+---
+
 # Release Notes — v1.29.0
 
 **Release Date:** October 17, 2026
