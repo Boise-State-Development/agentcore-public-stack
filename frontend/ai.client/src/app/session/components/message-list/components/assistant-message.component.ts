@@ -385,6 +385,7 @@ export class AssistantMessageComponent {
     const hasPendingInterruptHere = pendingInterruptsHere.length > 0;
     const result: DisplayBlock[] = [];
     let pendingToolCalls: ToolCallDisplay[] = [];
+    let lastBrowserPage: BrowserPageSummary | null = null;
 
     // Read once per recomputation, not per call: these are signal reads, and
     // the computed must re-run when a late-arriving summary lands.
@@ -439,9 +440,11 @@ export class AssistantMessageComponent {
       // The page a rail's browse_web calls reached gets its own card under
       // the rail, so the user can see where the agent went without opening
       // the rail. Derived from the results, so it costs nothing on the turn
-      // path and survives a reload.
-      const browserPage = browserPageFromCalls(calls);
+      // path and survives a reload. The page carries across rails: narration
+      // between a navigate and a screenshot splits them into two rails.
+      const browserPage = browserPageFromCalls(calls, lastBrowserPage);
       if (browserPage) {
+        lastBrowserPage = browserPage;
         result.push({ type: 'browser_page', browserPage });
       }
     };
