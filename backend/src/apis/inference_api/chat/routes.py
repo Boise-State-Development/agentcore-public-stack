@@ -2053,6 +2053,7 @@ async def stream_conversational_message(
     user_id: str,
     user_input: str,
     persist: bool = True,
+    long_term_memory: bool = True,
 ) -> AsyncGenerator[str, None]:
     """Stream a message as an assistant response with optional metadata event.
 
@@ -2067,6 +2068,8 @@ async def stream_conversational_message(
         user_id: User ID for persistence
         user_input: The user's original message to save
         persist: False streams the message without writing either turn to history
+        long_term_memory: False in an Agent conversation, whose writes skip
+            long-term memory extraction (``SessionFactory.create_session_manager``)
     """
     # Emit message_start event (assistant response)
     yield f"event: message_start\ndata: {json.dumps({'role': 'assistant'})}\n\n"
@@ -2106,7 +2109,12 @@ async def stream_conversational_message(
     try:
         from agents.main_agent.session.persistence import persist_synthetic_messages
 
-        session_manager = SessionFactory.create_session_manager(session_id=session_id, user_id=user_id, caching_enabled=False)
+        session_manager = SessionFactory.create_session_manager(
+            session_id=session_id,
+            user_id=user_id,
+            caching_enabled=False,
+            long_term_memory=long_term_memory,
+        )
         persist_synthetic_messages(
             session_manager,
             session_id,
@@ -2277,6 +2285,7 @@ def _refuse_turn(
             user_id=user_id,
             user_input=input_data.message,
             persist=persist,
+            long_term_memory=not input_data.rag_assistant_id,
         ),
         media_type="text/event-stream",
         headers=_sse_headers(input_data.session_id),
@@ -5244,6 +5253,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                             session_id=input_data.session_id,
                             user_id=user_id,
                             user_input=input_data.message,
+                            long_term_memory=not input_data.rag_assistant_id,
                         ):
                             yield frame
                         return

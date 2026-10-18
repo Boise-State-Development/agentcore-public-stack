@@ -79,6 +79,7 @@ class TestCloudSessionCreation:
             caching_enabled=True,
             compaction_enabled=None,
             compaction_threshold=None,
+            long_term_memory=True,
         )
 
     @patch("agents.main_agent.session.session_factory.AGENTCORE_MEMORY_AVAILABLE", True)
@@ -110,6 +111,7 @@ class TestCloudSessionCreation:
             caching_enabled=False,
             compaction_enabled=True,
             compaction_threshold=50000,
+            long_term_memory=True,
         )
 
 

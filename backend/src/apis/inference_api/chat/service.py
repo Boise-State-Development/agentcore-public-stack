@@ -574,6 +574,12 @@ async def get_agent(
         create_kwargs["memory_context"] = memory_context
     if text_only_model:
         create_kwargs["text_only_model"] = True
+    # An Agent conversation is isolated from the user's long-term memory, both
+    # ways: memory is keyed to the user alone, so it carried one Agent's
+    # knowledge base into the next. `assistant_id` is already a key element and
+    # on the snapshot, so this needs neither.
+    if assistant_id:
+        create_kwargs["long_term_memory"] = False
     # Skills v2: ChatAgent (now the target of both "chat" and "skill" types)
     # accepts accessible_skill_ids and conditionally adds the AgentSkills
     # plugin. Pass it through whenever resolved — VoiceAgent does not take the

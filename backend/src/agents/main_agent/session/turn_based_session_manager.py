@@ -154,6 +154,29 @@ def _approx_tokens(text: Any) -> int:
         return 0
 
 
+class _SkipExtractionClient:
+    """This manager's view of the data-plane client: every event skips extraction.
+
+    Every write the SDK makes (conversational events through
+    ``MemoryClient.create_event``, blob and agent-state events directly) ends
+    in ``memory_client.gmdp_client.create_event``. With shared clients on, that
+    client is the PROCESS-WIDE one (``ClientReusingSession`` hands every
+    manager the same instance), so patching it, as the share fork does on its
+    private client, would switch extraction off for every user's chats in the
+    container. A per-manager proxy around it scopes the change to this manager.
+    """
+
+    def __init__(self, client: Any) -> None:
+        self._client = client
+
+    def create_event(self, **kwargs: Any) -> Any:
+        kwargs.setdefault("extractionMode", "SKIP")
+        return self._client.create_event(**kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._client, name)
+
+
 def _is_bidi_agent(agent: Any) -> bool:
     """True for the voice path's ``BidiAgent``.
 
@@ -197,6 +220,7 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
         compaction_config: Optional[CompactionConfig] = None,
         user_id: Optional[str] = None,
         summarization_strategy_id: Optional[str] = None,
+        long_term_memory: bool = True,
         **kwargs: Any,
     ):
         """
@@ -208,12 +232,22 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
             compaction_config: Compaction configuration (None = disabled)
             user_id: User ID for DynamoDB session lookup
             summarization_strategy_id: Strategy ID for LTM summary retrieval
+            long_term_memory: False for an Agent conversation. Nothing is
+                retrieved into its messages, and every event it writes skips
+                long-term extraction (``_SkipExtractionClient``), so its
+                knowledge-base-augmented prompts never become facts about the
+                user. Compaction then has no extracted summary for the session
+                and uses ``_generate_fallback_summary``.
         """
         super().__init__(
             agentcore_memory_config=agentcore_memory_config,
             region_name=region_name,
             **kwargs,
         )
+
+        self.long_term_memory = long_term_memory
+        if not long_term_memory:
+            self.memory_client.gmdp_client = _SkipExtractionClient(self.memory_client.gmdp_client)
 
         self.user_id = user_id
         self.region_name = region_name
@@ -400,6 +434,8 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
             return None
         content = messages[-1].get("content")
         if not content or "text" not in content[0]:
+            return None
+        if not getattr(self, "long_term_memory", True):
             return None
         if not getattr(self.config, "retrieval_config", None):
             return None

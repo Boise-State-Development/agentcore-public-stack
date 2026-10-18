@@ -97,6 +97,17 @@ class _CooperativeStopSignal(Exception):
     """
 
 
+def _long_term_memory_of(main_agent_wrapper: Any) -> bool:
+    """Whether the turn's own session manager feeds long-term memory.
+
+    A synthetic write (an error reply, an interrupted partial) goes through a
+    fresh manager, which must inherit the turn's setting: an Agent
+    conversation's partial answer is knowledge-base material like the rest.
+    """
+    manager = getattr(main_agent_wrapper, "session_manager", None)
+    return getattr(manager, "long_term_memory", True) is not False
+
+
 def reset_cancellation_state(agent: Any, session_manager: Any) -> None:
     """Clear any cancellation armed by a PREVIOUS turn on this agent.
 
@@ -1250,7 +1261,12 @@ class StreamCoordinator:
                             from agents.main_agent.session.persistence import persist_synthetic_messages
                             from agents.main_agent.session.session_factory import SessionFactory
 
-                            persist_session_manager = SessionFactory.create_session_manager(session_id=session_id, user_id=user_id, caching_enabled=False)
+                            persist_session_manager = SessionFactory.create_session_manager(
+                                session_id=session_id,
+                                user_id=user_id,
+                                caching_enabled=False,
+                                long_term_memory=_long_term_memory_of(main_agent_wrapper),
+                            )
                             persist_synthetic_messages(
                                 persist_session_manager,
                                 session_id,
@@ -1728,7 +1744,12 @@ class StreamCoordinator:
                 from agents.main_agent.session.persistence import persist_synthetic_messages
                 from agents.main_agent.session.session_factory import SessionFactory
 
-                persist_session_manager = SessionFactory.create_session_manager(session_id=session_id, user_id=user_id, caching_enabled=False)
+                persist_session_manager = SessionFactory.create_session_manager(
+                    session_id=session_id,
+                    user_id=user_id,
+                    caching_enabled=False,
+                    long_term_memory=_long_term_memory_of(main_agent_wrapper),
+                )
                 persist_synthetic_messages(
                     persist_session_manager,
                     session_id,
@@ -1911,7 +1932,10 @@ class StreamCoordinator:
                     from agents.main_agent.session.session_factory import SessionFactory
 
                     persist_session_manager = SessionFactory.create_session_manager(
-                        session_id=session_id, user_id=user_id, caching_enabled=False
+                        session_id=session_id,
+                        user_id=user_id,
+                        caching_enabled=False,
+                        long_term_memory=_long_term_memory_of(main_agent_wrapper),
                     )
                     partial_persisted = persist_synthetic_messages(
                         persist_session_manager,
