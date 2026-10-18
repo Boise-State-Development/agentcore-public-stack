@@ -584,10 +584,35 @@ async def dispatch_app_tool_call(
     """
     ui_metadata, client = _resolve_client(agent, tool_name)
 
+    # The catalog only holds tools a connected server listed with `_meta.ui`
+    # and that survived the connector's tool filter. A miss is usually a
+    # server URL scoped too narrowly: GitHub's `/mcp/x/issues` serves
+    # `issue_write` (whose App calls `ui_get`) but not `ui_get`, which lives
+    # in the `context` toolset. Name the tool in the log, because the App
+    # only sees the 403. With the host flag off the catalog is empty, so
+    # every proxied call is rejected here.
+    if ui_metadata is None:
+        logger.warning(
+            "mcp-apps: refused app tools/call for %s: no connected MCP server "
+            "listed it as an app tool (session=%s)",
+            scrub_log(tool_name),
+            scrub_log(session_id),
+        )
+        raise AppToolCallError(
+            f"Tool '{tool_name}' is not offered by this conversation's MCP "
+            "servers",
+            code=403,
+        )
     # Spec MUST: reject tools/call from apps for tools whose visibility
-    # excludes "app". With the host flag off the catalog is empty, so
-    # ui_metadata is None and every proxied call is rejected here.
-    if ui_metadata is None or not ui_metadata.visible_to_app():
+    # excludes "app".
+    if not ui_metadata.visible_to_app():
+        logger.warning(
+            "mcp-apps: refused app tools/call for %s: visibility %s excludes "
+            "app (session=%s)",
+            scrub_log(tool_name),
+            ui_metadata.visibility,
+            scrub_log(session_id),
+        )
         raise AppToolCallError(
             f"Tool '{tool_name}' is not callable from an MCP App", code=403
         )

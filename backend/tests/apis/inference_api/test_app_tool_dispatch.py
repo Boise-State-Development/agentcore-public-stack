@@ -95,10 +95,16 @@ async def test_rejects_when_host_flag_disabled(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_rejects_unknown_tool(monkeypatch):
+    # e.g. GitHub's issue_write App calling ui_get against `/mcp/x/issues`,
+    # which never lists it. The message names the tool and says it isn't
+    # offered, not that its visibility forbids the App.
     _patch(monkeypatch, enabled=True, meta=None, client=_FakeClient())
     with pytest.raises(AppToolCallError) as ei:
-        await _call()
+        await _call(tool_name="ui_get")
     assert ei.value.code == 403
+    assert ei.value.message == (
+        "Tool 'ui_get' is not offered by this conversation's MCP servers"
+    )
 
 
 @pytest.mark.asyncio
@@ -113,6 +119,9 @@ async def test_rejects_tool_not_app_visible(monkeypatch):
     with pytest.raises(AppToolCallError) as ei:
         await _call()
     assert ei.value.code == 403
+    assert ei.value.message == (
+        "Tool 'widget_tool' is not callable from an MCP App"
+    )
 
 
 @pytest.mark.asyncio
