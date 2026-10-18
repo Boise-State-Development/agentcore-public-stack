@@ -113,10 +113,15 @@ from .app_context_dispatch import (
 )
 from apis.shared.mcp_apps.error_envelope import app_tool_error_response
 
-from .app_tool_dispatch import AppToolCallError, dispatch_app_tool_call
+from .app_tool_dispatch import AppToolCallError, agent_carries_tool_client, dispatch_app_tool_call
 from .agent_binding_policy import binds_conversation
 from .models import FileContent, InvocationRequest
-from .service import generate_conversation_title, get_agent, process_build_count
+from .service import (
+    generate_conversation_title,
+    get_agent,
+    live_conversation_agents,
+    process_build_count,
+)
 from .turn_timing import TurnPrelude
 from .system_prompt_resolver import (
     append_active_prompt,
@@ -2369,6 +2374,43 @@ async def _agent_for_app_dispatch(
     )
 
 
+async def _agent_for_app_tool_call(
+    input_data: InvocationRequest,
+    current_user: User,
+    user_id: str,
+    auth_token: Optional[str],
+    *,
+    agent_type: str,
+    accessible_skill_ids: Optional[list],
+):
+    """The agent an App's ``tools/call`` dispatches against.
+
+    ``_agent_for_app_dispatch`` cannot rebuild the turn's cache key: the turn's
+    system prompt, memory context, injected tools and memory binding are all
+    resolved later in the route, so its key missed on every press and paid a
+    full build and a memory restore (~1.5 s cold on dev). The conversation's
+    turns have already built an agent over the tool's MCP client, so the
+    newest one that carries it is used as is. Nothing on the agent is read or
+    written here: the dispatch calls the catalog's client, and the build only
+    ever served to wire and start it. The walk matches ``(session, user)``, so
+    another user's agent under the same session id is never a candidate.
+    """
+    session_id = input_data.session_id
+    tool_name = input_data.app_tool_call.tool_name
+    for live in live_conversation_agents(session_id, user_id):
+        if agent_carries_tool_client(live, tool_name):
+            logger.info("agent_cache outcome=app_reuse session=%s", scrub_log(session_id))
+            return live
+    return await _agent_for_app_dispatch(
+        input_data,
+        current_user,
+        user_id,
+        auth_token,
+        agent_type=agent_type,
+        accessible_skill_ids=accessible_skill_ids,
+    )
+
+
 @dataclass
 class TurnAttachments:
     """What this turn's attachments resolved to (map stage B4, ``preamble.files``).
@@ -3747,8 +3789,9 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
 
     # App-initiated tools/call (MCP Apps PR #5). Like resume/continuation it
     # bypasses quota / RAG / file resolution / title — there is no model
-    # turn. We rebuild the conversation agent (so the MCP client session +
-    # auth are wired exactly as for a model-driven call), dispatch the one
+    # turn. We reuse the conversation's live agent when it carries the tool's
+    # MCP client, else rebuild it (so the MCP client session + auth are wired
+    # exactly as for a model-driven call), dispatch the one
     # named tool, publish synthesized tool_use/tool_result into the thread
     # via the per-session broker, and return the CallToolResult as JSON for
     # app-api to relay back to the iframe. Inert behind the host flag (the
@@ -3757,7 +3800,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     if input_data.app_tool_call is not None:
         atc = input_data.app_tool_call
         try:
-            agent = await _agent_for_app_dispatch(
+            agent = await _agent_for_app_tool_call(
                 input_data,
                 current_user,
                 user_id,
