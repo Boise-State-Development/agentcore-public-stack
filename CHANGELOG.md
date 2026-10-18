@@ -4,6 +4,38 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [1.30.0] - 2026-10-18
+
+Fixes to how an Agent (assistant) chat builds its context, raised by an instructor whose course assistants answered worse than the legacy system did. An assistant chat no longer reads or writes the user's long-term memory. Retrieved excerpts reach the model whole, and the model is told they are partial. An Agent that binds no tools or skills now runs with none instead of the viewer's own. The Runtime can now read assistant knowledge-base uploads, so spreadsheet analysis works in cloud. Eight finished features now default on, and full-context mode for small knowledge bases is added (in development, default off). **Deploy `backend.yml` before `platform.yml`** (see the release notes).
+
+### 🚀 Added
+
+- **Full-context mode for small assistant knowledge bases** (in development, default off: `ASSISTANT_KB_FULL_CONTEXT_ENABLED` / `CDK_ASSISTANT_KB_FULL_CONTEXT_ENABLED`, AgentCore Runtime only). When every `complete` document has a text layer and together they fit `ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS` (default 50,000), their full text goes at the end of the system prompt as one byte-stable `<knowledge_base>` block, and retrieval runs only for citations. On any error, an ineligible file type, more than 16 MB of raw files or text over budget, the turn retrieves as before. New prelude stage `agent_build.kb_full_context` (#1667)
+
+### ✨ Improved
+
+- **Eight finished features now default on.** Each was opt-in while in development and has run in production since 1.28.0. They are now feature switches: on unless a deployment sets the variable to `false`. Backend readers treat unset or empty as on, CDK defaults to on, and the local SPA build (`environment.ts`) offers them. The eight are Shared Projects (`CDK_PROJECTS_ENABLED`, `features.projects`), direct user grants (`CDK_USER_GRANTS_ENABLED`, `features.userGrants`), client turn timing (`CDK_CLIENT_TURN_TIMING_ENABLED`, `features.clientTurnTiming`), skill authoring tools (`CDK_SKILL_AUTHORING_ENABLED`; still inert until a role is granted `my_skill_create`), Word tracked changes (`CDK_WORD_TRACKED_CHANGES_ENABLED`), large document attachments (`CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED`, `features.largeDocumentAttachments`), folder attachments (`CDK_FOLDER_ATTACHMENTS_ENABLED`, `features.folderAttachments`) and folder sync (`CDK_FOLDER_SYNC_ENABLED`, `features.folderSync`). This also fixes a mismatch: since 1.28.0 the production SPA build has offered these features while their backend defaults were off, so a deployment that built it without setting the variables saw UI whose APIs 404'd. Session prewarm, the conversation index and the attachments KB stay opt-in (#1674)
+
+### ⚠️ Changed
+
+- **A deployment that never set the eight variables above gains those features on its next platform deploy.** Set any you don't want to `false` in the GitHub environment before deploying. Large document attachments adds about 11 resources (the prepare queue, its dead-letter queue, the Lambda and what wires them together). After the first platform deploy that creates them, re-run Backend Deploy's "Deploy large-document-prepare Lambda image" job so the Lambda runs the real image instead of the bootstrap stub (#1674)
+- **Folder attachments' CDK default follows large document attachments.** Setting `CDK_LARGE_DOCUMENT_ATTACHMENTS_ENABLED=false` turns folder attachments off with it instead of failing synth. Setting `CDK_FOLDER_ATTACHMENTS_ENABLED=true` explicitly without large document attachments still fails synth (#1674)
+- **The AgentCore Runtime now carries `SKILL_AUTHORING_ENABLED`, `WORD_TRACKED_CHANGES_ENABLED` and `FOLDER_ATTACHMENTS_ENABLED` only while they are off** (as `false`), where it used to carry them only while on. An environment that had all three on drops three variables from the Runtime's environment. Deploy the backend first: the previous image reads an unset variable as off (#1674)
+- **An Agent that binds no tools runs with none of the viewer's tools.** It used to fall through to the viewer's tool picker, so its toolset changed with whoever was chatting. System tools, admin always-on tools and attachment auto-enable still apply. A knowledge base with a complete CSV/XLSX now auto-enables the spreadsheet tools for such an Agent (RBAC-gated). The composer's tool picker is locked in every Agent conversation. Existing unbound Agents pay one `toolConfig` cache rewrite on their next turn (#1669)
+- **An Agent that binds no skills runs with none of the viewer's skills**, and `/` commands activate nothing on it. Bound Agents, project harnesses and plain chats are unchanged. The skill picker and `/` menu are locked in every Agent conversation (#1671)
+
+### 🐛 Fixed
+
+- **Long-term memory no longer leaks between assistants.** Assistant turns built with `long_term_memory=False` retrieve no `<user_context>`, and every event they write carries `extractionMode="SKIP"` (through a per-manager client proxy, so plain chats on the shared client are unaffected). Records already extracted from past assistant chats stay in users' memory, but they no longer reach assistant chats (#1667)
+- **Retrieved excerpts reach the model whole.** The legacy (S3 Vectors) context cap rises from 2,000 to 22,000 characters, which fits five full-size chunks. The excerpt preamble now says the excerpts are partial and that an ambiguous question should get a clarifying question (`RETRIEVED_EXCERPTS_PREAMBLE`). Earlier turns keep their persisted bytes (#1667)
+- **`analyze_spreadsheet` can read assistant knowledge-base files in cloud.** The Runtime role had no read on the rag-documents bucket, so the tool listed a KB spreadsheet and then failed with AccessDenied (#1668)
+- **`analyze_spreadsheet` finds a file whose stored name has leading or trailing spaces.** `list_spreadsheets` showed the name with the space, the model passed it trimmed, and the lookup said "not found". `_find_file` now strips both sides in its exact and same-stem passes (#1673)
+
+### 🏗️ Infrastructure
+
+- `AssistantDocumentsRead` (`s3:GetObject` on `rag-documents/assistants/*`) added as a statement on the existing `RuntimeMemoryStatsPolicy` managed policy. No new resource. `platform.yml` forwards `CDK_ASSISTANT_KB_FULL_CONTEXT_ENABLED` (#1668, #1667)
+- CDK defaults for the eight promoted flags flip to on; the Runtime's env shrinks by three variables where they are on (#1674)
+
 ## [1.29.0] - 2026-10-17
 
 MCP Apps work reliably against GitHub's App tools, browser sign-in moves into a docked panel shown at 1:1, and admins can send static custom headers to an external MCP server. Also fixes the 1.28.2 prod backend build that failed on ECR Public's anonymous pull limit. No infrastructure change.

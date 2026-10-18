@@ -1,4 +1,4 @@
-"""Shared Projects is opt-in while in development (CLAUDE.md "Feature flags")."""
+"""Shared Projects is default on with a kill switch (CLAUDE.md "Feature flags")."""
 
 import pytest
 
@@ -7,9 +7,9 @@ from apis.shared.feature_flags import projects_enabled
 
 @pytest.mark.parametrize(
     "value,expected",
-    [(None, False), ("", False), ("false", False), ("yes", False), ("true", True), (" TRUE ", True)],
+    [(None, True), ("", True), ("true", True), ("yes", True), ("false", False), (" FALSE ", False)],
 )
-def test_projects_are_on_only_when_explicitly_enabled(monkeypatch, value, expected):
+def test_projects_are_off_only_when_explicitly_disabled(monkeypatch, value, expected):
     if value is None:
         monkeypatch.delenv("PROJECTS_ENABLED", raising=False)
     else:

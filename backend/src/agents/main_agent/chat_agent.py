@@ -171,6 +171,12 @@ class ChatAgent(BaseAgent):
 
         Likewise a note naming tools left out because another source already
         holds their name (``skipped_tool_names``), on the same cache terms.
+
+        Last, an assistant's whole knowledge base in full-context mode
+        (``knowledge_context``). Inside the system segment, so it is read from
+        the system cache point; it changes only when a document does. Not part
+        of ``self.system_prompt`` for the same snapshot reason as the notes, and
+        because it can be ~200 KB.
         """
         from agents.builtin_tools.ask_user_question import SYSTEM_PROMPT_GUIDANCE
 
@@ -186,6 +192,9 @@ class ChatAgent(BaseAgent):
         skipped = getattr(self, "skipped_tool_names", None)
         if skipped:
             prompt = f"{prompt}\n\n{skipped_tools_note(skipped)}"
+        knowledge = getattr(self, "knowledge_context", None)
+        if knowledge:
+            prompt = f"{prompt}\n\n{knowledge}"
         return prompt
 
     async def stream_async(

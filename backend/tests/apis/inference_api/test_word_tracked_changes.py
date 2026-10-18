@@ -34,11 +34,11 @@ def on(monkeypatch):
 
 @pytest.fixture()
 def off(monkeypatch):
-    monkeypatch.delenv("WORD_TRACKED_CHANGES_ENABLED", raising=False)
+    monkeypatch.setenv("WORD_TRACKED_CHANGES_ENABLED", "false")
 
 
-@pytest.mark.parametrize("value,expected", [(None, False), ("", False), ("false", False), ("1", False), ("true", True), (" TRUE ", True)])
-def test_the_flag_is_opt_in(monkeypatch, value, expected):
+@pytest.mark.parametrize("value,expected", [(None, True), ("", True), ("1", True), ("true", True), ("false", False), (" FALSE ", False)])
+def test_the_flag_is_on_unless_false(monkeypatch, value, expected):
     if value is None:
         monkeypatch.delenv("WORD_TRACKED_CHANGES_ENABLED", raising=False)
     else:
@@ -156,7 +156,8 @@ def store(monkeypatch):
 
 class TestRedlineTool:
     @pytest.mark.asyncio
-    async def test_saves_a_new_file_and_reports_each_change(self, store):
+    async def test_saves_a_new_file_and_reports_each_change(self, store, off):
+        # Read back with the flag off: deletions drop and insertions stay, the accepted text.
         from agents.builtin_tools.word_document_tool import make_redline_word_document_tool
 
         tool = make_redline_word_document_tool("s1", "u1", "Pat Reviewer")
@@ -277,7 +278,7 @@ class TestReadWordDocument:
     """R2: python-docx in the sandbox sees the markers as ordinary runs."""
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("flag,expected", [("true", True), ("", False)])
+    @pytest.mark.parametrize("flag,expected", [("true", True), ("", True), ("false", False)])
     async def test_the_sandbox_gets_the_annotated_bytes_only_with_the_flag(self, store, monkeypatch, flag, expected):
         import agents.builtin_tools.word_document_tool as word
 

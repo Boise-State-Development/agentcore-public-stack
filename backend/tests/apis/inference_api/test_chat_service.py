@@ -1051,3 +1051,30 @@ async def test_a_disabled_tool_is_dropped_before_the_build(mock_create_agent, mo
         )
 
     assert mock_create_agent.call_args.kwargs["enabled_tools"] == ["search_web"]
+
+
+class TestAgentChatLongTermMemory:
+    """An Agent (assistant) conversation is built with the user's long-term
+    memory off; every other turn is built exactly as before."""
+
+    @pytest.mark.asyncio
+    async def test_an_agent_turn_builds_without_long_term_memory(self, mock_create_agent, mock_freshness_hash):
+        await service.get_agent(session_id="s", user_id="u", assistant_id="ast-1")
+
+        assert mock_create_agent.call_args.kwargs["long_term_memory"] is False
+
+    @pytest.mark.asyncio
+    async def test_a_plain_turn_passes_nothing(self, mock_create_agent, mock_freshness_hash):
+        await service.get_agent(session_id="s", user_id="u")
+
+        assert "long_term_memory" not in mock_create_agent.call_args.kwargs
+
+    @pytest.mark.asyncio
+    async def test_a_mention_turn_does_not_share_the_plain_agents_slot(self, mock_create_agent, mock_freshness_hash):
+        """`assistant_id` is already a key element, so the memory-isolated agent
+        and the plain one can never be served for each other."""
+        plain = await service.get_agent(session_id="s", user_id="u")
+        mention = await service.get_agent(session_id="s", user_id="u", assistant_id="ast-1")
+
+        assert plain is not mention
+        assert mock_create_agent.call_count == 2

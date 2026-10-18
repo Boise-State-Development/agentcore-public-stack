@@ -521,7 +521,7 @@ DEFAULT_TOOLS: list[dict[str, Any]] = [
         # apis/inference_api/chat/routes.py, and docs/specs/skill-creator.md.
         # Keep the toolId as "my_skill_create": it is the gate key. Off by
         # default and not public: it is granted to a pilot role, and the
-        # runtime also needs SKILL_AUTHORING_ENABLED=true. Every write pauses
+        # runtime must not set SKILL_AUTHORING_ENABLED=false. Every write pauses
         # for the user's approval.
         "toolId": "my_skill_create",
         "displayName": "Skill Authoring",

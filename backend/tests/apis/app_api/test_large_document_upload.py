@@ -106,7 +106,7 @@ class TestCompleteUpload:
     @pytest.mark.parametrize(
         "env",
         [
-            {"LARGE_DOCUMENT_ATTACHMENTS_ENABLED": "", "LARGE_DOCUMENT_PREPARE_QUEUE_URL": QUEUE_URL},
+            {"LARGE_DOCUMENT_ATTACHMENTS_ENABLED": "false", "LARGE_DOCUMENT_PREPARE_QUEUE_URL": QUEUE_URL},
             {"LARGE_DOCUMENT_ATTACHMENTS_ENABLED": "true", "LARGE_DOCUMENT_PREPARE_QUEUE_URL": ""},
         ],
     )

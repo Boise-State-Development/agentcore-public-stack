@@ -34,6 +34,7 @@ from apis.shared.feature_flags import (
     agent_preparing_phase_enabled,
     kb_search_ahead_enabled,
     agents_enabled,
+    assistant_kb_full_context_enabled,
     attachment_kb_enabled,
     attachment_turn_guard_enabled,
     folder_attachments_enabled,
@@ -82,6 +83,7 @@ from apis.shared.skills.pins import base_skill_id
 from apis.inference_api.chat.agent_binding_resolver import (
     AgentBindingBlockedError,
     AgentNoticeEvent,
+    ResolvedSkills,
     resolve_agent_invocation,
 )
 from apis.shared.sessions.metadata import (
@@ -958,7 +960,7 @@ def _build_skill_authoring_tools(
 
     A single toggle: ``my_skill_create`` in the turn's tools provisions all
     seven (list / read / read_file / create / update / write_file /
-    delete_file). Also gated on the in-development ``SKILL_AUTHORING_ENABLED``
+    delete_file). Also gated on ``SKILL_AUTHORING_ENABLED`` (default on)
     and on ``SKILLS_ENABLED``. No IO. A turn without the id returns after one
     set intersection. With it, building the seven tools costs ~9 ms on a
     session's first turn and a memo lookup after that (see
@@ -1273,15 +1275,19 @@ async def _session_has_tabular(
     session_id: str,
     user_id: str,
     turn_has_tabular: bool = False,
+    kb_assistant_id: Optional[str] = None,
 ) -> bool:
     """Whether this session's turns need the Spreadsheet Analysis tools.
 
     True when this turn attaches a CSV/XLSX (already partitioned, no query),
     when the session was seen holding one earlier in this process, or when
-    the session's READY uploads include one. Sticky by design: the answer
-    feeds ``enabled_tools`` and therefore the agent-cache key, so it must
-    not flip between the attach turn and the follow-up. Fail-closed on
-    error: a turn without the tools is today's behavior, never a broken turn.
+    the session's READY uploads include one. With ``kb_assistant_id`` (an
+    Agent that binds no tools), also when that assistant's knowledge base
+    holds one: the picker used to be the only way those tools reached such an
+    Agent, and it no longer does. Sticky by design: the answer feeds
+    ``enabled_tools`` and therefore the agent-cache key, so it must not flip
+    between the attach turn and the follow-up. Fail-closed on error: a turn
+    without the tools is today's behavior, never a broken turn.
     """
     if turn_has_tabular:
         _remember_tabular_session(session_id)
@@ -1293,7 +1299,18 @@ async def _session_has_tabular(
     try:
         from apis.shared.files.document_read import session_has_tabular_files
 
-        present = await session_has_tabular_files(user_id, session_id)
+        if kb_assistant_id:
+            from apis.shared.assistants.kb_tabular import assistant_kb_has_tabular_documents
+
+            # Both reads at once: neither waits on the other, and the gate sits on the
+            # path to the first token.
+            in_session, in_kb = await asyncio.gather(
+                session_has_tabular_files(user_id, session_id),
+                assistant_kb_has_tabular_documents(kb_assistant_id),
+            )
+            present = in_session or in_kb
+        else:
+            present = await session_has_tabular_files(user_id, session_id)
     except Exception:  # noqa: BLE001 - the gate must never fail a turn
         logger.warning("spreadsheet auto-enable lookup failed; tools not injected this turn", exc_info=True)
         return False
@@ -1318,10 +1335,12 @@ async def _auto_enabled_attachment_tool_ids(
     session_id: str,
     user_id: str,
     turn_has_tabular: bool = False,
+    kb_assistant_id: Optional[str] = None,
 ) -> list[str]:
     """The Spreadsheet Analysis ids this turn should carry regardless of the
     picker, in a fixed order: every id in ``SPREADSHEET_TOOL_IDS`` the
-    caller's RBAC grant admits, when the session holds a spreadsheet.
+    caller's RBAC grant admits, when the session holds a spreadsheet (or,
+    given ``kb_assistant_id``, when that assistant's knowledge base does).
 
     Enables, never grants: ``can_access_tool`` is the same predicate the
     picker and Agent bindings answer to (role grant ∪ public tools). A user
@@ -1332,7 +1351,7 @@ async def _auto_enabled_attachment_tool_ids(
 
     if not attachment_tool_autoenable_enabled():
         return []
-    if not await _session_has_tabular(session_id, user_id, turn_has_tabular):
+    if not await _session_has_tabular(session_id, user_id, turn_has_tabular, kb_assistant_id):
         return []
     role_service = get_app_role_service()
     allowed: list[str] = []
@@ -1356,16 +1375,19 @@ async def _apply_attachment_tool_autoenable(
     session_id: str,
     user_id: str,
     turn_has_tabular: bool = False,
+    kb_assistant_id: Optional[str] = None,
 ) -> list | None:
     """``enabled_tools`` for this turn with the attachment auto-enable applied.
 
     The single seam every ``get_agent`` caller on the invocation path goes
     through, so the main turn and the MCP App dispatch paths compute the same
     effective list — and therefore the same agent-cache slot — for a session
-    holding a spreadsheet.
+    holding a spreadsheet. ``kb_assistant_id`` extends the gate to that
+    assistant's knowledge base; only an Agent that binds no tools passes it.
     """
     auto_ids = await _auto_enabled_attachment_tool_ids(
-        current_user, session_id, user_id, turn_has_tabular=turn_has_tabular
+        current_user, session_id, user_id, turn_has_tabular=turn_has_tabular,
+        kb_assistant_id=kb_assistant_id,
     )
     return _with_auto_enabled_tools(enabled_tools, auto_ids)
 
@@ -1388,16 +1410,14 @@ async def _apply_admin_always_on_tools(
     it would override the author's explicit scoping.
 
     ⚠️ The exemption is "the Agent binds its own toolset", NOT "the turn ran an
-    Agent". ``_resolve_tools`` returns ``None`` — so ``agent_bound_tools`` is
-    False — for an Agent with no ``tool`` bindings, and such a turn falls
-    through to the user's picker and **does** get the pinned set. That is
-    deliberate: a template-derived Agent starts with empty ``bindings``
-    (``agent_templates/seed.py``), and exempting it would make always-on
-    opt-out-by-construction — anyone could shed a pinned tool with a trivial
-    unbound Agent. See docs/specs/admin-always-on-tools.md §7 D4. A project
-    harness that binds no tools is the same case, though it no longer falls
-    through to the picker: its toolset is empty with ``owns_toolset`` False,
-    so the pinned set is still unioned in.
+    Agent". An Agent with no ``tool`` bindings (a project harness included)
+    resolves to an empty toolset with ``owns_toolset`` False — so
+    ``agent_bound_tools`` is False — and **does** get the pinned set, though
+    never the user's picker. That is deliberate: a template-derived Agent
+    starts with empty ``bindings`` (``agent_templates/seed.py``), and exempting
+    it would make always-on opt-out-by-construction — anyone could shed a
+    pinned tool with a trivial unbound Agent. See
+    docs/specs/admin-always-on-tools.md §7 D4.
 
     This is a deliberate divergence from the attachment auto-enable above,
     which applies to the effective list and so does reach Agent-bound turns:
@@ -2053,6 +2073,7 @@ async def stream_conversational_message(
     user_id: str,
     user_input: str,
     persist: bool = True,
+    long_term_memory: bool = True,
 ) -> AsyncGenerator[str, None]:
     """Stream a message as an assistant response with optional metadata event.
 
@@ -2067,6 +2088,8 @@ async def stream_conversational_message(
         user_id: User ID for persistence
         user_input: The user's original message to save
         persist: False streams the message without writing either turn to history
+        long_term_memory: False in an Agent conversation, whose writes skip
+            long-term memory extraction (``SessionFactory.create_session_manager``)
     """
     # Emit message_start event (assistant response)
     yield f"event: message_start\ndata: {json.dumps({'role': 'assistant'})}\n\n"
@@ -2106,7 +2129,12 @@ async def stream_conversational_message(
     try:
         from agents.main_agent.session.persistence import persist_synthetic_messages
 
-        session_manager = SessionFactory.create_session_manager(session_id=session_id, user_id=user_id, caching_enabled=False)
+        session_manager = SessionFactory.create_session_manager(
+            session_id=session_id,
+            user_id=user_id,
+            caching_enabled=False,
+            long_term_memory=long_term_memory,
+        )
         persist_synthetic_messages(
             session_manager,
             session_id,
@@ -2174,6 +2202,25 @@ def _apply_enabled_skills_filter(
         return []
     requested = set(enabled_skills)
     return [sid for sid in accessible_skill_ids if sid in requested]
+
+
+def _apply_agent_skills_override(
+    agent_type: str,
+    skill_ids: Optional[list[str]],
+    override: Optional[ResolvedSkills],
+) -> tuple[str, Optional[list[str]]]:
+    """The turn's ``(agent_type, skill ids)`` once an Agent's skills are known.
+
+    An Agent's skills replace the request's for the turn, so ChatAgent's AgentSkills
+    plugin discloses exactly what the Agent was given (D5, resolved per invoker). That
+    includes an empty set: an Agent that binds no skills runs with none, never the
+    viewer's ``enabled_skills``. With no skills ``build_skills_runtime`` mounts nothing
+    and the turn behaves as a plain chat. ``override`` is ``None`` only when no Agent ran
+    (plain chat, or the agents feature off); the request then drives skills and type.
+    """
+    if override is None:
+        return agent_type, skill_ids
+    return "skill", list(override.skill_ids)
 
 
 def _resolve_invoked_skill_slugs(
@@ -2277,6 +2324,7 @@ def _refuse_turn(
             user_id=user_id,
             user_input=input_data.message,
             persist=persist,
+            long_term_memory=not input_data.rag_assistant_id,
         ),
         media_type="text/event-stream",
         headers=_sse_headers(input_data.session_id),
@@ -3336,11 +3384,13 @@ async def _resolve_effective_tools(
 ) -> Optional[list]:
     """Map stage B11 (in ``tools``): the tool ids this turn actually carries.
 
-    The Agent's bindings if it has any, else the request's picker; then the
-    spreadsheet auto-enable for a session holding a spreadsheet, then the
-    admin's always-on set and the platform's system tools. One value, so the
-    cache key, every builder, the attachment guidance and the paused-turn
-    snapshot all see the same list.
+    On an Agent turn, the Agent's bindings — empty when it binds none, never
+    the request's picker; on a plain chat, the request's picker. Then the
+    spreadsheet auto-enable for a session holding a spreadsheet (or an unbound
+    Agent whose knowledge base holds one), then the admin's always-on set
+    unless the Agent binds its own tools, then the platform's system tools.
+    One value, so the cache key, every builder, the attachment guidance and
+    the paused-turn snapshot all see the same list.
     """
     # Get agent instance with user-specific configuration
     # AgentCore Memory tracks preferences across sessions per user_id
@@ -3353,15 +3403,21 @@ async def _resolve_effective_tools(
     # lifetime, so we can trust `input_data.rag_assistant_id`
     # directly; no preferences fallback needed.
     # An Agent's tool bindings replace the request's enabled_tools for this
-    # turn (D5, resolved per invoker above). None ⇒ no tool binding ⇒ the
-    # request drives the toolset exactly as today. A project harness is never
-    # None: binding no tools, it runs on none of the member's. Drives both the built-in
-    # extra tools (spreadsheet/artifact gate on specific ids) and get_agent.
+    # turn (D5, resolved per invoker above). An Agent that binds no tools gets
+    # an empty list here, not the viewer's picker: its toolset must not change
+    # with whoever is chatting. None ⇒ not an Agent turn (plain chat, or the
+    # Agent surface is off) ⇒ the request drives the toolset exactly as today.
+    # Drives both the built-in extra tools (spreadsheet/artifact gate on
+    # specific ids) and get_agent.
     effective_enabled_tools = (
         agent_tools_override.tool_ids
         if agent_tools_override is not None
         else input_data.enabled_tools
     )
+    # An unbound Agent's knowledge base is the one signal of what tools its own
+    # content needs: a spreadsheet there is unreadable without the analysis
+    # tools, which the picker used to supply.
+    agent_unbound = agent_tools_override is not None and not agent_tools_override.owns_toolset
     # A session holding a spreadsheet gets the Spreadsheet Analysis
     # tools whether or not the picker has them on, gated on the
     # caller's RBAC grant. Applied to the *effective* list so it
@@ -3375,6 +3431,7 @@ async def _resolve_effective_tools(
         input_data.session_id,
         user_id,
         turn_has_tabular=turn_has_tabular,
+        kb_assistant_id=input_data.rag_assistant_id if agent_unbound else None,
     )
 
     # Tools an admin pinned are unioned in for users whose roles grant
@@ -3532,8 +3589,27 @@ def _validate_resume_interrupts(agent, input_data: InvocationRequest) -> None:
         )
 
 
+async def _resume_knowledge_context(
+    assistant_id: Optional[str], current_user: User, user_id: str
+) -> Optional[str]:
+    """A resumed turn's full-context block, re-loaded under a fresh grant."""
+    if not assistant_id:
+        return None
+    from apis.shared.assistants.kb_access import resolve_kb_access
+    from apis.shared.assistants.kb_full_context import load_full_kb_context
+
+    if not assistant_kb_full_context_enabled():
+        return None
+    access = await resolve_kb_access(assistant_id, user_id, user_email=current_user.email)
+    return await load_full_kb_context(assistant_id, access=access)
+
+
 async def _search_and_augment(
-    *, assistant_id: str, message: str, access: Any
+    *,
+    assistant_id: str,
+    message: str,
+    access: Any,
+    full_context: Optional["asyncio.Task[Optional[str]]"] = None,
 ) -> Tuple[Optional[list], str]:
     """Search an assistant's knowledge base and augment ``message`` with it.
 
@@ -3542,6 +3618,12 @@ async def _search_and_augment(
     retrieved context. Never raises, which also means a turn that exits before
     awaiting it (a refusal after the search started) leaves no unretrieved
     exception behind.
+
+    ``full_context`` is the turn's ``load_full_kb_context`` task. When it
+    yields a block, the whole knowledge base is already in the system prompt,
+    so the chunks are returned for the citation cards and ``message`` comes
+    back unaugmented. The search still runs alongside, not after it, so a turn
+    that ends up retrieving waits no longer than before.
     """
     from apis.shared.assistants.rag_service import (
         augment_prompt_with_context,
@@ -3559,6 +3641,9 @@ async def _search_and_augment(
             access=access,
         )
         logger.info(f"Knowledge base search returned {len(context_chunks) if context_chunks else 0} chunks")
+        if full_context is not None and await full_context:
+            logger.info("Knowledge base sent whole (full-context mode) - message not augmented")
+            return context_chunks, message
         if not context_chunks:
             logger.info("No context chunks found for assistant - using original message without augmentation")
             return context_chunks, message
@@ -3746,7 +3831,8 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # plugin. The opt-in default (D6) is what keeps this cheap: an absent or
     # empty selection short-circuits to [] without touching RBAC or the skill
     # table, so every turn that doesn't ask for skills costs exactly what it did
-    # before. An Agent's skill bindings override this further down.
+    # before. An Agent turn replaces this further down with the Agent's own skills
+    # (none, when it binds none).
     effective_skill_ids = None
     if skills_enabled() and input_data.enabled_skills:
         effective_skill_ids = _apply_enabled_skills_filter(
@@ -4009,6 +4095,10 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # awaited after the agent build instead (turn-path spec §5 P3b). None on a
     # plain turn, a continuation, or once its result has been applied.
     kb_search: Optional["asyncio.Task[Tuple[Optional[list], str]]"] = None
+    # The whole knowledge base when it fits the budget (``kb_full_context``),
+    # loaded alongside everything up to the agent build and awaited by it: the
+    # block goes into the system prompt. None on a plain turn or a resume.
+    kb_full_context_task: Optional["asyncio.Task[Optional[str]]"] = None
     system_prompt = input_data.system_prompt  # Start with provided system prompt
     # One settings read per turn: the default model and personal instructions both
     # come from it. A preview is an author testing an agent, so it gets none of theirs.
@@ -4025,9 +4115,10 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
     # the request's ``enabled_tools`` for the turn (like ``model_override`` replaces the
     # model). None ⇒ the Agent binds no tools ⇒ the request's enabled_tools drive the turn.
     agent_tools_override = None
-    # An Agent's ``skill`` bindings, resolved per invoker (D5). When set they replace the
-    # request's skills AND force skill-mode (agent_type="skill") for the turn. None ⇒ the
-    # Agent binds no skills ⇒ the request's agent_type/enabled_skills drive the turn.
+    # An Agent's ``skill`` bindings, resolved per invoker (D5). On an Agent turn they replace
+    # the request's skills AND force skill-mode (agent_type="skill"); an Agent that binds no
+    # skills resolves to an empty set, so it runs with none. None ⇒ not an Agent turn ⇒ the
+    # request's agent_type/enabled_skills drive the turn.
     agent_skills_override = None
     # Shared Projects: set when this turn's agent is a project's hidden harness. Carried to
     # the session binding and to every cost row of the turn (``projectId`` plus the
@@ -4386,6 +4477,21 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             except AgentBindingBlockedError as block:
                 return _forbidden_turn(input_data, user_id, block.message)
 
+        # Full-context mode. Started here, with the search, and awaited by the agent
+        # build, so its DynamoDB Query (and on a conversation's first turn, its
+        # downloads) overlaps everything between here and the build. Runs on a
+        # continuation too: the block is part of the system prompt, and dropping it
+        # would rebuild the agent under a different key mid-answer.
+        if assistant_kb_full_context_enabled():
+            from apis.shared.assistants.kb_full_context import load_full_kb_context
+
+            kb_full_context_task = asyncio.create_task(
+                load_full_kb_context(
+                    input_data.rag_assistant_id,
+                    access=granted(input_data.rag_assistant_id, user_id, assistant_permission),
+                )
+            )
+
         # Skipped on a continuation: the turn carries an empty message, so a
         # knowledge-base search would spend a query on "" and augment nothing. The
         # context the original turn retrieved is already in the history being continued.
@@ -4401,6 +4507,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                     assistant_id=input_data.rag_assistant_id,
                     message=input_data.message,
                     access=granted(input_data.rag_assistant_id, user_id, assistant_permission),
+                    full_context=kb_full_context_task,
                 )
             )
             if not kb_search_ahead_enabled():
@@ -4707,6 +4814,12 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 memory_binding=snapshot.memory_binding,
                 # The memory block is hashed with the system prompt in the key.
                 memory_context=snapshot.memory_context,
+                # So is a full-context knowledge base, which is too large for the
+                # snapshot row. Re-load it: the block is deterministic, so an
+                # unchanged knowledge base yields the same bytes and the same
+                # slot; one changed during the pause misses and rebuilds, the
+                # pre-existing eviction path.
+                knowledge_context=await _resume_knowledge_context(snapshot.assistant_id, current_user, user_id),
                 text_only_model=bool(snapshot.text_only_model),
                 # Resume never builds injected tools, so an agent built on a
                 # resume *miss* lacks them. Writing it would put a tool-less
@@ -4769,16 +4882,12 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 or _folders_have(attachments.folders, is_tabular_file),
             )
 
-            # An Agent's skill bindings replace the request's skills for this turn so
-            # ChatAgent's AgentSkills plugin discloses exactly the bound set (D5,
-            # resolved per invoker above). Reassigning these function-scope locals here
-            # (before the main-turn get_agent below) makes them flow into construction —
-            # and thus the paused-turn snapshot — so a bound-skill agent resumes on the
-            # same skills_hash. None ⇒ no skill binding ⇒ the request drives skills/type.
-            # A project harness is never None here: an empty set runs it with no skills.
-            if agent_skills_override is not None:
-                effective_agent_type = "skill"
-                effective_skill_ids = agent_skills_override.skill_ids
+            # Reassigning these function-scope locals here (before the main-turn
+            # get_agent below) makes them flow into construction — and thus the
+            # paused-turn snapshot — so an Agent turn resumes on the same skills_hash.
+            effective_agent_type, effective_skill_ids = _apply_agent_skills_override(
+                effective_agent_type, effective_skill_ids, agent_skills_override
+            )
 
             turn_tools = await _build_turn_tools(
                 input_data,
@@ -4819,6 +4928,13 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                 call sites — see `defer_agent_build` below — and eighteen
                 keyword arguments that must not drift between them.
                 """
+                knowledge_context = None
+                if kb_full_context_task is not None:
+                    knowledge_context = await kb_full_context_task
+                    # What was left of the full-context load once everything ahead
+                    # of the build was done: ~0 on a warm turn, its downloads on a
+                    # conversation's first.
+                    prelude.mark("agent_build.kb_full_context")
                 return await get_agent(
                     session_id=input_data.session_id,
                     user_id=user_id,
@@ -4843,6 +4959,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                     memory_binding=turn_tools.memory_binding_key,
                     memory_context=memory_context,
                     text_only_model=turn_model.text_only,
+                    knowledge_context=knowledge_context,
                 )
 
             # Defer the build into the stream so it can be narrated.
@@ -5244,6 +5361,7 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
                             session_id=input_data.session_id,
                             user_id=user_id,
                             user_input=input_data.message,
+                            long_term_memory=not input_data.rag_assistant_id,
                         ):
                             yield frame
                         return

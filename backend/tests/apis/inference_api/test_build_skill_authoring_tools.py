@@ -41,13 +41,19 @@ def test_without_the_gate_id_nothing_is_built(on, enabled_tools):
     assert _names(enabled_tools) == []
 
 
-@pytest.mark.parametrize("value", [None, "", "false", "yes", "1"])
-def test_the_in_development_flag_is_opt_in(monkeypatch, value):
+@pytest.mark.parametrize("value", ["false", " FALSE "])
+def test_the_kill_switch_removes_them(monkeypatch, value):
+    monkeypatch.setenv("SKILL_AUTHORING_ENABLED", value)
+    assert _names(["my_skill_create"]) == []
+
+
+@pytest.mark.parametrize("value", [None, "", "yes"])
+def test_the_flag_is_on_unless_false(monkeypatch, value):
     if value is None:
         monkeypatch.delenv("SKILL_AUTHORING_ENABLED", raising=False)
     else:
         monkeypatch.setenv("SKILL_AUTHORING_ENABLED", value)
-    assert _names(["my_skill_create"]) == []
+    assert _names(["my_skill_create"]) != []
 
 
 def test_the_skills_kill_switch_also_removes_them(on, monkeypatch):

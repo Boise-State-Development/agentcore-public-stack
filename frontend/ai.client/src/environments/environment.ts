@@ -8,17 +8,18 @@ export const environment = {
     // Proactive new-build check (AppUpdateService). Inert on the dev server,
     // whose unhashed `main.js` gives it nothing to compare.
     versionCheckEnabled: true,
-    // Front-end feature switches (feature-flags.ts). In-development features are off
-    // until you choose to turn them on; match your backend's *_ENABLED values.
+    // Front-end feature switches (feature-flags.ts). Finished features are on, and
+    // in-development ones off until you choose to turn them on; match your
+    // backend's *_ENABLED values.
     features: {
-        projects: false,
+        projects: true,
         conversationSearch: true,
-        userGrants: false,
+        userGrants: true,
         sessionPrewarm: false,
-        clientTurnTiming: false,
-        largeDocumentAttachments: false,
-        folderAttachments: false,
+        clientTurnTiming: true,
+        largeDocumentAttachments: true,
+        folderAttachments: true,
         attachmentKb: false,
-        folderSync: false,
+        folderSync: true,
     } satisfies FeatureFlags,
 };

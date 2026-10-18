@@ -906,18 +906,24 @@ async def _find_file(filename: str, assistant_id: Optional[str], session_id: str
     param on retry), we treat them as the same file. Prevents the common
     round-trip loop where analyze_spreadsheet rejects a reasonable guess
     and forces the model to call list_spreadsheets (#206).
+
+    Both sides are compared with surrounding whitespace stripped. A stored
+    name can carry a leading or trailing space (Drive-synced documents do),
+    ``list_spreadsheets`` shows it verbatim, and the model trims it when it
+    calls ``analyze_spreadsheet``. Only matching is normalized: the returned
+    record keeps its stored name and S3 key.
     """
     candidates: list[Dict[str, Any]] = []
     if assistant_id:
         candidates.extend(await _get_kb_files(assistant_id))
     candidates.extend(await _get_session_files(session_id))
 
-    target_lower = filename.lower()
+    target_lower = filename.strip().lower()
     target_stem, _ = os.path.splitext(target_lower)
 
-    # First pass: exact match (case-insensitive).
+    # First pass: exact match (case-insensitive, whitespace-trimmed).
     for f in candidates:
-        if f["filename"].lower() == target_lower:
+        if f["filename"].strip().lower() == target_lower:
             return f
 
     # Second pass: same stem, tabular extension. Covers foo.csv -> foo.xlsx
@@ -927,9 +933,9 @@ async def _find_file(filename: str, assistant_id: Optional[str], session_id: str
 
     if target_stem and any(target_lower.endswith(ext) for ext in (".csv", ".xls", ".xlsx")):
         for f in candidates:
-            cand_lower = f["filename"].lower()
+            cand_lower = f["filename"].strip().lower()
             cand_stem, _ = os.path.splitext(cand_lower)
-            if cand_stem == target_stem and is_tabular_file(f["filename"], f.get("content_type", "")):
+            if cand_stem == target_stem and is_tabular_file(cand_lower, f.get("content_type", "")):
                 return f
 
     return None

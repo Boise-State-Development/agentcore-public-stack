@@ -431,10 +431,25 @@ export function createRuntimeExecutionRole(
   // CDK overflow policies, packed by a size CDK estimates before ARNs resolve,
   // and on dev OverflowPolicy1 resolves to 5,473 of IAM's 6,144 characters.
   // The same packing rolled back the first 2.6a deploy on app-api's role.
+  //
+  // `analyze_spreadsheet` downloads an assistant's knowledge-base spreadsheet
+  // from its original upload in rag-documents (`assistants/{id}/documents/...`),
+  // so the Runtime reads that prefix too; so does full-context mode
+  // (`kb_full_context`), which sends a small knowledge base's uploads whole.
+  // Read-only, no ListBucket: the key
+  // comes from the assistant's DOC# row. It rides this policy for the same
+  // overflow reason, and to add no resource to a stack near 500. Its
+  // description stays as it is: changing it replaces the policy.
   new iam.ManagedPolicy(scope, 'RuntimeMemoryStatsPolicy', {
     roles: [role],
     description: 'AgentCore Runtime: count memory file reads in STATS# rows (Shared Projects 2.6b)',
     statements: [
+      new iam.PolicyStatement({
+        sid: 'AssistantDocumentsRead',
+        effect: iam.Effect.ALLOW,
+        actions: ['s3:GetObject'],
+        resources: [`${refs.ragDocumentsBucket.bucketArn}/assistants/*`],
+      }),
       new iam.PolicyStatement({
         sid: 'MemorySpacesStatsUpdate',
         effect: iam.Effect.ALLOW,

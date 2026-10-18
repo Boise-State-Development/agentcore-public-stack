@@ -14,6 +14,7 @@ These tests pin down:
 - aliasing only triggers for tabular extensions (no foo.pdf ↔ foo.docx)
 - both sources contribute candidates
 - case-insensitive exact match
+- surrounding whitespace is ignored on both the request and the stored name
 
 After #260, ``_find_file`` and both helpers are ``async def``; the
 ``patch`` calls install ``AsyncMock`` side-effects so awaiting them
@@ -210,3 +211,51 @@ class TestSourceOrder:
         kb_p, sess_p = _patch_sources()
         with kb_p, sess_p:
             assert await _find_file("nope.csv", assistant_id="ast-1", session_id="s1") is None
+
+
+class TestWhitespaceTolerance:
+    """A stored name can start or end with a space (Drive-synced KB
+    documents do). ``list_spreadsheets`` shows it verbatim, but the model
+    trims it when it calls ``analyze_spreadsheet``, so matching must ignore
+    surrounding whitespace on both sides.
+    """
+
+    @pytest.mark.asyncio
+    async def test_leading_space_candidate_matches_trimmed_request(self):
+        kb_p, sess_p = _patch_sources(
+            kb=[_kb_file(" Enrollment.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")],
+        )
+        with kb_p, sess_p:
+            result = await _find_file("Enrollment.xlsx", assistant_id="ast-1", session_id="s1")
+            assert result is not None
+            # The record keeps its stored name; the S3 key is untouched.
+            assert result["filename"] == " Enrollment.xlsx"
+            assert result["s3_key"] == "kb/ Enrollment.xlsx"
+
+    @pytest.mark.asyncio
+    async def test_trimmed_candidate_matches_request_with_stray_spaces(self):
+        kb_p, sess_p = _patch_sources(session=[_session_file("Q1.csv", "text/csv")])
+        with kb_p, sess_p:
+            result = await _find_file("  Q1.csv ", assistant_id=None, session_id="s1")
+            assert result is not None
+            assert result["filename"] == "Q1.csv"
+
+    @pytest.mark.asyncio
+    async def test_csv_alias_resolves_xlsx_with_surrounding_spaces(self):
+        """The XLSX↔CSV stem alias still applies once both sides are
+        trimmed, even when the candidate's trailing space would otherwise
+        hide its tabular extension.
+        """
+        kb_p, sess_p = _patch_sources(kb=[_kb_file(" Ledger.xlsx ")])
+        with kb_p, sess_p:
+            result = await _find_file("Ledger.csv ", assistant_id="ast-1", session_id="s1")
+            assert result is not None
+            assert result["filename"] == " Ledger.xlsx "
+
+    @pytest.mark.asyncio
+    async def test_xlsx_alias_resolves_csv_with_leading_space(self):
+        kb_p, sess_p = _patch_sources(session=[_session_file(" Q3.csv", "text/csv")])
+        with kb_p, sess_p:
+            result = await _find_file(" Q3.xlsx", assistant_id=None, session_id="s1")
+            assert result is not None
+            assert result["filename"] == " Q3.csv"

@@ -181,18 +181,18 @@ class TestMetric:
         record_folder_expansion(outcome="ready", counts=FolderCounts(), bytes_attached=0, ms=0)
 
 
-@pytest.mark.parametrize("value", ["true", "TRUE", " True "])
-def test_only_true_enables(monkeypatch, value):
+@pytest.mark.parametrize("value", ["false", "FALSE", " False "])
+def test_only_false_disables(monkeypatch, value):
+    monkeypatch.setenv("FOLDER_ATTACHMENTS_ENABLED", value)
+    assert not folder_attachments_enabled()
+
+
+@pytest.mark.parametrize("value", ["", "true", "yes", "1", "off"])
+def test_anything_else_is_on(monkeypatch, value):
     monkeypatch.setenv("FOLDER_ATTACHMENTS_ENABLED", value)
     assert folder_attachments_enabled()
 
 
-@pytest.mark.parametrize("value", ["", "false", "yes", "1", "on"])
-def test_anything_else_is_off(monkeypatch, value):
-    monkeypatch.setenv("FOLDER_ATTACHMENTS_ENABLED", value)
-    assert not folder_attachments_enabled()
-
-
-def test_unset_is_off(monkeypatch):
+def test_unset_is_on(monkeypatch):
     monkeypatch.delenv("FOLDER_ATTACHMENTS_ENABLED", raising=False)
-    assert not folder_attachments_enabled()
+    assert folder_attachments_enabled()

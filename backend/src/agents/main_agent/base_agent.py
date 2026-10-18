@@ -76,6 +76,8 @@ class BaseAgent(ABC):
         extra_tools: Optional[List[Any]] = None,
         memory_context: Optional[str] = None,
         text_only_model: bool = False,
+        long_term_memory: bool = True,
+        knowledge_context: Optional[str] = None,
     ):
         """
         Initialize base agent with shared infrastructure.
@@ -102,6 +104,15 @@ class BaseAgent(ABC):
             skip_persistence: If True, don't persist messages (for preview sessions)
             text_only_model: The model's catalog row declares TEXT input only, so
                 it sees history with media blocks replaced by text.
+            long_term_memory: False for a conversation with an Agent: the
+                user's long-term memory is neither retrieved into it nor
+                extracted from it (``SessionFactory.create_session_manager``).
+                Follows from ``assistant_id``, already an agent cache key
+                element and on the construction snapshot.
+            knowledge_context: The assistant's whole knowledge base in
+                full-context mode (``apis.shared.assistants.kb_full_context``).
+                Sent at the end of the system prompt, inside the system cache
+                segment. Not snapshotted: see ``get_agent``.
         """
         # Basic state
         self.session_id = session_id
@@ -110,6 +121,7 @@ class BaseAgent(ABC):
         self.enabled_tools = enabled_tools
         self.extra_tools = extra_tools or []
         self.memory_context = memory_context or None
+        self.knowledge_context = knowledge_context or None
         self.agent = None
 
         # Merge legacy temperature/max_tokens into the canonical dict. Explicit
@@ -211,7 +223,10 @@ class BaseAgent(ABC):
 
         # Initialize session manager
         self.session_manager = SessionFactory.create_session_manager(
-            session_id=session_id, user_id=self.user_id, caching_enabled=self.model_config.caching_enabled
+            session_id=session_id,
+            user_id=self.user_id,
+            caching_enabled=self.model_config.caching_enabled,
+            long_term_memory=long_term_memory,
         )
         # Conversation restore from AgentCore Memory happens in here, so this
         # is a prime suspect for the cold build and has never been timed.

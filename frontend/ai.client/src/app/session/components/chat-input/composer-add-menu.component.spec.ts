@@ -67,6 +67,8 @@ describe('ComposerAddMenuComponent', () => {
   let connectorsLoading: ReturnType<typeof signal<boolean>>;
   let connectorList: ReturnType<typeof signal<unknown[] | undefined>>;
   let agentLocked: ReturnType<typeof signal<boolean>>;
+  let skillsLocked: ReturnType<typeof signal<boolean>>;
+  let skillCommands: ReturnType<typeof signal<SkillCommand[]>>;
   let tools: ReturnType<typeof signal<Tool[]>>;
   let states: Record<string, 'connected' | 'disconnected' | 'unknown'>;
 
@@ -100,6 +102,8 @@ describe('ComposerAddMenuComponent', () => {
       { providerId: 'slack', displayName: 'Slack', providerType: 'slack', iconName: 'x', scopes: [] },
     ]);
     agentLocked = signal(false);
+    skillsLocked = signal(false);
+    skillCommands = signal(SKILLS);
     tools = signal<Tool[]>([
       tool({ toolId: 'web_search', displayName: 'Web Search', isEnabled: true }),
       tool({ toolId: 'analyze_spreadsheet', displayName: 'Spreadsheet Analysis', isEnabled: false }),
@@ -114,7 +118,10 @@ describe('ComposerAddMenuComponent', () => {
         { provide: Router, useValue: { navigate } },
         { provide: ToastService, useValue: { error: vi.fn(), warning: vi.fn(), info: vi.fn(), success: vi.fn() } },
         { provide: FileSourceService, useValue: { listFileSources } },
-        { provide: SkillCommandService, useValue: { commands: signal(SKILLS), load: vi.fn(async () => undefined) } },
+        {
+          provide: SkillCommandService,
+          useValue: { commands: skillCommands, agentLocked: skillsLocked, load: vi.fn(async () => undefined) },
+        },
         {
           provide: ToolService,
           useValue: {
@@ -292,6 +299,16 @@ describe('ComposerAddMenuComponent', () => {
     expect(picked).toHaveBeenCalledWith(SKILLS[1]);
   });
 
+  it('says an Agent with no skills uses none, instead of "turn some on"', async () => {
+    skillsLocked.set(true);
+    skillCommands.set([]);
+    await openMenu();
+    await openSubmenu('composer-add-skills');
+    const skills = overlay('composer-skills-menu')!;
+    expect(skills.textContent).toContain("This agent doesn't use skills.");
+    expect(skills.textContent).not.toContain('No skills are turned on.');
+  });
+
   it('"Manage skills" goes to Customize → Skills', async () => {
     await openMenu();
     await openSubmenu('composer-add-skills');
@@ -365,6 +382,16 @@ describe('ComposerAddMenuComponent', () => {
     await settle();
     expect(toolsMenu.textContent).toContain("This conversation's agent chooses its tools");
     expect(toolsMenu.querySelector('[data-tool-id="web_search"]')!.getAttribute('aria-disabled')).toBe('true');
+  });
+
+  it('says an Agent with no tools uses none, instead of promising tools the turn will not get', async () => {
+    agentLocked.set(true);
+    tools.set([]);
+    await openMenu();
+    await openSubmenu('composer-add-tools');
+    const toolsMenu = overlay('composer-tools-menu')!;
+    expect(toolsMenu.textContent).toContain("This agent doesn't use tools.");
+    expect(toolsMenu.textContent).not.toContain('No tools available.');
   });
 
   it('lists connectors as switches with their connection state and probes the unknown ones', async () => {
