@@ -6,6 +6,8 @@ at the inference-api dispatch, and that a successful call publishes
 synthesized tool_use/tool_result into the per-session broker.
 """
 
+import contextlib
+
 import pytest
 
 from apis.inference_api.chat import app_tool_dispatch as dispatch_mod
@@ -248,6 +250,46 @@ async def test_no_structured_content_key_when_the_tool_returned_none(monkeypatch
     assert "structuredContent" not in payload["result"]
 
 
+@pytest.mark.asyncio
+async def test_strands_error_status_reaches_the_app_as_is_error(monkeypatch):
+    """`status: "error"` without `isError` is still an error.
+
+    That is the shape `call_tool_sync` returns when it catches an exception
+    itself. Read for `isError` alone, the App got `isError: false` beside
+    "Tool execution failed: ..." — found on dev with GitHub's issue_write.
+    """
+    client = _FakeClient(
+        {
+            "toolUseId": "mcp-1",
+            "status": "error",
+            "content": [{"text": "Tool execution failed: boom"}],
+        }
+    )
+    _patch(monkeypatch, enabled=True, meta=_ui(["model", "app"]), client=client)
+
+    broker = get_app_tool_event_broker()
+    q = broker.add_subscriber("disp-status")
+    try:
+        payload = await _call(session_id="disp-status")
+        events = broker.drain(q)
+    finally:
+        broker.remove_subscriber("disp-status", q)
+
+    assert payload["result"]["isError"] is True
+    assert payload["result"]["content"] == [
+        {"type": "text", "text": "Tool execution failed: boom"}
+    ]
+    assert events[1]["data"]["tool_result"]["status"] == "error"
+
+
+def test_is_error_reads_every_failure_marker():
+    assert dispatch_mod._is_error({"isError": True}) is True
+    assert dispatch_mod._is_error({"status": "error"}) is True
+    assert dispatch_mod._is_error({"status": "success"}) is False
+    assert dispatch_mod._is_error(_FakeResult(is_error=True)) is True
+    assert dispatch_mod._is_error(_FakeResult(is_error=False)) is False
+
+
 class _SessionClient(_FakeClient):
     """Client that tracks its MCP session the way Strands' MCPClient does.
 
@@ -314,6 +356,189 @@ async def test_leaves_a_live_client_session_alone(monkeypatch):
     assert client.starts == 0
     assert client.stops == 0
     assert client.active is True
+
+
+class _FlakyMCPServer:
+    """A real streamable-HTTP MCP server whose `tools/call` can 503.
+
+    With `fail_calls` set it runs the tool and then answers HTTP 503 — what
+    GitHub's MCP endpoint did on dev 2026-10-18: the issue was created, the
+    POST came back 503. The MCP SDK treats any non-2xx POST as fatal for the
+    session, so the in-flight call surfaces from Strands as "Connection to
+    the MCP server was closed".
+    """
+
+    def __init__(self) -> None:
+        import socket
+        import threading
+
+        import uvicorn
+        from mcp.server.fastmcp import FastMCP
+
+        self.writes: list = []
+        self.fail_calls = True
+        server = FastMCP("flaky", stateless_http=True, json_response=True)
+
+        @server.tool()
+        def issue_write(title: str) -> str:
+            self.writes.append(title)
+            return f"created {title}"
+
+        inner = server.streamable_http_app()
+
+        async def app(scope, receive, send):
+            if scope["type"] != "http":
+                return await inner(scope, receive, send)
+            messages = []
+            body = b""
+            while True:
+                message = await receive()
+                messages.append(message)
+                body += message.get("body", b"")
+                if not message.get("more_body"):
+                    break
+            replay_iter = iter(messages)
+
+            async def replay():
+                return next(replay_iter, {"type": "http.disconnect"})
+
+            if not (self.fail_calls and b'"tools/call"' in body):
+                return await inner(scope, replay, send)
+
+            async def discard(_message):
+                pass
+
+            await inner(scope, replay, discard)  # the write happens...
+            await send(  # ...and the answer is a 503
+                {
+                    "type": "http.response.start",
+                    "status": 503,
+                    "headers": [(b"content-type", b"text/plain")],
+                }
+            )
+            await send({"type": "http.response.body", "body": b"unavailable"})
+
+        sock = socket.socket()
+        sock.bind(("127.0.0.1", 0))
+        self.url = f"http://127.0.0.1:{sock.getsockname()[1]}/mcp"
+        port = sock.getsockname()[1]
+        sock.close()
+        self._server = uvicorn.Server(
+            uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error")
+        )
+        self._thread = threading.Thread(target=self._server.run, daemon=True)
+
+    def __enter__(self):
+        import time
+
+        self._thread.start()
+        deadline = time.monotonic() + 10
+        while not self._server.started:
+            if time.monotonic() > deadline:
+                raise RuntimeError("MCP test server did not start")
+            time.sleep(0.02)
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        self._server.should_exit = True
+        self._thread.join(timeout=10)
+
+    def client(self):
+        from mcp.client.streamable_http import streamablehttp_client
+        from strands.tools.mcp import MCPClient
+
+        return MCPClient(lambda: streamablehttp_client(self.url))
+
+
+@pytest.mark.asyncio
+async def test_a_connection_lost_mid_call_reports_an_unknown_outcome(monkeypatch):
+    """A write the server performed must not come back as a plain failure.
+
+    The dev sequence: an agent's tool provider owns a live session, the App
+    presses Create issue, GitHub creates it and answers 503. The App was told
+    `isError: false` with "Tool execution failed: Connection to the MCP server
+    was closed", and the shared client was left dead — the next press 502'd
+    and every agent built over it got the dead session's tool list.
+    """
+    monkeypatch.setattr(dispatch_mod, "_schedule_ui_resource_refresh", lambda *a: None)
+    with _FlakyMCPServer() as server:
+        client = server.client()
+        # As the agent build does: the tool provider starts the session.
+        await client.load_tools()
+        client.add_consumer("agent-registry")
+        _patch(monkeypatch, enabled=True, meta=_ui(["model", "app"]), client=client)
+        try:
+            payload = await dispatch_app_tool_call(
+                agent=None,
+                session_id="disp-lost",
+                user_id="u1",
+                tool_use_id="tu-1",
+                tool_name="issue_write",
+                arguments={"title": "first"},
+            )
+
+            assert server.writes == ["first"]  # performed once, never retried
+            assert payload["result"]["isError"] is True
+            text = payload["result"]["content"][0]["text"]
+            assert "may have completed" in text
+            assert "issue_write" in text
+
+            # The crashed session was reset, so the client reconnects: the
+            # next press works...
+            server.fail_calls = False
+            again = await dispatch_app_tool_call(
+                agent=None,
+                session_id="disp-lost",
+                user_id="u1",
+                tool_use_id="tu-1",
+                tool_name="issue_write",
+                arguments={"title": "second"},
+            )
+            assert again["result"]["isError"] is False
+            assert server.writes == ["first", "second"]
+
+            # ...and an agent built over the client next gets a live session
+            # rather than the dead one's cached tool list.
+            await client.load_tools()
+            result = client.call_tool_sync("t-3", "issue_write", {"title": "third"})
+            assert result["status"] == "success"
+        finally:
+            with contextlib.suppress(Exception):
+                client.stop(None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_a_crashed_session_is_reset_before_it_is_revived(monkeypatch):
+    """`start()` on a crashed client returns before any handshake.
+
+    Its init future is still the resolved one from the dead session, so a
+    plain revive "succeeded" and the call then failed on a session that was
+    not running.
+    """
+    monkeypatch.setattr(dispatch_mod, "_schedule_ui_resource_refresh", lambda *a: None)
+    with _FlakyMCPServer() as server:
+        client = server.client()
+        client.start()
+        # Crash it outside the dispatch, the way a model-driven call would.
+        client.call_tool_sync("t-1", "issue_write", {"title": "model"})
+        assert dispatch_mod._session_crashed(client)
+
+        server.fail_calls = False
+        _patch(monkeypatch, enabled=True, meta=_ui(["model", "app"]), client=client)
+        try:
+            payload = await dispatch_app_tool_call(
+                agent=None,
+                session_id="disp-crashed",
+                user_id="u1",
+                tool_use_id="tu-1",
+                tool_name="issue_write",
+                arguments={"title": "app"},
+            )
+            assert payload["result"]["isError"] is False
+            assert server.writes == ["model", "app"]
+        finally:
+            with contextlib.suppress(Exception):
+                client.stop(None, None, None)
 
 
 class _FakeIntegration:
