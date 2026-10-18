@@ -24,8 +24,9 @@ implemented twice is a rule that will eventually differ (Requirement 3):
   cannot silently shrink a five-chunk answer.
 * **The context cap, per engine.** ``augment_prompt_with_context`` takes an
   explicit ``max_context_length``; :func:`resolve_context_cap` decides it from
-  the assistant's engine. Legacy keeps the historical 2,000 characters; managed
-  gets :data:`MANAGED_MAX_CONTEXT_CHARS` (8,000). This is a *deliberate*
+  the assistant's engine. Legacy gets :data:`MAX_CONTEXT_CHARS` (22,000, sized
+  so ``top_k`` full-size Docling chunks fit; it was 2,000 until 2026-10);
+  managed gets :data:`MANAGED_MAX_CONTEXT_CHARS` (8,000). This is a *deliberate*
   managed-only asymmetry, amended into Requirement 3.2 on 2026-09-04 after
   measurement: holding the *character* cap identical across backends did **not**
   hold retrieval identical, because Bedrock's chunks are ~3x the size of the
@@ -77,10 +78,17 @@ from apis.shared.kb_backend.resolver import (
 
 logger = logging.getLogger(__name__)
 
-#: Legacy context cap (Requirement 3.2): 2,000 characters, unchanged from the
-#: value the S3 Vectors path has always used. Named so a change to it is a visible
-#: change to a constant rather than an edit to a default argument.
-MAX_CONTEXT_CHARS = 2000
+#: Legacy context cap (Requirement 3.2): sized so ``top_k`` (5) full-size chunks
+#: reach the model. Docling's ``HybridChunker`` cuts at 1,024 cl100k tokens
+#: (``docling_processor.py``), about 4,100 characters of English, and
+#: ``contextualize`` prepends the chunk's headings: ~4,300 a chunk, plus its
+#: ``[Context i]`` header, so five are ~21,600. The historical 2,000 fit fewer
+#: than half of ONE such chunk, so on a corpus of long documents top_k=5 reached
+#: the model as one truncated excerpt (2026-10, an instructor's course assistant
+#: answered for one assignment out of several). The cap only binds when chunks are
+#: large; a corpus of short chunks pays nothing for it. Pin the literal, as with
+#: the managed figure below: it follows Docling's chunk size, not either cap.
+MAX_CONTEXT_CHARS = 22000
 
 #: Managed context cap (Requirement 3.2, amended by measurement 2026-09-04).
 #: Bedrock's chunks run ~3x larger than the Docling chunks 2,000 was sized for, so
@@ -634,6 +642,27 @@ def dedupe_context_chunks(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]
     return kept
 
 
+#: What the model is told about retrieved chunks. They are the top few search
+#: hits for the user's message, not the knowledge base, and the old wording ("Use
+#: this information to answer ... accurately and comprehensively") read as if they
+#: were all of it: asked "Can I use AI on my assignment?", a course assistant that
+#: retrieved one assignment's policy answered for that assignment alone, even with
+#: instructions to ask which assignment when the policy varies. Changing this text
+#: changes the persisted user message of every later assistant turn, not the
+#: cacheable prefix of an existing conversation (earlier turns keep their bytes).
+RETRIEVED_EXCERPTS_PREAMBLE = (
+    "The following excerpts were retrieved from the assistant's knowledge base by a "
+    "search on the user's message. They are partial: the knowledge base may hold more "
+    "on this topic than these excerpts show, including material that applies to a "
+    "different case. Answer from them when they settle the question. If the question "
+    "could have different answers depending on something the excerpts do not settle "
+    "(for example, which assignment, course, section or date the user means), ask the "
+    "user a short clarifying question instead of answering for only the case the "
+    "excerpts happen to cover. Do not present the excerpts as everything the "
+    "knowledge base contains."
+)
+
+
 def augment_prompt_with_context(user_message: str, context_chunks: List[Dict[str, Any]], max_context_length: int = MAX_CONTEXT_CHARS) -> str:
     """
     Augment user message with retrieved context chunks
@@ -684,7 +713,7 @@ def augment_prompt_with_context(user_message: str, context_chunks: List[Dict[str
 
     # Combine context and user message
     context_section = "\n".join(context_parts)
-    augmented_message = f"""The following context is retrieved from the assistant's knowledge base. Use this information to answer the user's question accurately and comprehensively.
+    augmented_message = f"""{RETRIEVED_EXCERPTS_PREAMBLE}
 
 {context_section}
 ---
