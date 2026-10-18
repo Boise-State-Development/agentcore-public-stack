@@ -214,10 +214,10 @@
     <app-user-question-prompt [request]="request" />
   }
 
-  <!-- Browser sign-in prompt: the agent paused so the user can authenticate a
-       site it cannot reach. Full width like the question picker, and for the
-       same reason — it is something the reader must act on, not a yes/no.
-       Survives a refresh via the same PendingInterrupt breadcrumb replay. -->
+  <!-- Browser sign-in card: the agent paused so the user can authenticate a
+       site it cannot reach. The card opens the live browser in the docked
+       side panel below. Survives a refresh via the same PendingInterrupt
+       breadcrumb replay. -->
   @for (request of pendingBrowserLogins(); track request.interruptId) {
     <app-browser-login-prompt [request]="request" />
   }
@@ -283,4 +283,7 @@
   <!-- Fixed-position slide-over; renders only when an artifact is open. -->
   <app-artifact-panel />
   <app-file-preview-panel />
+  <!-- The live sign-in browser, on the same rail. Mounted once so its
+       iframe never moves in the DOM (a moved iframe reloads its stream). -->
+  <app-browser-panel />
 </div>

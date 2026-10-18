@@ -168,6 +168,32 @@ describe('ChatHttpService', () => {
     vi.restoreAllMocks();
   });
 
+  it('sends the sign-in panel frame height on the chat request', async () => {
+    // The backend sizes the browser sign-in handover from it (spec D3a); the
+    // turn that asks for a sign-in can be any request, so every one carries it.
+    vi.spyOn(window, 'innerHeight', 'get').mockReturnValue(900);
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('event: done\ndata: {}\n\n', {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+      }),
+    );
+    const request = { session_id: 's1', message: 'hi' };
+
+    await service.sendChatRequest(request);
+
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain('/chat/stream');
+    expect(JSON.parse(String(init.body))).toEqual({
+      session_id: 's1',
+      message: 'hi',
+      browser_frame_height: 778,
+    });
+    // The caller's object is left as it was.
+    expect(request).toEqual({ session_id: 's1', message: 'hi' });
+    vi.restoreAllMocks();
+  });
+
   it('ends the first-token clock on the first delta and clears it when the stream closes', async () => {
     // Client-measured time to first token (turn-timing.service.ts): the first
     // `content_block_delta` reports, and close clears whatever never got one.

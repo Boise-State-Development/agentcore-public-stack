@@ -1,4 +1,5 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { signal } from '@angular/core';
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 
 import { BrowserLoginPromptComponent } from './browser-login-prompt.component';
@@ -6,10 +7,9 @@ import {
   BrowserLoginRequest,
   BrowserLoginService,
 } from '../../../../../services/browser-login/browser-login.service';
+import { BrowserPaneStateService } from '../../../../services/browser-pane/browser-pane-state.service';
 
 const SANDBOX = 'https://mcp-sandbox.example.test';
-const SIGNED =
-  'https://bedrock-agentcore.us-west-2.amazonaws.com/live?X-Amz-Signature=deadbeef';
 
 function request(overrides: Partial<BrowserLoginRequest> = {}): BrowserLoginRequest {
   return {
@@ -31,20 +31,18 @@ function request(overrides: Partial<BrowserLoginRequest> = {}): BrowserLoginRequ
 describe('BrowserLoginPromptComponent', () => {
   let fixture: ComponentFixture<BrowserLoginPromptComponent>;
   let service: {
+    pending: ReturnType<typeof signal<BrowserLoginRequest[]>>;
     mintLiveView: ReturnType<typeof vi.fn>;
     hasLapsed: ReturnType<typeof vi.fn>;
     complete: ReturnType<typeof vi.fn>;
     skip: ReturnType<typeof vi.fn>;
   };
+  let pane: BrowserPaneStateService;
 
   beforeEach(async () => {
     service = {
-      mintLiveView: vi.fn().mockResolvedValue({
-        url: SIGNED,
-        expiresAt: new Date(Date.now() + 300_000).toISOString(),
-        viewport: { width: 1280, height: 800 },
-        controlState: 'user',
-      }),
+      pending: signal<BrowserLoginRequest[]>([]),
+      mintLiveView: vi.fn(),
       hasLapsed: vi.fn().mockReturnValue(false),
       complete: vi.fn().mockResolvedValue(undefined),
       skip: vi.fn().mockResolvedValue(undefined),
@@ -56,39 +54,52 @@ describe('BrowserLoginPromptComponent', () => {
       providers: [{ provide: BrowserLoginService, useValue: service }],
     }).compileComponents();
 
+    pane = TestBed.inject(BrowserPaneStateService);
     fixture = TestBed.createComponent(BrowserLoginPromptComponent);
   });
 
   afterEach(() => fixture.destroy());
 
   function render(req: BrowserLoginRequest = request()) {
+    service.pending.set([req]);
     fixture.componentRef.setInput('request', req);
     fixture.detectChanges();
     return fixture.nativeElement as HTMLElement;
   }
 
+  function button(el: HTMLElement, label: string): HTMLButtonElement | undefined {
+    return Array.from(el.querySelectorAll('button')).find(
+      (b) => b.textContent?.trim() === label,
+    );
+  }
+
+  /** Overflow menu items render in a CDK overlay, outside the fixture. */
+  function openMenu(el: HTMLElement): HTMLElement[] {
+    (el.querySelector('[aria-label^="More actions"]') as HTMLButtonElement).click();
+    fixture.detectChanges();
+    return Array.from(document.querySelectorAll<HTMLElement>('[cdkmenuitem], [role="menuitem"]'));
+  }
+
   describe('what the user is told', () => {
-    it("shows the agent's reason and the page being signed into", () => {
+    it("names the site and shows the agent's reason", () => {
       const el = render();
 
-      expect(el.textContent).toContain('Sign in to JSTOR');
-      expect(el.textContent).toContain('jstor.org/action/showLogin');
+      expect(el.textContent).toContain('Sign in to jstor.org');
+      expect(el.textContent).toContain('Sign in to JSTOR so I can check');
     });
 
-    it('discloses that the browser is ours and the agent is locked out', () => {
-      // Non-negotiable: the user is about to type a password into a browser
-      // running in our AWS account.
+    it('says it is waiting on the user, with the time left', () => {
       const el = render();
 
-      expect(el.textContent).toContain('running in our cloud');
-      expect(el.textContent?.toLowerCase()).toContain('locked out');
+      expect(el.textContent).toContain('Waiting for you');
+      expect(el.textContent).toMatch(/\dm \d+s left/);
     });
 
     it('offers no viewer when the sandbox origin is not deployed', () => {
       const el = render(request({ sandboxOrigin: '' }));
 
       expect(el.textContent).toContain("isn't available in this environment");
-      expect(el.querySelector('iframe')).toBeNull();
+      expect(button(el, 'Open')).toBeUndefined();
     });
 
     it('stops offering the viewer once the window has closed', () => {
@@ -96,287 +107,54 @@ describe('BrowserLoginPromptComponent', () => {
       const el = render();
 
       expect(el.textContent).toContain('sign-in window closed');
-      expect(el.textContent).toContain('Dismiss');
+      expect(button(el, 'Open')).toBeUndefined();
+      expect(button(el, 'Dismiss')).toBeDefined();
+    });
+
+    it('holds no viewer of its own — the stream lives in the side panel', () => {
+      const el = render();
       expect(el.querySelector('iframe')).toBeNull();
     });
   });
 
-  describe('opening the viewer', () => {
-    it('mints before framing, so a failure is a message not a black box', async () => {
+  describe('opening', () => {
+    it('opens this prompt in the side panel without minting itself', () => {
       const el = render();
-      (el.querySelector('button') as HTMLButtonElement).click();
-      await fixture.whenStable();
+      button(el, 'Open')!.click();
       fixture.detectChanges();
 
-      expect(service.mintLiveView).toHaveBeenCalledWith('conv-1');
-      expect(el.querySelector('iframe')).not.toBeNull();
-    });
-
-    it('mints once per open, however many times the button is activated', async () => {
-      const el = render();
-      const open = el.querySelector('button') as HTMLButtonElement;
-
-      // Two activations in the same tick: measured on dev as two
-      // `POST .../browser/live-view` 30ms apart for a single open. Each mint
-      // is a live signed credential, and the second drove a second
-      // `dcv.authenticate` that failed while the first was still connecting.
-      open.click();
-      open.click();
-      await fixture.whenStable();
-      fixture.detectChanges();
-
-      expect(service.mintLiveView).toHaveBeenCalledTimes(1);
-    });
-
-    it('retires the open affordance once the viewer is up', async () => {
-      const el = render();
-      (el.querySelector('button') as HTMLButtonElement).click();
-      await fixture.whenStable();
-      fixture.detectChanges();
-
-      // The re-entry guard covers a programmatic second call; this covers the
-      // UI half — there is no longer a control that could ask for another
-      // mint. Asserted as "the button is gone" rather than clicking it again,
-      // because clicking a control that does not exist passes whether or not
-      // the guard works.
-      const stillOffersOpen = Array.from(el.querySelectorAll('button')).some((b) =>
-        b.textContent?.includes('Open sign-in'),
-      );
-      expect(stillOffersOpen).toBe(false);
-      expect(service.mintLiveView).toHaveBeenCalledTimes(1);
-    });
-
-    it('frames the sandbox origin and declares the stream host in the CSP', async () => {
-      const el = render();
-      (el.querySelector('button') as HTMLButtonElement).click();
-      await fixture.whenStable();
-      fixture.detectChanges();
-
-      const src = el.querySelector('iframe')!.getAttribute('src')!;
-      expect(src.startsWith(`${SANDBOX}/live-view.html?csp=`)).toBe(true);
-
-      // connect-src must name the minted URL's own origin — without it DCV's
-      // WebSocket is blocked and the stream is silently black.
-      const csp = JSON.parse(decodeURIComponent(src.split('csp=')[1]));
-      expect(csp.connectDomains).toContain(
-        'https://bedrock-agentcore.us-west-2.amazonaws.com',
-      );
-      expect(csp.connectDomains).toContain(
-        'wss://bedrock-agentcore.us-west-2.amazonaws.com',
-      );
-    });
-
-    it('never puts the signed URL in the frame src', async () => {
-      const el = render();
-      (el.querySelector('button') as HTMLButtonElement).click();
-      await fixture.whenStable();
-      fixture.detectChanges();
-
-      const src = el.querySelector('iframe')!.getAttribute('src')!;
-      expect(src).not.toContain('X-Amz-Signature');
-    });
-
-    it('surfaces a mint failure instead of framing an empty viewer', async () => {
-      service.mintLiveView.mockRejectedValue(new Error('gone'));
-      const el = render();
-      (el.querySelector('button') as HTMLButtonElement).click();
-      await fixture.whenStable();
-      fixture.detectChanges();
-
-      expect(el.textContent).toContain('Could not open the sign-in viewer');
-      expect(el.querySelector('iframe')).toBeNull();
-    });
-
-    it('sizes the frame to the session viewport, not a constant', async () => {
-      const el = render(request({ viewport: { width: 1600, height: 900 } }));
-      (el.querySelector('button') as HTMLButtonElement).click();
-      await fixture.whenStable();
-      fixture.detectChanges();
-
-      const frame = el.querySelector('iframe')!.parentElement as HTMLElement;
-      expect(frame.style.aspectRatio.replace(/\s/g, '')).toBe('1600/900');
-    });
-  });
-
-  describe('full screen', () => {
-    async function openViewer(req = request()) {
-      const el = render(req);
-      (el.querySelector('button') as HTMLButtonElement).click();
-      await fixture.whenStable();
-      fixture.detectChanges();
-      return el;
-    }
-
-    function expand(el: HTMLElement) {
-      const btn = Array.from(el.querySelectorAll('button')).find((b) =>
-        b.textContent?.includes('Take over full screen'),
-      ) as HTMLButtonElement;
-      btn.click();
-      fixture.detectChanges();
-    }
-
-    it('offers a way into full screen once the viewer is up', async () => {
-      const el = await openViewer();
-
-      // The inline frame reads as a screenshot; without this the user has no
-      // signal that it is live and drivable.
-      const labels = Array.from(el.querySelectorAll('button')).map((b) =>
-        b.textContent?.trim(),
-      );
-      expect(labels.some((t) => t?.includes('Take over full screen'))).toBe(true);
-    });
-
-    it('keeps the SAME iframe element when expanding', async () => {
-      const el = await openViewer();
-      const before = el.querySelector('iframe');
-
-      expand(el);
-
-      // Non-negotiable: re-creating the iframe reloads it, which tears down
-      // the DCV stream and loses a half-typed password. Expanding must only
-      // restyle the wrapper.
-      expect(el.querySelector('iframe')).toBe(before);
-    });
-
-    it('says plainly that the user is driving, once expanded', async () => {
-      const el = await openViewer();
-      expand(el);
-
-      expect(el.textContent).toContain("You're driving this browser");
-    });
-
-    it('marks the expanded layer as a modal for assistive tech', async () => {
-      const el = await openViewer();
-      expand(el);
-
-      const layer = el.querySelector('[role="dialog"]');
-      expect(layer).not.toBeNull();
-      expect(layer?.getAttribute('aria-modal')).toBe('true');
-      expect(layer?.getAttribute('aria-label')).toContain('full screen');
-    });
-
-    it('is not a modal while inline, so it never traps the conversation', async () => {
-      const el = await openViewer();
-
-      expect(el.querySelector('[role="dialog"]')).toBeNull();
-    });
-
-    it('collapses back, keeping the same iframe', async () => {
-      const el = await openViewer();
-      expand(el);
-      const framed = el.querySelector('iframe');
-
-      const exit = Array.from(el.querySelectorAll('button')).find((b) =>
-        b.textContent?.includes('Exit full screen'),
-      ) as HTMLButtonElement;
-      exit.click();
-      fixture.detectChanges();
-
-      expect(el.querySelector('[role="dialog"]')).toBeNull();
-      expect(el.querySelector('iframe')).toBe(framed);
-    });
-
-    it('drops out of full screen when the window closes', async () => {
-      const el = await openViewer();
-      expand(el);
-      expect(el.querySelector('[role="dialog"]')).not.toBeNull();
-
-      // A deadline passing while expanded would otherwise strand a
-      // full-viewport black rectangle over the conversation.
-      //
-      // Driven through the INPUT rather than the clock: `lapsed` depends on
-      // both `request()` and the component's 1s ticker, and that ticker is a
-      // real `setInterval` created in the constructor — installing fake timers
-      // afterwards never drives it, so a timer-based version of this test
-      // passed for the wrong reason.
-      service.hasLapsed.mockReturnValue(true);
-      fixture.componentRef.setInput('request', request({ toolUseId: 'tu-2' }));
-      TestBed.tick();
-      fixture.detectChanges();
-
-      expect(el.querySelector('[role="dialog"]')).toBeNull();
-    });
-  });
-
-  describe('the ready handshake', () => {
-    it('ignores a ready message from any other origin', async () => {
-      const el = render();
-      (el.querySelector('button') as HTMLButtonElement).click();
-      await fixture.whenStable();
-      fixture.detectChanges();
-
-      const frame = el.querySelector('iframe')!;
-      const post = vi.fn();
-      Object.defineProperty(frame, 'contentWindow', {
-        value: { postMessage: post },
-        configurable: true,
-      });
-      post.mockClear();
-
-      // A hostile sibling frame must not be able to provoke us into posting a
-      // live signed URL to it.
-      window.dispatchEvent(
-        new MessageEvent('message', {
-          origin: 'https://evil.example',
-          data: { type: 'browser-live-view/ready' },
-        }),
-      );
-
-      expect(post).not.toHaveBeenCalled();
-    });
-
-    it('posts the URL to the sandbox origin when the viewer says it is ready', async () => {
-      const el = render();
-      (el.querySelector('button') as HTMLButtonElement).click();
-      await fixture.whenStable();
-      fixture.detectChanges();
-
-      const frame = el.querySelector('iframe')!;
-      const post = vi.fn();
-      Object.defineProperty(frame, 'contentWindow', {
-        value: { postMessage: post },
-        configurable: true,
-      });
-
-      window.dispatchEvent(
-        new MessageEvent('message', {
-          origin: SANDBOX,
-          data: { type: 'browser-live-view/ready' },
-        }),
-      );
-
-      expect(post).toHaveBeenCalledOnce();
-      const [message, target] = post.mock.calls[0];
-      expect(message.url).toBe(SIGNED);
-      expect(message.viewport).toEqual({ width: 1280, height: 800 });
-      // Explicit target, never '*': that origin also serves untrusted MCP App
-      // HTML, and a wildcard would post a live credential to whatever is there.
-      expect(target).toBe(SANDBOX);
+      expect(pane.openInterruptId()).toBe('v1:tool_call:tu-1:abc');
+      // The panel mints; a second mint here would be a second live credential.
+      expect(service.mintLiveView).not.toHaveBeenCalled();
+      expect(el.textContent).toContain('Open in side panel');
     });
   });
 
   describe('resolving', () => {
-    it('reports completion for this interrupt', async () => {
+    it('reports completion for this interrupt from the menu', async () => {
       const el = render();
-      (el.querySelector('button') as HTMLButtonElement).click();
-      await fixture.whenStable();
-      fixture.detectChanges();
-
-      const done = Array.from(el.querySelectorAll('button')).find((b) =>
-        b.textContent?.includes("I've signed in"),
-      ) as HTMLButtonElement;
-      done.click();
+      const item = openMenu(el).find((b) => b.textContent?.includes("I've signed in"));
+      item!.click();
       await fixture.whenStable();
 
       expect(service.complete).toHaveBeenCalledWith('v1:tool_call:tu-1:abc');
     });
 
-    it('skips when the user declines', async () => {
+    it('skips when the user declines, closing its panel', async () => {
       const el = render();
-      const decline = Array.from(el.querySelectorAll('button')).find((b) =>
-        b.textContent?.includes("Don't sign in"),
-      ) as HTMLButtonElement;
-      decline.click();
+      button(el, 'Open')!.click();
+      const item = openMenu(el).find((b) => b.textContent?.includes("Don't sign in"));
+      item!.click();
+      await fixture.whenStable();
+
+      expect(service.skip).toHaveBeenCalledWith('v1:tool_call:tu-1:abc');
+      expect(pane.openInterruptId()).toBeNull();
+    });
+
+    it('dismisses a lapsed prompt', async () => {
+      service.hasLapsed.mockReturnValue(true);
+      const el = render();
+      button(el, 'Dismiss')!.click();
       await fixture.whenStable();
 
       expect(service.skip).toHaveBeenCalledWith('v1:tool_call:tu-1:abc');

@@ -11,6 +11,7 @@ import { SessionService } from '../session/session.service';
 import { ErrorService } from '../../../services/error/error.service';
 import { isPreviewSession } from '../../../shared/constants/session.constants';
 import { TurnTimingService } from './turn-timing.service';
+import { browserFrameHeight } from '../../../services/browser-login/browser-frame-height';
 
 /**
  * Title fallback polling. A stream that outruns title generation closes a few
@@ -134,6 +135,22 @@ function notSentReason(error: unknown): string {
 }
 
 /**
+ * The request as sent, with the sign-in panel's frame height added.
+ *
+ * Added here, at the one send path every turn shares (new turns, resumes,
+ * continues, previews), because the turn that hands the browser to the user
+ * can be any of them. It sizes the remote browser for the docked panel
+ * (`browser-frame-height.ts`); the backend never puts it in the prompt.
+ * A copy, so the caller's object is never mutated.
+ */
+function withBrowserFrameHeight(
+  requestObject: Record<string, unknown>,
+): Record<string, unknown> {
+  const height = browserFrameHeight();
+  return height === null ? requestObject : { ...requestObject, browser_frame_height: height };
+}
+
+/**
  * Client-attested interruption reasons — the causes only the browser can
  * witness. The server's `connection_lost` fallback is deliberately not here:
  * it means "the stream died and nothing told us why", and the point of
@@ -247,7 +264,7 @@ export class ChatHttpService {
             OAuth2CallbackUrl: `${window.location.origin}/oauth-complete`,
             ...csrfHeaders,
           },
-          body: JSON.stringify(requestObject),
+          body: JSON.stringify(withBrowserFrameHeight(requestObject)),
           signal: abortController.signal,
           // Keep the stream open when the tab is backgrounded. With the library
           // default (`openWhenHidden: false`) fetch-event-source aborts the

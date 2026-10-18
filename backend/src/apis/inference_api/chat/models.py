@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field, field_validator
 
 from apis.shared.assistants.models import MAX_AGENT_INSTRUCTIONS_CHARS
+from apis.shared.browser_takeover import coerce_frame_height
 from apis.shared.sessions.session_lease import STEER_QUEUE_MAX_CHARS
 
 # Hard upper bound on a request's ``system_prompt``. The Agent Designer preview sends an
@@ -234,6 +235,20 @@ class InvocationRequest(BaseModel):
     # `message` is ignored; no model turn runs. The context is merged into
     # (and cleared before) the next real user turn's prompt.
     app_context_update: Optional[AppContextUpdateEntry] = None
+    # The height, in CSS pixels, the SPA's docked browser panel would give the
+    # sign-in stream (authenticated-web-assessment spec D3a). Client data, not
+    # prompt data: the route hands it to tools through Strands'
+    # `invocation_state`, so it never reaches the model, and only
+    # `request_user_login` reads it, to size the handover. Sent on every
+    # request because the turn that hands the browser over is not known in
+    # advance. An unusable value becomes None rather than a 422: a hint about
+    # window size must never be able to fail a turn.
+    browser_frame_height: Optional[int] = None
+
+    @field_validator("browser_frame_height", mode="before")
+    @classmethod
+    def _drop_unusable_frame_height(cls, value: Any) -> Optional[int]:
+        return coerce_frame_height(value)
 
     @field_validator("system_prompt")
     @classmethod
