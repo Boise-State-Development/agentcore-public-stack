@@ -193,9 +193,8 @@ async def update_context(
 ) -> JSONResponse:
     """Relay an app-pushed model-context update to inference-api.
 
-    Non-streaming, runs no model turn: inference-api stashes the payload on
-    the conversation agent's Strands state; the next real user turn merges
-    it. Mirrors `/proxy-call`'s auth + bearer hand-off — this boundary's
+    Non-streaming, runs no model turn: inference-api holds the payload for
+    this user's conversation; the next real user turn merges it. Mirrors `/proxy-call`'s auth + bearer hand-off — this boundary's
     only job is the session-cookie → bearer exchange.
     """
     invocation_body = {

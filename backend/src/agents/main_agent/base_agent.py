@@ -22,6 +22,7 @@ from agents.main_agent.session.hooks import (
     StopHook,
     OAuthConsentHook,
     MCPExternalApprovalHook,
+    MCPSessionHealHook,
     ContextAttributionHook,
     PrefixFingerprintHook,
 )
@@ -367,6 +368,13 @@ class BaseAgent(ABC):
         # (`MCPServerConfig.tools[*].needs_approval`); a no-op for any tool
         # without a flag.
         hooks.append(self._build_mcp_external_approval_hook())
+
+        # Reconnects a shared MCP client whose session died on its own (e.g.
+        # a server answering 503) before the next call on it, and reports a
+        # call that session dropped as an unknown outcome rather than a
+        # failure. After the two gates so a call they stop is not reconnected
+        # for nothing; a healthy call pays one session probe.
+        hooks.append(MCPSessionHealHook())
 
         # Per-turn context-token attribution (system / tools / messages).
         # Best-effort; computes the breakdown on BeforeModelCallEvent and

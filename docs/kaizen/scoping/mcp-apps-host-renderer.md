@@ -38,6 +38,7 @@ App-supplied context (the structured/text payload from `ui/update-model-context`
 
 - **Read path:** before each inference turn, merge any pending `agent.state.mcp_apps.context.*` entries into the prompt context, then clear them.
 - **Spec semantics honored:** "host MAY defer context until next user message" and "host SHOULD only send last update if multiple arrive before next user message" — we dedupe by `resourceUri` and apply last-write-wins between turns.
+- **Superseded (2026-10-18): the storage is no longer `agent.state`.** The dispatch's agent rarely shared the real turn's agent-cache slot, so context landed on a throwaway instance and never reached the model. Pending context is now held in process per `(session, user)` (`inference_api/chat/app_context_dispatch.py`); the read path is unchanged.
 
 ### 4. v1 method scope — full set, no deferrals
 
