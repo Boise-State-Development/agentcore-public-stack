@@ -63,10 +63,10 @@ class AppContextUpdateEntry(BaseModel):
 
     MCP Apps PR #6. The embedded App's JSON-RPC `ui/update-model-context`
     is relayed by app-api to `/invocations` with this directive. Like
-    `app_tool_call` it runs NO model turn — it stashes the payload on the
-    conversation agent's Strands `agent.state` under
-    `mcp_apps.context[resource_uri]`. The next real user turn merges any
-    pending entries into that turn's prompt and clears them.
+    `app_tool_call` it runs NO model turn — it holds the payload for the
+    `(session, user)` conversation (`chat/app_context_dispatch.py`). The
+    next real user turn merges any pending entries into that turn's prompt
+    and clears them.
 
     `resource_uri` is the bound MCP App resource (`ui://...`) and is the
     dedupe key: the host keeps only the last update per resource between
