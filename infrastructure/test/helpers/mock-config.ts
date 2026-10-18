@@ -184,6 +184,9 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     wordTrackedChanges: {
       enabled: false,
     },
+    assistantKbFullContext: {
+      enabled: false,
+    },
     largeDocumentAttachments: {
       enabled: false,
     },

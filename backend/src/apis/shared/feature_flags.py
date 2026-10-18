@@ -79,6 +79,25 @@ def word_tracked_changes_enabled() -> bool:
     return os.environ.get("WORD_TRACKED_CHANGES_ENABLED", "").strip().lower() == "true"
 
 
+def assistant_kb_full_context_enabled() -> bool:
+    """Whether a small assistant knowledge base reaches the model whole
+    (``apis/shared/assistants/kb_full_context.py``).
+
+    On, an assistant turn whose knowledge base fits the token budget
+    (``ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS``, default 50,000) sends the full
+    text of every ``complete`` document at the end of the system prompt, and the
+    user message is not augmented with retrieved chunks (retrieval still runs,
+    for the citation cards). Off, every assistant turn retrieves exactly as
+    before. **Opt-in while the feature is in development**: only ``"true"``
+    (case-insensitive) enables it; unset, empty or anything else is off.
+
+    AgentCore Runtime only: CDK sets it there, and only while on. The text comes
+    from the documents bucket, which the Runtime role can always read
+    (``AssistantDocumentsRead``, shared with spreadsheet analysis). No SPA switch.
+    """
+    return os.environ.get("ASSISTANT_KB_FULL_CONTEXT_ENABLED", "").strip().lower() == "true"
+
+
 def large_document_attachments_enabled() -> bool:
     """Whether documents over the inline limit are attached by reference
     (``docs/specs/large-document-attachments.md``).

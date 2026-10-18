@@ -592,6 +592,19 @@ match the v525 and v526 conversations exactly, and the third turn matches across
 conversations; every turn streamed 5 citations. The kb-migration dispatcher ran on the new
 image with no import errors; the other KB Lambdas had not been invoked at readout time.
 
+*P3b′. Full-context knowledge bases (`ASSISTANT_KB_FULL_CONTEXT_ENABLED`, default off).* When
+the flag is on, an agent turn also starts `load_full_kb_context` next to the KB search: one
+`Query` for the assistant's `DOC#` rows on every turn (never cached, so a deleted document
+leaves at once), and on a conversation's first turn the parallel `GetObject`s and text parse of
+a knowledge base that fits the 50,000-token budget (per-document text is cached in process by
+everything that changes with its bytes). Unlike the search, the build has to wait for it, because
+the block goes into the system prompt: `_build_main_agent` awaits it first, and new stage
+`agent_build.kb_full_context` is what was left once everything ahead of the build was done.
+Locally the parse is ~3ms for a 345K-character `.docx` and the render 0.3ms for a ~50K-token block;
+the network half is unmeasured. Expected on dev: ≈0 on a follow-up (the `Query` overlaps the
+`tools` stage), and on a first turn at most the downloads less that same window. Read
+`agent_build.kb_full_context` on dev before turning it on anywhere else.
+
 *Tests.* P3a: a fake session factory and a fake tool loader that each sleep; assert the
 build's wall time is the max not the sum, that `tools` order is unchanged across runs
 (`test_prompt_cache_determinism.py` already pins order), and that a failure in either thread

@@ -401,6 +401,9 @@ export class InferenceAgentCoreConstruct extends Construct {
         // Word tracked changes (in development, default off). Spread in only
         // while on, like skill authoring; must match app-api's copy.
         ...(config.wordTrackedChanges.enabled ? { WORD_TRACKED_CHANGES_ENABLED: 'true' } : {}),
+        // Assistant KB full-context mode (in development, default off). Spread in
+        // only while on, like the two above; Runtime only.
+        ...(config.assistantKbFullContext.enabled ? { ASSISTANT_KB_FULL_CONTEXT_ENABLED: 'true' } : {}),
         // Folder attachments (in development, default off): a turn's
         // folder_attachment_ids are resolved and rendered as manifests. Spread in
         // only while on, like the two above; app-api carries its own copy.

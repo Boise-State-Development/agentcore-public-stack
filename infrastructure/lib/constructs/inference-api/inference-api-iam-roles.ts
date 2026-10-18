@@ -434,7 +434,9 @@ export function createRuntimeExecutionRole(
   //
   // `analyze_spreadsheet` downloads an assistant's knowledge-base spreadsheet
   // from its original upload in rag-documents (`assistants/{id}/documents/...`),
-  // so the Runtime reads that prefix too. Read-only, no ListBucket: the key
+  // so the Runtime reads that prefix too; so does full-context mode
+  // (`kb_full_context`), which sends a small knowledge base's uploads whole.
+  // Read-only, no ListBucket: the key
   // comes from the assistant's DOC# row. It rides this policy for the same
   // overflow reason, and to add no resource to a stack near 500. Its
   // description stays as it is: changing it replaces the policy.

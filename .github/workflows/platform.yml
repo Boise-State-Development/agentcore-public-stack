@@ -320,6 +320,13 @@ jobs:
       # "true" in an environment to turn it on there. Unset (empty string) or
       # anything else means off. Sets the flag on both app-api and the Runtime.
       CDK_WORD_TRACKED_CHANGES_ENABLED: ${{ vars.CDK_WORD_TRACKED_CHANGES_ENABLED }}
+      # Assistant KB full-context mode: an assistant whose whole knowledge base
+      # fits 50,000 tokens gets it in the system prompt instead of retrieved
+      # chunks. Opt-in while in development: set the
+      # `CDK_ASSISTANT_KB_FULL_CONTEXT_ENABLED` variable to "true" in an
+      # environment to turn it on there. Unset (empty string) or anything else
+      # means off. Sets the flag on the Runtime only.
+      CDK_ASSISTANT_KB_FULL_CONTEXT_ENABLED: ${{ vars.CDK_ASSISTANT_KB_FULL_CONTEXT_ENABLED }}
       # Large document attachments: documents over the 4 MB inline limit are
       # attached by reference and read from sidecars a preparation Lambda
       # builds (docs/specs/large-document-attachments.md). Opt-in while in
