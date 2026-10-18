@@ -2294,6 +2294,17 @@ def _forbidden_turn(
     )
 
 
+def _with_pending_app_context(message: str, session_id: str, user_id: str) -> str:
+    """Prepend what this conversation's MCP Apps pushed since its last turn.
+
+    One dict lookup on the turn path (``merge_and_clear_pending_context``
+    drains a process-level store keyed by ``(session, user)``). The block
+    rides in the new user message, after the cached prefix.
+    """
+    block = merge_and_clear_pending_context(session_id, user_id)
+    return f"{block}\n\n{message}" if block else message
+
+
 async def _agent_for_app_dispatch(
     input_data: InvocationRequest,
     current_user: User,
@@ -2305,9 +2316,10 @@ async def _agent_for_app_dispatch(
 ):
     """The conversation's agent for an MCP App dispatch (map stage B3).
 
-    An App's ``tools/call`` and ``ui/update-model-context`` run no model turn,
-    but they need the same ``Agent`` the real turns use: the MCP client session,
-    its auth, and ``agent.state``, where pushed context lives. So the model, its
+    An App's ``tools/call`` runs no model turn, but it needs the same ``Agent``
+    the real turns use: the MCP client session and its auth. (``ui/update-model-
+    context`` needs no agent; it is held per conversation in
+    ``app_context_dispatch``.) So the model, its
     settings and the effective tool list are resolved exactly as the main turn
     resolves them, and ``get_agent`` reads the same cache slot with
     ``cache_write=False`` — this path builds no injected tools, so an agent it
@@ -3777,23 +3789,16 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
 
     # App-pushed model context (MCP Apps PR #6, `ui/update-model-context`).
     # Like app_tool_call it bypasses quota / RAG / file resolution / title
-    # and runs NO model turn — we rebuild the conversation agent (so the
-    # same cached `agent.state` is reused) and stash the payload under
-    # `mcp_apps.context[resource_uri]`. The next real user turn merges and
-    # clears it. Inert behind the host flag (no live App ever calls this).
+    # and runs NO model turn. It builds no agent either: the payload is held
+    # per `(session, user)`, off any agent instance, and the next real user
+    # turn merges and clears it. Inert behind the host flag (no live App
+    # ever calls this).
     if input_data.app_context_update is not None:
         acu = input_data.app_context_update
         try:
-            agent = await _agent_for_app_dispatch(
-                input_data,
-                current_user,
-                user_id,
-                auth_token,
-                agent_type=effective_agent_type,
-                accessible_skill_ids=effective_skill_ids,
-            )
             payload = dispatch_app_context_update(
-                agent,
+                session_id=input_data.session_id,
+                user_id=user_id,
                 resource_uri=acu.resource_uri,
                 content=acu.content,
                 structured_content=acu.structured_content,
@@ -4958,12 +4963,14 @@ async def invocations(request: InvocationRequest, current_user: User = Depends(g
             # to this turn only. Skipped on resume/continuation (Strands
             # ignores `final_message` there) so a pending update survives
             # until the next real user turn instead of being silently
-            # cleared. Kept out of persisted history via the
-            # `original_message` path below (cache-prefix-safe).
+            # cleared. It is persisted as part of this user message, so later
+            # turns still know what the App did, and hidden from the UI by the
+            # `original_message` displayText split below. Appended history,
+            # never the cached prefix.
             if not is_resume and not is_continuation:
-                pending_ctx_block = merge_and_clear_pending_context(agent)
-                if pending_ctx_block:
-                    final_message = f"{pending_ctx_block}\n\n{final_message}"
+                final_message = _with_pending_app_context(
+                    final_message, input_data.session_id, user_id
+                )
 
                 # Interrupted-turn context: the prior turn ended early (Stop /
                 # refresh / dropped connection) and its marker was popped at
