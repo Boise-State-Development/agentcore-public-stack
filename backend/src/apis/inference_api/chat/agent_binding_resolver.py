@@ -28,9 +28,8 @@ Phase 3 lands incrementally:
   invoke-through predicate (§6/D7, ``resolve_invocable_skill_ids``); a bound skill the
   invoker lacks — or the skills feature being disabled in this environment — blocks the
   turn (D5). The caller hands the result to ChatAgent as ``accessible_skill_ids``, which
-  is what mounts the ``AgentSkills`` disclosure plugin. Absent skill bindings ⇒ the
-  request's ``enabled_skills`` drive the turn as today — except on a project harness,
-  which always owns its skills (below).
+  is what mounts the ``AgentSkills`` disclosure plugin. An Agent that binds no skills
+  runs with **no** skills — never the request's ``enabled_skills`` (below).
 - ``knowledge_base`` stays with the existing RAG path.
 
 **Degrade with notice — a Shared Project's harness only** (shared-projects §9.6). A project
@@ -52,12 +51,12 @@ creating a trivial Agent (admin-always-on-tools §7 D4). System tools and the
 attachment / knowledge-base spreadsheet auto-enable are applied by the route, as on
 every turn.
 
-**A project's skills are the project's.** A harness that binds no skills, or whose bound
-skills were all dropped for this member, runs with *no* skills — never the member's own.
-One project conversation must not change with whoever is typing, and a member's own
-picks are not part of what the project's editors chose. Tools already follow that rule
-for every Agent (above). Ordinary shared Agents that bind no skills still take the
-request's skills.
+**An Agent's skills are the Agent's.** An Agent that binds no skills runs with *no*
+skills — never the viewer's own picks, the same rule as tools (above). One Agent
+conversation must not change with whoever is chatting, and the viewer's picks are not
+part of what the author chose. A project harness whose bound skills were all dropped
+for this member also runs with none. There is no always-on floor for skills, so an
+unbound Agent's skill set is simply empty.
 """
 
 from __future__ import annotations
@@ -138,9 +137,10 @@ class ResolvedSkills:
     AgentSkills plugin discloses exactly these (an Agent that binds skills owns its skills,
     like tools own the toolset). Every id has already passed the invoker's invoke-through
     predicate (§6); a bound skill the invoker could not access blocks the turn before this
-    is constructed (D5). Empty only for a project harness, where it means "this project
-    runs with no skills" and is distinct from ``plan.skills is None`` (no skill binding,
-    fall through to the request) — the same split ``ResolvedTools`` makes.
+    is constructed (D5). An empty ``skill_ids`` is meaningful — the turn runs with *no*
+    skills. ``resolve_agent_invocation`` never leaves ``plan.skills`` as ``None``: an
+    Agent that binds no skills, or a project harness whose bound skills were all
+    dropped, gets an empty set.
     """
 
     # A pinned binding's id carries its version (``skill_id@3``, ``skills.pins``).
@@ -218,9 +218,9 @@ class AgentInvocationPlan:
     ``model_override`` is ``None`` when the Agent pins no model — the caller then
     resolves the model exactly as today. ``tools`` is never ``None`` once resolved: an
     Agent that binds no tools gets an empty toolset (``owns_toolset`` False), so the
-    viewer's picker never reaches an Agent turn. ``skills`` is ``None`` when the Agent
-    binds no skills — the caller then uses the request's ``agent_type``/``enabled_skills``
-    — except on a project harness, where it is empty.
+    viewer's picker never reaches an Agent turn. ``skills`` is never ``None`` once
+    resolved either: an Agent that binds no skills gets an empty set, so the viewer's
+    ``enabled_skills`` never reach an Agent turn.
     """
 
     model_override: Optional[ResolvedModel] = None
@@ -282,9 +282,9 @@ async def resolve_agent_invocation(
         # An Agent that binds no tools runs on none of the viewer's picks. It chose no
         # tools, so the admin's always-on floor still applies (module docstring).
         plan.tools = ResolvedTools(tool_ids=[], owns_toolset=False)
-    if degrade and plan.skills is None:
-        # A project harness owns its skills: none bound, or none left after degrading,
-        # means none — not the member's own (see the module docstring).
+    if plan.skills is None:
+        # An Agent owns its skills: none bound (or, on a project harness, none left
+        # after degrading) means none — not the viewer's own (module docstring).
         plan.skills = ResolvedSkills(skill_ids=[])
     return plan
 
@@ -300,9 +300,8 @@ async def _resolve_skills(
     (block-with-message, no silent drop — D5). The skills feature being disabled in
     this environment also blocks — design-time refuses to create these while the flag is off,
     so reaching here with the flag off is environment drift (mirror ``_resolve_tools``).
-    Returns ``None`` when the Agent binds no skills, leaving the request's ``agent_type`` /
-    ``enabled_skills`` in force; ``resolve_agent_invocation`` turns that into an empty set
-    for a project harness.
+    Returns ``None`` when the Agent binds no skills; ``resolve_agent_invocation`` turns
+    that into an empty set, never the request's ``enabled_skills``.
 
     This is the **only** place invoke-through applies. It is AGENT-scoped, not
     user-scoped: widening the shared ``resolve_accessible_skill_ids`` instead would
@@ -351,7 +350,7 @@ async def _resolve_skills(
     # A pinned binding (shared-projects 3.1) runs as ``skill_id@n``; access was judged on
     # the catalog id above, and the pin only chooses which content the skill runs.
     kept = [pinned_ref(ref, pins[ref]) for ref in refs if ref in invocable]
-    # None when every skill was dropped; the caller makes that "no skills" for a project.
+    # None when every skill was dropped; the caller makes that "no skills".
     return ResolvedSkills(skill_ids=kept) if kept else None
 
 

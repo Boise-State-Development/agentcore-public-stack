@@ -187,8 +187,15 @@ agent    = skills bound on the invoked Agent that pass §6 access
 selected = request.enabled_skills (explicit opt-in ids; None/absent → [])
 
 plain chat turn:   (own ∪ catalog) ∩ selected
-agent turn:        agent bindings (REPLACE — selection ignored, as with tools)
+agent turn:        agent bindings (REPLACE — selection ignored, as with tools;
+                   an Agent that binds no skills runs with none)
 ```
+
+Until 2026-10-18 an Agent with **no** skill bindings fell through to the plain-chat
+rule, so its skills were whatever the viewer had selected. It now resolves to an
+empty set (`resolve_agent_invocation` never returns `plan.skills = None`), the rule a
+project harness already followed (shared-projects §9.6). The SPA locks the skill picker
+and the `/` menu for every Agent, to nothing when it binds none.
 
 Note the plain-chat default flips from v1: absent `enabled_skills` now means
 **no skills** (D6 opt-in), not "all accessible". `skills_hash` hashes the
