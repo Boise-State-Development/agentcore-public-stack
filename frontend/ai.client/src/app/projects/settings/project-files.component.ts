@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, DestroyRef, computed, effect, inject, input, output, signal, untracked } from '@angular/core';
+import { ChangeDetectionStrategy, Component, DestroyRef, ElementRef, computed, effect, inject, input, output, signal, untracked, viewChild } from '@angular/core';
 import { DatePipe } from '@angular/common';
 import { Dialog } from '@angular/cdk/dialog';
 import { firstValueFrom } from 'rxjs';
@@ -15,6 +15,13 @@ import {
   heroTrash,
 } from '@ng-icons/heroicons/outline';
 import { DocumentService, DocumentUploadError } from '../../assistants/services/document.service';
+import {
+  DocumentReplaceService,
+  DocumentReplaceTransport,
+  REPLACE_POLL_LIMIT_MS,
+  fileExtension,
+  orderReplacementsAdjacent,
+} from '../../assistants/services/document-replace.service';
 import { Document, DocumentStatus, KbUsage, PROCESSING_STATUSES } from '../../assistants/models/document.model';
 import { KnowledgeTarget } from '../../assistants/models/knowledge-target.model';
 import { FileSourceConnector } from '../../assistants/models/file-source.model';
@@ -140,6 +147,8 @@ export function formatBytes(bytes: number): string {
   ],
   template: `
     <div class="space-y-6">
+      <!-- Picker for Replace with a newer version; its accept list is set to the original's type on open. -->
+      <input #replacePicker type="file" class="sr-only" tabindex="-1" aria-hidden="true" (change)="onReplacePicked($event)" />
       <section aria-labelledby="files-heading">
         <div class="flex flex-wrap items-center justify-between gap-3">
           <h2 id="files-heading" class="text-sm/6 font-semibold text-gray-900 dark:text-white" [class.sr-only]="documents().length === 0">
@@ -328,7 +337,7 @@ export function formatBytes(bytes: number): string {
           </div>
         } @else if (documents().length > 0) {
           <ul class="mt-4 divide-y divide-gray-200 overflow-hidden rounded-2xl border border-gray-200 bg-white dark:divide-gray-700 dark:border-gray-700 dark:bg-gray-800">
-            @for (doc of documents(); track doc.documentId) {
+            @for (doc of displayedDocuments(); track doc.documentId) {
               <li class="flex items-center gap-3 px-4 py-3">
                 <ng-icon [name]="isWebPage(doc) ? 'heroGlobeAlt' : 'heroDocumentText'" class="size-5 shrink-0 text-gray-500 dark:text-gray-400" aria-hidden="true" />
                 <div class="min-w-0 flex-1">
@@ -338,6 +347,12 @@ export function formatBytes(bytes: number): string {
                   </p>
                   @if (doc.status === 'failed' && doc.errorMessage) {
                     <p class="text-xs/5 text-state-danger-600 dark:text-state-danger-400">{{ doc.errorMessage }}</p>
+                  }
+                  @if (replace.activeOldId() === doc.documentId) {
+                    <p role="status" class="text-xs/5 font-medium text-state-info-600 dark:text-state-info-400">Replacing…</p>
+                  }
+                  @if (replace.replacementFor(doc.documentId)) {
+                    <p class="text-xs/5 text-gray-600 dark:text-gray-400">New version of the file above</p>
                   }
                   @if (doc.removedFromSource) {
                     <p class="text-xs/5 font-medium text-state-warning-700 dark:text-state-warning-400">No longer in the folder</p>
@@ -388,11 +403,24 @@ export function formatBytes(bytes: number): string {
                     <ng-icon name="heroArrowDownTray" class="size-4" aria-hidden="true" />
                   </button>
                 }
+                @if (canReplace(doc)) {
+                  <button
+                    type="button"
+                    (click)="startReplace(doc)"
+                    [disabled]="replaceDisabled()"
+                    [appTooltip]="'Replace with a newer version'"
+                    appTooltipPosition="top"
+                    [attr.aria-label]="'Replace ' + doc.filename"
+                    class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-500 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-60 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+                  >
+                    <ng-icon name="heroArrowUpTray" class="size-4" aria-hidden="true" />
+                  </button>
+                }
                 @if (canEdit()) {
                   <button
                     type="button"
                     (click)="remove(doc)"
-                    [disabled]="deletingId() === doc.documentId"
+                    [disabled]="deletingId() === doc.documentId || replace.isBusy(doc.documentId)"
                     [appTooltip]="'Delete'"
                     appTooltipPosition="top"
                     [attr.aria-label]="'Delete ' + doc.filename"
@@ -429,6 +457,7 @@ export class ProjectFilesComponent {
   private consentService = inject(OAuthConsentService);
   private toast = inject(ToastService);
   private dialog = inject(Dialog);
+  protected readonly replace = inject(DocumentReplaceService);
 
   protected readonly personLabel = personLabel;
 
@@ -451,6 +480,15 @@ export class ProjectFilesComponent {
   protected readonly deletingId = signal<string | null>(null);
   /** The server's sentence, once an upload has returned it. */
   protected readonly notice = signal<string | null>(null);
+  /** The list as rendered: a replacement in flight or failed sits right after its original. */
+  protected readonly displayedDocuments = computed(() =>
+    orderReplacementsAdjacent(this.documents(), this.replace.replacementLinks()),
+  );
+  /** One replace (app-wide) or upload at a time — they share the progress card. */
+  protected readonly replaceDisabled = computed(() => this.replace.inFlight() || this.uploading());
+  private readonly replacePicker = viewChild<ElementRef<HTMLInputElement>>('replacePicker');
+  /** The file the replace picker was opened for. */
+  private replaceTarget: ProjectDocument | null = null;
 
   // Editors only: the connectors they can import from, the project's web
   // sources, and the sync schedules on both (every route behind them is editor-only).
@@ -487,8 +525,11 @@ export class ProjectFilesComponent {
 
   private readonly projectId = computed(() => this.project().projectId);
   private readonly target = computed<KnowledgeTarget>(() => ({ projectId: this.projectId() }));
-  /** Documents being polled to a terminal status; cleared on project change and destroy. */
-  private polling = new Set<string>();
+  /**
+   * Documents being polled to a terminal status, each mapped to the token of the
+   * loop that owns it; cleared on project change and destroy.
+   */
+  private polling = new Map<string, object>();
   private generation = 0;
 
   constructor() {
@@ -638,7 +679,10 @@ export class ProjectFilesComponent {
       this.kbUsage.set(page.kbUsage ?? null);
       this.canEdit.set(page.canEdit);
       for (const doc of page.documents) {
-        if (PROCESSING_STATUSES.includes(doc.status)) void this.poll(doc.documentId);
+        // A replacement in flight is polled by the replace itself.
+        if (PROCESSING_STATUSES.includes(doc.status) && !this.replace.isBusy(doc.documentId)) {
+          void this.poll(doc.documentId);
+        }
       }
     } catch (err) {
       if (generation === this.generation) this.error.set(projectErrorMessage(err, 'The project’s files could not be loaded.'));
@@ -712,30 +756,44 @@ export class ProjectFilesComponent {
     }
   }
 
-  /** Poll one document until it finishes processing, updating its row in place. */
-  private async poll(documentId: string): Promise<void> {
-    if (this.polling.has(documentId)) return;
-    this.polling.add(documentId);
+  /**
+   * Poll one document until it finishes processing, updating its row in place.
+   * Resolves to the finished document, or null when polling stopped first (already
+   * polled, cancelled, taken over, a fetch failed, or the time limit ran out).
+   *
+   * `takeOver` replaces a loop already polling the document instead of deferring
+   * to it; the older loop then stops quietly on its next check.
+   */
+  private async poll(
+    documentId: string,
+    limitMs = POLL_LIMIT_MS,
+    takeOver = false,
+  ): Promise<ProjectDocument | null> {
+    if (!takeOver && this.polling.has(documentId)) return null;
+    const token = {};
+    this.polling.set(documentId, token);
+    const owned = () => this.polling.get(documentId) === token;
     const projectId = this.projectId();
     const started = Date.now();
     let interval = POLL_START_MS;
     try {
-      while (this.polling.has(documentId) && Date.now() - started < POLL_LIMIT_MS) {
+      while (owned() && Date.now() - started < limitMs) {
         await new Promise(resolve => setTimeout(resolve, interval));
-        if (!this.polling.has(documentId)) return;
+        if (!owned()) return null;
         let doc: ProjectDocument;
         try {
           doc = await firstValueFrom(this.api.file(projectId, documentId));
         } catch {
-          return;
+          return null;
         }
-        if (!this.polling.has(documentId)) return;
+        if (!owned()) return null;
         this.documents.update(list => list.map(d => (d.documentId === documentId ? doc : d)));
-        if (doc.status === 'complete' || doc.status === 'failed') return;
+        if (doc.status === 'complete' || doc.status === 'failed') return doc;
         interval = Math.min(interval * 1.5, POLL_MAX_MS);
       }
+      return null;
     } finally {
-      this.polling.delete(documentId);
+      if (owned()) this.polling.delete(documentId);
     }
   }
 
@@ -763,19 +821,127 @@ export class ProjectFilesComponent {
     });
     if (!(await firstValueFrom(ref.closed))) return;
 
-    this.deletingId.set(doc.documentId);
     this.error.set(null);
     try {
-      await firstValueFrom(this.api.deleteFile(this.projectId(), doc.documentId));
-      this.polling.delete(doc.documentId);
-      this.documents.update(list => list.filter(d => d.documentId !== doc.documentId));
-      // The server deletes a file's sync schedule with it.
-      this.dropPolicyFor(doc.documentId);
+      await this.deleteFileNow(this.projectId(), doc.documentId);
+      this.replace.forget(doc.documentId);
     } catch (err) {
       this.error.set(projectErrorMessage(err, `${doc.filename} could not be deleted.`));
+    }
+  }
+
+  /** Delete a file and drop its row; throws on failure. Shared by Delete and Replace. */
+  private async deleteFileNow(projectId: string, documentId: string): Promise<void> {
+    this.deletingId.set(documentId);
+    try {
+      await firstValueFrom(this.api.deleteFile(projectId, documentId));
+      this.polling.delete(documentId);
+      this.documents.update(list => list.filter(d => d.documentId !== documentId));
+      // The server deletes a file's sync schedule with it.
+      this.dropPolicyFor(documentId);
     } finally {
       this.deletingId.set(null);
     }
+  }
+
+  // ---- replace with a newer version ---------------------------------------
+
+  /**
+   * Editors can replace a settled uploaded file. Imported and web files are kept
+   * fresh by their source, and an upload over one would drop its sync link.
+   */
+  protected canReplace(doc: ProjectDocument): boolean {
+    return this.canEdit() && (doc.status === 'complete' || doc.status === 'failed') && !doc.sourceConnectorId;
+  }
+
+  /** Open the replace picker for a file, limited to the original's type. */
+  protected startReplace(doc: ProjectDocument): void {
+    if (this.replaceDisabled()) return;
+    this.replaceTarget = doc;
+    const input = this.replacePicker()?.nativeElement;
+    if (!input) return;
+    // Set imperatively: a bound accept would not update before this synchronous click.
+    input.accept = fileExtension(doc.filename);
+    input.value = '';
+    input.click();
+  }
+
+  protected async onReplacePicked(event: Event): Promise<void> {
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = '';
+    const target = this.replaceTarget;
+    this.replaceTarget = null;
+    if (!target || !file) return;
+    await this.replace.replace(target, file, this.replaceTransport());
+  }
+
+  private replaceTransport(): DocumentReplaceTransport {
+    const projectId = this.projectId();
+    const generation = this.generation;
+    const current = () => generation === this.generation;
+    return {
+      requestUploadUrl: async file => {
+        const started = await firstValueFrom(
+          this.api.fileUploadUrl(projectId, {
+            filename: file.name,
+            contentType: file.type || 'application/octet-stream',
+            sizeBytes: file.size,
+          }),
+        );
+        if (current()) this.notice.set(started.notice);
+        return started;
+      },
+      uploadToS3: async (uploadUrl, file) => {
+        if (current()) this.upload.set({ filename: file.name, progress: 0, status: 'uploading' });
+        try {
+          await this.documentService.uploadToS3(uploadUrl, file, progress => {
+            if (current()) this.upload.update(u => (u ? { ...u, progress } : u));
+          });
+        } catch (err) {
+          if (current()) {
+            this.upload.set({
+              filename: file.name,
+              progress: this.upload()?.progress ?? 0,
+              status: 'error',
+              error: 'The file could not be uploaded. Please try again.',
+            });
+          }
+          throw err;
+        }
+        if (current()) this.upload.set({ filename: file.name, progress: 100, status: 'done' });
+      },
+      reportUploadFailure: async (documentId, message, details) => {
+        try {
+          await firstValueFrom(this.api.reportFileUploadFailure(projectId, documentId, message, details));
+        } catch {
+          // Best effort: the stale-document timeout still catches it.
+        }
+      },
+      refresh: async () => {
+        if (current()) await this.load(projectId, null);
+      },
+      waitForTerminal: async documentId => {
+        if (!current()) return null;
+        // Take over any poll a reload started during the upload, so its shorter
+        // limit or dedupe can't end the replace early. Registered synchronously.
+        const done = this.poll(documentId, REPLACE_POLL_LIMIT_MS, true);
+        try {
+          const row = await firstValueFrom(this.api.file(projectId, documentId));
+          if (current()) {
+            this.documents.update(list =>
+              list.some(d => d.documentId === documentId)
+                ? list.map(d => (d.documentId === documentId ? row : d))
+                : [...list, row],
+            );
+          }
+        } catch {
+          // The poll shows the row on its first tick.
+        }
+        return await done;
+      },
+      deleteDocument: documentId => this.deleteFileNow(projectId, documentId),
+    };
   }
 
   protected viewExtractedContent(doc: ProjectDocument): void {

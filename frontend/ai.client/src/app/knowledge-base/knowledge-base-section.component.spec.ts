@@ -8,7 +8,10 @@ import { KbUpgradeService, UpgradeStatus, DocumentNotCarried } from './kb-upgrad
 import { Document, KbUsage, PROCESSING_STATUSES } from '../assistants/models/document.model';
 import { ConfigService } from '../services/config.service';
 import { ToastService } from '../services/toast/toast.service';
-import { DocumentService } from '../assistants/services/document.service';
+import { DocumentService, DocumentUploadError } from '../assistants/services/document.service';
+import { Dialog } from '@angular/cdk/dialog';
+import { of } from 'rxjs';
+import { BackgroundTaskService } from '../services/background-tasks/background-task.service';
 import { FileSourceService } from '../assistants/services/file-source.service';
 import { WebSourceService } from '../assistants/services/web-source.service';
 import { SyncPolicyService } from '../assistants/services/sync-policy.service';
@@ -708,5 +711,280 @@ describe('KnowledgeBaseSectionComponent — upgrade card', () => {
       fixture.componentInstance.kbUsage.set(usage());
       expect(fixture.componentInstance.showUsageBar()).toBe(false);
     });
+  });
+});
+
+describe('KnowledgeBaseSectionComponent — replace document', () => {
+  let fixture: ComponentFixture<KnowledgeBaseSectionComponent>;
+  let documents: Record<string, ReturnType<typeof vi.fn>>;
+  let dialog: { open: ReturnType<typeof vi.fn> };
+  let toast: Record<'success' | 'error' | 'warning' | 'info', ReturnType<typeof vi.fn>>;
+
+  function doc(overrides: Partial<Document> = {}): Document {
+    return {
+      documentId: 'doc-1',
+      assistantId: 'ast-1',
+      filename: 'notes.pdf',
+      contentType: 'application/pdf',
+      sizeBytes: 1234,
+      status: 'complete',
+      createdAt: '2026-09-01T00:00:00Z',
+      updatedAt: '2026-09-01T00:00:00Z',
+      ...overrides,
+    } as Document;
+  }
+
+  const pdf = () => new File(['v2'], 'Notes v2.PDF', { type: 'application/pdf' });
+
+  beforeEach(async () => {
+    TestBed.resetTestingModule();
+    const collaborators = quietCollaborators();
+    documents = (collaborators[0] as unknown as { useValue: Record<string, ReturnType<typeof vi.fn>> })
+      .useValue;
+    documents['requestUploadUrl'].mockResolvedValue({ documentId: 'doc-new', uploadUrl: 'https://s3/put' });
+    documents['uploadToS3'].mockResolvedValue(undefined);
+    documents['reportUploadFailure'].mockResolvedValue(undefined);
+    dialog = { open: vi.fn() };
+    toast = { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() };
+
+    await TestBed.configureTestingModule({
+      imports: [KnowledgeBaseSectionComponent],
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        ...collaborators,
+        { provide: ConfigService, useValue: { appApiUrl: () => 'http://api.test' } },
+        {
+          provide: KbUpgradeService,
+          useValue: { getStatus: vi.fn().mockResolvedValue(status()), start: vi.fn(), retry: vi.fn(), dismissNotice: vi.fn() },
+        },
+        { provide: ToastService, useValue: toast },
+        { provide: Dialog, useValue: dialog },
+      ],
+    }).compileComponents();
+
+    fixture = TestBed.createComponent(KnowledgeBaseSectionComponent);
+    fixture.componentRef.setInput('createDraft', async () => 'ast-1');
+  });
+
+  afterEach(() => TestBed.resetTestingModule());
+
+  async function render(docs: Document[]) {
+    documents['listDocuments'].mockResolvedValue({ documents: docs, nextToken: null });
+    fixture.componentRef.setInput('entityId', 'ast-1');
+    fixture.componentRef.setInput('userPermission', 'owner');
+    fixture.componentRef.setInput('permissionResolved', true);
+    fixture.detectChanges();
+    // Documents, crawls and sync policies load in separate awaited steps.
+    await vi.waitFor(() => {
+      fixture.detectChanges();
+      expect(fixture.componentInstance.isLoadingKnowledge()).toBe(false);
+      expect(el().querySelectorAll('li').length).toBe(docs.length);
+    });
+  }
+
+  function el(): HTMLElement {
+    return fixture.nativeElement as HTMLElement;
+  }
+
+  function replaceButton(name = 'notes.pdf'): HTMLButtonElement | null {
+    return el().querySelector(`button[aria-label="Replace ${name}"]`);
+  }
+
+  /** Open the picker for a row and "choose" a file, as the browser would. */
+  function pick(target: Document, file: File): Promise<void> {
+    const c = fixture.componentInstance;
+    c.startReplace(target);
+    return c.onReplaceFilePicked({ target: { files: [file], value: 'x' } } as unknown as Event);
+  }
+
+  function rows(): string[] {
+    return Array.from(el().querySelectorAll('li')).map((li) => li.textContent ?? '');
+  }
+
+  it('offers Replace on complete and failed device uploads only', async () => {
+    await render([
+      doc({ documentId: 'a', filename: 'a.pdf' }),
+      doc({ documentId: 'b', filename: 'b.pdf', status: 'failed' }),
+      doc({ documentId: 'c', filename: 'c.pdf', status: 'uploading' }),
+      doc({ documentId: 'd', filename: 'd.pdf', status: 'chunking' }),
+      doc({ documentId: 'e', filename: 'e.pdf', status: 'embedding' }),
+      doc({ documentId: 'f', filename: 'f.pdf', status: 'provisioning' }),
+    ]);
+    expect(replaceButton('a.pdf')).not.toBeNull();
+    expect(replaceButton('a.pdf')?.getAttribute('title')).toBe('Replace with a newer version');
+    expect(replaceButton('b.pdf')).not.toBeNull();
+    for (const name of ['c.pdf', 'd.pdf', 'e.pdf', 'f.pdf']) {
+      expect(replaceButton(name)).toBeNull();
+    }
+  });
+
+  it('hides Replace for imported and web documents, leaving their sync control', async () => {
+    await render([
+      doc({ documentId: 'g', filename: 'Roster.pdf', sourceConnectorId: 'google-drive', sourceFileId: 'f1' }),
+      doc({ documentId: 'w', filename: 'Catalog', sourceConnectorId: 'web', sourceFileId: 'https://x.edu/' }),
+    ]);
+    expect(replaceButton('Roster.pdf')).toBeNull();
+    expect(replaceButton('Catalog')).toBeNull();
+    expect(el().querySelector('select[aria-label="Auto-sync schedule for Roster.pdf"]')).not.toBeNull();
+  });
+
+  it('deletes the old version only after the new one is ready, under the same name', async () => {
+    const old = doc();
+    await render([old]);
+    documents['pollDocumentStatus'].mockResolvedValue(doc({ documentId: 'doc-new', status: 'complete' }));
+    documents['listDocuments'].mockResolvedValue({ documents: [doc({ documentId: 'doc-new' })], nextToken: null });
+
+    await pick(old, pdf());
+    fixture.detectChanges();
+
+    const sent = documents['requestUploadUrl'].mock.calls[0];
+    expect(sent[0]).toBe('ast-1');
+    expect((sent[1] as File).name).toBe('notes.pdf');
+    expect(sent[2]).toEqual({ suppressErrorToast: true });
+    expect(documents['deleteDocument']).toHaveBeenCalledWith('ast-1', 'doc-1');
+    expect(documents['deleteDocument'].mock.invocationCallOrder[0]).toBeGreaterThan(
+      documents['pollDocumentStatus'].mock.invocationCallOrder[0],
+    );
+    expect(rows()).toHaveLength(1);
+    expect(rows()[0]).toContain('notes.pdf');
+    expect(toast.success).toHaveBeenCalled();
+  });
+
+  it('still deletes the old version when a reload during the upload starts polling the new one', async () => {
+    const old = doc();
+    await render([old]);
+    const c = fixture.componentInstance;
+    const uploading = doc({ documentId: 'doc-new', status: 'uploading' });
+    const complete = doc({ documentId: 'doc-new', status: 'complete' });
+    let finishUpload!: () => void;
+    documents['uploadToS3'].mockReturnValue(new Promise<void>((resolve) => (finishUpload = resolve)));
+    documents['listDocuments'].mockResolvedValue({ documents: [old, uploading], nextToken: null });
+
+    // A stray poll on the new document that ends on its own schedule, the way
+    // one started by a crawl-watcher reload would.
+    let finishStrayPoll!: (d: Document) => void;
+    documents['pollDocumentStatus'].mockReturnValueOnce(new Promise<Document>((resolve) => (finishStrayPoll = resolve)));
+    // The replace's own poll: honours cancellation like the real one.
+    documents['pollDocumentStatus'].mockImplementation(
+      (_r: string, _d: string, _u: unknown, _t: unknown, _a: unknown, _b: unknown, isCancelled?: () => boolean) =>
+        new Promise<Document>((resolve, reject) => {
+          let ticks = 0;
+          const tick = () => {
+            if (isCancelled?.()) return reject(new DocumentUploadError('cancelled', 'POLL_CANCELLED'));
+            if (++ticks >= 5) return resolve(complete);
+            setTimeout(tick, 5);
+          };
+          setTimeout(tick, 5);
+        }),
+    );
+
+    const running = pick(old, pdf());
+    await vi.waitFor(() => expect(documents['uploadToS3']).toHaveBeenCalled());
+
+    // A reload mid-upload leaves the in-flight replacement alone...
+    await c.loadDocuments();
+    expect(documents['pollDocumentStatus']).not.toHaveBeenCalled();
+    // ...and a poll that got in before the replace knew the new id can't cancel it.
+    void c.startPollingDocument('doc-new', 'ast-1');
+    expect(documents['pollDocumentStatus']).toHaveBeenCalledTimes(1);
+
+    finishUpload();
+    await vi.waitFor(() => expect(documents['pollDocumentStatus']).toHaveBeenCalledTimes(2));
+    finishStrayPoll(complete);
+
+    await running;
+    expect(documents['deleteDocument']).toHaveBeenCalledWith('ast-1', 'doc-1');
+    expect(toast.success).toHaveBeenCalled();
+    expect(toast.warning).not.toHaveBeenCalled();
+  });
+
+  it('keeps the old version when the new one fails, with the failed row right after it', async () => {
+    const old = doc();
+    const other = doc({ documentId: 'doc-2', filename: 'other.pdf' });
+    await render([old, other]);
+    const failed = doc({ documentId: 'doc-new', status: 'failed', errorMessage: 'Parse error' });
+    documents['pollDocumentStatus'].mockResolvedValue(failed);
+    documents['listDocuments'].mockResolvedValue({ documents: [failed, other, old], nextToken: null });
+
+    await pick(old, pdf());
+    fixture.detectChanges();
+
+    expect(documents['deleteDocument']).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledTimes(1);
+    const texts = rows();
+    const failedIndex = texts.findIndex((t) => t.includes('Parse error'));
+    const oldIndex = texts.findIndex((t) => t.includes('notes.pdf') && !t.includes('Parse error'));
+    expect(failedIndex).toBe(oldIndex + 1);
+    expect(texts[failedIndex]).toContain('New version of the file above');
+  });
+
+  it('asks before removing the current version when the byte cap has no room', async () => {
+    const old = doc();
+    await render([old]);
+    documents['requestUploadUrl'].mockRejectedValue(new DocumentUploadError('over cap', 'HTTP_413'));
+    dialog.open.mockReturnValue({ closed: of(false) });
+
+    await pick(old, pdf());
+
+    expect(dialog.open).toHaveBeenCalledTimes(1);
+    expect(dialog.open.mock.calls[0][1].data.destructive).toBe(true);
+    expect(documents['deleteDocument']).not.toHaveBeenCalled();
+    expect(documents['uploadToS3']).not.toHaveBeenCalled();
+  });
+
+  it('removes the current version first once the byte-cap fallback is confirmed', async () => {
+    const old = doc();
+    await render([old]);
+    documents['requestUploadUrl']
+      .mockRejectedValueOnce(new DocumentUploadError('over cap', 'HTTP_413'))
+      .mockResolvedValueOnce({ documentId: 'doc-new', uploadUrl: 'https://s3/put' });
+    dialog.open.mockReturnValue({ closed: of(true) });
+    documents['pollDocumentStatus'].mockResolvedValue(doc({ documentId: 'doc-new', status: 'complete' }));
+
+    await pick(old, pdf());
+
+    expect(documents['deleteDocument']).toHaveBeenCalledWith('ast-1', 'doc-1');
+    expect(documents['deleteDocument'].mock.invocationCallOrder[0]).toBeLessThan(
+      documents['requestUploadUrl'].mock.invocationCallOrder[1],
+    );
+    expect(documents['uploadToS3']).toHaveBeenCalled();
+  });
+
+  it('refuses a file of a different type without uploading', async () => {
+    const old = doc();
+    await render([old]);
+    await pick(old, new File(['x'], 'notes.docx'));
+    expect(documents['requestUploadUrl']).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledTimes(1);
+  });
+
+  it('warns to keep the tab open while replacing, and clears the warning after', async () => {
+    const old = doc();
+    await render([old, doc({ documentId: 'doc-2', filename: 'other.pdf' })]);
+    let finishUpload!: () => void;
+    documents['uploadToS3'].mockReturnValue(new Promise<void>((resolve) => (finishUpload = resolve)));
+    documents['pollDocumentStatus'].mockResolvedValue(doc({ documentId: 'doc-new', status: 'complete' }));
+    const tasks = TestBed.inject(BackgroundTaskService);
+    const unloadAllowed = () => window.dispatchEvent(new Event('beforeunload', { cancelable: true }));
+
+    const running = pick(old, pdf());
+    await vi.waitFor(() => expect(documents['uploadToS3']).toHaveBeenCalled());
+    fixture.detectChanges();
+
+    expect(tasks.tasks()).toHaveLength(1);
+    expect(replaceButton('notes.pdf')?.disabled).toBe(true);
+    expect(replaceButton('other.pdf')?.disabled).toBe(true);
+    expect(el().querySelector<HTMLButtonElement>('button[aria-label="Delete notes.pdf"]')?.disabled).toBe(true);
+    expect(el().querySelector<HTMLButtonElement>('button[aria-label="Delete other.pdf"]')?.disabled).toBe(false);
+    expect(el().textContent).toContain('Replacing…');
+    expect(unloadAllowed()).toBe(false);
+
+    finishUpload();
+    await running;
+    fixture.detectChanges();
+    expect(tasks.tasks()).toHaveLength(0);
+    expect(unloadAllowed()).toBe(true);
+    expect(el().textContent).not.toContain('Replacing…');
   });
 });
