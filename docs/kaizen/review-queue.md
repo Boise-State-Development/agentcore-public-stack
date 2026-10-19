@@ -35,14 +35,6 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Notes**: also assert the rendered IAM policy sizes against 6,144 in the same file. Splitting stacks contradicts the single-stack convention; it's flagged for Phil, not proposed.
 - **Status**: open
 
-### [2026-10-16] Authenticate ECR Public pulls in the image build action
-- **Source**: research/2026-10-16.md ▸ Top 5 #4; Backend Deploy runs 38850758469, 38587486323, 38577145616 (`429 … toomanyrequests: Data limit exceeded` on `public.ecr.aws/docker/library/python:3.13-slim`)
-- **Surface**: CI (`.github/actions/build-and-push-image`)
-- **Effort × Impact**: L × M
-- **Subtracts**: yes — removes manual deploy re-runs, and ends a second registry rate-limit incident (after Docker Hub, `5143d896`) instead of moving to a third registry
-- **Notes**: `aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin public.ecr.aws` before the build. The deploy role needs `ecr-public:GetAuthorizationToken` and `sts:GetServiceBearerToken`. The alternative is a private-ECR pull-through cache.
-- **Status**: open
-
 ### [2026-10-16] Re-price AgentCore Memory under consumption billing and add it to the per-session cost model
 - **Source**: research/2026-10-16.md ▸ Top 5 #5; https://aws.amazon.com/about-aws/whats-new/2026/10/agentcore-memory-consumption-based-pricing
 - **Surface**: backend + docs (`TurnBasedSessionManager` event sizes and restore volume, admin cost surfaces, platform cost sync)
@@ -203,17 +195,6 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
   - **Eligible two weeks after the next release reaches prod**: `MCP_PARALLEL_PREFLIGHT_ENABLED`, `KB_SEARCH_AHEAD_ENABLED`, `MEMORY_RETRIEVAL_PREFETCH_ENABLED`, `HISTORY_COUNT_PREFETCH_ENABLED`, `INLINE_ATTACHMENT_PERSIST_ENABLED`.
   - **Gated on something else**: `AGENT_BUILD_SHARED_SESSION_ENABLED` (Runtime V2 plus a clean snapshot restore, see the V2 entries below), `COMPACTION_SUMMARY_EXTRACT_ENABLED` (prod quality readout), `DOCUMENT_OFFLOAD_ENABLED` / `_REHYDRATE_` / `_DIGEST_` (the quality check waived in `docs/specs/document-offload-evaluation.md`, see [2026-09-21] *The cheap quality veto does not exist*).
 - **Status 2026-10-16 (review)**: no pass yet. All four eligible readers are still in `feature_flags.py` (:439, :471, :554, :644). 1.28.0 (#1628) is the third release since #1420 without the cleanup. reviews/2026-10-16.md ▸ #6.
-
-### [2026-10-02] Re-base the V2 Runtime plan on the published price, land B1, and use CDK's typed `platformVersion`
-- **Source**: research/2026-10-02.md
-- **Surface**: infrastructure (+ `scripts/build/deploy-runtime-image-if-changed.sh`, `docs/specs/agentcore-runtime-v2.md`)
-- **Effort × Impact**: L × H
-- **Subtracts**: yes. The plan's untyped `addPropertyOverride` (`aws-cdk-lib` 2.272.0 types `CfnRuntime.platformVersion`), and the separate [2026-09-04] W5 instance-SKU arithmetic entry (the committed-baseline rate of $0.0132/GB-hour is now published).
-- **Unlocks**: a go/no-go threshold written down before the dev A/B. V2 memory is $0.0169/GB-hour against V1's $0.00945 (1.79×), so V2 wins only if billed GB-hours fall below ~56% of V1's. Idle memory is reclaimed after 120 s.
-- **Status**: open. Plan step 1 (B1 allow-list) is still not started; it is harmless on V1.
-- **Status 2026-10-09**: B1 shipped (#1512), per-env platform version (#1514), B2 idle clock after snapshot restore (#1515). The first dev flip was rolled back on an undocumented 2,560-byte env payload cap (3,007 B; #1516 records it and the §7 refactor plan). Price still not in the spec (`agentcore-runtime-v2.md:39`); `aws-cdk-lib` still 2.265.0. reviews/2026-10-09.md ▸ #8 defers the retry to 2026-10-16, behind the platform-ceilings test and the rollout-switch removals (which free env slots).
-- **Status 2026-10-16 (review)**: dev has run on **V2 since 2026-10-10** (Runtime v613/v614; #1535, #1542; prewarm #1543). `agentcore-runtime-v2.md:39` still says "No V2 price" although the pricing page now lists V2 rates; `aws-cdk-lib` still 2.265.0. What remains is the GB-hours readout against the ~56% break-even, which six days of dev data can now answer. reviews/2026-10-16.md ▸ #4.
-- **Status 2026-10-16**: the price is now in the spec (`agentcore-runtime-v2.md` §1), checked on the pricing page, in the Price List API and against the rates billed on dev: V2 memory $0.0169 and vCPU $0.1276 (1.79× and 1.43× V1); committed baseline $0.0132 / $0.0997. V2 bills under distinct `Memory-v2` / `vCPU-v2` usage types. The first readout (§9, about 6 days on dev) puts V2 at 0.99× V1's GB-hours per day, and about 2× the Runtime dollars ($0.22 → $0.44/day). Per unit of work it is 0.36–0.63, straddling the 56% break-even. First read: **need more data, leaning no-go on cost alone**. Typed `platformVersion` is still pending a CDK bump.
 
 ### [2026-10-02] Make the nightly teardown survive an AgentCore Runtime that won't delete
 - **Source**: research/2026-10-02.md
@@ -414,6 +395,7 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Status 2026-10-02**: plan merged as `docs/specs/agentcore-runtime-v2.md` (#1376, 2026-09-28). **Re-based by the [2026-10-02] entry above** on the published V2 price (memory 1.79× V1 → wins only below ~56% of V1 GB-hours) and on `aws-cdk-lib` 2.272.0's typed `platformVersion`. B1 still unstarted. Second week as the review's #1 (reviews/2026-10-02.md ▸ #1).
 - **Status 2026-10-09**: B1 (#1512), the per-environment version (#1514) and the idle-clock fix (#1515) shipped in 1.27.0. **The first dev V2 flip failed** on a 2,560-byte environment-payload limit (spec §3 B4) and wedged the stack until a manual recovery. Plan re-sequenced (spec §7–§8): PR A derives the `{prefix}-{suffix}` names in `apis.shared.config` at process start (no read-site churn), adds a synth-time payload guard that refuses V2 over the limit, and a CDK test pinning the manifest to the template; PR B drops the 26 variables from the Runtime; then the dev A/B. 1.27.0's notes offer V2 without this warning and stay as published (no amendments); the docs-site and the next release's notes carry it.
 - **Status 2026-10-16**: PR A (#1533) and PR B (#1535) merged. **Dev has been on V2 since 2026-10-10 19:10Z.** Warm-up moved before readiness (#1542), session prewarm (#1543) is on in dev, and B1's real test passed on a live image roll. GB-hours readout (spec §9, about 6 days on dev): V2 used 21.3 GB-hours/day against V1's 21.4 (0.99×) while carrying 1.6–2.5× the traffic. Runtime spend went from $0.22 to $0.44/day (+$0.22/day). Normalised, V2 used 0.40 of V1's GB-hours per session, 0.63 per non-warm invocation and 0.36 per vCPU-hour, but vCPU per invocation rose. Confounders: 205 prewarm invocations, and test bursts in both windows (the V2 flip evening is a quarter of V2's memory; 10-09 is 38% of V1's). **Prod call: need more data, leaning no-go on cost.** Make the prod decision as a latency purchase with the premium stated. Next: join warms to sessions, run a second V2 week (10-17 → 10-23), explain the vCPU rise, and take a prod V1 per-session baseline.
+- **Status 2026-10-19 (queue cleanup)**: absorbs the last open piece of the resolved [2026-10-02] re-base entry. CDK's typed `CfnRuntime.platformVersion` needs `aws-cdk-lib` ≥ 2.272.0 (still `2.265.0`), and until then the untyped override at `inference-agentcore-construct.ts:454` stays.
 
 ### [2026-09-25] Curate Claude Opus 5.5 — and measure GPT-6 Luna as a side-channel candidate
 - **Source**: research/2026-09-25.md ▸ Top 5 #5 — https://aws.amazon.com/blogs/machine-learning/claude-opus-5-5-is-now-available-on-aws/ ; https://aws.amazon.com/about-aws/whats-new/2026/09/openai-gpt-6-sol-luna-on-amazon-bedrock/
@@ -449,6 +431,7 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Subtracts**: no on its own — but it is the thing that lets us *close* cost items on evidence instead of leaving them open, and it already closed one.
 - **Status**: open — **run the sweep before the next cost decision.** The honest framing for the review: most of `7f5f207f` was an expensive conversation, not a bug, and its two real regressions were already fixed. The value was not the verdict, it was that one anatomy overturned a queued decision. Do that across a month of sessions.
 - **Status 2026-10-02**: **question 2 ran on 2026-09-27, off-repo** (34,891 rows; see the PR-5 entry below for the result, which reversed that item's recommendation). Questions 1, 3, 4 and 5 and the `missCause` labelling did not run, and the script was not committed. reviews/2026-10-02.md ▸ #5 asks for the script in `backend/scripts/`, the remaining four answers, and says this is the last carry before `missCause` is declined.
+
 ### [2026-09-21] Standing watch — Strands' first-party `ContextManager` as it converges on what our compaction does
 - **Source**: conversation with Phil, 2026-09-21 — *"keep eyes on the compaction features delivered by Strands."* Prompted by research/2026-09-18 ▸ Strands, which reported the context-manager/offloading stack "fully released in 1.56.0" (#4118/#4146/#4187/#4231/#4254/#4282). **That framing is misleading and the correction is the headline here.**
 - **⚠️ It is already in our pin. Read this before planning a bump around it.** Everything below was read on disk from `backend/.venv/.../strands/_context_manager/` at **1.55.0**, our current pin — `context_manager.py`, `stash.py`, `strategies/offload/{base,drop,summarize,truncate}.py`, `methods/`, `modes/agentic/`, `retrieval_tool.py`. 1.56.0 did not *release* the stack; it finished it. The 1.56 additions are strategy presets + agent rewire (#4282) and **session-manager integration (#4254)** — the last being the one that matters, since our compaction lives inside `TurnBasedSessionManager`. **Evaluating this is not gated on the 1.56 bump**, which is separately blocked as a paired pin with `bedrock-agentcore>=1.23.1`.
@@ -556,18 +539,6 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Notes**: ✅ **Verified against our tree** — `apis/shared/mcp_apps/` contains no `title` or `annotations` handling at all. ⚠️ The upstream PR is **open, not merged**; the precedence comes from the base MCP schema, not the PR. ⚠️ While in this file: `ext-apps` v2.0.0 changed host-facing error codes (`-32002` → `-32602`, `-32603` → `-32602`) and removed the `MCP error N:` message prefix — the App-error chain from #1009/#1013 was built substantially on message text and deserves a grep in the same PR.
 - **Status**: open
 
-### [2026-09-18] Defer external MCP tool discovery to session scope — and add the sidebar conversation search while in the SPA
-- **Source**: research/2026-09-18.md ▸ Idea #5 — https://github.com/aws-samples/sample-strands-agent-with-agentcore/pull/294 (lazy loaders; measured "Starting" 10.417s → 4.081s, follow-up 7.377s → 1.117s) and PR #296 (sidebar search); corroborated by opencode #49276 and #49387
-- **Surface**: backend (`agents/main_agent/base_agent.py:478` `_build_filtered_tools`, `integrations/external_integration.py`, `gateway_integration.py`) + frontend (`components/sidenav/components/session-list/session-list.{ts,html}`)
-- **Effort × Impact**: M × M–H
-- **Subtracts**: yes — the eager load of every enabled external MCP client at agent build, on every agent construction
-- **Unlocks**:
-  - Their measured **60–85% first-token latency cut** on new and follow-up conversations
-  - A conversation-search affordance we have **none** of today — `session-list.ts` groups by date with no filter at all — at **zero token cost** (a pure client-side filter over already-loaded titles)
-- **Notes**: ⚠️ **Session-scoped only — never turn-scoped.** Their implementation goes further: their new base prompt tells the model *"available tools may change between turns within the same conversation"*, accepting a `toolConfig` that varies per turn. For us that is a `toolConfigHash` rewrite at 1.25× base input over a 30k–150k prefix **every turn** — the latency win would be paid back many times in cache writes. Defer discovery only for tools **not in this session's `enabled_tools`**, a set that is stable for the session. ⚠️ Also confirm we make no equivalent keep-alive/warm-up call when an `@`-mention builds a second `Agent` (opencode #49387 found exactly that cost per subagent). ⚠️ Their module-global → per-agent registry fix is the same bug class as our "never cache session state on an agent instance" rule — read it before touching this code. ⚠️ The two halves are independent; the SPA search can ship alone.
-- **Status**: open
-- **Status 2026-10-09** (revisit date reached): (b) **superseded**. Conversation search shipped as its own epic (PR-2a → PR-4b) and is default-on (#1506). (a): the #1406 dev readout (#1408) took cold `tools.mcp` from 21.5 s to 2.3 s, and `rag` (~1.4 s) is now the larger first-turn stage. reviews/2026-10-09.md ▸ Carried Over recommends declining (a) and resolving the entry.
-
 ### [2026-09-16] Decide PR-5 (selective 1h TTL on the static prefix, #1132, flag OFF) — a dev week AFTER the hourly system-prompt tick fix
 - **Source**: measured — `backend/scripts/probe_static_prefix_ttl.py` in dev-ai, 2026-09-16, Haiku 4.5. **420 s gap:** Bedrock honors `ttl: "1h"` on the tools+system points — 1h arm second call read 5,924 / wrote 327 (message segment only) vs the 5m arm re-writing all 6,251; pair **12% cheaper**. **60 s gap:** both arms warm; 1h arm **+$0.005157**, exactly the 0.75×-base premium on the first write with nothing to recover. Both recorded in the thresholds spec §6 PR-5 and the probe docstring.
 - **Surface**: backend — `core/model_config.py` (`static_prefix_cache_ttl`, `CacheConfig(system_prompt_ttl="1h", tools_ttl="1h")`), `apis/shared/costs/calculator.py` (1h writes billed at 2× base from the context-breakdown static size), the `staticPrefixTtl: "1h"` marker on `C#` rows; the hourly `%H:00` tick in `utils/timezone.py` (separate task chip, in progress).
@@ -602,14 +573,6 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Subtracts**: yes, if go — `_apply_compaction`'s slicing, `_retrieve_session_summaries`, `_prepend_summary_to_first_message`.
 - **Status**: open — **defer until the stack's metrics exist.** v2's own go criteria (over-threshold sessions > ~3% of active or > ~15% of spend; or `partial_miss` waste from compaction-state mutation > ~$50/month post-fixes) are now measurable from `CompactionForced`, `CompactionApplied` and the ledger. Decide with numbers, and weigh against adopting upstream's context manager when it ships rather than v2's hand-built engine.
 
-### [2026-09-16] Document offload epic — attachments are 31% of spend and 26% of the over-100k tail; spawned as a task, with actionable analytics as a first-class deliverable
-- **Source**: `docs/specs/document-context-offload.md` (Draft, no branch; 7 PRs, PRs 1–3 a unit) + the 2026-09-15 audit cohort split + `docs/specs/document-conversations-cost.md` (31%). The compaction stack deliberately does not touch attachments — a cut cannot fix them, a digest + page-range read can.
-- **Surface**: backend — `document_read` tool gated on the session having an attachment (ids kept out of `INJECTED_TOOL_IDS`), `DocumentDigest` at upload on `FileMetadata`, `_strip_document_bytes` → digest + live handle on restore; analytics: `hasDocuments` / `documentTokens` on `MessageMetadata` (the spec's PR-7) plus whatever else makes the cost-effectiveness of the next change *decidable* — per-session attachment tokens vs. answer quality signal, `document_read` call counts and page volumes, digest-vs-full-document turn shares.
-- **Effort × Impact**: L × H
-- **Subtracts**: partially — retires the contentless restore placeholder (a correctness bug: a returning user's document is silently lost) and the 14% re-upload rate.
-- **Status**: **BUILT 2026-09-16** — shipped as PRs #1137–#1143 (+#1145); analytics were pulled forward into PR-1 as asked, and the per-call fields do align with the compaction ledger and `AgentCoreStack/Compaction`. Validated 2026-09-16/17 (41 probes + a live dev clickthrough); two defects found and fixed in #1147. What remains is **measurement, not build** — see the three [2026-09-18] entries at the top of this queue. Original ask, for the record: task chip spawned 2026-09-16 ("Explore document offloading with actionable cost analytics"). Ask of the exploration: sequence PRs 1–3 together as the correctness fix, pull the analytics (PR-7) forward so the cost work (PR-4) is measured from day one, and align the per-call fields with the compaction ledger (#1130) and `AgentCoreStack/Compaction` so one anatomy page explains a session's cost.
-
-
 ### [2026-09-11] ✅ ANSWERED: `bedrock_cache_points_supported()` STAYS — and it is wrong in the opposite direction from the one we suspected
 - **Source**: measured, not read — `backend/scripts/probe_bedrock_cache_point_support.py` (added by this entry) against the pinned strands-agents 1.55.0 and live `bedrock-runtime` in dev-ai/us-west-2, 2026-09-11. **Answers check (d)** of the [2026-09-11] "Retire the hand-placed system `cachePoint`" entry below, and **narrows (c)** of the [2026-09-11] `ClientSession` monkeypatch entry. Does **not** close either — (a), (b) and the `tools_ttl` mixed-TTL evaluation are untouched.
 - **Surface**: backend — `core/model_config.py` (`bedrock_cache_points_supported`, the cachePoint-budget comment), `core/agent_factory.py` (the hand-placed system block), `backend/scripts/probe_bedrock_cache_point_support.py`.
@@ -624,7 +587,6 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
   - **Follow-on — ✅ MEASURED 2026-09-11 against all 54,932 Claude `C#` rows in PROD, and the worry is REFUTED. Do not spend time here.** The hypothesis was that small-prefix agents silently pay full input because both static cachePoints fall under the floor. Prod says caching is working: of turns billing **≥4,096** tokens, the uncached share is **0.1% (Jul) / 1.2% (Aug) / 0.2% (Sep)**. Only **670 rows in the table's entire history** are under-floor uncached, and those are *correctly* uncached — Bedrock will not cache that little from anyone, so there is no saving to recover. **The instrument validated itself on the way:** 2026-04 and 2026-05 read **100.0% uncached**, which is exactly the pre-#471 era before caching was re-enabled, and 2026-06 reads 57.5% as it rolled out. ⚠️ **Do not read a raw uncached count without splitting by month** — the pre-#471 rows are 105M tokens of history and will masquerade as a live leak (they did, in the first cut of this query: $166 of "waste" that evaporated on the time split).
   - **The whole live residual is 283 turns / 3.3M tokens over six weeks, and it is ~90% explained:** **(A) 45% is `/chat/api-converse`** — 206 turns across 3 sessions, the API-key path that CLAUDE.md documents as raw boto3 on the Bedrock branch with **no cachePoints by design**. **(B) 8% is single-turn sessions with a large input**, the exact signature of the documented strands≥1.48 behaviour where a cachePoint is *skipped entirely* when a non-PDF document is the first content block. **(C) 46% is 61 turns across 58 sessions** — ~1 turn each, same attachment shape, **~$5 total at Sonnet 4.6 rates over six weeks.** Nothing systemic.
   - **The one genuine (small) opportunity this surfaced:** the API-key `/chat/api-converse` path bills full input on every turn, forever, because it hand-rolls boto3 and places no cache points. 1.49M tokens in six weeks from **three** sessions. Negligible today, but it scales linearly with API-key adoption and the handler already moved to app-api in #621. File as its own item if API-key traffic grows.
-
 
 ### [2026-09-11] Retire the hand-placed system `cachePoint` — `CacheConfig.system_prompt_ttl` / `tools_ttl` are already in our pin
 - **✅ PARTIALLY SHIPPED 2026-09-18** — check **(b) is DONE**: the false 1.51-era invariant at `agent_factory.py` is rewritten and now states the real mechanism (upstream `_should_cache_system()` stands down on `not any("cachePoint" in block …)`; measured on the pinned 1.55.0 to yield exactly ONE system cachePoint with our block present and one without it), and the old claim is explicitly marked *"do not restore it"*. Checks (a) and (d) were already answered. **Still open: (c)** — the `tools_ttl` mixed-TTL evaluation against the 54%-cheaper layered technique, and the **1.55.0 → 1.55.1 patch bump**, which did NOT ship (`pyproject.toml` still pins `strands-agents==1.55.0`). The bump carries #4199 (malformed snapshot IDs) and #4228 (context-manager parity).
@@ -704,19 +666,6 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Scope is all cacheable families, not just GPT.** Anthropic, OpenAI, and any newly cacheable Bedrock model. For each new one, confirm *which API surface* serves caching before assuming it works — GPT-5.6 caches **only** over the Responses API and not at all over Converse, and that distinction was worth an entire transport.
 - ⚠️ **Never adopt an upstream caching default on inspection alone.** This stack shipped one caching change whose premise was wrong and measured **57% more expensive** live (#954 → reverted by #956). `backend/scripts/probe_gpt56_cache_rates.py --mode both --grow-history` is the gate: beat the current arm, measured, before switching.
 
-### [2026-09-04] Instrument the missing quality axis — per-message response feedback
-- **Source**: conversation with Phil, 2026-09-04 — **not** from a research scan. Spec written the same day: `docs/specs/response-feedback.md`. Revives the two long-dormant `# feedback: Optional[Feedback] = None` placeholders at `apis/shared/sessions/models.py:645` and `apis/app_api/messages/models.py:132`.
-- **Surface**: backend — `apis/shared/sessions/metadata.py` (a third `F#` SK prefix beside `C#`/`D#`), `apis/app_api/sessions/routes.py` (per the inference-api boundary rule), `admin/costs/routes.py:183` (third leg of the anatomy query); frontend — `message-actions.component.ts` (the existing Copy/Continue rail)
-- **Effort × Impact**: M × H — PR-1 is small; the impact is that it is the **only** proposed instrument for a dimension we currently cannot measure at all
-- **Subtracts**: no — this is additive, and the entry should be ranked knowing that. What it removes is an *epistemic* gap, not code: two commented-out placeholders become real, and "quality wins when it conflicts with cost" stops being unfalsifiable.
-- **Unlocks**:
-  - **The counterweight the cost roadmap has never had.** Every `C#` row carries model id, `cacheStatus`, `agentSwitched`, compaction state and cost. Nothing carries an outcome. W1–W5 has optimised cost against an asserted quality constant; a down-thumb rate joined to those same dimensions is the first evidence that compaction, a model downgrade, or the `@`-mention history fork costs anything besides dollars.
-  - **Affordable evaluation.** The Evaluations spike proved `EvaluationClient.run()` works end-to-end on real dev conversations with 16 built-in evaluators and deterministic session correlation (`runtime_session_id_for()`, `harness/runner.py:63`) — but judging is per-trace and cannot run fleet-wide. Human-marked failures are the sampling queue that makes it payable, and the fixed reason set routes each bucket to the right evaluator.
-  - **`Builtin.SkillSelectionAccuracy` / `SkillInstructionFollowing`** (queued 2026-08-28) become affordable for the same reason — the Skills v2 epic's unmeasured failure mode gets a pre-filter.
-  - **A rework rate in dollars** — down-thumbed turn cost plus the retries after it — which denominates quality in the unit the existing dashboards already speak.
-  - **Marketplace ranking and version-regression alarm** per published `AgentVersion`, giving the §8 rollback path its first automated trigger.
-- **Status**: open — three things a reviewer should weigh before ranking. **(1) The thesis is deliberately narrow:** feedback is a *sampler and a label*, never a metric. The spec makes "no single-number quality score field exists to be quoted" a structural rule (§9), because a raw rate over a self-selected ~3% is noise and will be misread the first time it reaches a slide. **(2) The consequence is load-bearing, not a nicety.** A thumb with no visible effect decays to a zero response rate within weeks, at which point every downstream phase is starved. PR-1 therefore ships retry-with-correction *with* the button or does not ship — this is the one place the phasing cannot be trimmed for scope. **(3) It must not merge with the D15 agent-report channel**, which already exists and is a different object (agent-scoped, free-text, moderation-queued, `suggestion` folded in on purpose). The down-thumb sheet hands off to that dialog; it does not grow a second queue. ⚠️ Two accuracy notes carried from the write-up: feedback is a **side-channel DynamoDB write** that never touches conversation history or `toolConfig` — a design putting it on the message object is a prompt-cache buster and is rejected in the spec; and any LLM-judged classification runs **offline in batch** over persisted turns, never as an inline per-turn call. ⚠️ `is_preview_session` guards the `D#` write (`metadata.py:156`) but **not** the `C#` cost write — the two prefixes already disagree, so `F#` needs a deliberate rule rather than a copied neighbour. Phase 6 (preference data for the existing `fine_tuning` domain) is **policy-gated and explicitly out of scope** — a consent decision at the identity-claim level, not an engineering one.
-
 ### [2026-09-04] Enforce platform-before-backend on a develop push
 - **Source**: reviews/2026-09-04.md ▸ Proposal #4 — direct observation by `kaizen-review-prep`; **not** in research/2026-09-04.md, which reported zero CI failures in the window. Run [33559336336](https://github.com/Boise-State-Development/agentcore-public-stack/actions/runs/33559336336).
 - **Surface**: CI — `.github/workflows/backend.yml` (the `Deploy inference-api image to AgentCore Runtime` job) and/or a shared concurrency group with `platform.yml`. No application code.
@@ -742,15 +691,6 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Subtracts**: yes — the manual hash-diff ritual `CLAUDE.md` currently instructs a human to perform on every cost-spike investigation ("the hash that changed between consecutive calls names the cache-buster"). Everything needed is already stored; nobody has written the comparison.
 - **Unlocks**: naming a cause we currently **cannot see at all**. An external MCP server that edits a tool's `inputSchema` between turns re-writes our cacheable prefix with no deploy of ours and no description change for a human to spot — measured in the wild at **17 schema/annotation-only changes across 248 servers in 27 hours**. Verified locally that `toolConfigHash` hashes `get_all_tool_specs()` (full specs *including* `inputSchema`), so we already **detect** this class; a `tools_changed` label on a row with no deploy is the first time we could **attribute** it.
 - **Status**: open — cheapest high-leverage item after #1. Labels available essentially for free: `tools_changed`, `system_prompt_changed`, `history_changed`, `agent_switched` (the `agentSwitched` flag already exists), `ttl_expired`, `cold_start`. Claude Code shipped exactly this in 2.1.260 ("a likely cause for prompt-cache misses"), which is corroboration the ergonomics are worth it.
-
-### [2026-09-04] Close the `ActiveSessionCount` alarm item — the metric now exists — and scope instance-based Runtime against W5
-- **✅ PARTIALLY SHIPPED 2026-09-18** — part **(1) is DONE**: [#1051](https://github.com/Boise-State-Development/agentcore-public-stack/pull/1051) wires the concurrent-Runtime-session alarm through `AlarmFactory`, and it was sized against evidence rather than a guess — `config.ts:481` records it as *"Measured against 7 days of real prod `ActiveSessionCount` (2026-09-04..11)"*. **Still open: part (2)**, the instance-based Runtime arithmetic against W5 — 889 `Runtime:Instance-based:*:Management-Hours` SKUs vs consumption rates, crossover at our measured 18–50 min microVM lifetimes. **Fifth month with no proposal against the largest share of the bill** (Runtime memory, 73% of the AICC bill); reviews/2026-09-18 recommends doing the paragraph or declining W5 as a kaizen lane.
-- **Source**: research/2026-09-04.md ▸ Top 5 #5 — AWS Price List API (`AmazonBedrockAgentCore` us-west-2: **889 new `Runtime:Instance-based:<type>:Management-Hours` SKUs** in the 2026-09-01 republish) + https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/release-notes.html. **Unblocks the [2026-07-10] `ActiveSessionCount` entry** — merge them at review.
-- **Surface**: infrastructure — `lib/constructs/observability/` (the `AlarmFactory` that #910 made the only sanctioned path), the AgentCore Runtime construct; plus W5 in `project_cost_effectiveness_roadmap.md`
-- **Effort × Impact**: L (alarm) + M (W5 scope) × M–H
-- **Subtracts**: yes — the `/ping` access-log as our runtime-lifetime instrument, a proxy adopted because no real metric existed. A real one now does.
-- **Unlocks**: the **first new lever on W5 since it was named.** Every prior cost win has been on the token side; Runtime memory is **73% of the AICC bill** and there is now a purchasable alternative to the consumption model.
-- **Status**: open — two deliberately different-sized parts. **(1, Low)** Wire the alarm: the 2026-07-10 entry was blocked on the metric not existing, and `AWS/Bedrock-AgentCore` now publishes `ActiveSessionCount` once per minute for Runtime and built-in tools; it routes to `{prefix}-alarms` as a consequence of going through `AlarmFactory`. **(2, Med)** Scope instance-based Runtime: 889 SKUs across c5/c6i/m5/m6i/m7i/r5/g5 families (`m5.large $0.01152/hr`, `c6i.xlarge $0.0204/hr`, `g5.xlarge $0.078468/hr`) against unchanged consumption rates of `$0.0895/vCPU-hr` + `$0.00945/GB-hr`. The question is the crossover at our measured microVM lifetimes (18–50 min post-#827) and session concurrency — arithmetic against numbers we already have, not a build. ⚠️ The ~12% management-fee-to-EC2 ratio was **derived** in this scan, not published; verify EC2 base rates before building a case on it.
 
 ### [2026-08-28] Port the reference repo's context-overflow hardening
 - **Source**: research/2026-08-28.md ▸ Top 5 #5 — https://github.com/aws-samples/sample-strands-agent-with-agentcore/pull/260 (`fix(agent): harden context overflow recovery`, 2026-08-18)
@@ -781,14 +721,6 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Effort × Impact**: M × M–H
 - **Subtracts**: no — a local guard against an upstream gap; delete it if/when #564 is fixed upstream
 - **Status**: open — **the bump's value was real but incomplete; this is what's left.** Metadata-filtered `ListEvents` transiently misses marker events, so the manager treats the turn as a **new session** and skips history restoration *even though the data exists in the unfiltered view*. Cost impact precedes correctness impact: a false "new session" both loses context **and** re-writes the entire cacheable prefix at the cache-write premium. Related upstream risks worth checking in the same pass: **#621** (`filter_restored_tool_context` incompatible with extended thinking — same restore path) and **#629** (TracerProvider never flushed before microVM freeze, so end-of-invocation spans are dropped — which means our own cost telemetry under-reports the final turn of every session).
-
-### [2026-07-24] Add GPT-5.6 Terra + Luna to the model catalog via the existing Mantle Responses path
-- **Source**: research/2026-07-24.md ▸ Top 5 #2 — GPT-5.6 Sol/Terra/Luna GA on Bedrock via Mantle (confirms last week's flagged-for-verification item) — https://aws.amazon.com/about-aws/whats-new/2026/07/openai-gpt-sol-terra/
-- **Surface**: backend / cross-cutting (inference-api model config + admin catalog; `_create_mantle_model` / `ModelProvider.MANTLE`; per-model region routing — Terra/Luna→us-west-2, **Sol→us-east only, gate or omit**; `CountTokensBedrockModel` de-prefix; frontend model picker)
-- **Effort × Impact**: L–M × M–H
-- **Subtracts**: addition only — justified: rides the built gpt-5.4 `apiMode=responses` wiring (exercises the "dark scaffolding" non-Claude Mantle lane the [2026-07-06] watchlist flagged) + adds a cheaper non-Claude tier
-- **Unlocks**: Terra (½ GPT-5.5 cost) as a cheaper agent/default tier + Luna (fast/cheap); explicit-breakpoint Mantle prompt caching at a 90% cached-input discount
-- **Status**: open — **new capability story of the week; low-effort because the path exists.** Pair with the caching-audit item below so the discount is captured. Gate Sol on region availability; confirm reasoning/temperature-controls handling on the OpenAI path (don't apply Claude's controls).
 
 ### [2026-07-24] Multi-provider prompt-caching audit — now doubly-motivated by GPT-5.6 explicit-breakpoint caching
 - **Source**: research/2026-07-24.md ▸ Top 5 #3 — internal issue #642; Strands #3144 (`strategy="auto"` never caches system prompt); **new**: GPT-5.6 on Mantle uses explicit cache breakpoints at a 90% discount
@@ -859,14 +791,6 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Unlocks**: Mantle-first capability gradient (Responses API, server-side tool use, async/long-running, Projects/Workspaces) once Claude parity lands; a uniform OpenAI-compatible lane for non-Claude models inside Bedrock without a second vendor SDK.
 - **Status**: open — **strategic/future-proofing, not urgent; recommend Defer (watchlist) + a small non-Claude-lane spike.** Corrected findings: (1) `bedrock-runtime` is "fully supported," no EOL signal — Mantle recommendation is greenfield-onboarding language, but the capability gradient toward Mantle is real. (2) **The "persisted Converse wire shape = multi-model lock-in" concern does NOT hold** — verified `strands/types/content.py:78` `ContentBlock` (`toolUse`/`toolResult`/`reasoningContent`) IS Strands' provider-neutral canonical shape; every Strands provider round-trips it to/from Anthropic Messages / OpenAI Chat Completions. AgentCore Memory abstracts *persistence*; Strands abstracts *multi-model shape*. Switching a provider's endpoint changes Strands `format_request` internals, **not** our persistence schema or `_convert_content_block`. No schema-decoupling PR needed. (3) The real bedrock-runtime ties are narrow: the 3 direct-Converse bypasses, `CountTokens` (no Mantle equal — powers context-attribution + compaction), and cross-region profiles (`us.*`/`global.*`, Mantle-absent). (4) **Do NOT migrate the Claude chat path to Mantle yet**: Opus 4.8 on Mantle is Messages-API-only (Chat Completions/Responses = No), so Mantle's headline built-ins don't apply to our primary model; Mantle also lacks cross-region inference, native `CountTokens`, structured outputs, and **Guardrails** (runtime-only — see [2026-06-19] Guardrails item, which this reinforces). Pricing identical; Mantle default TPM not a win (`20M in/4M out` vs runtime `30M`). **Reopen trigger:** a Strands Anthropic-Messages-on-Mantle provider ships **AND** cross-region + native token counting reach Claude-on-Mantle. Interim, low-risk value = finishing the non-Claude OpenAI-compatible lane already scaffolded in `_create_mantle_model()`.
 
-### [2026-07-03] Model-settings refresh: reinstate Fable 5 + add Sonnet 5 with temperature-suppression guard
-- **Source**: research/2026-07-03.md ▸ Top 5 #3 — Fable 5 reinstated (https://aws.amazon.com/blogs/aws/anthropic-claude-fable-5-on-aws-mythos-class-capabilities-with-built-in-safeguards-now-available/); Sonnet 5 GA + promo pricing (https://aws.amazon.com/bedrock/pricing/); ref-repo `NO_TEMPERATURE_MODELS` (commit 35bc3a9).
-- **Surface**: cross-cutting (inference-api model config + model-settings admin, `to_bedrock_config`, `CountTokensBedrockModel` de-prefix, frontend model picker)
-- **Effort × Impact**: M × M–H
-- **Subtracts**: addition only — justified: **un-withdraws the [2026-06-12] Fable 5 item** (revoked mid-June, reinstated July 1) and adds a materially cheaper capable tier (Sonnet 5 $2/$10 promo through Aug 31 vs. Opus 4.8)
-- **Unlocks**: Fable 5 harness tier above Opus 4.8; Sonnet 5 as a cheaper default/agent tier
-- **Status**: open — **the temperature-suppression guard is a prerequisite, not optional**: Sonnet 5 rejects `temperature` on ConverseStream. Fable 5 is US inference profile only (Global unstable).
-
 ### [2026-07-03] Tool-approval as first-class SSE/part state + tool_result source provenance
 - **Source**: research/2026-07-03.md ▸ Top 5 #4 — assistant-ui `eve@0.0.2` (https://github.com/Yonom/assistant-ui/releases); Vercel AI SDK human-in-the-loop (https://ai-sdk.dev/cookbook/next/human-in-the-loop); NN/g State of UX 2026 (https://www.nngroup.com/articles/state-of-ux-2026/).
 - **Surface**: frontend + backend (tool-approval BeforeToolCall hook, `tool_use`/`tool_result` SSE contract, frontend tool-call card + signal store; reuses `beginContinuationStreaming`)
@@ -875,64 +799,13 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Unlocks**: closes the known "approval hook can't see through the tool-fold" hole (pairs with the Strands hook-ordering bump); "data sources used" provenance on `tool_result` cards (we already carry `serverName`/`icon` on `ui_resource`) — a top NN/g trust driver
 - **Status**: open — auto-resume once all approvals in a turn resolve (the multi-tool piece worth stealing from the AI SDK).
 
-### [2026-06-19] Ship the interactive context-breakdown badge (Cursor + LibreChat convergence)
-- **Source**: research/2026-06-19.md ▸ Top 5 #5 — LibreChat v0.8.7-rc1 real-time context gauge + Cursor Context Usage Report (2026-06-05) + internal PR #433. **Reinforces** the [2026-06-05] "make the context-breakdown badge interactive" item with a second independent product datapoint.
-- **Surface**: frontend (context-breakdown badge component in `frontend/ai.client/src/app/session/`)
-- **Effort × Impact**: M × M
-- **Subtracts**: no — addition; lands on a surface we shipped and reuses `contextBreakdown` already on the final `metadata` event
-- **Unlocks**: user-facing context-cost transparency + an actionable "what's eating context / how to trim it" follow-up
-- **Status**: open — presentation-layer only (no backend change). Consolidated the superseded [2026-06-05] Cursor-only entry into this item. Lower priority than the [2026-07-03] reliability/model cluster. Reviewed reviews/2026-07-03.md ▸ below-cap (defer 1 week).
-
-### [2026-06-05] De-risk #419 (admin-managed Gateway target registration) against the new AWS auth-code-flow + BYO-secrets references
-- **Source**: research/2026-06-05.md ▸ Top 5 #5 — AWS "secure OAuth auth-code flow with Gateway + MCP clients" + AgentCore Identity BYO Secrets Manager (both June 1) + internal issue #419
-- **Surface**: infrastructure (Gateway target CRUD / `gateway_target_*`) + backend (`apis/shared/oauth/agentcore_identity.py` OAuth provider wiring + token-vault customParameters) + frontend (admin registration UI)
-- **Effort × Impact**: H × H
-- **Subtracts**: partial — BYO Secrets Manager lets us own/govern OAuth client secrets (CMK, tagging) instead of service-managed storage
-- **Unlocks**: admins register external MCP servers (protocol=mcp) without code changes — net-new admin surface, now blueprinted by AWS
-- **Status**: open — strategic; the AWS references materially de-risk an already-filed feature
-
-### [2026-05-29] Migrate inference-api model config Opus 4.7 → 4.8
-- **Source**: research/2026-05-29.md ▸ Top 5 #1 — Claude Opus 4.8 on Bedrock (May 28)
-- **Surface**: backend (model config in `inference_api`) + admin model catalog + the `_shape_thinking_value` / `temperature` provider-translation path
-- **Effort × Impact**: M × H
-- **Subtracts**: partial — Opus 4.8's system-in-`messages` caching allowance simplifies the #269 caching wiring (system no longer must sit strictly outside `messages` to preserve cache)
-- **Unlocks**: fewer-step tool turns (lower per-turn cost), best-in-class computer-use, ~4× fewer code-flaw pass-throughs, the `effort` compute-depth knob
-- **Status**: open — verify Bedrock region availability (us-east-1 ✓) and the 4.8 context window on the model card before flipping the pin; confirm the beta.27 Opus-4.7 thinking/`temperature` handling still applies
-
-### [2026-05-29] Compaction summary prompt: preserve standing/sensitive user instructions
-- **Source**: research/2026-05-29.md ▸ Top 5 #4 — Claude Code v2.1.152 compaction-prompt change (~May 26)
-- **Surface**: backend (`TurnBasedSessionManager` summarization prompt)
-- **Effort × Impact**: L × M
-- **Subtracts**: no — defensive/quality
-- **Status**: open — cheap; dovetails with the `compaction` SSE event
-
 ### [2026-05-29] Sync-in-async defensive sweep (anchored by web-crawler DoS #399)
 - **Source**: research/2026-05-29.md ▸ Top 5 #5 — internal issue #399 (web-crawler DoS, May 28); same class as AgentCore SDK #482
 - **Surface**: backend (web-sources crawler immediate fix, then a sweep of sync-in-async call sites across `inference-api` / `app-api`)
 - **Effort × Impact**: M × M-H
 - **Subtracts**: no — defensive; protects the shared event loop from being wedged by one user's request
 - **Status**: open — #399 already filed; kaizen value is the broader class-of-bug sweep (pairs with the queued SDK #482 guard)
-
-### [2026-05-22] Opus 4.7 `temperature`-omission guard
-- **Source**: research/2026-05-22.md ▸ Top 5 #4 — ref-repo commit `9385454`
-- **Surface**: backend (provider-translation chokepoint — same site as `_shape_thinking_value` / #329 / #331)
-- **Effort × Impact**: L × M
-- **Subtracts**: no — defensive; Opus 4.7 rejects `temperature` on extended-thinking turns
-- **Status**: open — **subsumed by the [2026-07-03] model-settings per-model temperature-suppression guard** (same `to_bedrock_config` chokepoint; Sonnet 5 has the same rejection). Ship as one guard covering both. Reviewed reviews/2026-07-03.md ▸ Proposal #3.
-
-### [2026-05-15] Investigate inference-api deploy — new images reach ECR but Runtime isn't rolled (issue #288)
-- **Source**: reviews/2026-05-15.md ▸ Proposal #10 (new from internal friction, issue #288 May 12). Pairs with the 1.6.4 → 1.9.1 bump (same SDK package owns `update_agent_runtime`).
-- **Surface**: cross-cutting — `.github/workflows/deploy-inference-api.yml` + bedrock-agentcore SDK `update_agent_runtime` call shape
-- **Effort × Impact**: L-M × M-H
-- **Subtracts**: possibly — removes the manual-redeploy band-aid that's been the workaround
-- **Status**: open — surfaced in reviews/2026-05-15.md ▸ Proposal #10 (Ship — recommended ship-first); no decision logged yet. **Friction intensifying**: 6+ "Deploy Inference API" failures May 15–17; a new "Deploy App API" failure cluster (8× May 16–17) may share a root cause.
-
-### [2026-05-10] Audit `BedrockModel.stream` cancellation path against Strands #2266
-- **Source**: research/2026-05-10.md ▸ Top 6 #4
-- **Surface**: backend
-- **Effort × Impact**: L × M-H
-- **Subtracts**: no — defensive (SSE-disconnect path is hot)
-- **Status**: open — surfaced in reviews/2026-05-15.md ▸ Proposal #8 (Ship); no decision logged yet
+- **Status 2026-10-19 (queue cleanup)**: the anchor is fixed. #399 closed as completed 2026-09-23 via #1252 (crawl concurrency guard, extraction and DynamoDB calls moved off the event loop). Only the broader sweep remains, and it has had no pick in five months: a decline candidate for the next review.
 
 ### [2026-05-10] Named A2A agent participants in the chat UI
 - **Source**: research/2026-05-10.md ▸ Agentic UI/UX ▸ Linear Agent pattern. Reinforced by research/2026-05-15.md Linear Code Intelligence 5× usage-growth datapoint.
@@ -942,6 +815,179 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Status**: open — deferred 4 weeks in reviews/2026-05-15.md (revisit 2026-06-12). Earns its keep when an A2A construct lands.
 
 ## Resolved
+
+### [2026-10-16] Authenticate ECR Public pulls in the image build action → RESOLVED — **SHIPPED**
+- **Decision**: shipped as #1652 (`103ac5c2`, 2026-10-17). `scripts/build/ecr-public-login.sh` logs Docker in to `public.ecr.aws` with a us-east-1 token before every build in `build-and-push-if-changed.sh` (all ten backend images), and the build retries once on a registry 429.
+- **Reasoning**: landed in the build script rather than `.github/actions/build-and-push-image`, which covers the same images. The login is best-effort: a CI role without the permissions warns and pulls anonymously, so a 429 can still recur for a deployment that has not granted them.
+- **Reviewed in**: queue cleanup 2026-10-19 (checked against `origin/develop`, git history and issue state)
+- **Source**: research/2026-10-16.md ▸ Top 5 #4; Backend Deploy runs 38850758469, 38587486323, 38577145616 (`429 … toomanyrequests: Data limit exceeded` on `public.ecr.aws/docker/library/python:3.13-slim`)
+- **Surface**: CI (`.github/actions/build-and-push-image`)
+- **Effort × Impact**: L × M
+- **Subtracts**: yes — removes manual deploy re-runs, and ends a second registry rate-limit incident (after Docker Hub, `5143d896`) instead of moving to a third registry
+- **Notes**: `aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin public.ecr.aws` before the build. The deploy role needs `ecr-public:GetAuthorizationToken` and `sts:GetServiceBearerToken`. The alternative is a private-ECR pull-through cache.
+- **Status**: open
+
+### [2026-10-02] Re-base the V2 Runtime plan on the published price, land B1, and use CDK's typed `platformVersion` → RESOLVED — **SHIPPED (typed `platformVersion` carried)**
+- **Decision**: B1 shipped (#1512), the V2 price is in `docs/specs/agentcore-runtime-v2.md` §1 and the first GB-hours readout in §9 (`0d0381b0`). The only remainder, CDK's typed `platformVersion`, waits on an `aws-cdk-lib` bump (still `2.265.0`; the override is at `inference-agentcore-construct.ts:454`) and is carried as a status line on [2026-09-25] *A/B the V2 AgentCore Runtime in dev*.
+- **Reasoning**: the entry's purpose, a go/no-go threshold written down before the A/B, is met, and the A/B entry now owns the V2 decision.
+- **Reviewed in**: queue cleanup 2026-10-19 (checked against `origin/develop`, git history and issue state)
+- **Source**: research/2026-10-02.md
+- **Surface**: infrastructure (+ `scripts/build/deploy-runtime-image-if-changed.sh`, `docs/specs/agentcore-runtime-v2.md`)
+- **Effort × Impact**: L × H
+- **Subtracts**: yes. The plan's untyped `addPropertyOverride` (`aws-cdk-lib` 2.272.0 types `CfnRuntime.platformVersion`), and the separate [2026-09-04] W5 instance-SKU arithmetic entry (the committed-baseline rate of $0.0132/GB-hour is now published).
+- **Unlocks**: a go/no-go threshold written down before the dev A/B. V2 memory is $0.0169/GB-hour against V1's $0.00945 (1.79×), so V2 wins only if billed GB-hours fall below ~56% of V1's. Idle memory is reclaimed after 120 s.
+- **Status**: open. Plan step 1 (B1 allow-list) is still not started; it is harmless on V1.
+- **Status 2026-10-09**: B1 shipped (#1512), per-env platform version (#1514), B2 idle clock after snapshot restore (#1515). The first dev flip was rolled back on an undocumented 2,560-byte env payload cap (3,007 B; #1516 records it and the §7 refactor plan). Price still not in the spec (`agentcore-runtime-v2.md:39`); `aws-cdk-lib` still 2.265.0. reviews/2026-10-09.md ▸ #8 defers the retry to 2026-10-16, behind the platform-ceilings test and the rollout-switch removals (which free env slots).
+- **Status 2026-10-16 (review)**: dev has run on **V2 since 2026-10-10** (Runtime v613/v614; #1535, #1542; prewarm #1543). `agentcore-runtime-v2.md:39` still says "No V2 price" although the pricing page now lists V2 rates; `aws-cdk-lib` still 2.265.0. What remains is the GB-hours readout against the ~56% break-even, which six days of dev data can now answer. reviews/2026-10-16.md ▸ #4.
+- **Status 2026-10-16**: the price is now in the spec (`agentcore-runtime-v2.md` §1), checked on the pricing page, in the Price List API and against the rates billed on dev: V2 memory $0.0169 and vCPU $0.1276 (1.79× and 1.43× V1); committed baseline $0.0132 / $0.0997. V2 bills under distinct `Memory-v2` / `vCPU-v2` usage types. The first readout (§9, about 6 days on dev) puts V2 at 0.99× V1's GB-hours per day, and about 2× the Runtime dollars ($0.22 → $0.44/day). Per unit of work it is 0.36–0.63, straddling the 56% break-even. First read: **need more data, leaning no-go on cost alone**. Typed `platformVersion` is still pending a CDK bump.
+
+### [2026-09-16] Document offload epic — attachments are 31% of spend and 26% of the over-100k tail; spawned as a task, with actionable analytics as a first-class deliverable → RESOLVED — **SHIPPED**
+- **Decision**: built 2026-09-16 as #1137–#1143 and #1145; two defects fixed in #1147.
+- **Reasoning**: the entry already said what remains is measurement, not build, and that measurement is owned by the [2026-09-18] *Document offload — the prod readout* and *recalibrate `PDF_PAGE_TOKEN_ESTIMATE`* entries, which stay open.
+- **Reviewed in**: queue cleanup 2026-10-19 (checked against `origin/develop`, git history and issue state)
+- **Source**: `docs/specs/document-context-offload.md` (Draft, no branch; 7 PRs, PRs 1–3 a unit) + the 2026-09-15 audit cohort split + `docs/specs/document-conversations-cost.md` (31%). The compaction stack deliberately does not touch attachments — a cut cannot fix them, a digest + page-range read can.
+- **Surface**: backend — `document_read` tool gated on the session having an attachment (ids kept out of `INJECTED_TOOL_IDS`), `DocumentDigest` at upload on `FileMetadata`, `_strip_document_bytes` → digest + live handle on restore; analytics: `hasDocuments` / `documentTokens` on `MessageMetadata` (the spec's PR-7) plus whatever else makes the cost-effectiveness of the next change *decidable* — per-session attachment tokens vs. answer quality signal, `document_read` call counts and page volumes, digest-vs-full-document turn shares.
+- **Effort × Impact**: L × H
+- **Subtracts**: partially — retires the contentless restore placeholder (a correctness bug: a returning user's document is silently lost) and the 14% re-upload rate.
+- **Status**: **BUILT 2026-09-16** — shipped as PRs #1137–#1143 (+#1145); analytics were pulled forward into PR-1 as asked, and the per-call fields do align with the compaction ledger and `AgentCoreStack/Compaction`. Validated 2026-09-16/17 (41 probes + a live dev clickthrough); two defects found and fixed in #1147. What remains is **measurement, not build** — see the three [2026-09-18] entries at the top of this queue. Original ask, for the record: task chip spawned 2026-09-16 ("Explore document offloading with actionable cost analytics"). Ask of the exploration: sequence PRs 1–3 together as the correctness fix, pull the analytics (PR-7) forward so the cost work (PR-4) is measured from day one, and align the per-call fields with the compaction ledger (#1130) and `AgentCoreStack/Compaction` so one anatomy page explains a session's cost.
+
+### [2026-07-24] Add GPT-5.6 Terra + Luna to the model catalog via the existing Mantle Responses path → RESOLVED — **SHIPPED**
+- **Decision**: shipped in `a3ab6cd8` (*curate GPT-5.6 Sol, Terra and Luna (PR-3)*, 2026-09-06); rows at `curated-models.ts:859` (`us.openai.gpt-5.6-terra`) and `:878` (`us.openai.gpt-5.6-luna`).
+- **Reasoning**: the paired [2026-07-24] *Multi-provider prompt-caching audit* stays open; it is the half that captures the caching discount.
+- **Reviewed in**: queue cleanup 2026-10-19 (checked against `origin/develop`, git history and issue state)
+- **Source**: research/2026-07-24.md ▸ Top 5 #2 — GPT-5.6 Sol/Terra/Luna GA on Bedrock via Mantle (confirms last week's flagged-for-verification item) — https://aws.amazon.com/about-aws/whats-new/2026/07/openai-gpt-sol-terra/
+- **Surface**: backend / cross-cutting (inference-api model config + admin catalog; `_create_mantle_model` / `ModelProvider.MANTLE`; per-model region routing — Terra/Luna→us-west-2, **Sol→us-east only, gate or omit**; `CountTokensBedrockModel` de-prefix; frontend model picker)
+- **Effort × Impact**: L–M × M–H
+- **Subtracts**: addition only — justified: rides the built gpt-5.4 `apiMode=responses` wiring (exercises the "dark scaffolding" non-Claude Mantle lane the [2026-07-06] watchlist flagged) + adds a cheaper non-Claude tier
+- **Unlocks**: Terra (½ GPT-5.5 cost) as a cheaper agent/default tier + Luna (fast/cheap); explicit-breakpoint Mantle prompt caching at a 90% cached-input discount
+- **Status**: open — **new capability story of the week; low-effort because the path exists.** Pair with the caching-audit item below so the discount is captured. Gate Sol on region availability; confirm reasoning/temperature-controls handling on the OpenAI path (don't apply Claude's controls).
+
+### [2026-07-03] Model-settings refresh: reinstate Fable 5 + add Sonnet 5 with temperature-suppression guard → RESOLVED — **SHIPPED IN PART — Fable half not pursued**
+- **Decision**: Sonnet 5 shipped (`62b0e54e`, 2026-07-11; row `global.anthropic.claude-sonnet-5`). The temperature-suppression guard was overtaken by per-model `supportedParams` (#203, `c70b4afe`): a row that declares no `temperature` never sends one, and the Sonnet 5 row declares only `max_tokens` and `effort`. Fable 5 was never curated.
+- **Reasoning**: three and a half months without a Fable pick, and Fable 5.1 ($10/$50 Global) has since replaced it on Bedrock. If a Fable tier is wanted, file it fresh against 5.1 rather than carrying this entry.
+- **Reviewed in**: queue cleanup 2026-10-19 (checked against `origin/develop`, git history and issue state)
+- **Source**: research/2026-07-03.md ▸ Top 5 #3 — Fable 5 reinstated (https://aws.amazon.com/blogs/aws/anthropic-claude-fable-5-on-aws-mythos-class-capabilities-with-built-in-safeguards-now-available/); Sonnet 5 GA + promo pricing (https://aws.amazon.com/bedrock/pricing/); ref-repo `NO_TEMPERATURE_MODELS` (commit 35bc3a9).
+- **Surface**: cross-cutting (inference-api model config + model-settings admin, `to_bedrock_config`, `CountTokensBedrockModel` de-prefix, frontend model picker)
+- **Effort × Impact**: M × M–H
+- **Subtracts**: addition only — justified: **un-withdraws the [2026-06-12] Fable 5 item** (revoked mid-June, reinstated July 1) and adds a materially cheaper capable tier (Sonnet 5 $2/$10 promo through Aug 31 vs. Opus 4.8)
+- **Unlocks**: Fable 5 harness tier above Opus 4.8; Sonnet 5 as a cheaper default/agent tier
+- **Status**: open — **the temperature-suppression guard is a prerequisite, not optional**: Sonnet 5 rejects `temperature` on ConverseStream. Fable 5 is US inference profile only (Global unstable).
+
+### [2026-05-22] Opus 4.7 `temperature`-omission guard → RESOLVED — **OVERTAKEN**
+- **Decision**: overtaken by per-model `supportedParams` (#203, `c70b4afe`). The Opus 4.7 row (`curated-models.ts:216`) declares only `max_tokens` and `effort`, so `temperature` is never sent to it.
+- **Reasoning**: the entry already said it was subsumed by the [2026-07-03] guard, which resolves the same way.
+- **Reviewed in**: queue cleanup 2026-10-19 (checked against `origin/develop`, git history and issue state)
+- **Source**: research/2026-05-22.md ▸ Top 5 #4 — ref-repo commit `9385454`
+- **Surface**: backend (provider-translation chokepoint — same site as `_shape_thinking_value` / #329 / #331)
+- **Effort × Impact**: L × M
+- **Subtracts**: no — defensive; Opus 4.7 rejects `temperature` on extended-thinking turns
+- **Status**: open — **subsumed by the [2026-07-03] model-settings per-model temperature-suppression guard** (same `to_bedrock_config` chokepoint; Sonnet 5 has the same rejection). Ship as one guard covering both. Reviewed reviews/2026-07-03.md ▸ Proposal #3.
+
+### [2026-05-29] Migrate inference-api model config Opus 4.7 → 4.8 → RESOLVED — **OVERTAKEN**
+- **Decision**: overtaken. No Opus 4.8 row was ever curated; Opus 5.5 was (#1358, `f3c90799`), and the default model is now the catalog's `isDefault` row, not inference-api config.
+- **Reasoning**: the top Claude tier moved two versions past 4.8. Opus 4.7 stays curated (`curated-models.ts:216`), and its retirement follows the never-hard-delete rule.
+- **Reviewed in**: queue cleanup 2026-10-19 (checked against `origin/develop`, git history and issue state)
+- **Source**: research/2026-05-29.md ▸ Top 5 #1 — Claude Opus 4.8 on Bedrock (May 28)
+- **Surface**: backend (model config in `inference_api`) + admin model catalog + the `_shape_thinking_value` / `temperature` provider-translation path
+- **Effort × Impact**: M × H
+- **Subtracts**: partial — Opus 4.8's system-in-`messages` caching allowance simplifies the #269 caching wiring (system no longer must sit strictly outside `messages` to preserve cache)
+- **Unlocks**: fewer-step tool turns (lower per-turn cost), best-in-class computer-use, ~4× fewer code-flaw pass-throughs, the `effort` compute-depth knob
+- **Status**: open — verify Bedrock region availability (us-east-1 ✓) and the 4.8 context window on the model card before flipping the pin; confirm the beta.27 Opus-4.7 thinking/`temperature` handling still applies
+
+### [2026-06-05] De-risk #419 (admin-managed Gateway target registration) against the new AWS auth-code-flow + BYO-secrets references → RESOLVED — **SHIPPED**
+- **Decision**: #419 closed as completed 2026-09-21: admin-managed Gateway MCP target registration shipped in 1.0.0 (backend #450, #452, #453).
+- **Reasoning**: the feature this entry meant to de-risk exists. BYO Secrets Manager for OAuth client secrets was never adopted; if it is wanted, file it as its own item.
+- **Reviewed in**: queue cleanup 2026-10-19 (checked against `origin/develop`, git history and issue state)
+- **Source**: research/2026-06-05.md ▸ Top 5 #5 — AWS "secure OAuth auth-code flow with Gateway + MCP clients" + AgentCore Identity BYO Secrets Manager (both June 1) + internal issue #419
+- **Surface**: infrastructure (Gateway target CRUD / `gateway_target_*`) + backend (`apis/shared/oauth/agentcore_identity.py` OAuth provider wiring + token-vault customParameters) + frontend (admin registration UI)
+- **Effort × Impact**: H × H
+- **Subtracts**: partial — BYO Secrets Manager lets us own/govern OAuth client secrets (CMK, tagging) instead of service-managed storage
+- **Unlocks**: admins register external MCP servers (protocol=mcp) without code changes — net-new admin surface, now blueprinted by AWS
+- **Status**: open — strategic; the AWS references materially de-risk an already-filed feature
+
+### [2026-05-15] Investigate inference-api deploy — new images reach ECR but Runtime isn't rolled (issue #288) → RESOLVED — **SHIPPED**
+- **Decision**: #288 closed as completed 2026-09-23. The old `scripts/stack-inference-api/deploy.sh` path is gone; the inference-api deploy runs `scripts/build/deploy-runtime-image-one.sh` → `deploy-runtime-image-if-changed.sh`, which updates the Runtime directly.
+- **Reasoning**: the broken path no longer exists, and B1 (#1512) proved it on a live V2 image roll.
+- **Reviewed in**: queue cleanup 2026-10-19 (checked against `origin/develop`, git history and issue state)
+- **Source**: reviews/2026-05-15.md ▸ Proposal #10 (new from internal friction, issue #288 May 12). Pairs with the 1.6.4 → 1.9.1 bump (same SDK package owns `update_agent_runtime`).
+- **Surface**: cross-cutting — `.github/workflows/deploy-inference-api.yml` + bedrock-agentcore SDK `update_agent_runtime` call shape
+- **Effort × Impact**: L-M × M-H
+- **Subtracts**: possibly — removes the manual-redeploy band-aid that's been the workaround
+- **Status**: open — surfaced in reviews/2026-05-15.md ▸ Proposal #10 (Ship — recommended ship-first); no decision logged yet. **Friction intensifying**: 6+ "Deploy Inference API" failures May 15–17; a new "Deploy App API" failure cluster (8× May 16–17) may share a root cause.
+
+### [2026-09-18] Defer external MCP tool discovery to session scope — and add the sidebar conversation search while in the SPA → RESOLVED — **OVERTAKEN**
+- **Decision**: (b) shipped as its own epic: conversation search, default-on since #1506 (2026-10-08), sidebar button at `sidenav.html:14-24`. (a) was never built. #1406 (`a9488794`) pre-flights an agent's external MCP servers concurrently instead, and the #1408 dev readout took cold `tools.mcp` from 21.5 s to 2.3 s.
+- **Reasoning**: follows reviews/2026-10-09.md ▸ Carried Over, which recommended declining (a) and resolving the entry. With `rag` (~1.4 s) now the larger first-turn stage, lazy discovery would buy little latency and would put the session-scoped `toolConfig` constraint at risk.
+- **Reviewed in**: queue cleanup 2026-10-19 (checked against `origin/develop`, git history and issue state)
+- **Source**: research/2026-09-18.md ▸ Idea #5 — https://github.com/aws-samples/sample-strands-agent-with-agentcore/pull/294 (lazy loaders; measured "Starting" 10.417s → 4.081s, follow-up 7.377s → 1.117s) and PR #296 (sidebar search); corroborated by opencode #49276 and #49387
+- **Surface**: backend (`agents/main_agent/base_agent.py:478` `_build_filtered_tools`, `integrations/external_integration.py`, `gateway_integration.py`) + frontend (`components/sidenav/components/session-list/session-list.{ts,html}`)
+- **Effort × Impact**: M × M–H
+- **Subtracts**: yes — the eager load of every enabled external MCP client at agent build, on every agent construction
+- **Unlocks**:
+  - Their measured **60–85% first-token latency cut** on new and follow-up conversations
+  - A conversation-search affordance we have **none** of today — `session-list.ts` groups by date with no filter at all — at **zero token cost** (a pure client-side filter over already-loaded titles)
+- **Notes**: ⚠️ **Session-scoped only — never turn-scoped.** Their implementation goes further: their new base prompt tells the model *"available tools may change between turns within the same conversation"*, accepting a `toolConfig` that varies per turn. For us that is a `toolConfigHash` rewrite at 1.25× base input over a 30k–150k prefix **every turn** — the latency win would be paid back many times in cache writes. Defer discovery only for tools **not in this session's `enabled_tools`**, a set that is stable for the session. ⚠️ Also confirm we make no equivalent keep-alive/warm-up call when an `@`-mention builds a second `Agent` (opencode #49387 found exactly that cost per subagent). ⚠️ Their module-global → per-agent registry fix is the same bug class as our "never cache session state on an agent instance" rule — read it before touching this code. ⚠️ The two halves are independent; the SPA search can ship alone.
+- **Status**: open
+- **Status 2026-10-09** (revisit date reached): (b) **superseded**. Conversation search shipped as its own epic (PR-2a → PR-4b) and is default-on (#1506). (a): the #1406 dev readout (#1408) took cold `tools.mcp` from 21.5 s to 2.3 s, and `rag` (~1.4 s) is now the larger first-turn stage. reviews/2026-10-09.md ▸ Carried Over recommends declining (a) and resolving the entry.
+
+### [2026-09-04] Instrument the missing quality axis — per-message response feedback → RESOLVED — **SHIPPED (core)**
+- **Decision**: thumbs on assistant messages and the content-free `F#` row joined to cost rows shipped in #1142 (2026-09-17). Retry-with-correction followed in `c7dda9bf`, eval sampling in #1148, the fleet view in #1152 and #1153, and the reason split on the cost profile in `cbd12d00`. In code: `message-actions.component.ts:68`.
+- **Reasoning**: what remains (author and marketplace surfaces, an abandonment signal, a sampler schedule) is tracked in `docs/specs/response-feedback.md` §13, which is the right owner for it now.
+- **Reviewed in**: queue cleanup 2026-10-19 (checked against `origin/develop`, git history and issue state)
+- **Source**: conversation with Phil, 2026-09-04 — **not** from a research scan. Spec written the same day: `docs/specs/response-feedback.md`. Revives the two long-dormant `# feedback: Optional[Feedback] = None` placeholders at `apis/shared/sessions/models.py:645` and `apis/app_api/messages/models.py:132`.
+- **Surface**: backend — `apis/shared/sessions/metadata.py` (a third `F#` SK prefix beside `C#`/`D#`), `apis/app_api/sessions/routes.py` (per the inference-api boundary rule), `admin/costs/routes.py:183` (third leg of the anatomy query); frontend — `message-actions.component.ts` (the existing Copy/Continue rail)
+- **Effort × Impact**: M × H — PR-1 is small; the impact is that it is the **only** proposed instrument for a dimension we currently cannot measure at all
+- **Subtracts**: no — this is additive, and the entry should be ranked knowing that. What it removes is an *epistemic* gap, not code: two commented-out placeholders become real, and "quality wins when it conflicts with cost" stops being unfalsifiable.
+- **Unlocks**:
+  - **The counterweight the cost roadmap has never had.** Every `C#` row carries model id, `cacheStatus`, `agentSwitched`, compaction state and cost. Nothing carries an outcome. W1–W5 has optimised cost against an asserted quality constant; a down-thumb rate joined to those same dimensions is the first evidence that compaction, a model downgrade, or the `@`-mention history fork costs anything besides dollars.
+  - **Affordable evaluation.** The Evaluations spike proved `EvaluationClient.run()` works end-to-end on real dev conversations with 16 built-in evaluators and deterministic session correlation (`runtime_session_id_for()`, `harness/runner.py:63`) — but judging is per-trace and cannot run fleet-wide. Human-marked failures are the sampling queue that makes it payable, and the fixed reason set routes each bucket to the right evaluator.
+  - **`Builtin.SkillSelectionAccuracy` / `SkillInstructionFollowing`** (queued 2026-08-28) become affordable for the same reason — the Skills v2 epic's unmeasured failure mode gets a pre-filter.
+  - **A rework rate in dollars** — down-thumbed turn cost plus the retries after it — which denominates quality in the unit the existing dashboards already speak.
+  - **Marketplace ranking and version-regression alarm** per published `AgentVersion`, giving the §8 rollback path its first automated trigger.
+- **Status**: open — three things a reviewer should weigh before ranking. **(1) The thesis is deliberately narrow:** feedback is a *sampler and a label*, never a metric. The spec makes "no single-number quality score field exists to be quoted" a structural rule (§9), because a raw rate over a self-selected ~3% is noise and will be misread the first time it reaches a slide. **(2) The consequence is load-bearing, not a nicety.** A thumb with no visible effect decays to a zero response rate within weeks, at which point every downstream phase is starved. PR-1 therefore ships retry-with-correction *with* the button or does not ship — this is the one place the phasing cannot be trimmed for scope. **(3) It must not merge with the D15 agent-report channel**, which already exists and is a different object (agent-scoped, free-text, moderation-queued, `suggestion` folded in on purpose). The down-thumb sheet hands off to that dialog; it does not grow a second queue. ⚠️ Two accuracy notes carried from the write-up: feedback is a **side-channel DynamoDB write** that never touches conversation history or `toolConfig` — a design putting it on the message object is a prompt-cache buster and is rejected in the spec; and any LLM-judged classification runs **offline in batch** over persisted turns, never as an inline per-turn call. ⚠️ `is_preview_session` guards the `D#` write (`metadata.py:156`) but **not** the `C#` cost write — the two prefixes already disagree, so `F#` needs a deliberate rule rather than a copied neighbour. Phase 6 (preference data for the existing `fine_tuning` domain) is **policy-gated and explicitly out of scope** — a consent decision at the identity-claim level, not an engineering one.
+
+### [2026-06-19] Ship the interactive context-breakdown badge (Cursor + LibreChat convergence) → RESOLVED — **SHIPPED**
+- **Decision**: shipped as #1296 (2026-09-25): a context meter with an itemized system / skills / memory / tools / messages panel on hover, tap or press (`context-meter.component.ts:123`). Follow-ups in #1298.
+- **Reasoning**: the 'how to trim it' actions named under Unlocks were not built; the panel only notes that older messages get summarized. File those separately if they're wanted.
+- **Reviewed in**: queue cleanup 2026-10-19 (checked against `origin/develop`, git history and issue state)
+- **Source**: research/2026-06-19.md ▸ Top 5 #5 — LibreChat v0.8.7-rc1 real-time context gauge + Cursor Context Usage Report (2026-06-05) + internal PR #433. **Reinforces** the [2026-06-05] "make the context-breakdown badge interactive" item with a second independent product datapoint.
+- **Surface**: frontend (context-breakdown badge component in `frontend/ai.client/src/app/session/`)
+- **Effort × Impact**: M × M
+- **Subtracts**: no — addition; lands on a surface we shipped and reuses `contextBreakdown` already on the final `metadata` event
+- **Unlocks**: user-facing context-cost transparency + an actionable "what's eating context / how to trim it" follow-up
+- **Status**: open — presentation-layer only (no backend change). Consolidated the superseded [2026-06-05] Cursor-only entry into this item. Lower priority than the [2026-07-03] reliability/model cluster. Reviewed reviews/2026-07-03.md ▸ below-cap (defer 1 week).
+
+### [2026-05-29] Compaction summary prompt: preserve standing/sensitive user instructions → RESOLVED — **SHIPPED**
+- **Decision**: the bounded-summary prompt (`667d43c4`) keeps standing instructions first and quotes them (`compaction_summary.py:99`). Extract-then-compress (#1335, `7388bcae`; default-on in #1355, `f4a19584`) copies them verbatim under a `STANDING INSTRUCTIONS:` heading (`:119`).
+- **Reasoning**: both halves of the ask, preservation and not paraphrasing sensitive constraints away, are in the prompt now.
+- **Reviewed in**: queue cleanup 2026-10-19 (checked against `origin/develop`, git history and issue state)
+- **Source**: research/2026-05-29.md ▸ Top 5 #4 — Claude Code v2.1.152 compaction-prompt change (~May 26)
+- **Surface**: backend (`TurnBasedSessionManager` summarization prompt)
+- **Effort × Impact**: L × M
+- **Subtracts**: no — defensive/quality
+- **Status**: open — cheap; dovetails with the `compaction` SSE event
+
+### [2026-05-10] Audit `BedrockModel.stream` cancellation path against Strands #2266 → RESOLVED — **OVERTAKEN**
+- **Decision**: fixed upstream. strands-agents/sdk-python#2266 closed as completed 2026-06-23 by #2916, which adds `_suppress_task_exception` (`strands/models/bedrock.py:84`, attached at `:1399`); our `strands-agents==1.57.2` pin carries it.
+- **Reasoning**: the leak the audit was meant to find can't occur on our pin, so no local audit is needed.
+- **Reviewed in**: queue cleanup 2026-10-19 (checked against `origin/develop`, git history and issue state)
+- **Source**: research/2026-05-10.md ▸ Top 6 #4
+- **Surface**: backend
+- **Effort × Impact**: L × M-H
+- **Subtracts**: no — defensive (SSE-disconnect path is hot)
+- **Status**: open — surfaced in reviews/2026-05-15.md ▸ Proposal #8 (Ship); no decision logged yet
+
+### [2026-09-04] Close the `ActiveSessionCount` alarm item — the metric now exists — and scope instance-based Runtime against W5 → RESOLVED — **SHIPPED (1) / OVERTAKEN (2)**
+- **Decision**: (1) the alarm shipped in #1051 (`3ea10727`; `ai-path-alarms-construct.ts:311`). (2) was overtaken by Runtime V2: `agentcore-runtime-v2.md` holds the instance-SKU arithmetic for V2 pricing, and reviews/2026-10-02.md and 2026-10-16.md fold it into the V2 thread.
+- **Reasoning**: the V2 A/B entry ([2026-09-25]) owns the Runtime cost decision now, with the published V2 and committed-baseline rates.
+- **Reviewed in**: queue cleanup 2026-10-19 (checked against `origin/develop`, git history and issue state)
+- **✅ PARTIALLY SHIPPED 2026-09-18** — part **(1) is DONE**: [#1051](https://github.com/Boise-State-Development/agentcore-public-stack/pull/1051) wires the concurrent-Runtime-session alarm through `AlarmFactory`, and it was sized against evidence rather than a guess — `config.ts:481` records it as *"Measured against 7 days of real prod `ActiveSessionCount` (2026-09-04..11)"*. **Still open: part (2)**, the instance-based Runtime arithmetic against W5 — 889 `Runtime:Instance-based:*:Management-Hours` SKUs vs consumption rates, crossover at our measured 18–50 min microVM lifetimes. **Fifth month with no proposal against the largest share of the bill** (Runtime memory, 73% of the AICC bill); reviews/2026-09-18 recommends doing the paragraph or declining W5 as a kaizen lane.
+- **Source**: research/2026-09-04.md ▸ Top 5 #5 — AWS Price List API (`AmazonBedrockAgentCore` us-west-2: **889 new `Runtime:Instance-based:<type>:Management-Hours` SKUs** in the 2026-09-01 republish) + https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/release-notes.html. **Unblocks the [2026-07-10] `ActiveSessionCount` entry** — merge them at review.
+- **Surface**: infrastructure — `lib/constructs/observability/` (the `AlarmFactory` that #910 made the only sanctioned path), the AgentCore Runtime construct; plus W5 in `project_cost_effectiveness_roadmap.md`
+- **Effort × Impact**: L (alarm) + M (W5 scope) × M–H
+- **Subtracts**: yes — the `/ping` access-log as our runtime-lifetime instrument, a proxy adopted because no real metric existed. A real one now does.
+- **Unlocks**: the **first new lever on W5 since it was named.** Every prior cost win has been on the token side; Runtime memory is **73% of the AICC bill** and there is now a purchasable alternative to the consumption model.
+- **Status**: open — two deliberately different-sized parts. **(1, Low)** Wire the alarm: the 2026-07-10 entry was blocked on the metric not existing, and `AWS/Bedrock-AgentCore` now publishes `ActiveSessionCount` once per minute for Runtime and built-in tools; it routes to `{prefix}-alarms` as a consequence of going through `AlarmFactory`. **(2, Med)** Scope instance-based Runtime: 889 SKUs across c5/c6i/m5/m6i/m7i/r5/g5 families (`m5.large $0.01152/hr`, `c6i.xlarge $0.0204/hr`, `g5.xlarge $0.078468/hr`) against unchanged consumption rates of `$0.0895/vCPU-hr` + `$0.00945/GB-hr`. The question is the crossover at our measured microVM lifetimes (18–50 min post-#827) and session concurrency — arithmetic against numbers we already have, not a build. ⚠️ The ~12% management-fee-to-EC2 ratio was **derived** in this scan, not published; verify EC2 base rates before building a case on it.
 
 ### [2026-10-09] Take Strands 1.59 with voice ported to the new Bidi usage shape, and delete our Nova speech/text split → RESOLVED — **SUPERSEDED**
 - **Decision**: superseded by [2026-10-16] *Take Strands 1.61.1: delete our reasoning projection and the cache-write shim, port voice* (added by the research scan, #1634). The voice port is unchanged; the target is now 1.61.1, and the cache-write shim can go without a bump (#4193 is already in 1.57.2).
