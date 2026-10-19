@@ -283,7 +283,8 @@ async def get_assistant_endpoint(assistant_id: str, current_user: User = Depends
 
         # Assistant exists, now check access
         assistant, permission = await get_assistant_with_access_check(
-            assistant_id=assistant_id, user_id=user_id, user_email=current_user.email
+            assistant_id=assistant_id, user_id=user_id, user_email=current_user.email,
+            resolve_public_share=True,
         )
 
         if not assistant:
@@ -361,7 +362,11 @@ async def update_assistant_endpoint(assistant_id: str, request: UpdateAssistantR
         # Design-time binding/model validation (D4/D5), after the auth gate above.
         try:
             await validate_agent_write(
-                current_user, bindings=request.bindings, model_settings=request.model_settings
+                current_user,
+                bindings=request.bindings,
+                model_settings=request.model_settings,
+                existing_bindings=assistant.bindings,
+                existing_model_settings=assistant.model_settings,
             )
         except BindingValidationError as e:
             raise HTTPException(status_code=e.status_code, detail=e.message)
