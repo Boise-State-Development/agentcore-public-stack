@@ -253,14 +253,23 @@ def _project_harness_role(assistant: Assistant, user_id: str, user_email: Option
 
 
 async def get_assistant_with_access_check(
-    assistant_id: str, user_id: str, user_email: str = None
+    assistant_id: str,
+    user_id: str,
+    user_email: str = None,
+    *,
+    resolve_public_share: bool = False,
 ) -> Tuple[Optional[Assistant], Optional[str]]:
     """
     Retrieve assistant by ID with visibility-based access control.
 
     Checks visibility:
-    - PRIVATE: Only owner can access
-    - PUBLIC: Anyone can access (returns "viewer" for non-owners)
+    - PRIVATE: Only the owner, or a user with an *editor* share record (the same
+      editor ``resolve_assistant_permission`` lets write it). A viewer share on a
+      PRIVATE assistant is still refused.
+    - PUBLIC: Anyone can access (returns "viewer" for non-owners). With
+      ``resolve_public_share=True`` a caller with a share record gets that share's
+      permission instead, so an editor of a published agent can load what they may
+      save. Off by default so the chat-turn path pays no extra DynamoDB read.
     - SHARED: Only owner or users with share records can access
 
     Returns:
@@ -295,6 +304,12 @@ async def get_assistant_with_access_check(
 
     # Non-owner access depends on visibility
     if assistant.visibility == "PRIVATE":
+        # An editor share outlives a switch to PRIVATE, and the write routes
+        # (resolve_assistant_permission) still honour it — so the read must too,
+        # or the editor can save an agent they cannot open. The share lookup runs
+        # only on this former deny path, so nobody who already had access pays for it.
+        if user_email and await check_share_access(assistant_id, user_email) == "editor":
+            return assistant, "editor"
         logger.warning(
             f"Access denied: user {user_id} attempted to access PRIVATE assistant {assistant_id} owned by {assistant.owner_id}"
         )
@@ -313,7 +328,12 @@ async def get_assistant_with_access_check(
             return None, None
         return assistant, share_permission
 
-    # PUBLIC: non-owners are viewers
+    # PUBLIC: non-owners are viewers, unless the caller asked for their share
+    # permission (the Designer load, which must agree with the write routes).
+    if resolve_public_share and user_email:
+        share_permission = await check_share_access(assistant_id, user_email)
+        if share_permission:
+            return assistant, share_permission
     return assistant, "viewer"
 
 

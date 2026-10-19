@@ -17,13 +17,21 @@ Resolution scope:
   palette (``resolve_accessible_skill_ids``, the SAME source the picker fetches). Run-time then
   re-resolves each bound skill against the *invoker* (``resolve_invocable_skill_ids``, D5).
   ``config.version`` pins the binding to a version, which must exist (shared-projects 3.1).
+- **Kept bindings.** On an update the route passes the record's own bindings and model
+  (``existing_bindings`` / ``existing_model_settings``). A binding already on the record
+  (same kind and ref) and an unchanged model skip the *access* check: the palettes only
+  list the saver's own capabilities, so a share editor who lacks something the owner bound
+  could otherwise never save. Anything newly added is still checked against the saver, and
+  shape checks (scoped-ref syntax, pins, param governance, kind rejections) run on
+  everything. Same rule as ``projects/harness_settings.py``; the invoker is re-checked at
+  run time either way (D5).
 - ``knowledge_base`` → **managed implicitly** (the KB is welded to the agent and its index
   is not user-configurable), so it is NOT author-settable; the compat layer synthesizes it
   on read. An explicit knowledge_base binding is rejected.
 """
 
 import logging
-from typing import List, Optional
+from typing import List, Optional, Set, Tuple
 
 from apis.shared.assistants.models import KNOWN_BINDING_KINDS, AgentBinding, AgentModelConfig
 from apis.shared.auth.models import User
@@ -58,6 +66,8 @@ async def validate_agent_write(
     *,
     bindings: Optional[List[AgentBinding]] = None,
     model_settings: Optional[AgentModelConfig] = None,
+    existing_bindings: Optional[List[AgentBinding]] = None,
+    existing_model_settings: Optional[AgentModelConfig] = None,
     model_access_service: Optional[ModelAccessService] = None,
     tool_service: Optional[ToolCatalogService] = None,
 ) -> None:
@@ -65,11 +75,24 @@ async def validate_agent_write(
 
     Services are injectable for testing. Callers pass only the fields actually present
     on the request — ``None`` means "not provided", so nothing is validated for it.
+
+    ``existing_bindings`` / ``existing_model_settings`` are the record's current values on
+    an update. What the write keeps from them skips the access check (see module doc).
     """
     if model_settings is not None:
-        await _validate_model(user, model_settings, model_access_service or ModelAccessService())
+        model_kept = (
+            existing_model_settings is not None
+            and existing_model_settings.model_id == model_settings.model_id
+        )
+        await _validate_model(
+            user,
+            model_settings,
+            model_access_service or ModelAccessService(),
+            check_access=not model_kept,
+        )
 
     if bindings is not None:
+        kept_keys = _binding_keys(existing_bindings)
         # Resolve the author's accessible tools/skills ONCE (async) when a binding of that
         # kind is present, then validate each binding synchronously against those sets — the
         # same sources the palette uses, so the picker and the write agree (cf. the model
@@ -79,21 +102,38 @@ async def validate_agent_write(
         # ref has to be checked on both axes: base id in the palette, tool name exposed
         # by that server.
         accessible_tools: Optional[dict] = None
-        if any(b.kind == "tool" for b in bindings):
+        if any(b.kind == "tool" and _key(b) not in kept_keys for b in bindings):
             svc = tool_service or ToolCatalogService()
             accessible_tools = {
                 t.tool_id: {st.name for st in t.server_tools}
                 for t in await svc.get_user_accessible_tools(user)
             }
         accessible_skill_ids: Optional[set] = None
-        if skills_enabled() and any(b.kind == "skill" for b in bindings):
+        if skills_enabled() and any(
+            b.kind == "skill" and _key(b) not in kept_keys for b in bindings
+        ):
             accessible_skill_ids = set(await resolve_accessible_skill_ids(user))
         for binding in bindings:
-            _validate_binding(binding, accessible_tools, accessible_skill_ids)
+            _validate_binding(
+                binding,
+                accessible_tools,
+                accessible_skill_ids,
+                kept=_key(binding) in kept_keys,
+            )
         await _validate_skill_pins(bindings)
 
 
-async def _validate_model(user: User, cfg: AgentModelConfig, svc: ModelAccessService) -> None:
+def _key(binding: AgentBinding) -> Tuple[str, str]:
+    return binding.kind, (binding.ref or "").strip()
+
+
+def _binding_keys(bindings: Optional[List[AgentBinding]]) -> Set[Tuple[str, str]]:
+    return {_key(b) for b in bindings or []}
+
+
+async def _validate_model(
+    user: User, cfg: AgentModelConfig, svc: ModelAccessService, *, check_access: bool = True
+) -> None:
     # ``modelConfig.modelId`` is the Bedrock/provider model id — the identifier the
     # runtime resolver, RBAC (``permissions.models``) and invocation all key on. Look
     # the record up by ``model_id`` (NOT ``get_managed_model``, which keys on the
@@ -106,7 +146,8 @@ async def _validate_model(user: User, cfg: AgentModelConfig, svc: ModelAccessSer
     # the run-time ``AppRoleService.can_access_model`` the invoker is later held to —
     # reads ``apis.shared.rbac.model_access.grants_model_access``, so the author cannot
     # compose a model the run-time check would refuse on the same grants (#798).
-    if not await svc.filter_accessible_models(user, [model]):
+    # An unchanged model was accepted when it was bound; the saver need not hold it.
+    if check_access and not await svc.filter_accessible_models(user, [model]):
         raise BindingValidationError(
             f"You do not have access to model '{cfg.model_id}'.", status_code=403
         )
@@ -165,6 +206,8 @@ def _validate_binding(
     binding: AgentBinding,
     accessible_tools: Optional[dict] = None,
     accessible_skill_ids: Optional[set] = None,
+    *,
+    kept: bool = False,
 ) -> None:
     kind = binding.kind
     if kind not in KNOWN_BINDING_KINDS:
@@ -177,14 +220,14 @@ def _validate_binding(
         )
 
     if kind == "tool":
-        _validate_tool(binding, accessible_tools or {})
+        _validate_tool(binding, accessible_tools or {}, kept=kept)
         return
 
     if kind == "skill":
-        _validate_skill(binding, accessible_skill_ids or set())
+        _validate_skill(binding, accessible_skill_ids or set(), kept=kept)
 
 
-def _validate_tool(binding: AgentBinding, accessible_tools: dict) -> None:
+def _validate_tool(binding: AgentBinding, accessible_tools: dict, *, kept: bool = False) -> None:
     """Validate one ``tool`` binding, bare (whole server) or scoped (one tool of it).
 
     Mirrors ``ToolCatalogService.save_user_preferences``, which validates the same
@@ -213,6 +256,10 @@ def _validate_tool(binding: AgentBinding, accessible_tools: dict) -> None:
             f"'{SCOPE_DELIMITER}'.",
             status_code=400,
         )
+    # A kept binding was validated when it was added; the saver's palette (and so the
+    # server's discovered names) may not include it, so only the shape is re-checked.
+    if kept:
+        return
     # Run-time re-resolves against the invoker via AppRoleService.can_access_tool (D5),
     # which likewise admits a scoped ref whose base server is granted.
     if base not in accessible_tools:
@@ -229,7 +276,7 @@ def _validate_tool(binding: AgentBinding, accessible_tools: dict) -> None:
             )
 
 
-def _validate_skill(binding: AgentBinding, accessible_skill_ids: set) -> None:
+def _validate_skill(binding: AgentBinding, accessible_skill_ids: set, *, kept: bool = False) -> None:
     if not skills_enabled():
         raise BindingValidationError("Skills are not enabled.", status_code=400)
     ref = (binding.ref or "").strip()
@@ -238,7 +285,7 @@ def _validate_skill(binding: AgentBinding, accessible_skill_ids: set) -> None:
     # The skill id must be in the author's palette (resolve_accessible_skill_ids) — the exact
     # source the Designer picker fetches. Run-time re-resolves against the invoker via
     # resolve_invocable_skill_ids (D5), which adds the Agent-owner invoke-through clause.
-    if ref not in accessible_skill_ids:
+    if not kept and ref not in accessible_skill_ids:
         raise BindingValidationError(
             f"You do not have access to skill '{ref}'.", status_code=403
         )
