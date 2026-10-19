@@ -16,6 +16,15 @@ import { parseIso } from '../utils/date';
 import { SpinnerComponent } from '../components/spinner/spinner.component';
 
 /**
+ * Return a copy of the response without the given record.
+ */
+function removeMemory(response: MemoriesResponse, recordId: string): MemoriesResponse {
+  const memories = response.memories.filter(m => m.recordId !== recordId);
+  const removed = response.memories.length - memories.length;
+  return { ...response, memories, totalCount: Math.max(0, response.totalCount - removed) };
+}
+
+/**
  * Represents a parsed preference with structured display
  */
 interface ParsedPreference {
@@ -634,8 +643,13 @@ export class MemoryDashboardPage {
 
     try {
       await this.memoryService.deleteMemory(recordId);
-      // Reload memories after successful deletion
-      this.memoryService.reload();
+      // Remove the record locally rather than reloading: the list comes from
+      // semantic retrieval, which can still return a just-deleted record.
+      this.allMemories.update(data => data && {
+        preferences: removeMemory(data.preferences, recordId),
+        facts: removeMemory(data.facts, recordId),
+      });
+      this.searchResults.update(results => results && removeMemory(results, recordId));
     } catch (error) {
       console.error('Failed to delete memory:', error);
     } finally {
