@@ -34,6 +34,16 @@ ingest was ever accepted) is **re-ingested** from the bytes still in S3. That
 re-ingest is the one-click retry of task 14.4 arriving on a schedule instead of a
 button.
 
+A ``NOT_FOUND`` document is re-ingested only if its bytes are in S3. A row is
+written before the browser's ``PUT``, so a ``PUT`` that never landed leaves a row
+with nothing behind it; Bedrock accepts an ingest for a missing object and never
+indexes it, so re-submitting it would repeat every night. The consumer's own S3
+probe decides: missing once the upload URL has expired, the row is failed with the
+consumer's "upload the file again" message and its reservation released; an
+inconclusive probe re-ingests as before. An armed re-ingest that
+``IngestKnowledgeBaseDocuments`` refuses outright is failed too, because the same
+bytes would be refused again.
+
 Ground truth comes from the consumer, not a second copy
 -------------------------------------------------------
 Every decision here reuses the consumer's own probes — :func:`document_status`
@@ -110,7 +120,7 @@ _TRUTHY = frozenset({"1", "true", "yes", "on", "enabled"})
 # the knowledge base does not exist there is nothing to probe, so such a document is
 # never even considered. Once it does exist, a document still parked here past the
 # grace window probes ``NOT_FOUND`` and is re-ingested from S3, which is exactly the
-# correction that is owed.
+# correction that is owed (or failed, if its upload never reached S3).
 NON_TERMINAL_STATUSES = frozenset({"provisioning", "uploading", "chunking", "embedding"})
 
 # ── Tunables, resolved at call time ──────────────────────────────────────────
@@ -148,6 +158,12 @@ ACTION_MARK_COMPLETE = "mark_complete"
 ACTION_RE_INGEST = "re_ingest"
 ACTION_MARK_FAILED = "mark_failed"
 
+# ── Action notes: why a NOT_FOUND document was planned ``mark_failed`` ───────
+#
+# The same values the ingestion consumer returns for the same outcomes.
+NOTE_UPLOAD_MISSING = "upload-missing"
+NOTE_INGEST_REJECTED = "ingest-rejected"
+
 # ── Metrics ──────────────────────────────────────────────────────────────────
 METRIC_STRANDED_FOUND = "KbStrandedDocumentsFound"
 METRIC_MARKED_COMPLETE = "KbStrandedDocumentsCompleted"
@@ -158,7 +174,13 @@ METRIC_LIMIT_REACHED = "KbDocumentReconcilerLimitReached"
 
 @dataclass
 class PlannedAction:
-    """One correction the reconciler intends, and the evidence for it."""
+    """One correction the reconciler intends, and the evidence for it.
+
+    ``note`` says why a ``mark_failed`` was planned when Bedrock's status alone
+    does not (:data:`NOTE_UPLOAD_MISSING`, :data:`NOTE_INGEST_REJECTED`). An armed
+    re-ingest that Bedrock refuses is recorded as the ``mark_failed`` it became,
+    so an armed report describes what was written.
+    """
 
     assistant_id: str
     document_id: str
@@ -167,6 +189,7 @@ class PlannedAction:
     bedrock_status: str
     performed: bool = False
     error: Optional[str] = None
+    note: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -177,6 +200,7 @@ class PlannedAction:
             "bedrockStatus": self.bedrock_status,
             "performed": self.performed,
             "error": self.error,
+            "note": self.note,
         }
 
 
@@ -597,9 +621,10 @@ def _reconcile_one(
         )
         return
 
-    # NOT_FOUND: Bedrock never received this document. The event dead-lettered
-    # before the ingest was accepted, so the bytes in S3 were never submitted.
-    # Re-ingest them — the scheduled form of task 14.4's one-click retry.
+    # NOT_FOUND: Bedrock never received this document. Either the event
+    # dead-lettered before the ingest was accepted, so the bytes in S3 were never
+    # submitted — re-ingest them, the scheduled form of task 14.4's one-click
+    # retry — or the browser's PUT never landed and there are no bytes to submit.
     if bedrock_status == ic.DOC_STATUS_NOT_FOUND:
         source = _document_source(document, document_id)
         if source is None:
@@ -608,6 +633,26 @@ def _reconcile_one(
                 f"cannot re-ingest, leaving it"
             )
             report.skipped_not_retrievable.append(document_id)
+            return
+        # Probed in report-only mode too: it is a read, and without it the report
+        # would claim a re-ingest an armed run would not make.
+        if _source_object_exists(source.s3_key) is False:
+            if ic._upload_window_open(document):
+                report.skipped_in_flight.append(document_id)
+                logger.info(
+                    f"document {document_id}'s object is not in S3 yet and its upload "
+                    f"URL is still valid; leaving it for the object's own event"
+                )
+                return
+            _plan(
+                report, assistant_id, document_id, ACTION_MARK_FAILED, status, bedrock_status,
+                armed,
+                lambda: _fail_missing_upload(assistant_id, document_id, document),
+                METRIC_MARKED_FAILED,
+                f"[report-only] WOULD mark {document_id} failed (NOT_FOUND in the "
+                f"knowledge base and its upload never reached S3)",
+                note=NOTE_UPLOAD_MISSING,
+            )
             return
         _plan(
             report, assistant_id, document_id, ACTION_RE_INGEST, status, bedrock_status,
@@ -637,9 +682,10 @@ def _plan(
     current_status: str,
     bedrock_status: str,
     armed: bool,
-    perform: Callable[[], Optional[bool]],
+    perform: Callable[[], Any],
     metric: str,
     report_only_message: str,
+    note: Optional[str] = None,
 ) -> None:
     """Record a planned action and, if armed, perform it.
 
@@ -653,6 +699,10 @@ def _plan(
     ``set_document_terminal`` nor ``_reingest`` will act on it. That is neither a
     correction made nor a failure, so the action is left unperformed with no error
     and no metric.
+
+    ``perform`` returning :class:`_SettledAsFailed` means it failed the row instead
+    of making the planned correction (a re-ingest Bedrock refused); the action is
+    re-recorded as that ``mark_failed``.
     """
     action = PlannedAction(
         assistant_id=assistant_id,
@@ -660,6 +710,7 @@ def _plan(
         kind=kind,
         current_status=current_status,
         bedrock_status=bedrock_status,
+        note=note,
     )
     report.planned_actions.append(action)
 
@@ -668,32 +719,92 @@ def _plan(
         return
 
     try:
-        if perform() is False:
+        outcome = perform()
+        if outcome is False:
             logger.info(f"{kind} skipped for document {document_id}: it was deleted")
             return
+        if isinstance(outcome, _SettledAsFailed):
+            action.kind = ACTION_MARK_FAILED
+            action.note = outcome.note
+            metric = METRIC_MARKED_FAILED
         action.performed = True
         emit_count(metric)
-        logger.info(f"{kind} performed for document {document_id}")
+        logger.info(f"{action.kind} performed for document {document_id}")
     except Exception as exc:  # noqa: BLE001 - one bad document must not end the run
         action.error = str(exc)
         logger.error(f"{kind} failed for document {document_id}: {exc}", exc_info=True)
 
 
-def _reingest(backend: Any, assistant_id: str, source: Any) -> bool:
+@dataclass(frozen=True)
+class _SettledAsFailed:
+    """A ``perform`` that failed the row instead of making the planned correction."""
+
+    note: str
+
+
+def _source_object_exists(s3_key: str) -> Optional[bool]:
+    """Whether the document's bytes are in the documents bucket (the consumer's probe).
+
+    ``None`` (inconclusive) when the bucket is not configured, so the caller
+    re-ingests as it did before the probe existed.
+    """
+    bucket = os.environ.get("S3_ASSISTANTS_DOCUMENTS_BUCKET_NAME")
+    if not bucket:
+        logger.warning(
+            "S3_ASSISTANTS_DOCUMENTS_BUCKET_NAME is not set; cannot check the object exists"
+        )
+        return None
+    return ic._source_object_exists(bucket, s3_key)
+
+
+def _fail_missing_upload(assistant_id: str, document_id: str, document: Dict[str, Any]) -> bool:
+    """Fail a document whose upload never reached S3, and return its reservation.
+
+    Mirrors the consumer once the upload URL has expired. ``False`` (deleted since
+    the scan) is ``_plan``'s logged skip, and nothing is released: the delete
+    settles the bytes.
+    """
+    if not ic.set_document_terminal(
+        assistant_id, document_id, ic.STATUS_FAILED, error=ic.UPLOAD_MISSING_MESSAGE
+    ):
+        return False
+    ic._release_reservation(assistant_id, document_id, ic._declared_bytes(document))
+    return True
+
+
+def _reingest(backend: Any, assistant_id: str, source: Any) -> Any:
     """Re-submit the bytes, unless the document was deleted since the scan.
 
     The scan skips ``deleting`` rows, but a document deleted between the scan and
     here would otherwise be pushed back into the knowledge base after its cleanup
     removed it. Re-read (strongly consistent) right before ingesting; ``False`` is
     ``_plan``'s logged skip.
+
+    A refusal in the ingest response (:class:`ManagedKbDocumentRejected`) fails
+    the row and releases its reservation, as the consumer does: the same bytes
+    would be refused again on every later pass.
     """
     import asyncio
 
-    deleted = ic._deleted_reason(ic._get_doc_row(assistant_id, source.document_id))
+    from apis.shared.kb_backend.managed_backend import ManagedKbDocumentRejected
+
+    document_id = source.document_id
+    doc_row = ic._get_doc_row(assistant_id, document_id)
+    deleted = ic._deleted_reason(doc_row)
     if deleted:
-        logger.info(f"document {source.document_id} {deleted}; not re-ingesting it")
+        logger.info(f"document {document_id} {deleted}; not re-ingesting it")
         return False
-    asyncio.run(backend.ingest(assistant_id, source))
+    try:
+        asyncio.run(backend.ingest(assistant_id, source))
+    except ManagedKbDocumentRejected as exc:
+        logger.error(f"re-ingestion of document {document_id} was refused: {exc}")
+        if not ic.set_document_terminal(
+            assistant_id, document_id, ic.STATUS_FAILED,
+            error=f"the knowledge base refused this document: {ic._rejection_reason(exc)}",
+        ):
+            return False
+        ic._release_reservation(assistant_id, document_id, ic._declared_bytes(doc_row))
+        return _SettledAsFailed(NOTE_INGEST_REJECTED)
     return True
 
 
@@ -768,6 +879,8 @@ __all__ = [
     "METRIC_RE_INGESTED",
     "METRIC_STRANDED_FOUND",
     "NON_TERMINAL_STATUSES",
+    "NOTE_INGEST_REJECTED",
+    "NOTE_UPLOAD_MISSING",
     "STUCK_MIN_AGE_MINUTES",
     "DocumentReconcileReport",
     "PlannedAction",
