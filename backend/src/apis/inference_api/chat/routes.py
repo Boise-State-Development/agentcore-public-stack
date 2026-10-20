@@ -1243,7 +1243,23 @@ async def _build_document_tools(
     from agents.builtin_tools.document_read_tool import make_document_read_tool
 
     tools = [make_document_read_tool(session_id, user_id, text_only=text_only)]
-    logger.info("Created document_read tool (session has a readable document)")
+
+    # Source provenance rides the same gate, for the same reason: the governing
+    # capability is the user's own attachment, and there is nothing to verify a
+    # quote against without one. The flag is a deployment constant, so this adds
+    # no key element of its own — `has_document_tools` already covers the gate
+    # (docs/specs/source-provenance-verification.md §8).
+    from apis.shared.feature_flags import source_provenance_enabled
+
+    if source_provenance_enabled():
+        from agents.builtin_tools.verify_sources_tool import make_verify_sources_tool
+
+        tools.append(make_verify_sources_tool(session_id, user_id))
+
+    logger.info(
+        "Created document tools (session has a readable document): %s",
+        ", ".join(getattr(t, "tool_name", type(t).__name__) for t in tools),
+    )
     return tools
 
 

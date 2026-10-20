@@ -1,7 +1,10 @@
 # Source provenance verification: whether a cited passage exists, and whether it says what we claim
 
 **Status:** In development, behind `SOURCE_PROVENANCE_ENABLED` (off by default; only
-the literal `"true"` enables). Spec for review — no implementation merged yet.
+the literal `"true"` enables). Spec approved 2026-10-20. PR-1 (the pure module, its
+tests, the flag) and PR-2 (`verify_sources`, the SSE event, the `SRCV#` store and its
+replay) implemented; not yet dev-validated. PR-3 (the SPA render) not started, so the
+states are backend-observable only. Decisions recorded in §9.
 **Author:** Phil Merrell (with Claude Code)
 **Date:** 2026-10-20
 **Targets:** `develop`
@@ -410,8 +413,8 @@ same for new rows whose check does not apply.
 | PR | Contents |
 |---|---|
 | PR-0 | This spec |
-| PR-1 | `source_provenance.py` (pure) + unit tests: all four states, every `method`, unicode-normalization edge cases, boundary over-claims (`5000000`/`500000`, `$500,000.99`, "John Smithson"), percent-vs-bare-number, straddling quotes, `kind` per format, `precision` round-trip. The flag, CDK wiring and CDK test. Nothing wired to a turn |
-| PR-2 | `verify_sources` tool inside the `_build_document_tools` gate; document-text resolution for prepared and unprepared documents; the `source_provenance` SSE event; the `SRCV#` store and its `GET /messages` replay. Backend complete and dev-verifiable by reading the stream |
+| PR-1 ✅ | `source_provenance.py` (pure) + unit tests: all four states, every `method`, unicode-normalization edge cases, boundary over-claims (`5000000`/`500000`, `$500,000.99`, "John Smithson"), percent-vs-bare-number, straddling quotes, `kind` per format, `precision` round-trip. The flag, CDK wiring and CDK test. Nothing wired to a turn |
+| PR-2 ✅ | `verify_sources` tool inside the `_build_document_tools` gate; `document_provenance_units` for prepared and unprepared documents; the `source_provenance` SSE event drained in `stream_coordinator`; the `SRCV#` store and its `GET /messages` replay as `sourceProvenance`. Plus `tests/architecture/test_source_provenance_state_boundary.py`, which keeps the state derivable in one place and the module pure. Backend complete and dev-verifiable by reading the stream |
 | PR-3 | SPA render behind `features.sourceProvenance`: a plain locator for `supported`, a warning affordance for `quote_unsupported`, a "not confirmed" qualifier for `unassessed`, "no source found" for `unverified` |
 
 PR-1 and PR-2 are slice one. PR-3 is stated as out of slice one rather than assumed.
@@ -433,6 +436,11 @@ PR-1 and PR-2 are slice one. PR-3 is stated as out of slice one rather than assu
   `literal` / `numeric` / `date` / `no_match` / the `unassessed` reasons is measurable
   before PR-3 renders anything — and before anyone argues for a partial-coverage rule
   (§6.4), which must have evidence behind it.
+* **The readout is content-free EMF**, one record per call in
+  `AgentCoreStack/Compaction` beside the `document_read` records: `SourceVerify` and
+  `SourceVerifyClaims`, with properties `format` and a count per state. No quote,
+  value or filename is ever emitted, so the honesty measurement carries none of the
+  document. It rides `PROMPT_CACHE_OBSERVABILITY_ENABLED` like its neighbours.
 
 ## 13. Non-goals
 

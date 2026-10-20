@@ -887,6 +887,11 @@ class MessagesListResponse(BaseModel):
         alias="toolSummaries",
         description="Persisted model-generated tool-batch summaries for this session, each shaped like the live `tool_group_summary` SSE event ({batchId, toolUseIds, summary}). Replayed on load so a reloaded conversation keeps the prose line the user saw live instead of downgrading to the client-side deterministic formatter. Returned only on the first page.",
     )
+    source_provenance: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        alias="sourceProvenance",
+        description="Persisted source-provenance verdicts for this session, each shaped like the live `source_provenance` SSE event ({toolUseId, claims}), where every claim carries {id, state, method, quote, locator, uploadId, filename} and `state` is one of supported / quote_unsupported / unassessed / unverified. Replayed on load because the event never re-streams: without it a reloaded conversation shows cited values with no provenance, and a `quote_unsupported` that vanishes on refresh reads as a clean answer. Returned only on the first page.",
+    )
     from_archive: bool = Field(
         False,
         alias="fromArchive",
