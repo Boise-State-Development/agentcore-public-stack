@@ -1,4 +1,4 @@
-"""Keep one tool per name, so a clash costs a tool rather than the turn.
+"""Keep one usable tool per name, so a bad name costs a tool, not the turn.
 
 Strands' ``ToolRegistry.register_tool`` raises on a second tool with a name it
 already holds (or one that differs only by ``-`` vs ``_``), and
@@ -19,6 +19,11 @@ keeps its order. A server that clashes loses only the clashing tools: it is wrap
 them for this agent alone. The wrapped client is shared through
 ``ExternalMCPIntegration``'s cache with other agents that may have no clash, so
 it is never changed itself.
+
+The same pass drops a tool whose name is longer than Bedrock accepts. That
+limit is refused at the request, not at the tool: one over-long name in
+``toolConfig`` costs the turn every tool it carries, so an MCP server free to
+name its own tools is one rename away from taking a conversation down.
 """
 
 from __future__ import annotations
@@ -33,16 +38,30 @@ from strands.tools import ToolProvider
 
 logger = logging.getLogger(__name__)
 
+#: The longest tool name Bedrock's ``toolConfig`` accepts.
+#:
+#: ``toolSpec.name`` is ``[a-zA-Z0-9_-]{1,64}``, and a name past it is a
+#: validation error on the whole request — so the model loses every tool in the
+#: turn, not the one with the long name.
+MAX_TOOL_NAME_LENGTH = 64
+
+#: Why a tool was left out: another source holds its name, or the name is
+#: longer than ``MAX_TOOL_NAME_LENGTH``.
+CLASH = "clash"
+TOO_LONG = "too_long"
+
 
 @dataclass(frozen=True)
 class SkippedToolName:
-    """One tool left out because an earlier source already holds its name."""
+    """One tool the model does not get, and why."""
 
     name: str
     #: The source whose copy was left out.
     source: str
-    #: The source whose copy the model has under that name.
-    kept_source: str
+    #: The source whose copy the model has under that name; empty for a name
+    #: no source may use.
+    kept_source: str = ""
+    reason: str = CLASH
 
 
 class NameExcludingToolProvider(ToolProvider):
@@ -119,10 +138,18 @@ def _list_provider_tools(providers: List[ToolProvider]) -> Dict[int, Optional[Li
         return executor.submit(asyncio.run, _list_all()).result()
 
 
+def _too_long(name: str) -> bool:
+    return len(name) > MAX_TOOL_NAME_LENGTH
+
+
 def resolve_tool_name_conflicts(
     tools: List[Any],
 ) -> Tuple[List[Any], List[SkippedToolName]]:
-    """Return ``tools`` with every tool name held once, and what was left out.
+    """Return ``tools`` with every usable tool name held once, and the rest.
+
+    A name is left out when an earlier source already holds it, or when it is
+    longer than Bedrock accepts — in which case no source gets it, so it is
+    never recorded as held.
 
     Entries that are not tools or providers (none today) pass through.
     ``skipped`` is sorted, so the note rendered from it is byte-stable.
@@ -143,7 +170,12 @@ def resolve_tool_name_conflicts(
         if not isinstance(name, str):
             continue
         key = _normalized(name)
-        if key in held:
+        if _too_long(name):
+            skipped.append(
+                SkippedToolName(name, _source_label(entry), reason=TOO_LONG)
+            )
+            replacement[id(entry)] = None
+        elif key in held:
             skipped.append(SkippedToolName(name, _source_label(entry), held[key]))
             replacement[id(entry)] = None
         else:
@@ -158,7 +190,12 @@ def resolve_tool_name_conflicts(
         excluded = set()
         for tool in listed:
             key = _normalized(tool.tool_name)
-            if key in held:
+            if _too_long(tool.tool_name):
+                excluded.add(tool.tool_name)
+                skipped.append(
+                    SkippedToolName(tool.tool_name, source, reason=TOO_LONG)
+                )
+            elif key in held:
                 excluded.add(tool.tool_name)
                 skipped.append(SkippedToolName(tool.tool_name, source, held[key]))
             else:
@@ -174,32 +211,61 @@ def resolve_tool_name_conflicts(
             resolved.append(replacement[id(entry)])
 
     for s in skipped:
-        logger.warning(
-            "Tool name clash: left out %s's '%s'; the agent keeps the one from %s",
-            s.source,
-            s.name,
-            s.kept_source,
-        )
-    skipped.sort(key=lambda s: (s.name, s.source, s.kept_source))
+        if s.reason == TOO_LONG:
+            logger.warning(
+                "Tool name too long: left out %s's '%s' (%d characters, the "
+                "limit is %d); a request carrying it would fail with every "
+                "other tool in the turn",
+                s.source,
+                s.name,
+                len(s.name),
+                MAX_TOOL_NAME_LENGTH,
+            )
+        else:
+            logger.warning(
+                "Tool name clash: left out %s's '%s'; the agent keeps the one from %s",
+                s.source,
+                s.name,
+                s.kept_source,
+            )
+    skipped.sort(key=lambda s: (s.reason, s.name, s.source, s.kept_source))
     return resolved, skipped
 
 
 def skipped_tools_note(skipped: List[SkippedToolName]) -> str:
-    """The system-prompt note naming tools left out for a name clash.
+    """The system-prompt note naming the tools left out, and why.
 
-    Changes only when the set of clashes does, which means ``toolConfig``
-    changed with it, so it adds no prompt-cache writes of its own.
+    Changes only when the set of left-out tools does, which means
+    ``toolConfig`` changed with it, so it adds no prompt-cache writes of its
+    own.
     """
-    lines = [
-        f"- `{s.name}` from {s.source} (the `{s.name}` in your tool list is {s.kept_source}'s)"
-        for s in skipped
-    ]
-    return (
-        "## Tools left out because of a name clash\n"
-        "Two enabled sources offer tools with the same name, so only the first "
-        "is available in this conversation:\n"
-        + "\n".join(lines)
-        + "\nIf a request needs a left-out tool, tell the user it is unavailable "
-        "here because of a tool-name clash, and that turning off one of the two "
-        "sources fixes it."
-    )
+    sections: List[str] = []
+
+    clashes = [s for s in skipped if s.reason == CLASH]
+    if clashes:
+        sections.append(
+            "## Tools left out because of a name clash\n"
+            "Two enabled sources offer tools with the same name, so only the first "
+            "is available in this conversation:\n"
+            + "\n".join(
+                f"- `{s.name}` from {s.source} (the `{s.name}` in your tool list "
+                f"is {s.kept_source}'s)"
+                for s in clashes
+            )
+            + "\nIf a request needs a left-out tool, tell the user it is unavailable "
+            "here because of a tool-name clash, and that turning off one of the two "
+            "sources fixes it."
+        )
+
+    too_long = [s for s in skipped if s.reason == TOO_LONG]
+    if too_long:
+        sections.append(
+            "## Tools left out because their names are too long\n"
+            f"A tool name may be at most {MAX_TOOL_NAME_LENGTH} characters and these "
+            "are longer, so they are not available in this conversation:\n"
+            + "\n".join(f"- `{s.name}` from {s.source}" for s in too_long)
+            + "\nIf a request needs one, tell the user it is unavailable here and "
+            "that the server has to give the tool a shorter name."
+        )
+
+    return "\n\n".join(sections)
