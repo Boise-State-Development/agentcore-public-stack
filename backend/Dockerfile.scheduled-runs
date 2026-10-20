@@ -75,6 +75,13 @@ COPY backend/src/apis/shared/tool_summaries/ ${LAMBDA_TASK_ROOT}/apis/shared/too
 COPY backend/src/apis/shared/conversation_archive/ ${LAMBDA_TASK_ROOT}/apis/shared/conversation_archive/
 COPY backend/src/apis/shared/mcp_apps/ui_resource_store.py ${LAMBDA_TASK_ROOT}/apis/shared/mcp_apps/ui_resource_store.py
 COPY backend/src/apis/shared/files/provenance_store.py ${LAMBDA_TASK_ROOT}/apis/shared/files/provenance_store.py
+# Structured extraction's stored rows, replayed by `messages.py` for the same
+# reason the provenance store above is: a scheduled run reads a session's
+# messages, and that module imports the store at module level.
+COPY backend/src/apis/shared/extraction/__init__.py ${LAMBDA_TASK_ROOT}/apis/shared/extraction/__init__.py
+COPY backend/src/apis/shared/extraction/extraction_store.py ${LAMBDA_TASK_ROOT}/apis/shared/extraction/extraction_store.py
+COPY backend/src/apis/shared/extraction/field_sets.py ${LAMBDA_TASK_ROOT}/apis/shared/extraction/field_sets.py
+COPY backend/src/apis/shared/extraction/schema.py ${LAMBDA_TASK_ROOT}/apis/shared/extraction/schema.py
 COPY backend/src/apis/shared/dynamo_errors.py ${LAMBDA_TASK_ROOT}/apis/shared/dynamo_errors.py
 
 # The two handlers themselves, as plain top-level modules.
