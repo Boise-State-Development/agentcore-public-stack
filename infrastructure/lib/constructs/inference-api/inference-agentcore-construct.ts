@@ -427,6 +427,15 @@ export class InferenceAgentCoreConstruct extends Construct {
           ? {
               DOCUMENT_EXTRACT_ENABLED: 'true',
               DOCUMENT_EXTRACT_MODEL_ID: config.documentExtract.modelId,
+              // Only when a deployment overrode it; the backend's default (4)
+              // applies otherwise and costs the V2 payload budget nothing.
+              ...(config.documentExtract.concurrency
+                ? {
+                    DOCUMENT_EXTRACT_CONCURRENCY: String(
+                      config.documentExtract.concurrency,
+                    ),
+                  }
+                : {}),
             }
           : {}),
         // Agent Designer harness resolution: the runtime resolves an Agent's

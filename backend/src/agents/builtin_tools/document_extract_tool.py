@@ -63,6 +63,12 @@ from typing import Any, Dict, List, Optional, Tuple
 from strands import tool
 from strands.types.tools import ToolContext
 
+from apis.shared.extraction.batch import (
+    MAX_DOCUMENTS,
+    RELIABLE_DOCUMENT_COUNT,
+    DocumentOutcome,
+    extract_over_documents,
+)
 from apis.shared.extraction.extraction_broker import queue_extraction
 from apis.shared.extraction.extractor import (
     ExtractionError,
@@ -72,9 +78,9 @@ from apis.shared.extraction.extractor import (
 from apis.shared.extraction.field_sets import FieldSetError
 from apis.shared.extraction.render import (
     XLSX_MIME_TYPE,
-    render_markdown,
-    render_workbook,
-    workbook_filename,
+    batch_workbook_filename,
+    render_batch_markdown,
+    render_batch_workbook,
 )
 from apis.shared.extraction.resolver import (
     FieldSetNotFound,
@@ -363,6 +369,54 @@ async def _persist(
     except Exception:  # noqa: BLE001 - persistence is best-effort
         logger.warning("document_extract: failed to persist run", exc_info=True)
 
+def _normalize_upload_ids(upload_ids: Any) -> List[str]:
+    """Model input to a de-duplicated list of ids, in the order given.
+
+    Tolerant on shape because an unenforced tool argument guarantees nothing
+    (§6.2): a model that sends a bare string, or a comma-separated one, meant
+    one document and should get it rather than an error about JSON. Duplicates
+    are dropped — extracting the same document twice in one batch would double
+    its cost and put it in the comparison twice.
+    """
+    if isinstance(upload_ids, str):
+        candidates = [part.strip() for part in upload_ids.split(",")]
+    elif isinstance(upload_ids, (list, tuple)):
+        candidates = []
+        for item in upload_ids:
+            if isinstance(item, str):
+                candidates.extend(part.strip() for part in item.split(","))
+            elif item is not None:
+                candidates.append(str(item).strip())
+    elif upload_ids is None:
+        return []
+    else:
+        candidates = [str(upload_ids).strip()]
+
+    seen: Dict[str, None] = {}
+    for candidate in candidates:
+        if candidate:
+            seen.setdefault(candidate, None)
+    return list(seen)
+
+
+def _outcome_note(outcomes: List[Any]) -> str:
+    """One line per failed document, for the model to pass on.
+
+    A set where three documents failed silently is a judgement made on eleven
+    documents while reading as though it were made on fourteen. So the failures
+    are named, with their reasons, and the model is told the count it actually
+    has.
+    """
+    failed = [o for o in outcomes if not o.ok]
+    if not failed:
+        return ""
+    lines = "; ".join(f"{o.filename or o.upload_id}: {o.error}" for o in failed[:10])
+    more = f" (and {len(failed) - 10} more)" if len(failed) > 10 else ""
+    return (
+        f"{len(failed)} of {len(outcomes)} documents could not be extracted — "
+        f"{lines}{more}. Say so; do not present the comparison as covering them."
+    )
+
 
 def make_document_extract_tool(session_id: str, user_id: str, records: List[Any]):
     """Create a ``document_extract`` tool bound to this turn's identity and skills.
@@ -378,18 +432,23 @@ def make_document_extract_tool(session_id: str, user_id: str, records: List[Any]
 
     @tool(name=DOCUMENT_EXTRACT_TOOL_NAME, context=True)
     async def document_extract(
-        upload_id: str,
+        upload_ids: List[str],
         field_set: str,
         tool_context: ToolContext,
         pages: Optional[str] = None,
     ) -> Any:
-        """Pull a named set of fields out of one attached document, as a table.
+        """Pull a named set of fields out of one or more attached documents.
 
-        Use this when the user wants the same specific facts off a document —
-        deadlines, caps, rates, eligibility, limits — and a field set exists for
-        that kind of document. Each value comes back with a status saying
-        whether it was actually found in the passage cited for it, and the user
-        is shown a table and a spreadsheet automatically.
+        Use this when the user wants the same specific facts off a document or
+        a stack of them — deadlines, caps, rates, eligibility, limits — and a
+        field set exists for that kind of document. Pass **every** document the
+        user is asking about in one call: that is what lets you compare them,
+        spot conflicts between them, and say which are worth pursuing. Calling
+        this once per document instead throws that away.
+
+        Each value comes back with a status saying whether it was actually found
+        in the passage cited for it, and the user is shown a table and a
+        spreadsheet automatically.
 
         Do not read the field-set file yourself and do not re-type the field
         names: name the set and the backend reads its definition.
@@ -409,36 +468,48 @@ def make_document_extract_tool(session_id: str, user_id: str, records: List[Any]
         useful answer — say so plainly rather than guessing.
 
         Args:
-            upload_id: The document's id, from the attachment note, the document
-                listing, or an earlier document_read call.
+            upload_ids: The documents' ids, from the attachment note, the
+                document listing, or earlier document_read calls. Pass them all
+                at once.
             field_set: The name of the field set to run, as named in the skill's
                 instructions.
-            pages: Optional. Narrow a long document, e.g. "1-4" or "1,2,9".
-                Use it when the fields are all in one section of a large
-                package — it is the main lever on what a run costs.
+            pages: Optional. Narrow every document to these pages, e.g. "1-4".
+                Use it when the fields are all in one section of each package —
+                it is the main lever on what a run costs. Provenance is still
+                checked against the whole document.
 
         Returns:
-            Each field's name, value and status. The table, the cited passages
-            and the spreadsheet are already shown to the user.
+            One row set per document, each field with its value and status. The
+            tables, the cited passages and the spreadsheet are already shown to
+            the user.
         """
         from apis.shared.feature_flags import document_extract_model_id
 
         if not (field_set or "").strip():
             listing = ", ".join(available) or "(none)"
+            return _error(f"❌ field_set is required. Available field sets: {listing}")
+
+        ids = _normalize_upload_ids(upload_ids)
+        if not ids:
             return _error(
-                f"❌ field_set is required. Available field sets: {listing}"
+                "❌ upload_ids is required: pass the id of each document to "
+                "extract from, as a list."
+            )
+        if len(ids) > MAX_DOCUMENTS:
+            return _error(
+                f"❌ {len(ids)} documents in one call exceeds the limit of "
+                f"{MAX_DOCUMENTS}. Run them in batches — and tell the user the "
+                "comparison covers only the batch you ran."
             )
 
-        # Resolve the set before touching the document: a mistyped set name is
-        # the model's mistake and costs nothing to correct, while reading a
-        # 300-page package first would spend an S3 GET to find that out.
+        # Resolve the set before touching any document: a mistyped set name is
+        # the model's mistake and costs nothing to correct, while reading fifty
+        # packages first would spend fifty S3 GETs to find that out.
         try:
             resolved = await asyncio.to_thread(resolve_field_set, records, field_set)
         except FieldSetNotFound as exc:
             return _error(f"❌ {exc}")
         except FieldSetError as exc:
-            # The author's mistake, not the model's. Say which, so the message
-            # reaches a user who can act on it.
             return _error(
                 f"❌ The field set '{field_set}' could not be read: {exc} "
                 "This is a problem with how the field set is written, not with "
@@ -446,137 +517,220 @@ def make_document_extract_tool(session_id: str, user_id: str, records: List[Any]
                 "maintains the skill."
             )
 
-        try:
-            meta, fmt, texts = await document_provenance_units(
-                user_id, session_id, upload_id
-            )
-        except WorkspaceStorageNotConfiguredError:
-            return _error(_NO_STORAGE_MESSAGE)
-        except (WorkspaceError, DocumentReadError) as exc:
-            return _error(f"❌ {exc}")
-        except Exception as exc:  # noqa: BLE001 - conversational, never raised through
-            logger.error("document_extract: document read failed: %s", exc, exc_info=True)
-            return _error(f"❌ Failed to read document '{upload_id}': {exc}")
+        model_id = document_extract_model_id()
 
-        selected = _parse_pages(pages, len(texts))
-        extract_texts = (
-            [texts[page - 1] for page in selected] if selected else list(texts)
+        async def extract_one(upload_id: str, _label: str) -> DocumentOutcome:
+            """Read, extract and verify one document. Never raises."""
+            try:
+                meta, fmt, texts = await document_provenance_units(
+                    user_id, session_id, upload_id
+                )
+            except WorkspaceStorageNotConfiguredError:
+                return DocumentOutcome(upload_id, upload_id, error=_NO_STORAGE_MESSAGE)
+            except (WorkspaceError, DocumentReadError) as exc:
+                return DocumentOutcome(upload_id, upload_id, error=str(exc))
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                logger.error(
+                    "document_extract: read failed for %s: %s", upload_id, exc,
+                    exc_info=True,
+                )
+                return DocumentOutcome(
+                    upload_id, upload_id, error=f"could not be read: {exc}"
+                )
+
+            selected = _parse_pages(pages, len(texts))
+            extract_texts = (
+                [texts[page - 1] for page in selected] if selected else list(texts)
+            )
+            try:
+                result = await extract_fields(
+                    resolved,
+                    "\n\n".join(extract_texts),
+                    filename=meta.filename,
+                    model_id=model_id,
+                )
+            except SchemaTooComplexError as exc:
+                # A property of the field set, identical for every document in
+                # the batch, so the batch stops rather than repeating it N times.
+                return DocumentOutcome(
+                    upload_id, meta.filename, error=str(exc), fatal_for_batch=True
+                )
+            except ExtractionError as exc:
+                return DocumentOutcome(upload_id, meta.filename, error=str(exc))
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                logger.error(
+                    "document_extract: extraction failed for %s: %s", upload_id, exc,
+                    exc_info=True,
+                )
+                return DocumentOutcome(
+                    upload_id, meta.filename, error=f"extraction failed: {exc}"
+                )
+
+            return DocumentOutcome(
+                upload_id=upload_id,
+                filename=meta.filename,
+                result=result,
+                fmt=fmt,
+                texts=tuple(texts),
+            )
+
+        outcomes = await extract_over_documents(
+            resolved, [(uid, uid) for uid in ids], extract_one
         )
 
-        # Provenance is always verified against the WHOLE document, never the
-        # narrowed selection. A quote the model took from page 2 of a run
-        # narrowed to pages 3-5 is still a real passage of this document, and
-        # searching only the selection would report it `unverified` — a
-        # *manufactured* hallucination signal, which is the one error this must
-        # never produce.
-        units = document_units(fmt, list(texts)) if any(texts) else None
+        succeeded = [o for o in outcomes if o.ok]
+        if not succeeded:
+            note = _outcome_note(outcomes)
+            return _error(f"❌ No document could be extracted. {note}")
 
-        model_id = document_extract_model_id()
-        try:
-            result = await extract_fields(
-                resolved,
-                "\n\n".join(extract_texts),
-                filename=meta.filename,
-                model_id=model_id,
+        # Provenance is verified against the WHOLE document, never the narrowed
+        # selection. A quote the model took from page 2 of a run narrowed to
+        # pages 3-5 is still a real passage of this document, and searching only
+        # the selection would report it `unverified` — a *manufactured*
+        # hallucination signal, which is the one error this must never produce.
+        per_document: List[Tuple[DocumentOutcome, List[Row]]] = []
+        for outcome in succeeded:
+            units = (
+                document_units(outcome.fmt, list(outcome.texts))
+                if any(outcome.texts)
+                else None
             )
-        except SchemaTooComplexError as exc:
-            # The author's problem, not the user's request. Said plainly so the
-            # model relays something actionable rather than offering to retry.
-            return _error(
-                f"❌ {exc} Tell the user the field set needs to be split; "
-                "retrying will not help."
+            per_document.append(
+                (outcome, build_rows(resolved, outcome.result.rows, units))
             )
-        except ExtractionError as exc:
-            return _error(f"❌ Extraction did not run: {exc}")
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            logger.error("document_extract: extraction failed: %s", exc, exc_info=True)
-            return _error(f"❌ Extraction failed: {exc}")
 
-        rows = build_rows(resolved, result.rows, units)
+        enforced = all(o.result.schema_enforced for o in succeeded)
+        tool_use_id = (tool_context.tool_use or {}).get("toolUseId", "")
 
-        content = render_markdown(
-            rows,
+        # ONE artifact and ONE workbook for the batch, with a document column —
+        # not N of each. The deliverable is the comparison: "two collide on the
+        # same March deadline" is a fact about the set, and it is only visible
+        # in a table that holds the set.
+        content = render_batch_markdown(
+            per_document,
             field_set=resolved,
-            filename=meta.filename,
-            model_id=result.model_id,
-            schema_enforced=result.schema_enforced,
+            model_id=model_id,
+            schema_enforced=enforced,
+            failures=[(o.filename or o.upload_id, o.error or "") for o in outcomes if not o.ok],
+        )
+        title = (
+            f"{resolved.title} — {succeeded[0].filename}"
+            if len(succeeded) == 1
+            else f"{resolved.title} — {len(succeeded)} documents"
         )
         artifact_id = await _write_artifact(
-            user_id=user_id,
-            session_id=session_id,
-            title=f"{resolved.title} — {meta.filename}",
-            content=content,
+            user_id=user_id, session_id=session_id, title=title, content=content
         )
 
         download_upload_id: Optional[str] = None
         size_kb = ""
-        workbook = render_workbook(
-            rows,
+        workbook = render_batch_workbook(
+            per_document,
             field_set=resolved,
-            filename=meta.filename,
-            model_id=result.model_id,
-            schema_enforced=result.schema_enforced,
+            model_id=model_id,
+            schema_enforced=enforced,
         )
         if workbook:
             stored = await _write_workbook(
                 user_id=user_id,
                 session_id=session_id,
-                filename=workbook_filename(resolved, meta.filename),
+                filename=batch_workbook_filename(resolved, len(succeeded)),
                 data=workbook,
             )
             if stored:
                 download_upload_id, size_kb = stored
 
-        tool_use_id = (tool_context.tool_use or {}).get("toolUseId", "")
-        payload: Dict[str, Any] = {
-            "toolUseId": tool_use_id,
-            "fieldSet": resolved.name,
-            "fieldSetVersion": resolved.version,
-            "uploadId": meta.upload_id,
-            "filename": meta.filename,
-            "modelId": result.model_id,
-            "schemaEnforced": result.schema_enforced,
-            "artifactId": artifact_id,
-            "downloadUploadId": download_upload_id,
-            "fields": event_fields(rows),
-        }
+        # One row and one SSE frame PER DOCUMENT, all sharing this call's
+        # toolUseId. The store's key carries the upload id too, or N documents
+        # in one call would overwrite each other's row.
+        total_usage: Dict[str, int] = {}
+        for outcome, rows in per_document:
+            payload: Dict[str, Any] = {
+                "toolUseId": tool_use_id,
+                "fieldSet": resolved.name,
+                "fieldSetVersion": resolved.version,
+                "uploadId": outcome.upload_id,
+                "filename": outcome.filename,
+                "modelId": outcome.result.model_id,
+                "schemaEnforced": outcome.result.schema_enforced,
+                "artifactId": artifact_id,
+                "downloadUploadId": download_upload_id,
+                "documentCount": len(succeeded),
+                "fields": event_fields(rows),
+            }
+            await _persist(user_id, session_id, tool_use_id, payload)
+            queue_extraction(user_id, session_id, payload)
+            record_document_extract(
+                outcome.fmt, rows, schema_enforced=outcome.result.schema_enforced
+            )
+            for key, value in (outcome.result.usage or {}).items():
+                total_usage[key] = total_usage.get(key, 0) + value
 
-        # Persisted BEFORE the broker hand-off, for the reason verify_sources
-        # records: the emit loop may never reach this payload on a cancelled
-        # turn or a dropped connection, and the row is what survives a reload.
-        await _persist(user_id, session_id, tool_use_id, payload)
-        queue_extraction(user_id, session_id, payload)
-
-        record_document_extract(fmt, rows, schema_enforced=result.schema_enforced)
+        # One metering row for the batch: the per-document calls are one
+        # logical unit of work and their token counts simply add.
         await _meter(
             user_id=user_id,
             session_id=session_id,
             tool_use_id=tool_use_id,
-            model_id=result.model_id,
-            usage=result.usage,
+            model_id=model_id,
+            usage=total_usage,
         )
 
-        summary = model_facing_result(
-            rows,
-            field_set=resolved,
-            artifact_id=artifact_id,
-            schema_enforced=result.schema_enforced,
-        )
-        # The `_download_card` precedent: tell the model the table and the card
-        # are already on screen, or it helpfully re-types both.
+        documents = [
+            {
+                "uploadId": outcome.upload_id,
+                "filename": outcome.filename,
+                **model_facing_result(
+                    rows,
+                    field_set=resolved,
+                    artifact_id=None,
+                    schema_enforced=outcome.result.schema_enforced,
+                ),
+            }
+            for outcome, rows in per_document
+        ]
+        summary: Dict[str, Any] = {
+            "fieldSet": resolved.name,
+            "documentCount": len(succeeded),
+            "documents": documents,
+        }
+        if artifact_id:
+            summary["artifactId"] = artifact_id
+        if not enforced:
+            summary["schemaEnforced"] = False
+
         note = (
-            f"A table of these {len(rows)} fields is already displayed to the "
-            "user, with the passage and page each value came from"
+            f"A table of these {len(resolved.fields)} fields across "
+            f"{len(succeeded)} document(s) is already displayed to the user, "
+            "with the passage and page each value came from"
         )
         if download_upload_id:
-            note += f", and a spreadsheet ({size_kb}) is in this chat's Files"
+            note += f", and one spreadsheet covering all of them ({size_kb}) is in this chat's Files"
         note += (
-            ". Do not re-type the table or write a download link. Report what "
-            "the user asked about, and name any field whose status is not "
-            "`supported`."
+            ". Do not re-type the tables or write a download link. Compare the "
+            "documents for the user: name any field whose status is not "
+            "`supported`, and say which documents disagree or collide."
         )
+        if len(succeeded) > RELIABLE_DOCUMENT_COUNT:
+            # Straight out of the §17.7 measurement: the reduce stays reliable
+            # to about ten documents, and every miss above that is a
+            # cross-document fact going unnoticed. Working the comparison
+            # field-by-field rather than document-by-document is the cheapest
+            # thing that addresses that specific failure.
+            note += (
+                f" This is {len(succeeded)} documents, which is more than can be "
+                "held in mind at once: go through the comparison one FIELD at a "
+                "time across all of them, rather than one document at a time, or "
+                "you will miss the deadline and personnel collisions that are the "
+                "point of reading them together."
+            )
+        failures = _outcome_note(outcomes)
+        if failures:
+            note += " " + failures
         summary["note"] = note
         return {"content": [{"json": summary}], "status": "success"}
 

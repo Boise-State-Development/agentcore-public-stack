@@ -360,6 +360,7 @@ jobs:
       CDK_SOURCE_PROVENANCE_ENABLED: ${{ vars.CDK_SOURCE_PROVENANCE_ENABLED }}
       CDK_DOCUMENT_EXTRACT_ENABLED: ${{ vars.CDK_DOCUMENT_EXTRACT_ENABLED }}
       CDK_DOCUMENT_EXTRACT_MODEL_ID: ${{ vars.CDK_DOCUMENT_EXTRACT_MODEL_ID }}
+      CDK_DOCUMENT_EXTRACT_CONCURRENCY: ${{ vars.CDK_DOCUMENT_EXTRACT_CONCURRENCY }}
       # SageMaker fine-tuning. The tables, bucket, SageMaker role and IAM
       # grants deploy unconditionally, but these two decide whether the feature
       # is reachable and how it is rationed, and neither was forwarded before —

@@ -27,6 +27,21 @@ the text comes from), `docs/specs/turn-path-ttft.md` (why none of this runs befo
 first token), `docs/specs/shared-projects.md` §3.3 (the Outputs library the results
 land in).
 
+**Amendment (2026-10-20): N documents per call, as concurrency inside the tool.**
+`document_extract` takes a **list** of `upload_ids` rather than one, and runs the
+extraction for each concurrently under a semaphore (§17). The outcome worth building is a
+**judgement across a set** — "of these fourteen, three are worth pursuing; two collide on
+the same March deadline and both need the same PI; one demands cost share we can't meet" —
+which a per-document pipeline structurally cannot produce. One conversation per document
+would reproduce that limitation with worse ergonomics and 5-10x the cost (§17.1, where the
+briefed "~200x" is corrected). The reduce step is **a skill, not code** (§17.3): the model can already reason over N row sets;
+what it lacks is knowing what a grants office wants out of a set, and that belongs in
+markdown where it costs nothing until the skill activates. Each extraction call stays a
+pure function of `(document, field set)`, which the one-document design already
+guaranteed and which is now load-bearing rather than speculative. §15's bare exclusion of
+batch fan-out is replaced by a measured trigger condition for the unattended path, and
+the "G5" label is retired (§15).
+
 ---
 
 ## 1. Problem
@@ -862,14 +877,28 @@ PR-1 and PR-2 are slice one. PR-3 is stated as outside it rather than assumed.
   units, every field reads `unverified`/`document_unreadable`, and the run says so. The
   fix is G3 and it is a prerequisite for extraction from scanned documents, not a part
   of this.
-* **Batch fan-out over many documents (G5).** One document per call. A batch wraps
-  `document_extract` **at the harness level**, not inside it: the scheduled-runs worker
-  already runs a headless harness and already publishes a run's artifacts to a project's
-  Outputs, so a batch is one run per document with one artifact per run, plus the
-  operational hardening the gap analysis says to take whole (heartbeat, reaper, atomic
-  `finalized_at`, bounded delivery attempts, a distinct `delivery_failures` state).
-  Nothing here should make that harder, which is why the tool takes exactly one
-  `upload_id` and holds no run state.
+* **A durable, unattended path for large backlogs.** Not built. N documents per call
+  (§17) covers the **attended** case — an office sitting with a week's intake, getting a
+  judgement across it in one turn — and that is deliberately where this stops. The
+  unattended path means work that survives the tab closing: a queue, a heartbeat, a
+  reaper, an atomic `finalized_at`, bounded delivery attempts and a distinct
+  `delivery_failures` state. That is a different feature with its own failure modes, and
+  building it before anyone needs it would be building it against a guess.
+
+  **It is built when one of two things happens**, and not before: someone hits the
+  measured ceiling in §17.7 in real use — the reduce going unreliable above ten
+  documents, or batches running up against `MAX_DOCUMENTS` — or someone asks for runs
+  that must survive the tab. Either is a concrete signal; "we might want this at scale"
+  is not.
+
+  **The "G5" label from the gap analysis is retired**, because it conflated two
+  different jobs under one name: weekly triage of an intake, and one-off bulk
+  processing of a backlog. Only the first is in scope, it is now §17 rather than a
+  non-goal, and keeping the single label would make "is G5 done?" unanswerable.
+
+  Nothing in §17 should make the unattended path harder, which is why each extraction
+  call is a pure function of `(document, field set)` holding no run state: a queue-driven
+  worker would call the same function with the same arguments.
 * **Any re-implementation of provenance logic.** We call `verify_claims` and read
   `state`. We do not derive a state, construct a `SourceVerification`, reintroduce the
   boolean pair, or widen the import allowance the boundary test enforces.
@@ -878,7 +907,8 @@ PR-1 and PR-2 are slice one. PR-3 is stated as outside it rather than assumed.
 * **Extending the Outputs library to files**, so the `.xlsx` could land there (§8.4).
   A change to the Outputs model, not to extraction.
 * **An eval and tuning loop over field sets** — their `extraction_config`,
-  `tuning_result` and optimizer. That is G4, and it shares its runner with G5.
+  `tuning_result` and optimizer. That is G4. It would share a runner with the
+  unattended path above, which is another reason not to build either on a guess.
 * **A warm call per field set** to keep grammars compiled (§6.4), until the measurement
   says it is needed.
 
@@ -1064,10 +1094,190 @@ to make — and (b) no N-fold redundant compilation, which matters against a
 deployment that already has a Bedrock throttle alarm. It is not a latency
 optimization and the spec should not claim it is.
 
+---
+
+## 17. N documents per call (Amendment 2026-10-20)
+
+### 17.1 Why the set, and not the documents
+
+The outcome worth building is a **judgement across a set**: *of these fourteen,
+three are worth pursuing; two collide on the same March deadline and both need
+the same PI; one demands cost share we can't meet.* None of those three clauses
+is a fact about any single document. A per-document pipeline structurally
+cannot produce them, which is exactly why this is worth doing rather than
+buying.
+
+So `document_extract` takes `upload_ids: List[str]`, and one tool call carries
+the whole stack. One conversation per document would reproduce the limitation
+with worse ergonomics, and cost **5–10x more** — each conversation paying a
+cache *write* for its own system prompt, `toolConfig` and history, where one
+conversation pays that once and then reads it at 0.1x:
+
+| N | prefix | one conversation each | one conversation | ratio |
+|---|---|---|---|---|
+| 10 | 30k tok | $0.412 | $0.075 | 5.5x |
+| 50 | 30k tok | $2.062 | $0.221 | 9.3x |
+| 10 | 150k tok | $2.062 | $0.358 | 5.8x |
+| 50 | 150k tok | $10.312 | $1.033 | 10.0x |
+
+(Haiku 4.5 Regional: $1.10/MTok base, $1.375 cache write, $0.11 cache read.)
+
+**The "~200x" this amendment was briefed with does not hold** — the arithmetic
+gives 5–10x across the realistic range, growing with N because the single
+conversation amortizes one prefix while the alternative re-writes it per
+document. The decision is unaffected: 10x is still decisive, and the
+*structural* argument above — that a per-document pipeline cannot produce the
+answer at all — was always the load-bearing one. Recorded because a number
+nobody has checked is worth less than a smaller one that holds.
+
+### 17.2 One artifact and one workbook, not N
+
+The deliverable of a batch is the **comparison**, so the batch writes one
+markdown artifact and one workbook, both holding the whole set. The artifact
+leads with a comparison table oriented **field-per-row, document-per-column**,
+because that is the orientation in which a collision is visible at a glance —
+the same deadline twice on one row. The per-document sections follow, carrying
+the provenance a reviewer goes to once the comparison has told them where to
+look. The workbook carries both orientations as two sheets, since sorting and
+filtering want one row per `(document, field)`.
+
+A reviewer handed fourteen separate tables has been handed the work of joining
+them, which is the work the feature exists to do.
+
+**The stored row is keyed `EXTR#<tool_use_id>#<upload_id>`**, not on the tool
+use alone: N documents in one call share a `toolUseId`, and the single-document
+key would have had them silently overwrite each other, leaving a reload showing
+one row set where the user saw fourteen. Keying on both also keeps each row
+independently inside the 400KB item limit.
+
+### 17.3 The reduce step is a skill, not code
+
+The model can already reason over N row sets. What it cannot know is what a
+research-administration office wants out of a stack — which collisions matter,
+what counts as an outlier, that a dismissal is only useful with its reason
+attached. That is institutional knowledge, it differs between offices, and it
+changes without a deploy.
+
+So it is markdown in the funder-family skill that already holds the field set
+(`docs/examples/skills/funder-family/references/reduce-across-documents.md`),
+where it costs nothing until the skill activates. **No synthesis function is
+written in Python.** A Python reduce would freeze one office's judgement into
+every deployment's build and make "we also care about internal competition" a
+pull request.
+
+### 17.4 Bounded concurrency, and the number
+
+`asyncio.gather` under a semaphore, default **4**, from
+`DOCUMENT_EXTRACT_CONCURRENCY` and clamped to `1..16`.
+
+Four is deliberately conservative. Each call is a constrained Converse request
+whose input is a whole document, so four in flight is already meaningful
+Bedrock traffic from a single turn — and this deployment has a Bedrock throttle
+alarm that an over-eager default would trip on the first real batch, which is
+the worst possible moment to discover the number. Four also captures most of
+the available win: fourteen documents at four-wide is four waves, not fourteen.
+
+A semaphore rather than chunked waves, because chunking makes every wave wait
+for its slowest member — one 300-page document in a batch of four would stall
+three idle slots.
+
+**Raise it on evidence**: the `DocumentExtract` EMF records plus the absence of
+throttling across a few real batches. The lever is an environment variable, so
+trying a different number in one environment needs no deploy.
+
+### 17.5 Warming the grammar, and what measurement said about it
+
+The concern was that N parallel calls against a **cold** field set would each
+pay grammar compilation, making the first run of any new or edited set
+catastrophically slow, N times over.
+
+**Measured** (§16.11): five concurrent calls on a cold 10-field schema each
+took 15.3–16.0s against a warm median of 2.95s — so yes, every call paid
+compilation and none was served a grammar another had warmed. But they paid it
+*concurrently*: wall clock for all five was 16.05s. **The N-times-slower first
+run does not happen.** What is wasted is Bedrock's compute, N times over, not
+the user's time.
+
+Warming with one call before fanning out is still adopted, on honest grounds
+rather than the assumed ones. It costs about three seconds more on a cold
+schema and one document's latency on a warm one, and buys:
+
+* **Error economy.** A field set that exceeds one of the four undocumented
+  capacity limits (§16.9) fails in under a second. Warming turns that into one
+  clear error instead of N identical ones, and stops before spending the batch.
+* **No N-fold redundant compilation**, against an account with a throttle alarm.
+
+The warming call is **document one doing real work**, not a throwaway, so
+nothing is spent to get it. If it fails *because the field set cannot be
+compiled*, the batch stops and that one reason is returned for every document —
+firing the rest would produce N copies of an error about the author's field set
+that no user can act on differently. Any other first-document failure is just
+one bad document, and the rest proceed.
+
+### 17.6 Partial failure is the normal case
+
+One unreadable document in fourteen must not sink the batch. Every document
+comes back as a result or a reason, the reasons are named in the model-facing
+note, and the artifact lists them above the comparison. A set where three
+documents failed silently is a judgement made on eleven documents while reading
+as though it were made on fourteen — which is a worse failure than returning
+nothing.
+
+### 17.7 The measured ceiling
+
+**Token cost is linear and cheap.** Built from the real model-facing payload
+for a full-width 14-field set:
+
+| N | payload chars | ≈tokens | per document | Haiku in | Sonnet in |
+|---|---|---|---|---|---|
+| 1 | 1,621 | 450 | 450 | $0.0005 | $0.0015 |
+| 10 | 12,044 | 3,346 | 335 | $0.0037 | $0.0110 |
+| 25 | 29,414 | 8,171 | 327 | $0.0090 | $0.0270 |
+| 50 | 58,364 | 16,212 | 324 | $0.0178 | $0.0535 |
+
+~325 tokens per document, flat. At N=50 the payload is ~16k tokens sitting in
+the cacheable prefix, re-read at 0.1x on every later turn — about $0.036 on
+Haiku across twenty further turns. **Cost is not the binding constraint.**
+
+**Judgement is.** Three trials per N, with a planted cross-document collision
+(two documents sharing a deadline *and* a required PI) and a planted outlier
+budget cap, scored on whether the reduce found each:
+
+| N | collision found | outlier found |
+|---|---|---|
+| 10 | **3/3** | 2/3 |
+| 25 | 1/3 | 2/3 |
+| 50 | 2/3 | 2/3 |
+
+**The reduce is reliable at N≈10 and roughly a coin flip above it.** There is
+no clean cliff — N=25 scoring below N=50 is noise at three trials — and the
+scorer is a substring match that can undercount a correct answer phrased
+differently. The honest reading is: reliable at ten, unreliable beyond, and the
+limit is the model's attention across a wide set rather than anything about
+cost or concurrency.
+
+That inverts the intuition worth recording: **the expensive-looking thing is
+cheap, and the free-looking thing is the ceiling.**
+
+One mitigation falls straight out of the failure mode. The misses are always a
+*cross-document* fact going unnoticed, so above fifteen documents the tool's
+note tells the model to work the comparison **field by field** rather than
+document by document. Costs nothing and addresses the thing that actually fails.
+
+**A note on how this was measured, because it nearly produced a false result.**
+The first run of this experiment reported collision detection at 0/3 for N=50.
+The fixture was wrong: it paired every value with one boilerplate quote, so
+`verify_claims` correctly marked all 350 values `quote_unsupported`, and the
+model correctly refused to make any recommendation on data where every single
+value had failed its provenance check. That was the integration working
+exactly as §7 intends, scored as a quality failure. The fixture now asserts
+every planted row is `supported` before the model is asked anything.
+
 ## Sources
 
 * `_local-notes/vandalizer-parity-and-gap-analysis.md` §G1 (this spec's seed), §G2 (the
-  provenance model composed with), §G5, §G9 (both deliberately out of scope).
+  provenance model composed with), §G5 (whose label is retired — see §15),
+  §G9 (deliberately out of scope).
 * Vandalizer `backend/app/models/search_set.py`, `app/services/extraction_engine.py`
   (GPLv3) — read for the reasoning in their field model: the per-field search phrase,
   the explicit `item_order`, the optional flag, the enum values, the display title, and

@@ -21,6 +21,9 @@ from apis.shared.extraction.extraction_broker import (
 from apis.shared.extraction.extraction_store import _clamp_payload, _MAX_QUOTE_CHARS
 from apis.shared.extraction.field_sets import parse_field_set
 from apis.shared.extraction.render import (
+    batch_workbook_filename,
+    render_batch_markdown,
+    render_batch_workbook,
     render_markdown,
     render_workbook,
     workbook_filename,
@@ -406,3 +409,226 @@ class TestTheStoredRow:
             assert live_field["method"] == stored_field["method"]
             if live_field["locator"] is not None:
                 assert live_field["locator"] == stored_field["locator"]
+
+
+class TestTheBatchOutputs:
+    """§17.2. One artifact and one workbook holding the whole set, because the
+    deliverable of an N-document run is the comparison."""
+
+    def per_document(self, n: int, collide: bool = False):
+        from apis.shared.extraction.rows import build_rows
+
+        field_set = parse_field_set(
+            "| name | title | type | find |\n|---|---|---|---|\n"
+            "| deadline | Submission deadline | string | the deadline |\n"
+            "| budget_cap | Budget cap | currency | the cap |\n",
+            name="nsf-solicitation",
+        )
+        out = []
+        for i in range(n):
+            page = (
+                "Full proposals are due March 3, 2026. "
+                f"Awards up to ${500 + i},000 in total costs."
+            )
+            document = document_units("pdf", [page], precision=PRECISION_MEASURED)
+            deadline = "March 3, 2026" if collide else f"April {i + 1}, 2026"
+            rows = build_rows(
+                field_set,
+                {
+                    "deadline": {
+                        "value": deadline,
+                        "quote": "Full proposals are due March 3, 2026.",
+                    },
+                    "budget_cap": {
+                        "value": f"${500 + i},000",
+                        "quote": f"Awards up to ${500 + i},000 in total costs.",
+                    },
+                },
+                document,
+            )
+
+            class Outcome:
+                upload_id = f"u{i}"
+                filename = f"nsf-26-{500 + i}.pdf"
+
+            out.append((Outcome(), rows))
+        return field_set, out
+
+    def test_the_comparison_table_is_field_per_row(self) -> None:
+        """The orientation in which a collision is visible at a glance: the
+        same deadline twice on one row."""
+        field_set, per_doc = self.per_document(3, collide=True)
+        md = render_batch_markdown(
+            per_doc, field_set=field_set, model_id="m", schema_enforced=True
+        )
+        comparison = md.split("## Comparison")[1].split("##")[0]
+        header = next(l for l in comparison.splitlines() if l.startswith("| Field"))
+        assert header.count("nsf-26-") == 3
+        deadline_row = next(
+            l for l in comparison.splitlines() if l.startswith("| Submission deadline")
+        )
+        assert deadline_row.count("March 3, 2026") == 3
+
+    def test_every_document_gets_its_own_provenance_section(self) -> None:
+        field_set, per_doc = self.per_document(3)
+        md = render_batch_markdown(
+            per_doc, field_set=field_set, model_id="m", schema_enforced=True
+        )
+        for i in range(3):
+            assert f"## nsf-26-{500 + i}.pdf" in md
+        assert "p. 1" in md
+
+    def test_one_document_gets_no_comparison_table(self) -> None:
+        field_set, per_doc = self.per_document(1)
+        md = render_batch_markdown(
+            per_doc, field_set=field_set, model_id="m", schema_enforced=True
+        )
+        assert "## Comparison" not in md
+
+    def test_an_unsupported_value_is_marked_in_the_dense_table(self) -> None:
+        """A value the check did not support must not sit in a comparison
+        looking like one that was."""
+        from apis.shared.extraction.rows import build_rows
+
+        field_set = parse_field_set(
+            "| name | title | find |\n|---|---|---|\n| cap | Cap | the cap |\n",
+            name="s",
+        )
+        document = document_units(
+            "pdf", ["Awards up to $500,000."], precision=PRECISION_MEASURED
+        )
+        rows = build_rows(
+            field_set,
+            {"cap": {"value": "$750,000", "quote": "Awards up to $500,000."}},
+            document,
+        )
+
+        class Outcome:
+            upload_id = "u0"
+            filename = "a.pdf"
+
+        class Outcome2(Outcome):
+            upload_id = "u1"
+            filename = "b.pdf"
+
+        md = render_batch_markdown(
+            [(Outcome(), rows), (Outcome2(), rows)],
+            field_set=field_set,
+            model_id="m",
+            schema_enforced=True,
+        )
+        comparison = md.split("## Comparison")[1].split("\n##")[0]
+        assert "⚠ $750,000" in comparison
+        assert "not** in the passage" in md or "not in the passage" in md
+
+    def test_failed_documents_are_listed_above_the_comparison(self) -> None:
+        field_set, per_doc = self.per_document(2)
+        md = render_batch_markdown(
+            per_doc,
+            field_set=field_set,
+            model_id="m",
+            schema_enforced=True,
+            failures=[("broken.pdf", "no text layer")],
+        )
+        assert md.index("could not be extracted") < md.index("## Comparison")
+        assert "no text layer" in md
+
+    def test_the_workbook_has_a_comparison_sheet_and_a_detail_sheet(self) -> None:
+        """The two questions an office asks of a batch want opposite
+        orientations."""
+        from openpyxl import load_workbook
+
+        field_set, per_doc = self.per_document(3)
+        data = render_batch_workbook(
+            per_doc, field_set=field_set, model_id="m", schema_enforced=True
+        )
+        assert data and data[:2] == b"PK"
+        book = load_workbook(BytesIO(data))
+        assert book.sheetnames == ["Comparison", "Detail"]
+
+        comparison = book["Comparison"]
+        assert [c.value for c in comparison[4]][0] == "Field"
+        assert len([c for c in comparison[4] if c.value]) == 4  # Field + 3 docs
+
+        detail = book["Detail"]
+        assert [c.value for c in detail[1]] == [
+            "Document", "Field", "Value", "Source", "Status", "Cited passage",
+        ]
+        # One row per (document, field): 3 documents x 2 fields.
+        assert detail.max_row == 7
+
+    @pytest.mark.parametrize(
+        "count,expected",
+        [(1, "nsf-solicitation.xlsx"), (14, "nsf-solicitation-14-documents.xlsx")],
+    )
+    def test_the_batch_workbook_filename(self, count, expected) -> None:
+        field_set = parse_field_set(
+            "| name | find |\n|---|---|\n| a | b |\n", name="nsf-solicitation"
+        )
+        assert batch_workbook_filename(field_set, count) == expected
+
+
+class TestTheStoredRowKeyCarriesTheDocument:
+    """§17.2. The bug this prevents is silent and only visible on reload.
+
+    N documents in one call share a ``toolUseId``. With the single-document
+    key — ``EXTR#<tool_use_id>`` — each document's write would have overwritten
+    the last, so a reload would show one row set where the user saw fourteen,
+    with nothing anywhere saying the other thirteen had been dropped.
+    """
+
+    def items_written(self, payloads):
+        from apis.shared.extraction.extraction_store import ExtractionStore
+
+        written = []
+
+        class FakeTable:
+            def put_item(self, Item):  # noqa: N803 - boto3's own kwarg name
+                written.append(Item)
+
+        store = ExtractionStore.__new__(ExtractionStore)
+        store._table = FakeTable()
+        for payload in payloads:
+            store.store(
+                user_id="u1",
+                session_id="s1",
+                tool_use_id="tu-7",
+                payload=payload,
+            )
+        return written
+
+    def payload(self, upload_id: str):
+        return {
+            "fieldSet": "nsf-solicitation",
+            "uploadId": upload_id,
+            "filename": f"{upload_id}.pdf",
+            "fields": [{"name": "deadline", "state": "supported", "method": "date"}],
+        }
+
+    def test_each_document_in_a_batch_gets_its_own_row(self) -> None:
+        written = self.items_written(
+            [self.payload(f"up-{i}") for i in range(3)]
+        )
+        assert [item["SK"] for item in written] == [
+            "EXTR#tu-7#up-0",
+            "EXTR#tu-7#up-1",
+            "EXTR#tu-7#up-2",
+        ]
+        assert len({item["SK"] for item in written}) == 3
+
+    def test_the_tool_use_id_is_still_the_grouping_key(self) -> None:
+        """So a reader can reassemble a batch without being told its size."""
+        written = self.items_written([self.payload(f"up-{i}") for i in range(3)])
+        assert {item["toolUseId"] for item in written} == {"tu-7"}
+        assert all(item["SK"].startswith("EXTR#tu-7#") for item in written)
+
+    def test_re_running_the_same_call_overwrites_rather_than_accumulates(self) -> None:
+        written = self.items_written([self.payload("up-0"), self.payload("up-0")])
+        assert written[0]["SK"] == written[1]["SK"]
+
+    def test_the_session_gsi_key_is_unchanged(self) -> None:
+        """The replay query is ``begins_with("EXTR#")`` on GSI_SK, which the
+        document suffix must not disturb."""
+        [item] = self.items_written([self.payload("up-0")])
+        assert item["GSI_PK"] == "SESSION#s1"
+        assert item["GSI_SK"].startswith("EXTR#")

@@ -798,6 +798,31 @@ describe('RAG Ingestion Configuration', () => {
         'us.anthropic.claude-haiku-4-5-20251001-v1:0',
       );
     });
+
+    // Batch concurrency (structured-extraction.md §17.4). Left UNDEFINED
+    // unless a deployment sets it, so the Runtime's environment carries
+    // nothing for the default case and spends none of the V2 payload budget.
+    // The backend's own default is 4 and it clamps to 1..16.
+    test('concurrency is undefined unless a deployment sets it', () => {
+      delete process.env.CDK_DOCUMENT_EXTRACT_CONCURRENCY;
+      expect(loadConfig(app).documentExtract.concurrency).toBeUndefined();
+      process.env.CDK_DOCUMENT_EXTRACT_CONCURRENCY = '';
+      expect(loadConfig(app).documentExtract.concurrency).toBeUndefined();
+    });
+
+    test('a deployment can override the concurrency', () => {
+      process.env.CDK_DOCUMENT_EXTRACT_CONCURRENCY = '8';
+      expect(loadConfig(app).documentExtract.concurrency).toBe(8);
+    });
+
+    test('a non-numeric or non-positive concurrency is dropped, not forwarded', () => {
+      // The backend falls back anyway, and a bad string sitting in the
+      // Runtime's environment is harder to spot than an absent one.
+      for (const value of ['abc', '4.5', '0', '-2', 'true']) {
+        process.env.CDK_DOCUMENT_EXTRACT_CONCURRENCY = value;
+        expect(loadConfig(app).documentExtract.concurrency).toBeUndefined();
+      }
+    });
   });
 
   describe('Client turn timing feature flag', () => {
