@@ -5,115 +5,188 @@ import {
   input,
   signal,
 } from '@angular/core';
-import { NgIcon, provideIcons } from '@ng-icons/core';
-import {
-  heroCheckCircle,
-  heroExclamationTriangle,
-  heroDocumentText,
-  heroQuestionMarkCircle,
-} from '@ng-icons/heroicons/outline';
 import type { SourceProvenanceClaim, SourceLocator } from '../../../../../shared/utils/stream-parser';
 
 /**
  * What a `verify_sources` call found, rendered under the answer it belongs to
  * (`docs/specs/source-provenance-verification.md` §4).
  *
- * The design rule the spec insists on, and the reason this is not a row in the
- * collapsed tool rail: **a plain page reference is only ever shown for
- * `supported`**. Every other state says, in its own words, that it is not a
- * confirmed citation. `quote_unsupported` is the hallucination signal — the
- * passage is real and the value is not in it — so it renders as a warning and
- * is never collapsed out of sight. The ported design's own history is the
- * argument: its badge keyed on "did we find the quote", which gave a
- * fabricated amount the same confident chip as a correct one.
+ * Styled as a sibling of the tool rail — same chevron, same muted one-line
+ * header, same bordered row list, same status dots — because it is the same
+ * kind of thing: a compact, scannable record of what the agent established,
+ * folded away until someone checks it. It is a separate block rather than a
+ * rail row because the rail says what the agent *did*, while this says whether
+ * the answer's values are *in the source*, and that belongs with the answer.
  *
- * Disclosure follows from that. A run where everything checked out is one
- * quiet line, because a clean result should not shout; a run with anything
- * unconfirmed opens itself and stays open.
+ * Two rules survive the restyle, because they are the feature rather than its
+ * appearance:
  *
- * Colour is never the only signal: each state carries an icon and words. The
- * states are not a severity ramp either — `unassessed` and `unverified` are
- * absences of evidence, not failures, and are styled as neutral rather than as
- * lesser warnings, so the single red thing on screen is the one that earned it.
+ * 1. **A plain locator appears only for `supported`.** Every other state says
+ *    in words what is and is not established, and the locator never stands
+ *    alone — on its own, "page 1" reads as a confirmed citation whatever sits
+ *    beside it.
+ * 2. **Anything unconfirmed opens the list by default.** A warning behind a
+ *    click is not a warning, and `quote_unsupported` — the passage is real,
+ *    the value is not in it — is the state the whole feature exists to
+ *    surface. The header keeps saying so even when the list is collapsed.
+ *
+ * Colour is never the only signal: the header counts unconfirmed values in
+ * words, and each row pairs its dot with a sentence.
  */
 @Component({
   selector: 'app-source-provenance',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon],
-  providers: [
-    provideIcons({
-      heroCheckCircle,
-      heroExclamationTriangle,
-      heroDocumentText,
-      heroQuestionMarkCircle,
-    }),
-  ],
   styles: `
     :host {
       display: block;
     }
+
+    /* Chevron, dot and accordion match tool-rail.component.css. Duplicated
+       rather than shared because Angular scopes component styles, and a rail
+       that drifted from this panel would read as two unrelated widgets. */
+    .chevron {
+      transition: transform 0.2s ease-out;
+    }
+
+    .chevron.open {
+      transform: rotate(90deg);
+    }
+
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 9999px;
+      flex-shrink: 0;
+    }
+
+    .collapsible-content {
+      display: grid;
+      grid-template-rows: 0fr;
+      transition: grid-template-rows 0.2s ease-out;
+    }
+
+    .collapsible-content.open {
+      grid-template-rows: 1fr;
+    }
+
+    .collapsible-content > div {
+      overflow: hidden;
+      opacity: 0;
+      transition: opacity 0s ease-out;
+    }
+
+    .collapsible-content.open > div {
+      opacity: 1;
+      transition: opacity 0.15s ease-out 0.05s;
+    }
+
+    /* The quote renders inside '.message-block', whose global prose rule gives
+       every <p> a 16px bottom margin — which would punch a gap into a dense
+       accordion row. Same fix the rail's batch summary needs. */
+    .claim-quote {
+      margin: 0.125rem 0 0;
+    }
+
+    /* The message block's global prose rules (styles.css, unlayered) restyle
+       every ul/li — list markers and padding — and beat any Tailwind utility,
+       the same way they beat the rail's <pre> styling. Without this each row
+       carries a bullet next to its status dot. */
+    .claim-list {
+      list-style: none;
+      margin: 0.5rem 0 0;
+      padding-left: 0;
+    }
+
+    .claim-list > li {
+      list-style: none;
+      margin: 0;
+      padding-left: 0.625rem;
+    }
+
+    .claim-list > li::marker {
+      content: '';
+    }
   `,
   template: `
     @if (claims().length) {
-      <div
-        class="mt-2 w-full rounded-lg border text-[13px]"
-        [class]="unconfirmed().length ? warningShell : calmShell"
-      >
-        <!-- Header: the one-line verdict, and the toggle when there is detail. -->
+      <div class="mt-2">
         <button
           type="button"
-          class="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-1 focus-visible:ring-offset-white dark:focus-visible:ring-offset-gray-900"
+          (click)="toggle()"
+          class="group/prov flex w-full cursor-pointer items-center gap-2 text-left"
           [attr.aria-expanded]="isOpen()"
           [attr.aria-controls]="panelId"
-          (click)="toggle()"
+          [attr.aria-label]="isOpen() ? 'Hide source details' : 'Show source details'"
         >
-          <ng-icon
-            [name]="unconfirmed().length ? 'heroExclamationTriangle' : 'heroCheckCircle'"
-            class="shrink-0 text-base"
-            [class]="unconfirmed().length ? 'text-state-warning-600 dark:text-state-warning-400' : 'text-state-success-600 dark:text-state-success-400'"
+          <svg
+            class="chevron size-3 shrink-0 text-gray-400 dark:text-gray-500"
+            [class.open]="isOpen()"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
             aria-hidden="true"
-          />
-          <span class="min-w-0 flex-1">
-            <span class="font-medium">{{ headline() }}</span>
-            @if (filename()) {
-              <span class="text-gray-500 dark:text-gray-400"> in {{ filename() }}</span>
-            }
+          >
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+          </svg>
+
+          <span
+            class="min-w-0 truncate text-xs text-gray-500 group-hover/prov:text-gray-700 dark:text-gray-400 dark:group-hover/prov:text-gray-200"
+          >
+            {{ headline() }}
           </span>
-          <span class="shrink-0 text-xs text-gray-500 dark:text-gray-400">
-            {{ isOpen() ? 'Hide' : 'Details' }}
-          </span>
+
+          <!-- The count of values the document does not support, in the same
+               place and the same weight the rail puts "N failed". It stays
+               visible when the list is collapsed: the detail folds away, the
+               fact that something is unconfirmed does not. -->
+          @if (unconfirmed().length; as bad) {
+            <span
+              class="shrink-0 text-[11px] font-medium text-state-danger-600 dark:text-state-danger-400"
+            >
+              {{ bad }} unconfirmed
+            </span>
+          }
         </button>
 
-        @if (isOpen()) {
-          <ul [id]="panelId" class="list-none space-y-2 border-t px-3 py-2.5 border-gray-200 dark:border-gray-700">
-            @for (claim of claims(); track claim.id + claim.quote) {
-              <li class="flex gap-2.5">
-                <ng-icon
-                  [name]="iconFor(claim.state)"
-                  class="mt-0.5 shrink-0 text-sm"
-                  [class]="iconClassFor(claim.state)"
-                  aria-hidden="true"
-                />
-                <div class="min-w-0 flex-1">
-                  <p class="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-                    <span class="font-medium break-words">{{ label(claim) }}</span>
-                    <!--
-                      The locator sits beside the verdict, never alone: on its
-                      own, "p. 1" reads as a confirmed citation whatever the
-                      state next to it says.
-                    -->
-                    <span class="text-xs" [class]="verdictClassFor(claim.state)">{{ verdict(claim) }}</span>
-                  </p>
+        <!-- CSS-collapsed for the rail's accordion feel, but hidden from
+             assistive tech and from tab order while closed. The rows carry
+             passages from the user's own document; clipping them to zero
+             height still leaves them reachable by a screen reader, which
+             would read out quotes nobody opened. -->
+        <div
+          class="collapsible-content"
+          [class.open]="isOpen()"
+          [attr.aria-hidden]="isOpen() ? null : 'true'"
+          [attr.inert]="isOpen() ? null : ''"
+        >
+          <div>
+            <ul
+              [id]="panelId"
+              class="claim-list divide-y divide-gray-200/80 overflow-hidden rounded-lg border border-gray-200/80 dark:divide-white/10 dark:border-white/10"
+            >
+              @for (claim of claims(); track claim.id + claim.quote) {
+                <li class="bg-white/40 py-1.5 pr-2.5 dark:bg-transparent">
+                  <div class="flex items-center gap-2">
+                    <span [class]="dotClass(claim.state)"></span>
+                    <span class="min-w-0 truncate text-xs text-gray-600 dark:text-gray-300">
+                      {{ label(claim) }}
+                    </span>
+                    <!-- The verdict sits with the value, never a bare locator:
+                         "page 1" alone reads as a confirmed citation. -->
+                    <span class="truncate text-[11px]" [class]="verdictClass(claim.state)">
+                      {{ verdict(claim) }}
+                    </span>
+                  </div>
                   @if (claim.quote) {
-                    <p class="mt-0.5 text-gray-600 dark:text-gray-400 break-words">
-                      <q class="italic">{{ claim.quote }}</q>
+                    <p class="claim-quote pl-[14px] text-[11px] text-gray-400 dark:text-gray-500">
+                      <q>{{ claim.quote }}</q>
                     </p>
                   }
-                </div>
-              </li>
-            }
-          </ul>
-        }
+                </li>
+              }
+            </ul>
+          </div>
+        </div>
       </div>
     }
   `,
@@ -123,21 +196,15 @@ export class SourceProvenanceComponent {
 
   protected readonly panelId = `provenance-${Math.random().toString(36).slice(2, 9)}`;
 
-  protected readonly calmShell =
-    'border-gray-200 bg-gray-50 text-gray-800 dark:border-gray-700 dark:bg-gray-800/50 dark:text-gray-200';
-  protected readonly warningShell =
-    'border-state-warning-300 bg-state-warning-50 text-state-warning-900 dark:border-state-warning-700/60 dark:bg-state-warning-950/30 dark:text-state-warning-100';
-
   /** Claims whose value the document does not support. */
   protected readonly unconfirmed = computed(() =>
     this.claims().filter(c => c.state === 'quote_unsupported'),
   );
 
   /**
-   * Open by default whenever something is unconfirmed.
-   *
-   * A warning the reader has to click to discover is not a warning, and this
-   * is the state the whole feature exists to surface.
+   * Open by default whenever something is unconfirmed; collapsed otherwise,
+   * like the rail. A warning the reader has to click to discover is not a
+   * warning, and this is the state the whole feature exists to surface.
    */
   private readonly opened = signal<boolean | null>(null);
   protected readonly isOpen = computed(
@@ -156,19 +223,18 @@ export class SourceProvenanceComponent {
 
   protected readonly headline = computed(() => {
     const total = this.claims().length;
-    const bad = this.unconfirmed().length;
-    if (bad) {
-      return bad === 1
-        ? '1 value could not be confirmed'
-        : `${bad} values could not be confirmed`;
-    }
     const supported = this.claims().filter(c => c.state === 'supported').length;
+    const doc = this.filename() ? ` in ${this.filename()}` : '';
+    const values = total === 1 ? '1 value' : `${total} values`;
+    if (this.unconfirmed().length) {
+      return `Checked ${values}${doc}`;
+    }
     if (supported === total) {
-      return total === 1 ? '1 value checked against the source' : `${total} values checked against the source`;
+      return `Confirmed ${values}${doc}`;
     }
     // Some were traced but not confirmable. Say so rather than implying the
     // whole set was verified.
-    return `${supported} of ${total} values confirmed`;
+    return `Confirmed ${supported} of ${total} values${doc}`;
   });
 
   /** What the claim is about: the value as stated, else the model's own label. */
@@ -177,8 +243,8 @@ export class SourceProvenanceComponent {
   }
 
   /**
-   * The words beside each claim. These carry the meaning — the colour and icon
-   * only reinforce them — so each one says what is and is not established.
+   * The words beside each claim. These carry the meaning — the dot only
+   * reinforces them — so each says what is and is not established.
    */
   protected verdict(claim: SourceProvenanceClaim): string {
     switch (claim.state) {
@@ -205,23 +271,17 @@ export class SourceProvenanceComponent {
     return `${about}${unit} ${loc.value}`;
   }
 
-  protected iconFor(state: SourceProvenanceClaim['state']): string {
-    if (state === 'supported') return 'heroCheckCircle';
-    if (state === 'quote_unsupported') return 'heroExclamationTriangle';
-    if (state === 'unassessed') return 'heroDocumentText';
-    return 'heroQuestionMarkCircle';
+  /** Same vocabulary as the rail's status dots. */
+  protected dotClass(state: SourceProvenanceClaim['state']): string {
+    if (state === 'supported') return 'status-dot bg-state-success-500';
+    if (state === 'quote_unsupported') return 'status-dot bg-state-danger-500';
+    return 'status-dot bg-gray-400';
   }
 
-  protected iconClassFor(state: SourceProvenanceClaim['state']): string {
-    if (state === 'supported') return 'text-state-success-600 dark:text-state-success-400';
-    if (state === 'quote_unsupported') return 'text-state-warning-600 dark:text-state-warning-400';
-    return 'text-gray-400 dark:text-gray-500';
-  }
-
-  protected verdictClassFor(state: SourceProvenanceClaim['state']): string {
+  protected verdictClass(state: SourceProvenanceClaim['state']): string {
     if (state === 'quote_unsupported') {
-      return 'font-medium text-state-warning-700 dark:text-state-warning-300';
+      return 'font-medium text-state-danger-600 dark:text-state-danger-400';
     }
-    return 'text-gray-500 dark:text-gray-400';
+    return 'text-gray-400 dark:text-gray-500';
   }
 }
