@@ -546,6 +546,25 @@ async def get_messages_from_cloud(
                 user_id=user_id,
             )
 
+        async def fetch_extractions():
+            """Fetch persisted structured-extraction runs.
+
+            Sync DynamoDB query off the session GSI; runs in a thread pool.
+            Empty when the table is absent (dev), the flag is off, or nothing
+            was extracted.
+            """
+            from apis.shared.feature_flags import document_extract_enabled
+
+            if not document_extract_enabled():
+                return []
+            from apis.shared.extraction.extraction_store import get_extraction_store
+
+            return await asyncio.to_thread(
+                get_extraction_store().list_for_session,
+                session_id=session_id,
+                user_id=user_id,
+            )
+
         # Run fetches in parallel
         (
             messages_raw,
@@ -554,6 +573,7 @@ async def get_messages_from_cloud(
             ui_resource_rows,
             tool_summary_rows,
             source_provenance_rows,
+            extraction_rows,
         ) = await asyncio.gather(
             fetch_messages(),
             fetch_metadata(),
@@ -561,6 +581,7 @@ async def get_messages_from_cloud(
             fetch_ui_resources(),
             fetch_tool_summaries(),
             fetch_source_provenance(),
+            fetch_extractions(),
         )
 
         messages_raw = list(messages_raw or [])
@@ -676,6 +697,15 @@ async def get_messages_from_cloud(
                 if row.get("claims")
             ]
 
+        # Structured extraction: the `document_extraction` SSE is emitted once
+        # mid-turn and never re-streams. Without this replay a reloaded
+        # conversation mentions values with no table and no provenance behind
+        # them — and a `quote_unsupported` that vanishes on refresh reads as a
+        # clean answer, exactly as above. First page only, same reasoning.
+        extractions: List[Dict[str, Any]] = []
+        if not next_token:
+            extractions = [row for row in extraction_rows if row.get("fields")]
+
         return MessagesListResponse(
             messages=message_responses,
             next_token=next_page_token,
@@ -683,6 +713,7 @@ async def get_messages_from_cloud(
             ui_resources=ui_resources,
             tool_summaries=tool_summaries,
             source_provenance=source_provenance,
+            extractions=extractions,
         )
 
     except Exception as e:

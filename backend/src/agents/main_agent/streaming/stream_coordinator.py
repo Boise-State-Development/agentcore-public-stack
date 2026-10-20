@@ -832,6 +832,11 @@ class StreamCoordinator:
                         session_id, user_id
                     ):
                         yield provenance_sse
+                    # Same last chance for an extraction run in the final batch.
+                    for extraction_sse in await self._drain_document_extractions(
+                        session_id, user_id
+                    ):
+                        yield extraction_sse
                     await self._persist_paused_turn_snapshot(
                         agent,
                         session_id=session_id,
@@ -1358,6 +1363,17 @@ class StreamCoordinator:
                     session_id, user_id
                 ):
                     yield provenance_sse
+
+                # Structured extraction: `document_extract` parked its rows on
+                # its own broker for the same reason — a tool result is the
+                # Converse payload, and the quotes, locators and the rendered
+                # table must not reach the cacheable prefix
+                # (docs/specs/structured-extraction.md §9). Drained on the same
+                # pass, so the table appears while the turn continues.
+                for extraction_sse in await self._drain_document_extractions(
+                    session_id, user_id
+                ):
+                    yield extraction_sse
 
                 # Format as SSE event and yield (including done event after metadata)
                 sse_event = self._format_sse_event(event)
@@ -3281,6 +3297,38 @@ class StreamCoordinator:
             }
             events.append(
                 f"event: source_provenance\ndata: {json.dumps(event)}\n\n"
+            )
+        return events
+
+    @staticmethod
+    async def _drain_document_extractions(session_id: str, user_id: str) -> List[str]:
+        """Harvest `document_extract` runs into `document_extraction` SSEs.
+
+        The rows are already persisted by the tool, so this is purely the live
+        view: nothing here is load-bearing for a reload, and a failure costs
+        the user the mid-turn table and nothing else.
+
+        Keyed on `(user_id, session_id)` because a session id alone does not
+        name a conversation (CLAUDE.md) — two users on one session id must
+        never drain each other's extracted document values.
+        """
+        from apis.shared.feature_flags import document_extract_enabled
+
+        if not document_extract_enabled():
+            return []
+        try:
+            from apis.shared.extraction.extraction_broker import take_extractions
+
+            payloads = take_extractions(user_id, session_id)
+        except Exception:  # noqa: BLE001 - never worth breaking the stream
+            logger.debug("document extraction drain failed", exc_info=True)
+            return []
+
+        events: List[str] = []
+        for payload in payloads:
+            event = {"type": "document_extraction", "sessionId": session_id, **payload}
+            events.append(
+                f"event: document_extraction\ndata: {json.dumps(event)}\n\n"
             )
         return events
 

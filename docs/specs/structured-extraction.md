@@ -1,9 +1,10 @@
 # Structured extraction: a named field set over a document, as rows that carry their own verdict
 
-**Status:** Spec only. Nothing implemented. Behind `DOCUMENT_EXTRACT_ENABLED` (off by
-default; only the literal `"true"` enables) once PR-1 lands. **Implementation is
-blocked on source-provenance verification (G2) reaching `develop`** — §13 names
-exactly what collides and why. Decisions recorded in §11. Revised 2026-10-20 after
+**Status:** PR-1 and PR-2 implemented (slice one), behind `DOCUMENT_EXTRACT_ENABLED`
+(off by default; only the literal `"true"` enables). PR-3 (the SPA render) is not
+built. Source-provenance verification (G2) merged to `develop` on 2026-10-20, which
+unblocked this. **§16 records where this spec was wrong** — it was written before the
+code, and five of its decisions needed correcting on contact. Decisions recorded in §11. Revised 2026-10-20 after
 reading `strands-agents==1.57.2`: the constrained call is
 `BedrockModel.structured_output` with `strict_tools=True` on a dedicated model
 instance, not a hand-rolled `outputConfig.textFormat` request — same architecture, with
@@ -880,6 +881,188 @@ PR-1 and PR-2 are slice one. PR-3 is stated as outside it rather than assumed.
   `tuning_result` and optimizer. That is G4, and it shares its runner with G5.
 * **A warm call per field set** to keep grammars compiled (§6.4), until the measurement
   says it is needed.
+
+---
+
+## 16. Where this spec was wrong
+
+Written before the code, so parts of it were a hypothesis. Recorded here rather than
+quietly fixed, because the next reader needs to know which decisions survived contact.
+Each has a test naming the finding.
+
+**16.1 `references/field-sets/<name>.md` is not an expressible path (§4).**
+`SkillBundleFiles.validate_filename` is `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` — no path
+separators — and a manifest entry's standard path is `{kind_dir}/{filename}` with no
+nesting. The convention shipped is **`field-set.<name>.md`**, read at
+`references/field-set.<name>.md`. Every property D2 rests on survives (a flat manifest
+scan with no S3 GET, skill-scoped access by construction, versioning and sharing for
+free); only the directory is given up.
+
+**16.2 D5's letter conflicts with §14, and §14 wins.** D5 reads as "`optional: true`
+becomes a nullable union", implying a declared-required field is non-nullable. That
+cannot hold with §14's requirement that a field the document does not answer come back
+`null` rather than invented: a non-nullable value leaves the model no way to say "not
+here" except to write something. **Every value is nullable**, and `optional` now records
+the author's expectation instead of the schema's — a null on a field the author marked
+required is a finding for the reviewer, not a schema violation. D5's load-bearing half is
+kept exactly: nothing ever leaves `required`, so absence is always an explicit null and
+never a missing key, which also preserves §6.5's payoff (a 40-field set declares zero
+optional parameters).
+
+**16.3 Strands rewrites the schema on the way out, and §6.3's rules have to be checked
+on the rewritten form.** `model_json_schema()` is not what Bedrock receives.
+`convert_pydantic_to_tool_spec` inlines every `$defs` and collapses each `anyOf` into a
+type array, pushing nullability *down into nested branches*. Two defects were invisible
+at the Pydantic level:
+
+* **`Optional[Literal[...]]` becomes `{"enum": [...], "type": ["string","null"]}`** —
+  `type` permits null, `enum` refuses it, and `enum` wins. **An enum field could not
+  report an absent value**, so the model's only legal answer was to pick one, which is
+  the invention §14 exists to catch. `None` is now a member of the enum, which §6.3's
+  subset explicitly allows.
+* **`Optional[List[str]]` leaks null into `items`**, making `["climate", null]` a
+  schema-valid answer. The list is nullable; its entries are not.
+
+Also: a `format` passed through Pydantic's `json_schema_extra` lands *beside* the
+`anyOf`, where no validator reads it. Annotating the inner type puts it inside the
+string branch.
+
+**16.4 The model-cache key should include the content, not just `(set, version)` (D4).**
+Keying on the version alone serves the previous schema for the life of the process to an
+author who edits a `find` phrase without bumping `version` — and the symptom reads as a
+model regression. The key is `(name, version, content-digest)`, so a cache hit means
+exactly "the same schema", which is the property §6.4 actually needs. Two identical sets
+still share one class, so grammar reuse is unaffected.
+
+**16.5 `pages` must not narrow what provenance is verified against (§5, §7).** The spec
+does not say this and the obvious implementation gets it wrong. A quote the model took
+from page 1 of a run narrowed to pages 3–5 is still a real passage of this document;
+searching only the selection reports it `unverified` — **manufacturing** a hallucination
+signal, which is the one error this family of features must never produce. Extraction
+sees the selection; `document_units` always gets the whole document.
+
+**16.6 Two implementation decisions the spec deliberately left open, settled against
+real code.**
+
+* **The broker (§9) is a sibling of `provenance_broker`, not a generalization of it.**
+  That module is already generic — a thread-locked bounded dict keyed on
+  `(user_id, session_id)` — and only its name and its drain's event type make it
+  "provenance". Generalizing means a kind discriminator on every payload plus a branch
+  in a drain that currently has none, to avoid duplicating about forty lines. Two
+  brokers that each do one thing is cheaper, and it keeps either feature's kill switch
+  out of the other's code.
+* **Metering (D12) writes its `C#` row with `message_id="extract:<tool_use_id>"`.** The
+  row's SK is `C#<timestamp>#<uuid>` and `message_id` is only an attribute, so a
+  non-turn call can tag itself — the precedent is the voice path's `voice:<index>`.
+
+**16.7 Two traps found in the SDK and the model layer, neither in this spec.**
+
+* **Token usage is not where it looks.** `process_stream` wraps each provider chunk as
+  `{"event": chunk}`, so the metadata is a level deeper than it appears, and the
+  authoritative reading is the final `ModelStopReason`'s `{"stop": (stop_reason,
+  message, usage, metrics)}`. `event["metadata"]["usage"]` — the obvious shape — never
+  occurs. This was silent in the worst way: a metering path that skips an empty reading
+  writes **no** `C#` row, and `UnmeteredModelCall` does not fire either, since that
+  covers a call that reported usage and failed to price. So §9's `$0` trap had nothing
+  left to detect it. Strands also seeds usage at zero and overwrites it on the metadata
+  chunk, so an all-zero reading means "not reported yet", not "free".
+* **`getattr(model, "json")` returns Pydantic's deprecated method, not the field.** A
+  field named `json`, `copy` or `schema` is bound to a renamed attribute with the
+  authored name as its alias, and an attribute-first read yields a bound method — which
+  is not `None`, so it passes every guard and surfaces as a mysteriously empty column.
+  Look up by alias through `model_fields` first.
+
+**16.8 One invariant the spec assumed and nothing enforced.**
+`document_read.DOCUMENT_CLASS_FORMATS` and `source_provenance.UNIT_KINDS` must agree, or
+`document_units(fmt, texts)` raises through the agent's event loop and fails the turn —
+for `verify_sources` as much as for `document_extract`. They matched; now a test says so.
+
+**16.9 The capacity limits are real, undocumented, and far tighter than §5
+assumed. `MAX_FIELDS = 40` was never reachable.** Measured on dev against
+`us.anthropic.claude-haiku-4-5-20251001-v1:0`, 2026-10-20, with randomized
+property names so every schema was provably cold.
+
+Strict tool use has **four** distinct capacity failures, none of them in the
+AWS documentation, each with its own message and its own timescale:
+
+| Bedrock's message | When it arrives |
+|---|---|
+| `too many parameters with union types (… limit: 16 parameters with unions)` | < 1s, a pure count check |
+| `Schemas contains too many parameters and cause performance issues` | ~0.3s, a complexity pre-check |
+| `Schema is too complex for compilation` | ~25s |
+| `Compiled grammar size (393.0MB) exceeds maximum allowed size (300MB)` | 55–95s, after compiling |
+
+What the sweep found, in our schema shape (one nested
+`{nullable value, string quote}` object per field):
+
+| Fields | Result |
+|---|---|
+| 8 | compiles, ~13s |
+| 10 | compiles, ~15s |
+| 12 | compiles, ~19s |
+| **14** | **compiles, ~20–23s — the ceiling** |
+| 16 | refused in 0.29s (performance pre-check) |
+
+So `MAX_FIELDS` is **14**, measured rather than chosen, and the refusal says
+whose limit it is — an author told "the limit is 14" assumes it is ours and
+asks for it to be raised.
+
+Three things the sweep corrects, each of which inverts an assumption:
+
+* **Nullability is not the driver.** Eight *non-nullable* flat strings produce
+  the same 314.4MB grammar as eight nullable ones. §6.5's reasoning — that D5's
+  nullable-union trick "sidesteps" the optional-parameter cap — was wrong in
+  its premise but right in its conclusion, and for a different reason: the
+  separate 16-union counter does exist, and an enum-with-`null` does **not**
+  count against it, so 16.3's enum fix buys union budget as well as honesty.
+* **Flat top-level scalars are the expensive shape; nesting is cheap.** Eight
+  flat strings blow the 300MB ceiling, while sixteen nested two-property
+  objects (thirty-two leaf strings) compile in 22s. The per-field object this
+  spec adopted for §7's "quote as a sibling of the value" turns out to be what
+  makes any useful field count reachable at all. It was chosen for provenance
+  and it paid for itself in grammar size.
+* **Description length is free.** Fourteen fields with one-sentence `find`
+  phrases compile as fast as fourteen with three-word ones (19.6s vs 22.9s),
+  which matches AWS's own statement that changing only `name` or `description`
+  does not invalidate a cached grammar. **Tuning a `find` phrase therefore
+  costs no recompilation** — the thing an office does most often is the thing
+  that is cheapest, which is worth knowing before anyone optimizes for it.
+
+**This leaves §1's motivating example not fitting in one call.** A grants
+office wanting "the same twenty answers" gets fourteen per field set and must
+split the rest into a second set. That is a real product limitation, and it is
+recorded here rather than discovered by the first office to author a wide set.
+Chunking one logical set across several constrained calls is the obvious fix
+and is **not** built — see §15.
+
+**16.10 A capacity failure must not fall back to unenforced.** D11 would have
+retried *any* schema-shaped `ValidationException` without `strict_tools`. But a
+field set one field too wide is not a transient fault: it would have produced
+unenforced types on **every run, forever**, with a `schemaEnforced: false`
+marker as the only trace, and the office that authored it would never be told
+the cause. `SchemaTooComplexError` is raised instead, naming the field set and
+saying it needs splitting. D11's fallback keeps its original job — a schema
+Bedrock refuses on a *feature* — which is what it was actually written for.
+
+**16.11 Parallel calls against a cold schema each pay compilation, but the
+wall-clock cost is one compilation, not N.** Measured with five concurrent
+calls on a cold 10-field schema: every call took 15.3–16.0s where the warm
+median is 2.95s, so none was served a grammar warmed by another. Wall clock for
+all five was 16.05s.
+
+The feared outcome — "the first run of any new or edited field set is
+catastrophically slow, N times over" — **does not occur**, because the
+compilations proceed concurrently. What is wasted is Bedrock's compute, N times
+over, not the user's time.
+
+Warming with one call before fanning out is still adopted, but on the honest
+grounds rather than the assumed ones: it costs about three seconds *more* wall
+clock on a cold schema (16s → 19s) and one document's latency on a warm one, and
+it buys (a) one clear error instead of N identical ones when the field set
+exceeds a capacity limit — which the measurements above show is an easy mistake
+to make — and (b) no N-fold redundant compilation, which matters against a
+deployment that already has a Bedrock throttle alarm. It is not a latency
+optimization and the spec should not claim it is.
 
 ## Sources
 

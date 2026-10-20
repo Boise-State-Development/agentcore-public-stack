@@ -892,6 +892,11 @@ class MessagesListResponse(BaseModel):
         alias="sourceProvenance",
         description="Persisted source-provenance verdicts for this session, each shaped like the live `source_provenance` SSE event ({toolUseId, claims}), where every claim carries {id, state, method, quote, locator, uploadId, filename} and `state` is one of supported / quote_unsupported / unassessed / unverified. Replayed on load because the event never re-streams: without it a reloaded conversation shows cited values with no provenance, and a `quote_unsupported` that vanishes on refresh reads as a clean answer. Returned only on the first page.",
     )
+    extractions: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        alias="extractions",
+        description="Persisted structured-extraction runs for this session, each shaped like the live `document_extraction` SSE event ({toolUseId, fieldSet, fieldSetVersion, uploadId, filename, modelId, schemaEnforced, artifactId, downloadUploadId, fields}), where every field carries {name, title, type, value, state, method, quote, locator}. `state` is the source-provenance verdict for that value, so a reloaded table keeps its per-cell status rather than showing bare values — a `quote_unsupported` that vanishes on refresh reads as a clean answer. `schemaEnforced: false` means the typed schema could not be applied to that run and the types were requested rather than guaranteed. `quotesOmitted` is set when the stored row had to drop its quotes to fit DynamoDB's item limit; the artifact holds the full table regardless. Returned only on the first page.",
+    )
     from_archive: bool = Field(
         False,
         alias="fromArchive",
