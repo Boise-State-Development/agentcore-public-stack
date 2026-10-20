@@ -370,7 +370,8 @@ async def test_leaves_a_live_client_session_alone(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_a_connection_lost_mid_call_reports_an_unknown_outcome(monkeypatch):
+@pytest.mark.parametrize("failure", ["503", "dropped"])
+async def test_a_connection_lost_mid_call_reports_an_unknown_outcome(monkeypatch, failure):
     """A write the server performed must not come back as a plain failure.
 
     The dev sequence: an agent's tool provider owns a live session, the App
@@ -378,9 +379,14 @@ async def test_a_connection_lost_mid_call_reports_an_unknown_outcome(monkeypatch
     `isError: false` with "Tool execution failed: Connection to the MCP server
     was closed", and the shared client was left dead — the next press 502'd
     and every agent built over it got the dead session's tool list.
+
+    On mcp 2.x the 503 leaves the session up; a dropped response still ends
+    it. Both are an unknown outcome, and both leave a client the next press
+    can use.
     """
     monkeypatch.setattr(dispatch_mod, "_schedule_ui_resource_refresh", lambda *a: None)
-    with FlakyMCPServer() as server:
+    with FlakyMCPServer(fail_calls=failure == "503") as server:
+        server.drop_calls = failure == "dropped"
         client = server.client()
         # As the agent build does: the tool provider starts the session.
         await client.load_tools()
@@ -402,9 +408,10 @@ async def test_a_connection_lost_mid_call_reports_an_unknown_outcome(monkeypatch
             assert "may have completed" in text
             assert "issue_write" in text
 
-            # The crashed session was reset, so the client reconnects: the
+            # A crashed session was reset, so the client reconnects: the
             # next press works...
             server.fail_calls = False
+            server.drop_calls = False
             again = await dispatch_app_tool_call(
                 agent=None,
                 session_id="disp-lost",
@@ -441,14 +448,15 @@ async def test_a_crashed_session_is_reset_before_it_is_revived(monkeypatch):
     not running.
     """
     monkeypatch.setattr(dispatch_mod, "_schedule_ui_resource_refresh", lambda *a: None)
-    with FlakyMCPServer() as server:
+    with FlakyMCPServer(fail_calls=False) as server:
+        server.drop_calls = True
         client = server.client()
         client.start()
         # Crash it outside the dispatch, the way a model-driven call would.
         client.call_tool_sync("t-1", "issue_write", {"title": "model"})
         assert mcp_session.session_crashed(client)
 
-        server.fail_calls = False
+        server.drop_calls = False
         _patch(monkeypatch, enabled=True, meta=_ui(["model", "app"]), client=client)
         try:
             payload = await dispatch_app_tool_call(

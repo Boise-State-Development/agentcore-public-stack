@@ -457,6 +457,16 @@ did not move. The cold turn called `search_classes` three times and answered fro
 With MCP loading reduced to the slowest server, `rag` (1404–1485ms) is now the largest
 stage on this agent's first turn — P3b's case.
 
+*MCP negotiation on the 2.x SDK (2026-10-17).* Since `mcp` 2.1.1 each `start()` negotiates
+with `negotiate_auto`: a `server/discover` probe, then `initialize` if the server rejects
+it. A 2026-07-28 server (GitHub) answers the probe and needs nothing else. A legacy one
+pays one extra POST per connect: `mcp.excalidraw.com` went from 201ms to 325ms p50.
+`mcp_apps._UIExtensionClientSession` removes that after the first connect per process. A
+rejected probe followed by a good handshake marks the URL legacy for an hour
+(`mcp_transport.remember_legacy_server`), and later connects skip the probe: 205ms p50,
+back to 1.30 parity. A 5xx or timed-out probe is not a verdict. Only a cache-miss build
+connects at all, so a cache hit pays none of this.
+
 *P3a. Inside the constructor, no async plumbing.* In `BaseAgent.__init__`, `session_mgr`
 and `tools` do not depend on each other (hooks, which take the session manager, are built
 after both). Run them on two threads of one `ThreadPoolExecutor` and join — the same

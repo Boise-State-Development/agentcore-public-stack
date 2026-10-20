@@ -4,7 +4,7 @@ Tests for OAuthBearerAuth and CompositeAuth.
 Requirements: 19.1–19.5
 """
 import pytest
-import httpx
+import httpx2
 
 from agents.main_agent.integrations.oauth_auth import OAuthBearerAuth, CompositeAuth
 
@@ -15,7 +15,7 @@ class TestOAuthBearerAuthStaticToken:
     def test_static_token_adds_authorization_header(self):
         """Req 19.1: WHEN a static token is provided, auth_flow adds 'Authorization: Bearer {token}'."""
         auth = OAuthBearerAuth(token="my-secret-token")
-        request = httpx.Request("GET", "https://example.com/api")
+        request = httpx2.Request("GET", "https://example.com/api")
 
         flow = auth.auth_flow(request)
         modified_request = next(flow)
@@ -36,7 +36,7 @@ class TestOAuthBearerAuthTokenProvider:
             return "provider-token"
 
         auth = OAuthBearerAuth(token_provider=provider)
-        request = httpx.Request("GET", "https://example.com/api")
+        request = httpx2.Request("GET", "https://example.com/api")
 
         flow = auth.auth_flow(request)
         modified_request = next(flow)
@@ -47,7 +47,7 @@ class TestOAuthBearerAuthTokenProvider:
     def test_token_provider_returns_none_no_header(self):
         """Req 19.3: WHEN the token_provider returns None, auth_flow does not add an Authorization header."""
         auth = OAuthBearerAuth(token_provider=lambda: None)
-        request = httpx.Request("GET", "https://example.com/api")
+        request = httpx2.Request("GET", "https://example.com/api")
 
         flow = auth.auth_flow(request)
         modified_request = next(flow)
@@ -73,7 +73,7 @@ class TestCompositeAuth:
         auth2 = OAuthBearerAuth(token="token-two")
 
         composite = CompositeAuth(auth1, auth2)
-        request = httpx.Request("GET", "https://example.com/api")
+        request = httpx2.Request("GET", "https://example.com/api")
 
         flow = composite.auth_flow(request)
         modified_request = next(flow)
@@ -84,7 +84,7 @@ class TestCompositeAuth:
     def test_applies_mixed_auth_handlers(self):
         """Req 19.5 (detail): CompositeAuth works with handlers that set different headers."""
 
-        class CustomHeaderAuth(httpx.Auth):
+        class CustomHeaderAuth(httpx2.Auth):
             def auth_flow(self, request):
                 request.headers["X-Custom"] = "custom-value"
                 yield request
@@ -93,7 +93,7 @@ class TestCompositeAuth:
         oauth = OAuthBearerAuth(token="my-token")
 
         composite = CompositeAuth(custom_auth, oauth)
-        request = httpx.Request("GET", "https://example.com/api")
+        request = httpx2.Request("GET", "https://example.com/api")
 
         flow = composite.auth_flow(request)
         modified_request = next(flow)
@@ -104,7 +104,7 @@ class TestCompositeAuth:
     def test_empty_composite_yields_unmodified_request(self):
         """Req 19.5 (edge): CompositeAuth with no handlers yields the request unchanged."""
         composite = CompositeAuth()
-        request = httpx.Request("GET", "https://example.com/api")
+        request = httpx2.Request("GET", "https://example.com/api")
         original_headers = dict(request.headers)
 
         flow = composite.auth_flow(request)

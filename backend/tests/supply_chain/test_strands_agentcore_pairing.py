@@ -10,12 +10,15 @@ Two rules that used to live only as prose in the kaizen queue, now asserted:
    on the Lambda images that install `bedrock-agentcore` from their own
    hand-maintained requirements files.
 
-2. **`mcp` stays below 2 because we declared it, not by accident.**
-   `strands-agents` itself allows `mcp<2.2`. Without a declared constraint the
-   only thing holding the 1.x line is `idna==3.15` (mcp 2.x -> httpx2 -> idna
-   >=3.18), so a routine security bump of `idna` would silently cross the
-   major version under `integrations/mcp_apps.py`'s `ClientSession` patch.
-   See the comment on `[tool.uv].constraint-dependencies` in pyproject.toml.
+2. **The `mcp` SDK line is chosen by a declared exact pin, inside Strands' range.**
+   `mcp` reaches us only through `strands-agents`, which allows a range
+   (`mcp>=1.23.0,<2.2` on 1.57.2). Our seams on the SDK
+   (`integrations/mcp_apps.py`'s `ClientSession` patch and
+   `integrations/mcp_transport.py`) fail silently on a line they were not
+   written for, so the version is an exact `[tool.uv]` constraint that
+   `uv.lock` agrees with, and it must stay inside the range the pinned
+   Strands declares. See the comment on `[tool.uv].constraint-dependencies`
+   in pyproject.toml.
 """
 
 import re
@@ -164,44 +167,97 @@ def test_lambda_requirements_match_lock_for_agentcore_and_boto():
 
 
 # ---------------------------------------------------------------------------
-# Guard rail 2: mcp < 2 is held by a DECLARED constraint
+# Guard rail 2: the mcp version is a DECLARED exact pin inside Strands' range
 # ---------------------------------------------------------------------------
 
+# The 2.x transport's own dependencies, pinned with it so the lock never
+# drifts. `mcp-types` is exact-pinned by `mcp` itself.
+_MCP_COMPANION_PINS = ("httpx2", "httpcore2", "truststore")
 
-def _declared_mcp_constraint(pyproject: dict) -> SpecifierSet:
+
+def _declared_constraints(pyproject: dict) -> Dict[str, SpecifierSet]:
     constraints = pyproject.get("tool", {}).get("uv", {}).get("constraint-dependencies", [])
-    specs = [Requirement(c).specifier for c in constraints if Requirement(c).name == "mcp"]
-    assert specs, (
+    out: Dict[str, SpecifierSet] = {}
+    for raw in constraints:
+        req = Requirement(raw)
+        out[req.name] = out.get(req.name, SpecifierSet()) & req.specifier
+    return out
+
+
+def _exact_pin(spec: SpecifierSet) -> Optional[Version]:
+    pins = [s for s in spec if s.operator == "=="]
+    return Version(pins[0].version) if len(pins) == 1 and len(spec) == 1 else None
+
+
+def _declared_mcp_pin() -> Version:
+    spec = _declared_constraints(_load_toml(PYPROJECT_PATH)).get("mcp")
+    assert spec is not None, (
         "pyproject.toml [tool.uv].constraint-dependencies no longer constrains `mcp`. "
-        "strands-agents allows mcp<2.2, so nothing but an unrelated idna pin would "
-        "keep the resolver on mcp 1.x. Restore `mcp<2` or lift it deliberately "
-        "together with a test pass over integrations/mcp_apps.py."
+        "strands-agents allows a range of SDK versions, so the resolver would move "
+        "the MCP SDK on its own. Pin it exactly, together with a test pass over "
+        "integrations/mcp_apps.py and integrations/mcp_transport.py."
     )
-    combined = SpecifierSet()
-    for spec in specs:
-        combined &= spec
-    return combined
+    pin = _exact_pin(spec)
+    assert pin is not None, f"[tool.uv] constraint on mcp ({spec}) must be one exact `==` pin"
+    return pin
 
 
-def test_mcp_below_2_is_a_declared_constraint():
-    combined = _declared_mcp_constraint(_load_toml(PYPROJECT_PATH))
-
-    for probe in ("2.0.0", "2.0.0rc1", "2.1.0", "2.2.0"):
-        assert not combined.contains(probe, prereleases=True), (
-            f"[tool.uv] constraint on mcp ({combined}) admits {probe}; it must exclude every 2.x release."
-        )
-    assert combined.contains("1.30.0"), f"[tool.uv] constraint on mcp ({combined}) excludes the 1.x line entirely"
+def test_mcp_is_a_declared_exact_pin():
+    _declared_mcp_pin()
 
 
-def test_uv_lock_was_resolved_under_the_mcp_constraint():
+def test_mcp_pin_is_inside_the_range_strands_declares():
+    from importlib.metadata import requires
+
+    pin = _declared_mcp_pin()
+    strands_mcp = [Requirement(r) for r in requires("strands-agents") or [] if Requirement(r).name == "mcp"]
+    assert strands_mcp, "strands-agents no longer declares an mcp requirement"
+    for req in strands_mcp:
+        if req.marker is None:
+            assert req.specifier.contains(pin), (
+                f"mcp=={pin} is outside strands-agents' declared range ({req.specifier})"
+            )
+
+
+def test_uv_lock_was_resolved_under_the_mcp_pin():
+    pin = _declared_mcp_pin()
     lock = _load_toml(UV_LOCK_PATH)
     manifest_constraints = lock.get("manifest", {}).get("constraints", [])
     mcp_entries = [c for c in manifest_constraints if c.get("name") == "mcp"]
-
     assert mcp_entries, "uv.lock [manifest] carries no mcp constraint; it was not resolved under pyproject's [tool.uv] constraint"
-    for entry in mcp_entries:
-        assert not SpecifierSet(entry["specifier"]).contains("2.0.0", prereleases=True)
 
     locked = _locked_versions()
-    assert "mcp" in locked, "mcp missing from uv.lock"
-    assert locked["mcp"] < Version("2"), f"uv.lock resolved mcp=={locked['mcp']}"
+    assert locked.get("mcp") == pin, f"uv.lock resolved mcp=={locked.get('mcp')}, pyproject pins {pin}"
+    assert locked.get("mcp-types") == pin, f"uv.lock resolved mcp-types=={locked.get('mcp-types')}, expected {pin}"
+
+
+def test_the_2x_transport_dependencies_are_pinned_and_locked():
+    declared = _declared_constraints(_load_toml(PYPROJECT_PATH))
+    locked = _locked_versions()
+    for name in _MCP_COMPANION_PINS:
+        assert name in declared, f"[tool.uv] constraint-dependencies does not pin {name}"
+        pin = _exact_pin(declared[name])
+        assert pin is not None, f"[tool.uv] constraint on {name} ({declared[name]}) must be one exact `==` pin"
+        assert locked.get(name) == pin, f"uv.lock resolved {name}=={locked.get(name)}, pyproject pins {pin}"
+
+
+def test_lambda_images_that_install_strands_carry_the_same_mcp_set():
+    """The scheduled-runs image installs Strands, and so `mcp`, from its own
+    requirements file. A Lambda left on another SDK line is a second line in
+    production that no test here exercises."""
+    locked = _locked_versions()
+    mismatches = []
+    checked = 0
+    for path in LAMBDA_REQUIREMENTS_FILES:
+        if _requirements_pin(path, "strands-agents") is None and _requirements_pin(path, "mcp") is None:
+            continue
+        rel = path.relative_to(BACKEND_ROOT)
+        for name in ("strands-agents", "mcp", "mcp-types", *_MCP_COMPANION_PINS):
+            pinned = _requirements_pin(path, name)
+            checked += 1
+            if pinned is None:
+                mismatches.append(f"  {rel}: {name} is not pinned (uv.lock has {locked.get(name)})")
+            elif pinned != locked.get(name):
+                mismatches.append(f"  {rel}: {name}=={pinned} (uv.lock has {locked.get(name)})")
+    assert checked > 0, "No Lambda requirements file installs strands-agents; re-check this guard"
+    assert not mismatches, "Lambda mcp set drifted from backend/uv.lock:\n" + "\n".join(mismatches)

@@ -22,7 +22,6 @@ from dataclasses import dataclass
 from typing import Any, Callable, Iterator, Literal, Optional, List, Set, Tuple
 from urllib.parse import urlparse
 
-from mcp.client.streamable_http import streamablehttp_client
 from strands.tools.mcp import MCPClient
 
 from apis.shared.tools.models import (
@@ -39,6 +38,7 @@ from agents.main_agent.integrations.mcp_apps import (
     hidden_from_model,
 )
 from agents.main_agent.integrations.gateway_auth import get_sigv4_auth
+from agents.main_agent.integrations.mcp_transport import streamable_http_transport
 from agents.main_agent.integrations.token_exchange import (
     TokenExchangeError,
     get_token_exchange_client,
@@ -349,7 +349,7 @@ def create_external_mcp_client(
             # initialize and filters app-only tools out of the model's tool
             # list (both inert unless AGENTCORE_MCP_APPS_HOST_ENABLED=true).
             mcp_client = UICapableMCPClient(
-                lambda url=config.server_url, auth=auth, headers=headers: streamablehttp_client(
+                lambda url=config.server_url, auth=auth, headers=headers: streamable_http_transport(
                     url,
                     headers=headers,
                     auth=auth,

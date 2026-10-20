@@ -47,7 +47,7 @@ dependencies = [
     "python-multipart==0.0.31",
     "aiohttp==3.14.3",
     "urllib3==2.8.0",
-    "idna==3.15",
+    "idna==3.20",
     "pyasn1==0.6.4",
     "soupsieve==2.9.0",
     # Transitive via starlette/httpx/fastapi. Pinned to 4.14.2 for
@@ -122,33 +122,37 @@ all = [
 ]
 
 [tool.uv]
-# Guard rail on a TRANSITIVE dependency — this is not a loosened pin.
+# Exact pins on TRANSITIVE dependencies — the MCP SDK line is chosen here.
 #
 # `mcp` arrives only via `strands-agents`; we do not depend on it directly and
 # deliberately do not promote it to a direct dependency. `strands-agents==1.57.2`
-# — the version pinned above, today — declares `mcp>=1.23.0,<2.2`, so the
-# resolver is free to cross into `mcp` 2.x whenever it gets the chance.
+# declares `mcp>=1.23.0,<2.2`, so without this constraint the resolver would
+# move the SDK whenever it got the chance. 2.1.1 is the newest release inside
+# that range: it negotiates MCP 2026-07-28 (`server/discover`, per-request
+# `_meta` capabilities, multi-round-trip input requests), and Strands'
+# `strands/tools/mcp/_compat.py` adapts to it (`MCP_V2`).
 #
-# Without this constraint the only thing holding us on 1.x is incidental: `mcp` 2.x
-# pulls `httpx2>=2.5.0`, which needs `idna>=3.18`, and we pin `idna==3.15` for
-# an unrelated Dependabot alert. A routine security bump of `idna` would quietly
-# unblock the major crossing — nobody would be choosing it, and nothing in the
-# diff would say "MCP".
+# Our own seams on the SDK are in `src/agents/main_agent/integrations/`:
+# `mcp_apps.py` substitutes `strands.tools.mcp.mcp_client.ClientSession` with
+# `_UIExtensionClientSession` to advertise the MCP Apps UI extension (SEP-1865),
+# and `mcp_transport.py` builds the streamable-HTTP transport over `httpx2`.
+# Both fail silently on an SDK line they were not written for (no App frames,
+# no auth-status signal), so move this pin deliberately, with a test pass over
+# them. See docs/kaizen/scoping/2026-10-17-mcp-sdk-v2-upgrade.md.
 #
-# That crossing lands under `src/agents/main_agent/integrations/mcp_apps.py`,
-# which substitutes `strands.tools.mcp.mcp_client.ClientSession` with
-# `_UIExtensionClientSession` to advertise the MCP Apps UI extension (SEP-1865)
-# on `initialize`. That seam reaches through a Strands internal into an MCP SDK
-# class and has never been exercised against 2.x — where the transport
-# dependency itself changed (httpx -> httpx2) and the types moved to a separate
-# `mcp-types` distribution. The failure mode is silent: MCP App frame headers
-# degrade to a generic glyph rather than raising an ImportError.
+# `httpx2` / `httpcore2` / `truststore` are the 2.x transport's own
+# dependencies (`mcp` asks only for `httpx2>=2.5.0`), pinned so the lock never
+# drifts onto a release younger than two weeks.
 #
-# A constraint, not a dependency: it bounds the version IF `mcp` is in the
-# resolution graph, without adding it to our own dependency metadata. Lift it
-# deliberately, together with a test pass over that `ClientSession` patch.
+# A constraint, not a dependency: it bounds the version IF the package is in
+# the resolution graph, without adding it to our own dependency metadata.
 # Asserted by backend/tests/supply_chain/test_strands_agentcore_pairing.py.
-constraint-dependencies = ["mcp<2"]
+constraint-dependencies = [
+    "mcp==2.1.1",
+    "httpx2==2.13.1",
+    "httpcore2==2.13.1",
+    "truststore==0.10.4",
+]
 
 [tool.setuptools]
 package-dir = {"" = "src"}

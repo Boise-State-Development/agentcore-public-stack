@@ -16,7 +16,13 @@ cachetools==6.2.4
 # bedrock_agentcore.memory.integrations.strands, which imports Strands (the base
 # package; none of its bidi extras are imported). Versions match backend/uv.lock.
 strands-agents==1.57.2
-mcp==1.30.0
+# mcp 2.x's own wire types and transport, pinned like backend/pyproject.toml's
+# [tool.uv] constraints so pip resolves the same set uv.lock does.
+mcp==2.1.1
+mcp-types==2.1.1
+httpx2==2.13.1
+httpcore2==2.13.1
+truststore==0.10.4
 opentelemetry-api==1.44.0
 opentelemetry-sdk==1.44.0
 opentelemetry-instrumentation-threading==0.65b0

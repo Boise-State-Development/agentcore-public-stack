@@ -4,18 +4,23 @@ Provides AWS SigV4 authentication for Streamable HTTP MCP client
 """
 
 import boto3
-import httpx
+import httpx2
 from typing import Generator, Optional
 from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
 from botocore.credentials import Credentials
 
 
-class SigV4HTTPXAuth(httpx.Auth):
+class SigV4HTTPXAuth(httpx2.Auth):
     """
-    HTTPX Auth class that signs requests with AWS SigV4.
+    HTTPX2 Auth class that signs requests with AWS SigV4.
     Used for authenticating with AgentCore Gateway MCP protocol.
+    httpx2, not httpx: the mcp 2.x streamable-HTTP transport is built on
+    httpx2, whose client rejects an ``httpx.Auth`` (see ``mcp_transport``).
     """
+
+    # The signature covers the body, so httpx2 must have read it first.
+    requires_request_body = True
 
     def __init__(
         self,
@@ -51,11 +56,11 @@ class SigV4HTTPXAuth(httpx.Auth):
         self.signer = SigV4Auth(credentials, service, region)
 
     def auth_flow(
-        self, request: httpx.Request
-    ) -> Generator[httpx.Request, httpx.Response, None]:
+        self, request: httpx2.Request
+    ) -> Generator[httpx2.Request, httpx2.Response, None]:
         """
         Signs the request with SigV4 and adds the signature to the request headers.
-        This method is called by httpx for each request.
+        This method is called by httpx2 for each request.
         """
         # Create an AWS request
         headers = dict(request.headers)
@@ -86,7 +91,7 @@ def get_sigv4_auth(
     credentials: Optional[Credentials] = None,
 ) -> SigV4HTTPXAuth:
     """
-    Get a SigV4 auth handler for httpx requests.
+    Get a SigV4 auth handler for httpx2 requests.
 
     Args:
         service: AWS service name (default: 'bedrock-agentcore')
@@ -94,7 +99,7 @@ def get_sigv4_auth(
         credentials: AWS credentials. If None, uses boto3 session credentials.
 
     Returns:
-        SigV4HTTPXAuth instance for use with httpx clients and MCP streamablehttp_client
+        SigV4HTTPXAuth instance for use with httpx2 clients and `mcp_transport`
     """
     return SigV4HTTPXAuth(
         credentials=credentials,

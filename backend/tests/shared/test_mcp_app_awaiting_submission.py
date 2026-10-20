@@ -10,6 +10,8 @@ everything except App tools.
 
 from __future__ import annotations
 
+import mcp.types as mcp_types
+
 from apis.shared.mcp_apps.awaiting_submission import (
     AWAITING_USER_SUBMISSION,
     awaiting_user_submission,
@@ -110,3 +112,40 @@ class TestMarkAwaitingUserSubmission:
 
         assert not mark_awaiting_user_submission(result, is_app_tool=False)
         assert "structuredContent" not in result
+
+
+def test_a_2026_07_28_server_sends_the_marker_itself():
+    """Real wire: on 2026-07-28 GitHub attaches the marker to its stub
+    (`TestTypedIssueWriteAwaitingForm`), and it reaches the Strands result
+    whole, so no text match is needed and nothing overwrites it."""
+    import mcp.types as mcp_types
+    from strands.tools.mcp import MCPClient
+
+    from agents.main_agent.integrations.mcp_transport import streamable_http_transport
+    from tests.fixtures.flaky_mcp_server import FlakyMCPServer
+
+    marker = {"status": AWAITING_USER_SUBMISSION, "tool": "issue_write"}
+
+    def setup(server):
+        @server.tool()
+        def form_write(title: str) -> mcp_types.CallToolResult:
+            return mcp_types.CallToolResult(
+                content=[mcp_types.TextContent(type="text", text=_GITHUB_CREATE_STUB["content"][0]["text"])],
+                isError=True,
+                structuredContent=marker,
+            )
+
+    with FlakyMCPServer(fail_calls=False, setup=setup) as server:
+        client = MCPClient(lambda: streamable_http_transport(server.url))
+        client.start()
+        try:
+            result = client.call_tool_sync("t-1", "form_write", {"title": "x"})
+        finally:
+            client.stop(None, None, None)
+
+    assert result["status"] == "error"
+    assert result["structuredContent"] == marker
+    assert has_awaiting_marker(result)
+    assert awaiting_user_submission(result, is_app_tool=False)
+    assert mark_awaiting_user_submission(result, is_app_tool=True)
+    assert result["structuredContent"] == marker
