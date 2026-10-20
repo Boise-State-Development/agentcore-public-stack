@@ -70,9 +70,25 @@ FIELD_TYPES = frozenset(
 #: (D7): a schema-declared type cannot be talked out of.
 JUDGEMENT_TYPES = frozenset({TYPE_ENUM, TYPE_BOOLEAN})
 
-#: §5. A set wider than this is refused at parse time rather than truncated,
-#: because a silently dropped column is a column a reviewer thinks was checked.
-MAX_FIELDS = 40
+#: The widest field set that Bedrock will actually compile a grammar for, in
+#: our schema shape. **Measured on dev against Haiku 4.5, 2026-10-20** — not
+#: chosen, and not the 40 the spec assumed (§16.9).
+#:
+#: Strict tool use has at least four undocumented capacity limits, each with
+#: its own error, and a field set runs into them well before 40:
+#:
+#:   * 14 fields (nested ``{nullable value, string quote}``) compiles in ~20s.
+#:   * 16 fields is refused in 0.29s: "Schemas ... cause performance issues".
+#:   * A separate counter caps *union-typed* parameters at 16 outright.
+#:   * Flat top-level scalars are far worse: 8 of them produce a 314MB grammar
+#:     against a 300MB cap. Nesting each field as its own object is what makes
+#:     14 reachable at all.
+#:
+#: A set wider than this is refused at parse time rather than truncated,
+#: because a silently dropped column is a column a reviewer thinks was
+#: checked — and far better than the request-time failure the author would
+#: otherwise get, which names a grammar rather than their field table.
+MAX_FIELDS = 14
 
 #: The filename convention a field set is stored under in a skill's reference
 #: bundle: ``field-set.<name>.md``, read at ``references/field-set.<name>.md``.
@@ -400,7 +416,10 @@ def parse_field_set(text: str, *, name: str) -> FieldSet:
     if len(fields) > MAX_FIELDS:
         raise FieldSetError(
             f"field set '{name}': {len(fields)} fields exceeds the limit of "
-            f"{MAX_FIELDS}. Split it rather than dropping columns"
+            f"{MAX_FIELDS}. This is Bedrock's own limit on how complex a "
+            "constrained schema may be, measured rather than chosen — a wider "
+            "set is refused at request time with an error about grammar size. "
+            "Split it into two field sets and run them separately"
         )
 
     return FieldSet(

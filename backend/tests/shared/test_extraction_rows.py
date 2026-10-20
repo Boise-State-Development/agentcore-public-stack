@@ -17,7 +17,7 @@ from typing import Any, Dict
 
 import pytest
 
-from apis.shared.extraction.field_sets import parse_field_set
+from apis.shared.extraction.field_sets import MAX_FIELDS, parse_field_set
 from apis.shared.extraction.rows import (
     MAX_RESULT_CHARS,
     MAX_VALUE_CHARS,
@@ -338,12 +338,16 @@ class TestWhatTheModelIsTold:
     def test_an_oversized_result_drops_to_names_and_states(self) -> None:
         """§5.1's second bound. The states are what the model needs to act;
         the values are on screen in the table either way."""
+        # A full-width set (the measured Bedrock ceiling) whose values are each
+        # at the per-value cap: 14 x 200 chars is well past the 2,000-char
+        # result bound, so the drop has to fire.
         rows_md = "".join(
-            f"| field_{i} | the value for field {i} |\n" for i in range(40)
+            f"| field_{i} | the value for field {i} |\n" for i in range(MAX_FIELDS)
         )
         field_set = parse_field_set(f"| name | find |\n|---|---|\n{rows_md}", name="big")
         huge = {
-            f"field_{i}": {"value": "y" * 180, "quote": None} for i in range(40)
+            f"field_{i}": {"value": "y" * MAX_VALUE_CHARS, "quote": None}
+            for i in range(MAX_FIELDS)
         }
         result = model_facing_result(
             build_rows(field_set, huge, None),

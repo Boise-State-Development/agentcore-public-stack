@@ -256,13 +256,62 @@ async def _run_once(
     return await asyncio.wait_for(_drive(), timeout=timeout)
 
 
-def _should_fall_back(exc: BaseException) -> bool:
-    """Whether *exc* is one of D11's three marked-fallback causes.
+#: Bedrock's own words when a schema is too big or too complex to compile.
+#: **Measured on dev, 2026-10-20** — each of these is a distinct error, none is
+#: documented, and the first arrives in under a second while the third can take
+#: ninety:
+#:
+#:   * "parameters with union types"  — more than 16 nullable/anyOf parameters.
+#:   * "cause performance issues"     — a fast pre-check on overall complexity.
+#:   * "too complex for compilation"  — the same verdict, reached later.
+#:   * "grammar size"                 — compiled past the 300MB ceiling.
+#:
+#: These are **authoring** failures, not transient ones, and they are the
+#: reason the unenforced fallback must not swallow everything a
+#: ``ValidationException`` can mean: a field set that is too wide would
+#: otherwise downgrade to unenforced on *every* run, forever, and the office
+#: that authored it would never be told. See :func:`_capacity_failure`.
+_CAPACITY_MARKERS = (
+    "parameters with union types",
+    "cause performance issues",
+    "too complex for compilation",
+    "grammar size",
+)
 
-    Narrow on purpose. A credentials error, a throttle or an access denial is
-    not a reason to retry without enforcement — it is a reason to fail, because
-    retrying would turn an infrastructure problem into a quietly weaker result.
+
+class SchemaTooComplexError(ExtractionError):
+    """The field set is wider or more complex than Bedrock will compile.
+
+    Separate from :class:`ExtractionError` so the tool can tell the model this
+    is the *author's* problem to fix, not the user's request to retry.
     """
+
+
+def _capacity_failure(exc: BaseException) -> bool:
+    """Whether *exc* says the schema itself is too big to compile."""
+    message = str(exc)
+    return any(marker in message for marker in _CAPACITY_MARKERS)
+
+
+def _should_fall_back(exc: BaseException) -> bool:
+    """Whether *exc* is one of D11's marked-fallback causes.
+
+    Narrow on purpose, in two directions.
+
+    A credentials error, a throttle or an access denial is not a reason to
+    retry without enforcement — it is a reason to fail, because retrying would
+    turn an infrastructure problem into a quietly weaker result.
+
+    And a **capacity** failure is not a reason either, which is the correction
+    measurement forced: the spec's D11 would have retried unenforced on any
+    schema-shaped ``ValidationException``, so a field set one field too wide
+    would have produced unenforced types on every run for the life of the
+    deployment, with only a ``schemaEnforced: false`` marker to show for it.
+    That is a fixable authoring mistake wearing the costume of a transient
+    fault. It raises instead.
+    """
+    if _capacity_failure(exc):
+        return False
     if isinstance(exc, asyncio.TimeoutError):
         # Grammar compilation on a schema Bedrock has not seen (§6.4).
         return True
@@ -327,6 +376,13 @@ async def extract_fields(
     except asyncio.CancelledError:
         raise
     except Exception as exc:  # noqa: BLE001 - classified by _should_fall_back
+        if _capacity_failure(exc):
+            raise SchemaTooComplexError(
+                f"the field set '{field_set.name}' is too complex for Bedrock to "
+                f"compile a constrained schema from ({exc}). This is a limit on "
+                "the field set itself, not on the document — it needs splitting "
+                "into two smaller sets by whoever maintains the skill."
+            ) from exc
         if not _should_fall_back(exc):
             raise ExtractionError(f"the extraction call failed: {exc}") from exc
         logger.warning(
@@ -394,5 +450,6 @@ __all__ = [
     "STRICT_TIMEOUT_SECONDS",
     "ExtractionError",
     "ExtractionResult",
+    "SchemaTooComplexError",
     "extract_fields",
 ]

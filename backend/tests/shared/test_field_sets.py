@@ -228,6 +228,32 @@ class TestAuthoringErrors:
         with pytest.raises(FieldSetError, match=f"exceeds the limit of {MAX_FIELDS}"):
             parse(f"| name | find |\n|---|---|\n{rows}")
 
+    def test_a_set_at_the_ceiling_still_parses(self) -> None:
+        rows = "".join(f"| field_{i} | value {i} |\n" for i in range(MAX_FIELDS))
+        assert len(parse(f"| name | find |\n|---|---|\n{rows}").fields) == MAX_FIELDS
+
+    def test_the_ceiling_is_the_measured_bedrock_one(self) -> None:
+        """14, measured on dev 2026-10-20, not chosen.
+
+        Pinned as a value rather than left implicit because it is the one
+        number in this module that came from an experiment: 14 fields compile
+        in ~20s, 16 are refused in 0.29s with "cause performance issues", and
+        the spec's assumed 40 was never reachable. If someone raises it, the
+        measurement has to be redone — the limit is undocumented and the
+        failure lands at request time, naming a grammar rather than a field
+        table.
+        """
+        assert MAX_FIELDS == 14
+
+    def test_the_refusal_explains_whose_limit_it_is(self) -> None:
+        """An author told "the limit is 14" will believe it is our choice and
+        ask for it to be raised."""
+        rows = "".join(f"| f_{i} | value |\n" for i in range(MAX_FIELDS + 1))
+        with pytest.raises(FieldSetError) as exc:
+            parse(f"| name | find |\n|---|---|\n{rows}")
+        assert "Bedrock's own limit" in str(exc.value)
+        assert "Split it" in str(exc.value)
+
     def test_a_bad_set_name_is_refused(self) -> None:
         with pytest.raises(FieldSetError, match="lowercase words"):
             parse("| name | find |\n|---|---|\n| a | b |\n", name="NSF_Solicitation")

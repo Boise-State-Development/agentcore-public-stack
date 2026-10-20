@@ -64,7 +64,11 @@ from strands import tool
 from strands.types.tools import ToolContext
 
 from apis.shared.extraction.extraction_broker import queue_extraction
-from apis.shared.extraction.extractor import ExtractionError, extract_fields
+from apis.shared.extraction.extractor import (
+    ExtractionError,
+    SchemaTooComplexError,
+    extract_fields,
+)
 from apis.shared.extraction.field_sets import FieldSetError
 from apis.shared.extraction.render import (
     XLSX_MIME_TYPE,
@@ -474,6 +478,13 @@ def make_document_extract_tool(session_id: str, user_id: str, records: List[Any]
                 "\n\n".join(extract_texts),
                 filename=meta.filename,
                 model_id=model_id,
+            )
+        except SchemaTooComplexError as exc:
+            # The author's problem, not the user's request. Said plainly so the
+            # model relays something actionable rather than offering to retry.
+            return _error(
+                f"❌ {exc} Tell the user the field set needs to be split; "
+                "retrying will not help."
             )
         except ExtractionError as exc:
             return _error(f"❌ Extraction did not run: {exc}")

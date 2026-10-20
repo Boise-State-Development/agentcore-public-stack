@@ -977,6 +977,93 @@ real code.**
 `document_units(fmt, texts)` raises through the agent's event loop and fails the turn —
 for `verify_sources` as much as for `document_extract`. They matched; now a test says so.
 
+**16.9 The capacity limits are real, undocumented, and far tighter than §5
+assumed. `MAX_FIELDS = 40` was never reachable.** Measured on dev against
+`us.anthropic.claude-haiku-4-5-20251001-v1:0`, 2026-10-20, with randomized
+property names so every schema was provably cold.
+
+Strict tool use has **four** distinct capacity failures, none of them in the
+AWS documentation, each with its own message and its own timescale:
+
+| Bedrock's message | When it arrives |
+|---|---|
+| `too many parameters with union types (… limit: 16 parameters with unions)` | < 1s, a pure count check |
+| `Schemas contains too many parameters and cause performance issues` | ~0.3s, a complexity pre-check |
+| `Schema is too complex for compilation` | ~25s |
+| `Compiled grammar size (393.0MB) exceeds maximum allowed size (300MB)` | 55–95s, after compiling |
+
+What the sweep found, in our schema shape (one nested
+`{nullable value, string quote}` object per field):
+
+| Fields | Result |
+|---|---|
+| 8 | compiles, ~13s |
+| 10 | compiles, ~15s |
+| 12 | compiles, ~19s |
+| **14** | **compiles, ~20–23s — the ceiling** |
+| 16 | refused in 0.29s (performance pre-check) |
+
+So `MAX_FIELDS` is **14**, measured rather than chosen, and the refusal says
+whose limit it is — an author told "the limit is 14" assumes it is ours and
+asks for it to be raised.
+
+Three things the sweep corrects, each of which inverts an assumption:
+
+* **Nullability is not the driver.** Eight *non-nullable* flat strings produce
+  the same 314.4MB grammar as eight nullable ones. §6.5's reasoning — that D5's
+  nullable-union trick "sidesteps" the optional-parameter cap — was wrong in
+  its premise but right in its conclusion, and for a different reason: the
+  separate 16-union counter does exist, and an enum-with-`null` does **not**
+  count against it, so 16.3's enum fix buys union budget as well as honesty.
+* **Flat top-level scalars are the expensive shape; nesting is cheap.** Eight
+  flat strings blow the 300MB ceiling, while sixteen nested two-property
+  objects (thirty-two leaf strings) compile in 22s. The per-field object this
+  spec adopted for §7's "quote as a sibling of the value" turns out to be what
+  makes any useful field count reachable at all. It was chosen for provenance
+  and it paid for itself in grammar size.
+* **Description length is free.** Fourteen fields with one-sentence `find`
+  phrases compile as fast as fourteen with three-word ones (19.6s vs 22.9s),
+  which matches AWS's own statement that changing only `name` or `description`
+  does not invalidate a cached grammar. **Tuning a `find` phrase therefore
+  costs no recompilation** — the thing an office does most often is the thing
+  that is cheapest, which is worth knowing before anyone optimizes for it.
+
+**This leaves §1's motivating example not fitting in one call.** A grants
+office wanting "the same twenty answers" gets fourteen per field set and must
+split the rest into a second set. That is a real product limitation, and it is
+recorded here rather than discovered by the first office to author a wide set.
+Chunking one logical set across several constrained calls is the obvious fix
+and is **not** built — see §15.
+
+**16.10 A capacity failure must not fall back to unenforced.** D11 would have
+retried *any* schema-shaped `ValidationException` without `strict_tools`. But a
+field set one field too wide is not a transient fault: it would have produced
+unenforced types on **every run, forever**, with a `schemaEnforced: false`
+marker as the only trace, and the office that authored it would never be told
+the cause. `SchemaTooComplexError` is raised instead, naming the field set and
+saying it needs splitting. D11's fallback keeps its original job — a schema
+Bedrock refuses on a *feature* — which is what it was actually written for.
+
+**16.11 Parallel calls against a cold schema each pay compilation, but the
+wall-clock cost is one compilation, not N.** Measured with five concurrent
+calls on a cold 10-field schema: every call took 15.3–16.0s where the warm
+median is 2.95s, so none was served a grammar warmed by another. Wall clock for
+all five was 16.05s.
+
+The feared outcome — "the first run of any new or edited field set is
+catastrophically slow, N times over" — **does not occur**, because the
+compilations proceed concurrently. What is wasted is Bedrock's compute, N times
+over, not the user's time.
+
+Warming with one call before fanning out is still adopted, but on the honest
+grounds rather than the assumed ones: it costs about three seconds *more* wall
+clock on a cold schema (16s → 19s) and one document's latency on a warm one, and
+it buys (a) one clear error instead of N identical ones when the field set
+exceeds a capacity limit — which the measurements above show is an easy mistake
+to make — and (b) no N-fold redundant compilation, which matters against a
+deployment that already has a Bedrock throttle alarm. It is not a latency
+optimization and the spec should not claim it is.
+
 ## Sources
 
 * `_local-notes/vandalizer-parity-and-gap-analysis.md` §G1 (this spec's seed), §G2 (the

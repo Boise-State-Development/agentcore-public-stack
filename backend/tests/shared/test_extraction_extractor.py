@@ -359,6 +359,82 @@ class TestTheMarkedFallback:
             )
 
 
+class TestSchemaCapacityIsAnAuthoringError:
+    """A field set too wide to compile must not downgrade silently.
+
+    The error strings below are **verbatim from Bedrock**, captured on dev
+    against Haiku 4.5 on 2026-10-20. None is documented, and each arrives on a
+    different timescale — the perf pre-check in 0.29s, a grammar-size failure
+    after ninety seconds of compiling.
+
+    The spec's D11 would have treated all of them as a reason to retry
+    unenforced, so a field set one field too wide would have produced
+    unenforced types on *every* run for the life of the deployment, with a
+    `schemaEnforced: false` marker as the only trace. That is a fixable
+    authoring mistake wearing the costume of a transient fault.
+    """
+
+    MEASURED = [
+        pytest.param(
+            "The model returned the following errors: Schemas contains too many "
+            "parameters with union types (18 parameters with type arrays or anyOf). "
+            "This causes exponential compilation cost. Reduce the number of nullable "
+            "or union-typed parameters (limit: 16 parameters with unions).",
+            id="union-limit",
+        ),
+        pytest.param(
+            "The model returned the following errors: Schemas contains too many "
+            "parameters and cause performance issues. Simplify your tool schemas or "
+            "reduce the number of strict tools.",
+            id="perf-guard",
+        ),
+        pytest.param(
+            "The model returned the following errors: Schema is too complex for "
+            "compilation. Try reducing the number of tools or simplifying tool schemas.",
+            id="too-complex",
+        ),
+        pytest.param(
+            "The model returned the following errors: Compiled grammar size (393.0MB) "
+            "exceeds maximum allowed size (300MB). Simplify your JSON schema to reduce "
+            "grammar complexity.",
+            id="grammar-size",
+        ),
+    ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("message", MEASURED)
+    async def test_a_capacity_failure_raises_rather_than_downgrading(
+        self, monkeypatch, field_set, message
+    ) -> None:
+        install(monkeypatch, ValidationException(message), "ok")
+        with pytest.raises(ex.SchemaTooComplexError) as exc:
+            await ex.extract_fields(
+                field_set, "a document", filename="nsf.pdf", model_id="us.model"
+            )
+        assert "needs splitting" in str(exc.value)
+        # And it never reached for the unenforced retry.
+        assert [b["strict"] for b in FakeModel.built] == [True]
+
+    @pytest.mark.parametrize("message", MEASURED)
+    def test_each_measured_message_is_classified_as_capacity(self, message) -> None:
+        assert ex._capacity_failure(ValidationException(message)) is True
+        assert ex._should_fall_back(ValidationException(message)) is False
+
+    def test_an_unsupported_feature_still_falls_back(self) -> None:
+        """D11's original intent is preserved for what it was actually for: a
+        schema Bedrock refuses on a *feature*, not on size."""
+        exc = ValidationException(
+            "The model returned the following errors: schema uses an unsupported "
+            "feature: minimum"
+        )
+        assert ex._capacity_failure(exc) is False
+        assert ex._should_fall_back(exc) is True
+
+    def test_schema_too_complex_is_an_extraction_error(self) -> None:
+        """So a caller that only knows the base class still handles it."""
+        assert issubclass(ex.SchemaTooComplexError, ex.ExtractionError)
+
+
 class TestRefusals:
     @pytest.mark.asyncio
     async def test_an_unset_model_id_is_refused_not_defaulted(self, field_set) -> None:
