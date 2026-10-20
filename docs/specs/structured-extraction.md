@@ -873,6 +873,39 @@ PR-1 and PR-2 are slice one. PR-3 is stated as outside it rather than assumed.
   express a numeric range, and a constraint the grammar enforces is one the model cannot
   report honestly. Nothing in this slice reads that section; the parser ignores it
   rather than rejecting it, so a field set authored with rules is forward-compatible.
+* **Better prompting for outlier detection.** Not the branch to take, and this is
+  recorded as a decision rather than an omission because it is the obvious next
+  move and it is the wrong one.
+
+  §17.8 measured outlier detection at 4/10 → 3/10 → 1/10 as N grows, and the
+  field-by-field note that recovered collision detection did not help it. The
+  reason the two behave differently is the reason prompting will not close the
+  gap: **a collision is a relation the comparison table already makes visible**,
+  so attention is the only missing ingredient and an instruction can supply it;
+  **an outlier needs a sense of what normal is for that field**, which the model
+  has to infer from fourteen rows that frequently carry no distribution to infer
+  it from. No wording fixes a missing denominator.
+
+  Two directions that would, both out of scope here:
+
+  1. **Compute it, then let the model interpret it.** Once rows are typed,
+     "which value in this column is unlike the others" is arithmetic — distinct
+     count, min/max, modal value per field — computable in Python and handed
+     over as part of the tool result. The code finds the anomaly and the model
+     says why it matters. This is the same principle §6.3 already states for
+     numeric constraints: a flag on a row the model can report honestly beats
+     asking the model to do the detection and hoping.
+  2. **"Unusual" may be the wrong question entirely.** An office does not
+     primarily want "which of these is atypical", it wants "which of these
+     violates our constraints" — *we cannot meet cost share above 25%*. That is
+     a policy fact about the institution, belonging in the project's memory
+     space, not a statistical property of this particular week's fourteen
+     documents. On that reading, outlier-as-anomaly conflates two different
+     jobs, and the valuable one needs no statistics at all.
+
+  Which of those is right is an open question; that better prompting is not the
+  answer is not.
+
 * **OCR (G3).** A scanned PDF has no text layer. `document_provenance_units` yields no
   units, every field reads `unverified`/`document_unreadable`, and the run says so. The
   fix is G3 and it is a prerequisite for extraction from scanned documents, not a part
