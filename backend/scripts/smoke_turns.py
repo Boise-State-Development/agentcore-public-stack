@@ -740,9 +740,18 @@ PROVENANCE_AMOUNT = "$487,500"
 PROVENANCE_FABRICATED = "$912,000"
 
 
-def minimal_pdf(text: str) -> bytes:
-    """A valid single-page PDF whose only content is ``text`` (Helvetica 24pt)."""
-    stream = f"BT /F1 24 Tf 72 700 Td ({text}) Tj ET".encode("latin-1")
+def minimal_pdf(text: str, *, font_size: int = 24) -> bytes:
+    """A valid single-page PDF whose only content is ``text`` (Helvetica).
+
+    ``font_size`` defaults to 24, which is what the token rows have always
+    used. Pass something smaller for anything sentence-length: text wider than
+    the 612pt MediaBox runs off the page, and ``get_text_bounded`` clips to the
+    page box, so the text layer comes back **silently truncated** — a 53-char
+    sentence at 24pt extracts as its first 49 characters. A row asserting on
+    that text then fails for a reason that has nothing to do with what it is
+    testing.
+    """
+    stream = f"BT /F1 {font_size} Tf 72 700 Td ({text}) Tj ET".encode("latin-1")
     objs = [
         b"<< /Type /Catalog /Pages 2 0 R >>",
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
@@ -1151,6 +1160,53 @@ async def row_attach_pdf(ctx: Context) -> RowResult:
     return RowResult("attach_pdf", "PASS", f"inline PDF accepted, answer streamed, attachment restored; tools={_tools_used(turn)}", warnings)
 
 
+
+async def _register_upload(
+    user_id: str, session_id: str, filename: str, mime_type: str, data: bytes
+) -> str:
+    """Register *data* as a READY session file and return its upload_id.
+
+    The SPA presigns, PUTs to S3 and completes the upload, then sends
+    ``file_upload_ids`` — never base64 ``files`` (`chat-request.service.ts`).
+    That difference decides whether ``document_read`` and ``verify_sources``
+    exist on the turn: ``turn_has_document`` is classified from the *resolved
+    uploads* only (`routes.py`, `_resolved_files_include_a_document`), and
+    inline base64 never produces an upload row — `inline_persist` writes rows
+    for spreadsheets and decks, not documents.
+
+    So a row that needs the document tools cannot use the base64 path, and this
+    writes the same two things a completed upload does: the S3 object at the
+    conventional key, and a READY row. Needs AWS credentials, so it is only
+    reachable where the harness already resolved the deployed environment.
+    """
+    import boto3
+
+    from apis.shared.files.models import FileMetadata, FileStatus
+    from apis.shared.files.repository import get_file_upload_repository
+
+    bucket = os.environ.get("S3_USER_FILES_BUCKET_NAME", "")
+    if not bucket:
+        raise RowSkip("S3_USER_FILES_BUCKET_NAME is not set; needs --prefix (deployed) or a local stack")
+    upload_id = f"{int(time.time() * 1000)}-{uuid.uuid4().hex[:12]}"
+    key = f"user-files/{user_id}/{session_id}/{upload_id}/{filename}"
+    await asyncio.to_thread(
+        boto3.client("s3").put_object, Bucket=bucket, Key=key, Body=data, ContentType=mime_type
+    )
+    await get_file_upload_repository().create_file(
+        FileMetadata(
+            upload_id=upload_id,
+            user_id=user_id,
+            session_id=session_id,
+            filename=filename,
+            mime_type=mime_type,
+            size_bytes=len(data),
+            s3_key=key,
+            s3_bucket=bucket,
+            status=FileStatus.READY,
+        )
+    )
+    return upload_id
+
 async def row_source_provenance(ctx: Context) -> RowResult:
     """`verify_sources` answers both questions and emits `source_provenance`.
 
@@ -1175,14 +1231,14 @@ async def row_source_provenance(ctx: Context) -> RowResult:
         f"   - id \"bogus\", value \"{PROVENANCE_FABRICATED}\", quote set to the SAME sentence verbatim.\n"
         "3. Reply with just: real=<state> bogus=<state>"
     )
-    files = [
-        {
-            "filename": "smoke.pdf",
-            "content_type": "application/pdf",
-            "bytes": base64.b64encode(minimal_pdf(PROVENANCE_SENTENCE)).decode(),
-        }
-    ]
-    turn = await ctx.transport.stream_turn(ctx.base_payload(sid, prompt, files=files, enabled_tools=None))
+    # A real upload, not base64: see _register_upload for why the document
+    # tools do not exist on an inline-base64 turn.
+    upload_id = await _register_upload(
+        ctx.args.user_id or "", sid, "smoke.pdf", "application/pdf", minimal_pdf(PROVENANCE_SENTENCE, font_size=11)
+    )
+    turn = await ctx.transport.stream_turn(
+        ctx.base_payload(sid, prompt, file_upload_ids=[upload_id], enabled_tools=None)
+    )
     ctx.note(turn)
     warnings = assert_frame_contract(turn)
 
@@ -1399,6 +1455,20 @@ def resolve_runtime_env(prefix: str, region: str) -> None:
         "DYNAMODB_ASSISTANTS_TABLE_NAME": param("rag/assistants-table-name", f"{prefix}-assistants"),
         "DYNAMODB_USER_SETTINGS_TABLE_NAME": param("settings/user-settings-table-name", f"{prefix}-user-settings"),
         "AGENTCORE_MEMORY_ID": param("inference-api/memory-id", ""),
+        # Session files, for rows that need a real upload rather than inline
+        # base64 (`_register_upload`). Both are `{prefix}-user-file-uploads`,
+        # the bucket suffixed with the account — taken from app-api's live task
+        # definition, not from a bucket-name search: this account also holds an
+        # unrelated `*-user-files-*` bucket from another stack.
+        "DYNAMODB_USER_FILES_TABLE_NAME": f"{prefix}-user-file-uploads",
+        "S3_USER_FILES_BUCKET_NAME": f"{prefix}-user-file-uploads-{account}",
+        # Runtime-direct mode reads `GET /messages` in-process, standing in for
+        # app-api, so the in-process reader needs app-api's flags too. Only the
+        # *read* is affected: the `source_provenance` frame comes from the
+        # deployed Runtime, so a deployment with the feature genuinely off fails
+        # the frame assertion first and this cannot mask it. `setdefault`, so an
+        # operator who exports it wins.
+        "SOURCE_PROVENANCE_ENABLED": "true",
     }
     for k, v in env.items():
         os.environ.setdefault(k, v)
