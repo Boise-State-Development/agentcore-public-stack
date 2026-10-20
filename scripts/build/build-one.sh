@@ -254,6 +254,7 @@ case "$SERVICE" in
             "backend/src/apis/shared/auth/models.py"
             "backend/src/apis/shared/timestamps.py"
             "backend/src/apis/shared/mcp_apps/ui_resource_store.py"
+            "backend/src/apis/shared/files/provenance_store.py"
         )
         # Both scheduled-runs Lambdas are arm64 (see the scheduled-runs
         # CDK construct).
