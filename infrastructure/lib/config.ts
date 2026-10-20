@@ -96,6 +96,7 @@ export interface AppConfig {
   folderAttachments: FolderAttachmentsConfig;
   folderSync: FolderSyncConfig;
   sourceProvenance: SourceProvenanceConfig;
+  documentExtract: DocumentExtractConfig;
   agents: AgentsConfig;
   agentMarketplace: AgentMarketplaceConfig;
   dictation: DictationConfig;
@@ -772,6 +773,35 @@ export interface FolderSyncConfig {
  */
 export interface SourceProvenanceConfig {
   enabled: boolean;
+}
+
+/**
+ * Typed structured extraction (docs/specs/structured-extraction.md). On, a turn
+ * whose active skills declare a field set also gets `document_extract`: a named,
+ * typed field set is run over one document and comes back as rows, each value
+ * carrying a source-provenance state rather than a bare answer. **Opt-in while
+ * in development**: off unless CDK_DOCUMENT_EXTRACT_ENABLED=true (or a
+ * `documentExtract.enabled: true` cdk.json context). A feature switch, and
+ * therefore permanent: each run spends a model call whose input scales with the
+ * document, and it has the product assert typed values about a user's document.
+ *
+ * Sets DOCUMENT_EXTRACT_ENABLED on the AgentCore Runtime (which mounts the tool,
+ * extracts, verifies and emits `document_extraction`) and on app-api (which
+ * replays the stored `EXTR#` rows on GET /messages). Written to the Runtime's
+ * environment **only while on**, so the default spends none of the V2 payload
+ * budget. No resources: the rows sit on the existing sessions-metadata table and
+ * its SessionLookupIndex GSI, and the artifact and workbook use existing paths.
+ *
+ * `modelId` is the Bedrock-native Converse model the constrained call runs on —
+ * deliberately not the turn's model, because strict tool use is a Converse
+ * feature a Mantle-hosted model never receives. It **must** have a catalog row:
+ * without one the call prices to null, costs $0, counts against no quota and
+ * fires UnmeteredModelCall. Regional (`us.*`) on dev, Global (`global.*`) in
+ * production, matching how the stack already distinguishes them.
+ */
+export interface DocumentExtractConfig {
+  enabled: boolean;
+  modelId: string;
 }
 
 /**
@@ -1609,6 +1639,21 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_SOURCE_PROVENANCE_ENABLED
         ? process.env.CDK_SOURCE_PROVENANCE_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('sourceProvenance')?.enabled ?? false,
+    },
+    documentExtract: {
+      // In development: only "true" enables, and an unset GitHub variable
+      // arrives as "" rather than undefined.
+      enabled: process.env.CDK_DOCUMENT_EXTRACT_ENABLED
+        ? process.env.CDK_DOCUMENT_EXTRACT_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('documentExtract')?.enabled ?? false,
+      // Haiku 4.5 carries structured outputs on bedrock-runtime, and the
+      // Regional (`us.*`) profile is what dev runs. Production overrides this
+      // with the Global id through the same variable. Pinned by a config test
+      // because an id with no catalog row is an unmetered call, not an error.
+      modelId:
+        process.env.CDK_DOCUMENT_EXTRACT_MODEL_ID?.trim() ||
+        scope.node.tryGetContext('documentExtract')?.modelId ||
+        'us.anthropic.claude-haiku-4-5-20251001-v1:0',
     },
     agents: {
       // Default ON with a kill switch (house style, mirroring memorySpaces /

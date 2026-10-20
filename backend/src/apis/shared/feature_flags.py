@@ -1122,3 +1122,59 @@ def source_provenance_enabled() -> bool:
     invisible, so there is nothing for a rollout hedge to protect.
     """
     return os.environ.get("SOURCE_PROVENANCE_ENABLED", "").strip().lower() == "true"
+
+
+def document_extract_enabled() -> bool:
+    """Whether a named field set can be run over a document as typed rows
+    (``docs/specs/structured-extraction.md``).
+
+    On, a turn whose active skills declare a field set also gets
+    ``document_extract``: the model names a set and a document, and the backend
+    resolves the set's fields server-side, makes **its own** constrained model
+    call carrying the document text and the field schema, and verifies each
+    extracted value through ``source_provenance`` — so every row carries one of
+    the four states rather than a tidy value with nothing behind it. The field
+    schema never enters the turn's ``toolConfig``: the agent-facing spec is one
+    constant per deployment and the typed schema travels on a request of its
+    own, which has no cacheable prefix to re-write (D1). The model gets the
+    values and the states back, a few tokens each; the quotes, locators, the
+    rendered table and the workbook travel on the ``document_extraction`` SSE
+    event, an ``EXTR#`` row and an artifact. Off, the tool is never built.
+
+    Its model is named separately by ``DOCUMENT_EXTRACT_MODEL_ID``, which must
+    have a catalog row — without one the extraction call prices to ``None``,
+    costs $0, counts against no quota and fires ``UnmeteredModelCall`` (§9).
+
+    **Opt-in while the feature is in development** (CLAUDE.md "Feature flags"):
+    only ``"true"`` (case-insensitive) enables it; unset arrives as ``""`` and
+    is off. CDK sets it on the AgentCore Runtime (which mounts the tool,
+    extracts, verifies and emits) and on app-api (which replays the ``EXTR#``
+    rows on ``GET /messages``) from ``config.documentExtract.enabled``. The
+    SPA's matching switch is ``features.documentExtract``.
+
+    A **feature switch**, not a rollout switch, and therefore permanent: each
+    run spends money on a model call whose input scales with the document, it
+    adds a tool to ``toolConfig``, and it has the product assert typed values
+    about a document on a user's behalf. Every one of those is a judgement a
+    deployment may reasonably decline, so it is configuration rather than a
+    rollout hedge, and it does not retire.
+    """
+    return os.environ.get("DOCUMENT_EXTRACT_ENABLED", "").strip().lower() == "true"
+
+
+def document_extract_model_id() -> str:
+    """The Bedrock-native Converse model id the extraction call uses (§6.6).
+
+    Deliberately not the turn's model. The constrained call needs Converse's
+    strict tool use, which a Mantle-hosted OpenAI model never receives — so the
+    extraction builds its own dedicated ``BedrockModel`` and the turn's model,
+    and its model *class*, are irrelevant to it. The cost of that is worth
+    stating rather than hiding: extraction may run on a different (usually
+    cheaper) model than the one the user picked, which is why the id travels on
+    the SSE event.
+
+    Empty when unset, which the caller reports as a configuration error rather
+    than silently falling back — a wrong id here is an unmetered call (§9), and
+    a default that looks like it works is how one ships.
+    """
+    return os.environ.get("DOCUMENT_EXTRACT_MODEL_ID", "").strip()

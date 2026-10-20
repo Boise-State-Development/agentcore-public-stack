@@ -213,6 +213,12 @@ function allFlagsOn(base: AppConfig): AppConfig {
     // sessions-metadata table and one more tool in toolConfig — so it is here
     // for the environment-variable ceilings, not the resource count.
     sourceProvenance: { enabled: true },
+    // Structured extraction adds no resources either — `EXTR#` rows on the
+    // existing sessions-metadata table, an artifact through the existing
+    // artifacts path, and an .xlsx through the existing user-files path — so
+    // like source provenance it is here for the environment-variable ceilings
+    // and for the flag-coverage test below, not for the resource count.
+    documentExtract: { ...base.documentExtract, enabled: true },
     agents: { enabled: true },
     agentMarketplace: { enabled: true },
     dictation: { ...base.dictation, enabled: true },

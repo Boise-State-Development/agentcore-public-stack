@@ -740,6 +740,66 @@ describe('RAG Ingestion Configuration', () => {
     });
   });
 
+  // ============================================================
+  // Structured extraction — in development, so only "true" enables
+  // ============================================================
+
+  describe('Document extract feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_DOCUMENT_EXTRACT_ENABLED;
+      delete process.env.CDK_DOCUMENT_EXTRACT_MODEL_ID;
+    });
+
+    test('defaults to disabled, and "" (unset GitHub variable) is disabled', () => {
+      delete process.env.CDK_DOCUMENT_EXTRACT_ENABLED;
+      expect(loadConfig(app).documentExtract.enabled).toBe(false);
+      process.env.CDK_DOCUMENT_EXTRACT_ENABLED = '';
+      expect(loadConfig(app).documentExtract.enabled).toBe(false);
+    });
+
+    test('only "true" enables it', () => {
+      process.env.CDK_DOCUMENT_EXTRACT_ENABLED = 'True';
+      expect(loadConfig(app).documentExtract.enabled).toBe(true);
+      for (const value of ['yes', '1', 'on', 'enabled', 'false']) {
+        process.env.CDK_DOCUMENT_EXTRACT_ENABLED = value;
+        expect(loadConfig(app).documentExtract.enabled).toBe(false);
+      }
+    });
+
+    // The model id gets a case of its own because getting it wrong is silent.
+    // An id with no catalog row prices the extraction call to null: it costs
+    // $0, counts against no quota, and only the UnmeteredModelCall metric
+    // says so (structured-extraction.md §9).
+    test('the extraction model id defaults to a real Bedrock-native id', () => {
+      delete process.env.CDK_DOCUMENT_EXTRACT_MODEL_ID;
+      const modelId = loadConfig(app).documentExtract.modelId;
+      expect(modelId).toBe('us.anthropic.claude-haiku-4-5-20251001-v1:0');
+      // Structured outputs is per model AND per inference profile: the India
+      // profile is the one documented exclusion, and our own profiles are the
+      // only ones this stack ever sets.
+      expect(modelId.startsWith('in.')).toBe(false);
+      expect(modelId.startsWith('us.') || modelId.startsWith('global.')).toBe(true);
+    });
+
+    test('the model id is overridable per environment, and is trimmed', () => {
+      process.env.CDK_DOCUMENT_EXTRACT_MODEL_ID =
+        '  global.anthropic.claude-haiku-4-5-20251001-v1:0  ';
+      expect(loadConfig(app).documentExtract.modelId).toBe(
+        'global.anthropic.claude-haiku-4-5-20251001-v1:0',
+      );
+    });
+
+    test('an unset GitHub variable ("") falls back to the default, not to empty', () => {
+      // The trap this exists for: `vars.X` forwards "" when unset, and
+      // `'' || default` is the default while `''.trim()` alone would have
+      // shipped an empty model id to the Runtime.
+      process.env.CDK_DOCUMENT_EXTRACT_MODEL_ID = '';
+      expect(loadConfig(app).documentExtract.modelId).toBe(
+        'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+      );
+    });
+  });
+
   describe('Client turn timing feature flag', () => {
     afterEach(() => {
       delete process.env.CDK_CLIENT_TURN_TIMING_ENABLED;

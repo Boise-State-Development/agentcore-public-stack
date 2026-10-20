@@ -409,6 +409,13 @@ export function buildAppApiEnvironment(
     // `SRCV#` verdicts, which the SSE event does not re-stream. In development,
     // so only "true" enables.
     SOURCE_PROVENANCE_ENABLED: config.sourceProvenance.enabled ? 'true' : 'false',
+
+    // Typed structured extraction (docs/specs/structured-extraction.md).
+    // app-api's share is the read side: `GET /messages` replays the stored
+    // `EXTR#` rows, which the SSE event does not re-stream. In development, so
+    // only "true" enables. The model id is deliberately NOT set here — app-api
+    // never makes the extraction call.
+    DOCUMENT_EXTRACT_ENABLED: config.documentExtract.enabled ? 'true' : 'false',
     ...(params.largeDocumentPrepareQueueUrl
       ? { LARGE_DOCUMENT_PREPARE_QUEUE_URL: params.largeDocumentPrepareQueueUrl }
       : {}),

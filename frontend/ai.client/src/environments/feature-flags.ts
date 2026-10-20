@@ -86,4 +86,18 @@ export interface FeatureFlags {
    * everywhere until a deployment turns both sides on.
    */
   sourceProvenance: boolean;
+
+  /**
+   * Structured extraction: a named field set run over a document as typed rows
+   * (docs/specs/structured-extraction.md). The UI's share is the rows table —
+   * each cell showing its source-provenance state in the same vocabulary
+   * `sourceProvenance` established, plus the `schemaEnforced` disclosure when
+   * the typed schema was requested rather than guaranteed. Backend:
+   * DOCUMENT_EXTRACT_ENABLED (the Runtime mounts `document_extract`, extracts,
+   * verifies and emits `document_extraction`; app-api replays the `EXTR#`
+   * rows). In development, so `false` everywhere until a deployment turns both
+   * sides on. Carried from slice one so the two sides can land independently;
+   * the table render is slice three.
+   */
+  documentExtract: boolean;
 }

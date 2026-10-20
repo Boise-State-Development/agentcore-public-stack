@@ -23,5 +23,6 @@ export const environment = {
         // The `development` GitHub environment sets CDK_FOLDER_SYNC_ENABLED=true.
         folderSync: true,
         sourceProvenance: false,
+        documentExtract: false,
     } satisfies FeatureFlags,
 };
