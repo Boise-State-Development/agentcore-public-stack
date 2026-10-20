@@ -958,6 +958,34 @@ How the probe runs (`apis/app_api/telemetry/ttft_probe.py`, `TtftProbeConstruct`
 
 Reading drift: compare the daily medians on the dashboard's trend widget, first turns and follow-ups separately, and when one moves, slice it by `modelId` in Logs Insights before calling it a regression; a change of default model moves every percentile. Alarms wait for a baseline (see the probe).
 
+#### Recorded comparisons
+
+A dependency bump or a change on this path that gets measured by hand lands here,
+with the statistics it actually supports. `smoke_turns.py` is the usual
+instrument, and its first-token line is the number quoted.
+
+**strands-agents 1.57.2 → 1.61.1, bedrock-agentcore 1.24.0 → 1.24.2** (PRs
+`71c24232` + `961b8f7a`, measured on dev 2026-10-20). Both runs
+`scripts/smoke_turns.py --auth headless-grant` against dev, same rows, same user,
+same day; pre-bump on the image deployed 20:06:18Z (which carried #1681 and
+#1686 but not the bump), post-bump on `78321529`.
+
+| first token | pre-bump | post-bump | Δ |
+|---|---|---|---|
+| min | 1,365 ms | 1,355 ms | −10 ms |
+| median | 4,062 ms | 4,242 ms | **+180 ms (+4.4%)** |
+| max | 4,611 ms | 4,849 ms | +238 ms |
+
+**Read this as "no evidence the bump moved TTFT", not as "TTFT unchanged."**
+Six turns per side, and every smoke row opens a new session, so each measurement
+is a cold agent build — the noisiest thing on this path. That sample has no power
+to detect anything under roughly **500 ms**, so the +180 ms median sits inside
+expected variance and a real regression smaller than half a second would have
+passed this comparison unnoticed. The budget in §1 is not satisfied by this
+number; it is merely not contradicted by it. Anything claiming a TTFT effect at
+finer resolution needs the probe's daily medians (above) or a purpose-built A/B,
+not a six-turn smoke run.
+
 ## 7. Clarity refactors
 
 The route's phases are now named functions with typed results, in the order the map
