@@ -167,10 +167,16 @@ def _resolve_resource(record: Any, path: str) -> Optional[Any]:
 class SkillsRuntime(NamedTuple):
     """What one turn's skills contribute to the agent.
 
-    A ``NamedTuple`` rather than a dataclass so every existing
-    ``plugin, read_tool = build_skills_runtime(...)`` call site keeps working
-    unchanged — the records are a third element nobody has to unpack, which
-    makes adding a second consumer a non-event for the first one.
+    A ``NamedTuple`` so callers can read ``.plugin`` / ``.read_skill_file`` /
+    ``.records`` by name instead of by position.
+
+    **Adding the third element is a breaking change for positional callers**,
+    and that is worth stating plainly rather than glossed: a three-element
+    tuple does not unpack into two names, so every
+    ``plugin, read_tool = build_skills_runtime(...)`` site had to be updated.
+    The alternative — returning a two-tuple and fetching the records again —
+    would have cost the turn a second DynamoDB read of rows it already held,
+    which is the thing this exists to avoid.
     """
 
     plugin: Optional[Any]

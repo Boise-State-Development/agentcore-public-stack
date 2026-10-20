@@ -133,15 +133,26 @@ class TestTheGateCostsNothing:
 
 
 class TestTheSkillsRuntimeCarriesRecords:
-    def test_the_runtime_tuple_still_unpacks_as_two(self) -> None:
-        """Existing ``plugin, read_tool = build_skills_runtime(...)`` call sites
-        must keep working: the records are a third element nobody has to
-        unpack, which is what makes adding a second consumer a non-event."""
+    def test_the_runtime_is_a_three_element_tuple_and_callers_must_say_so(
+        self,
+    ) -> None:
+        """A three-element tuple does **not** unpack into two names.
+
+        An earlier revision of this change claimed it did and shipped a test
+        that only read ``.plugin`` and ``.records`` — so the assertion passed
+        while five real call sites raised ``ValueError: too many values to
+        unpack``. The named fields are the point of the NamedTuple; the arity
+        is a breaking change, and it is written down here rather than assumed
+        away.
+        """
         from agents.main_agent.skills.strands_mapping import SkillsRuntime
 
         runtime = SkillsRuntime(None, None, [])
-        assert runtime.records == []
-        assert runtime.plugin is None
+        assert len(runtime) == 3
+        plugin, read_tool, records = runtime
+        assert (plugin, read_tool, records) == (None, None, [])
+        with pytest.raises(ValueError):
+            _two, _names = runtime  # noqa: F841 - the arity is the assertion
 
     def test_an_empty_skill_list_returns_an_empty_runtime(self) -> None:
         from agents.main_agent.skills import strands_mapping as sm

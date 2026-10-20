@@ -121,7 +121,7 @@ async def _build_and_fingerprint(monkeypatch, rng: random.Random) -> dict:
     shuffled_records = list(SKILL_RECORDS)
     rng.shuffle(shuffled_records)
     monkeypatch.setattr(sm, "fetch_active_skill_records", lambda ids: shuffled_records)
-    plugin, read_tool = sm.build_skills_runtime(merged.skills)
+    plugin, read_tool, _records = sm.build_skills_runtime(merged.skills)
 
     tools = [TOOLS_BY_ID[tool_id] for tool_id in merged.tools if tool_id in TOOLS_BY_ID]
     tools.append(read_tool)
@@ -168,7 +168,9 @@ async def test_skills_xml_actually_present_in_fingerprinted_prompt(monkeypatch):
     # Guard the guard: if AgentSkills ever stops injecting before the hook
     # captures, the system-prompt assertion above would trivially pass.
     monkeypatch.setattr(sm, "fetch_active_skill_records", lambda ids: list(SKILL_RECORDS))
-    plugin, read_tool = sm.build_skills_runtime([r.skill_id for r in SKILL_RECORDS])
+    plugin, read_tool, _records = sm.build_skills_runtime(
+        [r.skill_id for r in SKILL_RECORDS]
+    )
     model = MagicMock()
     model.config = {}
     agent = Agent(model=model, system_prompt="Base.", tools=[read_tool], plugins=[plugin])
