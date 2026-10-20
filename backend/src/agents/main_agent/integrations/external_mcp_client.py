@@ -1033,6 +1033,9 @@ class ExternalMCPIntegration:
         survivor's filter, so a server held through two roles still reaches
         every tool either role selected — bounded, as always, by the surviving
         row's own admin tool list, which ``_load_server`` applies.
+
+        A record whose status is disabled claims nothing, so it can never win
+        over an active record for the same server.
         """
         rows = await asyncio.gather(
             *(self._read_row(tool_id, repository) for tool_id, _ in servers)
@@ -1044,7 +1047,19 @@ class ExternalMCPIntegration:
         dropped: List[dict] = []
 
         for (tool_id, names), (row, was_read, catalog_ms) in zip(servers, rows):
-            key = _same_server_key(row) if row is not None else None
+            # A disabled row must never claim a server, or it would win the
+            # dedupe and then be skipped for its status — costing the user a
+            # server an *active* record reaches. Dev has exactly this shape:
+            # three catalog entries on Zoom's hosted server, of which
+            # `race_test_zoom_search_2` and `_3` are disabled and `zoom_hosted`
+            # is active. Left keyless, it keeps its own entry and `_load_server`
+            # reports `disabled` for it exactly as before.
+            key = (
+                _same_server_key(row)
+                if row is not None
+                and not is_disabled_status(getattr(row, "status", None))
+                else None
+            )
             index = winner_of.get(key) if key else None
             if index is None:
                 if key:

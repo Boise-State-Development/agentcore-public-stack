@@ -1675,6 +1675,84 @@ class TestOneServerIsLoadedOnce:
         }
 
     @pytest.mark.asyncio
+    async def test_a_disabled_entry_never_wins_over_an_active_one(self):
+        """dev's real shape: three catalog entries on Zoom's hosted server,
+        `race_test_zoom_search_2` and `_3` disabled, `zoom_hosted` active — and
+        the disabled ones sort first. A disabled winner would be dropped for
+        its status straight afterwards, costing the user a server an active
+        record reaches."""
+        when = datetime(2025, 1, 1, tzinfo=timezone.utc)
+        zoom_url = "https://mcp.zoom.us/mcp/zoom/streamable"
+        tools = {}
+        for tid, status in (
+            ("race_test_zoom_search_2", "disabled"),
+            ("race_test_zoom_search_3", "disabled"),
+            ("zoom_hosted", "active"),
+        ):
+            tool = _fake_tool(when, tool_id=tid, server_url=zoom_url)
+            tool.status = status
+            tools[tid] = tool
+        client = SimpleNamespace(load_tools=AsyncMock(return_value=[]))
+        timings: list = []
+
+        with patch(
+            "apis.shared.tools.repository.get_tool_catalog_repository",
+            return_value=self._repo(tools),
+        ), patch(
+            "agents.main_agent.integrations.external_mcp_client.create_external_mcp_client",
+            return_value=client,
+        ) as create_mock:
+            result = await ExternalMCPIntegration().load_external_tools(
+                list(tools), timings=timings
+            )
+
+        # The active entry still loads; neither disabled entry claimed the URL.
+        assert result == [client]
+        assert create_mock.call_args.kwargs["tool_definition"].tool_id == "zoom_hosted"
+        assert [(t["id"], t["outcome"]) for t in timings] == [
+            ("race_test_zoom_search_2", "disabled"),
+            ("race_test_zoom_search_3", "disabled"),
+            ("zoom_hosted", "loaded"),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_two_active_entries_still_collapse_when_one_is_disabled(self):
+        """The dedupe is not switched off by a disabled sibling: among the
+        active records for one server, the first still wins."""
+        when = datetime(2025, 1, 1, tzinfo=timezone.utc)
+        tools = {}
+        for tid, status in (
+            ("a_disabled", "disabled"),
+            ("b_active", "active"),
+            ("c_active", "active"),
+        ):
+            tool = _fake_tool(when, tool_id=tid, server_url=self.ONE_URL)
+            tool.status = status
+            tools[tid] = tool
+        client = SimpleNamespace(load_tools=AsyncMock(return_value=[]))
+        timings: list = []
+
+        with patch(
+            "apis.shared.tools.repository.get_tool_catalog_repository",
+            return_value=self._repo(tools),
+        ), patch(
+            "agents.main_agent.integrations.external_mcp_client.create_external_mcp_client",
+            return_value=client,
+        ) as create_mock:
+            result = await ExternalMCPIntegration().load_external_tools(
+                list(tools), timings=timings
+            )
+
+        assert result == [client]
+        assert create_mock.call_count == 1
+        assert create_mock.call_args.kwargs["tool_definition"].tool_id == "b_active"
+        assert [(t["id"], t["outcome"]) for t in timings] == [
+            ("a_disabled", "disabled"),
+            ("b_active", "loaded"),
+            ("c_active", "duplicate"),
+        ]
+
+    @pytest.mark.asyncio
     async def test_different_headers_on_one_url_stay_two_servers(self):
         """The dev GitHub connector's shape: one hosted server, and each
         catalog entry asks it for a different toolset in its headers."""
