@@ -3,7 +3,11 @@
 **Status:** Spec only. Nothing implemented. Behind `DOCUMENT_EXTRACT_ENABLED` (off by
 default; only the literal `"true"` enables) once PR-1 lands. **Implementation is
 blocked on source-provenance verification (G2) reaching `develop`** — §13 names
-exactly what collides and why. Decisions recorded in §11.
+exactly what collides and why. Decisions recorded in §11. Revised 2026-10-20 after
+reading `strands-agents==1.57.2`: the constrained call is
+`BedrockModel.structured_output` with `strict_tools=True` on a dedicated model
+instance, not a hand-rolled `outputConfig.textFormat` request — same architecture, with
+the schema generator and the result validator already written (§2.6, §6.1, D1, D15).
 **Author:** Phil Merrell (with Claude Code)
 **Date:** 2026-10-20
 **Targets:** `develop`
@@ -96,6 +100,22 @@ a forced one-tool Converse call whose result is then validated in Python, and wh
 code comments record that `tool_use["input"]` may arrive as a **string** needing
 `json.loads`. That is the house precedent for a schema-shaped side-channel call, and
 also local evidence that an unenforced `inputSchema` guarantees nothing about shape.
+
+**2.6 Strands already ships this, twice, and only one of the two is usable.** The
+pinned `strands-agents==1.57.2` has a `structured_output` subsystem, and the difference
+between its two entry points is exactly the difference this spec's hardest decision
+turns on.
+
+| Path | What it does | Verdict |
+|---|---|---|
+| **Agent-level** — `Agent(structured_output_model=…)`, or `structured_output_model=` on a call | Builds a `StructuredOutputTool` from a Pydantic model and `register_dynamic_tool`s it into **that agent's** registry, so its spec enters **the turn's `toolConfig`**. Also appends a forcing prompt to the conversation ("You must format the previous response as structured output") | **Unusable.** This is the per-session prefix churn D1 exists to refuse, with a conversation mutation on top |
+| **Model-level** — [`BedrockModel.structured_output(output_model, prompt, system_prompt)`](https://github.com/strands-agents/sdk-python) | `self.stream(messages=prompt, tool_specs=[one_spec], tool_choice={"any": {}})` — a **fresh request with its own messages and exactly one tool**, no conversation and no other tool spec, then `output_model(**tool_use["input"])` for Pydantic validation | **This is the design.** It is the side channel §5 describes, SDK-provided, with validation included |
+
+Plus a config flag worth knowing about before someone finds it the hard way:
+`BedrockModel(strict_tools=True)` adds `strict: true` to **every** tool spec in that
+model's requests and runs `ensure_strict_json_schema` over each `inputSchema`. On a
+one-tool request that is exactly the grammar enforcement we want. On the chat agent it
+would be a loaded gun (D15).
 
 ## 3. The field set
 
@@ -212,13 +232,13 @@ field set over six iterations pays it six times for nothing.
 
 **But the agent-facing spec is not where the schema belongs anyway**, and that is the
 part the "constant spec vs. generated spec" framing misses. The typed field schema does
-not have to be in *a tool* at all. Bedrock Converse takes a JSON Schema directly, as
-`outputConfig.textFormat`, on a request of its own (§6). So:
+not have to be in *the turn's* `toolConfig` at all — it belongs on a request of its
+own, which `BedrockModel.structured_output` already makes (§2.6, §6). So:
 
 * The agent calls `document_extract` — constant spec, zero prefix churn.
-* The tool resolves the field set server-side from the skill resource, generates the
-  JSON Schema, and makes **its own Converse call** carrying the document text, the
-  field schema and nothing else.
+* The tool resolves the field set server-side from the skill resource, builds a Pydantic
+  model from it, and makes **its own model call** carrying the document text, the field
+  schema and nothing else.
 * That call is a side channel in the exact sense `session_title` and
   `tool_group_summary` already are: its own request, its own messages, concurrent with
   nothing in the conversation, appending nothing to it. It has no cacheable prefix to
@@ -232,8 +252,9 @@ Three further things fall out, which is usually the sign the seam is in the righ
 * **The extraction context is a fresh one.** The input is the document and the schema,
   not the conversation — so extraction on turn 40 of a long thread costs the same as on
   turn 1.
-* **It can be forced.** The side-channel call constrains the output absolutely;
-  an `outputConfig` on the agent's own turn would hijack the turn's prose.
+* **It can be forced.** The side-channel call uses `toolChoice: {"any": {}}`, so the
+  typed answer is the only answer it can give. Forcing the agent's own turn that way
+  would take the turn's prose away from the user.
 
 ### 5.1 What goes back to the model
 
@@ -291,23 +312,54 @@ is a deployment constant, and nothing else varies.
 Verified against the pinned SDK and the AWS docs on 2026-10-20, because "the fleet
 behaves uniformly" is exactly the assumption that breaks in production.
 
-**6.1 Two distinct mechanisms, and we want the second one.**
+**6.1 Bedrock has two mechanisms; Strands exposes one of them; we take the Strands
+one.**
 
-| Mechanism | Where the schema goes | What it constrains |
-|---|---|---|
-| Strict tool use | `toolSpec.strict: true` beside `inputSchema` | The model's tool-call *arguments* |
-| JSON Schema output format | `outputConfig.textFormat.jsonSchema` | The model's *text response* |
+| Mechanism | Where the schema goes | What it constrains | Reachable via Strands |
+|---|---|---|---|
+| Strict tool use | `toolSpec.strict: true` beside `inputSchema` | The model's tool-call *arguments* | Yes — `BedrockModel(strict_tools=True)` |
+| JSON Schema output format | `outputConfig.textFormat.jsonSchema` | The model's *text response* | No |
 
 Both are present in the **already-pinned** `boto3==1.43.103` / `botocore==1.43.103`:
 `ToolSpecification` has members `['name', 'description', 'inputSchema', 'strict']`, and
 `ConverseRequest` carries `outputConfig` → `OutputConfig{textFormat, effort}` →
 `OutputFormatStructure` (a union) → `JsonSchemaDefinition{schema, name, description}`,
 where `schema` is a **required string** holding the JSON-encoded schema. **No
-dependency bump is needed**, which also means no approval to ask for.
+dependency bump is needed for either**, which also means no approval to ask for.
 
-We use `outputConfig.textFormat`, not `strict`, because the extraction call wants a
-typed *object* back, not a tool invocation, and because it keeps the schema out of every
-`toolConfig` in the system by construction rather than by discipline.
+**We use Strands' model-level path with `strict_tools=True`**, which is strict tool use
+on a request carrying exactly one tool. Concretely, per run:
+
+```python
+model = BedrockModel(model_id=DOCUMENT_EXTRACT_MODEL_ID, strict_tools=True)  # dedicated
+RowModel = pydantic_model_for(field_set)      # cached per (field set, version)
+async for event in model.structured_output(RowModel, [{"role": "user", "content": …}],
+                                           system_prompt=…):
+    ...                                        # last event carries {"output": RowModel(...)}
+```
+
+Why this rather than hand-rolling `outputConfig.textFormat`, which an earlier draft of
+this spec chose:
+
+* **It deletes a component.** No hand-written JSON Schema generator and no hand-written
+  canonical serializer — `create_model` plus `model_json_schema()` produces the schema,
+  and `ensure_strict_json_schema` adds the `additionalProperties: false` that strict
+  mode requires. Those are two fewer things to get subtly wrong than a bespoke emitter.
+* **Validation comes with it.** `output_model(**tool_use["input"])` is Pydantic, so a
+  type the grammar somehow let through still fails here, with field-path errors. Against
+  `outputConfig` we would parse and validate the returned text ourselves.
+* **The same Pydantic model is the field set's shape everywhere** — the schema sent, the
+  validator on return, and what the artifact and workbook writers iterate. One source of
+  truth beats a generator plus a parallel dataclass.
+* **It is the SDK surface, so a Strands upgrade carries it.** Hand-rolled `outputConfig`
+  would sit beside `BedrockModel` doing a job `BedrockModel` already does.
+
+`outputConfig.textFormat` stays documented here as the escape hatch, because it is one
+`client.converse` call away and it is the fallback if strict mode's own restrictions
+(6.5) turn out to bite a real field set. Rejected outright: **Strands' agent-level
+structured output**, for the reason §2.6 gives — it registers the schema as a tool in
+the turn's own `toolConfig` and appends a forcing prompt to the conversation, which is
+both halves of what D1 refuses.
 
 **6.2 Without one of those flags, nothing is enforced.** `strict` is opt-in on the tool
 definition, and the AWS docs describe it as what "enable[s] schema validation on tool
@@ -326,9 +378,10 @@ values 0 and 1. **Not** supported: recursive schemas, external `$ref`, numeric
 constraints (`minimum`/`maximum`/`multipleOf`), string constraints
 (`minLength`/`maxLength`), and `additionalProperties` set to anything but `false`.
 
-Consequences for our generator, each a real constraint rather than a note:
+Consequences for our Pydantic model builder, each a real constraint rather than a note:
 
-* `additionalProperties: false` always, on every object.
+* `additionalProperties: false` always, on every object — which `strict_tools` applies
+  for us via `ensure_strict_json_schema`, so this one is handled rather than remembered.
 * `type: enum` → a `string` with `enum`. Native, and the reason types are worth having.
 * `type: date` → `string` with `"format": "date"`. Enforced as a format, and still
   re-parsed in Python, because a well-formed date can still be the wrong one.
@@ -337,36 +390,46 @@ Consequences for our generator, each a real constraint rather than a note:
   discards the symbol and invents precision. The numeric comparison that matters
   happens in G2's value check, which already handles currency symbols and thousands
   separators.
-* `optional: true` → the property stays in `required` and its type becomes a union with
-  `null`. Omitting it from `required` would let the model silently drop a field, and a
-  missing key and an absent value are different facts: `null` is the model saying "not
-  in this document", which is answerable, and a missing key is the model saying
-  nothing, which is not.
+* `optional: true` → `Optional[str]` with no default, so the property stays in
+  `required` and its type becomes a union with `null`. Omitting it from `required` would
+  let the model silently drop a field, and a missing key and an absent value are
+  different facts: `null` is the model saying "not in this document", which is
+  answerable, and a missing key is the model saying nothing, which is not. **Strands
+  does not force this for us** — `ensure_strict_json_schema`'s `require_all_properties`
+  defaults to `False` for Bedrock (it exists for OpenAI), so a Pydantic field given a
+  default would drop out of `required` and we would not be told. It is our rule to keep,
+  and it has a second payoff under 6.5.
 * **A `minimum`/`maximum` on a numeric field is not expressible.** Range checks, and
   every cross-field rule, must run in Python after the rows come back. That is where
   G9 attaches (§15) and it is not a workaround — a constraint the grammar enforces is
   one the model cannot report honestly, so "the award amount is implausible" is better
   as a flag on a row than as a value the model was forbidden to emit.
 
-**6.4 Grammar compilation is a latency cliff, and the schema string must be byte-
-stable.** Bedrock compiles a new schema's grammar on first use — the docs say "up to a
+**6.4 Grammar compilation is a latency cliff, and the schema must be stable across
+runs.** Bedrock compiles a new schema's grammar on first use — the docs say "up to a
 few minutes" — then caches it for **24 hours from first access**, per account, for
 identical schemas. Two consequences:
 
-* **The generated schema must serialize identically every run.** Field order from the
-  authored order, fixed key order in the emitted JSON, a fixed separator convention. A
-  schema that differs by a byte is a cache miss, which here means minutes, not cents.
-  This is the same determinism discipline as the prompt-cache contract, enforced for a
-  different reason, and a unit test pins the exact serialized bytes for a fixture set.
+* **One field-set version must produce one schema.** Not "a canonical serializer", which
+  is what this spec asked for before Strands' surface was read — Pydantic emits the
+  schema and we do not hand-serialize it. What we own instead is the *model*: build it
+  with `create_model` from the authored field order, and **cache the generated class per
+  `(field set, version)`** so two runs of one field set are the same class and therefore
+  the same schema. The cache is not an optimization: a fresh class per call also misses
+  Strands' own `_TOOL_SPEC_CACHE`, which keys on the model type. A unit test asserts the
+  emitted `inputSchema` is equal across two builds of one fixture set, which is the
+  property that matters and is weaker than byte-equality of a string we no longer write.
 * **First use of a new or edited field set can be slow, and the tool must survive it.**
-  The extraction call gets a bounded timeout. On timeout, or on a 400 naming an
-  unsupported schema feature, it retries **once without `outputConfig`**, keeping the
-  same prompt and validating in Python, and marks the run `schema_unenforced`. That
-  marker reaches the SSE event and the row — never silently — so a reviewer knows the
-  types were asked for rather than guaranteed. A field set used weekly recompiles each
-  time; if that proves to be the common case rather than the edge, the answer is a
-  nightly warm call per field set, which is one scheduled call and is **out of this
-  slice**.
+  The extraction call gets a bounded timeout. On timeout, or on a `ValidationException`
+  naming an unsupported schema feature, it retries **once on a model instance without
+  `strict_tools`**, keeping the same prompt and the same Pydantic validation on return,
+  and marks the run `schema_unenforced`. (`BedrockModel.structured_output` also raises
+  `ValueError` when the model answers without calling the forced tool; that takes the
+  same path.) The marker reaches the SSE event and the row — never silently — so a
+  reviewer knows the types were asked for rather than guaranteed. A field set used
+  weekly recompiles each time; if that proves to be the common case rather than the
+  edge, the answer is a nightly warm call per field set, which is one scheduled call and
+  is **out of this slice**.
 
 **6.5 Which models actually support it, and the one that bit.** Verified on the Claude
 Haiku 4.5 model card: structured outputs is **supported** on the `bedrock-runtime`
@@ -378,17 +441,30 @@ through the India Geographic cross-Region inference profile
 forward: **support is per model *and* per inference profile**, and a deployment that
 localises its model ids can lose the feature without changing a line of code.
 
+One further restriction belongs to strict tool use specifically, and Strands' own
+docstring is where it is written down rather than the AWS page: with `strict: true`,
+"optional parameters are capped across all tools in the request", and `oneOf` is
+unsupported. We do not know the cap's number and should not guess one — but **D5
+sidesteps it entirely**, because every field is `required` with optionality expressed as
+a nullable type, so a 40-field set declares zero optional parameters. A rule adopted for
+honesty about missing values turns out to be the one that keeps a large field set inside
+strict mode. Worth noticing rather than relying on: if a real field set ever trips this,
+6.1's `outputConfig` escape hatch is the answer, since that mechanism's documented
+subset carries no such cap.
+
 **6.6 The fleet problem dissolves, rather than being solved.** `mantle.py` builds
 Strands `OpenAIModel` / `OpenAIResponsesModel` against the Bedrock Mantle
 OpenAI-compatible surface, with canonical→native parameter maps per API mode and the
 documented behaviour that "a canonical param without an entry here is silently
-dropped". A hosted OpenAI model is therefore not speaking Converse at all, and
-`outputConfig` is not a thing it would receive — it would be dropped without a word.
+dropped". A hosted OpenAI model is therefore not speaking Converse at all, and neither
+`outputConfig` nor `strict_tools` is a thing it would receive. (`OpenAIModel` has its
+own `structured_output`, against `response_format`; we simply never reach it.)
 
-The side-channel design means we never have to care: the extraction call names its own
-model, from `DOCUMENT_EXTRACT_MODEL_ID` (CDK-set per environment, `us.*` on dev,
-`global.*` on prod, matching how the stack already distinguishes them). The turn's
-model is irrelevant to it. **So the answer to "what happens on a model that does not
+The side-channel design means we never have to care: the extraction call builds **its
+own dedicated `BedrockModel`**, named by `DOCUMENT_EXTRACT_MODEL_ID` (CDK-set per
+environment, `us.*` on dev, `global.*` on prod, matching how the stack already
+distinguishes them). The turn's model is irrelevant to it, and so is the turn's model
+*class*. **So the answer to "what happens on a model that does not
 enforce" is that such a model is never asked**, and the only unenforced path left is
 6.4's deliberate, marked fallback.
 
@@ -574,14 +650,22 @@ are measured (§14).
 ## 11. Decisions, with reasons
 
 **D1 — The agent-facing tool spec is constant; the typed schema goes on a side-channel
-Converse call via `outputConfig.textFormat`.** Generating `inputSchema` from the field
-list puts a per-session, per-edit value ahead of the entire cacheable prefix, and
-re-writes 30k–150k tokens at 1.25× base input rate on every change — not the "one
-rewrite" the gap analysis costed. A constant spec with the detail as a runtime argument
-is the `verify_sources` answer and would have been enough; `outputConfig` is strictly
-better, because it keeps the enums and types the runtime-argument shape gives up, on a
-request with no prefix to protect. Rejected: `strict: true` on the agent's tool — it
-constrains arguments, not an answer, and it would put the schema back in a `toolConfig`.
+call, made with `BedrockModel.structured_output` on a dedicated `strict_tools=True`
+model.** Generating the agent tool's `inputSchema` from the field list puts a
+per-session, per-edit value ahead of the entire cacheable prefix, and re-writes
+30k–150k tokens at 1.25× base input rate on every change — not the "one rewrite" the
+gap analysis costed. A constant spec with the detail as a runtime argument is the
+`verify_sources` answer and would have been enough; a schema on a request of its own is
+strictly better, because it keeps the enums and types the runtime-argument shape gives
+up, on a request with no prefix to protect.
+
+*Which* request-of-its-own took two passes, and the second answer is the SDK's.
+Hand-rolled `outputConfig.textFormat` works and is still the escape hatch, but Strands'
+model-level path is the same architecture with the schema generator, the canonical
+serializer and the result validator already written (§6.1). **Rejected: Strands'
+agent-level structured output** — it registers the schema as a dynamic tool in the
+turn's own registry and appends a forcing prompt to the conversation, which is both
+halves of what this decision refuses.
 
 **D2 — The field set is a skill reference file, resolved server-side by name; not a
 first-class entity.** It inherits four already-correct access decisions by
@@ -598,9 +682,12 @@ which silently breaks comparability with last month's rows. `SKILL.md` names the
 available sets; the model names one; the backend reads it. The skill's prose must say
 *not* to read the field file.
 
-**D4 — Field order is the authored order of the markdown rows.** Their `item_order`
-exists for drag-and-drop; we need it for grammar reuse (§6.4) and for every
-determinism rule in `CLAUDE.md`. Never a dict iteration, never a sort on read.
+**D4 — Field order is the authored order of the markdown rows, and the generated
+Pydantic model is cached per `(field set, version)`.** Their `item_order` exists for
+drag-and-drop; we need it for grammar reuse (§6.4) and for every determinism rule in
+`CLAUDE.md`. Never a dict iteration, never a sort on read. The cache is part of the
+decision rather than a tuning detail: one class per field-set version is what makes two
+runs the same schema, and it is also what Strands' own `_TOOL_SPEC_CACHE` keys on.
 
 **D5 — `optional` becomes a nullable union, not an absent `required` entry.** A missing
 key and an explicit `null` are different facts, and only one of them is the model
@@ -633,10 +720,12 @@ precedent in the same lines: infrastructure, implicitly scoped to the turn's ski
 RBAC-gated. Skills are already a cache-key element, so no new key element.
 
 **D11 — The unenforced fallback is marked, never silent.** On a grammar-compilation
-timeout or a 400 naming an unsupported schema feature, retry once without
-`outputConfig` and validate in Python, with `schemaEnforced: false` on the event, the
-row and the artifact header. A reviewer must be able to tell the difference between
-types that were guaranteed and types that were requested.
+timeout, a `ValidationException` naming an unsupported schema feature, or the
+`ValueError` Strands raises when the model answers without calling the forced tool,
+retry once on a model instance **without** `strict_tools` — same prompt, same Pydantic
+validation on return — and set `schemaEnforced: false` on the event, the row and the
+artifact header. A reviewer must be able to tell the difference between types that were
+guaranteed and types that were requested.
 
 **D12 — The extraction call is metered.** Unlike `session_title` and
 `tool_group_summary` its input scales with the document, so the "negligible side
@@ -652,6 +741,18 @@ through the model's tool input to build a file from data the backend is holding.
 **D14 — No new publisher to Outputs.** A user shares the artifact, or a project
 schedule publishes it (§8.4). An agent tool that pushes into a shared project is a
 sharing decision made by a model.
+
+**D15 — `strict_tools` is set on the extraction model instance only, and never on the
+chat agent's.** It is a `BedrockModel` *config* flag, so it adds `strict: true` to
+**every** tool spec in that model's requests and restricts the JSON Schema features
+every one of them may use — and "a schema that uses an unsupported feature fails at
+request time with a `ValidationException`". Our agents carry MCP tool schemas we do not
+author and cannot fix, where `oneOf` is ordinary. Setting it on the agent's model would
+make a third party's tool definition able to fail an entire turn. The agent factory
+builds `CountTokensBedrockModel(native_projection=False, **bedrock_config)`, so the flag
+would arrive through `bedrock_config` if anyone ever added it there; the extraction path
+constructs its own instance instead and shares nothing with it. A test asserts the flag
+appears in exactly one place.
 
 ## 12. The flag
 
@@ -696,18 +797,18 @@ is **not** on the collision list, because this feature does not touch it (§2.1,
 | PR | Contents | Blocked on G2 |
 |---|---|---|
 | PR-0 | This spec. One new file | **No** — open now |
-| PR-1 | The pure layer: the field-set markdown parser, the field model, the JSON Schema generator with byte-stable serialization, and unit tests (the subset rules of §6.3, nullable optionals, enum fields, `currency` as string, the authored-order guarantee, a pinned serialized-bytes fixture, malformed-table errors). Plus the flag, the CDK wiring, the CDK tests and the SPA flag field. **Nothing wired to a turn** | Yes — flag and CDK files |
-| PR-2 | `document_extract` mounted in `ChatAgent._create_agent`; field-set resolution through the skill resource store; the side-channel Converse call with `outputConfig.textFormat` and the marked unenforced fallback; the `verify_claims` integration; the backend-authored artifact and the in-process `.xlsx`; the `document_extraction` SSE event and its broker; the `EXTR#` store and its `GET /messages` replay; the `C#` metering row; the content-free EMF record. Backend complete and dev-verifiable by reading the stream | Yes — imports G2 |
+| PR-1 | The pure layer: the field-set markdown parser, the field model, the `create_model` builder with its per-`(set, version)` cache, and unit tests (the subset rules of §6.3, nullable optionals staying in `required`, enum fields, `currency` as string, the authored-order guarantee, schema equality across two builds of one fixture, malformed-table errors). Plus the flag, the CDK wiring, the CDK tests and the SPA flag field. **Nothing wired to a turn** | Yes — flag and CDK files |
+| PR-2 | `document_extract` mounted in `ChatAgent._create_agent`; field-set resolution through the skill resource store; the dedicated `BedrockModel(strict_tools=True)` and its `structured_output` call, with the marked unenforced fallback; the `verify_claims` integration; the backend-authored artifact and the in-process `.xlsx`; the `document_extraction` SSE event and its broker; the `EXTR#` store and its `GET /messages` replay; the `C#` metering row; the content-free EMF record; the D15 single-call-site test. Backend complete and dev-verifiable by reading the stream | Yes — imports G2 |
 | PR-3 | SPA render behind `features.documentExtract`: the rows table with per-cell provenance in G2's vocabulary, the `schemaEnforced` disclosure, and reload replay | Yes — follows G2's PR-3 vocabulary |
 
 PR-1 and PR-2 are slice one. PR-3 is stated as outside it rather than assumed.
 
 ## 14. How we'll know
 
-* **The pure layer is unit-tested**, because parsing a table and generating a schema are
-  pure. The §6.3 subset rules, the authored-order guarantee and the byte-stable
-  serialization each have cases, and the serialization has a pinned-bytes fixture
-  because a one-byte drift costs minutes of grammar compilation, not cents.
+* **The pure layer is unit-tested**, because parsing a table and building a Pydantic
+  model are pure. The §6.3 subset rules and the authored-order guarantee each have
+  cases, and one asserts the emitted `inputSchema` is equal across two builds of one
+  fixture set — schema drift costs minutes of grammar compilation, not cents.
 * **On dev**, attach a real solicitation PDF, run a 10-field set, and read the
   `document_extraction` frame: typed values, and a locator with `precision: "measured"`
   on the `supported` ones. Then run a field set containing a field the document does not
@@ -797,6 +898,19 @@ PR-1 and PR-2 are slice one. PR-3 is stated as outside it rather than assumed.
   card](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-haiku-4-5.html)
   (structured outputs supported on `bedrock-runtime`, excluded only on the `in.*`
   profile; explicit prompt caching min 4,096 tokens).
+* `strands-agents==1.57.2`, read in the venv 2026-10-20:
+  `strands/models/bedrock.py` (`BedrockModel.structured_output` — one tool spec,
+  `tool_choice: {"any": {}}`, Pydantic validation on return; the `strict_tools` config
+  flag, and its docstring as the written source for the optional-parameter cap and the
+  `oneOf` restriction), `strands/models/_strict_schema.py`
+  (`ensure_strict_json_schema`; `require_all_properties` defaults to `False` for
+  Bedrock), `strands/tools/structured_output/` (`StructuredOutputTool` and
+  `_structured_output_context.register_tool` → `register_dynamic_tool` — the
+  agent-level path this spec rejects), `strands/models/openai.py` (`structured_output`
+  on the Mantle-facing class, never reached). Our own
+  `agents/main_agent/core/agent_factory.py:50` builds
+  `CountTokensBedrockModel(native_projection=False, **bedrock_config)`, which is why
+  D15 is a decision rather than a note.
 * Verified in this tree 2026-10-20: `boto3`/`botocore==1.43.103` service model
   (`ToolSpecification.strict`, `ConverseRequest.outputConfig` →
   `OutputConfig{textFormat, effort}` → `OutputFormatStructure` →
