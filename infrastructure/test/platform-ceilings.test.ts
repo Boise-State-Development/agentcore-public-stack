@@ -6,10 +6,10 @@
  *
  *   - CloudFormation's **500 resources per stack**. Single-stack architecture
  *     (CLAUDE.md) against a hard limit, reached by accretion: dev's live
- *     PlatformStack measured **494 of 500 on 2026-10-16** (492 three days
- *     earlier). The guard this file replaces asserted `< 465` against the
- *     *default* flag set, so it stayed comfortably green while the real
- *     deployment sat six resources from a deploy-time hard failure.
+ *     PlatformStack measured **494 of 500** on 2026-10-16 and again on
+ *     2026-10-20 (492 on 10-13). The guard this file replaces asserted `< 465`
+ *     against the *default* flag set, so it stayed comfortably green while the
+ *     real deployment sat six resources from a deploy-time hard failure.
  *   - IAM's **6,144-character managed policy** and **10,240-character role
  *     inline policy** limits. CloudFormation rejects an oversized policy with
  *     `ServiceLimitExceeded` / `PolicySize: 6144` and rolls the stack back;
@@ -42,6 +42,24 @@
  * fullest policy (measured: 5,774 / 5,855 / 5,936 at 3 / 12 / 21 characters),
  * so measuring at the maximum keeps the IAM guard from passing here and
  * failing for a deployment whose prefix is longer than the test's.
+ *
+ * **Re-validating these numbers.** A change to this file deploys nothing —
+ * `platform.yml`'s path filters cover `lib/`, `bin/`, `bootstrap-assets/`,
+ * `assets/` and the platform scripts, not `test/` — which is correct, but it
+ * means a deploy will never tell you whether this synth still matches reality.
+ * Read the live stack instead, and do it whenever a constant here is edited or
+ * the numbers in it are quoted somewhere that matters:
+ *
+ *     AWS_PROFILE=<env> aws cloudformation list-stack-resources \
+ *       --stack-name <prefix>-PlatformStack --region <region> \
+ *       --query 'length(StackResourceSummaries)'
+ *
+ * For a policy, take the `AWS::IAM::ManagedPolicy` physical id from the same
+ * listing, then `iam get-policy-version` and measure the document as compact
+ * JSON (`json.dumps(doc, separators=(',', ':'))`) — IAM does not count
+ * whitespace, so compact length is the comparable figure. Check first that no
+ * commit has touched `infrastructure/lib` since the stack's `LastUpdatedTime`,
+ * or you are comparing against a template this code did not produce.
  */
 import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
@@ -56,20 +74,29 @@ import { mockSsmContext } from './helpers/mock-config';
 const CFN_RESOURCE_LIMIT = 500;
 
 /**
+ * `AWS::CDK::Metadata`, which the CDK **CLI** adds to every deployed template
+ * (version reporting, on unless `versionReporting: false` — `cdk.json` does not
+ * set it) and which `Template.fromStack` never produces. Dev's live stack
+ * carries it, and so does `cdk synth` of this app; a unit-test synth therefore
+ * under-counts every real deploy by exactly one resource, so the count compared
+ * against the ceiling adds it back.
+ */
+const DEPLOY_ONLY_RESOURCES = 1;
+
+/**
  * The all-on count this test refuses to let pass.
  *
- * 500 is the hard failure. The margin below it covers two things:
+ * 500 is the hard failure, and the margin below it is **reaction room only**: a
+ * ceiling reached at deploy time is reached by a rolled-back stack, not by CI.
+ * Hence 497, three resources of headroom.
  *
- *   1. **What this synth does not model.** Dev's live stack measured 494 on
- *      2026-10-16 where the all-on synth below is 492 — about 2 resources of
- *      per-environment configuration (its own subdomains, certificates and
- *      identity wiring) that a test with a mock domain does not reproduce. So
- *      dev's 500 is roughly this synth's 498.
- *   2. **Room to react.** A ceiling found at deploy time is found by a rolled
- *      back stack, not by CI.
- *
- * Hence 495: three synth resources of headroom, firing about three resources
- * before the deploy that would roll dev back.
+ * It is reaction room rather than a modelling allowance because the synth is
+ * calibrated against the live stack rather than guessed. Measured on dev
+ * (`dev-boisestateai-v2-PlatformStack`, 2026-10-20, template synthesized from
+ * this same commit of `infrastructure/lib`): **494 live** against **494** here.
+ * Every difference by resource type: +1 Route53 RecordSet dev has from its own
+ * subdomain configuration, −1 CloudWatch Alarm this worst case enables and dev
+ * does not. They cancel, so treat the agreement as ±1 rather than exact.
  *
  * **If this test fails, reclaim headroom — do not raise this number.** The
  * levers are known and scheduled (composite or metric-math alarms in place of
@@ -77,7 +104,7 @@ const CFN_RESOURCE_LIMIT = 500;
  * see docs/kaizen/reviews/2026-10-16.md ▸ Proposal #2. Raising the constant
  * buys a green build and spends the margin that exists to stop a rollback.
  */
-const ALL_ON_RESOURCE_CEILING = 495;
+const ALL_ON_RESOURCE_CEILING = 497;
 
 /** IAM: a managed policy document may not exceed 6,144 characters. */
 const IAM_MANAGED_POLICY_LIMIT = 6144;
@@ -137,6 +164,16 @@ const DEPLOYED_SHAPE: Record<string, unknown> = {
     embeddingModel: 'amazon.titan-embed-text-v2',
     vectorDimension: 1024,
     vectorDistanceMetric: 'cosine',
+  },
+  // Costs one resource (measured: 492 -> 493), and dev configures it. Omitting
+  // it is the same trap `runtime-env-var-limit.test.ts` records against itself
+  // ("without it this test counts 44 while prod and dev deploy 47"): a block
+  // that only synthesizes when a value is present makes a minimal config
+  // under-count, and a ceiling guard that under-counts reports headroom no
+  // environment has.
+  tokenExchange: {
+    url: 'https://tokens.example.com/v2/oauth/token',
+    clientId: 'test-client',
   },
 };
 
@@ -308,13 +345,22 @@ function arnFor(type: string, name: string, region: string, account: string): st
  * at a flat 150 characters (`DEFAULT_ARN_SIZE_ESTIMATE` in aws-iam) and packs
  * to 6,000, so CDK itself does not know whether a policy it produced fits.
  *
- * Accuracy, measured against the only two figures taken off a live deployment:
- * this estimator puts the Runtime's `OverflowPolicy1` at 5,470 where dev
- * measured 5,473, and app-api's `OverflowPolicy3` at 5,913 where dev measured
- * 5,921 before the grant that broke the 10-08 deploy. Within 10 characters on
- * both — which is also why the `cdk.json` feature flags and the longest legal
- * prefix matter: without them the same two policies come out 180 and 440
- * characters away from what dev deploys.
+ * Accuracy, against dev's live policies read with `iam get-policy-version`
+ * (2026-10-20, same commit of `infrastructure/lib` as the deployed template):
+ * the tightest policy, app-api's `OverflowPolicy3`, is **5,913 here against
+ * 5,921 live** — 8 characters, and it is the one that has actually failed a
+ * deploy. The Runtime's `OverflowPolicy1` is 5,470 here against 5,443 live, 27
+ * characters high. This is also why the `cdk.json` feature flags and the
+ * longest legal prefix matter: without them those two come out 180 and 440
+ * characters from what dev deploys.
+ *
+ * One known under-model, on a role with room to spare rather than the tight
+ * one: dev's Runtime role packs a second overflow policy (code-interpreter and
+ * browser grants, whose ARNs carry real provisioned AgentCore resource ids)
+ * that this synth folds into one, because `mockSsmContext`'s stand-in values
+ * are shorter than the real ids. Read the Runtime role's figure as a floor.
+ * Its tightest policy has 701 characters free live, so nothing turns on it
+ * today.
  */
 function makeResolver(
   resources: Record<string, { Type: string; Properties?: Record<string, unknown> }>,
@@ -414,8 +460,14 @@ function policySizes(template: Template, config: AppConfig): SizedPolicy[] {
   return sized.sort((a, b) => (a.limit - a.bytes) - (b.limit - b.bytes));
 }
 
+/** Resources this synth produced. */
 function resourceCount(template: Template): number {
   return Object.keys(template.toJSON().Resources).length;
+}
+
+/** What CloudFormation is actually asked to create — see DEPLOY_ONLY_RESOURCES. */
+function deployedResourceCount(template: Template): number {
+  return resourceCount(template) + DEPLOY_ONLY_RESOURCES;
 }
 
 describe('platform ceilings', () => {
@@ -455,7 +507,7 @@ describe('platform ceilings', () => {
   });
 
   it('stays under the resource ceiling with every opt-in flag on', () => {
-    const count = resourceCount(allOnTemplate);
+    const count = deployedResourceCount(allOnTemplate);
 
     // Thrown rather than asserted so the guidance travels with the failure —
     // Jest's expect() carries no message argument.
@@ -463,9 +515,10 @@ describe('platform ceilings', () => {
       throw new Error(
         `PlatformStack synthesizes ${count} resources with every opt-in flag on; `
         + `this guard allows ${ALL_ON_RESOURCE_CEILING} of CloudFormation's `
-        + `${CFN_RESOURCE_LIMIT}. The margin is not spare room: dev's live stack measured 494 `
-        + 'where this synth was 492, so dev reaches 500 at about 498 here, and a stack '
-        + 'that hits the limit is found by a rolled-back deploy rather than by CI. '
+        + `${CFN_RESOURCE_LIMIT}. The margin is not spare room: this count is calibrated `
+        + "against dev's live stack (494 live, 494 here on 2026-10-20), so it is three "
+        + 'resources of room to react, and a stack that reaches the limit reaches it as a '
+        + 'rolled-back deploy rather than as a red build. '
         + 'RECLAIM HEADROOM — do not raise the ceiling. The levers are composite or '
         + 'metric-math alarms in place of per-resource ones, merged managed policies, and '
         + 'shared EventBridge targets; see docs/kaizen/reviews/2026-10-16.md Proposal #2.',
@@ -476,7 +529,7 @@ describe('platform ceilings', () => {
 
   it('stays under the resource ceiling with the shipped defaults', () => {
     // A deployment that turns nothing on still has to deploy.
-    expect(resourceCount(defaultsTemplate)).toBeLessThanOrEqual(ALL_ON_RESOURCE_CEILING);
+    expect(deployedResourceCount(defaultsTemplate)).toBeLessThanOrEqual(ALL_ON_RESOURCE_CEILING);
   });
 
   it('keeps every IAM policy inside the limit CloudFormation enforces', () => {
@@ -511,8 +564,8 @@ describe('platform ceilings', () => {
     // Not assertions — numbers in the test output. The ceilings above are the
     // gate; this is the early warning, and it is why both synths are printed:
     // a PR sees its own headroom change without reading this file.
-    const defaultCount = resourceCount(defaultsTemplate);
-    const allOnCount = resourceCount(allOnTemplate);
+    const defaultCount = deployedResourceCount(defaultsTemplate);
+    const allOnCount = deployedResourceCount(allOnTemplate);
     console.log(
       `[resource headroom] shipped defaults: ${defaultCount}/${CFN_RESOURCE_LIMIT}; `
       + `every opt-in flag on: ${allOnCount}/${CFN_RESOURCE_LIMIT} `
