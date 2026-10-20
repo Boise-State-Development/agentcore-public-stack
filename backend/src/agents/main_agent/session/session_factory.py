@@ -99,10 +99,18 @@ if AGENTCORE_MEMORY_AVAILABLE:
     class _SharedSessionMemoryClient(MemoryClient):
         """``MemoryClient`` built from the shared session when the flag is on.
 
-        The SDK session manager constructs ``MemoryClient(region_name=...)``
-        with no session, so it cannot be handed one; its clients are then
-        replaced a few lines later, so they were pure cost. Rebinding the name
-        in the SDK module is the only seam the pinned bedrock-agentcore offers.
+        Through bedrock-agentcore 1.24.1 the SDK session manager built
+        ``MemoryClient(region_name=...)`` with no session — it accepted a
+        ``boto_session`` and then ignored it — so the client could not be
+        handed one, and its clients were replaced a few lines later at pure
+        cost. Rebinding the name in the SDK module was the only seam on offer.
+
+        1.24.2 passes ``boto3_session=`` through, so on the session-manager
+        path this subclass now just forwards what it is given and the
+        contextvar fallback below is unreachable there. It is kept as the seam
+        for any SDK path that still constructs a client without one; removing
+        it is a follow-up, not part of the bump.
+
         Pinned by ``test_session_factory_shared_clients.py``, which fails if an
         SDK upgrade stops going through it.
         """

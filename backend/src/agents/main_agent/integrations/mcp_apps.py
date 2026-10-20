@@ -47,7 +47,6 @@ from strands.tools.mcp import MCPClient
 from strands.types import PaginatedList
 
 from agents.main_agent.config.constants import Defaults, EnvVars
-from agents.main_agent.integrations.mcp_session_end import ReleasesCallsOnSessionEnd
 from apis.shared.tools.models import ToolUIMetadata
 
 logger = logging.getLogger(__name__)
@@ -780,7 +779,7 @@ def _is_transient_connect_error(exc: BaseException) -> bool:
     return False
 
 
-class UICapableMCPClient(ReleasesCallsOnSessionEnd, MCPClient):
+class UICapableMCPClient(MCPClient):
     """`MCPClient` that records `_meta.ui` and hides app-only tools.
 
     Used for external MCP servers. Construction installs the `initialize`

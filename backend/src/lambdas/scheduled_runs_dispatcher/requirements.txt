@@ -3,7 +3,7 @@
 boto3==1.43.103
 pydantic==2.12.5
 httpx==0.28.1
-bedrock-agentcore==1.24.0
+bedrock-agentcore==1.24.2
 # Worker-only transitive deps (both handlers share ONE image, and the
 # Dockerfile installs THIS file): the worker imports apis.shared.harness ->
 # apis.shared.sessions_bff, whose cookie.py needs cryptography (AESGCM) and
@@ -16,7 +16,7 @@ cachetools==6.2.4
 # reader app-api's shares use. It reads AgentCore Memory through
 # bedrock_agentcore.memory.integrations.strands, which imports Strands (the base
 # package; none of its bidi extras are imported). Versions match backend/uv.lock.
-strands-agents==1.57.2
+strands-agents==1.61.1
 mcp==1.30.0
 opentelemetry-api==1.44.0
 opentelemetry-sdk==1.44.0

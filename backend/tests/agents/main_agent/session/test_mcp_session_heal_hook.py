@@ -26,15 +26,18 @@ from strands import Agent
 from strands.models.model import Model
 from strands.tools.mcp import MCPAgentTool, MCPClient
 
-from agents.main_agent.integrations.mcp_session_end import ReleasesCallsOnSessionEnd
 from agents.main_agent.session.hooks import mcp_session_heal as heal_mod
 from agents.main_agent.session.hooks.mcp_session_heal import MCPSessionHealHook
 from apis.shared.tools import mcp_session
 from tests.fixtures.flaky_mcp_server import FlakyMCPServer
 
 
-class _Client(ReleasesCallsOnSessionEnd, MCPClient):
-    """What this stack builds (`UICapableMCPClient`, `FilteredMCPClient`)."""
+class _Client(MCPClient):
+    """What this stack builds (`UICapableMCPClient`, `FilteredMCPClient`).
+
+    Both were `ReleasesCallsOnSessionEnd, MCPClient` until strands-agents
+    1.61.1; the mixin retired with the upstream fix (see the test below).
+    """
 
 
 class _ScriptedModel(Model):
@@ -125,29 +128,30 @@ def _stopping(client: Any):
 
 @pytest.mark.asyncio
 async def test_a_call_whose_session_dies_resolves_rather_than_hangs():
-    """Upstream, the call the 503 answered never returns (strands 1.57.2).
+    """Fixed upstream in strands-agents 1.58.0 (#4499); our workaround is gone.
 
-    Its `run_async` task is mid-cleanup when the dying session stops the
-    background loop. The `cancel_signal` every agent passes makes it lose
-    that race every time, so the turn hung. If the plain client stops
-    hanging, Strands has fixed it and `ReleasesCallsOnSessionEnd` can go.
+    On 1.57.2 the call the 503 answered never returned: its `run_async` task
+    was mid-cleanup when the dying session stopped the background loop, and the
+    `cancel_signal` every agent passes made it lose that race every time, so
+    the turn hung. #1659 added `ReleasesCallsOnSessionEnd` to keep the loop
+    alive until those tasks resolved, and left this test to say when the
+    workaround could go — which the 1.61.1 bump did.
+
+    The plain SDK client is now the whole assertion. If a later SDK regresses,
+    this times out and the mixin has to come back (it is in git history at the
+    commit that removed it).
     """
     with FlakyMCPServer() as server:
-        for cls, hangs in ((MCPClient, True), (_Client, False)):
-            with _stopping(server.client(cls)) as client:
-                await client.load_tools()
-                call = client.call_tool_async(
-                    "t-1", "issue_write", {"title": cls.__name__},
-                    cancel_signal=threading.Event(),
-                )
-                if hangs:
-                    with pytest.raises(asyncio.TimeoutError):
-                        await asyncio.wait_for(call, timeout=1.5)
-                else:
-                    result = await asyncio.wait_for(call, timeout=5)
-                    assert result["status"] == "error"
-                    assert "closed" in _text(result)
-        assert server.writes == ["MCPClient", "_Client"]
+        with _stopping(server.client(MCPClient)) as client:
+            await client.load_tools()
+            call = client.call_tool_async(
+                "t-1", "issue_write", {"title": "MCPClient"},
+                cancel_signal=threading.Event(),
+            )
+            result = await asyncio.wait_for(call, timeout=5)
+            assert result["status"] == "error"
+            assert "closed" in _text(result)
+        assert server.writes == ["MCPClient"]
 
 
 @pytest.mark.asyncio
