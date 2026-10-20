@@ -250,6 +250,13 @@ def make_verify_sources_tool(session_id: str, user_id: str):
                 "id": result.claim_id,
                 "state": result.state,
                 "method": result.method,
+                # The value as the model stated it. Display metadata, like the
+                # quote beside it: a `quote_unsupported` that cannot name the
+                # value it is warning about makes the reader guess which number
+                # in the answer is the unconfirmed one. It costs nothing in the
+                # prefix — the model already wrote it into this tool's
+                # arguments, which are the content blocks.
+                "value": str(claim.value) if claim.value is not None else "",
                 "quote": claim.quote,
                 "locator": result.locator.to_payload() if result.locator else None,
                 "uploadId": meta.upload_id,

@@ -415,7 +415,7 @@ same for new rows whose check does not apply.
 | PR-0 | This spec |
 | PR-1 ✅ | `source_provenance.py` (pure) + unit tests: all four states, every `method`, unicode-normalization edge cases, boundary over-claims (`5000000`/`500000`, `$500,000.99`, "John Smithson"), percent-vs-bare-number, straddling quotes, `kind` per format, `precision` round-trip. The flag, CDK wiring and CDK test. Nothing wired to a turn |
 | PR-2 ✅ | `verify_sources` tool inside the `_build_document_tools` gate; `document_provenance_units` for prepared and unprepared documents; the `source_provenance` SSE event drained in `stream_coordinator`; the `SRCV#` store and its `GET /messages` replay as `sourceProvenance`. Plus `tests/architecture/test_source_provenance_state_boundary.py`, which keeps the state derivable in one place and the module pure. Backend complete and dev-verifiable by reading the stream |
-| PR-3 | SPA render behind `features.sourceProvenance`: a plain locator for `supported`, a warning affordance for `quote_unsupported`, a "not confirmed" qualifier for `unassessed`, "no source found" for `unverified` |
+| PR-3 ✅ | SPA render behind `features.sourceProvenance`: a plain locator for `supported`, a warning affordance for `quote_unsupported`, a "not confirmed" qualifier for `unassessed`, "no source found" for `unverified` |
 
 PR-1 and PR-2 are slice one. PR-3 is stated as out of slice one rather than assumed.
 

@@ -2,6 +2,8 @@ import { Injectable, signal } from '@angular/core';
 import type {
   AgentStatusEvent,
   ToolGroupSummaryEvent,
+  SourceProvenanceEvent,
+  SourceProvenanceClaim,
 } from '../../../shared/utils/stream-parser';
 
 /** What we know about one tool invocation beyond its raw input/result. */
@@ -16,6 +18,14 @@ export interface ToolInsight {
   summary?: string;
   /** The batch this call was summarized with; dedupes a re-delivered event. */
   batchId?: string;
+  /**
+   * Source-provenance verdicts, when this call was a `verify_sources`.
+   *
+   * Stored per call rather than per message because the verdicts belong to a
+   * specific invocation: a turn can verify twice against two documents, and
+   * merging them would attribute a passage to the wrong file.
+   */
+  provenance?: readonly SourceProvenanceClaim[];
 }
 
 /** One tool the runtime has started and not yet reported finishing. */
@@ -129,6 +139,21 @@ export class ToolInsightService {
       if (summary) return summary;
     }
     return undefined;
+  }
+
+  /**
+   * Provenance verdicts for one `verify_sources` call, if it carried any.
+   *
+   * Unlike `summaryFor`, this takes a single id rather than a group: a batch
+   * summary describes a group of calls, while a verdict describes exactly one
+   * call's claims, and widening the lookup to the group would let a second
+   * verification in the same batch answer for the first.
+   */
+  provenanceFor(
+    sessionId: string,
+    toolUseId: string,
+  ): readonly SourceProvenanceClaim[] | undefined {
+    return this.bySession().get(sessionId)?.get(toolUseId)?.provenance;
   }
 
   /**
@@ -280,6 +305,52 @@ export class ToolInsightService {
    * and `ArtifactStateService.seedFromHydration`: a slow hydration response
    * must never undo a live summary that arrived while it was in flight.
    */
+  /** Record one `verify_sources` call's verdicts (live `source_provenance`). */
+  recordProvenance(sessionId: string, event: SourceProvenanceEvent): void {
+    if (!event.toolUseId || !event.claims?.length) return;
+
+    this.bySession.update(map => {
+      const next = new Map(map.get(sessionId) ?? []);
+      next.set(event.toolUseId, {
+        ...next.get(event.toolUseId),
+        provenance: event.claims,
+      });
+      return new Map(map).set(sessionId, next);
+    });
+  }
+
+  /**
+   * Seed provenance persisted server-side, replayed on the `GET /messages`
+   * `sourceProvenance` sidecar at conversation load.
+   *
+   * Non-clobbering by `toolUseId`, for the same reason as the summaries above:
+   * a slow hydration response must never undo a live verdict. It matters more
+   * here — overwriting a live `quote_unsupported` with a stale row would
+   * replace a warning the user is looking at.
+   */
+  seedProvenanceFromHydration(
+    sessionId: string,
+    rows: readonly { toolUseId?: string; claims?: SourceProvenanceClaim[] }[],
+  ): void {
+    if (!rows.length) return;
+
+    this.bySession.update(map => {
+      const next = new Map(map.get(sessionId) ?? []);
+      let changed = false;
+      for (const row of rows) {
+        if (!row.toolUseId || !row.claims?.length) continue;
+        if (next.get(row.toolUseId)?.provenance) continue;
+        next.set(row.toolUseId, {
+          ...next.get(row.toolUseId),
+          provenance: row.claims,
+        });
+        changed = true;
+      }
+      if (!changed) return map;
+      return new Map(map).set(sessionId, next);
+    });
+  }
+
   seedFromHydration(
     sessionId: string,
     rows: readonly { batchId?: string; toolUseIds?: string[]; summary?: string }[],
