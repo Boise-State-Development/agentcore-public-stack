@@ -776,7 +776,7 @@ appears in exactly one place.
 |---|---|
 | Backend | `DOCUMENT_EXTRACT_ENABLED`, read by `document_extract_enabled()` in `apis/shared/feature_flags.py`. **In-development: only the literal `"true"` enables**; an unset GitHub variable arrives as `""` |
 | Also | `DOCUMENT_EXTRACT_MODEL_ID` — the Bedrock-native Converse model id the extraction call uses. CDK-set per environment (`us.*` dev, `global.*` prod), and it must have a catalog row (§9) |
-| Set on | The AgentCore Runtime (mounts the tool, extracts, verifies, writes the artifact and the workbook, emits the event) and app-api (replays `EXTR#` rows on `GET /messages`) |
+| Set on | The AgentCore Runtime (mounts the tool, extracts, verifies, writes the artifact and the workbook, emits the event) and app-api (replays `EXTR#` rows on `GET /messages`). **The two look inconsistent on purpose, and it reads like a bug:** app-api always carries `DOCUMENT_EXTRACT_ENABLED`, as `'false'` while off, whereas the Runtime's copy is written **only while on** — so on a correctly deployed environment with the feature off, the variable is *present as `false`* on app-api and *entirely absent* from the Runtime. Absent is the right observation there, not a half-finished deploy. Anyone verifying a deploy by describing the Runtime's environment will otherwise go looking for a fault that is not there |
 | CDK | `documentExtract.enabled` and `documentExtract.modelId` in `infrastructure/lib/config.ts` from `CDK_DOCUMENT_EXTRACT_ENABLED` / `CDK_DOCUMENT_EXTRACT_MODEL_ID`, forwarded in `.github/workflows/platform.yml`. Written to the Runtime's environment **only while on**, so the default costs nothing against the 2,560-byte V2 budget. A `config.test.ts` case pins both sides, and a second pins the model id |
 | SPA | `features.documentExtract`, `false` in all three `environment*.ts`, injected via the `FEATURES` token — never an environment file imported into a component. Added in slice one so the two sides land independently; the table render is slice three |
 | Kind | **Feature switch** — permanent. It spends money per run on a model call whose input scales with a document, it adds a tool to `toolConfig`, and it makes the product assert typed values about a document on a user's behalf. Every one of those is a judgement a deployment may reasonably decline, so it is configuration, not a rollout hedge, and it does not retire. Promoting it to default-on with an `=false` kill switch is its own deliberate change |
@@ -873,6 +873,39 @@ PR-1 and PR-2 are slice one. PR-3 is stated as outside it rather than assumed.
   express a numeric range, and a constraint the grammar enforces is one the model cannot
   report honestly. Nothing in this slice reads that section; the parser ignores it
   rather than rejecting it, so a field set authored with rules is forward-compatible.
+* **Better prompting for outlier detection.** Not the branch to take, and this is
+  recorded as a decision rather than an omission because it is the obvious next
+  move and it is the wrong one.
+
+  §17.8 measured outlier detection at 4/10 → 3/10 → 1/10 as N grows, and the
+  field-by-field note that recovered collision detection did not help it. The
+  reason the two behave differently is the reason prompting will not close the
+  gap: **a collision is a relation the comparison table already makes visible**,
+  so attention is the only missing ingredient and an instruction can supply it;
+  **an outlier needs a sense of what normal is for that field**, which the model
+  has to infer from fourteen rows that frequently carry no distribution to infer
+  it from. No wording fixes a missing denominator.
+
+  Two directions that would, both out of scope here:
+
+  1. **Compute it, then let the model interpret it.** Once rows are typed,
+     "which value in this column is unlike the others" is arithmetic — distinct
+     count, min/max, modal value per field — computable in Python and handed
+     over as part of the tool result. The code finds the anomaly and the model
+     says why it matters. This is the same principle §6.3 already states for
+     numeric constraints: a flag on a row the model can report honestly beats
+     asking the model to do the detection and hoping.
+  2. **"Unusual" may be the wrong question entirely.** An office does not
+     primarily want "which of these is atypical", it wants "which of these
+     violates our constraints" — *we cannot meet cost share above 25%*. That is
+     a policy fact about the institution, belonging in the project's memory
+     space, not a statistical property of this particular week's fourteen
+     documents. On that reading, outlier-as-anomaly conflates two different
+     jobs, and the valuable one needs no statistics at all.
+
+  Which of those is right is an open question; that better prompting is not the
+  answer is not.
+
 * **OCR (G3).** A scanned PDF has no text layer. `document_provenance_units` yields no
   units, every field reads `unverified`/`document_unreadable`, and the run says so. The
   fix is G3 and it is a prerequisite for extraction from scanned documents, not a part
