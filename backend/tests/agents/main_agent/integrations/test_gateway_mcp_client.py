@@ -8,6 +8,7 @@ import pytest
 from unittest.mock import patch, MagicMock
 
 from agents.main_agent.integrations.gateway_mcp_client import (
+    MAX_TOOL_LIST_PAGES,
     FilteredMCPClient,
     GatewayAuthError,
     _build_gateway_auth,
@@ -207,3 +208,113 @@ class TestGatewayIntegrationAuthDegradation:
         mock_factory.assert_called_once_with(
             enabled_tool_ids=["gateway_a___b"], auth_token="tok-123"
         )
+
+
+class TestGatewayToolPagination:
+    """Every page of the Gateway's `tools/list` must reach the agent (#1527).
+
+    `FilteredMCPClient.list_tools_sync` took `*args` and then called
+    `super().list_tools_sync()` with none of them, so each page request
+    returned page ONE together with page one's cursor. Strands'
+    `_list_all_tools_sync` asks again for as long as a cursor comes back, so a
+    Gateway with more than one page listed page one over and over and the agent
+    was never built.
+    """
+
+    @staticmethod
+    def _tool(name: str):
+        from mcp.types import Tool as MCPTool
+        from strands.tools.mcp import MCPAgentTool
+
+        return MCPAgentTool(MCPTool(name=name, inputSchema={"type": "object"}), None)
+
+    def _client(self, enabled):
+        return FilteredMCPClient(client_factory=MagicMock(), enabled_tool_ids=enabled)
+
+    def _serve(self, pages, asked):
+        """A base `list_tools_sync` serving `pages` keyed by incoming cursor."""
+        from strands.types import PaginatedList
+
+        def _list_tools_sync(
+            _self, pagination_token=None, prefix=None, tool_filters=None
+        ):
+            asked.append(pagination_token)
+            names, next_token = pages[pagination_token]
+            return PaginatedList(
+                [self._tool(n) for n in names], token=next_token
+            )
+
+        return _list_tools_sync
+
+    def test_every_page_is_listed(self):
+        pages = {
+            None: (["t1", "t2"], "cursor-2"),
+            "cursor-2": (["t3"], "cursor-3"),
+            "cursor-3": (["t4"], None),
+        }
+        asked: list = []
+        client = self._client(
+            ["gateway_t1", "gateway_t2", "gateway_t3", "gateway_t4"]
+        )
+
+        with patch(
+            "strands.tools.mcp.MCPClient.list_tools_sync",
+            self._serve(pages, asked),
+        ):
+            tools = client._list_all_tools_sync()
+
+        assert [t.tool_name for t in tools] == ["t1", "t2", "t3", "t4"]
+        # The cursor reached the server, instead of being swallowed.
+        assert asked == [None, "cursor-2", "cursor-3"]
+
+    def test_the_filter_still_applies_on_a_later_page(self):
+        pages = {
+            None: (["wanted"], "cursor-2"),
+            "cursor-2": (["wanted_too", "not_enabled"], None),
+        }
+        asked: list = []
+        client = self._client(["gateway_wanted", "gateway_wanted_too"])
+
+        with patch(
+            "strands.tools.mcp.MCPClient.list_tools_sync",
+            self._serve(pages, asked),
+        ):
+            tools = client._list_all_tools_sync()
+
+        assert [t.tool_name for t in tools] == ["wanted", "wanted_too"]
+
+    def test_a_cursor_that_never_clears_is_capped(self):
+        """A server that always hands back a cursor would otherwise hold the
+        agent build forever."""
+        from collections import defaultdict
+
+        pages = defaultdict(lambda: (["t"], "always-more"))
+        asked: list = []
+        client = self._client(["gateway_t"])
+
+        with patch(
+            "strands.tools.mcp.MCPClient.list_tools_sync",
+            self._serve(pages, asked),
+        ):
+            tools = client._list_all_tools_sync()
+
+        assert len(asked) == MAX_TOOL_LIST_PAGES
+        assert len(tools) == MAX_TOOL_LIST_PAGES
+
+    def test_the_page_budget_is_per_listing(self):
+        """The client is reused across turns, so a listing that spent the
+        budget must not starve the next one."""
+        from collections import defaultdict
+
+        pages = defaultdict(lambda: (["t"], "always-more"))
+        asked: list = []
+        client = self._client(["gateway_t"])
+
+        with patch(
+            "strands.tools.mcp.MCPClient.list_tools_sync",
+            self._serve(pages, asked),
+        ):
+            client._list_all_tools_sync()
+            client._list_all_tools_sync()
+
+        assert len(asked) == 2 * MAX_TOOL_LIST_PAGES

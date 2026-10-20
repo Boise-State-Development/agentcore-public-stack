@@ -1,7 +1,9 @@
 /**
  * The shared `attachments` knowledge base, PR-3 (docs/specs/large-document-attachments.md
- * §4E), folded into the large-document pipeline because PlatformStack sits at
- * 492/500 resources on dev. Pinned:
+ * §4E), folded into the large-document pipeline to spend as few of
+ * PlatformStack's resources as possible (`platform-ceilings.test.ts` carries
+ * the stack's count against CloudFormation's limit; this test pins what
+ * turning the feature on costs). Pinned:
  *   - CDK_ATTACHMENT_KB_ENABLED is opt-in, and refused without large-document attachments;
  *   - on, it costs exactly 2 resources: an S3 Object Deleted rule and a daily
  *     schedule, both targeting the existing prepare queue; the user-files

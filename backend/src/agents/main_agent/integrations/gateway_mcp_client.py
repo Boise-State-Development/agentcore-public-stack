@@ -21,6 +21,14 @@ from agents.main_agent.integrations.mcp_apps import (
 
 logger = logging.getLogger(__name__)
 
+#: How many `tools/list` pages one listing may read.
+#:
+#: Strands' `_list_all_tools_sync` keeps calling back for as long as a cursor
+#: comes with the page, so a server whose cursor never clears would hold the
+#: agent build forever. A page is 100 tools by the MCP default, so 20 pages is
+#: far past any real Gateway and the loop is bounded either way.
+MAX_TOOL_LIST_PAGES = 20
+
 
 class GatewayAuthError(Exception):
     """Raised when the Gateway needs a user token and none is available.
@@ -115,6 +123,7 @@ class FilteredMCPClient(ReleasesCallsOnSessionEnd, MCPClient):
         self.enabled_tool_ids = enabled_tool_ids
         self.prefix = prefix
         self._session_started = False
+        self._pages_listed = 0
         logger.info(f"FilteredMCPClient created with {len(enabled_tool_ids)} enabled tool IDs")
 
     def __enter__(self):
@@ -134,11 +143,32 @@ class FilteredMCPClient(ReleasesCallsOnSessionEnd, MCPClient):
         """Deprecated: Session is managed by Strands ToolRegistry."""
         pass
 
-    def list_tools_sync(self, *args, **kwargs):
-        """List tools from Gateway and filter based on enabled_tool_ids."""
+    def list_tools_sync(
+        self,
+        pagination_token: Optional[str] = None,
+        *args: Any,
+        **kwargs: Any,
+    ) -> "PaginatedList":
+        """List one page of Gateway tools, filtered to `enabled_tool_ids`.
+
+        The cursor and the caller's prefix/filters are passed through to the
+        base client. They used to be swallowed — the override took `*args` and
+        then called `super().list_tools_sync()` with nothing — so every page
+        request returned page ONE along with page one's cursor. Strands'
+        `_list_all_tools_sync` asks again for as long as a cursor comes back,
+        so a Gateway with more than one page of tools listed page one over and
+        over and the agent was never built. Fixed, a listing reads every page,
+        and `MAX_TOOL_LIST_PAGES` bounds it against a cursor that never clears.
+        """
         from strands.types import PaginatedList
 
-        paginated_result = super().list_tools_sync()
+        if pagination_token is None:
+            # A listing starts at the first page; the page budget is per
+            # listing, not per client (this one is reused across turns).
+            self._pages_listed = 0
+
+        paginated_result = super().list_tools_sync(pagination_token, *args, **kwargs)
+        self._pages_listed += 1
 
         filtered_tools = [
             tool for tool in paginated_result
@@ -159,7 +189,16 @@ class FilteredMCPClient(ReleasesCallsOnSessionEnd, MCPClient):
         # issue `resources/read` against it.
         filtered_tools = record_and_filter_ui_tools(filtered_tools, client=self)
 
-        return PaginatedList(filtered_tools, token=paginated_result.pagination_token)
+        token = paginated_result.pagination_token
+        if token is not None and self._pages_listed >= MAX_TOOL_LIST_PAGES:
+            logger.warning(
+                "Gateway is still returning a tools/list cursor after %d pages; "
+                "stopping here. Tools past this point are not registered.",
+                self._pages_listed,
+            )
+            token = None
+
+        return PaginatedList(filtered_tools, token=token)
 
 
 def get_gateway_url_from_ssm(region: Optional[str] = None) -> Optional[str]:

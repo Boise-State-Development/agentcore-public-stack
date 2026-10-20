@@ -196,9 +196,12 @@ CloudFormation caps a stack at **500 resources**, and this is a deliberate
 single-stack architecture with nowhere to spill. Alarms are the largest
 discretionary consumer.
 
-Measured: **308** resources before this work, **~370** after. A guard in
-`observability-dynamodb-alarms.test.ts` fails the build above 460, so the ceiling
-surfaces while there is still room to react rather than as a failed deploy.
+Measured: **308** resources before this work, **~370** after. The guard is
+`platform-ceilings.test.ts`, which synthesizes the stack twice — with the
+shipped defaults and with every opt-in flag on — and fails the build above a
+margin below 500, so the ceiling surfaces while there is still room to react
+rather than as a failed deploy. It prints both counts on every run; read them
+there rather than keeping a number in prose.
 
 When budget matters, decide with data rather than by covering every documented
 metric. The DynamoDB allocation was cut from 78 alarms to 27 because a live sweep
