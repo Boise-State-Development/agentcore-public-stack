@@ -65,6 +65,17 @@ def _label(state: str) -> str:
     return _STATE_LABEL.get(state, state)
 
 
+def _format_number(value: float) -> str:
+    """A number as a reader expects it: ``15`` rather than ``15.0``.
+
+    JSON has one number type, so a `number` field whose document says "15
+    pages" comes back as ``15.0`` and renders that way in a column headed
+    "Page limit" — which reads as a bug to the office looking at it. Only
+    whole values are shortened; ``54.5`` stays ``54.5``.
+    """
+    return str(int(value)) if float(value).is_integer() else str(value)
+
+
 def _cell(text: str) -> str:
     """One value, safe to drop in a markdown table cell."""
     return (text or "").replace("|", "\\|").replace("\n", " ").strip()
@@ -75,6 +86,8 @@ def _display(row: Row) -> str:
         return "—"
     if isinstance(row.value, bool):
         return "Yes" if row.value else "No"
+    if isinstance(row.value, float):
+        return _format_number(row.value)
     if isinstance(row.value, list):
         return ", ".join(str(item) for item in row.value if item is not None) or "—"
     return str(row.value)

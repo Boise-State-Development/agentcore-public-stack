@@ -92,11 +92,18 @@ class Row:
 
 
 def _display_value(value: Any) -> str:
-    """One value as a single line of text, for the table and the workbook."""
+    """One value as a single line of text, for the event and the model.
+
+    A whole-number float is shortened (``15`` rather than ``15.0``): JSON has
+    one number type, so a ``number`` field reading "15 pages" in the document
+    comes back as ``15.0``, and that is not what the document said.
+    """
     if value is None:
         return ""
     if isinstance(value, bool):
         return "Yes" if value else "No"
+    if isinstance(value, float):
+        return str(int(value)) if value.is_integer() else str(value)
     if isinstance(value, list):
         return ", ".join(str(item) for item in value if item is not None)
     return str(value)
