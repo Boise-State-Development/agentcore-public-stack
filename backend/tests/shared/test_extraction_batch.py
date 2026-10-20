@@ -271,11 +271,15 @@ class TestTheMeasuredThresholds:
         assert b.MAX_DOCUMENTS >= 50
 
     def test_the_reliable_count_is_the_measured_one(self) -> None:
-        """Pinned as a value because it came from an experiment: with a planted
-        cross-document collision the reduce found it 3/3 at ten documents and
-        about one in two above that, while token cost stayed flat at ~325 per
-        document. The binding constraint is the model's attention, not cost —
-        the opposite of the intuition, which is why the number is written down.
+        """Pinned as a value because it came from an experiment, re-run at ten
+        trials per condition (§17.8): with a planted cross-document collision
+        the reduce found it 10/10 at ten documents and 8/10 at both twenty-five
+        and fifty, while token cost stayed flat at ~325 per document.
+
+        So this is where the number stops being 10/10, not a cliff — the
+        earlier "roughly a coin flip above ten" was three-trial noise, and the
+        correction is recorded because the first reading was the pessimistic
+        one and someone could have scoped a feature around it.
         """
         assert b.RELIABLE_DOCUMENT_COUNT == 10
 

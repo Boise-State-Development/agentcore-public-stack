@@ -267,16 +267,24 @@ __all__ = [
 ]
 
 
-#: Documents the reduce step handles reliably in one turn. **Measured**
-#: (§17.7): with a planted cross-document collision, the model found it 3/3 at
-#: ten documents and roughly one in two above that, while the token cost stayed
-#: flat at ~325 per document. So the binding constraint on a batch is the
-#: model's attention across a wide set, not cost and not concurrency — the
-#: opposite of the intuition.
+#: Documents the reduce step handles reliably in one turn. **Measured over ten
+#: trials per condition** (§17.8, which supersedes §17.7's three): with a
+#: planted cross-document collision the model found it 10/10 at ten documents
+#: and 8/10 at both twenty-five and fifty. So this is the threshold above which
+#: the number stops being 10/10, not a cliff — the fall-off beyond it is gentle,
+#: and §17.7's "roughly a coin flip" was three-trial noise.
+#:
+#: The binding constraint on a batch is still the model's attention rather than
+#: cost: token cost is flat at ~325 per document, which is the opposite of the
+#: intuition and the reason this constant exists at all.
 #:
 #: Not a cap. A user may legitimately want fifty documents extracted as a data
 #: pull even where the judgement across them is weaker, and refusing that would
 #: trade a useful spreadsheet for a principle. It is the threshold above which
-#: the tool tells the model to work the comparison field-by-field, which is what
-#: the measured failure mode actually calls for.
+#: the tool tells the model to work the comparison field-by-field — a note that
+#: moved collision detection from 5/10 to 8/10 at fifty documents and 8/10 to
+#: 9/10 at twenty-five. Consistent direction, largest where the problem is
+#: worst, and **not** significant at ten trials: the intervals overlap. It is
+#: kept because it is free and aimed at the right failure, not because it is
+#: proven.
 RELIABLE_DOCUMENT_COUNT = 10

@@ -1249,12 +1249,10 @@ budget cap, scored on whether the reduce found each:
 | 25 | 1/3 | 2/3 |
 | 50 | 2/3 | 2/3 |
 
-**The reduce is reliable at N≈10 and roughly a coin flip above it.** There is
-no clean cliff — N=25 scoring below N=50 is noise at three trials — and the
-scorer is a substring match that can undercount a correct answer phrased
-differently. The honest reading is: reliable at ten, unreliable beyond, and the
-limit is the model's attention across a wide set rather than anything about
-cost or concurrency.
+Those three-trial numbers are **superseded by §17.8**, which ran ten trials per
+condition and found the degradation much gentler than this table suggested. The
+table is kept because the progression of what we knew is part of the record,
+and because it is the reason the ten-trial run happened.
 
 That inverts the intuition worth recording: **the expensive-looking thing is
 cheap, and the free-looking thing is the ceiling.**
@@ -1272,6 +1270,89 @@ model correctly refused to make any recommendation on data where every single
 value had failed its provenance check. That was the integration working
 exactly as §7 intends, scored as a quality failure. The fixture now asserts
 every planted row is `supported` before the model is asked anything.
+
+### 17.8 Ten trials, and does the mitigation work? (revision of 17.7)
+
+§17.7's three trials per condition were thin enough to say so at the time. Ten
+trials per condition, same planted collision and outlier, and with the
+field-by-field note isolated — because as shipped it was a hypothesis sitting
+in production code, and it is the only thing between "reliable at ten" and
+"useful for a real fourteen-document intake."
+
+Proportions carry a **95% Wilson interval**, which is the honest way to report
+n=10 rather than printing a percentage that implies more.
+
+**Baseline, note as shipped (field-by-field only above ten documents):**
+
+| N | collision | outlier | mean output tokens |
+|---|---|---|---|
+| 10 | **10/10** [72–100%] | 4/10 [17–69%] | 797 |
+| 25 | 8/10 [49–94%] | 3/10 [11–60%] | 1,338 |
+| 50 | 8/10 [49–94%] | 1/10 [2–40%] | 1,736 |
+
+**The mitigation, isolated:**
+
+| condition | collision | outlier | mean output tokens |
+|---|---|---|---|
+| N=25, note **off** | 8/10 [49–94%] | 2/10 [6–51%] | 1,123 |
+| N=25, note **on** | 9/10 [60–98%] | 2/10 [6–51%] | 1,460 |
+| N=50, note **off** | 5/10 [24–76%] | 4/10 [17–69%] | 1,164 |
+| N=50, note **on** | 8/10 [49–94%] | 1/10 [2–40%] | 1,887 |
+
+Five readings, in descending order of how much weight they carry.
+
+**1. §17.7 was too pessimistic, and the direction of the error matters.** Three
+trials said "roughly a coin flip above ten". Ten trials say **8/10 at both N=25
+and N=50**. The "reliable at ten" claim survives intact (10/10, and the only
+condition whose interval excludes 70%), but the fall-off beyond it is gentle
+rather than a collapse. Triage at a realistic fourteen-document intake is in
+far better shape than the first measurement implied.
+
+**2. The field-by-field note works, and it works where it is needed.** At N=50
+it moves collision detection from 5/10 to 8/10; at N=25, from 8/10 to 9/10. The
+effect is largest where the problem is worst, which is the shape a real
+mechanism has rather than an artifact. **But the intervals overlap**
+([24–76%] against [49–94%]), so ten trials establish a consistent direction and
+not significance. It is kept because it is free, the direction is right twice,
+and it addresses the specific failure mode — but it should not be described as
+proven.
+
+**3. The rough scorer is better than feared.** The strict scorer — which also
+requires a word framing the finding as a collision — returned **exactly the
+same count as the lenient one in all seven conditions**. So when the model
+surfaces the planted fact it always presents it as the cross-document problem
+it is, and the scorer is not inflating results with incidental mentions. That
+was the specific worry about a substring match, and it does not hold.
+
+**4. A new finding, and the weaker half of the story: outlier detection is
+poor, and it decays with N.** 4/10 → 3/10 → 1/10 across the baseline, and the
+note does not help it. The reduce skill's "outliers worth a second look"
+section is the least effective thing in it. That is a different failure from
+the collision one — a collision is a relation the comparison table makes
+visible, while an outlier needs a sense of what normal is for the field — and
+it wants a different fix. Not attempted here.
+
+There is a hypothesis worth naming and not believing yet: at N=50 the note
+moved outlier detection 4/10 → 1/10 while moving collisions 5/10 → 8/10, which
+would be attention traded from one to the other. At n=10 with those intervals
+it is equally consistent with noise.
+
+**5. Output length tracks the work.** The note adds 300–700 output tokens,
+which is the model visibly doing more comparison rather than complying with an
+instruction and carrying on as before.
+
+**What a better scorer would be, rather than building one.** Reading #3, the
+weak link is not false positives but false *negatives* — a correct answer the
+substring match misses. Two changes would address it, in order of value per
+unit of effort: have a second model grade each response against the planted
+facts with the facts given to the grader (an LLM-as-judge on a three-item
+rubric, which is cheap and the standard answer), and plant *several* collisions
+of different kinds per trial so each response yields a recall figure instead of
+one bit. A rough scorer with an honest interval is worth more than a precise
+number from a scorer nobody has validated, which is why that is written down
+here rather than implemented.
+
+**The spend for all of this**: 70 Converse calls on Haiku, roughly $0.50.
 
 ## Sources
 
