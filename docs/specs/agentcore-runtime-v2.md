@@ -1,6 +1,6 @@
 # AgentCore Runtime V2 migration
 
-**Status:** plan steps 1–3 shipped in 1.27.0. The first dev V2 attempt (2026-10-09) failed on an environment-variable size limit (B4) and was rolled back to V1. Step 4, PR A (#1533) and PR B (#1535), is merged to `develop`, and **dev has run V2 since 2026-10-10 19:10Z** (step 5). V2 must not be selected on any release before PR B ships (§8). **The first GB-hours readout (2026-10-16, §9) is "need more data" for prod:** on dev, V2 used about as many GB-hours per day as V1 while carrying more traffic, and Runtime spend roughly doubled. Tracks `docs/kaizen/review-queue.md ▸ [2026-09-25] A/B the V2 AgentCore Runtime in dev`.
+**Status:** plan steps 1–3 shipped in 1.27.0. The first dev V2 attempt (2026-10-09) failed on an environment-variable size limit (B4) and was rolled back to V1. Step 4, PR A (#1533) and PR B (#1535), is merged to `develop`, and **dev has run V2 since 2026-10-10 19:10Z** (step 5). V2 must not be selected on any release before PR B ships (§8). **The first GB-hours readout (2026-10-16, §9) is "need more data" for prod:** on dev, V2 used about as many GB-hours per day as V1 while carrying more traffic, and Runtime spend roughly doubled. **Prod has run V2 since 2026-10-16 19:25Z** (1.28.0), and the prod readout (2026-10-20, §10) gives its V1 baseline — **1.179 GB-hours per session** — and reads prod's first V2 days as cost-neutral to modestly cheaper, not the near-doubling dev saw. Tracks `docs/kaizen/review-queue.md ▸ [2026-09-25] A/B the V2 AgentCore Runtime in dev`.
 **Sources:**
 - The AWS ML blog post [The new AgentCore Runtime: elastic, optimized, and consistently fast starts](https://aws.amazon.com/blogs/machine-learning/the-new-agentcore-runtime-elastic-optimized-and-consistently-fast-starts/) (2026-09-18).
 - The [What's New post](https://aws.amazon.com/about-aws/whats-new/2026/09/new-agentcore-runtime-generally-available).
@@ -9,6 +9,7 @@
 - A read-only `GetAgentRuntime` against the dev runtime.
 - The failed dev V2 update on 2026-10-09 (§3 B4), and read-only `GetAgentRuntime` calls against the dev and prod runtimes that day.
 - The AgentCore pricing page and the Price List API, read on 2026-10-16. Read-only Cost Explorer, CloudWatch and Logs Insights queries against the dev account the same day (§9).
+- Read-only Cost Explorer, CloudWatch and Logs Insights queries against the **prod** account on 2026-10-20 (§10), covering 2026-09-29 → 2026-10-20.
 
 Labels used in this document:
 - **Verified**: checked against AWS or our tree on 2026-09-27.
@@ -434,4 +435,126 @@ So the memory reclaim is real: a V2 session holds about 40% of the GB-hours a V1
   1. Join warm invocations to sessions in Logs Insights to get the turnless-warm share. That collapses the 0.40–0.91 per-session range.
   2. A second V2 week (10-17 → 10-23) with no flip-day burst.
   3. The V2 vCPU-per-invocation question (9.3 item 5).
-  4. Prod's V1 GB-hours per session on real traffic, read-only, as the baseline any prod projection multiplies.
+  4. ~~Prod's V1 GB-hours per session on real traffic, read-only, as the baseline any prod projection multiplies.~~ **Answered in §10 (2026-10-20): 1.179 GB-hours per session**, 385.0 per day, 0.349 per invocation, over 14 complete V1 days. Prod turned out to be on V2 already (since 2026-10-16 19:25Z), so §10 is the before side of a prod A/B rather than a projection, and prod's own first V2 days put the cost at 0.59–0.99× V1 per unit of work against dev's 1.26×.
+
+## 10. Prod readout: the V1 GB-hours baseline (2026-10-20)
+
+**Read this as a solid V1 baseline and a very early V2 sighting, not a verdict.** The baseline below is 14 complete UTC days of ordinary prod traffic on V1 (2026-10-02 → 2026-10-16), and it is firm: two exact calendar weeks, no session prewarm, no load-test burst, and Cost Explorer and CloudWatch agree to 0.005%. Everything in §10.3 onward rests on **three** V2 days, two of which are a weekend and one of which is anomalous, so it moves the question without closing it.
+
+**Prod is already on V2.** §9.4 wrote item 4 as the baseline "any prod projection multiplies", on the understanding that prod still ran V1. It does not: prod shipped 1.28.0 on `platformVersion: V2` on **2026-10-16 at 19:25Z**, and Cost Explorer confirms it — the V1 usage types bill for the last time on 10-16 and are zero from 10-17. So this is not a projection onto a V1 production estate. It is the **before** side of a real prod A/B whose after side has started, and the decision it informs is whether prod *stays* on V2.
+
+### 10.1 The V1 baseline
+
+Window **2026-10-02 00:00Z → 2026-10-16 00:00Z**, 14 days, `platformVersion: V1` throughout. Memory 5,389.8 GB-hours, vCPU 50.59 vCPU-hours, 4,571 sessions, 15,442 invocations, none of them prewarm.
+
+| | per day | per session | per invocation |
+|---|---|---|---|
+| **Memory GB-hours** | **385.0** | **1.179** | **0.3490** |
+| vCPU-hours | 3.614 | 0.01107 | 0.003276 |
+| Runtime $ | $3.96 | $0.01213 | $0.003592 |
+
+Runtime dollars over the window were **$55.46**, of which **91.8% is memory** and 8.2% vCPU — the same split dev's V1 week showed (91%). Annualised at this rate the prod Runtime line is about **$1,450/year**.
+
+The per-session figure is stable, which is what makes it usable as a baseline. Widening the window to 17 days (2026-09-29 → 10-16) moves it from 1.179 to **1.178** GB-hours per session, and no single day in the window departs from the mean by more than 25%:
+
+| | days | GB-h/day | GB-h/session | vCPU-h/session | inv/session |
+|---|---|---|---|---|---|
+| Window A (baseline, two full weeks) | 14 | 385.0 | 1.179 | 0.01107 | 3.38 |
+| Window B (sensitivity) | 17 | 409.7 | 1.178 | 0.01123 | 3.60 |
+| Window A, weekdays only | 10 | 470.6 | 1.157 | 0.01101 | 3.26 |
+| Window A, weekend only | 4 | 170.9 | 1.353 | 0.01153 | 4.37 |
+
+Prod has a strong weekly cycle that dev does not — a weekday carries 2.8× a weekend day's GB-hours — so the **per-day** figure only means anything over a whole number of weeks. That is why the baseline window is exactly two. The **per-session** figure is nearly immune to it (1.157 weekday against 1.353 weekend), which is the second reason to make it the headline.
+
+### 10.2 Prod against dev: prod sessions are longer, not fatter
+
+| V1, per session | dev (§9) | prod | prod / dev |
+|---|---|---|---|
+| Memory GB-hours | 0.86 | **1.179** | **1.37×** |
+| Invocations | 1.67 | 3.38 | 2.02× |
+| Memory GB-hours per invocation | 0.52 | 0.349 | 0.67× |
+
+A prod V1 session holds **37% more GB-hours than a dev one, while costing 33% less per invocation**. The two facts are the same fact: prod sessions take about twice as many turns, and on V1 memory bills at the high watermark for the session's whole life, so a session that lives long enough for three or four turns bills more GB-hours in total and less per turn. Prod is not using a heavier container; it is holding the same container open across more of a conversation.
+
+**This cuts in V2's favour, and it is the main reason dev's readout cannot be transplanted.** V2's saving is the 120-second reclaim of idle memory *within* a session. A longer session with more turns contains more inter-turn idle — think time between a user reading an answer and typing the next prompt — so there is strictly more for the reclaim to take back. Dev's 1.67 invocations per session is close to one-turn-and-done, which is the shape that gives the reclaim the least to work with. On this reasoning prod should do *better* under V2 than dev did, and §10.3 is consistent with that.
+
+### 10.3 Prod's first V2 days (provisional)
+
+Three complete UTC days on V2: 10-17 (Sat), 10-18 (Sun), 10-19 (Mon). Prewarm is on, so invocations are split into warm and non-warm; the warm counts are Logs Insights line counts (§10.5).
+
+| | GB-h | vCPU-h | sessions | invocations | of which prewarm |
+|---|---|---|---|---|---|
+| 10-17 Sat | 95.26 | 3.146 | 181 | 809 | 171 (21%) |
+| 10-18 Sun | 124.41 | 3.594 | 265 | 885 | 235 (27%) |
+| 10-19 Mon | 467.21 | 16.048 | 1,033 | 6,461 | 941 (15%) |
+
+Against the V1 baseline, per unit of work:
+
+| V2 / V1 (prod) | all 3 days | weekend only |
+|---|---|---|
+| **Memory GB-hours per session** | **0.39** | **0.42** |
+| Memory GB-hours per non-warm invocation | 0.29 | 0.49 |
+| vCPU-hours per non-warm invocation | 1.02 | 1.60 |
+| **Runtime $ per non-warm invocation** | **0.59** | **0.99** |
+| Runtime $ per session | 0.81 | 0.84 |
+
+Prod's memory reclaim reproduces dev's almost exactly: **0.39–0.42 of V1's GB-hours per session, against dev's 0.40.** The reclaim is the most transferable number in either readout. What differs is where it lands against the rate: because prod's V1 baseline bills 1.179 GB-hours per session rather than 0.86, the same 0.40 multiplier removes more absolute memory, and prod's all-in cost per unit of work comes out at **0.59–0.99× V1 where dev's was 1.26×**.
+
+The vCPU line is the same unresolved worry §9.3 item 5 raises, and prod does not settle it either: per non-warm invocation vCPU is 1.02× on the three days but 1.60× on the weekend pair, and the spread is wider than the signal.
+
+### 10.4 The projection against the break-evens
+
+V2 needs memory below **56%** of V1's GB-hours at consumption rates, or **72%** at the committed baseline. Prod's measured per-session memory ratio, 0.39–0.42, clears both.
+
+Applied to prod's own V1 volume (326.5 sessions and 1,103 invocations a day), holding the work constant and substituting V2's measured per-unit usage:
+
+| Basis | GB-h/day | vCPU-h/day | $/day | vs V1 $3.96 | $/year |
+|---|---|---|---|---|---|
+| per session, 3 days @ consumption | 151.6 | 5.03 | $3.20 | 0.81× | −$276 |
+| per session, 3 days @ committed | 151.6 | 5.03 | $2.50 | 0.63× | −$532 |
+| per session, weekend @ consumption | 160.8 | 4.93 | $3.35 | 0.84× | −$224 |
+| per non-warm invocation, 3 days @ consumption | 111.3 | 3.69 | $2.35 | 0.59× | −$588 |
+| per non-warm invocation, weekend @ consumption | 188.1 | 5.77 | $3.92 | 0.99× | −$17 |
+
+For comparison, the transplant §9.4 item 4 originally asked for — **dev's** ratios on prod's volume — spans much wider and straddles break-even, which is the point of having measured prod instead:
+
+| dev ratio transplanted | $/day @ consumption | vs V1 | $/day @ committed | vs V1 |
+|---|---|---|---|---|
+| per session 0.40 (vCPU 1.15×) | $3.13 | 0.79× | $2.45 | 0.62× |
+| per non-warm invocation 0.63 (vCPU 1.75×) | $4.91 | 1.24× | $3.83 | 0.97× |
+| raw daily 0.99 (vCPU 2.75×) | $7.71 | 1.95× | $6.02 | 1.52× |
+
+**Every one of these is a saving of a few hundred dollars a year at most, and the pessimistic transplant is a loss of about the same.** The Runtime line is ~$1,450/year against a prod Bedrock model bill orders of magnitude larger. V2 on prod should be decided on cold-start latency and on prewarm, which it makes affordable; on cost it is close enough to neutral that the measurement error here is comparable to the saving.
+
+### 10.5 Method
+
+Mirrors §9.2, so the two readouts are comparable.
+
+- **Cost Explorer**, daily, grouped by `USAGE_TYPE`, service `Amazon Bedrock AgentCore`, us-east-1 endpoint. Hourly and resource-level Cost Explorer data are payer opt-ins that are not enabled, so the hourly split comes from CloudWatch. Cost Explorer lags about a day: it had no row for 10-20 at all, so the last complete day is 10-19.
+- **The rates billed on prod confirm §1 to the cent**: `USW2-Runtime:Consumption-based:Memory` $0.009450/GB-hour, `…:vCPU` $0.089500/vCPU-hour, `…:Memory-v2` $0.016900, `…:vCPU-v2` $0.127590. Dollars in this section apply those rates to the usage and reproduce Cost Explorer's billed amounts to within 0.01%.
+- **CloudWatch** (`AWS/Bedrock-AgentCore`, hourly `Sum`): `MemoryUsed-GBHours` and `CPUUsed-vCPUHours` on the runtime, and `Sessions` / `Invocations` on the `Name`+`Operation`+`Resource` dimension set. `ActiveSessionCount` (`Service` dimension, `Maximum`) for the burst check.
+- **The cross-check holds.** CloudWatch's daily memory totals match Cost Explorer's on every complete UTC day, worst case 0.39 GB-hour on a 470 GB-hour day (**0.008%**); over the baseline window the two differ by 0.25 GB-hour in 5,390 (0.005%). This is looser than dev's 0.01 GB-hour in absolute terms and tighter in relative terms, which is what 25× the volume predicts. vCPU agrees to 0.01 vCPU-hour.
+- **Attribution needs no proxy.** The prod account also runs AgentCore Browser, Code Interpreter, Gateway and Memory, but each bills under its own usage type (`USW2-BrowserTool:…`, `USW2-CodeInterpreter:…`, `USW2-Gateway:…`, `USW2-Memory:…`), so the two `USW2-Runtime:…` types are the Runtime alone. Within the Runtime, the `Service: AgentCore.Runtime` rollup of `MemoryUsed-GBHours` equals the single runtime `boisestateai_v2_agentcore_runtime-h4MSyY7YSh`'s own series exactly — **0.000 GB-hours and 0.000 vCPU-hours unattributed** over the whole 21 days. There are 10 further runtime *log groups* in the account, left behind by deleted runtimes; none of them bills.
+- **Prewarm counts** come from Logs Insights on the runtime's log group, matching `prewarm invocation` and excluding the OpenTelemetry JSON duplicate of the same record (every line is emitted twice, once as text and once inside an OTEL envelope, so an unqualified `/prewarm/` filter double-counts). **Zero in the entire V1 window** — prewarm reached prod with 1.28.0 on 10-16, which is the first day it appears (73). This is the one confounder dev had to carry that the prod baseline does not.
+
+### 10.6 Confounders
+
+1. **The V2 side is three days, and one of them is strange.** 10-19 (Mon) carried 1,033 sessions and 6,461 invocations — 2.2× and 4.3× a V1 Monday — concentrated in three evening hours (20:00–23:00Z) at 140–192 sessions each with **8.1–9.6 invocations per session** against a prod norm of 3.4. That is an automated pattern, not people. It is not the known load-test signature either: `ActiveSessionCount` peaked at 141, where the three confirmed September load tests sustained 241/608/1,404. Its per-session GB-hours (0.452) sit right on the other two V2 days' (0.526, 0.469), so it does not distort the headline ratio, but it is why every V2 figure here is given with and without it, and why the weekend-only column exists.
+2. **The V1 window is clean, and that was checked rather than assumed.** `ActiveSessionCount` peaked at 12–60 with a mean of 6–13 on every day of it, nowhere near the 241 floor of a confirmed load test. The two prod releases inside the window — 1.26.0 (10-03 16:08Z) and 1.27.0 (10-09 03:36Z) — both land on days *below* the window mean, so release smoke on prod is not inflating the baseline measurably. The releases that worried the brief, 1.29.0 and 1.30.0, are both after the V1 window closes and so cannot touch it; 1.28.0/1.28.1 land on 10-16, the flip day, which is excluded from both sides.
+3. **10-16 is excluded entirely.** The flip was 19:25Z, so that day bills under both version's usage types (370.2 GB-hours V1, 41.1 V2). Rather than apportion it as §9.2 did for dev's flip hour, it is simply left out of both windows; at 411 GB-hours it is one day in 14 and including it changes no conclusion.
+4. **Prewarm is on for the V2 days and did not exist in the V1 window** — dev's confounder 1, with the same consequence. 15–27% of V2 invocations are warms. A warm for a conversation with no live microVM starts a *session*, so the per-session denominator is inflated by sessions that may never take a turn, which flatters V2; the per-non-warm-invocation row is the counterweight, and the truth is between them. The turnless-warm share is still unmeasured — it is §9.4 item 1, and it is now a prod question too.
+5. **V1's pre-booted pool.** Unchanged from §9.3 item 4: whether the pool's idle time is billed to us, and therefore whether prod's 1.179 GB-hours per session includes it, is not visible from either source. If it is billed, part of the V1 baseline is overhead V2 does not have, and V2 looks better than the ratios here suggest.
+6. **The V1 window predates eight features that 1.28.0 turned on in prod** (Projects, large documents, folder attachments and the rest). Those change what a turn does and therefore what it holds in memory. The baseline measures the stack as it ran up to 10-16, not the stack running now, so a V1-versus-V2 comparison across 10-16 is not a clean single-variable change — a caveat that applies to the V2 ratios in §10.3, not to the baseline itself.
+
+### 10.7 Verdict: §9.4 item 4 is answered; the prod decision is now a different question
+
+- **The baseline asked for exists: prod V1 is 1.179 GB-hours per session** (385.0 per day over two full weeks, 0.349 per invocation), with vCPU at 0.01107 vCPU-hours per session and a Runtime line of $3.96/day split 91.8% memory. It is measured on 14 complete days of real traffic, cross-checked between two sources to 0.005%, and stable to 0.001 GB-hours per session against a 17-day window. §9.4 item 4 can be closed.
+- **The framing in §9.4 is stale in one respect worth correcting:** prod is not waiting for this number in order to decide whether to adopt V2. It adopted V2 on 2026-10-16. The live question is whether to stay, and the rollback is cheap and known (set `V1`, run `platform.yml`).
+- **On cost, prod's early V2 data is better for V2 than dev's was, and the reason is structural, not noise.** The memory reclaim reproduces at 0.39–0.42 per session against dev's 0.40, but it applies to a 1.37× larger V1 baseline per session, because prod sessions run 3.4 turns to dev's 1.7 and therefore contain more reclaimable idle. Per unit of work prod V2 costs 0.59–0.99× V1 where dev measured 1.26×. **Nothing here is a reason to roll back on cost.**
+- **It is also not yet a reason to claim a saving.** Three days, two of them a weekend, one automated, with prewarm newly on and the turnless-warm share unmeasured, and a vCPU-per-invocation ratio that swings 1.02–1.60× depending on which days you take. The honest statement is **cost-neutral to modestly cheaper, with the error bar wider than the effect**.
+- **What is still missing**, now that the baseline is not:
+  1. The week-2 prod readout (**scheduled 2026-10-24**), over 10-17 → 10-23, which gives a full week including five weekdays and dilutes 10-19.
+  2. What ran on 10-19 evening. 8–10 invocations per session in three hours is either a feature working as intended or something worth knowing about; either way it should be named before it is averaged into a baseline.
+  3. The turnless-warm share (§9.4 item 1), which bounds the per-session numbers on both environments.
+  4. The vCPU question (§9.3 item 5), which prod widened rather than narrowed.
+- **The decision this should be taken on is latency, not cost.** The Runtime line is ~$1,450/year on V1 and the plausible V2 range is roughly ±$600 of it. Prewarm cut dev's median first token by 1.5 s and depends on V2's cheap idle. That is worth more than the money either way, which is what §9.4 already concluded — prod's numbers make the cost side of it closer to free than dev's did.
