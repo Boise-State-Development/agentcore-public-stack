@@ -417,6 +417,18 @@ export class InferenceAgentCoreConstruct extends Construct {
         // runs the check and emits `source_provenance`. Written only while ON,
         // so the default costs nothing against the V2 payload budget.
         ...(config.sourceProvenance.enabled ? { SOURCE_PROVENANCE_ENABLED: 'true' } : {}),
+        // Typed structured extraction: the Runtime mounts `document_extract`,
+        // makes the constrained side-channel call, verifies each value through
+        // source_provenance and emits `document_extraction`. Written only while
+        // ON, so the default costs nothing against the V2 payload budget. The
+        // model id rides along only while on for the same reason — it is read
+        // on the extraction path and nowhere else.
+        ...(config.documentExtract.enabled
+          ? {
+              DOCUMENT_EXTRACT_ENABLED: 'true',
+              DOCUMENT_EXTRACT_MODEL_ID: config.documentExtract.modelId,
+            }
+          : {}),
         // Agent Designer harness resolution: the runtime resolves an Agent's
         // bindings + modelConfig at invocation. Default off, mirrors app-api.
         AGENTS_API_ENABLED: config.agents.enabled ? 'true' : 'false',
