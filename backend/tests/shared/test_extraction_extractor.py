@@ -54,6 +54,29 @@ ANSWER = {
     "budget_cap": {"value": "$500,000", "quote": "up to $500,000"},
 }
 
+USAGE = {
+    "inputTokens": 4000,
+    "outputTokens": 120,
+    "totalTokens": 4120,
+    "cacheReadInputTokens": 0,
+    "cacheWriteInputTokens": 0,
+}
+
+
+def ModelStreamChunkEvent(chunk: Dict[str, Any]) -> Dict[str, Any]:
+    """Strands' wrapper for a raw provider chunk: ``{"event": chunk}``.
+
+    Reproduced rather than imported so the test pins the *shape* this module
+    depends on. Importing the real class would make the test pass through any
+    future rename of the wrapper key without saying so.
+    """
+    return {"event": chunk}
+
+
+def ModelStopReason(stop_reason: str, message: Any, usage: Any, metrics: Any) -> Dict[str, Any]:
+    """Strands' final event: ``{"stop": (stop_reason, message, usage, metrics)}``."""
+    return {"stop": (stop_reason, message, usage, metrics)}
+
 
 class FakeModel:
     """Records how it was built, and yields what it was told to."""
@@ -73,8 +96,15 @@ class FakeModel:
             raise self._behaviour
         if self._behaviour == "hang":
             await asyncio.sleep(10)
-        yield {"metadata": {"usage": {"inputTokens": 4000, "outputTokens": 120}}}
+        # These are Strands' OWN event shapes, mirrored from
+        # `strands/event_loop/streaming.py` and `strands/types/_events.py` —
+        # not invented for the test. A fake that emitted a convenient shape
+        # instead would confirm whatever the reader happened to look for, and
+        # it did: an earlier revision read `event["metadata"]["usage"]`, which
+        # process_stream never produces, so metering silently recorded nothing.
+        yield ModelStreamChunkEvent({"metadata": {"usage": dict(USAGE)}})
         yield {"output": output_model.model_validate(ANSWER)}
+        yield ModelStopReason("tool_use", {}, dict(USAGE), {"latencyMs": 10})
 
 
 def install(monkeypatch, *behaviours: Any) -> None:
@@ -154,6 +184,93 @@ class TestTheHappyPath:
         text = prompt[0]["content"][0]["text"]
         assert "DOCUMENT BODY" in text
         assert "the deadline" in text  # the field set's own find phrases
+
+
+class TestUsageIsActuallyRead:
+    """D12 depends on this, and getting it wrong is silent.
+
+    ``_meter`` skips an empty reading, so a missed usage block writes no ``C#``
+    row at all — worse than an unpriced model, because not even
+    ``UnmeteredModelCall`` fires to say so. These tests pin the two event
+    shapes Strands really emits, and one asserts them against the installed
+    SDK so a rename breaks the build rather than the metering.
+    """
+
+    @pytest.mark.asyncio
+    async def test_usage_is_read_from_the_stream(self, monkeypatch, field_set) -> None:
+        install(monkeypatch, "ok")
+        result = await ex.extract_fields(
+            field_set, "a document", filename="nsf.pdf", model_id="us.model"
+        )
+        assert result.usage["inputTokens"] == 4000
+        assert result.usage["outputTokens"] == 120
+
+    def test_the_authoritative_reading_is_the_final_stop_tuple(self) -> None:
+        """``ModelStopReason`` is ``{"stop": (stop_reason, message, usage,
+        metrics)}`` — emitted once, after the provider's metadata chunk has
+        been folded in."""
+        assert ex._usage_from(
+            {"stop": ("tool_use", {}, {"inputTokens": 7, "outputTokens": 3}, {})}
+        ) == {
+            "inputTokens": 7,
+            "outputTokens": 3,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokens": 0,
+        }
+
+    def test_the_chunk_wrapper_key_is_event_not_metadata(self) -> None:
+        """``ModelStreamChunkEvent`` is ``{"event": chunk}``, so the provider's
+        metadata is one level further in than it looks. Reading
+        ``event["metadata"]`` finds nothing, every time."""
+        wrapped = {"event": {"metadata": {"usage": {"inputTokens": 5, "outputTokens": 2}}}}
+        assert ex._usage_from(wrapped)["inputTokens"] == 5
+        # The shape that looks right and never occurs.
+        assert ex._usage_from({"metadata": {"usage": {"inputTokens": 5}}}) == {}
+
+    def test_an_all_zero_reading_is_treated_as_absent(self) -> None:
+        """Strands seeds usage at zero and overwrites it when the metadata
+        chunk arrives, so all-zero means "not reported yet". Metering it would
+        price the call at $0 and look exactly like a model with no catalog
+        row."""
+        assert ex._usage_from({"stop": ("tool_use", {}, {"inputTokens": 0, "outputTokens": 0}, {})}) == {}
+
+    def test_cache_token_counts_are_carried_when_present(self) -> None:
+        usage = ex._usage_from(
+            {
+                "stop": (
+                    "tool_use",
+                    {},
+                    {
+                        "inputTokens": 100,
+                        "outputTokens": 10,
+                        "cacheReadInputTokens": 40,
+                        "cacheWriteInputTokens": 60,
+                    },
+                    {},
+                )
+            }
+        )
+        assert usage["cacheReadInputTokens"] == 40
+        assert usage["cacheWriteInputTokens"] == 60
+
+    def test_a_malformed_event_yields_nothing_rather_than_raising(self) -> None:
+        for bad in ({}, {"stop": None}, {"stop": ("x",)}, {"event": "nope"},
+                    {"stop": ("x", {}, "not-a-dict", {})}):
+            assert ex._usage_from(bad) == {}
+
+    def test_the_shapes_match_the_installed_sdk(self) -> None:
+        """The reason this file reproduces the wrappers instead of importing
+        them: the test must fail if Strands renames a key, not silently follow
+        it into a metering gap."""
+        from strands.types._events import ModelStopReason, ModelStreamChunkEvent
+
+        chunk = ModelStreamChunkEvent({"metadata": {"usage": {"inputTokens": 1}}})
+        assert set(chunk) == {"event"}
+        stop = ModelStopReason("tool_use", {}, {"inputTokens": 1}, {})
+        assert set(stop) == {"stop"}
+        assert len(stop["stop"]) == 4
+        # Position 2 is usage, which is what `_usage_from` indexes.
+        assert stop["stop"][2] == {"inputTokens": 1}
 
 
 class TestTheMarkedFallback:

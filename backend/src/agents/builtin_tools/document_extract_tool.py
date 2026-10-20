@@ -192,6 +192,26 @@ async def _meter(
     path already set with ``voice:<index>``.
     """
     if not usage or not (usage.get("inputTokens") or usage.get("outputTokens")):
+        # A call that ran and reported no usage is an unmetered call, so it is
+        # named as one rather than passed over in silence. Without this the gap
+        # is invisible twice: no `C#` row to find and no metric to notice.
+        try:
+            from apis.shared.observability.emf import emit_unmetered_model_call
+
+            logger.warning(
+                "Unmetered document_extract call: model=%s reason=no_usage — the "
+                "extraction ran but reported no token usage, so it is not "
+                "counted against quota",
+                model_id,
+            )
+            emit_unmetered_model_call(
+                model_id,
+                "no_usage",
+                surface="document_extract",
+                session_id=session_id,
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug("document_extract: unmetered metric skipped", exc_info=True)
         return
     try:
         from datetime import datetime, timezone

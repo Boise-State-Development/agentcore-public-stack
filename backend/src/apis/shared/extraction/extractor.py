@@ -170,23 +170,57 @@ def _prompt(field_set: FieldSet, document_text: str, filename: str) -> List[Dict
     ]
 
 
-def _usage_from(event: Dict[str, Any]) -> Dict[str, int]:
-    """Token usage out of whatever the stream reported, or ``{}``.
+def _normalize_usage(usage: Any) -> Dict[str, int]:
+    if not isinstance(usage, dict):
+        return {}
+    normalized = {
+        "inputTokens": int(usage.get("inputTokens") or 0),
+        "outputTokens": int(usage.get("outputTokens") or 0),
+        "cacheReadInputTokens": int(usage.get("cacheReadInputTokens") or 0),
+        "cacheWriteInputTokens": int(usage.get("cacheWriteInputTokens") or 0),
+    }
+    # Strands seeds usage at zero and overwrites it when the provider's
+    # metadata chunk arrives, so an all-zero reading is "not reported yet"
+    # rather than a real measurement. Returning {} for it keeps the caller
+    # from metering a call at zero tokens, which would price to $0 and look
+    # exactly like a model with no catalog row.
+    return normalized if (normalized["inputTokens"] or normalized["outputTokens"]) else {}
 
-    Best-effort by design: a missing usage block costs the metering row its
-    numbers, and raising here would lose a good extraction over bookkeeping.
+
+def _usage_from(event: Dict[str, Any]) -> Dict[str, int]:
+    """Token usage out of one ``process_stream`` event, or ``{}``.
+
+    **The shapes here are Strands', not the provider's**, and getting them
+    wrong is silent: ``_meter`` skips an empty reading, so a missed usage block
+    writes no ``C#`` row at all — worse than the unpriced-model case, because
+    not even ``UnmeteredModelCall`` fires to say so.
+
+    Two places carry it, read in order of reliability:
+
+    * ``event["stop"]`` — the final ``ModelStopReason``, a 4-tuple of
+      ``(stop_reason, message, usage, metrics)``. This is the authoritative
+      one: it is emitted once per call, after the provider's metadata chunk
+      has been folded in.
+    * ``event["event"]["metadata"]["usage"]`` — a ``ModelStreamChunkEvent``
+      wrapping the provider's raw metadata chunk. The wrapper key is
+      ``"event"``, not ``"metadata"``; the metadata is one level further in.
+
+    Best-effort: raising here would lose a good extraction over bookkeeping.
     """
     try:
-        for key in ("metadata", "event", "metrics"):
-            block = event.get(key)
-            if isinstance(block, dict) and isinstance(block.get("usage"), dict):
-                usage = block["usage"]
-                return {
-                    "inputTokens": int(usage.get("inputTokens") or 0),
-                    "outputTokens": int(usage.get("outputTokens") or 0),
-                    "cacheReadInputTokens": int(usage.get("cacheReadInputTokens") or 0),
-                    "cacheWriteInputTokens": int(usage.get("cacheWriteInputTokens") or 0),
-                }
+        stop = event.get("stop")
+        if isinstance(stop, (tuple, list)) and len(stop) >= 3:
+            usage = _normalize_usage(stop[2])
+            if usage:
+                return usage
+
+        chunk = event.get("event")
+        if isinstance(chunk, dict):
+            metadata = chunk.get("metadata")
+            if isinstance(metadata, dict):
+                usage = _normalize_usage(metadata.get("usage"))
+                if usage:
+                    return usage
     except Exception:  # noqa: BLE001 - metering must never fail an extraction
         logger.debug("extraction usage not readable", exc_info=True)
     return {}
@@ -208,8 +242,11 @@ async def _run_once(
         ):
             if not isinstance(event, dict):
                 continue
-            if not usage:
-                usage = _usage_from(event)
+            # Overwrite rather than keep the first: the authoritative reading
+            # is on the final `stop` event, which arrives last.
+            reading = _usage_from(event)
+            if reading:
+                usage = reading
             if "output" in event:
                 output = event["output"]
         if output is None:
