@@ -42,6 +42,24 @@
  * fullest policy (measured: 5,774 / 5,855 / 5,936 at 3 / 12 / 21 characters),
  * so measuring at the maximum keeps the IAM guard from passing here and
  * failing for a deployment whose prefix is longer than the test's.
+ *
+ * **Re-validating these numbers.** A change to this file deploys nothing —
+ * `platform.yml`'s path filters cover `lib/`, `bin/`, `bootstrap-assets/`,
+ * `assets/` and the platform scripts, not `test/` — which is correct, but it
+ * means a deploy will never tell you whether this synth still matches reality.
+ * Read the live stack instead, and do it whenever a constant here is edited or
+ * the numbers in it are quoted somewhere that matters:
+ *
+ *     AWS_PROFILE=<env> aws cloudformation list-stack-resources \
+ *       --stack-name <prefix>-PlatformStack --region <region> \
+ *       --query 'length(StackResourceSummaries)'
+ *
+ * For a policy, take the `AWS::IAM::ManagedPolicy` physical id from the same
+ * listing, then `iam get-policy-version` and measure the document as compact
+ * JSON (`json.dumps(doc, separators=(',', ':'))`) — IAM does not count
+ * whitespace, so compact length is the comparable figure. Check first that no
+ * commit has touched `infrastructure/lib` since the stack's `LastUpdatedTime`,
+ * or you are comparing against a template this code did not produce.
  */
 import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
