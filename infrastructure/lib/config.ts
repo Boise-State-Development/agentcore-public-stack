@@ -802,6 +802,18 @@ export interface SourceProvenanceConfig {
 export interface DocumentExtractConfig {
   enabled: boolean;
   modelId: string;
+  /**
+   * Concurrent extraction calls when one `document_extract` call carries
+   * several documents (structured-extraction.md §17.4). Optional, and written
+   * to the Runtime only when set, so the default spends none of the V2
+   * environment budget. The backend's own default is 4 — deliberately
+   * conservative, because each call is a constrained Converse request carrying
+   * a whole document and this account has a Bedrock throttle alarm that an
+   * over-eager default would trip on the first real batch. Raise it on the
+   * DocumentExtract EMF records plus an absence of throttling, not on
+   * impatience; the backend clamps to 1..16.
+   */
+  concurrency?: number;
 }
 
 /**
@@ -1654,6 +1666,17 @@ export function loadConfig(scope: cdk.App): AppConfig {
         process.env.CDK_DOCUMENT_EXTRACT_MODEL_ID?.trim() ||
         scope.node.tryGetContext('documentExtract')?.modelId ||
         'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+      // Left undefined unless a deployment sets it, so the Runtime's
+      // environment carries nothing for the default case. A non-numeric value
+      // is dropped rather than forwarded: the backend would fall back anyway,
+      // and a bad string in the Runtime's env is harder to spot than an absent
+      // one.
+      ...(() => {
+        const raw = process.env.CDK_DOCUMENT_EXTRACT_CONCURRENCY?.trim();
+        const fromContext = scope.node.tryGetContext('documentExtract')?.concurrency;
+        const value = raw ? Number(raw) : fromContext;
+        return Number.isInteger(value) && value > 0 ? { concurrency: value } : {};
+      })(),
     },
     agents: {
       // Default ON with a kill switch (house style, mirroring memorySpaces /

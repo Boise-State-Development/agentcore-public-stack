@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import logging
 from io import BytesIO
-from typing import Dict, Optional, Sequence
+from typing import Any, Dict, Optional, Sequence, Tuple
 
 from apis.shared.files.source_provenance import (
     STATE_QUOTE_UNSUPPORTED,
@@ -65,6 +65,17 @@ def _label(state: str) -> str:
     return _STATE_LABEL.get(state, state)
 
 
+def _format_number(value: float) -> str:
+    """A number as a reader expects it: ``15`` rather than ``15.0``.
+
+    JSON has one number type, so a `number` field whose document says "15
+    pages" comes back as ``15.0`` and renders that way in a column headed
+    "Page limit" — which reads as a bug to the office looking at it. Only
+    whole values are shortened; ``54.5`` stays ``54.5``.
+    """
+    return str(int(value)) if float(value).is_integer() else str(value)
+
+
 def _cell(text: str) -> str:
     """One value, safe to drop in a markdown table cell."""
     return (text or "").replace("|", "\\|").replace("\n", " ").strip()
@@ -75,6 +86,8 @@ def _display(row: Row) -> str:
         return "—"
     if isinstance(row.value, bool):
         return "Yes" if row.value else "No"
+    if isinstance(row.value, float):
+        return _format_number(row.value)
     if isinstance(row.value, list):
         return ", ".join(str(item) for item in row.value if item is not None) or "—"
     return str(row.value)
@@ -214,7 +227,203 @@ def workbook_filename(field_set: FieldSet, filename: str) -> str:
 
 __all__ = [
     "XLSX_MIME_TYPE",
+    "batch_workbook_filename",
+    "render_batch_markdown",
+    "render_batch_workbook",
     "render_markdown",
     "render_workbook",
     "workbook_filename",
 ]
+
+
+# ---------------------------------------------------------------------------
+# A batch: one artifact and one workbook holding the whole set
+# ---------------------------------------------------------------------------
+#
+# Not N artifacts and N workbooks (§17.2). The deliverable of an N-document run
+# is the **comparison**: "two collide on the same March deadline and both need
+# the same PI" is a fact about the set, not about any document in it, and it is
+# only visible in a table that holds the set. A reviewer handed fourteen
+# separate tables has been handed the work of joining them.
+
+
+def render_batch_markdown(
+    per_document: Sequence[Tuple[Any, Sequence[Row]]],
+    *,
+    field_set: FieldSet,
+    model_id: str,
+    schema_enforced: bool,
+    failures: Sequence[Tuple[str, str]] = (),
+) -> str:
+    """The batch artifact: one comparison table, then one section per document.
+
+    The comparison table comes **first** and is oriented field-per-row,
+    document-per-column, because that is the orientation in which a collision
+    is visible at a glance — the same deadline twice on one row. The per-document
+    sections below it carry the provenance, which is what a reviewer goes to
+    once the comparison has told them where to look.
+    """
+    documents = [outcome for outcome, _ in per_document]
+    lines = [
+        f"# {field_set.title}",
+        "",
+        f"**Documents:** {len(documents)}  ",
+        f"**Field set:** `{field_set.name}` (version {field_set.version})  ",
+        f"**Extraction model:** `{model_id}`",
+    ]
+    if not schema_enforced:
+        lines.append(
+            "  \n**⚠ Types were requested, not enforced** for at least one "
+            "document. The constrained schema could not be applied, so those "
+            "values were validated after the fact rather than guaranteed as "
+            "they were produced."
+        )
+    if failures:
+        lines += [
+            "",
+            f"**⚠ {len(failures)} document(s) could not be extracted** and are "
+            "absent from the comparison below:",
+            "",
+        ]
+        lines += [f"- {_cell(name)} — {_cell(reason)}" for name, reason in failures]
+
+    if len(per_document) > 1:
+        lines += ["", "## Comparison", ""]
+        header = "| Field | " + " | ".join(
+            _cell(o.filename or o.upload_id) for o in documents
+        ) + " |"
+        lines.append(header)
+        lines.append("| --- | " + " | ".join("---" for _ in documents) + " |")
+        for index, field in enumerate(field_set.fields):
+            cells = []
+            for _, rows in per_document:
+                row = rows[index] if index < len(rows) else None
+                if row is None:
+                    cells.append("—")
+                    continue
+                text = _cell(_display(row))
+                # A value the check did not support must not sit in a
+                # comparison looking like one that was. The marker is the
+                # cheapest honest way to carry that into a dense table.
+                if row.state == STATE_QUOTE_UNSUPPORTED:
+                    text = f"⚠ {text}"
+                elif row.state == STATE_UNVERIFIED and row.value is not None:
+                    text = f"? {text}"
+                cells.append(text)
+            lines.append(f"| {_cell(field.title)} | " + " | ".join(cells) + " |")
+        lines += [
+            "",
+            "⚠ = the value is **not** in the passage cited for it. "
+            "? = no source passage was found for it. "
+            "Neither is safe to rely on without checking the document.",
+        ]
+
+    for outcome, rows in per_document:
+        lines += [
+            "",
+            f"## {outcome.filename or outcome.upload_id}",
+            "",
+            "| Field | Value | Source | Status |",
+            "| --- | --- | --- | --- |",
+        ]
+        for row in rows:
+            lines.append(
+                f"| {_cell(row.field.title)} | {_cell(_display(row))} | "
+                f"{_cell(row.locator_text or '—')} | {_cell(_label(row.state))} |"
+            )
+
+    lines += ["", _STATE_NOTE]
+    return "\n".join(lines) + "\n"
+
+
+def render_batch_workbook(
+    per_document: Sequence[Tuple[Any, Sequence[Row]]],
+    *,
+    field_set: FieldSet,
+    model_id: str,
+    schema_enforced: bool,
+) -> Optional[bytes]:
+    """One workbook for the batch: a Comparison sheet, then one row per cell.
+
+    Two sheets rather than one, because the two questions an office asks of a
+    batch want opposite orientations: *Comparison* is field-per-row and
+    document-per-column for spotting collisions, while *Detail* is one row per
+    (document, field) with its passage, which is what sorts and filters.
+    """
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Alignment, Font
+    except ImportError:  # pragma: no cover - openpyxl is a base dependency
+        logger.warning("document_extract: openpyxl unavailable; no workbook written")
+        return None
+
+    try:
+        documents = [outcome for outcome, _ in per_document]
+        book = Workbook()
+
+        comparison = book.active
+        comparison.title = "Comparison"
+        comparison.append(
+            [f"{field_set.title} — {len(documents)} document(s)"]
+        )
+        comparison["A1"].font = Font(bold=True, size=14)
+        comparison.append(
+            [
+                f"Field set {field_set.name} v{field_set.version}; "
+                f"extracted with {model_id}"
+                + ("" if schema_enforced else "; TYPES REQUESTED, NOT ENFORCED")
+            ]
+        )
+        comparison.append([])
+        header = ["Field"] + [o.filename or o.upload_id for o in documents]
+        comparison.append(header)
+        for index in range(1, len(header) + 1):
+            comparison.cell(row=4, column=index).font = Font(bold=True)
+        for index, field in enumerate(field_set.fields):
+            cells = [field.title]
+            for _, rows in per_document:
+                row = rows[index] if index < len(rows) else None
+                cells.append("" if row is None else _display(row))
+            comparison.append(cells)
+        comparison.column_dimensions["A"].width = 28
+        for column in range(2, len(header) + 1):
+            comparison.cell(row=4, column=column)
+            comparison.column_dimensions[
+                comparison.cell(row=4, column=column).column_letter
+            ].width = 30
+
+        detail = book.create_sheet("Detail")
+        detail_header = ["Document", "Field", "Value", "Source", "Status", "Cited passage"]
+        detail.append(detail_header)
+        for index in range(1, len(detail_header) + 1):
+            detail.cell(row=1, column=index).font = Font(bold=True)
+        for outcome, rows in per_document:
+            for row in rows:
+                detail.append(
+                    [
+                        outcome.filename or outcome.upload_id,
+                        row.field.title,
+                        _display(row) if row.value is not None else "",
+                        row.locator_text or "",
+                        _label(row.state),
+                        row.quote or "",
+                    ]
+                )
+        for column, width in zip("ABCDEF", (32, 28, 36, 12, 34, 80)):
+            detail.column_dimensions[column].width = width
+        for cell in detail["F"]:
+            cell.alignment = Alignment(wrap_text=True, vertical="top")
+
+        buffer = BytesIO()
+        book.save(buffer)
+        return buffer.getvalue()
+    except Exception:  # noqa: BLE001 - a missing workbook beats a lost run
+        logger.warning("document_extract: failed to build batch workbook", exc_info=True)
+        return None
+
+
+def batch_workbook_filename(field_set: FieldSet, count: int) -> str:
+    """A readable name for a batch workbook."""
+    if count == 1:
+        return f"{field_set.name}.xlsx"
+    return f"{field_set.name}-{count}-documents.xlsx"

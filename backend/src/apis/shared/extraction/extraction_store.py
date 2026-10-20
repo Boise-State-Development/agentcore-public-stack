@@ -27,12 +27,22 @@ exists, so this needs **zero new infra**. A new ``EXTR#`` SK prefix beside
 ``C#`` (cost), ``META``, ``TSUM#``, ``SRCV#``, ``APPCARD#`` and ``UIRES#``::
 
     PK:     USER#<user_id>
-    SK:     EXTR#<tool_use_id>      (last-write-wins per call)
+    SK:     EXTR#<tool_use_id>#<upload_id>
     GSI_PK: SESSION#<session_id>    (SessionLookupIndex)
     GSI_SK: EXTR#<created_at>
 
-Keyed on the ``toolUseId`` of the ``document_extract`` call, so a re-run of the
-same invocation overwrites its own row rather than accumulating.
+**One row per (call, document)**, not per call. A single
+``document_extract`` call now carries N documents (§17), and they share one
+``toolUseId`` — so a key of ``EXTR#<tool_use_id>`` alone would have had the
+documents in a batch silently overwrite each other, leaving a reload showing
+one row set where the user saw fourteen. Keying on both also keeps each row
+independently bounded against the 400KB item limit: fourteen fields of one
+document fit comfortably, where a whole batch in one item would not.
+
+The ``toolUseId`` is still the grouping key a reader uses, so the SPA can
+reassemble a batch from the rows without being told how many to expect; and a
+re-run of the same invocation still overwrites its own rows rather than
+accumulating.
 
 Rows carry model-quoted passages from the user's own document, so quotes and
 values are clamped and the field count is bounded. An item that grew past
@@ -128,7 +138,7 @@ class ExtractionStore:
         stored = _clamp_payload(payload)
         item: Dict[str, Any] = {
             "PK": f"USER#{user_id}",
-            "SK": f"EXTR#{tool_use_id}",
+            "SK": f"EXTR#{tool_use_id}#{payload.get('uploadId', '')}",
             "GSI_PK": f"SESSION#{session_id}",
             "GSI_SK": f"EXTR#{created_at}",
             "userId": user_id,

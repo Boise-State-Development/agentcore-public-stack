@@ -421,3 +421,52 @@ class TestOrder:
         rows = build_rows(field_set, partial, document)
         assert len(rows) == 4
         assert rows[-1].state == STATE_UNVERIFIED
+
+
+class TestNumberRendering:
+    """A whole-number float must not read as ``15.0``.
+
+    Found on a real run, not in a fixture: JSON has one number type, so a
+    ``number`` field whose document says "limited to 15 pages" comes back as
+    ``15.0`` and rendered that way in a column headed "Page limit" — which
+    reads as a bug to the office looking at it, and is not what the document
+    said.
+    """
+
+    @pytest.fixture
+    def numeric_set(self):
+        return parse_field_set(
+            "| name | title | type | find |\n|---|---|---|---|\n"
+            "| page_limit | Page limit | number | the page limit |\n"
+            "| indirect_rate | Indirect rate | number | the rate |\n",
+            name="s",
+        )
+
+    def test_a_whole_number_loses_its_decimal(self, numeric_set) -> None:
+        rows = build_rows(
+            numeric_set,
+            {
+                "page_limit": {"value": 15.0, "quote": "limited to 15 pages"},
+                "indirect_rate": {"value": 54.5, "quote": "a rate of 54.5%"},
+            },
+            None,
+        )
+        fields = {f["name"]: f["value"] for f in event_fields(rows)}
+        assert fields["page_limit"] == "15"
+        assert fields["indirect_rate"] == "54.5"
+
+    def test_the_model_facing_value_is_shortened_too(self, numeric_set) -> None:
+        rows = build_rows(
+            numeric_set,
+            {
+                "page_limit": {"value": 15.0, "quote": None},
+                "indirect_rate": {"value": 54.5, "quote": None},
+            },
+            None,
+        )
+        result = model_facing_result(
+            rows, field_set=numeric_set, artifact_id=None, schema_enforced=True
+        )
+        values = {f["name"]: f["value"] for f in result["fields"]}
+        assert values["page_limit"] == "15"
+        assert values["indirect_rate"] == "54.5"
