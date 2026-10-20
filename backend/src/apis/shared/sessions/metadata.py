@@ -426,7 +426,9 @@ def _derive_cache_observability(
     query) and derives:
 
     - ``cacheStatus``: first_write | hit | partial_miss | miss_ttl_expired |
-      miss_avoidable | uncached (see ``apis.shared.observability.CacheStatus``).
+      miss_avoidable | uncached (see ``apis.shared.observability.CacheStatus``),
+      or ``estimated`` for a row whose usage was never reported — those return
+      early, before the query, and are never classified.
     - ``cacheGapSeconds``: whole seconds since the previous call, when known.
     - ``cachePrefixGapSeconds``: seconds since the last call with the *same*
       prefix, when that is a different (older) call than the previous one.
@@ -476,6 +478,18 @@ def _derive_cache_observability(
             return {}
 
         cache_read, cache_write = _extract_cache_usage(message_metadata)
+
+        # A call whose usage was never reported (an interrupted turn's cut
+        # generation) carries estimated buckets, so there is nothing here to
+        # classify. Say exactly that instead of deriving a status from the
+        # estimate: `cacheStatus` is where a cache investigation starts, and a
+        # confident-looking `first_write` or `miss_avoidable` on numbers nobody
+        # measured would send it after the wrong call. `wastedUsd` stays zero
+        # for the same reason — it is the metric the AvoidableMiss alarm reads.
+        # The buckets themselves are still the row's best estimate of what was
+        # billed, so the next call's own classification keeps its predecessor.
+        if (message_metadata.model_extra or {}).get("usageEstimated"):
+            return {"cacheStatus": CacheStatus.ESTIMATED.value, "wastedUsd": 0.0}
 
         # Recent cost rows for this session, newest first (GSI_SK = C#<timestamp>
         # sorts chronologically). We need a window rather than just the previous

@@ -2059,10 +2059,11 @@ class StreamCoordinator:
             # tail is the turn's user or tool-result message, so a model call
             # was streaming or awaiting its first token). A cut generation
             # often never delivered the provider's terminal usage event, so
-            # its input side falls back to the context-attribution projection
-            # (output unknown, priced at zero). Never projected for a Stop
-            # during tool execution: the projection then describes the last
-            # completed call, which is already metered.
+            # its whole usage is estimated — prompt size, the tokens of the
+            # partial we streamed, and the cache bucket the prompt belongs in
+            # — and the row says so (`interrupted_usage`). Never estimated for
+            # a Stop during tool execution: the projection then describes the
+            # last completed call, which is already metered.
             if meter_usage and main_agent_wrapper is not None:
                 try:
                     await self._update_session_metadata(
@@ -2086,15 +2087,19 @@ class StreamCoordinator:
                             else current_assistant_message_index + 1
                         )
                         if in_flight_idx not in metered:
-                            projected = self._projected_input_usage(agent)
-                            if projected:
+                            estimated = await self._interrupted_call_usage(
+                                strands_agent=agent,
+                                wrapper=main_agent_wrapper,
+                                partial_text=text,
+                            )
+                            if estimated:
                                 while len(slots) <= in_flight_idx:
                                     # Its hooks' index counts this turn's
                                     # retried attempts, like any slot's.
                                     slots.append(
                                         {"usage": {}, "metrics": {}, "call_index": len(slots) + model_retries}
                                     )
-                                slots[in_flight_idx] = {**slots[in_flight_idx], "usage": projected}
+                                slots[in_flight_idx] = {**slots[in_flight_idx], **estimated}
                                 metered.append(in_flight_idx)
 
                     if metered:
@@ -2134,30 +2139,42 @@ class StreamCoordinator:
             # shield). Swallow here and let the caller re-raise the original.
             logger.debug("interrupted-turn persistence shield cancelled; inner write continues")
 
-    def _projected_input_usage(self, agent: Any) -> Optional[Dict[str, Any]]:
-        """Best-effort input-token usage for an interrupted turn.
+    async def _interrupted_call_usage(
+        self,
+        *,
+        strands_agent: Any,
+        wrapper: Any,
+        partial_text: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Estimated usage for the model call this interruption cut off.
 
         A cut generation frequently never delivers Bedrock's terminal usage
-        event, so ``accumulated_metadata['usage']`` is empty and the turn
-        would persist with no token/cost/context data. The context-attribution
-        hook keeps the best input size it has for the call in flight — a
-        native count of the exact request when it measured one, else Strands'
-        usage-anchored projection (see ``get_projected_input_tokens``). Output
-        is unknown — the turn never finished — so it's reported as zero
-        (input-side cost only). Returns ``None`` if no projection is
-        available, leaving the caller to persist whatever it has.
+        event, so ``accumulated_metadata['usage']`` is empty and the call
+        would reach the cost row with nothing on it. Everything that can be
+        established about what it consumed — the projected prompt size, the
+        tokens of the answer we streamed, and which billing bucket the prompt
+        belongs in — is assembled in
+        :mod:`agents.main_agent.streaming.interrupted_usage`, which also
+        records the method behind each figure so the row never presents an
+        estimate as a measurement.
+
+        Returns the slot payload to merge (``usage`` + ``usageEstimate``), or
+        ``None`` when the input size cannot be established — there is no
+        honest row to write then. Runs inside the shielded teardown task,
+        after the stream is over; never on the path to a first token.
         """
         try:
-            from agents.main_agent.session.hooks.context_attribution import (
-                get_projected_input_tokens,
+            from agents.main_agent.streaming.interrupted_usage import (
+                build_interrupted_call_usage,
             )
 
-            total = get_projected_input_tokens(agent)
-            if not total or total <= 0:
-                return None
-            return {"inputTokens": int(total), "outputTokens": 0, "totalTokens": int(total)}
+            return await build_interrupted_call_usage(
+                strands_agent=strands_agent,
+                wrapper=wrapper,
+                partial_text=partial_text,
+            )
         except Exception:  # noqa: BLE001 - best-effort enrichment only
-            logger.debug("Could not project interrupted-turn input usage", exc_info=True)
+            logger.debug("Could not estimate interrupted-turn usage", exc_info=True)
             return None
 
     async def _persist_paused_turn_snapshot(
@@ -4139,6 +4156,14 @@ class StreamCoordinator:
                 )
                 if context_window is not None:
                     metadata_kwargs["contextWindow"] = context_window
+                # This call's usage was estimated, not reported: a field ->
+                # method map naming what produced each figure. Present only on
+                # the interrupted call's row (see `interrupted_usage`); its
+                # presence is also what suppresses the cache classification
+                # and `wastedUsd`, which must never be derived from a guess.
+                usage_estimate = accumulated_metadata.get("usageEstimate")
+                if usage_estimate:
+                    metadata_kwargs["usageEstimated"] = usage_estimate
                 # PR-5 experiment arm marker (extra field via extra="allow"),
                 # so the cost anatomy can split 1h-static-prefix turns from
                 # the 5m baseline without guessing from the write:read shape.
