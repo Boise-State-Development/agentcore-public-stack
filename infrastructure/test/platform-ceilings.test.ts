@@ -209,6 +209,10 @@ function allFlagsOn(base: AppConfig): AppConfig {
     attachmentKb: { enabled: true },
     folderAttachments: { enabled: true },
     folderSync: { enabled: true },
+    // Source provenance adds no resources — it is `SRCV#` rows on the existing
+    // sessions-metadata table and one more tool in toolConfig — so it is here
+    // for the environment-variable ceilings, not the resource count.
+    sourceProvenance: { enabled: true },
     agents: { enabled: true },
     agentMarketplace: { enabled: true },
     dictation: { ...base.dictation, enabled: true },
