@@ -108,6 +108,11 @@ TAIL_ALLOWED = frozenset(
         "agent_status",
         "artifact",
         "ui_resource",
+        # Drained on the same pass as the tool-batch summaries, so like them
+        # it can land in the tail when the tool ran in the final batch
+        # (docs/specs/structured-extraction.md §9). `source_provenance` is
+        # added by the PR that dev-validates it, which owns that line.
+        "document_extraction",
         "event",
         "message",
         "result",
