@@ -75,4 +75,15 @@ export interface FeatureFlags {
    * folder schedule while off; the kb-sync Lambdas carry it too).
    */
   folderSync: boolean;
+  /**
+   * Source provenance verification
+   * (docs/specs/source-provenance-verification.md): a cited value is rendered
+   * with a page reference only where the backend could confirm the passage is
+   * in the document AND that the value appears in it; a located passage that
+   * does not support its value renders as the warning it is. Backend:
+   * SOURCE_PROVENANCE_ENABLED (the Runtime builds `verify_sources` and emits
+   * `source_provenance`; app-api replays it). In development, so `false`
+   * everywhere until a deployment turns both sides on.
+   */
+  sourceProvenance: boolean;
 }

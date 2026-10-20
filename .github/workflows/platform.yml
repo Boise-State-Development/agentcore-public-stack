@@ -352,6 +352,12 @@ jobs:
       # with a kill switch ("false" turns it off). Sets the flag on app-api and
       # both kb-sync Lambdas; no resources. The SPA's matching switch is `features.folderSync`.
       CDK_FOLDER_SYNC_ENABLED: ${{ vars.CDK_FOLDER_SYNC_ENABLED }}
+      # Source provenance verification: `verify_sources` checks whether a cited
+      # passage is in the document and whether the asserted value appears in it
+      # (docs/specs/source-provenance-verification.md). In development, so only
+      # "true" enables. Sets the flag on the AgentCore Runtime and app-api; no
+      # resources. The SPA's matching switch is `features.sourceProvenance`.
+      CDK_SOURCE_PROVENANCE_ENABLED: ${{ vars.CDK_SOURCE_PROVENANCE_ENABLED }}
       # SageMaker fine-tuning. The tables, bucket, SageMaker role and IAM
       # grants deploy unconditionally, but these two decide whether the feature
       # is reachable and how it is rationed, and neither was forwarded before —

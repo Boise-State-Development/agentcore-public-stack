@@ -95,6 +95,7 @@ export interface AppConfig {
   attachmentKb: AttachmentKbConfig;
   folderAttachments: FolderAttachmentsConfig;
   folderSync: FolderSyncConfig;
+  sourceProvenance: SourceProvenanceConfig;
   agents: AgentsConfig;
   agentMarketplace: AgentMarketplaceConfig;
   dictation: DictationConfig;
@@ -750,6 +751,26 @@ export interface FolderAttachmentsConfig {
  * No resources: the worker already holds every grant a folder run uses.
  */
 export interface FolderSyncConfig {
+  enabled: boolean;
+}
+
+/**
+ * Source provenance verification (docs/specs/source-provenance-verification.md):
+ * a session with a readable document also gets `verify_sources`, which answers
+ * two separate questions about a cited passage — is it in the document, and does
+ * the asserted value actually appear in it — and collapses them into one of four
+ * states. **Opt-in while in development**: off unless
+ * CDK_SOURCE_PROVENANCE_ENABLED=true (or a `sourceProvenance.enabled: true`
+ * cdk.json context). A feature switch, and therefore permanent: it adds a tool
+ * to toolConfig and changes what the product asserts about a user's document.
+ * Sets SOURCE_PROVENANCE_ENABLED on the AgentCore Runtime (which builds the
+ * tool, verifies and emits the event) and on app-api (which replays the stored
+ * verdicts on GET /messages). Written to the Runtime's environment **only while
+ * on**, so the default spends none of the V2 payload budget. No resources: the
+ * verdicts are `SRCV#` rows on the existing sessions-metadata table and its
+ * SessionLookupIndex GSI.
+ */
+export interface SourceProvenanceConfig {
   enabled: boolean;
 }
 
@@ -1581,6 +1602,13 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_FOLDER_SYNC_ENABLED
         ? process.env.CDK_FOLDER_SYNC_ENABLED.trim().toLowerCase() !== 'false'
         : scope.node.tryGetContext('folderSync')?.enabled ?? true,
+    },
+    sourceProvenance: {
+      // In development: only "true" enables, and an unset GitHub variable
+      // arrives as "" rather than undefined.
+      enabled: process.env.CDK_SOURCE_PROVENANCE_ENABLED
+        ? process.env.CDK_SOURCE_PROVENANCE_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('sourceProvenance')?.enabled ?? false,
     },
     agents: {
       // Default ON with a kill switch (house style, mirroring memorySpaces /

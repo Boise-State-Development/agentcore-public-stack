@@ -21,5 +21,6 @@ export const environment = {
         folderAttachments: true,
         attachmentKb: false,
         folderSync: true,
+        sourceProvenance: false,
     } satisfies FeatureFlags,
 };
