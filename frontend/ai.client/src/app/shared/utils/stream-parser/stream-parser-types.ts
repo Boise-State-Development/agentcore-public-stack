@@ -470,6 +470,63 @@ export interface AgentStatusEvent {
  * Gated by `TOOL_SUMMARIES_ENABLED`. Absence means the deterministic line
  * stands — a downgrade in specificity, never a blank.
  */
+/**
+ * Where in a document a cited passage was located
+ * (`docs/specs/source-provenance-verification.md` §5).
+ *
+ * `kind` is the unit the document actually HAS, so a Word document cites a
+ * paragraph and never invents a page. `precision` is always present: an
+ * optional flag whose absence reads as exact is how an estimated position gets
+ * rendered as a confident `p. 234`, so an `estimated` locator is hedged.
+ */
+export interface SourceLocator {
+  kind: 'page' | 'paragraph' | 'line';
+  value: number;
+  precision: 'measured' | 'estimated';
+}
+
+/**
+ * The verdict for one asserted value: is its quoted passage in the document,
+ * and does the value actually appear in that passage?
+ *
+ * The two questions are answered separately on the backend and collapsed into
+ * `state` in exactly one place, so no consumer re-derives it. Treat `state` as
+ * the whole answer — in particular `quote_unsupported` means the passage is
+ * real and the value is NOT in it, which is the hallucination signal and must
+ * never render like a located citation.
+ */
+export interface SourceProvenanceClaim {
+  id: string;
+  state: 'supported' | 'quote_unsupported' | 'unassessed' | 'unverified';
+  /** How the state was reached (`literal`, `no_match`, `enum_field`, …). Measurement, not a verdict. */
+  method: string;
+  /**
+   * The value as the model stated it. Optional: a backend older than the
+   * field sends none, and the renderer falls back to the claim's own label
+   * rather than inventing one.
+   */
+  value?: string;
+  quote: string;
+  locator: SourceLocator | null;
+  uploadId: string;
+  filename: string;
+}
+
+/**
+ * Verdicts for one `verify_sources` call, emitted mid-turn and never
+ * re-streamed — `GET /messages` replays them under `sourceProvenance`.
+ *
+ * Gated by `SOURCE_PROVENANCE_ENABLED` on the backend and
+ * `features.sourceProvenance` here. Absence means no provenance is shown at
+ * all, which is the honest fallback: the SPA must never infer a citation.
+ */
+export interface SourceProvenanceEvent {
+  type: 'source_provenance';
+  sessionId: string;
+  toolUseId: string;
+  claims: SourceProvenanceClaim[];
+}
+
 export interface ToolGroupSummaryEvent {
   type: 'tool_group_summary';
   sessionId: string;
@@ -622,7 +679,8 @@ export type StreamEventType =
   | 'model_retry'
   | 'agent_notice'
   | 'agent_status'
-  | 'tool_group_summary';
+  | 'tool_group_summary'
+  | 'source_provenance';
 
 /**
  * Union type of all possible event data types
@@ -654,6 +712,7 @@ export type StreamEventData =
   | AgentNoticeEvent
   | AgentStatusEvent
   | ToolGroupSummaryEvent
+  | SourceProvenanceEvent
   | null
   | undefined;
 

@@ -6,7 +6,7 @@ import { SessionService as BffSessionService } from '../../../auth/session.servi
 import { SUPPRESS_ERROR_TOAST } from '../../../auth/error.interceptor';
 import { SessionMetadata, SessionPreferences, UpdateSessionMetadataRequest } from '../models/session-metadata.model';
 import { Message } from '../models/message.model';
-import type { UiResourceEvent } from '../../../shared/utils/stream-parser';
+import type { UiResourceEvent, SourceProvenanceClaim } from '../../../shared/utils/stream-parser';
 
 /**
  * Sessions the sidebar asks for at a time: the first load, and each page
@@ -109,6 +109,14 @@ export interface MessagesListResponse {
    * Present only on the first page.
    */
   toolSummaries?: { batchId?: string; toolUseIds?: string[]; summary?: string }[];
+  /**
+   * Persisted source-provenance verdicts, each shaped like the live
+   * `source_provenance` SSE event. Replayed on load because that event never
+   * re-streams: without it a reloaded conversation shows cited values with no
+   * provenance, and a `quote_unsupported` that vanishes on refresh reads as a
+   * clean answer. Present only on the first page.
+   */
+  sourceProvenance?: { toolUseId?: string; claims?: SourceProvenanceClaim[] }[];
   /**
    * True when Memory's events for this session have expired and these
    * messages are the conversation archive's text-only copy. The agent cannot

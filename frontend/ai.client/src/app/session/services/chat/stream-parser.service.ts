@@ -602,6 +602,12 @@ export class StreamParserService {
       onToolGroupSummary: (data) =>
         this.toolInsight.recordSummary(state.sessionId, data),
 
+      // Source-provenance verdicts for a `verify_sources` call. Scoped to the
+      // streaming session, not the viewed one: a background conversation's
+      // verdicts belong to that conversation.
+      onSourceProvenance: (data) =>
+        this.toolInsight.recordProvenance(state.sessionId, data),
+
       onModelRetry: (data: ModelRetryEvent) => {
         // Not viewed-session-scoped on purpose: this signal is read per
         // session id, so a background conversation's retry stays with that

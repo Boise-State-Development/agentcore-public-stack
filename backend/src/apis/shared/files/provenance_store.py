@@ -68,6 +68,10 @@ _TTL_DAYS = 90
 #: refuses a longer quote outright, so this is the defensive second line.
 _MAX_QUOTE_CHARS = 1200
 
+#: Clamp on one stored value. A value is a number, a date or a name; anything
+#: longer is not the kind of thing the check can confirm anyway.
+_MAX_VALUE_CHARS = 200
+
 #: Claims kept per call. The tool caps its own input lower; this guards the row
 #: against a future caller that does not.
 _MAX_CLAIMS = 24
@@ -190,6 +194,7 @@ def _clamp(claim: Dict[str, Any]) -> Dict[str, Any]:
         "id": str(claim.get("id", ""))[:120],
         "state": str(claim.get("state", "")),
         "method": str(claim.get("method", "")),
+        "value": str(claim.get("value") or "")[:_MAX_VALUE_CHARS],
         "quote": str(claim.get("quote") or "")[:_MAX_QUOTE_CHARS],
         "uploadId": str(claim.get("uploadId", "")),
         "filename": str(claim.get("filename", ""))[:255],

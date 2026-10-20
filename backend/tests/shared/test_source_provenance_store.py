@@ -34,6 +34,7 @@ def _claim(**overrides):
         "id": "total",
         "state": "supported",
         "method": "literal",
+        "value": "$487,500",
         "quote": "The total approved budget is $487,500",
         "locator": {"kind": "page", "value": 3, "precision": "measured"},
         "uploadId": "up-1",
@@ -89,6 +90,37 @@ def test_a_claim_with_no_locator_stores_none():
     [stored] = table.puts[0]["claims"]
     assert "locator" not in stored
     assert stored["state"] == "unverified"
+
+
+def test_the_asserted_value_is_stored_so_a_warning_can_name_it():
+    """A `quote_unsupported` that cannot say WHICH value is unconfirmed makes
+    the reader guess which number in the answer to distrust."""
+    table = _FakeTable()
+    _store_with(table).store(
+        user_id="u1",
+        session_id="s1",
+        tool_use_id="tu1",
+        claims=[_claim(state="quote_unsupported", method="no_match", value="$912,000")],
+    )
+    assert table.puts[0]["claims"][0]["value"] == "$912,000"
+
+
+def test_a_long_value_is_clamped():
+    table = _FakeTable()
+    _store_with(table).store(
+        user_id="u1", session_id="s1", tool_use_id="tu1", claims=[_claim(value="9" * 5000)]
+    )
+    assert len(table.puts[0]["claims"][0]["value"]) == 200
+
+
+def test_a_missing_value_stores_empty_rather_than_none():
+    """Older rows and a backend without the field must read as absent, not as
+    the string "None"."""
+    table = _FakeTable()
+    claim = _claim()
+    del claim["value"]
+    _store_with(table).store(user_id="u1", session_id="s1", tool_use_id="tu1", claims=[claim])
+    assert table.puts[0]["claims"][0]["value"] == ""
 
 
 def test_a_long_quote_is_clamped_rather_than_failing_the_write():
