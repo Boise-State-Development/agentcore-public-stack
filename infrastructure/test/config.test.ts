@@ -712,6 +712,34 @@ describe('RAG Ingestion Configuration', () => {
     });
   });
 
+  // ============================================================
+  // Source provenance verification — in development, so only "true" enables
+  // ============================================================
+
+  describe('Source provenance feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_SOURCE_PROVENANCE_ENABLED;
+    });
+
+    test('defaults to disabled, and "" (unset GitHub variable) is disabled', () => {
+      delete process.env.CDK_SOURCE_PROVENANCE_ENABLED;
+      expect(loadConfig(app).sourceProvenance.enabled).toBe(false);
+      process.env.CDK_SOURCE_PROVENANCE_ENABLED = '';
+      expect(loadConfig(app).sourceProvenance.enabled).toBe(false);
+    });
+
+    test('only "true" enables it', () => {
+      process.env.CDK_SOURCE_PROVENANCE_ENABLED = 'True';
+      expect(loadConfig(app).sourceProvenance.enabled).toBe(true);
+      // Anything else a human might set is still off, because a half-built
+      // feature must not switch on for another deployment by accident.
+      for (const value of ['yes', '1', 'on', 'enabled', 'false']) {
+        process.env.CDK_SOURCE_PROVENANCE_ENABLED = value;
+        expect(loadConfig(app).sourceProvenance.enabled).toBe(false);
+      }
+    });
+  });
+
   describe('Client turn timing feature flag', () => {
     afterEach(() => {
       delete process.env.CDK_CLIENT_TURN_TIMING_ENABLED;

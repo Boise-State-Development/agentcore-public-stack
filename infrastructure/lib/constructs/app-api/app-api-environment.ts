@@ -403,6 +403,12 @@ export function buildAppApiEnvironment(
     // Folder sync (default on): app-api accepts a
     // `drive_folder` KB sync policy. The kb-sync Lambdas carry it too.
     FOLDER_SYNC_ENABLED: config.folderSync.enabled ? 'true' : 'false',
+
+    // Source provenance verification (docs/specs/source-provenance-verification.md).
+    // app-api's share is the read side: `GET /messages` replays the stored
+    // `SRCV#` verdicts, which the SSE event does not re-stream. In development,
+    // so only "true" enables.
+    SOURCE_PROVENANCE_ENABLED: config.sourceProvenance.enabled ? 'true' : 'false',
     ...(params.largeDocumentPrepareQueueUrl
       ? { LARGE_DOCUMENT_PREPARE_QUEUE_URL: params.largeDocumentPrepareQueueUrl }
       : {}),

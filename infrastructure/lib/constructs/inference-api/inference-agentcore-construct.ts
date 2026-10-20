@@ -413,6 +413,10 @@ export class InferenceAgentCoreConstruct extends Construct {
         // deployment, never per session. Spread in only while on, like
         // full-context mode; must match app-api's and the prepare Lambda's copies.
         ...(config.attachmentKb.enabled ? { ATTACHMENT_KB_ENABLED: 'true' } : {}),
+        // Source provenance verification: the Runtime builds `verify_sources`,
+        // runs the check and emits `source_provenance`. Written only while ON,
+        // so the default costs nothing against the V2 payload budget.
+        ...(config.sourceProvenance.enabled ? { SOURCE_PROVENANCE_ENABLED: 'true' } : {}),
         // Agent Designer harness resolution: the runtime resolves an Agent's
         // bindings + modelConfig at invocation. Default off, mirrors app-api.
         AGENTS_API_ENABLED: config.agents.enabled ? 'true' : 'false',

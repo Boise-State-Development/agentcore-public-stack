@@ -527,6 +527,25 @@ async def get_messages_from_cloud(
                 user_id=user_id,
             )
 
+        async def fetch_source_provenance():
+            """Fetch persisted source-provenance verdicts.
+
+            Sync DynamoDB query off the session GSI; runs in a thread pool.
+            Empty when the table is absent (dev), the flag is off, or nothing
+            was verified.
+            """
+            from apis.shared.feature_flags import source_provenance_enabled
+
+            if not source_provenance_enabled():
+                return []
+            from apis.shared.files.provenance_store import get_source_provenance_store
+
+            return await asyncio.to_thread(
+                get_source_provenance_store().list_for_session,
+                session_id=session_id,
+                user_id=user_id,
+            )
+
         # Run fetches in parallel
         (
             messages_raw,
@@ -534,12 +553,14 @@ async def get_messages_from_cloud(
             pending_interrupts,
             ui_resource_rows,
             tool_summary_rows,
+            source_provenance_rows,
         ) = await asyncio.gather(
             fetch_messages(),
             fetch_metadata(),
             fetch_pending_interrupts(),
             fetch_ui_resources(),
             fetch_tool_summaries(),
+            fetch_source_provenance(),
         )
 
         messages_raw = list(messages_raw or [])
@@ -638,12 +659,30 @@ async def get_messages_from_cloud(
                 if row.get("summary")
             ]
 
+        # Source provenance: the `source_provenance` SSE is emitted once
+        # mid-turn and never re-streams. Without this replay a reloaded
+        # conversation shows the cited values with no provenance at all, and the
+        # state a reader most needs is `quote_unsupported` — a verdict that
+        # vanishes on refresh reads as a clean answer. First page only, same
+        # reasoning as toolSummaries above.
+        source_provenance: List[Dict[str, Any]] = []
+        if not next_token:
+            source_provenance = [
+                {
+                    "toolUseId": row.get("toolUseId", ""),
+                    "claims": row.get("claims") or [],
+                }
+                for row in source_provenance_rows
+                if row.get("claims")
+            ]
+
         return MessagesListResponse(
             messages=message_responses,
             next_token=next_page_token,
             pending_interrupts=pending_interrupts,
             ui_resources=ui_resources,
             tool_summaries=tool_summaries,
+            source_provenance=source_provenance,
         )
 
     except Exception as e:

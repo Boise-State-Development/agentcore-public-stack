@@ -1091,3 +1091,34 @@ def inline_attachment_persist_enabled() -> bool:
     returns exactly: nothing is written and the note is unchanged.
     """
     return os.environ.get("INLINE_ATTACHMENT_PERSIST_ENABLED", "").strip().lower() != "false"
+
+
+def source_provenance_enabled() -> bool:
+    """Whether a cited passage is verified against the document it names
+    (``docs/specs/source-provenance-verification.md``).
+
+    On, a session that has a readable document also gets ``verify_sources``
+    beside ``document_read``: the model names the value it is asserting and the
+    passage it says supports it, and the backend answers two separate questions
+    — is that passage in the document, and does the value actually appear in it
+    — collapsing them into one of four states. The model is told only the state
+    (a word per claim, so it can correct a ``quote_unsupported``); the quote,
+    the locator and the method travel on the ``source_provenance`` SSE event and
+    a ``SRCV#`` row, never on the message content blocks, because those are the
+    cacheable prefix and a display string there is paid at model rates every
+    later turn. Off, the tool is never built and nothing is emitted.
+
+    **Opt-in while the feature is in development** (CLAUDE.md "Feature flags"):
+    only ``"true"`` (case-insensitive) enables it; unset arrives as ``""`` and
+    is off. CDK sets it on the AgentCore Runtime (which builds the tool,
+    verifies and emits) and on app-api (which replays the rows on
+    ``GET /messages``) from ``config.sourceProvenance.enabled``. The SPA's
+    matching switch is ``features.sourceProvenance``.
+
+    A **feature switch**, not a rollout switch, and therefore permanent: it adds
+    a tool to ``toolConfig`` for sessions with a document, and it changes what
+    the product asserts to a user about their own document — a judgement a
+    deployment may reasonably decline. Nothing about it is meant to be
+    invisible, so there is nothing for a rollout hedge to protect.
+    """
+    return os.environ.get("SOURCE_PROVENANCE_ENABLED", "").strip().lower() == "true"

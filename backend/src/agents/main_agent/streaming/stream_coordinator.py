@@ -825,6 +825,13 @@ class StreamCoordinator:
                         tool_summary_tasks, drain_all=True
                     ):
                         yield summary_sse
+                    # Last chance for a verdict queued by a tool call in the
+                    # final batch: the loop above drains between agent events,
+                    # and `done` may be the next one.
+                    for provenance_sse in await self._drain_source_provenance_events(
+                        session_id, user_id
+                    ):
+                        yield provenance_sse
                     await self._persist_paused_turn_snapshot(
                         agent,
                         session_id=session_id,
@@ -1341,6 +1348,17 @@ class StreamCoordinator:
                 ):
                     yield summary_sse
 
+                # Source provenance: `verify_sources` parked its verdicts on the
+                # broker because a tool result is the Converse payload and the
+                # quote, locator and method must not reach the cacheable prefix
+                # (docs/specs/source-provenance-verification.md §8). Drained on
+                # the same pass as the summaries, and persisted here, so a
+                # dropped connection still leaves the `SRCV#` row a reload reads.
+                for provenance_sse in await self._drain_source_provenance_events(
+                    session_id, user_id
+                ):
+                    yield provenance_sse
+
                 # Format as SSE event and yield (including done event after metadata)
                 sse_event = self._format_sse_event(event)
                 yield sse_event
@@ -1799,6 +1817,17 @@ class StreamCoordinator:
                     logger.warning(
                         "MCP Apps broker unsubscribe failed", exc_info=True
                     )
+
+            # Same contract for the provenance broker: anything still queued
+            # when the stream ends is already persisted as a `SRCV#` row, so
+            # dropping it here loses nothing and leaves no residue for the next
+            # turn on this conversation to emit out of order.
+            try:
+                from apis.shared.files.provenance_broker import discard_provenance
+
+                discard_provenance(user_id, session_id)
+            except Exception:  # noqa: BLE001
+                logger.debug("source provenance discard failed", exc_info=True)
 
     @staticmethod
     def _last_persisted_role(agent: Any) -> Optional[str]:
@@ -3217,6 +3246,43 @@ class StreamCoordinator:
         except Exception:  # noqa: BLE001 - a summary is never worth an error
             logger.debug("Tool batch summary task failed", exc_info=True)
             return None
+
+    @staticmethod
+    async def _drain_source_provenance_events(session_id: str, user_id: str) -> List[str]:
+        """Harvest `verify_sources` verdicts into `source_provenance` SSEs.
+
+        The verdicts are already persisted by the tool, so this is purely the
+        live view: nothing here is load-bearing for a reload, and a failure
+        costs the user the mid-turn update and nothing else.
+
+        Keyed on `(user_id, session_id)` because a session id alone does not
+        name a conversation (CLAUDE.md) — two users on one session id must
+        never drain each other's quoted document text.
+        """
+        from apis.shared.feature_flags import source_provenance_enabled
+
+        if not source_provenance_enabled():
+            return []
+        try:
+            from apis.shared.files.provenance_broker import take_provenance
+
+            payloads = take_provenance(user_id, session_id)
+        except Exception:  # noqa: BLE001 - never worth breaking the stream
+            logger.debug("source provenance drain failed", exc_info=True)
+            return []
+
+        events: List[str] = []
+        for payload in payloads:
+            event = {
+                "type": "source_provenance",
+                "sessionId": session_id,
+                "toolUseId": payload.get("toolUseId", ""),
+                "claims": payload.get("claims") or [],
+            }
+            events.append(
+                f"event: source_provenance\ndata: {json.dumps(event)}\n\n"
+            )
+        return events
 
     @staticmethod
     async def _collect_tool_summary_events(

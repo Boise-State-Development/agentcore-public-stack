@@ -199,6 +199,9 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     folderSync: {
       enabled: false,
     },
+    sourceProvenance: {
+      enabled: false,
+    },
     agents: {
       enabled: false,
     },
