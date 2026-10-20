@@ -9,7 +9,6 @@ from typing import Optional, List, Callable, Any
 from mcp.client.streamable_http import streamablehttp_client
 from strands.tools.mcp import MCPClient
 from agents.main_agent.config.constants import EnvVars, Defaults
-from agents.main_agent.integrations.mcp_session_end import ReleasesCallsOnSessionEnd
 from agents.main_agent.integrations.gateway_auth import get_sigv4_auth, get_gateway_region_from_url
 from agents.main_agent.integrations.oauth_auth import create_oauth_bearer_auth
 from apis.shared.tools.gateway_identity import resolve_gateway_id, gateway_url_from_id
@@ -93,7 +92,7 @@ def _build_gateway_auth(region: str, auth_token: Optional[str]):
     return create_oauth_bearer_auth(token=auth_token)
 
 
-class FilteredMCPClient(ReleasesCallsOnSessionEnd, MCPClient):
+class FilteredMCPClient(MCPClient):
     """
     MCPClient wrapper that filters tools based on enabled tool IDs.
     This allows us to use Managed Integration while still filtering tools.

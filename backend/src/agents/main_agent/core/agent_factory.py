@@ -16,7 +16,6 @@ from agents.main_agent.core.retry_strategy import TransientModelRetryStrategy
 from agents.main_agent.config.constants import EnvVars, Defaults
 from apis.shared.models.bedrock_responses import build_bedrock_responses_model
 from apis.shared.models.mantle import build_mantle_model
-from apis.shared.models.signed_reasoning import signed_reasoning_input
 from apis.shared.models.stream_output import tag_partial_output
 from apis.shared.models.text_only_input import text_only_input
 from apis.shared.models.usage_normalization import usage_normalized
@@ -246,13 +245,11 @@ class AgentFactory:
         if model_config.text_only:
             model = text_only_input(model)
 
-        # Claude verifies the signature on every replayed reasoning block, and
-        # a turn that ran on another model (GPT, after a mid-conversation
-        # model switch) left unsigned ones in the shared history. A history
-        # that only ever ran on Claude has none, so this changes nothing there.
-        model_lower = model_config.model_id.lower()
-        if provider == ModelProvider.BEDROCK and ("claude" in model_lower or "anthropic" in model_lower):
-            model = signed_reasoning_input(model)
+        # Reasoning blocks a model would reject are dropped by Strands itself
+        # since 1.61.1 (#5166), in `BedrockModel._format_bedrock_messages` via
+        # `_rejects_reasoning_block`. We carried the same projection locally
+        # from 29b05de1; upstream's covers more (the Claude -> GPT/Nova/Llama
+        # direction too) and runs for every Bedrock model, so ours was removed.
 
         retry_strategy = AgentFactory._build_retry_strategy(model_config, model)
 
