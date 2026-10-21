@@ -1356,10 +1356,26 @@ previous run, so the state cannot currently tell a paraphrase from an assembly.
 
 So the honest state for a multi-valued answer is already reachable with no code
 change — `unassessed`/`non_scalar`, which is exactly "traceable, not
-confirmable" — and both true positives survive. **Author any field whose real
-answer is several values as `type: list`, never `string`.** A grants office would
-plausibly type a deadline field `string`, so this is schema guidance rather than
-a fixture mistake, and it belongs here rather than in a reviewer's head.
+confirmable" — and both true positives survive.
+
+**Author any field whose real answer is several values as `type: list`, never
+`string`.** Not as a workaround: `type: list` *means* "these values", and the
+reason it is the right type here is that a deadline with three dates is a list
+of three dates, which is what the author would say if asked. A `string` holding
+a joined assembly is the author describing a list in the wrong type, and the
+badge is the consequence rather than the problem. A grants office would
+plausibly type a deadline field `string`, so this is schema guidance that
+belongs here rather than in a reviewer's head.
+
+**Approved and not yet landed** (2026-10-21): a `list` value will be verified
+**component-wise**, earning `supported` when every element matches, instead of
+today's `unassessed`. Measured against the three ways a model might smuggle an
+invention into a list — one element invented, all invented, a genuine value with
+junk appended — every one fails to reach `supported`, because the rule is *every*
+component. Implemented in `source_provenance.py` by the session that owns it.
+Until it lands, a correctly-typed list reads `unassessed`, which under-reports
+what is provable but never over-claims. The advice above does not change when it
+does; only the state it earns gets stronger.
 
 **The obvious code fix is a trap, recorded so nobody reaches for it.** Splitting
 a value into components and verifying each is the first instinct. Measured, it
@@ -1405,6 +1421,18 @@ to over-claim about. Whether `list` should go further and verify component-wise
 therefore not this spec's call. It belongs inside `_value_in_quote` so the state
 stays derived in one place (`source_provenance` D1, fenced by
 `test_source_provenance_state_boundary.py`).
+
+**The runs also established that nothing about this is reachable by its users.**
+Standing up that test required creating a skill through the API, uploading a
+field-set file to it, flipping a preference, presigning and completing a file
+upload, and sending the turn by API — because the composer will not adopt a
+pre-staged attachment it did not upload itself, and the skills picker is what
+turns a preference into the `enabled_skills` the mount gate needs. §4 records
+authoring as given-up #1, but that undersells it: the feature is **API-only end
+to end**, the attachment included. It is merged, deployed, verified against a
+real solicitation and catching real paraphrases, and a grants officer cannot
+reach any part of it. That is the gap between "G1 works" and "G1 is usable", and
+it is a product decision rather than a defect.
 
 **A gate divergence confirmed by the same run, by failing.** `document_extract`
 did not mount, because the turn was sent through the API without
