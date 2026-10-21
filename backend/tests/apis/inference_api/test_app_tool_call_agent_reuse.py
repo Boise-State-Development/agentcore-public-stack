@@ -43,10 +43,10 @@ class _Catalog:
     def __init__(self, client: Any) -> None:
         self._client = client
 
-    def get(self, _name: str) -> ToolUIMetadata:
+    def get(self, _name: str, _user_id: str | None = None) -> ToolUIMetadata:
         return ToolUIMetadata(resource_uri="ui://srv/w", visibility=["model", "app"])
 
-    def get_client(self, _name: str) -> Any:
+    def get_client(self, _name: str, _user_id: str | None = None) -> Any:
         return self._client
 
 
