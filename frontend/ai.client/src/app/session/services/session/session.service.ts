@@ -1,4 +1,4 @@
-import { inject, Injectable, signal, WritableSignal, resource, computed, effect } from '@angular/core';
+import { inject, Injectable, signal, WritableSignal, resource, computed, effect, untracked } from '@angular/core';
 import { HttpClient, HttpContext, HttpParams } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
@@ -39,6 +39,8 @@ export interface SessionsListResponse {
   sessions: SessionMetadata[];
   /** Pagination token for retrieving the next page of results */
   nextToken: string | null;
+  /** The user's pinned conversations, most recently pinned first. First page only. */
+  pinned?: SessionMetadata[];
 }
 
 /**
@@ -336,7 +338,8 @@ export class SessionService {
       // Resource hasn't loaded yet or is disabled, return cached sessions only
       return {
         sessions: localCache,
-        nextToken: null
+        nextToken: null,
+        pinned: undefined,
       };
     }
 
@@ -380,6 +383,85 @@ export class SessionService {
     // The next user to sign in starts from one page, not this one's scroll depth.
     this.sessionsWindow.set(SIDEBAR_PAGE_SIZE);
     this.loadMoreSessionsError.set(false);
+    this.pinOverrides.set(new Map());
+  }
+
+  /**
+   * Optimistic pin state: sessionId → `pinnedAt` (pinned) or `null` (unpinned),
+   * applied over the server's `pinned` list so the sidebar moves a row the
+   * instant Pin/Unpin is clicked. An entry is dropped once a list response
+   * agrees with it, or rolled back if the request fails.
+   */
+  private readonly pinOverrides = signal<ReadonlyMap<string, string | null>>(new Map());
+
+  /**
+   * The user's pinned conversations, most recently pinned first: the server's
+   * list with optimistic pins/unpins applied. Rows come from the main list when
+   * it has them, so a rename or local-cache update shows up here too.
+   */
+  readonly pinnedSessions = computed<SessionMetadata[]>(() => {
+    const merged = this.mergedSessionsResource();
+    const overrides = this.pinOverrides();
+    const byId = new Map(merged.sessions.map(s => [s.sessionId, s]));
+    const pinned = new Map<string, SessionMetadata>();
+
+    for (const session of merged.pinned ?? []) {
+      const override = overrides.get(session.sessionId);
+      if (override === null) continue;
+      pinned.set(session.sessionId, {
+        ...(byId.get(session.sessionId) ?? session),
+        pinnedAt: override ?? session.pinnedAt,
+      });
+    }
+    for (const [sessionId, pinnedAt] of overrides) {
+      const session = byId.get(sessionId);
+      if (pinnedAt === null || pinned.has(sessionId) || !session) continue;
+      pinned.set(sessionId, { ...session, pinnedAt });
+    }
+
+    return [...pinned.values()].sort((a, b) => (b.pinnedAt ?? '').localeCompare(a.pinnedAt ?? ''));
+  });
+
+  readonly pinnedSessionIds = computed(() => new Set(this.pinnedSessions().map(s => s.sessionId)));
+
+  /** Drop optimistic pin entries once the server's list reflects them. */
+  private readonly reconcilePinOverrides = effect(() => {
+    const response = this.sessionsResource.hasValue() ? this.sessionsResource.value() : null;
+    if (!response?.pinned) return;
+    untracked(() => {
+      const overrides = this.pinOverrides();
+      if (overrides.size === 0) return;
+      const serverIds = new Set(response.pinned!.map(s => s.sessionId));
+      const next = new Map(overrides);
+      for (const [sessionId, pinnedAt] of overrides) {
+        if (serverIds.has(sessionId) === (pinnedAt !== null)) next.delete(sessionId);
+      }
+      if (next.size !== overrides.size) this.pinOverrides.set(next);
+    });
+  });
+
+  /**
+   * Pins or unpins a conversation. Updates the sidebar immediately, then
+   * `PUT`/`DELETE /sessions/{id}/pin`; on failure the optimistic change is
+   * rolled back and the error rethrown so the caller can tell the user.
+   */
+  async setSessionPinned(sessionId: string, pinned: boolean): Promise<void> {
+    const previous = this.pinOverrides();
+    this.pinOverrides.set(new Map(previous).set(sessionId, pinned ? new Date().toISOString() : null));
+
+    try {
+      const url = `${this.baseUrl()}/${sessionId}/pin`;
+      await firstValueFrom(pinned ? this.http.put<void>(url, {}) : this.http.delete<void>(url));
+      this.refreshSessions();
+    } catch (error) {
+      this.pinOverrides.update(current => {
+        const next = new Map(current);
+        if (previous.has(sessionId)) next.set(sessionId, previous.get(sessionId)!);
+        else next.delete(sessionId);
+        return next;
+      });
+      throw error;
+    }
   }
 
   /**

@@ -42,6 +42,9 @@ describe('SessionList', () => {
       markSessionRead: vi.fn().mockResolvedValue(undefined),
       markSessionUnread: vi.fn().mockResolvedValue(undefined),
       refreshSessions: vi.fn(),
+      pinnedSessions: signal([]),
+      pinnedSessionIds: signal(new Set<string>()),
+      setSessionPinned: vi.fn().mockResolvedValue(undefined),
     };
     mockSidenavService = { close: vi.fn() };
     mockToastService = { success: vi.fn(), error: vi.fn() };

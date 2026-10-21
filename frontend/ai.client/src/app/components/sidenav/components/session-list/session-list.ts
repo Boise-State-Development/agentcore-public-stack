@@ -23,6 +23,7 @@ import { ProjectsService } from '../../../../projects/services/projects.service'
 import { FEATURES } from '../../../../services/features';
 import { UNTITLED_SESSION_TITLE } from './session-title-filter';
 import { bindingQueryParams } from '../../../../session/services/session/conversation-binding.service';
+import { appPin, appPinOff } from './pin-icons';
 
 /**
  * One row of a time bucket: a plain conversation, or the tasks of one project
@@ -60,7 +61,7 @@ export function groupProjectSessions(
 @Component({
   selector: 'app-session-list',
   imports: [RouterLink, RouterLinkActive, NgIcon, NgTemplateOutlet, CdkMenuTrigger, CdkMenu, CdkMenuItem, InViewDirective],
-  providers: [provideIcons({ heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroEllipsisHorizontalSolid, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp, heroEnvelope, heroEnvelopeOpen, heroRectangleStack })],
+  providers: [provideIcons({ heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroEllipsisHorizontalSolid, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp, heroEnvelope, heroEnvelopeOpen, heroRectangleStack, appPin, appPinOff })],
   templateUrl: './session-list.html',
   styleUrl: './session-list.css',
   changeDetection: ChangeDetectionStrategy.OnPush
@@ -135,8 +136,11 @@ export class SessionList {
    * Today, Yesterday, Last 7 Days, Last 30 Days, Older.
    */
   readonly groupedSessions = computed(() => {
-    const sessions = this.sessions();
-    if (!sessions || sessions.length === 0) return [];
+    // Pinned conversations get their own group on top and leave their time bucket.
+    const pinned = this.sessionService.pinnedSessions();
+    const pinnedIds = this.sessionService.pinnedSessionIds();
+    const sessions = this.sessions()?.filter(s => !pinnedIds.has(s.sessionId)) ?? [];
+    if (sessions.length === 0 && pinned.length === 0) return [];
 
     const now = new Date();
     const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -169,7 +173,7 @@ export class SessionList {
 
     // Only return groups that have sessions
     const names = this.projectNames();
-    return groups
+    const timeGroups = groups
       .filter(g => g.sessions.length > 0)
       .map(g => ({
         ...g,
@@ -177,6 +181,15 @@ export class SessionList {
           ? groupProjectSessions(g.sessions, names)
           : g.sessions.map(session => ({ kind: 'session' as const, session })),
       }));
+    if (pinned.length === 0) return timeGroups;
+    return [
+      {
+        label: 'Pinned',
+        sessions: pinned,
+        entries: pinned.map(session => ({ kind: 'session' as const, session }) as SessionListEntry),
+      },
+      ...timeGroups,
+    ];
   });
 
   constructor() {
@@ -567,6 +580,36 @@ export class SessionList {
         this.chatStateService.markSessionUnread(session.sessionId);
         this.sessionService.refreshSessions();
       }
+    });
+  }
+
+  protected isPinned(session: SessionMetadata): boolean {
+    return this.sessionService.pinnedSessionIds().has(session.sessionId);
+  }
+
+  /** Project tasks already list under their project, so they can't be pinned. */
+  protected canPin(session: SessionMetadata): boolean {
+    return !session.preferences?.projectId;
+  }
+
+  /**
+   * Pins or unpins a conversation. The row moves right away (optimistic);
+   * a failed request moves it back and shows a toast.
+   */
+  protected onTogglePinClick(event: Event, session: SessionMetadata): void {
+    event.preventDefault();
+    event.stopPropagation();
+    const pin = !this.isPinned(session);
+
+    // Deferred past the CDK menu's close, for the same reason as onToggleReadClick.
+    queueMicrotask(() => {
+      this.sessionService.setSessionPinned(session.sessionId, pin).catch(error => {
+        console.error('Failed to update pin:', error);
+        this.toastService.error(
+          pin ? 'Failed to pin' : 'Failed to unpin',
+          'There was an error updating the conversation. Please try again.'
+        );
+      });
     });
   }
 

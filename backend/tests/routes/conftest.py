@@ -52,6 +52,16 @@ def _stub_ensure_session_metadata_exists(monkeypatch):
     )
 
 
+@pytest.fixture(autouse=True)
+def _stub_list_pinned_sessions(monkeypatch):
+    """GET /sessions reads the PinnedSessionIndex on its first page. Route tests
+    mock ``list_user_sessions`` and don't provision the table, so pins are empty."""
+    monkeypatch.setattr(
+        "apis.app_api.sessions.routes.list_pinned_sessions",
+        AsyncMock(return_value=[]),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Auto-stub the api-converse profile lookup
 # ---------------------------------------------------------------------------
