@@ -221,18 +221,6 @@ Three things that look optional and are not:
 - PRs target `develop`; `main` is updated via squash-merge releases only
 - Branch naming: `feature/<short-description>`
 
-## Delivery workflow
+## Boise State Web Team delivery
 
-Work is tracked on the Web Team board (GitHub Project 7,
-https://github.com/orgs/Boise-State-Development/projects/7). The full
-playbook is in `Boise-State-Development/delivery-playbook`; the
-`web-team-dev` Claude Code plugin (enabled in `.claude/settings.json`) has the
-skills: `start-work`, `open-pr`, `file-issue`, `release-to-done`,
-`my-standup`, `onboard-repo`.
-
-- Every change starts from an issue. Branch `feature/<issue#>-<slug>` from `develop`.
-- PR descriptions say `Closes #<issue>` — that is what moves the board.
-- "Done" means running in production, not merged.
-- Never write student IDs, employee IDs, names, usernames, or email addresses
-  in issues, PRs, commits, or code comments. Refer to people by role.
-- Discovered work goes in a new issue (Status Triage), not into this PR.
+For Boise State Web Team contributors only; everyone else can skip this section. The team tracks this repo's work on its internal board (GitHub Project 7 in `Boise-State-Development`). The process lives in the private `delivery-playbook` repo and its `web-team-dev` Claude Code plugin, which team members install for themselves. In short: start each change from an issue, and say `Closes #<issue>` in the PR so the board moves. "Done" means running in production, so after a release move shipped issues there with `release-to-done`.
