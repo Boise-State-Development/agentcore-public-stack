@@ -1307,6 +1307,145 @@ One mitigation falls straight out of the failure mode. The misses are always a
 note tells the model to work the comparison **field by field** rather than
 document by document. Costs nothing and addresses the thing that actually fails.
 
+**The provenance gate caught a real paraphrase on the first real document, unprompted.**
+Dev, 2026-10-21, NSF 23-603 (an HTML solicitation, 55,887 characters). Seven
+claims: six `supported`, one `quote_unsupported` — and the failure was nobody's
+fixture. The model asserted the deadline as *"October 18, 2023, with subsequent
+deadlines the third Wednesday in October annually"* where the document says
+*"Third Wednesday in October, Annually Thereafter"*. It paraphrased, the
+value-in-quote check failed, and the state said so, on the single field where
+paraphrasing is most tempting.
+
+That is worth more than the fixture result below it, and the distinction matters:
+a planted failure shows the gate *can* fire, while a spontaneous one shows it
+fires on the kind of error a model actually makes. Nobody can arrange the second
+kind, which is why it is recorded the first time it happened.
+
+The same run validated two decisions against real data rather than tests.
+Locators resolved `kind: "line"` throughout, because the source is unpaginated
+HTML (§7) — so D3's `kind` was load-bearing on the very first document rather
+than on a contrived `.docx`. And `precision` genuinely split: `measured` on four
+claims, `estimated` on three. It hedged where it could not pin the line and did
+not hedge where it could, which is the behaviour an always-`measured` or
+always-`estimated` implementation would have faked.
+
+**A correct value can wear the hallucination badge, and the fix is authoring.**
+The second run (same solicitation, `enabled_skills` supplied) extracted six of
+seven values exactly against ground truth — and labelled the seventh
+`quote_unsupported` while it was *right*. The deadline field's real answer is
+three dates on three separate lines; the model assembled them into
+`"October 18, 2023; Third Wednesday in October, Annually Thereafter; October 18,
+2024"`, which is correct and does not appear literally in any passage, so the
+value check returned `no_match`.
+
+That is worse than a missing badge. A correct answer carrying the hallucination
+signal trains a reviewer to discount the signal, which is the one thing the four
+states exist to prevent. And the same field produced a **true** positive on the
+previous run, so the state cannot currently tell a paraphrase from an assembly.
+
+**The field was typed `string`; it should be `type: list`.** Measured against
+`source_provenance` on dev:
+
+| value as sent | state | method |
+|---|---|---|
+| assembled string | `quote_unsupported` | `no_match` |
+| the same value as a **list** | `unassessed` | `non_scalar` |
+| one component alone | `supported` | `literal` |
+| a genuinely wrong date | `quote_unsupported` | `no_match` |
+| the previous run's paraphrase | `quote_unsupported` | `no_match` |
+
+So the honest state for a multi-valued answer is already reachable with no code
+change — `unassessed`/`non_scalar`, which is exactly "traceable, not
+confirmable" — and both true positives survive.
+
+**Author any field whose real answer is several values as `type: list`, never
+`string`.** Not as a workaround: `type: list` *means* "these values", and the
+reason it is the right type here is that a deadline with three dates is a list
+of three dates, which is what the author would say if asked. A `string` holding
+a joined assembly is the author describing a list in the wrong type, and the
+badge is the consequence rather than the problem. A grants office would
+plausibly type a deadline field `string`, so this is schema guidance that
+belongs here rather than in a reviewer's head.
+
+**Approved and not yet landed** (2026-10-21): a `list` value will be verified
+**component-wise**, earning `supported` when every element matches, instead of
+today's `unassessed`. Measured against the three ways a model might smuggle an
+invention into a list — one element invented, all invented, a genuine value with
+junk appended — every one fails to reach `supported`, because the rule is *every*
+component. Implemented in `source_provenance.py` by the session that owns it.
+Until it lands, a correctly-typed list reads `unassessed`, which under-reports
+what is provable but never over-claims. The advice above does not change when it
+does; only the state it earns gets stronger.
+
+**The obvious code fix is a trap, recorded so nobody reaches for it.** Splitting
+a value into components and verifying each is the first instinct. Measured, it
+depends entirely on the separator:
+
+| | split on `;` | split on `,` |
+|---|---|---|
+| the assembled value | all components supported — fixes it | mixed — **fails to fix it** |
+| the previous run's paraphrase | no split, stays `quote_unsupported` | mixed — **leaks partial credit** |
+
+Comma-splitting breaks it in both directions: it tears
+`"Third Wednesday in October, Annually Thereafter"` apart on its own internal
+comma, and it hands partial credit to a genuine paraphrase.
+
+**Splitting on an explicit `;` survives those two cases and is still unsound**,
+which is worth recording because it is the obvious salvage and it was proposed
+and withdrawn here. It over-claims on **assembly that creates meaning**. Measured
+on a `type: string` field whose value is `"$500,000; October 18, 2023"`, against
+a document stating both facts in separate sections and a quote spanning both:
+
+| | state |
+|---|---|
+| today | `quote_unsupported` |
+| under `;`-matching | **`supported`** |
+| does the document assert that composite as a unit? | **no** |
+
+So it awards the strongest state to a claim the document never makes. Today's
+verdict is also wrong — neither fact is invented — but it errs safe, while
+`;`-matching errs in the only direction this check exists to prevent.
+
+**The reason is D7, one section earlier in this spec.** `enum_field` is derived
+from the *declared type* rather than the model's `from_fixed_set`, precisely so a
+model cannot self-certify its way out of the value check. Letting the model's
+**punctuation** select its verification path is the identical error with a
+different input. The discriminator has to be something the *author* declared.
+
+Which points at the field type, and is why `type: list` is the guidance above
+rather than a workaround: an author declaring a list is claiming "these values",
+so a list of found values is exactly that claim and the join carries no meaning
+to over-claim about. Whether `list` should go further and verify component-wise
+— earning `supported` when every element matches, instead of today's
+`unassessed` — is a change to what a badge means on a shipped feature, and
+therefore not this spec's call. It belongs inside `_value_in_quote` so the state
+stays derived in one place (`source_provenance` D1, fenced by
+`test_source_provenance_state_boundary.py`).
+
+**The runs also established that nothing about this is reachable by its users.**
+Standing up that test required creating a skill through the API, uploading a
+field-set file to it, flipping a preference, presigning and completing a file
+upload, and sending the turn by API — because the composer will not adopt a
+pre-staged attachment it did not upload itself, and the skills picker is what
+turns a preference into the `enabled_skills` the mount gate needs. §4 records
+authoring as given-up #1, but that undersells it: the feature is **API-only end
+to end**, the attachment included. It is merged, deployed, verified against a
+real solicitation and catching real paraphrases, and a grants officer cannot
+reach any part of it. That is the gap between "G1 works" and "G1 is usable", and
+it is a product decision rather than a defect.
+
+**A gate divergence confirmed by the same run, by failing.** `document_extract`
+did not mount, because the turn was sent through the API without
+`enabled_skills` — Skills v2 is opt-in (D6), so an absent selection means *no
+skills*, and the mount condition is a field set among the turn's skills (D9).
+`verify_sources` ran anyway, because its gate is document presence rather than
+skills. Both behaved correctly, and the divergence between the two gates — the
+one deliberate difference between them — was exercised for the first time by a
+caller who had every other condition satisfied. Worth knowing because the
+symptom is silent: no error, the tool simply is not there, and
+`userEnabled: true` on the skill is a *preference* the SPA turns into
+`enabled_skills`, never something the turn path derives.
+
 **A note on how this was measured, because it nearly produced a false result.**
 The first run of this experiment reported collision detection at 0/3 for N=50.
 The fixture was wrong: it paired every value with one boilerplate quote, so
