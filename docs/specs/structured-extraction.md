@@ -528,6 +528,18 @@ Respecting its decisions, each of which constrains us:
   `render_locator` — `p. 12` / `¶ 34` / `line 88`, hedged to `p. ~12` when estimated.
   A `.docx` field set renders paragraphs, because a `.docx` has no pages.
 
+  **The first real solicitation this feature met was HTML, not PDF**, which
+  settles `kind` as a requirement rather than an edge case. NSF 23-603 is served
+  as a web page — NSF's own page tells you to print it to PDF, and the old PDF
+  URL is dead — so it is unpaginated and its locators resolve `kind: "line"`.
+  The `.docx` example above reads as a corner case one could defer; an HTML
+  funding opportunity is the *ordinary* input for this feature's actual users,
+  and a locator that said `p. 12` about it would be inventing a page for a
+  document that has none. `UNIT_KINDS` maps `html`, `txt` and `md` to
+  `line`, and `tests/architecture/test_document_formats_have_locator_units.py`
+  asserts every readable format has a unit, so this is enforced rather than
+  remembered.
+
 **One genuine improvement over `verify_sources`, and it is free.** That tool takes
 `from_fixed_set` from the *model*, which is the model self-certifying that the value
 question does not apply to its answer. We do not have to trust that: the field set
@@ -776,7 +788,7 @@ appears in exactly one place.
 |---|---|
 | Backend | `DOCUMENT_EXTRACT_ENABLED`, read by `document_extract_enabled()` in `apis/shared/feature_flags.py`. **In-development: only the literal `"true"` enables**; an unset GitHub variable arrives as `""` |
 | Also | `DOCUMENT_EXTRACT_MODEL_ID` — the Bedrock-native Converse model id the extraction call uses. CDK-set per environment (`us.*` dev, `global.*` prod), and it must have a catalog row (§9) |
-| Set on | The AgentCore Runtime (mounts the tool, extracts, verifies, writes the artifact and the workbook, emits the event) and app-api (replays `EXTR#` rows on `GET /messages`). **The two look inconsistent on purpose, and it reads like a bug:** app-api always carries `DOCUMENT_EXTRACT_ENABLED`, as `'false'` while off, whereas the Runtime's copy is written **only while on** — so on a correctly deployed environment with the feature off, the variable is *present as `false`* on app-api and *entirely absent* from the Runtime. Absent is the right observation there, not a half-finished deploy. Anyone verifying a deploy by describing the Runtime's environment will otherwise go looking for a fault that is not there |
+| Set on | The AgentCore Runtime (mounts the tool, extracts, verifies, writes the artifact and the workbook, emits the event) and app-api (replays `EXTR#` rows on `GET /messages`). **The two look inconsistent on purpose, and it reads like a bug:** app-api always carries `DOCUMENT_EXTRACT_ENABLED`, as `'false'` while off, whereas the Runtime's copy is written **only while on** — so on a correctly deployed environment with the feature off, the variable is *present as `false`* on app-api and *entirely absent* from the Runtime. Absent is the right observation there, not a half-finished deploy. Anyone verifying a deploy by describing the Runtime's environment will otherwise go looking for a fault that is not there. **And a second asymmetry runs the opposite way:** `DOCUMENT_EXTRACT_MODEL_ID` is conditional on the Runtime (written only while on) and **never set on app-api at all**, in either state, because app-api never makes the extraction call. So "I turned it on and app-api has no model id" is correct — and is the more natural thing for someone to notice and misread, since turning a feature on is when people check |
 | CDK | `documentExtract.enabled` and `documentExtract.modelId` in `infrastructure/lib/config.ts` from `CDK_DOCUMENT_EXTRACT_ENABLED` / `CDK_DOCUMENT_EXTRACT_MODEL_ID`, forwarded in `.github/workflows/platform.yml`. Written to the Runtime's environment **only while on**, so the default costs nothing against the 2,560-byte V2 budget. A `config.test.ts` case pins both sides, and a second pins the model id |
 | SPA | `features.documentExtract`, `false` in all three `environment*.ts`, injected via the `FEATURES` token — never an environment file imported into a component. Added in slice one so the two sides land independently; the table render is slice three |
 | Kind | **Feature switch** — permanent. It spends money per run on a model call whose input scales with a document, it adds a tool to `toolConfig`, and it makes the product assert typed values about a document on a user's behalf. Every one of those is a judgement a deployment may reasonably decline, so it is configuration, not a rollout hedge, and it does not retire. Promoting it to default-on with an `=false` kill switch is its own deliberate change |
