@@ -601,6 +601,11 @@ class SessionMetadataResponse(BaseModel):
         False,
         description="True when an unattended (scheduled) run left a response the user hasn't opened yet; drives the blue unread dot in the session list",
     )
+    pinned_at: Optional[str] = Field(
+        default=None,
+        alias="pinnedAt",
+        description="ISO 8601 timestamp the user pinned this conversation; set only on entries of SessionsListResponse.pinned",
+    )
 
 
 class SessionsListResponse(BaseModel):
@@ -609,6 +614,10 @@ class SessionsListResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     sessions: List[SessionMetadataResponse] = Field(..., description="List of sessions for the user")
     next_token: Optional[str] = Field(None, alias="nextToken", description="Pagination token for retrieving the next page of results")
+    pinned: Optional[List[SessionMetadataResponse]] = Field(
+        None,
+        description="The user's pinned conversations, most recently pinned first. Returned on the first page only (no next_token); they may also appear in `sessions`",
+    )
 
 
 class BulkDeleteSessionsRequest(BaseModel):

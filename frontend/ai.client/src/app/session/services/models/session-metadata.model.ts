@@ -75,6 +75,9 @@ export interface SessionMetadata {
    *  unread state ChatStateService tracks for interactive background
    *  completions — the session list ORs the two. */
   unread?: boolean;
+  /** When the user pinned this conversation. Present only on entries of the
+   *  list response's `pinned` array (and on optimistic pins). */
+  pinnedAt?: string;
 }
 
 // Request model for updating session metadata
