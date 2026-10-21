@@ -1,0 +1,80 @@
+# Keeps this repo's issues moving on the Web Team board (GitHub Project 7).
+# Adapted from Boise-State-Development/delivery-playbook (templates/repo/).
+#
+#   pull_request -> issues the PR closes move to "In Review" (added to the
+#                   board if they were not on it)
+#   issues       -> closed as completed -> "Awaiting Release";
+#                   not planned / duplicate -> archived
+#
+# Why this is not the template's one-line `uses:` caller: delivery-playbook is
+# a private repository, and a public repository cannot call a reusable
+# workflow that lives in a private one. This job inlines the reusable
+# workflow's steps instead; the sync script itself is still fetched from
+# delivery-playbook at run time, so it stays single-sourced there.
+#
+# No `mark-released` job: production deploys run from `main`, which receives
+# squash-merged releases, so the commit that closed an issue on `develop` is
+# never an ancestor of the deployed SHA and the playbook's ancestor check
+# would never match. Move shipped issues to Done with the `release-to-done`
+# skill after a release.
+#
+# Inert until the org shares the board app with this repo: the job is skipped
+# while the PROJECT_SYNC_APP_ID org variable is not visible here, which is
+# also what keeps it from failing in forks and in other organizations'
+# deployments of this stack.
+
+name: Project sync
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review]
+  issues:
+    types: [closed]
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    # Fork PRs get no secrets, so they cannot mint the board token.
+    if: >-
+      vars.PROJECT_SYNC_APP_ID != '' &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Get project token
+        id: token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.PROJECT_SYNC_APP_ID }}
+          private-key: ${{ secrets.PROJECT_SYNC_APP_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Fetch sync script
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: Boise-State-Development/delivery-playbook
+          token: ${{ steps.token.outputs.token }}
+          path: .delivery-playbook
+          sparse-checkout: scripts/project_sync.py
+          sparse-checkout-cone-mode: false
+
+      - name: Sync board
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          PROJECT_OWNER: ${{ github.repository_owner }}
+          PROJECT_NUMBER: 7
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          CLOSE_REASON: ${{ github.event.issue.state_reason }}
+        run: |
+          s=.delivery-playbook/scripts/project_sync.py
+          case "$EVENT" in
+            pull_request)
+              python3 "$s" pr --repo "$REPO" --number "$PR_NUMBER" ;;
+            issues)
+              python3 "$s" closed --repo "$REPO" --number "$ISSUE_NUMBER" --reason "${CLOSE_REASON:-completed}" ;;
+          esac

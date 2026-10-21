@@ -1,0 +1,35 @@
+name: Bug
+description: Something that worked is broken or wrong.
+type: Bug
+projects: ["Boise-State-Development/7"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Do not include** student IDs, employee IDs, names, usernames, email addresses, or screenshots showing them. Describe the record generically and reference the ServiceNow ticket for specifics.
+  - type: textarea
+    id: what
+    attributes:
+      label: What's wrong
+      description: What happens, and what should happen instead.
+    validations: {required: true}
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to see it
+      description: Steps, environment (prod / staging / dev), and when it started.
+  - type: dropdown
+    id: impact
+    attributes:
+      label: Impact
+      options:
+        - Production is down or data is wrong (P0)
+        - Many users affected, workaround is painful (P1)
+        - Some users affected or a workaround exists (P2)
+        - Cosmetic or rare (P3)
+    validations: {required: true}
+  - type: input
+    id: ticket
+    attributes:
+      label: ServiceNow ticket
+      placeholder: INC0000000

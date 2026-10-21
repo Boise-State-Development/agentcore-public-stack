@@ -220,3 +220,19 @@ Three things that look optional and are not:
 - Branch from `develop`, never `main`
 - PRs target `develop`; `main` is updated via squash-merge releases only
 - Branch naming: `feature/<short-description>`
+
+## Delivery workflow
+
+Work is tracked on the Web Team board (GitHub Project 7,
+https://github.com/orgs/Boise-State-Development/projects/7). The full
+playbook is in `Boise-State-Development/delivery-playbook`; the
+`web-team-dev` Claude Code plugin (enabled in `.claude/settings.json`) has the
+skills: `start-work`, `open-pr`, `file-issue`, `release-to-done`,
+`my-standup`, `onboard-repo`.
+
+- Every change starts from an issue. Branch `feature/<issue#>-<slug>` from `develop`.
+- PR descriptions say `Closes #<issue>` — that is what moves the board.
+- "Done" means running in production, not merged.
+- Never write student IDs, employee IDs, names, usernames, or email addresses
+  in issues, PRs, commits, or code comments. Refer to people by role.
+- Discovered work goes in a new issue (Status Triage), not into this PR.

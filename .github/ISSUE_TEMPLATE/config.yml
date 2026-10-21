@@ -1,0 +1,5 @@
+# Production outages and urgent support go through ServiceNow first; the team
+# links the ticket number in the issue's Ticket field.
+# TODO: add a contact_links entry pointing at the ServiceNow portal once the
+# team confirms the right catalog item URL.
+blank_issues_enabled: true

@@ -1,0 +1,37 @@
+name: Feature
+description: A new capability or change that users will notice.
+type: Feature
+projects: ["Boise-State-Development/7"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Do not include** student IDs, employee IDs, names, usernames, or email addresses. Refer to people by role or office.
+  - type: textarea
+    id: need
+    attributes:
+      label: What's needed
+      description: Who benefits, what changes for them, and why now. Plain language.
+    validations: {required: true}
+  - type: textarea
+    id: criteria
+    attributes:
+      label: Acceptance criteria
+      description: Statements a reviewer can check.
+      value: |
+        - [ ] 
+    validations: {required: true}
+  - type: input
+    id: office
+    attributes:
+      label: Requesting office or role
+      placeholder: e.g. Registrar's Office
+  - type: input
+    id: deadline
+    attributes:
+      label: Deadline, if any, and why
+  - type: input
+    id: ticket
+    attributes:
+      label: ServiceNow ticket
+      placeholder: RITM0000000

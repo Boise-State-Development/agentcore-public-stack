@@ -1,0 +1,10 @@
+{
+  "extraKnownMarketplaces": {
+    "delivery-playbook": {
+      "source": { "source": "github", "repo": "Boise-State-Development/delivery-playbook" }
+    }
+  },
+  "enabledPlugins": {
+    "web-team-dev@delivery-playbook": true
+  }
+}
