@@ -1372,10 +1372,39 @@ depends entirely on the separator:
 
 Comma-splitting breaks it in both directions: it tears
 `"Third Wednesday in October, Annually Thereafter"` apart on its own internal
-comma, and it hands partial credit to a genuine paraphrase. Only an explicit
-separator the model *chose* is safe. Any component-wise matching belongs inside
-`_value_in_quote` so the state stays derived in one place (`source_provenance`
-D1), and it is that module's decision rather than this one's.
+comma, and it hands partial credit to a genuine paraphrase.
+
+**Splitting on an explicit `;` survives those two cases and is still unsound**,
+which is worth recording because it is the obvious salvage and it was proposed
+and withdrawn here. It over-claims on **assembly that creates meaning**. Measured
+on a `type: string` field whose value is `"$500,000; October 18, 2023"`, against
+a document stating both facts in separate sections and a quote spanning both:
+
+| | state |
+|---|---|
+| today | `quote_unsupported` |
+| under `;`-matching | **`supported`** |
+| does the document assert that composite as a unit? | **no** |
+
+So it awards the strongest state to a claim the document never makes. Today's
+verdict is also wrong — neither fact is invented — but it errs safe, while
+`;`-matching errs in the only direction this check exists to prevent.
+
+**The reason is D7, one section earlier in this spec.** `enum_field` is derived
+from the *declared type* rather than the model's `from_fixed_set`, precisely so a
+model cannot self-certify its way out of the value check. Letting the model's
+**punctuation** select its verification path is the identical error with a
+different input. The discriminator has to be something the *author* declared.
+
+Which points at the field type, and is why `type: list` is the guidance above
+rather than a workaround: an author declaring a list is claiming "these values",
+so a list of found values is exactly that claim and the join carries no meaning
+to over-claim about. Whether `list` should go further and verify component-wise
+— earning `supported` when every element matches, instead of today's
+`unassessed` — is a change to what a badge means on a shipped feature, and
+therefore not this spec's call. It belongs inside `_value_in_quote` so the state
+stays derived in one place (`source_provenance` D1, fenced by
+`test_source_provenance_state_boundary.py`).
 
 **A gate divergence confirmed by the same run, by failing.** `document_extract`
 did not mount, because the turn was sent through the API without
