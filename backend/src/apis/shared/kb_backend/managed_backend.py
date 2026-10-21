@@ -111,9 +111,34 @@ ISOLATION_SAFE_FILTER_OPERATORS = frozenset({"equals", "in"})
 #: CUSTOM connector; the metadata key is a documented mirror of it.
 CUSTOM_IDENTIFIER_METADATA_KEY = "x-amz-bedrock-kb-custom-document-identifier"
 
+#: Statuses in ``IngestKnowledgeBaseDocuments``' OWN response that mean Bedrock
+#: refused the document outright. The call succeeds at the HTTP level either way, so
+#: a caller that drops the response cannot tell an accepted document from a refused
+#: one; the refusal then surfaces only as a ``NOT_FOUND`` probe with no reason
+#: attached. Explicit failures only: ``NOT_FOUND`` here has no documented meaning,
+#: so it is logged with its reason but not treated as a refusal.
+INGEST_REJECTED_STATUSES = frozenset({"FAILED", "METADATA_UPDATE_FAILED", "IGNORED"})
+
 
 class ManagedKbError(RuntimeError):
     """A managed knowledge base operation could not be performed."""
+
+
+class ManagedKbDocumentRejected(ManagedKbError):
+    """``IngestKnowledgeBaseDocuments`` accepted the call but refused a document.
+
+    ``rejections`` maps each refused platform document id to Bedrock's
+    ``(status, statusReason)``. Re-submitting the same bytes would be refused
+    again, so callers treat this as terminal for those documents.
+    """
+
+    def __init__(self, rejections: Mapping[str, Tuple[str, Optional[str]]]) -> None:
+        self.rejections = dict(rejections)
+        detail = "; ".join(
+            f"{document_id}: {status} ({reason or 'no reason given'})"
+            for document_id, (status, reason) in self.rejections.items()
+        )
+        super().__init__(f"the knowledge base refused {detail}")
 
 
 class ManagedKbNotProvisioned(ManagedKbError):
@@ -557,8 +582,10 @@ class ManagedKbBackend:
 
     # ── ingestion ───────────────────────────────────────────────────────────
     async def ingest(self, kb_ref: str, source: DocumentSource) -> None:
-        """Index one document."""
-        await self.ingest_documents(kb_ref, [source])
+        """Index one document. Raises :class:`ManagedKbDocumentRejected` if refused."""
+        rejected = await self.ingest_documents(kb_ref, [source])
+        if rejected:
+            raise ManagedKbDocumentRejected(rejected)
 
     async def ingest_documents(
         self,
@@ -566,8 +593,14 @@ class ManagedKbBackend:
         sources: Iterable[DocumentSource],
         *,
         batch_size: int = MAX_DOCUMENTS_PER_CALL,
-    ) -> None:
+    ) -> Dict[str, Tuple[str, Optional[str]]]:
         """Index documents with ``IngestKnowledgeBaseDocuments``.
+
+        Returns the documents Bedrock refused in its response, as
+        ``{document_id: (status, statusReason)}`` (:data:`INGEST_REJECTED_STATUSES`),
+        each logged at ERROR. Returned rather than raised so one refused document
+        does not fail a batch whose other documents were accepted; the single-
+        document :meth:`ingest` raises instead.
 
         Batched at 10 and concurrency-bounded at 10 (Requirements 9.3, 9.5).
         ``StartIngestionJob`` is never involved (Requirement 9.2).
@@ -581,7 +614,7 @@ class ManagedKbBackend:
         """
         documents = list(sources)
         if not documents:
-            return
+            return {}
 
         aws_kb_id, aws_data_source_id = await self._locate_async(kb_ref)
         if not aws_data_source_id:
@@ -599,7 +632,7 @@ class ManagedKbBackend:
             for source, inline in zip(documents, annotated)
         ]
 
-        await self._run_bounded(
+        responses = await self._run_bounded(
             [
                 {
                     "knowledgeBaseId": aws_kb_id,
@@ -611,6 +644,7 @@ class ManagedKbBackend:
             client.ingest_knowledge_base_documents,
             what="IngestKnowledgeBaseDocuments",
         )
+        return ingest_rejections(responses)
 
     async def document_statuses(
         self, kb_ref: str, document_ids: Iterable[str]
@@ -733,8 +767,13 @@ class ManagedKbBackend:
         )
 
     @staticmethod
-    async def _run_bounded(payloads: Sequence[Mapping[str, Any]], operation, *, what: str) -> None:
+    async def _run_bounded(
+        payloads: Sequence[Mapping[str, Any]], operation, *, what: str
+    ) -> List[Any]:
         """Issue each payload off the event loop, at most 10 in flight.
+
+        Returns each call's response, in payload order, so a caller can read the
+        per-document outcome the service reports inside a successful call.
 
         The semaphore is acquired *around* the ``to_thread`` call so the bound
         counts operations in flight at AWS, not coroutines created here — which is
@@ -742,9 +781,9 @@ class ManagedKbBackend:
         """
         semaphore = document_operation_semaphore()
 
-        async def _one(payload: Mapping[str, Any]) -> None:
+        async def _one(payload: Mapping[str, Any]) -> Any:
             async with semaphore:
-                await asyncio.to_thread(lambda: operation(**payload))
+                return await asyncio.to_thread(lambda: operation(**payload))
 
         results = await asyncio.gather(
             *(_one(payload) for payload in payloads), return_exceptions=True
@@ -753,10 +792,43 @@ class ManagedKbBackend:
         if failures:
             logger.error(f"{what}: {len(failures)}/{len(payloads)} batches failed")
             raise failures[0]
+        return list(results)
+
+
+def ingest_rejections(responses: Iterable[Any]) -> Dict[str, Tuple[str, Optional[str]]]:
+    """The documents ``IngestKnowledgeBaseDocuments`` responses refused, logged.
+
+    A ``documentDetails`` entry carrying a ``statusReason`` outside the refused
+    set is logged at WARNING so a status this module does not classify is still
+    visible. A response that is not a mapping (a stubbed client) is skipped.
+    """
+    rejected: Dict[str, Tuple[str, Optional[str]]] = {}
+    for response in responses:
+        if not isinstance(response, Mapping):
+            continue
+        for detail in response.get("documentDetails") or []:
+            status = str(detail.get("status") or "")
+            reason = detail.get("statusReason")
+            document_id = str(
+                ((detail.get("identifier") or {}).get("custom") or {}).get("id") or ""
+            )
+            if status in INGEST_REJECTED_STATUSES:
+                logger.error(
+                    f"IngestKnowledgeBaseDocuments refused document {document_id!r}: "
+                    f"{status} ({reason or 'no reason given'})"
+                )
+                rejected[document_id] = (status, reason)
+            elif reason:
+                logger.warning(
+                    f"IngestKnowledgeBaseDocuments reported document {document_id!r} "
+                    f"as {status}: {reason}"
+                )
+    return rejected
 
 
 __all__ = [
     "CONTENT_DATA_SOURCE_TYPE",
+    "INGEST_REJECTED_STATUSES",
     "ISOLATION_SAFE_FILTER_OPERATORS",
     "MAX_CONCURRENT_DOCUMENT_OPERATIONS",
     "MAX_DOCUMENTS_PER_CALL",
@@ -764,6 +836,7 @@ __all__ = [
     "MAX_INLINE_TEXT_CHARS",
     "RERANKING_MODEL_TYPE",
     "ManagedKbBackend",
+    "ManagedKbDocumentRejected",
     "ManagedKbError",
     "ManagedKbNotProvisioned",
     "UnsafeFilterOperator",
@@ -771,6 +844,7 @@ __all__ = [
     "document_identifier",
     "document_operation_semaphore",
     "document_payload",
+    "ingest_rejections",
     "retrieval_configuration",
     "validate_isolation_filter",
 ]
