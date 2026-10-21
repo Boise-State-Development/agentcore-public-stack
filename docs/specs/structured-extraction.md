@@ -1329,6 +1329,54 @@ claims, `estimated` on three. It hedged where it could not pin the line and did
 not hedge where it could, which is the behaviour an always-`measured` or
 always-`estimated` implementation would have faked.
 
+**A correct value can wear the hallucination badge, and the fix is authoring.**
+The second run (same solicitation, `enabled_skills` supplied) extracted six of
+seven values exactly against ground truth — and labelled the seventh
+`quote_unsupported` while it was *right*. The deadline field's real answer is
+three dates on three separate lines; the model assembled them into
+`"October 18, 2023; Third Wednesday in October, Annually Thereafter; October 18,
+2024"`, which is correct and does not appear literally in any passage, so the
+value check returned `no_match`.
+
+That is worse than a missing badge. A correct answer carrying the hallucination
+signal trains a reviewer to discount the signal, which is the one thing the four
+states exist to prevent. And the same field produced a **true** positive on the
+previous run, so the state cannot currently tell a paraphrase from an assembly.
+
+**The field was typed `string`; it should be `type: list`.** Measured against
+`source_provenance` on dev:
+
+| value as sent | state | method |
+|---|---|---|
+| assembled string | `quote_unsupported` | `no_match` |
+| the same value as a **list** | `unassessed` | `non_scalar` |
+| one component alone | `supported` | `literal` |
+| a genuinely wrong date | `quote_unsupported` | `no_match` |
+| the previous run's paraphrase | `quote_unsupported` | `no_match` |
+
+So the honest state for a multi-valued answer is already reachable with no code
+change — `unassessed`/`non_scalar`, which is exactly "traceable, not
+confirmable" — and both true positives survive. **Author any field whose real
+answer is several values as `type: list`, never `string`.** A grants office would
+plausibly type a deadline field `string`, so this is schema guidance rather than
+a fixture mistake, and it belongs here rather than in a reviewer's head.
+
+**The obvious code fix is a trap, recorded so nobody reaches for it.** Splitting
+a value into components and verifying each is the first instinct. Measured, it
+depends entirely on the separator:
+
+| | split on `;` | split on `,` |
+|---|---|---|
+| the assembled value | all components supported — fixes it | mixed — **fails to fix it** |
+| the previous run's paraphrase | no split, stays `quote_unsupported` | mixed — **leaks partial credit** |
+
+Comma-splitting breaks it in both directions: it tears
+`"Third Wednesday in October, Annually Thereafter"` apart on its own internal
+comma, and it hands partial credit to a genuine paraphrase. Only an explicit
+separator the model *chose* is safe. Any component-wise matching belongs inside
+`_value_in_quote` so the state stays derived in one place (`source_provenance`
+D1), and it is that module's decision rather than this one's.
+
 **A gate divergence confirmed by the same run, by failing.** `document_extract`
 did not mount, because the turn was sent through the API without
 `enabled_skills` — Skills v2 is opt-in (D6), so an absent selection means *no
