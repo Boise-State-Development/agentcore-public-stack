@@ -528,6 +528,18 @@ Respecting its decisions, each of which constrains us:
   `render_locator` — `p. 12` / `¶ 34` / `line 88`, hedged to `p. ~12` when estimated.
   A `.docx` field set renders paragraphs, because a `.docx` has no pages.
 
+  **The first real solicitation this feature met was HTML, not PDF**, which
+  settles `kind` as a requirement rather than an edge case. NSF 23-603 is served
+  as a web page — NSF's own page tells you to print it to PDF, and the old PDF
+  URL is dead — so it is unpaginated and its locators resolve `kind: "line"`.
+  The `.docx` example above reads as a corner case one could defer; an HTML
+  funding opportunity is the *ordinary* input for this feature's actual users,
+  and a locator that said `p. 12` about it would be inventing a page for a
+  document that has none. `UNIT_KINDS` maps `html`, `txt` and `md` to
+  `line`, and `tests/architecture/test_document_formats_have_locator_units.py`
+  asserts every readable format has a unit, so this is enforced rather than
+  remembered.
+
 **One genuine improvement over `verify_sources`, and it is free.** That tool takes
 `from_fixed_set` from the *model*, which is the model self-certifying that the value
 question does not apply to its answer. We do not have to trust that: the field set
