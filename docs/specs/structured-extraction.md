@@ -210,6 +210,12 @@ Why this and not a first-class entity:
    ships with field sets authored *for* an office, not *by* it. That is a real
    limitation and the honest sequencing: prove the extraction is trustworthy before
    handing out the schema editor.
+
+   **Being closed:** the extraction was verified end to end on dev on 2026-10-20, so the
+   sequencing above has expired. `docs/specs/field-set-authoring.md` designs the editor,
+   on the user tier (`/skills/mine/{id}/resources`) rather than the admin one — the test
+   skill carrying `field-set.nsf-solicitation.md` is already a user-owned skill, so
+   everything below the file works today.
 2. **There is no Extractions tab.** The experience map's Project tab implies a surface
    that lists extraction runs and lets a reviewer correct them. This design gives the
    reviewer an artifact per run in Outputs, which is a weaker thing: readable and
