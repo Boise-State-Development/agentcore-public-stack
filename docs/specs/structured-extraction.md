@@ -1307,6 +1307,40 @@ One mitigation falls straight out of the failure mode. The misses are always a
 note tells the model to work the comparison **field by field** rather than
 document by document. Costs nothing and addresses the thing that actually fails.
 
+**The provenance gate caught a real paraphrase on the first real document, unprompted.**
+Dev, 2026-10-21, NSF 23-603 (an HTML solicitation, 55,887 characters). Seven
+claims: six `supported`, one `quote_unsupported` — and the failure was nobody's
+fixture. The model asserted the deadline as *"October 18, 2023, with subsequent
+deadlines the third Wednesday in October annually"* where the document says
+*"Third Wednesday in October, Annually Thereafter"*. It paraphrased, the
+value-in-quote check failed, and the state said so, on the single field where
+paraphrasing is most tempting.
+
+That is worth more than the fixture result below it, and the distinction matters:
+a planted failure shows the gate *can* fire, while a spontaneous one shows it
+fires on the kind of error a model actually makes. Nobody can arrange the second
+kind, which is why it is recorded the first time it happened.
+
+The same run validated two decisions against real data rather than tests.
+Locators resolved `kind: "line"` throughout, because the source is unpaginated
+HTML (§7) — so D3's `kind` was load-bearing on the very first document rather
+than on a contrived `.docx`. And `precision` genuinely split: `measured` on four
+claims, `estimated` on three. It hedged where it could not pin the line and did
+not hedge where it could, which is the behaviour an always-`measured` or
+always-`estimated` implementation would have faked.
+
+**A gate divergence confirmed by the same run, by failing.** `document_extract`
+did not mount, because the turn was sent through the API without
+`enabled_skills` — Skills v2 is opt-in (D6), so an absent selection means *no
+skills*, and the mount condition is a field set among the turn's skills (D9).
+`verify_sources` ran anyway, because its gate is document presence rather than
+skills. Both behaved correctly, and the divergence between the two gates — the
+one deliberate difference between them — was exercised for the first time by a
+caller who had every other condition satisfied. Worth knowing because the
+symptom is silent: no error, the tool simply is not there, and
+`userEnabled: true` on the skill is a *preference* the SPA turns into
+`enabled_skills`, never something the turn path derives.
+
 **A note on how this was measured, because it nearly produced a false result.**
 The first run of this experiment reported collision detection at 0/3 for N=50.
 The fixture was wrong: it paired every value with one boilerplate quote, so
